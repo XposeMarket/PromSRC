@@ -1,0 +1,26 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Fix Telegram proposal approve callback to trigger execution like UI approve",
+  "summary": "Update Telegram callback handler for proposal approval so it routes through the same approve-and-execute backend flow as the frontend UI, instead of only flipping status to approved.",
+  "details": "## Problem\nTelegram inline button callback `pr:ap` currently marks a proposal approved but does not trigger execution. Users receive a message like “approved and ready for execution” but executor task is never launched.\n\n## Root cause\nIn `src/gateway/comms/telegram-channel.ts`, the `handleCallbackQuery` branch for `pr:ap` calls direct approval logic (`approveProposal(...)`) and replies to Telegram, but does not call the API/backend flow used by the frontend approve action that also initiates execution.\n\n## Proposed fix\n1. Edit `src/gateway/comms/telegram-channel.ts` in the `pr:ap` callback path.\n2. Replace direct status-only approval call with call to the same internal API route used by UI approve (`POST /api/proposals/:id/approve`) or equivalent shared service method that encapsulates:\n   - approve proposal\n   - trigger executor dispatch when executor metadata exists\n3. Update Telegram response handling to reflect real outcomes:\n   - approval + execution started\n   - approval completed but no executor configured\n   - execution start failure with actionable error\n4. Keep behavior idempotent and preserve existing auth/session checks for callback processing.\n5. Ensure no duplicate execution launches on repeated callback taps.\n\n## Validation\n- From Telegram, tap Approve on a pending proposal with executor configured.\n- Verify proposal transitions to `executing` (or equivalent) and background task is created.\n- Verify Telegram confirmation message states execution started.\n- Repeat tap should not create duplicate executor tasks.\n\n## Notes\nNo frontend/UI changes needed; this is server-side callback behavior parity with existing UI flow.",
+  "sourceAgentId": "0fc8d750-3ad1-4299-a545-91725c1e52b7",
+  "sourceSessionId": "0fc8d750-3ad1-4299-a545-91725c1e52b7",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/comms/telegram-channel.ts",
+      "action": "edit",
+      "description": "Route Telegram proposal approval callback through approve+execute flow and improve status messaging."
+    }
+  ],
+  "diffPreview": "// before (conceptual)\nif (action === 'pr:ap') {\n  await proposals.approveProposal(id);\n  await telegram.send('✅ Proposal approved. Ready for execution.');\n}\n\n// after (conceptual)\nif (action === 'pr:ap') {\n  const result = await apiClient.post(`/api/proposals/${id}/approve`);\n  if (result.executionStarted) {\n    await telegram.send('✅ Proposal approved and execution started.');\n  } else if (result.approved) {\n    await telegram.send('✅ Proposal approved. No executor configured.');\n  } else {\n    await telegram.send('⚠️ Proposal approved, but execution could not be started.');\n  }\n}\n",
+  "estimatedImpact": "Restores Telegram approval parity with frontend UI; prevents false-positive 'approved' confirmations; enables one-tap approve-and-run flow for proposal operations.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Apply the approved fix for Telegram proposal approval flow.\n\nTask:\n- Edit `src/gateway/comms/telegram-channel.ts`.\n- In callback handling for proposal approve (`pr:ap`), stop using status-only approval path.\n- Route to the same approve endpoint/service used by frontend UI approve so execution is launched when executor metadata exists.\n- Preserve callback safety/idempotency and avoid duplicate starts on repeated presses.\n- Update Telegram result messaging to reflect actual execution state.\n\nThen:\n- Run build/check as required for src edits.\n- Summarize exact code changes and verification notes.\n\nDo not modify unrelated behavior.",
+  "id": "prop_1774164063365_14bf99",
+  "status": "denied",
+  "createdAt": 1774164063365,
+  "updatedAt": 1774164499106,
+  "decidedAt": 1774164499106
+}

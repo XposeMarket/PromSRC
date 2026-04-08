@@ -1,0 +1,21 @@
+{
+  "id": "c1843560-46bd-4882-b410-43b2c4c5c560",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw!",
+      "timestamp": 1772163471759
+    },
+    {
+      "role": "assistant",
+      "content": "No tools are needed for this greeting.\n\nHey Claw! 👋 How can I help you today? I'm SmallClaw, your friendly local file assistant lobster 🦞.\n\n\nHey Claw! 👋 How can I help you today? I'm SmallClaw, your friendly local file assistant lobster 🦞.",
+      "timestamp": 1772163541543
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772163458379,
+  "lastActiveAt": 1772163541543,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 85
+}

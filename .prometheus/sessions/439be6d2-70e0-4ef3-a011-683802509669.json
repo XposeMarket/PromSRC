@@ -1,0 +1,18 @@
+{
+  "id": "439be6d2-70e0-4ef3-a011-683802509669",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw!",
+      "timestamp": 1772142018437
+    },
+    {
+      "role": "assistant",
+      "content": "Final response: \"Hello! 👋 How can I help today?\"\n\nHello! 👋 How can I help today?",
+      "timestamp": 1772142089562
+    }
+  ],
+  "workspace": "d:\\SmallClaw\\workspace",
+  "createdAt": 1772142014846,
+  "lastActiveAt": 1772142089562
+}

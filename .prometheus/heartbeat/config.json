@@ -1,0 +1,44 @@
+{
+  "system": {
+    "activeHoursStart": 0,
+    "activeHoursEnd": 24,
+    "reviewTeamsAfterRun": true
+  },
+  "agents": {
+    "main": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "researcher_src-reader_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "analyst_staleness-vetting_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "builder_staleness-report-writer_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "src_reader_staleness_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "analyst_staleness_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "report_writer_staleness_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    }
+  }
+}

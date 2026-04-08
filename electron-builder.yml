@@ -1,0 +1,55 @@
+appId: com.prometheus.desktop
+productName: Prometheus
+copyright: "Prometheus Desktop"
+
+# Icon — electron-builder auto-converts PNG → .ico for Windows
+icon: assets/Prometheus.png
+
+# What to include in the packaged app
+files:
+  - electron/**/*
+  - src/**/*
+  - web-ui/**/*
+  - assets/**/*
+  - bin/**/*
+  - scripts/**/*
+  - workspace/**/*
+  - .prometheus/**/*
+  - node_modules/**/*
+  - package.json
+  - tsconfig.json
+  # Exclude heavy/unnecessary stuff
+  - "!node_modules/.cache/**/*"
+  - "!**/*.map"
+  - "!dist/**/*"
+  - "!.git/**/*"
+  - "!**/*.log"
+
+# Where to output the installer
+directories:
+  output: release
+
+# Windows build
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/Prometheus.png
+
+# Installer options (NSIS = proper Windows installer)
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Prometheus
+  installerIcon: assets/Prometheus.png
+  uninstallerIcon: assets/Prometheus.png
+  installerHeaderIcon: assets/Prometheus.png
+  deleteAppDataOnUninstall: false
+
+# asar packaging — bundles source into a fast archive
+# Disabled so tsx can resolve .ts files at runtime inside the app
+asar: false

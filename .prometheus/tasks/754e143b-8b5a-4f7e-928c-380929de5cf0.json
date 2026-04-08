@@ -1,0 +1,54 @@
+{
+  "id": "754e143b-8b5a-4f7e-928c-380929de5cf0",
+  "title": "PG Website Builder: Urgent owner request. Attempt direct GitHub upload to private repo https://githu",
+  "prompt": "Urgent owner request. Attempt direct GitHub upload to private repo https://github.com/XposeMarket/Prometheus for website files ONLY.\n\nScope rules (strict):\n- Include only website artifacts from `teams/team_mn74d1g9_0f4d45/workspace/website-week1-nextjs/` plus website docs:\n  - website-week1-implementation-checklist.md\n  - website-week1-page-structure.md\n  - website-week1-component-map.md\n  - website-week1-section-copy-blocks.md\n- In repo, place as:\n  - `website/` (Next.js files)\n  - `website/docs/` (the 4 docs)\n- Exclude everything else (X queue, KPI, execution handoffs, product bible, etc.).\n\nExecute:\n1) Clone/pull repo.\n2) Copy only allowed files.\n3) git add website\n4) commit: `feat: add week-1 prometheus website scaffold and docs`\n5) push to default branch (or create branch + PR if protected)\n\nReturn:\n- success/failure\n- branch + commit hash (or PR URL)\n- exact committed file list\n- confirmation exclusions were respected\n- exact blocker text if failed.",
+  "sessionId": "team_dispatch_pg_website_builder_v1_1774541831891",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "Urgent owner request. Attempt direct GitHub upload to private repo https://github.com/XposeMarket/Prometheus for website",
+      "status": "done",
+      "completedAt": 1774542174348,
+      "notes": "Success — upload completed.\n\n- **Result:** ✅ Success  \n- **Repo/branch:** `https://github.com/XposeMarket/Prometheus` on `main`  \n- **Commit:** `e41aee2ef4c3bb6cefd6c71d754ddb7be2b8e994`  \n- **Message"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774541831894,
+      "type": "status_push",
+      "content": "Task created: PG Website Builder: Urgent owner request. Attempt direct GitHub upload to private repo https://githu"
+    },
+    {
+      "t": 1774542174348,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"Success — upload completed.\\n\\n- **Result:** ✅ Success  \\n- **Repo/branch:** `https://github.com/XposeMarket/Prometheus` on `main`  \\n- **Commit:** `e41aee2ef4c3bb6cefd6c71d754ddb7be2b8e994`  \\n- **Message\"}]"
+    },
+    {
+      "t": 1774542174353,
+      "type": "status_push",
+      "content": "Done: Success — upload completed.\n\n- **Result:** ✅ Success  \n- **Repo/branch:** `https://github.com/XposeMarket/Prometheus` on `main`  \n- **Commit:** `e41aee2ef4c3bb6cefd6c71d754ddb7be2b8e994`  \n- **Message"
+    }
+  ],
+  "lastProgressAt": 1774542174353,
+  "startedAt": 1774541831894,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1774541831903
+  },
+  "finalSummary": "Success — upload completed.\n\n- **Result:** ✅ Success  \n- **Repo/branch:** `https://github.com/XposeMarket/Prometheus` on `main`  \n- **Commit:** `e41aee2ef4c3bb6cefd6c71d754ddb7be2b8e994`  \n- **Message:** `feat: add week-1 prometheus website scaffold and docs`\n\n**Exact committed files:**\n- `website/app/contact/page.tsx`\n- `website/app/demo/page.tsx`\n- `website/app/layout.tsx`\n- `website/app/page.tsx`\n- `website/app/pricing/page.tsx`\n- `website/components/landing/cta-section.tsx`\n- `website/components/landing/hero-section.tsx`\n- `website/components/landing/pain-section.tsx`\n- `website/components/landing/proof-section.tsx`\n- `website/components/landing/value-pillars-section.tsx`\n- `website/components/layout/site-footer.tsx`\n- `website/components/layout/site-header.tsx`\n- `website/docs/website-week1-component-map.md`\n- `website/docs/website-week1-implementation-checklist.md`\n- `website/docs/website-week1-page-structure.md`\n- `website/docs/website-week1-section-copy-blocks.md`\n- `website/lib/landing-copy.ts`\n- `website/next-env.d.ts`\n- `website/next.config.mjs`\n- `website/package.json`\n- `website/tsconfig.json`\n\n**Exclusions respected:** ✅ Confirmed. Only `website/` was staged/committed; no X queue, KPI tracker, handoff docs, PRODUCT_BIBLE, or other non-website files were included.\n\nNo blocker on this run.",
+  "completedAt": 1774542174351
+}

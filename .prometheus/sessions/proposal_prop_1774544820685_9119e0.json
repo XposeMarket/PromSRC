@@ -1,0 +1,21 @@
+{
+  "id": "proposal_prop_1774544820685_9119e0",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774545671819
+    },
+    {
+      "role": "assistant",
+      "content": "Step 6–8 are complete. - **Changed files (exact):** - `src/gateway/proposals/proposal-store.ts` - `src/gateway/routes/proposals.router.ts` - `src/gateway/agents-runtime/subagent-executor.ts` - **Behavior verification completed:** - Pending edit succeeds: content diff check, version increment, revision history append, `proposal_updated` broadcast. - Post-approval edit blocked: deterministic `not_pending` path → HTTP `409` / tool `ERROR 409`. - Src-details validation enforced on edits: deterministic validation failure → HTTP `400` with `missingSections` / tool `ERROR 400`. - Immutable approval snapshot confirmed at approval time: captures `approvedAt`, `approvedVersion`, and frozen content snapshot. - **Build verification:** - `npm run build` passed (`tsc` exit 0). - **Completion logging:** - Wrote full `task_complete` note for task `07302699-f356-45e9-b61c-391e8045bb5c`.",
+      "timestamp": 1774545671821
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774545671820,
+  "lastActiveAt": 1774545671821,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 284
+}

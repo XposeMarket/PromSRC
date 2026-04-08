@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(npm run:*)",
+      "Bash(ls:*)",
+      "Bash(python3:*)",
+      "Bash(node:*)",
+      "Bash(npx tsc:*)",
+      "Bash(find:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:docs.claude.com)",
+      "Read(//c/tmp/**)",
+      "Bash(find D:Prometheus -type f \\\\\\(-name *accessibility* -o -name *tree* -o -name *eval* -o -name *snapshot* -o -name *delta* \\\\\\))",
+      "Bash(powershell -Command \":*)",
+      "Bash(powershell -Command \"\n  Add-Type -AssemblyName System.IO.Compression.FileSystem\n  \n  \\\\$skills = @\\('revenue-manager', 'marketing-campaign-builder', 'sdr-sales', 'financial-analyst', 'brand-strategist', 'hr-recruiter', 'operations-manager', 'legal-drafting'\\)\n  \n  foreach \\(\\\\$skill in \\\\$skills\\) {\n    \\\\$zip = \\\\\"D:\\\\Prometheus\\\\skills\\\\\\\\\\\\$skill.skill\\\\\"\n    \\\\$dest = \\\\\"D:\\\\Prometheus\\\\workspace\\\\skills\\\\\\\\\\\\$skill\\\\\"\n    \n    Write-Host \\\\\"Processing \\\\$skill...\\\\\"\n    New-Item -ItemType Directory -Path \\\\$dest -Force | Out-Null\n    [System.IO.Compression.ZipFile]::ExtractToDirectory\\(\\\\$zip, \\\\$dest, \\\\$true\\)\n    Write-Host \\\\\"  ✓ Extracted\\\\\"\n  }\n  Write-Host \\\\\"Done!\\\\\"\n\")",
+      "Bash(powershell -Command \"\n  Add-Type -AssemblyName System.IO.Compression.FileSystem\n  \n  \\\\$skills = @\\('revenue-manager', 'marketing-campaign-builder', 'sdr-sales', 'financial-analyst', 'brand-strategist', 'hr-recruiter', 'operations-manager', 'legal-drafting'\\)\n  \n  foreach \\(\\\\$skill in \\\\$skills\\) {\n    \\\\$zip = \\\\\"D:\\\\Prometheus\\\\skills\\\\\\\\\\\\$skill.skill\\\\\"\n    \\\\$dest = \\\\\"D:\\\\Prometheus\\\\workspace\\\\skills\\\\\\\\\\\\$skill\\\\\"\n    \n    Write-Host \\\\\"Extracting \\\\$skill...\\\\\"\n    New-Item -ItemType Directory -Path \\\\$dest -Force | Out-Null\n    [System.IO.Compression.ZipFile]::ExtractToDirectory\\(\\\\$zip, \\\\$dest\\)\n    Write-Host \\\\\"  ✓ Done\\\\\"\n  }\n\")",
+      "Bash(powershell -Command '\n  Add-Type -AssemblyName System.IO.Compression.FileSystem\n  \n  $skills = @\\(\"revenue-manager\", \"marketing-campaign-builder\", \"sdr-sales\", \"financial-analyst\", \"brand-strategist\", \"hr-recruiter\", \"operations-manager\", \"legal-drafting\"\\)\n  \n  foreach \\($skill in $skills\\) {\n    $zip = \"D:\\\\Prometheus\\\\skills\\\\$skill.skill\"\n    $dest = \"D:\\\\Prometheus\\\\workspace\\\\skills\\\\$skill\"\n    \n    Write-Host \"Extracting $skill...\"\n    New-Item -ItemType Directory -Path $dest -Force | Out-Null\n    [System.IO.Compression.ZipFile]::ExtractToDirectory\\($zip, $dest\\)\n    Write-Host \"  ✓ Done\"\n  }\n')",
+      "Bash(wc -c D:/Prometheus/src/gateway/tools/defs/*.ts)",
+      "Bash(2)",
+      "Bash(npx create-next-app@latest prometheus-site --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm)",
+      "Bash(npm install:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool)",
+      "Bash(TMPDIR=/d/tmp TEMP=/d/tmp TMP=/d/tmp npm run:*)"
+    ]
+  }
+}

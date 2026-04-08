@@ -1,0 +1,27 @@
+{
+  "id": "cli_7c67983b-5afd-4a7a-92a6-b14116fb257d",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom - can you test all of these for me",
+      "timestamp": 1775073713163
+    },
+    {
+      "role": "assistant",
+      "content": "Absolutely — I can.  \nPlease paste the list (or screenshot) of what you want tested, and I’ll run through each one.",
+      "timestamp": 1775073717855
+    },
+    {
+      "role": "user",
+      "content": "list_files, list_directory, file_stats, read_file, grep_file, search_files (grep_files deprecated alias)",
+      "timestamp": 1775073730485
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "terminal",
+  "createdAt": 1775073713164,
+  "lastActiveAt": 1775073730485,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 94
+}

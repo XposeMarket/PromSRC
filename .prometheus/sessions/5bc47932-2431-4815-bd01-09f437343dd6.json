@@ -1,0 +1,21 @@
+{
+  "id": "5bc47932-2431-4815-bd01-09f437343dd6",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom can you go ahead and test out your background agent system - id like you to go ahead and maybe get one to remve any duplicates in the Soul or User md files and then you go on X and like some posts while its working in the background",
+      "timestamp": 1774602776853
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774602776854,
+  "lastActiveAt": 1774602776854,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 75,
+  "activatedToolCategories": [
+    "team_ops",
+    "browser",
+    "scheduling"
+  ]
+}

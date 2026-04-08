@@ -1,0 +1,18 @@
+{
+  "id": "4c61df2c-21ae-4414-9f19-4923f5800e03",
+  "history": [
+    {
+      "role": "user",
+      "content": "Whats the current price of bitcoin",
+      "timestamp": 1771956482178
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Ollama chat failed: an error was encountered while running the model: CUDA error: out of memory\r\n  current device: 0, in function ggml_cuda_compute_forward at C:\\a\\ollama\\ollama\\ml\\backend\\ggml\\ggml\\src\\ggml-cuda\\ggml-cuda.cu:2882\r\n  err\r\nC:\\a\\ollama\\ollama\\ml\\backend\\ggml\\ggml\\src\\ggml-cuda\\ggml-cuda.cu:94: CUDA error",
+      "timestamp": 1771956548453
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771956475803,
+  "lastActiveAt": 1771956548454
+}

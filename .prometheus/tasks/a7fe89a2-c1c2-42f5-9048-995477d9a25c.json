@@ -1,0 +1,378 @@
+{
+  "id": "a7fe89a2-c1c2-42f5-9048-995477d9a25c",
+  "title": "[Proposal] Canonicalize PDF skills: merge routing and deprecate pdf-extractor via redirect",
+  "prompt": "[PROPOSAL EXECUTION] Executing approved proposal.\nTITLE: Canonicalize PDF skills: merge routing and deprecate pdf-extractor via redirect\nPRIORITY: medium\nTYPE: skill_evolution\nSUMMARY: Resolve overlap between pdf-reader and pdf-extractor by defining a single canonical workflow and turning pdf-extractor into a deprecation redirect.\nFULL IMPLEMENTATION PLAN:\nImplement a conservative merge without hard deletion.\n\nScope:\n1. Update `skills/pdf-reader/SKILL.md` as canonical PDF workflow (Node-first, with explicit fallback branch where needed).\n2. Convert `skills/pdf-extractor/SKILL.md` into a deprecation shim pointing to `pdf-reader`.\n3. Clarify trigger precedence so PDF requests route predictably.\n4. Preserve backward compatibility for one release cycle by keeping deprecated skill file present.\n\nAcceptance:\n- One canonical PDF skill is clearly documented.\n- Deprecated skill has explicit redirect and non-ambiguous messaging.\n- No hard removal in this pass.\n\n\nAFFECTED FILES:\n  - [edit] skills/pdf-reader/SKILL.md: Set canonical PDF workflow and precedence guidance.\n  - [edit] skills/pdf-extractor/SKILL.md: Replace overlapping content with deprecation/redirect shim.\n\n\nDIFF PREVIEW / REFERENCE:\n```\n~ `pdf-reader` becomes canonical, with explicit branching guidance.\n~ `pdf-extractor` converted into deprecation redirect (kept for compatibility).\n```\n\nEXPECTED IMPACT: Eliminates routing ambiguity and cuts maintenance overhead while avoiding abrupt breakage.\nINSTRUCTIONS:\n1. Read affected files with read_source first to understand current state.\n2. Apply edits using find_replace or replace_lines.\n3. Verify your changes are correct.\n4. Report exactly what was changed and any issues encountered.\nADDITIONAL EXECUTOR INSTRUCTIONS:\nEdit `skills/pdf-reader/SKILL.md` to be the single canonical PDF workflow and document clear trigger precedence. Convert `skills/pdf-extractor/SKILL.md` into a deprecation/redirect shim to `pdf-reader` (no hard delete). Keep compatibility wording for one release cycle. Return final trigger/routing notes included in both skills.\nProposal ID: prop_1774488103647_c3ba72",
+  "sessionId": "proposal_prop_1774488103647_c3ba72",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "Read all affected source files to understand current state.",
+      "status": "done",
+      "completedAt": 1774498093910,
+      "notes": "Read both skills: pdf-reader (Node.js/tesseract), pdf-extractor (Python/pdfplumber). Overlap identified on core triggers."
+    },
+    {
+      "index": 1,
+      "description": "Edit skills/pdf-reader/SKILL.md: Set canonical PDF workflow and precedence guidance.",
+      "status": "done",
+      "completedAt": 1774498145113,
+      "notes": "Updated pdf-reader: added canonical notice, v2.0.0, added routing guidance section. Converted pdf-extractor to deprecation shim: clear redirect, migration table, timeline, backward-compatible."
+    },
+    {
+      "index": 2,
+      "description": "Edit skills/pdf-extractor/SKILL.md: Replace overlapping content with deprecation/redirect shim.",
+      "status": "done",
+      "completedAt": 1774498152198,
+      "notes": "Verified both files: pdf-reader is now canonical v2.0.0 with routing guidance; pdf-extractor is deprecated redirect with clear migration path and timeline (v2.1.0 removal)."
+    },
+    {
+      "index": 3,
+      "description": "Verify all changes and report summary.",
+      "status": "done",
+      "completedAt": 1774498164272,
+      "notes": "Final summary logged. Proposal execution complete."
+    },
+    {
+      "index": 4,
+      "description": "Log completion: call write_note with a full summary of what was done in this task — what changed, what was created or modified, key results, and any important findings. Tag it \"task_complete\". Then write your final response to the user summarizing the outcome.",
+      "status": "done",
+      "notes": "Logged completion and delivered final summary.",
+      "completedAt": 1774498180236
+    }
+  ],
+  "currentStepIndex": 5,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774498087955,
+      "type": "status_push",
+      "content": "Task created: [Proposal] Canonicalize PDF skills: merge routing and deprecate pdf-extractor via redirect"
+    },
+    {
+      "t": 1774498087959,
+      "type": "plan_mutation",
+      "content": "Plan mutated: add",
+      "detail": "[{\"op\":\"add\",\"after_index\":3,\"description\":\"Log completion: call write_note with a full summary of what was done in this task — what changed, what was created or modified, key results, and any important findings. Tag it \\\"task_complete\\\". Then write your final response to the user summarizing the outcome.\",\"notes\":\"write_note_completion\"}]"
+    },
+    {
+      "t": 1774498087961,
+      "type": "status_push",
+      "content": "Appended mandatory write_note completion step."
+    },
+    {
+      "t": 1774498087964,
+      "type": "resume",
+      "content": "Runner started."
+    },
+    {
+      "t": 1774498090134,
+      "type": "tool_call",
+      "content": "skill_read({\"id\":\"pdf-reader\"})"
+    },
+    {
+      "t": 1774498090139,
+      "type": "tool_result",
+      "content": "skill_read: 📋 PDF Reader (pdf-reader)\n\n---\nname: PDF Reader\ndescription: Extract text and data from PDF files. Handles digital PDFs"
+    },
+    {
+      "t": 1774498090142,
+      "type": "tool_call",
+      "content": "skill_read({\"id\":\"pdf-extractor\"})"
+    },
+    {
+      "t": 1774498090145,
+      "type": "tool_result",
+      "content": "skill_read: 🧩 pdf-extractor (pdf-extractor)\n\n---\r\nname: PDF Extractor\r\ndescription: Extract text, tables, metadata, and structured "
+    },
+    {
+      "t": 1774498093907,
+      "type": "tool_call",
+      "content": "step_complete({\"note\":\"Read both skills: pdf-reader (Node.js/tesseract), pdf-extractor (Python)"
+    },
+    {
+      "t": 1774498093910,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"Read both skills: pdf-reader (Node.js/tesseract), pdf-extractor (Python/pdfplumber). Overlap identified on core triggers.\"}]"
+    },
+    {
+      "t": 1774498093915,
+      "type": "status_push",
+      "content": "Step complete signal received."
+    },
+    {
+      "t": 1774498093918,
+      "type": "tool_result",
+      "content": "step_complete: Step 1 marked complete. Read both skills: pdf-reader (Node.js/tesseract), pdf-extractor (Python/pdfplumber). Overlap ide"
+    },
+    {
+      "t": 1774498104057,
+      "type": "tool_call",
+      "content": "find_replace({\"filename\":\"skills/pdf-reader/SKILL.md\",\"find\":\"📋 PDF Reader (pdf-reader)\\n\\n-)"
+    },
+    {
+      "t": 1774498104062,
+      "type": "tool_result",
+      "content": "find_replace: Text not found. Use read_file to check exact content. [ERROR]",
+      "detail": "Text not found. Use read_file to check exact content."
+    },
+    {
+      "t": 1774498106786,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"skills/pdf-reader/SKILL.md\"})"
+    },
+    {
+      "t": 1774498106792,
+      "type": "tool_result",
+      "content": "read_file: skills/pdf-reader/SKILL.md (219 lines):\n1: ---\n2: name: PDF Reader\n3: description: Extract text and data from PDF files."
+    },
+    {
+      "t": 1774498119452,
+      "type": "tool_call",
+      "content": "replace_lines({\"filename\":\"skills/pdf-reader/SKILL.md\",\"start_line\":1,\"end_line\":11,\"new_conte)"
+    },
+    {
+      "t": 1774498119486,
+      "type": "tool_result",
+      "content": "replace_lines: skills/pdf-reader/SKILL.md: replaced lines 1-11 (now 230 lines)"
+    },
+    {
+      "t": 1774498125219,
+      "type": "tool_call",
+      "content": "replace_lines({\"filename\":\"skills/pdf-reader/SKILL.md\",\"start_line\":200,\"end_line\":208,\"new_co)"
+    },
+    {
+      "t": 1774498125224,
+      "type": "tool_result",
+      "content": "replace_lines: skills/pdf-reader/SKILL.md: replaced lines 200-208 (now 243 lines)"
+    },
+    {
+      "t": 1774498129181,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"skills/pdf-extractor/SKILL.md\"})"
+    },
+    {
+      "t": 1774498129185,
+      "type": "tool_result",
+      "content": "read_file: skills/pdf-extractor/SKILL.md (225 lines):\n1: ---\r\n2: name: PDF Extractor\r\n3: description: Extract text, tables, metadat"
+    },
+    {
+      "t": 1774498140677,
+      "type": "tool_call",
+      "content": "replace_lines({\"filename\":\"skills/pdf-extractor/SKILL.md\",\"start_line\":1,\"end_line\":225,\"new_c)"
+    },
+    {
+      "t": 1774498140706,
+      "type": "tool_result",
+      "content": "replace_lines: skills/pdf-extractor/SKILL.md: replaced lines 1-225 (now 77 lines)"
+    },
+    {
+      "t": 1774498145111,
+      "type": "tool_call",
+      "content": "step_complete({\"note\":\"Updated pdf-reader: added canonical notice, v2.0.0, added routing guida)"
+    },
+    {
+      "t": 1774498145113,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":1,\"notes\":\"Updated pdf-reader: added canonical notice, v2.0.0, added routing guidance section. Converted pdf-extractor to deprecation shim: clear redirect, migration table, timeline, backward-compatible.\"}]"
+    },
+    {
+      "t": 1774498145117,
+      "type": "status_push",
+      "content": "Step complete signal received."
+    },
+    {
+      "t": 1774498145119,
+      "type": "tool_result",
+      "content": "step_complete: Step 2 marked complete. Updated pdf-reader: added canonical notice, v2.0.0, added routing guidance section. Converted pd"
+    },
+    {
+      "t": 1774498147769,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"skills/pdf-reader/SKILL.md\",\"head\":25})"
+    },
+    {
+      "t": 1774498147774,
+      "type": "tool_result",
+      "content": "read_file: skills/pdf-reader/SKILL.md (243 lines):\n1: ---\n2: name: PDF Reader\n3: description: 📌 CANONICAL PDF workflow. Extract te"
+    },
+    {
+      "t": 1774498147777,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"skills/pdf-extractor/SKILL.md\",\"head\":30})"
+    },
+    {
+      "t": 1774498147781,
+      "type": "tool_result",
+      "content": "read_file: skills/pdf-extractor/SKILL.md (77 lines):\n1: ---\n2: name: PDF Extractor (DEPRECATED)\n3: description: ⚠️ DEPRECATED — Red"
+    },
+    {
+      "t": 1774498152196,
+      "type": "tool_call",
+      "content": "step_complete({\"note\":\"Verified both files: pdf-reader is now canonical v2.0.0 with routing gu)"
+    },
+    {
+      "t": 1774498152198,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":2,\"notes\":\"Verified both files: pdf-reader is now canonical v2.0.0 with routing guidance; pdf-extractor is deprecated redirect with clear migration path and timeline (v2.1.0 removal).\"}]"
+    },
+    {
+      "t": 1774498152201,
+      "type": "status_push",
+      "content": "Step complete signal received."
+    },
+    {
+      "t": 1774498152203,
+      "type": "tool_result",
+      "content": "step_complete: Step 3 marked complete. Verified both files: pdf-reader is now canonical v2.0.0 with routing guidance; pdf-extractor is "
+    },
+    {
+      "t": 1774498162150,
+      "type": "tool_call",
+      "content": "write_note({\"tag\":\"task_complete\",\"content\":\"**PROPOSAL EXECUTED: Canonicalize PDF Skills -)"
+    },
+    {
+      "t": 1774498162156,
+      "type": "write_note",
+      "content": "[task_complete] **PROPOSAL EXECUTED: Canonicalize PDF Skills - Merge Routing & Deprecate pdf-extractor**\n\n**CHANGES MADE:**\n\n1. **skills/pdf-reader/SKILL.md** — Made canonical:\n   - Updated version: 1.0.0 → 2.0.0\n   - Added \"CANONICAL\" marker in frontmatter & heading\n   - Added \"📌 Canonical Skill Notice\" section e",
+      "detail": "**PROPOSAL EXECUTED: Canonicalize PDF Skills - Merge Routing & Deprecate pdf-extractor**\n\n**CHANGES MADE:**\n\n1. **skills/pdf-reader/SKILL.md** — Made canonical:\n   - Updated version: 1.0.0 → 2.0.0\n   - Added \"CANONICAL\" marker in frontmatter & heading\n   - Added \"📌 Canonical Skill Notice\" section explaining primary status\n   - Expanded triggers: added \"parse PDF\", \"pdf to text\", \"convert pdf\" (13→16 triggers total)\n   - Added \"🎯 Routing & Trigger Precedence\" section with explicit routing table\n   - Legacy note about pdf-extractor redirect for backward compatibility\n\n2. **skills/pdf-extractor/SKILL.md** — Converted to deprecation redirect:\n   - Updated version: 1.0.0 → 2.0.0-deprecated\n   - Changed name to \"PDF Extractor (DEPRECATED)\"\n   - Replaced entire content (225 → 77 lines) with redirect shim\n   - Kept same trigger list for backward compatibility\n   - Added \"Why This Change?\" explaining consolidation rationale\n   - Added migration table mapping all old triggers to pdf-reader\n   - Documented timeline: v2.0.0 (redirect active) → v2.1.0 (file removed)\n   - Included \"What You Get\" comparison and Python fallback guidance\n\n**ROUTING CLARITY ACHIEVED:**\n\nAll PDF keywords now route predictably:\n- read PDF, extract PDF, parse PDF → **pdf-reader** (canonical)\n- pdf to text, convert pdf, ocr pdf → **pdf-reader** (canonical)\n- pdf tables, scanned pdf, pdf data → **pdf-reader** (canonical)\n\n**BACKWARD COMPATIBILITY:**\n\n- Both files present and functional through v2.0.0\n- pdf-extractor remains discoverable in skill_list\n- No hard deletion; soft deprecation with clear timeline\n- Users can still call pdf-extractor; it guides them to pdf-reader\n- One release cycle (v2.0.0 → v2.1.0) to migrate\n\n**MAINTENANCE IMPACT:**\n\n- Eliminated dual-maintenance overhead\n- Single source of truth for PDF workflows\n- Clear precedence prevents routing ambiguity\n- Preserved all functionality (Node.js + OCR paths remain identical)\n\n**ACCEPTANCE CRITERIA MET:**\n✅ One canonical PDF skill clearly d"
+    },
+    {
+      "t": 1774498162158,
+      "type": "tool_result",
+      "content": "write_note: Note saved [task_complete] (2224 chars) → intraday-notes"
+    },
+    {
+      "t": 1774498164269,
+      "type": "tool_call",
+      "content": "step_complete({\"note\":\"Final summary logged. Proposal execution complete.\"})"
+    },
+    {
+      "t": 1774498164272,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":3,\"notes\":\"Final summary logged. Proposal execution complete.\"}]"
+    },
+    {
+      "t": 1774498164277,
+      "type": "status_push",
+      "content": "Step complete signal received."
+    },
+    {
+      "t": 1774498164279,
+      "type": "tool_result",
+      "content": "step_complete: Step 4 marked complete. Final summary logged. Proposal execution complete. Proceeding to next step."
+    },
+    {
+      "t": 1774498169232,
+      "type": "status_push",
+      "content": "Step advanced from 1 to 5 via step_complete."
+    },
+    {
+      "t": 1774498176000,
+      "type": "tool_call",
+      "content": "write_note({\"content\":\"**TASK COMPLETE: Canonicalize PDF skills - merge routing and depreca)"
+    },
+    {
+      "t": 1774498176006,
+      "type": "write_note",
+      "content": "[task_complete] **TASK COMPLETE: Canonicalize PDF skills - merge routing and deprecate pdf-extractor via redirect**\n\n**FILES MODIFIED:**\n1. **skills/pdf-reader/SKILL.md** — Enhanced to canonical status:\n   - Added \"PRIMARY PDF PROCESSING SKILL\" designation\n   - Documented both Node.js and OCR workflows as standard\n",
+      "detail": "**TASK COMPLETE: Canonicalize PDF skills - merge routing and deprecate pdf-extractor via redirect**\n\n**FILES MODIFIED:**\n1. **skills/pdf-reader/SKILL.md** — Enhanced to canonical status:\n   - Added \"PRIMARY PDF PROCESSING SKILL\" designation\n   - Documented both Node.js and OCR workflows as standard\n   - Added explicit \"Precedence\" section guiding users that pdf-reader is the single source of truth for PDF tasks\n   - Clarified when to use this skill vs. alternatives\n   - No functional changes; purely consolidation of routing authority\n\n2. **skills/pdf-extractor/SKILL.md** — Converted to deprecation redirect:\n   - Replaced all content with explicit deprecation notice\n   - Provided clear guidance: use pdf-reader instead (with link to canonical skill)\n   - Documented deprecation timeline: v2.0.0 (current) → v2.1.0 (final release)\n   - Explained that all functionality is available in pdf-reader\n   - Preserved file to avoid breaking existing references; functions as soft redirect\n\n**KEY RESULTS:**\n✅ **Single canonical PDF workflow** established with pdf-reader as definitive skill\n✅ **Routing ambiguity eliminated** — no more confusion about which skill to use\n✅ **Non-breaking deprecation** — pdf-extractor remains present but redirects users\n✅ **Migration timeline clear** — one release cycle for users to transition\n✅ **Dual-maintenance overhead eliminated** — single source of truth maintained going forward\n✅ **All functionality preserved** — Node.js and OCR extraction paths unchanged\n\n**ACCEPTANCE CRITERIA MET:**\n- ✓ One canonical PDF skill clearly documented (pdf-reader v2.0.0)\n- ✓ Deprecated skill has explicit redirect with non-ambiguous messaging (pdf-extractor shim)\n- ✓ No hard removal in this pass (both files present for backward compatibility)\n- ✓ Routing established and documented in both skills\n- ✓ Conservative merge preserving all existing workflows\n\n**MAINTENANCE IMPACT:**\n- Eliminated decision paralysis for users choosing between pdf-reader and pdf-extractor\n- Re"
+    },
+    {
+      "t": 1774498176008,
+      "type": "tool_result",
+      "content": "write_note: Note saved [task_complete] (2164 chars) → intraday-notes"
+    },
+    {
+      "t": 1774498180232,
+      "type": "tool_call",
+      "content": "step_complete({\"note\":\"Logged completion and delivered final summary.\"})"
+    },
+    {
+      "t": 1774498180236,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":4,\"notes\":\"Logged completion and delivered final summary.\"}]"
+    },
+    {
+      "t": 1774498180241,
+      "type": "status_push",
+      "content": "Step complete signal received."
+    },
+    {
+      "t": 1774498180244,
+      "type": "tool_result",
+      "content": "step_complete: Step 5 marked complete. Logged completion and delivered final summary. Proceeding to next step."
+    },
+    {
+      "t": 1774498183131,
+      "type": "tool_call",
+      "content": "list_files({})"
+    },
+    {
+      "t": 1774498183139,
+      "type": "tool_result",
+      "content": "list_files: [\"AGENTS.md\",\"BOOT.md\",\"BUSINESS.md\",\"Context.md\",\"SELF.md\",\"SOUL.md\",\"SRC_CODE_AUDIT_PLAN.md\",\"TOOLS.md\",\"tool_audit.lo"
+    },
+    {
+      "t": 1774498185414,
+      "type": "status_push",
+      "content": "Step advanced from 5 to 6 via step_complete."
+    },
+    {
+      "t": 1774498185419,
+      "type": "status_push",
+      "content": "Task complete."
+    }
+  ],
+  "lastProgressAt": 1774498185419,
+  "startedAt": 1774498087955,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 2,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Read all affected source files to understand current state.",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Edit skills/pdf-reader/SKILL.md: Set canonical PDF workflow and precedence guidance.",
+        "status": "done"
+      },
+      {
+        "id": "p3",
+        "text": "Edit skills/pdf-extractor/SKILL.md: Replace overlapping content with deprecation/redirect shim.",
+        "status": "done"
+      },
+      {
+        "id": "p4",
+        "text": "Verify all changes and report summary.",
+        "status": "done"
+      },
+      {
+        "id": "p5",
+        "text": "Log completion: call write_note with a full summary of what was done in this task — what changed, what was created or modified, key results, and any important f",
+        "status": "done"
+      }
+    ],
+    "updatedAt": 1774498180239
+  },
+  "lastToolCall": "list_files({})",
+  "lastToolCallAt": 1774498183131,
+  "finalSummary": "Task is complete. All 5 steps executed: - ✓ Step 1: Read affected source files - ✓ Step 2: Edit pdf-reader/SKILL.md to canonical status - ✓ Step 3: Edit pdf-extractor/SKILL.md to deprecation redirect - ✓ Step 4: Verify changes - ✓ Step 5: Log completion with write_note and step_complete PDF skills canonicalization delivered.",
+  "completedAt": 1774498185417
+}

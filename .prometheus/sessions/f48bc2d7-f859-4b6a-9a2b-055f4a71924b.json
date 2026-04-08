@@ -1,0 +1,31 @@
+{
+  "id": "f48bc2d7-f859-4b6a-9a2b-055f4a71924b",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom can you find where all the previous completed tasks are stored",
+      "timestamp": 1773930730408
+    },
+    {
+      "role": "assistant",
+      "content": "Yep — completed tasks are stored in Prometheus’s task system database/state, and you can view them via `task_control(list)` (it returns active + historical task entries, including completed ones).\n\nIf you want, I can pull the current list now and point to the exact task IDs/statuses.",
+      "timestamp": 1773930738673
+    },
+    {
+      "role": "user",
+      "content": "yea no go ahead and actually find the directory for me, where do all of the task sessions live",
+      "timestamp": 1773934648210
+    },
+    {
+      "role": "assistant",
+      "content": "Nailed down as far as the filesystem shows:\n\n- **Primary task/session store root:** `D:\\Prometheus\\.prometheus\\`\n- **Subagent session roots:** `D:\\Prometheus\\.prometheus\\subagents\\{agent_id}\\`\n- **Team task/session workspaces:** `D:\\Prometheus\\teams\\{team_id}\\workspace\\`\n\nAlso, in your current workspace, `.prometheus\\subagents\\code_executor\\` is presently empty.",
+      "timestamp": 1773934707761
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1773930730409,
+  "lastActiveAt": 1773934707762,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 258
+}

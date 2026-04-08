@@ -1,0 +1,21 @@
+{
+  "id": "b3b8e62c-0417-4403-be57-ec2befe41d6a",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey",
+      "timestamp": 1774288704543
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Anthropic API error 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"},\"request_id\":\"req_011CZLSp3sEnN9b2ay9HcQRu\"}",
+      "timestamp": 1774288705515
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774288704544,
+  "lastActiveAt": 1774288705515,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 75
+}

@@ -1,0 +1,93 @@
+{
+  "type": "skill_evolution",
+  "priority": "medium",
+  "title": "Create secret-and-token-ops skill for vault-safe credential operations",
+  "summary": "Add a dedicated skill for secure token/secret handling, lifecycle hygiene, rotation/recovery playbooks, and redaction-safe logging.",
+  "details": "Create a security operations skill for credential management workflows.\n\nScope:\n1. Add `skills/secret-and-token-ops/SKILL.md` with complete frontmatter and explicit triggers.\n2. Document safe handling rules for secrets/tokens (never echo, redact logs, minimal exposure).\n3. Include lifecycle guidance: create/store/rotate/revoke/recover.\n4. Add incident-safe response checklist for suspected credential leaks.\n\nAcceptance:\n- New skill is explicit, actionable, and security-forward.\n- Trigger list captures secret/token/credential scenarios.\n- Includes leak-response and rotation workflows.",
+  "sourceAgentId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "sourceSessionId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "affectedFiles": [
+    {
+      "path": "skills/secret-and-token-ops/SKILL.md",
+      "action": "create",
+      "description": "New credential safety and token lifecycle operations skill."
+    },
+    {
+      "path": "skills/_state.json",
+      "action": "edit",
+      "description": "Register secret-and-token-ops skill entry."
+    }
+  ],
+  "diffPreview": "+ New secret-and-token-ops skill with redaction-safe practices and token lifecycle playbook.\n~ `_state.json` updated with new skill ID.",
+  "estimatedImpact": "Improves security posture and reduces risk from unsafe credential handling patterns.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Create `skills/secret-and-token-ops/SKILL.md` with full frontmatter, trigger list, and sections for secure handling rules, token lifecycle operations (create/store/rotate/revoke/recover), and leak-incident response checklist. Register the skill in `skills/_state.json`. Return the final trigger list and safety checklist.",
+  "id": "prop_1774488176310_4a6b16",
+  "status": "executing",
+  "createdAt": 1774488176310,
+  "updatedAt": 1774602067359,
+  "version": 1,
+  "revisionHistory": [
+    {
+      "version": 1,
+      "editedAt": 1774488176310,
+      "editedBy": "69d7949d-758a-42d8-b95b-368c9deedde8",
+      "note": "Initial proposal content",
+      "snapshot": {
+        "type": "skill_evolution",
+        "priority": "medium",
+        "title": "Create secret-and-token-ops skill for vault-safe credential operations",
+        "summary": "Add a dedicated skill for secure token/secret handling, lifecycle hygiene, rotation/recovery playbooks, and redaction-safe logging.",
+        "details": "Create a security operations skill for credential management workflows.\n\nScope:\n1. Add `skills/secret-and-token-ops/SKILL.md` with complete frontmatter and explicit triggers.\n2. Document safe handling rules for secrets/tokens (never echo, redact logs, minimal exposure).\n3. Include lifecycle guidance: create/store/rotate/revoke/recover.\n4. Add incident-safe response checklist for suspected credential leaks.\n\nAcceptance:\n- New skill is explicit, actionable, and security-forward.\n- Trigger list captures secret/token/credential scenarios.\n- Includes leak-response and rotation workflows.",
+        "affectedFiles": [
+          {
+            "path": "skills/secret-and-token-ops/SKILL.md",
+            "action": "create",
+            "description": "New credential safety and token lifecycle operations skill."
+          },
+          {
+            "path": "skills/_state.json",
+            "action": "edit",
+            "description": "Register secret-and-token-ops skill entry."
+          }
+        ],
+        "diffPreview": "+ New secret-and-token-ops skill with redaction-safe practices and token lifecycle playbook.\n~ `_state.json` updated with new skill ID.",
+        "estimatedImpact": "Improves security posture and reduces risk from unsafe credential handling patterns.",
+        "requiresBuild": false,
+        "executorAgentId": "code_executor",
+        "executorPrompt": "Create `skills/secret-and-token-ops/SKILL.md` with full frontmatter, trigger list, and sections for secure handling rules, token lifecycle operations (create/store/rotate/revoke/recover), and leak-incident response checklist. Register the skill in `skills/_state.json`. Return the final trigger list and safety checklist."
+      }
+    }
+  ],
+  "approvalSnapshot": {
+    "approvedAt": 1774602067227,
+    "approvedVersion": 1,
+    "snapshot": {
+      "type": "skill_evolution",
+      "priority": "medium",
+      "title": "Create secret-and-token-ops skill for vault-safe credential operations",
+      "summary": "Add a dedicated skill for secure token/secret handling, lifecycle hygiene, rotation/recovery playbooks, and redaction-safe logging.",
+      "details": "Create a security operations skill for credential management workflows.\n\nScope:\n1. Add `skills/secret-and-token-ops/SKILL.md` with complete frontmatter and explicit triggers.\n2. Document safe handling rules for secrets/tokens (never echo, redact logs, minimal exposure).\n3. Include lifecycle guidance: create/store/rotate/revoke/recover.\n4. Add incident-safe response checklist for suspected credential leaks.\n\nAcceptance:\n- New skill is explicit, actionable, and security-forward.\n- Trigger list captures secret/token/credential scenarios.\n- Includes leak-response and rotation workflows.",
+      "affectedFiles": [
+        {
+          "path": "skills/secret-and-token-ops/SKILL.md",
+          "action": "create",
+          "description": "New credential safety and token lifecycle operations skill."
+        },
+        {
+          "path": "skills/_state.json",
+          "action": "edit",
+          "description": "Register secret-and-token-ops skill entry."
+        }
+      ],
+      "diffPreview": "+ New secret-and-token-ops skill with redaction-safe practices and token lifecycle playbook.\n~ `_state.json` updated with new skill ID.",
+      "estimatedImpact": "Improves security posture and reduces risk from unsafe credential handling patterns.",
+      "requiresBuild": false,
+      "executorAgentId": "code_executor",
+      "executorPrompt": "Create `skills/secret-and-token-ops/SKILL.md` with full frontmatter, trigger list, and sections for secure handling rules, token lifecycle operations (create/store/rotate/revoke/recover), and leak-incident response checklist. Register the skill in `skills/_state.json`. Return the final trigger list and safety checklist."
+    }
+  },
+  "decidedAt": 1774602067227,
+  "executorTaskId": "proposal_prop_1774488176310_4a6b16"
+}

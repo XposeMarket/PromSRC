@@ -1,0 +1,27 @@
+{
+  "type": "skill_evolution",
+  "priority": "medium",
+  "title": "Add explicit trigger metadata and routing boundaries to x-browser-automation-playbook",
+  "summary": "Strengthen x-browser-automation-playbook metadata by adding explicit triggers and clear precedence against browser-automation-playbook and web-scraper.",
+  "details": "Update `skills/x-browser-automation-playbook/SKILL.md` for better routing precision.\n\nScope:\n1. Add explicit frontmatter trigger list covering x.com/Twitter-specific actions.\n2. Document boundaries and precedence:\n   - X-specific interactive/social actions -> x-browser-automation-playbook\n   - General browser workflows -> browser-automation-playbook\n   - Static extraction/crawl tasks -> web-scraper\n3. Keep existing operational guidance intact.\n\nAcceptance:\n- Frontmatter includes explicit trigger list.\n- Boundary/preference rules are documented and unambiguous.",
+  "sourceAgentId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "sourceSessionId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "affectedFiles": [
+    {
+      "path": "skills/x-browser-automation-playbook/SKILL.md",
+      "action": "edit",
+      "description": "Add trigger metadata and precedence/boundary guidance."
+    }
+  ],
+  "diffPreview": "- Missing/weak explicit trigger metadata and boundary clarity.\n+ Complete trigger list plus precedence rules across adjacent automation skills.",
+  "estimatedImpact": "Improves skill selection quality for X tasks and reduces overlap misrouting.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Edit `skills/x-browser-automation-playbook/SKILL.md` to include explicit frontmatter triggers and a concise routing precedence section versus `browser-automation-playbook` and `web-scraper`. Preserve existing stable operational patterns. Return updated triggers and precedence text.",
+  "id": "prop_1774488139202_f02a1b",
+  "status": "executing",
+  "createdAt": 1774488139203,
+  "updatedAt": 1774540632105,
+  "decidedAt": 1774540632099,
+  "executorTaskId": "proposal_prop_1774488139202_f02a1b"
+}

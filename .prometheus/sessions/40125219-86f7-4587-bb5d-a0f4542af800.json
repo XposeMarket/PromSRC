@@ -1,0 +1,18 @@
+{
+  "id": "40125219-86f7-4587-bb5d-a0f4542af800",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw, how many files are in the workspace that begin with golden?",
+      "timestamp": 1771714287104
+    },
+    {
+      "role": "assistant",
+      "content": "ERROR: SyntaxError: missing ) after argument list",
+      "timestamp": 1771714320215
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771714287105,
+  "lastActiveAt": 1771714320215
+}

@@ -1,0 +1,64 @@
+{
+  "id": "proposal_prop_1774676035934_99ff10",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774676155014
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Telegram tool feed: distinct step_complete marker + show after/write payloads\nReason: Task paused — model returned an unrecoverable error at step 1.\nDetails: Error: Anthropic API error 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 205952 tokens > 200000 maximum\"},\"request_id\":\"req_011CZUwEbKoB5xNxDGTNGK2f\"}\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: f3254529-7f3f-4a16-ad84-b3f1678c1b1a",
+      "timestamp": 1774676155015
+    },
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774681121914
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Telegram tool feed: distinct step_complete marker + show after/write payloads\nReason: Task paused — model returned an unrecoverable error at step 1.\nDetails: Error: Anthropic API error 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 204111 tokens > 200000 maximum\"},\"request_id\":\"req_011CZV3Yj7ZSTN24EQ72Kayv\"}\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: f3254529-7f3f-4a16-ad84-b3f1678c1b1a",
+      "timestamp": 1774681121916
+    },
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774681700419
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Telegram tool feed: distinct step_complete marker + show after/write payloads\nReason: Task paused — model returned an unrecoverable error at step 1.\nDetails: Error: Anthropic API error 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 203658 tokens > 200000 maximum\"},\"request_id\":\"req_011CZV4HNWGKK6MHPjix2ByC\"}\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: f3254529-7f3f-4a16-ad84-b3f1678c1b1a",
+      "timestamp": 1774681700420
+    },
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774681747913
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Telegram tool feed: distinct step_complete marker + show after/write payloads\nReason: Task paused — model returned an unrecoverable error at step 1.\nDetails: Error: Anthropic API error 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 203507 tokens > 200000 maximum\"},\"request_id\":\"req_011CZV4Lnism2QQ9gz3aiD98\"}\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: f3254529-7f3f-4a16-ad84-b3f1678c1b1a",
+      "timestamp": 1774681747914
+    },
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774710436643
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Telegram tool feed: distinct step_complete marker + show after/write payloads\nReason: Task paused — model returned an unrecoverable error at step 1.\nDetails: Error: Anthropic API error 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 201198 tokens > 200000 maximum\"},\"request_id\":\"req_011CZVgodZAYuyagea49QQ3M\"}\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: f3254529-7f3f-4a16-ad84-b3f1678c1b1a",
+      "timestamp": 1774710436645
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774676127099,
+  "lastActiveAt": 1774710436645,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 874,
+  "activatedToolCategories": [
+    "source_write"
+  ]
+}

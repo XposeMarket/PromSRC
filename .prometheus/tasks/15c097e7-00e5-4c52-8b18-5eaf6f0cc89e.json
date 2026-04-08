@@ -1,0 +1,173 @@
+{
+  "id": "15c097e7-00e5-4c52-8b18-5eaf6f0cc89e",
+  "title": "🧠 Midnight Intraday Reflection → Memory Updates",
+  "prompt": "You are Prom, running as a scheduled maintenance agent focused on improving personalization quality.\n\nGoal:\nEach run, review the previous day's intraday notes file and update long-term memory only when there are genuinely important, new, non-duplicate facts that improve future behavior with the user.\n\nExecution steps (deterministic):\n1) Compute yesterday's date in YYYY-MM-DD using the job runtime local date.\n2) Target file path: memory/<YYYY-MM-DD>-intraday-notes.md\n3) If the file does not exist or is empty:\n   - Exit cleanly with a short result summary: \"No intraday notes found for <date>; no memory updates made.\"\n- Complete plan.\n4) If file exists:\n   - Read the full file.\n   - Extract only high-signal items that impact assistant behavior, such as:\n     - stable communication/style preferences\n     - workflow rules or hard constraints\n     - tool usage constraints/policies\n     - recurring project context that should persist\n   - Ignore transient logs, one-off execution noise, and anything already represented in memory.\n5) Before writing, inspect current memory categories and contents:\n   - memory_browse(file:\"user\") and memory_browse(file:\"soul\")\n   - memory_read(file:\"user\") and memory_read(file:\"soul\")\n6) For each truly new, important item:\n   - Write to the correct file/category using memory_write:\n     - USER.md for user preferences, identity, projects, workflow preferences.\n     - SOUL.md for assistant behavior rules, tool policies, and operating constraints.\n   - Keep entries concise, specific, and timestamped when helpful.\n7) De-duplication rule:\n   - Do NOT write items that are already present in equivalent meaning.\n   - Prefer updating the most relevant existing category rather than creating unnecessary new categories.\n8) Output a concise run summary including:\n   - date reviewed\n   - whether file existed\n   - number of candidate insights\n   - number of memory writes executed\n   - exact categories updated\n\nSuccess criteria:\n- Zero writes when no meaningf",
+  "sessionId": "default",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "scheduleId": "job_1774675329945_p9pzc",
+  "plan": [
+    {
+      "index": 0,
+      "description": "You are Prom, running as a scheduled maintenance agent focused on improving personalization quality.\n\nGoal:\nEach run, re",
+      "status": "done",
+      "completedAt": 1775069915126,
+      "notes": "Done. Steps 2 and 3 were completed in the prior actions:\n\n- Step 2 (inspect current memory): executed via `memory_browse` and `memory_read` for both `user` and `soul`, which returned not found.\n- Step"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1775069859861,
+      "type": "status_push",
+      "content": "Task created: 🧠 Midnight Intraday Reflection → Memory Updates"
+    },
+    {
+      "t": 1775069865373,
+      "type": "tool_call",
+      "content": "declare_plan({\"steps\":[\"Compute yesterday date and locate notes file\",\"Read notes and inspect)"
+    },
+    {
+      "t": 1775069865378,
+      "type": "tool_result",
+      "content": "declare_plan: Plan set (3 steps): Compute yesterday date and locate notes file → Read notes and inspect current memory → Write dedupli"
+    },
+    {
+      "t": 1775069865382,
+      "type": "tool_call",
+      "content": "run_command({\"command\":\"python -c \\\"from datetime import date,timedelta; print((date.today())"
+    },
+    {
+      "t": 1775069865387,
+      "type": "tool_result",
+      "content": "run_command: Blocked: \"python -c \"from datetime import date,timedelta; print((date.today()-timedelta(days=1)).isoformat())\"\" contains"
+    },
+    {
+      "t": 1775069869069,
+      "type": "tool_call",
+      "content": "run_command({\"command\":\"powershell -NoProfile -Command \\\"(Get-Date).AddDays(-1).ToString('yy)"
+    },
+    {
+      "t": 1775069869074,
+      "type": "tool_result",
+      "content": "run_command: Command \"powershell -NoProfile -Command \"(Get-Date).AddDays(-1).ToString('yyyy-MM-dd')\"\" not recognized. Try: chrome, no"
+    },
+    {
+      "t": 1775069872252,
+      "type": "tool_call",
+      "content": "list_files({})"
+    },
+    {
+      "t": 1775069872256,
+      "type": "tool_result",
+      "content": "list_files: [\"tool_audit.log\"]"
+    },
+    {
+      "t": 1775069881650,
+      "type": "tool_call",
+      "content": "complete_plan_step({\"note\":\"Computed yesterday date from runtime context as 2026-03-31 and checked )"
+    },
+    {
+      "t": 1775069881656,
+      "type": "tool_result",
+      "content": "complete_plan_step: Unknown tool: complete_plan_step"
+    },
+    {
+      "t": 1775069888885,
+      "type": "tool_call",
+      "content": "memory_browse({\"file\":\"user\"})"
+    },
+    {
+      "t": 1775069888893,
+      "type": "tool_result",
+      "content": "memory_browse: USER.md not found. Create it first."
+    },
+    {
+      "t": 1775069888897,
+      "type": "tool_call",
+      "content": "memory_browse({\"file\":\"soul\"})"
+    },
+    {
+      "t": 1775069888905,
+      "type": "tool_result",
+      "content": "memory_browse: SOUL.md not found. Create it first."
+    },
+    {
+      "t": 1775069897791,
+      "type": "tool_call",
+      "content": "memory_read({\"file\":\"user\"})"
+    },
+    {
+      "t": 1775069897802,
+      "type": "tool_result",
+      "content": "memory_read: USER.md not found"
+    },
+    {
+      "t": 1775069897804,
+      "type": "tool_call",
+      "content": "memory_read({\"file\":\"soul\"})"
+    },
+    {
+      "t": 1775069897811,
+      "type": "tool_result",
+      "content": "memory_read: SOUL.md not found"
+    },
+    {
+      "t": 1775069902822,
+      "type": "tool_call",
+      "content": "write_note({\"content\":\"Maintenance sync ran against 2026-03-31 context; intraday notes and )"
+    },
+    {
+      "t": 1775069902834,
+      "type": "tool_result",
+      "content": "write_note: Note saved [last_run_insight] (254 chars) â†’ intraday-notes"
+    },
+    {
+      "t": 1775069915126,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"Done. Steps 2 and 3 were completed in the prior actions:\\n\\n- Step 2 (inspect current memory): executed via `memory_browse` and `memory_read` for both `user` and `soul`, which returned not found.\\n- Step\"}]"
+    },
+    {
+      "t": 1775069915130,
+      "type": "status_push",
+      "content": "Done: Done. Steps 2 and 3 were completed in the prior actions:\n\n- Step 2 (inspect current memory): executed via `memory_browse` and `memory_read` for both `user` and `soul`, which returned not found.\n- Step"
+    }
+  ],
+  "lastProgressAt": 1775069915130,
+  "startedAt": 1775069859861,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Compute yesterday date and locate notes file",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Read notes and inspect current memory",
+        "status": "done"
+      },
+      {
+        "id": "p3",
+        "text": "Write deduplicated memory updates and summarize",
+        "status": "skipped"
+      }
+    ],
+    "updatedAt": 1775069915124
+  },
+  "lastToolCall": "write_note({\"content\":\"Maintenance sync ran against 2026-03-31 context; intraday notes and )",
+  "lastToolCallAt": 1775069902822,
+  "finalSummary": "Done. Steps 2 and 3 were completed in the prior actions:\n\n- Step 2 (inspect current memory): executed via `memory_browse` and `memory_read` for both `user` and `soul`, which returned not found.\n- Step 3 (write deduplicated updates + summarize): no candidate insights, so zero `memory_write` actions; summary already produced; required `write_note` reflection was successfully saved.\n\nFinal status remains:\n- date reviewed: 2026-03-31\n- file existed: no\n- candidate insights: 0\n- memory writes: 0\n- categories updated: none",
+  "completedAt": 1775069915128
+}

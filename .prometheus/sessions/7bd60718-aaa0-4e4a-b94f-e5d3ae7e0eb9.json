@@ -1,0 +1,11 @@
+{
+  "id": "7bd60718-aaa0-4e4a-b94f-e5d3ae7e0eb9",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1774936365982,
+  "lastActiveAt": 1774936365982,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0
+}

@@ -1,0 +1,21 @@
+{
+  "id": "a439cace-bf3f-4a64-ab5c-f52480140fb5",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you go ahead and create a new skill for yourself - how to properly create src code edit related proposals - every proposal related to src code edits must require you to read the exact files and lines needed to be changed and reference them in the details and plans as well as what they need to be changed with - followed by the expected output of the changes and the current flow. - i believe you get some of this info as well in the runtime prompt and also aybe in self.md when creating proposals  - so lets also use that as reference, but we need to make it sharper  - since you read skills almost every turn",
+      "timestamp": 1774470190982
+    },
+    {
+      "role": "assistant",
+      "content": "Done — I created a new skill: **`src-edit-proposal-rigor`** (🧭).\n\nIt now enforces exactly what you asked for on all `src/` proposal work:\n- must read exact source files first (`read_source`/`grep_source`),\n- must cite file paths + line ranges,\n- must describe **current flow** before edits,\n- must specify exact planned changes per file,\n- must define deterministic expected behavior/output after patch,\n- must include concrete acceptance tests,\n- must include risks/compatibility,\n- and must use the required `write_proposal.details` headings verbatim.\n\nIf you want, next I can also create a **companion QA skill** that checks a proposal draft and fails it if any of those requirements are missing.",
+      "timestamp": 1774470263802
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774470190982,
+  "lastActiveAt": 1774470263802,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 388
+}

@@ -1,0 +1,17 @@
+---
+description: Required structure for proposals that edit src/ — enforce five mandatory sections
+globs: src/**/*, workspace/proposals/**/*, **/proposal*.ts
+alwaysApply: false
+---
+
+# Src Proposal Requirements
+
+When creating a proposal (via `write_proposal` or any path) that affects files under `src/`, the **details** field MUST include these exact section headings and content:
+
+1. **Why this change** — rationale for the edit
+2. **Exact source edits** — file paths, line numbers, find/replace blocks (copy-pasteable)
+3. **Deterministic behavior after patch** — what will reliably happen after the patch is applied
+4. **Acceptance tests** — concrete steps to verify the change
+5. **Risks and compatibility** — backward compatibility, regressions, fallbacks
+
+Proposals without all five sections are **rejected** by the proposal store. Use these headings verbatim.

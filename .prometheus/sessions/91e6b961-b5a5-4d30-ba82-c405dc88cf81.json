@@ -1,0 +1,21 @@
+{
+  "id": "91e6b961-b5a5-4d30-ba82-c405dc88cf81",
+  "history": [
+    {
+      "role": "user",
+      "content": "are you able to see your new tools to access web ui",
+      "timestamp": 1774585595376
+    },
+    {
+      "role": "assistant",
+      "content": "Done. 58 skills available: 🔌 api-integration - Correctly call REST APIs and web servi, web-ui/: [FILE] index - Copy.html [FILE] index.html [DIR]  src/.",
+      "timestamp": 1774585621373
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774585595376,
+  "lastActiveAt": 1774585621373,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 71
+}

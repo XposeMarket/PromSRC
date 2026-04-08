@@ -1,0 +1,293 @@
+{
+  "type": "feature_addition",
+  "priority": "high",
+  "title": "Add one-time Background Agent spawn/join flow (ephemeral, no profile files)",
+  "summary": "Implement Claude Code-style Background Agents as an additive capability: main chat can spawn one-time parallel LLM calls for side work (like memory updates), continue primary work immediately, then deterministically rejoin background results into one final response—without changing default current behavior.",
+  "details": "## Why this change\nRaul’s core requirement is to add a **Background Agents** primitive that behaves like Claude Code’s background agents while preserving what already works today.\n\nCurrent behavior (which is good and must remain): when a prompt includes both a memory update and code edits, main chat executes both sequentially in one flow.\n\nRequested new behavior (opt-in): main chat can offload side work (example: memory update) to a one-time background execution, immediately continue primary work (example: coding), then collect/rejoin the background result before final reply.\n\nThis is a capability addition, not a replacement. Default/direct flow must continue to work unchanged unless explicitly spawning a background agent.\n\n## Exact source edits\n1) Add new background execution primitive (ephemeral)\n- Add a background spawn path that creates a **one-time execution unit** with:\n  - no profile files\n  - no long-lived agent identity\n  - no heartbeat/schedule ownership\n  - task-scoped prompt only\n- Background run must be a **separate LLM/API call** from the active main-chat call.\n- Runtime identity/persona should be the same as main chat (same core model/prompting identity), but invocation context is scoped to the spawn payload.\n\n2) Add orchestrator-facing interface\n- Introduce explicit operations for:\n  - `background_spawn` (start fire-and-forget task)\n  - `background_status`/`background_progress` (in_progress | completed | failed + optional partial metadata)\n  - `background_join` (retrieve and merge final result)\n- Keep interface additive; do not alter existing start_task semantics.\n\n3) Enforce boundary vs existing task system\n- Preserve clear contract:\n  - `start_task` = tracked long-running task workflow\n  - `Background Agent` = one-shot ephemeral parallel LLM call with no profile artifacts\n- Ensure no cross-contamination of persistence features from subagents/start_task into background agents.\n\n4) Add deterministic merge/finalization behavior\n- Support explicit join policies:\n  - `wait_all`\n  - `wait_until_timeout` (default)\n  - `best_effort_merge`\n- Add merge safety:\n  - idempotent ingestion (each background result merges once)\n  - final-response gate executes join policy before response assembly\n  - if timeout expires, final message clearly reports unfinished background items\n\n5) Preserve current flow by default\n- If no background spawn is used, existing sequential behavior remains unchanged.\n- Background capability is opt-in and additive only.\n\n## Deterministic behavior after patch\n### Canonical user flow (must work exactly)\nUser sends one prompt with both:\n1) memory correction/update instruction\n2) coding change request\n\nExpected orchestration:\n1. Main chat spawns background task: “update memory file with user-stated correction”.\n2. Background agent starts in parallel (separate LLM/API call).\n3. Main chat immediately performs code edits without waiting.\n4. Main chat reaches finalization and applies join policy (`wait_until_timeout` default).\n5. If background finished, merge its completion/result text into final reply.\n6. Final user response includes both outcomes: code change result + memory update result.\n7. If background not finished by timeout, final response includes explicit in-progress notice.\n\n### Identity and capability behavior\n- Background agent is the same core Prom identity/model as main chat.\n- Difference is only invocation trigger/context: background uses spawn-provided prompt rather than direct user prompt.\n- No profile file creation, no persistent subagent config, no schedule/heartbeat side-effects.\n\n### Scalable fan-out behavior\n- A subagent or orchestrator can spawn multiple background calls in parallel (e.g., one per news source).\n- System may incur more LLM calls by design; this is accepted as the tradeoff for parallel efficiency and lower single-agent serial workload.\n\n## Acceptance tests\n1) Additive regression\n- Prompt with memory+code request and no background spawn path enabled.\n- Confirm current sequential flow still works as before.\n\n2) Canonical mixed prompt with spawn\n- Trigger background memory update + foreground code edit.\n- Confirm foreground code starts before background completion.\n- Confirm final reply contains both completed results when background completes within timeout.\n\n3) Timeout behavior\n- Force slow background job.\n- Confirm finalization returns foreground result + explicit background in-progress notice under `wait_until_timeout`.\n\n4) Join policies\n- Validate `wait_all`, `wait_until_timeout`, `best_effort_merge` produce deterministic documented outcomes.\n\n5) Idempotent merge\n- Call join/merge path multiple times for same background task.\n- Confirm result merges only once (no duplicate completion artifacts).\n\n6) start_task boundary\n- Validate start_task workflows are unchanged and still managed via task lifecycle tools.\n- Validate background tasks do not create persistent profile/schedule artifacts.\n\n7) Parallel fan-out sanity\n- Spawn N background fetch/research calls (e.g., multiple sources).\n- Confirm independent status tracking and deterministic final aggregation behavior.\n\n## Risks and compatibility\n- Risk: race conditions when finalizing response while background jobs are still running.\n  - Mitigation: explicit join policy + finalization gate + timeout messaging.\n- Risk: semantic confusion with start_task/subagents.\n  - Mitigation: strict boundary contract and additive API naming.\n- Risk: increased API cost due to parallel calls.\n  - Mitigation: expected/accepted tradeoff; leave caller control over fan-out.\n- Compatibility: backward compatible by default because existing direct flow remains unchanged unless background spawn is explicitly used.",
+  "sourceAgentId": "9eb8d3a5-66ef-4baa-b3dc-dc170121450b",
+  "sourceSessionId": "9eb8d3a5-66ef-4baa-b3dc-dc170121450b",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/tool-schema.ts",
+      "action": "edit",
+      "description": "Add schema/types for background_spawn, background_status/background_progress, and background_join operations."
+    },
+    {
+      "path": "src/gateway/task-runner.ts",
+      "action": "edit",
+      "description": "Add ephemeral background execution path and lifecycle tracking distinct from start_task."
+    },
+    {
+      "path": "src/gateway/agent-dispatch.ts",
+      "action": "edit",
+      "description": "Route background spawns as separate LLM/API calls with task-scoped prompt and no profile persistence."
+    },
+    {
+      "path": "src/gateway/response-finalizer.ts",
+      "action": "edit",
+      "description": "Implement join-policy gate (wait_all / wait_until_timeout / best_effort_merge), timeout notices, and merge-once idempotency."
+    },
+    {
+      "path": "src/gateway/routes/tasks.ts",
+      "action": "edit",
+      "description": "Expose/extend endpoints for background status/progress/join without altering existing task contracts."
+    },
+    {
+      "path": "src/gateway/proposals/proposal-executor.ts",
+      "action": "edit",
+      "description": "Ensure proposal execution path can invoke background primitives without affecting legacy behavior."
+    }
+  ],
+  "diffPreview": "// New additive tool contract (illustrative)\ntype BackgroundJoinPolicy = 'wait_all' | 'wait_until_timeout' | 'best_effort_merge';\n\ninterface BackgroundSpawnInput {\n  prompt: string;                  // task-scoped instructions\n  joinPolicy?: BackgroundJoinPolicy; // default: wait_until_timeout\n  timeoutMs?: number;              // used by wait_until_timeout\n  tags?: string[];\n}\n\ninterface BackgroundStatus {\n  id: string;\n  state: 'queued' | 'in_progress' | 'completed' | 'failed' | 'timed_out';\n  result?: string;\n  error?: string;\n}\n\n// Deterministic finalization behavior\nfinalizeResponse() {\n  const joinOutcome = applyJoinPolicy(activeBackgroundJobs);\n  mergeBackgroundResultsIdempotently(joinOutcome.completedJobs);\n  return composeFinalUserReply({ foregroundResult, joinOutcome });\n}\n",
+  "estimatedImpact": "Adds parallel side-work capability with deterministic merge semantics while preserving current UX as default; improves responsiveness for mixed prompts and enables scalable fan-out patterns.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor_synthesizer_v1",
+  "executorPrompt": "Execute proposal prop_1774543650770_4b9692 exactly as specified. This is a src feature implementation. Apply only the listed file edits, preserving existing default sequential behavior when no background spawn is used. Implement: ephemeral one-shot background spawn/status/join primitives; separate LLM/API call execution; strict boundary vs start_task; join policies (wait_all, wait_until_timeout default, best_effort_merge); merge-once idempotency and finalization gate with timeout messaging. Run build/tests required by repo standards. Return: (1) exact changed files, (2) verification evidence for each acceptance test, (3) any blockers/mismatches if encountered; stop and report if proposal spec cannot be matched deterministically.",
+  "id": "prop_1774543650770_4b9692",
+  "status": "executing",
+  "createdAt": 1774543650770,
+  "updatedAt": 1774546920505,
+  "version": 4,
+  "revisionHistory": [
+    {
+      "version": 1,
+      "editedAt": 1774543650770,
+      "editedBy": "9eb8d3a5-66ef-4baa-b3dc-dc170121450b",
+      "note": "Initial proposal content",
+      "snapshot": {
+        "type": "feature_addition",
+        "priority": "high",
+        "title": "Add one-time Background Agent spawn/join flow (ephemeral, no profile files)",
+        "summary": "Introduce a new ephemeral Background Agent primitive that runs as a separate LLM call in parallel with the current turn, then can be polled/joined for result integration—without changing existing inline behavior.",
+        "details": "## Why this change\nRaul requested a Claude Code–style Background Agent capability that is distinct from persistent subagents: one-time, fire-and-forget, no profile/config files, same main-agent runtime identity, separate API/LLM call, and usable for parallel side work (e.g., memory update while code edits continue).\n\nCurrent behavior (from source):\n- Interactive flow can run tools inline and also has `start_task`, but `start_task` currently routes through `runTask(...)` inside the same chat handler flow in `src/gateway/routes/chat.router.ts` (around lines 2232-2274), not an explicit ephemeral background-agent spawn/join primitive with a dedicated result contract.\n- Existing background execution uses `TaskRecord` + `BackgroundTaskRunner` (`src/gateway/tasks/task-store.ts`, `src/gateway/tasks/background-task-runner.ts`) and is suited to autonomous tasks/plans, including mandatory completion logging.\n- Existing tool surface (`src/gateway/tools/defs/agent-team-schedule.ts`) exposes `start_task` and `task_control`, plus team background dispatch (`dispatch_team_agent background=true`) but does not expose a direct “spawn ephemeral background agent from this turn and later join result” API for normal interactive orchestration.\n\nWhy insufficient:\n- There is no first-class ephemeral Background Agent primitive that explicitly preserves the current inline flow while offloading side work concurrently and returning structured completion for final merged response.\n- User intent requires additive behavior with minimal regression risk: current direct memory+code flow must still work exactly as-is when background spawning is not used.\n\n## Exact source edits\n1) `src/gateway/tools/defs/agent-team-schedule.ts`\n- Add two new tool definitions:\n  - `background_agent_spawn` (or `spawn_background_agent`) with params such as `goal`, optional `context`, `max_steps`, optional `label`, optional `return_to_session` (defaults true).\n  - `background_agent_progress` (or `background_agent_result`) with params `job_id`, optional `block` (default false), optional `timeout_ms`.\n- Keep existing tools (`start_task`, `task_control`, etc.) unchanged for backward compatibility.\n\n2) `src/gateway/tasks/task-store.ts`\n- Extend `TaskRecord` with minimal optional metadata for ephemeral background agents, e.g.:\n  - `kind?: 'task' | 'background_agent'`\n  - `ephemeral?: boolean`\n  - `originSessionId?: string`\n  - `joinPolicy?: 'poll' | 'auto_join'`\n- Ensure defaults preserve existing task behavior when fields are absent.\n\n3) `src/gateway/routes/chat.router.ts`\n- Add explicit handling branch for `background_agent_spawn` in the tool-call loop near other tool special-cases.\n  - Create a TaskRecord (kind background_agent, ephemeral true) using current session as origin.\n  - Launch `BackgroundTaskRunner` immediately (reuse existing runner path).\n  - Return structured ack containing `job_id`, status running, and next-step guidance.\n- Add explicit handling branch for `background_agent_progress`:\n  - Resolve task by id, return `{status: queued|running|complete|failed|...}`.\n  - If `block=true`, wait up to timeout for completion then return result summary.\n- Add lightweight end-of-turn reconciliation hook:\n  - If the current turn spawned one or more background agents and they complete before final response emission, append compact completion snippets for merged final answer context.\n  - If still running, return “in progress” state deterministically without blocking forever.\n\n4) `src/gateway/tasks/background-task-runner.ts`\n- Add optional mode branch for `kind=background_agent` to keep deterministic execution but skip behaviors that are task-kanban specific when unnecessary.\n- Preserve existing robust step/protocol logic; only gate optional behaviors (e.g., completion-note expectations) based on task kind.\n- Ensure completion writes a concise machine-readable result payload consumable by `background_agent_progress`.\n\n5) `src/gateway/tool-builder.ts`\n- No major logic rewrite; ensure newly added tool defs are included through the agent-team-schedule definitions path (already aggregated) and available in interactive mode.\n\n## Deterministic behavior after patch\nHappy path:\n1. User asks for memory change + code edits.\n2. Model calls `background_agent_spawn` for memory update task.\n3. Main turn continues with file/code tools immediately.\n4. Before final response, model may call `background_agent_progress` (block false/true) to fetch completion.\n5. Final response includes both: code edit outcome + background memory-update outcome.\n\nEdge cases:\n- Background job still running at response time: progress tool returns `running` with stable `job_id`; model can finalize with explicit “memory update in progress” or do a bounded `block=true` wait.\n- Background job fails: returns `failed` + summary/error snippet; main response includes failure while preserving primary task result.\n- Multiple concurrent background agents: each has unique job id; progress tool is id-specific and deterministic.\n\nError paths:\n- Invalid `job_id` in progress tool returns clear typed error (`not_found`) without crashing chat loop.\n- Spawn failure returns error immediately and main flow proceeds normally.\n\nExplicit non-changes:\n- Existing inline flow (memory_write + code edits in one turn) remains valid and unchanged.\n- Existing subagent/team architecture remains unchanged.\n- Existing `start_task`/`task_control` semantics remain backward compatible.\n\n## Acceptance tests\n1. Build/typecheck:\n- Run `npm run build` and ensure no TypeScript errors.\n\n2. Interactive mixed-task test (core requirement):\n- Prompt: request memory update + code edit.\n- Verify model can call `background_agent_spawn` for memory update and continue code tools in same turn.\n- Verify final response includes code outcome and background result/progress.\n\n3. Progress API behavior:\n- Spawn background agent, call `background_agent_progress` immediately => status `running`.\n- Call again after completion => `complete` + result summary.\n- Call with bad id => deterministic `not_found` response.\n\n4. Concurrency test:\n- Spawn 3-5 background agents with distinct goals.\n- Verify unique ids, independent statuses, no cross-contamination.\n\n5. Regression tests:\n- Existing memory+code flow without background spawn still completes exactly as before.\n- Existing team background dispatch and task_control flows remain operational.\n\n## Risks and compatibility\nPotential risks:\n- Overlap/confusion between existing `start_task` and new background-agent primitive.\n- Completion-merge timing race conditions near final response generation.\n- Additional concurrent LLM calls may increase token/API usage.\n\nBackward compatibility:\n- Additive tool introduction only; no breaking parameter changes to existing tools.\n- Existing task and team workflows keep current behavior.\n\nMitigations/rollback:\n- Guard feature behind optional config flag if needed (`orchestration.background_agents_enabled`).\n- Keep new task metadata optional with safe defaults.\n- If regressions appear, disable the new tool exposure while leaving old flows intact.",
+        "affectedFiles": [
+          {
+            "path": "src/gateway/tools/defs/agent-team-schedule.ts",
+            "action": "edit",
+            "description": "Add background_agent_spawn and background_agent_progress tool schemas."
+          },
+          {
+            "path": "src/gateway/routes/chat.router.ts",
+            "action": "edit",
+            "description": "Implement spawn/progress handling and optional end-of-turn reconciliation logic."
+          },
+          {
+            "path": "src/gateway/tasks/task-store.ts",
+            "action": "edit",
+            "description": "Add optional TaskRecord metadata for ephemeral background-agent jobs."
+          },
+          {
+            "path": "src/gateway/tasks/background-task-runner.ts",
+            "action": "edit",
+            "description": "Support background-agent kind semantics and structured completion payload."
+          },
+          {
+            "path": "src/gateway/tool-builder.ts",
+            "action": "edit",
+            "description": "Ensure new tool definitions are surfaced via existing tool assembly path."
+          }
+        ],
+        "diffPreview": "// agent-team-schedule.ts\n+ name: 'background_agent_spawn'\n+ name: 'background_agent_progress'\n\n// task-store.ts\n+ kind?: 'task' | 'background_agent'\n+ ephemeral?: boolean\n+ originSessionId?: string\n\n// chat.router.ts\n+ if (toolName === 'background_agent_spawn') { createTask(...); new BackgroundTaskRunner(...).start(); ... }\n+ if (toolName === 'background_agent_progress') { loadTask(job_id); return status/result }\n\n// background-task-runner.ts\n+ if (task.kind === 'background_agent') { ...ephemeral completion shaping... }",
+        "estimatedImpact": "Adds parallel one-shot execution primitive for side tasks, reducing main-turn orchestration load and enabling concurrent memory/research/file prep without disrupting existing flows.",
+        "requiresBuild": true,
+        "executorAgentId": "code_executor_synthesizer_v1",
+        "executorPrompt": "Execute proposal implementation exactly as specified for Background Agents. 1) Read the listed source files and confirm the exact insertion points. 2) Apply only the declared edits: add new tool defs, task metadata, chat.router spawn/progress handling, and runner completion payload support. 3) Do not alter unrelated behavior, especially existing inline memory+code flow, start_task, task_control, subagent/team logic. 4) Run npm run build and fix any compile errors caused by these edits only. 5) Return a concise execution report: changed files, key code paths touched, and acceptance test outcomes (including mixed memory+code scenario and progress polling). Stop and report blocker immediately if source reality conflicts with proposal assumptions."
+      }
+    },
+    {
+      "version": 2,
+      "editedAt": 1774546192464,
+      "editedBy": "main",
+      "note": "Added explicit start_task vs background-agent contract and deterministic merge race safeguards per user direction.",
+      "snapshot": {
+        "type": "feature_addition",
+        "priority": "high",
+        "title": "Add one-time Background Agent spawn/join flow (ephemeral, no profile files)",
+        "summary": "Refine the Background Agents proposal to hard-separate it from start_task and add deterministic completion-merge policies to prevent race conditions at final response time.",
+        "details": "## Why this change\n- We are adding Background Agents as an **additive** capability for one-time parallel work (e.g., memory update while main coding continues) without replacing the current direct inline flow.\n- The current risk areas are:\n  1) ambiguity with existing `start_task` semantics,\n  2) merge timing races when assembling the final user response.\n- This revision codifies explicit contracts and join behavior so implementation remains deterministic and backwards-compatible.\n\n## Exact source edits\n- `src/gateway/tools/*` (new/updated background-agent tools):\n  - Add dedicated tool verbs and schema for ephemeral background execution:\n    - `background_spawn(task_prompt, merge_policy?, timeout_ms?)`\n    - `background_status(task_id)`\n    - `background_join(task_id | all, merge_policy_override?)`\n  - Ensure these are distinct from `start_task` and do not route into scheduler/task-lifecycle primitives.\n- `src/gateway/orchestration/*` (execution routing and lifecycle):\n  - Add explicit execution path for **one-shot parallel LLM call** using same core runtime identity/prompt system, but task-scoped prompt payload.\n  - Enforce no profile file creation and no persistent subagent registration.\n- `src/gateway/task-registry|state/*` (ephemeral bookkeeping):\n  - Add lightweight in-memory/short-lived tracking for background agent job state (`queued|running|complete|failed|timed_out`).\n  - Track result payload and merge marker to prevent duplicate ingestion.\n- `src/gateway/response-assembly/*` (final response gating):\n  - Execute deterministic join policy before final response assembly.\n  - Add idempotent merge so each completed background result is merged once.\n- `src/gateway/prompts|docs/*` (policy and UX copy):\n  - Document hard contract:\n    - `start_task` = tracked multi-step workflow system.\n    - `Background Agent` = ephemeral one-shot parallel call, no schedules/heartbeat/profile.\n  - Add user-facing status wording for incomplete background tasks under bounded waits.\n\n## Deterministic behavior after patch\n- Contract separation:\n  - `start_task` remains unchanged for tracked long-running task workflows.\n  - Background Agents are separate, one-time, fire-and-forget execution units.\n- Supported merge policies:\n  - `wait_all`: block until all targeted background jobs finish.\n  - `wait_until_timeout`: wait up to timeout, merge completed jobs, include explicit incomplete markers for unfinished jobs.\n  - `best_effort_merge`: do not block; merge only currently-complete results.\n- Default behavior for mixed prompts (memory + coding) is additive-safe:\n  - Main flow continues coding while background memory update runs.\n  - Before final response, join policy runs and merges result deterministically.\n- Idempotency and race safety:\n  - A background result can only be merged once (merge marker).\n  - Final response assembly always runs after selected join policy execution path.\n- Explicit non-changes:\n  - Existing direct inline behavior remains available and unchanged unless background tools are explicitly invoked.\n\n## Acceptance tests\n1. Contract clarity tests:\n   - Invoke `start_task` and verify no background-agent states/tools are used.\n   - Invoke `background_spawn` and verify no task scheduler/subagent profile artifacts are created.\n2. Parallel mixed-workflow test:\n   - Prompt pattern: memory update + code edit.\n   - Verify coding proceeds while background memory task runs in parallel.\n   - Verify final response contains both code outcome and merged memory outcome.\n3. Merge policy tests:\n   - `wait_all`: final response delayed until all complete.\n   - `wait_until_timeout`: final response includes completed results + unfinished notices.\n   - `best_effort_merge`: immediate final response with only completed merges.\n4. Idempotency/race tests:\n   - Call join twice on same completed background task; confirm single merge effect.\n   - Simulate completion arriving near response finalization; verify deterministic single inclusion.\n5. Back-compat tests:\n   - Run existing direct flow scenarios and verify no behavior regressions.\n\n## Risks and compatibility\n- Potential risks:\n  - Developer/operator confusion between task systems.\n  - Completion/merge races near final response timing.\n  - Extra API call cost from fan-out usage.\n- Backward compatibility:\n  - Additive-only: existing flows unchanged unless background tools are explicitly used.\n- Mitigations/rollback:\n  - Strong API/tool naming separation + docs/UI copy.\n  - Deterministic join policy + idempotent merge markers.\n  - Feature flag/controlled rollout path so Background Agents can be disabled quickly if needed.",
+        "affectedFiles": [
+          {
+            "path": "src/gateway/tools",
+            "action": "edit",
+            "description": "Add dedicated background agent spawn/status/join tools and schema distinct from start_task."
+          },
+          {
+            "path": "src/gateway/orchestration",
+            "action": "edit",
+            "description": "Add one-shot parallel LLM execution path for ephemeral background agents."
+          },
+          {
+            "path": "src/gateway/response-assembly",
+            "action": "edit",
+            "description": "Add deterministic join-policy gate and idempotent merge before final response."
+          },
+          {
+            "path": "src/gateway/task-registry",
+            "action": "edit",
+            "description": "Track ephemeral background task states/results with merge-once markers."
+          },
+          {
+            "path": "src/gateway/prompts",
+            "action": "edit",
+            "description": "Document explicit contract boundary versus start_task and merge-policy UX."
+          }
+        ],
+        "diffPreview": "- Clarify primitive boundary:\n+ start_task => tracked multi-step task workflow\n+ background_agent => ephemeral one-shot parallel LLM call (no profile/schedule/heartbeat)\n\n- Add merge policy options:\n+ wait_all\n+ wait_until_timeout (recommended default)\n+ best_effort_merge\n\n- Add merge safety:\n+ idempotent merge markers (merge once)\n+ final response assembly must execute chosen join policy before output",
+        "estimatedImpact": "Reduces ambiguity and race-condition risk for Background Agents while preserving current direct execution UX. Enables safe parallel fan-out with deterministic response merging.",
+        "requiresBuild": true,
+        "requiresSrcEdit": true,
+        "executorAgentId": "code_executor_synthesizer_v1",
+        "executorPrompt": "Execute this proposal as a src-edit implementation. Apply only the specified file-scope changes for background_spawn/background_status/background_join, explicit start_task boundary, deterministic join policies, and merge-once safeguards. Keep behavior additive and do not alter existing direct flow unless required by the new feature path. Run build/tests required for touched src modules, report exact changed files, and stop with a blocker report if repository reality conflicts with proposal assumptions."
+      }
+    },
+    {
+      "version": 3,
+      "editedAt": 1774546582621,
+      "editedBy": "main",
+      "note": "Expanded details to better reflect original proposal goal while preserving risk controls and deterministic merge requirements.",
+      "snapshot": {
+        "type": "feature_addition",
+        "priority": "high",
+        "title": "Add one-time Background Agent spawn/join flow (ephemeral, no profile files)",
+        "summary": "Restore the fuller Background Agents vision while keeping the new safety constraints: add an opt-in, additive parallel-execution primitive that lets main chat spawn one-shot background work, continue foreground work immediately, and deterministically rejoin results before final response.",
+        "details": "## Why this change\nPrometheus currently handles work in a primarily single-threaded conversational path unless users explicitly shift into existing task systems. Raul’s product direction is to add a new optional primitive that enables **parallel side work** without changing what already works today.\n\nThe core goal is not just “run something in background,” but to enable a practical workflow:\n1) main chat receives a mixed request,\n2) it spawns one-time side work,\n3) it continues primary work immediately,\n4) it rejoins side-work output into one final coherent response.\n\nThis proposal is intentionally additive. Existing direct execution and current UX must remain intact unless background execution is explicitly invoked.\n\n## Exact source edits\n- `src/gateway/server-v2.ts`\n  - Add orchestration handling for one-time background execution lifecycle in the main chat runtime path.\n  - Add explicit spawn/continue/rejoin flow control so foreground execution can proceed while background calls run.\n  - Add finalization gate hook that applies a declared join policy before final response assembly.\n\n- `src/gateway/routes/tasks.ts`\n  - Add/extend endpoint-level contracts for background spawn/status/join interactions.\n  - Define stable run identifiers and deterministic state transitions for background units.\n  - Ensure status/read semantics are compatible with current task UX without replacing it.\n\n- `src/gateway/tool-builder.ts`\n  - Register background tools/schemas (spawn, status/progress, join/result retrieval).\n  - Keep naming and parameter contracts distinct from `start_task` to avoid behavioral ambiguity.\n\n- `src/gateway/terminal-ui.ts`\n  - Surface background-run tracking and join-policy behavior where users can observe progress.\n  - Keep existing UX defaults untouched unless background execution is explicitly invoked.\n\n- `src/gateway/prompts/main-agent-system-prompt.md`\n  - Document orchestration contract for additive use:\n    - when to spawn background work,\n    - how to continue foreground work,\n    - how to rejoin deterministically,\n    - what to do when timeouts occur.\n\n## Deterministic behavior after patch\n- **Default behavior unchanged (non-background path):**\n  - Existing direct execution remains default and behaves exactly as before.\n\n- **Background path (opt-in only):**\n  - Main chat can spawn one or more one-shot background units.\n  - Background units are ephemeral: no persistent profile files, no long-lived identity.\n  - Main chat continues foreground execution immediately after spawn.\n\n- **Hard boundary with existing task system:**\n  - `start_task` remains the managed long-running workflow primitive.\n  - Background Agent remains a one-shot parallel LLM call primitive.\n  - Contracts/tooling are explicitly separated.\n\n- **Join/finalization behavior:**\n  - Support explicit join policies: `wait_all`, `wait_until_timeout`, `best_effort_merge`.\n  - Recommended default: `wait_until_timeout` (bounded wait).\n  - On timeout, final response includes clear unfinished-job annotation.\n\n- **Merge safety:**\n  - Rejoin ingestion is idempotent: each background result merges once only.\n  - Final response assembly runs through an explicit join-policy gate to prevent race-condition output drift.\n\n## Acceptance tests\n1. **No-regression baseline**\n   - Execute representative requests without background spawn; confirm unchanged behavior.\n\n2. **Spawn + continue + rejoin**\n   - Spawn one background task, complete foreground work, join result, verify single final response includes both outcomes.\n\n3. **Parallel fan-out**\n   - Spawn multiple one-shot background tasks and verify deterministic status tracking and merge ordering/identity consistency.\n\n4. **Timeout handling under bounded wait**\n   - Use `wait_until_timeout`; verify bounded finalization and explicit unfinished-task notice.\n\n5. **Idempotent join**\n   - Call join multiple times for same run; verify merged output is not duplicated.\n\n6. **Boundary protection**\n   - Run `start_task` flows and confirm no behavior regression or contract confusion.\n\n## Risks and compatibility\nPotential risks:\n- Overlap/confusion between existing `start_task` and new background-agent primitive.\n- Completion-merge timing race conditions near final response generation.\n- Hidden regressions if additive boundaries are not enforced strictly.\n\nMitigations:\n- Explicit contract separation in naming/docs/tooling (`start_task` vs background spawn/status/join).\n- Finalization join gate + policy-driven waits.\n- Idempotent merge-once safeguard.\n- Regression test coverage to prove non-background path parity.",
+        "affectedFiles": [
+          {
+            "path": "src/gateway/server-v2.ts",
+            "action": "edit",
+            "description": "Add background run orchestration and finalization join-gate integration in additive mode."
+          },
+          {
+            "path": "src/gateway/routes/tasks.ts",
+            "action": "edit",
+            "description": "Add deterministic background run lifecycle/status/join contracts."
+          },
+          {
+            "path": "src/gateway/tool-builder.ts",
+            "action": "edit",
+            "description": "Expose background spawn/status/join tool schemas with explicit boundary from start_task."
+          },
+          {
+            "path": "src/gateway/terminal-ui.ts",
+            "action": "edit",
+            "description": "Surface background progress and join policy outcomes to users without altering default flow."
+          },
+          {
+            "path": "src/gateway/prompts/main-agent-system-prompt.md",
+            "action": "edit",
+            "description": "Codify spawn+continue+rejoin behavior and timeout handling guidance."
+          }
+        ],
+        "diffPreview": "- Add additive one-shot background execution primitive\n- Keep direct path default and unchanged\n- Add join policies: wait_all | wait_until_timeout | best_effort_merge\n- Add merge-once idempotency\n- Add final-response join gate\n- Clarify strict boundary from start_task",
+        "estimatedImpact": "Restores full product intent (spawn + continue + rejoin) with deterministic merge safety and backward-compatible rollout.",
+        "requiresBuild": true,
+        "requiresSrcEdit": true,
+        "executorAgentId": "code_executor_synthesizer_v1",
+        "executorPrompt": "Execute proposal prop_1774543650770_4b9692 exactly as specified. Apply only listed src edits. Preserve default non-background behavior, keep start_task untouched, implement background spawn/status/join contracts, enforce join-policy gate, and ensure merge-once idempotency. Run required build/tests, report exact changed files and verification evidence, and stop on any scope mismatch or blocker."
+      }
+    },
+    {
+      "version": 4,
+      "editedAt": 1774546815613,
+      "editedBy": "main",
+      "note": "Restored original detailed product plan and canonical examples, then layered requested risk controls additively instead of replacing core proposal narrative.",
+      "snapshot": {
+        "type": "feature_addition",
+        "priority": "high",
+        "title": "Add one-time Background Agent spawn/join flow (ephemeral, no profile files)",
+        "summary": "Implement Claude Code-style Background Agents as an additive capability: main chat can spawn one-time parallel LLM calls for side work (like memory updates), continue primary work immediately, then deterministically rejoin background results into one final response—without changing default current behavior.",
+        "details": "## Why this change\nRaul’s core requirement is to add a **Background Agents** primitive that behaves like Claude Code’s background agents while preserving what already works today.\n\nCurrent behavior (which is good and must remain): when a prompt includes both a memory update and code edits, main chat executes both sequentially in one flow.\n\nRequested new behavior (opt-in): main chat can offload side work (example: memory update) to a one-time background execution, immediately continue primary work (example: coding), then collect/rejoin the background result before final reply.\n\nThis is a capability addition, not a replacement. Default/direct flow must continue to work unchanged unless explicitly spawning a background agent.\n\n## Exact source edits\n1) Add new background execution primitive (ephemeral)\n- Add a background spawn path that creates a **one-time execution unit** with:\n  - no profile files\n  - no long-lived agent identity\n  - no heartbeat/schedule ownership\n  - task-scoped prompt only\n- Background run must be a **separate LLM/API call** from the active main-chat call.\n- Runtime identity/persona should be the same as main chat (same core model/prompting identity), but invocation context is scoped to the spawn payload.\n\n2) Add orchestrator-facing interface\n- Introduce explicit operations for:\n  - `background_spawn` (start fire-and-forget task)\n  - `background_status`/`background_progress` (in_progress | completed | failed + optional partial metadata)\n  - `background_join` (retrieve and merge final result)\n- Keep interface additive; do not alter existing start_task semantics.\n\n3) Enforce boundary vs existing task system\n- Preserve clear contract:\n  - `start_task` = tracked long-running task workflow\n  - `Background Agent` = one-shot ephemeral parallel LLM call with no profile artifacts\n- Ensure no cross-contamination of persistence features from subagents/start_task into background agents.\n\n4) Add deterministic merge/finalization behavior\n- Support explicit join policies:\n  - `wait_all`\n  - `wait_until_timeout` (default)\n  - `best_effort_merge`\n- Add merge safety:\n  - idempotent ingestion (each background result merges once)\n  - final-response gate executes join policy before response assembly\n  - if timeout expires, final message clearly reports unfinished background items\n\n5) Preserve current flow by default\n- If no background spawn is used, existing sequential behavior remains unchanged.\n- Background capability is opt-in and additive only.\n\n## Deterministic behavior after patch\n### Canonical user flow (must work exactly)\nUser sends one prompt with both:\n1) memory correction/update instruction\n2) coding change request\n\nExpected orchestration:\n1. Main chat spawns background task: “update memory file with user-stated correction”.\n2. Background agent starts in parallel (separate LLM/API call).\n3. Main chat immediately performs code edits without waiting.\n4. Main chat reaches finalization and applies join policy (`wait_until_timeout` default).\n5. If background finished, merge its completion/result text into final reply.\n6. Final user response includes both outcomes: code change result + memory update result.\n7. If background not finished by timeout, final response includes explicit in-progress notice.\n\n### Identity and capability behavior\n- Background agent is the same core Prom identity/model as main chat.\n- Difference is only invocation trigger/context: background uses spawn-provided prompt rather than direct user prompt.\n- No profile file creation, no persistent subagent config, no schedule/heartbeat side-effects.\n\n### Scalable fan-out behavior\n- A subagent or orchestrator can spawn multiple background calls in parallel (e.g., one per news source).\n- System may incur more LLM calls by design; this is accepted as the tradeoff for parallel efficiency and lower single-agent serial workload.\n\n## Acceptance tests\n1) Additive regression\n- Prompt with memory+code request and no background spawn path enabled.\n- Confirm current sequential flow still works as before.\n\n2) Canonical mixed prompt with spawn\n- Trigger background memory update + foreground code edit.\n- Confirm foreground code starts before background completion.\n- Confirm final reply contains both completed results when background completes within timeout.\n\n3) Timeout behavior\n- Force slow background job.\n- Confirm finalization returns foreground result + explicit background in-progress notice under `wait_until_timeout`.\n\n4) Join policies\n- Validate `wait_all`, `wait_until_timeout`, `best_effort_merge` produce deterministic documented outcomes.\n\n5) Idempotent merge\n- Call join/merge path multiple times for same background task.\n- Confirm result merges only once (no duplicate completion artifacts).\n\n6) start_task boundary\n- Validate start_task workflows are unchanged and still managed via task lifecycle tools.\n- Validate background tasks do not create persistent profile/schedule artifacts.\n\n7) Parallel fan-out sanity\n- Spawn N background fetch/research calls (e.g., multiple sources).\n- Confirm independent status tracking and deterministic final aggregation behavior.\n\n## Risks and compatibility\n- Risk: race conditions when finalizing response while background jobs are still running.\n  - Mitigation: explicit join policy + finalization gate + timeout messaging.\n- Risk: semantic confusion with start_task/subagents.\n  - Mitigation: strict boundary contract and additive API naming.\n- Risk: increased API cost due to parallel calls.\n  - Mitigation: expected/accepted tradeoff; leave caller control over fan-out.\n- Compatibility: backward compatible by default because existing direct flow remains unchanged unless background spawn is explicitly used.",
+        "affectedFiles": [
+          {
+            "path": "src/gateway/tool-schema.ts",
+            "action": "edit",
+            "description": "Add schema/types for background_spawn, background_status/background_progress, and background_join operations."
+          },
+          {
+            "path": "src/gateway/task-runner.ts",
+            "action": "edit",
+            "description": "Add ephemeral background execution path and lifecycle tracking distinct from start_task."
+          },
+          {
+            "path": "src/gateway/agent-dispatch.ts",
+            "action": "edit",
+            "description": "Route background spawns as separate LLM/API calls with task-scoped prompt and no profile persistence."
+          },
+          {
+            "path": "src/gateway/response-finalizer.ts",
+            "action": "edit",
+            "description": "Implement join-policy gate (wait_all / wait_until_timeout / best_effort_merge), timeout notices, and merge-once idempotency."
+          },
+          {
+            "path": "src/gateway/routes/tasks.ts",
+            "action": "edit",
+            "description": "Expose/extend endpoints for background status/progress/join without altering existing task contracts."
+          },
+          {
+            "path": "src/gateway/proposals/proposal-executor.ts",
+            "action": "edit",
+            "description": "Ensure proposal execution path can invoke background primitives without affecting legacy behavior."
+          }
+        ],
+        "diffPreview": "// New additive tool contract (illustrative)\ntype BackgroundJoinPolicy = 'wait_all' | 'wait_until_timeout' | 'best_effort_merge';\n\ninterface BackgroundSpawnInput {\n  prompt: string;                  // task-scoped instructions\n  joinPolicy?: BackgroundJoinPolicy; // default: wait_until_timeout\n  timeoutMs?: number;              // used by wait_until_timeout\n  tags?: string[];\n}\n\ninterface BackgroundStatus {\n  id: string;\n  state: 'queued' | 'in_progress' | 'completed' | 'failed' | 'timed_out';\n  result?: string;\n  error?: string;\n}\n\n// Deterministic finalization behavior\nfinalizeResponse() {\n  const joinOutcome = applyJoinPolicy(activeBackgroundJobs);\n  mergeBackgroundResultsIdempotently(joinOutcome.completedJobs);\n  return composeFinalUserReply({ foregroundResult, joinOutcome });\n}\n",
+        "estimatedImpact": "Adds parallel side-work capability with deterministic merge semantics while preserving current UX as default; improves responsiveness for mixed prompts and enables scalable fan-out patterns.",
+        "requiresBuild": true,
+        "requiresSrcEdit": true,
+        "executorAgentId": "code_executor_synthesizer_v1",
+        "executorPrompt": "Execute proposal prop_1774543650770_4b9692 exactly as specified. This is a src feature implementation. Apply only the listed file edits, preserving existing default sequential behavior when no background spawn is used. Implement: ephemeral one-shot background spawn/status/join primitives; separate LLM/API call execution; strict boundary vs start_task; join policies (wait_all, wait_until_timeout default, best_effort_merge); merge-once idempotency and finalization gate with timeout messaging. Run build/tests required by repo standards. Return: (1) exact changed files, (2) verification evidence for each acceptance test, (3) any blockers/mismatches if encountered; stop and report if proposal spec cannot be matched deterministically."
+      }
+    }
+  ],
+  "requiresSrcEdit": true,
+  "approvalSnapshot": {
+    "approvedAt": 1774546920494,
+    "approvedVersion": 4,
+    "snapshot": {
+      "type": "feature_addition",
+      "priority": "high",
+      "title": "Add one-time Background Agent spawn/join flow (ephemeral, no profile files)",
+      "summary": "Implement Claude Code-style Background Agents as an additive capability: main chat can spawn one-time parallel LLM calls for side work (like memory updates), continue primary work immediately, then deterministically rejoin background results into one final response—without changing default current behavior.",
+      "details": "## Why this change\nRaul’s core requirement is to add a **Background Agents** primitive that behaves like Claude Code’s background agents while preserving what already works today.\n\nCurrent behavior (which is good and must remain): when a prompt includes both a memory update and code edits, main chat executes both sequentially in one flow.\n\nRequested new behavior (opt-in): main chat can offload side work (example: memory update) to a one-time background execution, immediately continue primary work (example: coding), then collect/rejoin the background result before final reply.\n\nThis is a capability addition, not a replacement. Default/direct flow must continue to work unchanged unless explicitly spawning a background agent.\n\n## Exact source edits\n1) Add new background execution primitive (ephemeral)\n- Add a background spawn path that creates a **one-time execution unit** with:\n  - no profile files\n  - no long-lived agent identity\n  - no heartbeat/schedule ownership\n  - task-scoped prompt only\n- Background run must be a **separate LLM/API call** from the active main-chat call.\n- Runtime identity/persona should be the same as main chat (same core model/prompting identity), but invocation context is scoped to the spawn payload.\n\n2) Add orchestrator-facing interface\n- Introduce explicit operations for:\n  - `background_spawn` (start fire-and-forget task)\n  - `background_status`/`background_progress` (in_progress | completed | failed + optional partial metadata)\n  - `background_join` (retrieve and merge final result)\n- Keep interface additive; do not alter existing start_task semantics.\n\n3) Enforce boundary vs existing task system\n- Preserve clear contract:\n  - `start_task` = tracked long-running task workflow\n  - `Background Agent` = one-shot ephemeral parallel LLM call with no profile artifacts\n- Ensure no cross-contamination of persistence features from subagents/start_task into background agents.\n\n4) Add deterministic merge/finalization behavior\n- Support explicit join policies:\n  - `wait_all`\n  - `wait_until_timeout` (default)\n  - `best_effort_merge`\n- Add merge safety:\n  - idempotent ingestion (each background result merges once)\n  - final-response gate executes join policy before response assembly\n  - if timeout expires, final message clearly reports unfinished background items\n\n5) Preserve current flow by default\n- If no background spawn is used, existing sequential behavior remains unchanged.\n- Background capability is opt-in and additive only.\n\n## Deterministic behavior after patch\n### Canonical user flow (must work exactly)\nUser sends one prompt with both:\n1) memory correction/update instruction\n2) coding change request\n\nExpected orchestration:\n1. Main chat spawns background task: “update memory file with user-stated correction”.\n2. Background agent starts in parallel (separate LLM/API call).\n3. Main chat immediately performs code edits without waiting.\n4. Main chat reaches finalization and applies join policy (`wait_until_timeout` default).\n5. If background finished, merge its completion/result text into final reply.\n6. Final user response includes both outcomes: code change result + memory update result.\n7. If background not finished by timeout, final response includes explicit in-progress notice.\n\n### Identity and capability behavior\n- Background agent is the same core Prom identity/model as main chat.\n- Difference is only invocation trigger/context: background uses spawn-provided prompt rather than direct user prompt.\n- No profile file creation, no persistent subagent config, no schedule/heartbeat side-effects.\n\n### Scalable fan-out behavior\n- A subagent or orchestrator can spawn multiple background calls in parallel (e.g., one per news source).\n- System may incur more LLM calls by design; this is accepted as the tradeoff for parallel efficiency and lower single-agent serial workload.\n\n## Acceptance tests\n1) Additive regression\n- Prompt with memory+code request and no background spawn path enabled.\n- Confirm current sequential flow still works as before.\n\n2) Canonical mixed prompt with spawn\n- Trigger background memory update + foreground code edit.\n- Confirm foreground code starts before background completion.\n- Confirm final reply contains both completed results when background completes within timeout.\n\n3) Timeout behavior\n- Force slow background job.\n- Confirm finalization returns foreground result + explicit background in-progress notice under `wait_until_timeout`.\n\n4) Join policies\n- Validate `wait_all`, `wait_until_timeout`, `best_effort_merge` produce deterministic documented outcomes.\n\n5) Idempotent merge\n- Call join/merge path multiple times for same background task.\n- Confirm result merges only once (no duplicate completion artifacts).\n\n6) start_task boundary\n- Validate start_task workflows are unchanged and still managed via task lifecycle tools.\n- Validate background tasks do not create persistent profile/schedule artifacts.\n\n7) Parallel fan-out sanity\n- Spawn N background fetch/research calls (e.g., multiple sources).\n- Confirm independent status tracking and deterministic final aggregation behavior.\n\n## Risks and compatibility\n- Risk: race conditions when finalizing response while background jobs are still running.\n  - Mitigation: explicit join policy + finalization gate + timeout messaging.\n- Risk: semantic confusion with start_task/subagents.\n  - Mitigation: strict boundary contract and additive API naming.\n- Risk: increased API cost due to parallel calls.\n  - Mitigation: expected/accepted tradeoff; leave caller control over fan-out.\n- Compatibility: backward compatible by default because existing direct flow remains unchanged unless background spawn is explicitly used.",
+      "affectedFiles": [
+        {
+          "path": "src/gateway/tool-schema.ts",
+          "action": "edit",
+          "description": "Add schema/types for background_spawn, background_status/background_progress, and background_join operations."
+        },
+        {
+          "path": "src/gateway/task-runner.ts",
+          "action": "edit",
+          "description": "Add ephemeral background execution path and lifecycle tracking distinct from start_task."
+        },
+        {
+          "path": "src/gateway/agent-dispatch.ts",
+          "action": "edit",
+          "description": "Route background spawns as separate LLM/API calls with task-scoped prompt and no profile persistence."
+        },
+        {
+          "path": "src/gateway/response-finalizer.ts",
+          "action": "edit",
+          "description": "Implement join-policy gate (wait_all / wait_until_timeout / best_effort_merge), timeout notices, and merge-once idempotency."
+        },
+        {
+          "path": "src/gateway/routes/tasks.ts",
+          "action": "edit",
+          "description": "Expose/extend endpoints for background status/progress/join without altering existing task contracts."
+        },
+        {
+          "path": "src/gateway/proposals/proposal-executor.ts",
+          "action": "edit",
+          "description": "Ensure proposal execution path can invoke background primitives without affecting legacy behavior."
+        }
+      ],
+      "diffPreview": "// New additive tool contract (illustrative)\ntype BackgroundJoinPolicy = 'wait_all' | 'wait_until_timeout' | 'best_effort_merge';\n\ninterface BackgroundSpawnInput {\n  prompt: string;                  // task-scoped instructions\n  joinPolicy?: BackgroundJoinPolicy; // default: wait_until_timeout\n  timeoutMs?: number;              // used by wait_until_timeout\n  tags?: string[];\n}\n\ninterface BackgroundStatus {\n  id: string;\n  state: 'queued' | 'in_progress' | 'completed' | 'failed' | 'timed_out';\n  result?: string;\n  error?: string;\n}\n\n// Deterministic finalization behavior\nfinalizeResponse() {\n  const joinOutcome = applyJoinPolicy(activeBackgroundJobs);\n  mergeBackgroundResultsIdempotently(joinOutcome.completedJobs);\n  return composeFinalUserReply({ foregroundResult, joinOutcome });\n}\n",
+      "estimatedImpact": "Adds parallel side-work capability with deterministic merge semantics while preserving current UX as default; improves responsiveness for mixed prompts and enables scalable fan-out patterns.",
+      "requiresBuild": true,
+      "requiresSrcEdit": true,
+      "executorAgentId": "code_executor_synthesizer_v1",
+      "executorPrompt": "Execute proposal prop_1774543650770_4b9692 exactly as specified. This is a src feature implementation. Apply only the listed file edits, preserving existing default sequential behavior when no background spawn is used. Implement: ephemeral one-shot background spawn/status/join primitives; separate LLM/API call execution; strict boundary vs start_task; join policies (wait_all, wait_until_timeout default, best_effort_merge); merge-once idempotency and finalization gate with timeout messaging. Run build/tests required by repo standards. Return: (1) exact changed files, (2) verification evidence for each acceptance test, (3) any blockers/mismatches if encountered; stop and report if proposal spec cannot be matched deterministically."
+    }
+  },
+  "decidedAt": 1774546920494,
+  "executorTaskId": "proposal_prop_1774543650770_4b9692"
+}

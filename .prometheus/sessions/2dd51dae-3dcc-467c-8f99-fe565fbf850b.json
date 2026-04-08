@@ -1,0 +1,41 @@
+{
+  "id": "2dd51dae-3dcc-467c-8f99-fe565fbf850b",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw",
+      "timestamp": 1772823256846
+    },
+    {
+      "role": "assistant",
+      "content": "Hey. What do you want to work on today?",
+      "timestamp": 1772823263563
+    },
+    {
+      "role": "user",
+      "content": "nothing just testing and setting you up",
+      "timestamp": 1772823284551
+    },
+    {
+      "role": "assistant",
+      "content": "Got it—no problem. I’m here and ready whenever you want to try something.",
+      "timestamp": 1772823290147
+    },
+    {
+      "role": "user",
+      "content": "How many sub agents do we have?",
+      "timestamp": 1772823303738
+    },
+    {
+      "role": "assistant",
+      "content": "We currently have 1 agent configured.",
+      "timestamp": 1772823319158
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772823239262,
+  "lastActiveAt": 1772823319158,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 104
+}

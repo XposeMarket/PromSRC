@@ -1,0 +1,15 @@
+{
+  "taskId": "c61012bc-fa51-4558-9d8d-2d80a9b428ef",
+  "createdAt": 1773591722942,
+  "updatedAt": 1773591722943,
+  "entries": [
+    {
+      "id": "1617a074-b11f-412c-9794-95809d39d925",
+      "t": 1773591722943,
+      "stepIndex": 0,
+      "category": "finding",
+      "key": "last_run_insight",
+      "value": "Weekly review pattern: scheduled runs are succeeding most when prompts are narrow and produce concrete artifacts, while failures cluster around placeholder heartbeats, verifier loops, and runtimes that report actions without durable evidence. Tricky part: the control plane has almost no formal run-history data yet, so memory logs are carrying most of the forensic signal."
+    }
+  ]
+}

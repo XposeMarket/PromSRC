@@ -1,0 +1,26 @@
+{
+  "id": "8b98c28d-ede7-4712-a74a-4535bf4114f3",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw can you go ahead and open up x and make a promotional post for smallclaw, its already logged in just go ahead and post it",
+      "timestamp": 1772767985488
+    },
+    {
+      "role": "assistant",
+      "content": "Got it! I’ll hop over to X, post the promotional message for smallclaw, and let you know once it’s live.",
+      "timestamp": 1772767994217
+    },
+    {
+      "role": "assistant",
+      "content": "Got it! I’ll hop over to X, post the promotional message for smallclaw, and let you know once it’s live.",
+      "timestamp": 1772767994218
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772767924643,
+  "lastActiveAt": 1772767994218,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 116
+}

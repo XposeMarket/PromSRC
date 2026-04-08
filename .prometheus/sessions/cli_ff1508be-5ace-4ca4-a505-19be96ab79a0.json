@@ -1,0 +1,32 @@
+{
+  "id": "cli_ff1508be-5ace-4ca4-a505-19be96ab79a0",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey",
+      "timestamp": 1774845928267
+    },
+    {
+      "role": "assistant",
+      "content": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187547,\"eligible_promo\":null,\"resets_in_seconds\":341617}}",
+      "timestamp": 1774845929418
+    },
+    {
+      "role": "user",
+      "content": "hows it going prom",
+      "timestamp": 1774845934538
+    },
+    {
+      "role": "assistant",
+      "content": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187546,\"eligible_promo\":null,\"resets_in_seconds\":341610}}",
+      "timestamp": 1774845935679
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "terminal",
+  "createdAt": 1774845928267,
+  "lastActiveAt": 1774845935679,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 153
+}

@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774654211643",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "1) **Restart/build status:** ✅ Manual restart for **“Telegram /restart”** is complete. The gateway booted successfully, and **Telegram polling has resumed**. No files were changed in this restart, so no new build step was required (latest Telegram image-intake changes were already build-verified earlier with `npm run build` / `tsc` passing).\n\n2) **What changed (high-level):** This was a runtime/session refresh only—no code edits, no config changes, and no API-surface changes during this restart.\n\n3) **What should I verify next?** I can now validate any of these live: Telegram command handling (`/new`, `/clear`, `/model`), inbound image intake path, or end-to-end message roundtrip health.",
+      "timestamp": 1774654217120
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774654211653,
+  "lastActiveAt": 1774654217121,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 205,
+  "activatedToolCategories": [
+    "browser",
+    "team_ops",
+    "scheduling",
+    "integrations"
+  ]
+}

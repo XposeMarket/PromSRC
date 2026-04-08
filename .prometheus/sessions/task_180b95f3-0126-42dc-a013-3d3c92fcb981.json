@@ -1,0 +1,18 @@
+{
+  "id": "task_180b95f3-0126-42dc-a013-3d3c92fcb981",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775346758115,
+  "lastActiveAt": 1775346758115,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "source_write",
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

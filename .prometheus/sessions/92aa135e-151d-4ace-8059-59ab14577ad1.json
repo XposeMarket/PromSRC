@@ -1,0 +1,25 @@
+{
+  "id": "92aa135e-151d-4ace-8059-59ab14577ad1",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey prom can you go in my browser to X, and search up openclaw/claude related things and go ahead and like 5 posts for me - im testing out your declare plan tool as well as browser tools",
+      "timestamp": 1775148941888
+    },
+    {
+      "role": "assistant",
+      "content": "Restart complete — Prometheus is back up, and I’m ready to continue from the Telegram quick restart context.  \nNo files were changed in this restart; this was a clean manual reboot focused on restoring runtime services (including the Telegram gateway/polling path).  \nWhat do you want me to verify next: gateway health, Telegram polling responsiveness, or an end-to-end test message flow?",
+      "timestamp": 1775149483792
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775148941890,
+  "lastActiveAt": 1775149483793,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 177,
+  "activatedToolCategories": [
+    "browser"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "3f723da7-ce1d-44de-8a43-7ffa6a5766cb",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Hey Raul — great to kick this off with you. I’m Prom, your dedicated assistant for **Prometheus Self Improving**.\n\nI’d love to hear the story in your words: what this project is, what “success” looks like for you, who’s involved, what tools/systems you want in the loop, and any timelines you already care about.",
+      "timestamp": 1774508852871
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774508826653,
+  "lastActiveAt": 1774508852871,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 96
+}

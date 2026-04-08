@@ -1,0 +1,138 @@
+{
+  "id": "896dd068-a988-4ff6-8d11-e513489d4769",
+  "title": "TopstepAI Market Heartbeat",
+  "prompt": "You are TopstepAI ops monitor. Goal: every run, verify live trading system health during market hours and dispatch corrective actions if needed.\n\nSteps:\n1) Confirm current time is within configured market monitoring window for MNQ/MGC intraday session. If outside window, output {\"status\":\"outside_hours\"} and stop.\n2) Check team/agent health for TopstepAI members: trading_market_analyst, trading_risk_manager, trading_executor, trading_journal, trading_news_watcher. Identify missing/stalled/offline members.\n3) Verify platform connectivity/session readiness for broker UI and data feed. If disconnected, set status degraded.\n4) Verify open position state synchronization flag exists and is fresh (<60s old). If stale, dispatch a reconcile request to risk_manager and journal.\n5) If any critical issue (risk manager unavailable, executor unavailable, disconnected while OPEN position), dispatch immediate STOP_TRADING alert task to main session and mark critical.\n6) Return strict JSON: {\"status\":\"ok|degraded|critical|outside_hours\",\"issues\":[...],\"actions\":[...],\"timestamp\":\"ISO\"}.\n\nConstraints:\n- Never place/modify orders in this job.\n- Never relax risk limits.\n- Keep output concise JSON only.",
+  "sessionId": "9bce6ab6-e696-4a5b-a8ff-209ec6bf77bc",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "scheduleId": "job_1773381343523_f1vap",
+  "plan": [
+    {
+      "index": 0,
+      "description": "You are TopstepAI ops monitor. Goal: every run, verify live trading system health during market hours and dispatch corre",
+      "status": "done",
+      "completedAt": 1773381467189,
+      "notes": "{\"status\":\"degraded\",\"issues\":[\"outside_config_window_check_unavailable_assumed_in_hours\",\"broker_connectivity_heartbeat_missing\",\"position_sync_flag_missing_or_stale_gt_60s\"],\"actions\":[\"dispatched_r"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1773381439831,
+      "type": "status_push",
+      "content": "Task created: TopstepAI Market Heartbeat"
+    },
+    {
+      "t": 1773381446161,
+      "type": "tool_call",
+      "content": "team_manage({\"action\":\"list\"})"
+    },
+    {
+      "t": 1773381446170,
+      "type": "tool_result",
+      "content": "team_manage: {\n  \"success\": true,\n  \"action\": \"list\",\n  \"count\": 3,\n  \"teams\": [\n    {\n      \"id\": \"team_trade_wzndkk\",\n      \"name\":"
+    },
+    {
+      "t": 1773381446182,
+      "type": "tool_call",
+      "content": "task_control({\"action\":\"list\",\"task_id\":\"\",\"status\":\"running\",\"include_all_sessions\":true,\"li)"
+    },
+    {
+      "t": 1773381446554,
+      "type": "tool_result",
+      "content": "task_control: {\n  \"success\": true,\n  \"action\": \"list\",\n  \"scope\": \"all_sessions\",\n  \"tasks\": [\n    {\n      \"task_id\": \"896dd068-a988-4"
+    },
+    {
+      "t": 1773381446555,
+      "type": "tool_call",
+      "content": "list_files({})"
+    },
+    {
+      "t": 1773381446574,
+      "type": "tool_result",
+      "content": "list_files: [\"AGENTS.md\",\"BOOT.md\",\"HEARTBEAT.md\",\"IDENTITY.md\",\"index.html\",\"MEMORY.md\",\"SELF.md\",\"SOUL.md\",\"TOOLS.md\",\"tool_audit."
+    },
+    {
+      "t": 1773381451756,
+      "type": "tool_call",
+      "content": "dispatch_to_agent({\"agent_id\":\"trading_risk_manager\",\"message\":\"TopstepAI ops monitor detected sta)"
+    },
+    {
+      "t": 1773381451949,
+      "type": "tool_result",
+      "content": "dispatch_to_agent: {\"task_id\":\"a07928be-b05e-4721-ade0-8bde6857e493\",\"agent_id\":\"trading_risk_manager\",\"status\":\"dispatched\"}"
+    },
+    {
+      "t": 1773381456535,
+      "type": "tool_call",
+      "content": "dispatch_to_agent({\"agent_id\":\"trading_journal\",\"message\":\"TopstepAI ops monitor detected stale/mi)"
+    },
+    {
+      "t": 1773381456608,
+      "type": "tool_result",
+      "content": "dispatch_to_agent: {\"task_id\":\"857b34d9-ecaf-4a26-88c6-352f88f39eb2\",\"agent_id\":\"trading_journal\",\"status\":\"dispatched\"}"
+    },
+    {
+      "t": 1773381461460,
+      "type": "tool_call",
+      "content": "write_note({\"content\":\"Health check flow worked and quickly identified missing freshness si)"
+    },
+    {
+      "t": 1773381461469,
+      "type": "tool_result",
+      "content": "write_note: Note saved [last_run_insight] (245 chars) → intraday-notes"
+    },
+    {
+      "t": 1773381467189,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"{\\\"status\\\":\\\"degraded\\\",\\\"issues\\\":[\\\"outside_config_window_check_unavailable_assumed_in_hours\\\",\\\"broker_connectivity_heartbeat_missing\\\",\\\"position_sync_flag_missing_or_stale_gt_60s\\\"],\\\"actions\\\":[\\\"dispatched_r\"}]"
+    },
+    {
+      "t": 1773381467194,
+      "type": "status_push",
+      "content": "Done: {\"status\":\"degraded\",\"issues\":[\"outside_config_window_check_unavailable_assumed_in_hours\",\"broker_connectivity_heartbeat_missing\",\"position_sync_flag_missing_or_stale_gt_60s\"],\"actions\":[\"dispatched_r"
+    }
+  ],
+  "lastProgressAt": 1773381467194,
+  "startedAt": 1773381439831,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Run Team Manage",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Run Task Control",
+        "status": "done"
+      },
+      {
+        "id": "p3",
+        "text": "Run Dispatch To Agent",
+        "status": "done"
+      },
+      {
+        "id": "p4",
+        "text": "Run Write Note",
+        "status": "done"
+      }
+    ],
+    "updatedAt": 1773381467186
+  },
+  "lastToolCall": "write_note({\"content\":\"Health check flow worked and quickly identified missing freshness si)",
+  "lastToolCallAt": 1773381461460,
+  "finalSummary": "{\"status\":\"degraded\",\"issues\":[\"outside_config_window_check_unavailable_assumed_in_hours\",\"broker_connectivity_heartbeat_missing\",\"position_sync_flag_missing_or_stale_gt_60s\"],\"actions\":[\"dispatched_reconcile_request_to_trading_risk_manager:task_a07928be-b05e-4721-ade0-8bde6857e493\",\"dispatched_ops_incident_log_to_trading_journal:task_857b34d9-ecaf-4a26-88c6-352f88f39eb2\"],\"timestamp\":\"2026-03-13T05:57:00Z\"}",
+  "completedAt": 1773381467192
+}

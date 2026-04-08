@@ -1,0 +1,23 @@
+{
+  "id": "auto_boot_1775074987888",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Startup status is partially constrained: task and schedule systems are currently unavailable in this snapshot, so there are no live task/schedule updates to action right now. Today’s notes highlight that memory sync correctly no-op’d when signals were low, and that intermittent intraday logs should continue to be handled gracefully without forcing writes. Where things left off: the X→Telegram flow hang was traced to an invalid `browser_send_to_telegram` call plus a missed fallback, which left a declared-plan step incomplete and triggered repeated unfinished-step polling.",
+      "timestamp": 1775074995933
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775074988421,
+  "lastActiveAt": 1775074995934,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 171,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

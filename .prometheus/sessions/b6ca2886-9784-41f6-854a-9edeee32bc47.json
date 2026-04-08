@@ -1,0 +1,22 @@
+{
+  "id": "b6ca2886-9784-41f6-854a-9edeee32bc47",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom do you see this\n\n[UPLOADED FILES]\n  • \"pokemon.png\" (image) → saved to: D:\\Prometheus\\workspace\\uploads\\pokemon_1775091185055.png\nImages above are attached directly — you can see them.\nUse the exact workspace paths above to read, edit, or process files.",
+      "timestamp": 1775091185287
+    },
+    {
+      "role": "assistant",
+      "content": "Yep — I can see it clearly.  \nThat card is **“Nacre”**, an **EPIC Rabbit** with these stats:\n\n- Debugging: **48**\n- Patience: **57**\n- Chaos: **100**\n- Wisdom: **74**\n- Snark: **36**\n\n…and honestly the flavor text is 🔥\n\nIf you want, I can also extract all text from the image into clean copyable format.",
+      "timestamp": 1775091191100
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775091185288,
+  "lastActiveAt": 1775091191100,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 174
+}

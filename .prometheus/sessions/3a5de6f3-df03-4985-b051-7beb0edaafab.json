@@ -1,0 +1,38 @@
+{
+  "id": "3a5de6f3-df03-4985-b051-7beb0edaafab",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw, use my browser and go on youtube and look up videos about openclaw",
+      "timestamp": 1771830899205
+    },
+    {
+      "role": "assistant",
+      "content": "Chrome needs remote debugging enabled. Right-click Chrome's shortcut → Properties → add `--remote-debugging-port=9222` to the Target field → restart Chrome. Then try again! 🦞",
+      "timestamp": 1771831079136
+    },
+    {
+      "role": "user",
+      "content": "Can you change that for me",
+      "timestamp": 1771831144322
+    },
+    {
+      "role": "assistant",
+      "content": "Sure! Here's a concise version: Add `--remote-debugging-port=9222` to Chrome's shortcut Target → restart → try again. 🦞",
+      "timestamp": 1771831195612
+    },
+    {
+      "role": "user",
+      "content": "Try again",
+      "timestamp": 1771831268350
+    },
+    {
+      "role": "assistant",
+      "content": "Final response: \"Add `--remote-debugging-port=9222` to Chrome's shortcut Target → restart Chrome → try again. 🦞\"\n\nAdd `--remote-debugging-port=9222` to Chrome's shortcut Target → restart Chrome → try again. 🦞",
+      "timestamp": 1771831364758
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771830899223,
+  "lastActiveAt": 1771831364758
+}

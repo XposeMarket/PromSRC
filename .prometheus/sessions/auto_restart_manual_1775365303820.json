@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1775365303820",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Hey Raul — gateway's back up and Telegram polling resumed. No file changes this restart, just an internal tweak to get things running cleaner. What should I verify first?",
+      "timestamp": 1775365305764
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775365303885,
+  "lastActiveAt": 1775365305765,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 55,
+  "activatedToolCategories": [
+    "browser",
+    "scheduling",
+    "integrations"
+  ]
+}

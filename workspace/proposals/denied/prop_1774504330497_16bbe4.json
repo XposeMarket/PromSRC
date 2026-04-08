@@ -1,0 +1,31 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Expose full src edit toolset and update proposal execution guidance",
+  "summary": "Add missing src edit tools to the surfaced tool definitions and revise proposal execution instructions so tool choice is use-case based instead of replace-first bias.",
+  "details": "## Why this change\nProposal execution currently overuses `find_replace_source`/`replace_lines_source` because guidance and surfaced tool definitions steer behavior that way. The executor already supports richer source-edit primitives (`insert_after_source`, `delete_lines_source`, `write_source`), but they are not consistently exposed/recommended. This causes unnecessary friction for insert/delete/full-file rewrite workflows and reduces deterministic edit quality.\n\n## Exact source edits\n1. **Update src tool definitions exposure** in `src/gateway/tools/defs/file-web-memory.ts`:\n   - Add missing src-edit tool definitions for:\n     - `insert_after_source`\n     - `delete_lines_source`\n     - `write_source`\n   - Keep existing definitions for:\n     - `find_replace_source`\n     - `replace_lines_source`\n   - Ensure parameter schemas and help text match actual executor behavior and safety constraints.\n\n2. **Revise proposal execution guidance** in `src/gateway/routes/proposals.router.ts`:\n   - Replace/augment current wording that prefers only `find_replace_source`/`replace_lines_source`.\n   - Add explicit tool-selection guidance by scenario:\n     - exact token swap → `find_replace_source`\n     - bounded block rewrite → `replace_lines_source`\n     - append/insert region → `insert_after_source`\n     - remove contiguous range → `delete_lines_source`\n     - full-file rewrite/new canonical content → `write_source`\n   - Preserve existing safety expectations (read before edit, minimal blast radius, deterministic edits).\n\n3. **(If needed) align any shared prompt/help text** that references src editing defaults so all operator-facing guidance is consistent with the expanded toolset.\n\n## Deterministic behavior after patch\n- During proposal execution, the agent can select from all supported src edit primitives, not just replace-based ones.\n- Tool availability and instruction text are consistent with executor capabilities.\n- Insert/delete/full rewrite operations become first-class and no longer require awkward replace-based workarounds.\n- Existing replace workflows remain unchanged and backward compatible.\n\n## Acceptance tests\n1. **Tool surfacing test**\n   - Trigger context where tool list is rendered/available for proposal execution.\n   - Verify presence of all five src edit tools:\n     - `find_replace_source`, `replace_lines_source`, `insert_after_source`, `delete_lines_source`, `write_source`.\n\n2. **Guidance test**\n   - Inspect proposal execution instruction block and verify use-case mapping text exists for each tool class (replace/line-range/insert/delete/write).\n\n3. **Functional smoke tests**\n   - Execute a small controlled edit with each newly surfaced tool on a test src file:\n     - insert a line (`insert_after_source`)\n     - delete a line range (`delete_lines_source`)\n     - rewrite file content (`write_source`)\n   - Confirm edits apply correctly and deterministically.\n\n4. **Regression test**\n   - Run existing `find_replace_source` and `replace_lines_source` patch flow and ensure no behavior regressions.\n\n## Risks and compatibility\n- **Risk:** Expanding tool choices may increase chance of incorrect tool selection in ambiguous prompts.\n  - **Mitigation:** clear scenario mapping in proposal instructions and preserve read-before-edit guidance.\n- **Risk:** `write_source` has larger blast radius if misused.\n  - **Mitigation:** keep guidance explicit that it is for intentional full-file rewrites only; prefer smaller-scope tools otherwise.\n- **Compatibility:** Backward compatible; no breaking API/tool removals, only additive exposure + instruction refinement.",
+  "sourceAgentId": "549a6cc2-aebb-4611-9ff1-5c51b32d1d16",
+  "sourceSessionId": "549a6cc2-aebb-4611-9ff1-5c51b32d1d16",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/tools/defs/file-web-memory.ts",
+      "action": "edit",
+      "description": "Expose missing src edit tools (insert_after_source, delete_lines_source, write_source) with correct schemas/descriptions."
+    },
+    {
+      "path": "src/gateway/routes/proposals.router.ts",
+      "action": "edit",
+      "description": "Update proposal execution prompt/instructions to recommend src edit tools by use-case instead of replace-only bias."
+    }
+  ],
+  "diffPreview": "- Proposal guidance: 'use find_replace_source (preferred) or replace_lines_source'\n+ Proposal guidance: 'select src edit tool by operation type: find_replace_source / replace_lines_source / insert_after_source / delete_lines_source / write_source'\n\n+ file-web-memory src defs: add insert_after_source, delete_lines_source, write_source tool definitions",
+  "estimatedImpact": "Improves edit precision and reduces workaround patches for insert/delete/full rewrite cases; better alignment between exposed tools and executor capabilities.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved patch exactly:\n1) Edit `src/gateway/tools/defs/file-web-memory.ts` to expose `insert_after_source`, `delete_lines_source`, and `write_source` alongside existing src edit tools. Match real executor parameter contracts and descriptions.\n2) Edit `src/gateway/routes/proposals.router.ts` proposal execution instructions so src tool guidance is use-case based (exact swap, line block, insert, delete, full rewrite) rather than replace-first only.\n3) Keep changes minimal and backward compatible.\n4) Run TypeScript build checks used in this repo, fix any compile issues introduced by the patch.\n5) Return a concise summary of changed sections and verification results.",
+  "id": "prop_1774504330497_16bbe4",
+  "status": "denied",
+  "createdAt": 1774504330498,
+  "updatedAt": 1774504408003,
+  "decidedAt": 1774504408003
+}

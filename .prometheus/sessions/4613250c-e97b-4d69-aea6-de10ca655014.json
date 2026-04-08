@@ -1,0 +1,18 @@
+{
+  "id": "4613250c-e97b-4d69-aea6-de10ca655014",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw, can you go ahead and open up X on my computer - and then look up the latest posts about openclaw? What are people saying about openclaw lately?",
+      "timestamp": 1772059061553
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Ollama chat failed: fetch failed",
+      "timestamp": 1772060781655
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1772059040864,
+  "lastActiveAt": 1772060781656
+}

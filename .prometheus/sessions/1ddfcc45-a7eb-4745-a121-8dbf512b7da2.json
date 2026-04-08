@@ -1,0 +1,28 @@
+{
+  "id": "1ddfcc45-a7eb-4745-a121-8dbf512b7da2",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claude",
+      "timestamp": 1775329274473
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul! I'm Prom, running here in Prometheus. What's up?",
+      "timestamp": 1775329278166
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul — Prometheus is back up and Telegram polling is live. The restart was clean with no file changes, so you're running the same build as before. What would you like me to verify or pick up next?",
+      "timestamp": 1775336092705
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775329274475,
+  "lastActiveAt": 1775336092706,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 96,
+  "activatedToolCategories": []
+}

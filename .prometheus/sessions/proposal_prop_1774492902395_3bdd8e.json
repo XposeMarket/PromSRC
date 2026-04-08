@@ -1,0 +1,21 @@
+{
+  "id": "proposal_prop_1774492902395_3bdd8e",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774493227019
+    },
+    {
+      "role": "assistant",
+      "content": "Implemented and verified. ### Changed files - `src/gateway/agents-runtime/subagent-executor.ts` (around lines **1952–2009**) - Added `write_note` idempotency guard for task sessions when `tag === \"task_complete\"`. - It now checks the current task journal for an existing `write_note` entry with `[task_complete]` prefix (case-insensitive). - If found, it returns a successful no-op: - `write_note: task_complete already recorded for this task; skipped duplicate.` - Non-`task_complete` tags are unchanged. - `src/gateway/tasks/background-task-runner.ts` - Updated final-step prompt logic (around lines **653–701**): - If task-complete note already exists: instructs **“Do NOT call write_note again; call step_complete now.”** - Otherwise preserves original 3-step finalization order. - Added deterministic auto-advance on non-advanced final step (around lines **771–816**): - When current step is `write_note_completion` and journal already has `[task_complete]`, - marks step complete via `mutatePlan(... notes: 'auto-complete: task_complete already logged')` - increments `currentStepIndex` - appends status journal note - broadcasts step-done event - continues loop cleanly. ### Build / verification - Ran `npm run build` twice (as requested by plan steps). - Both passed: `tsc` exit `0`. - No issues encountered.",
+      "timestamp": 1774493227021
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774493227021,
+  "lastActiveAt": 1774493227021,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 408
+}

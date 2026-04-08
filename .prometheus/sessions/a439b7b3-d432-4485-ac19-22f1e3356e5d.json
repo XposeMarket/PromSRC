@@ -1,0 +1,16 @@
+{
+  "id": "a439b7b3-d432-4485-ac19-22f1e3356e5d",
+  "history": [
+    {
+      "role": "user",
+      "content": "npm run build and gateway restart pls",
+      "timestamp": 1774216907505
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774216907505,
+  "lastActiveAt": 1774216963833,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 17
+}

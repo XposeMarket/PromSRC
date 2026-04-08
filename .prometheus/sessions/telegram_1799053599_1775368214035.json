@@ -1,0 +1,35 @@
+{
+  "id": "telegram_1799053599_1775368214035",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "✅ Started a new Telegram chat session. This thread is now linked to the new channel session.",
+      "timestamp": 1775368214035
+    },
+    {
+      "role": "user",
+      "content": "Prom we have a huge problem with the background tasks and how they run - idkcwtf just happened. This thing didnt run declare plan, and even ran write proposal as an approved proposal. - docme a favor - do you aee claude code on my desktop",
+      "timestamp": 1775368307448
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Anthropic API error 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"},\"request_id\":\"req_011CZk6v7EKU9BdKBD3yKGsu\"}",
+      "timestamp": 1775368307448
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Anthropic API error 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"},\"request_id\":\"req_011CZkqNgPjHJgGn6QRKtFiJ\"}",
+      "timestamp": 1775401714060
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "telegram",
+  "createdAt": 1775368214036,
+  "lastActiveAt": 1775401714082,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 243,
+  "activatedToolCategories": [
+    "desktop"
+  ]
+}

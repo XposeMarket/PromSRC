@@ -1,0 +1,75 @@
+{
+  "type": "src_edit",
+  "priority": "critical",
+  "title": "Fix Telegram Proposal Approve Button Not Executing Proposals",
+  "summary": "Telegram proposal approval callback approves proposals in the store but never dispatches execution. The button confirms approval but the executor never runs.",
+  "details": "## Why this change\n\nWhen a user clicks the ✅ Approve button on a proposal in Telegram, the callback handler (`approveProposal()`) updates the proposal status to \"approved\" in the store and sends a confirmation message, but it **never calls `dispatchApprovedProposal()`** — the function responsible for actually triggering the executor agent.\n\nComparison: The HTTP endpoint handler (proposals.router.ts lines 119-145) correctly calls `dispatchApprovedProposal()` on line 136 after approval. The Telegram handler is missing this critical step.\n\n## Exact source edits\n\n**File**: src/gateway/telegram-handler.ts\n**Lines**: 974-1006 (the `approveProposal()` callback handler)\n\n**Current code** (lines 994-1000):\n```typescript\nawait this.proposalsStore.approveProposal(proposalId);\n\n// Update the button to show approved\nbutton.text = '✅ Approved';\nbutton.callback_data = `proposal_approved:${proposalId}`;\n\nawait this.telegramApi.editMessageReplyMarkup(chatId, messageId, {\n  inline_keyboard: [[button]]\n});\n\nawait this.telegramApi.sendMessage(chatId, `✅ Proposal approved. Executor will begin shortly.`);\n```\n\n**Fixed code** (add after line 999, before the success message):\n```typescript\nawait this.proposalsStore.approveProposal(proposalId);\n\n// Update the button to show approved\nbutton.text = '✅ Approved';\nbutton.callback_data = `proposal_approved:${proposalId}`;\n\nawait this.telegramApi.editMessageReplyMarkup(chatId, messageId, {\n  inline_keyboard: [[button]]\n});\n\n// CRITICAL: Dispatch the approved proposal to the executor\nawait dispatchApprovedProposal(proposalId);\n\nawait this.telegramApi.sendMessage(chatId, `✅ Proposal approved. Executor will begin shortly.`);\n```\n\n## Deterministic behavior after patch\n\n1. User clicks ✅ Approve button in Telegram\n2. Proposal status changes to \"approved\" in store\n3. **`dispatchApprovedProposal(proposalId)` is called immediately**\n4. Executor agent spawns with the proposal instructions\n5. Confirmation message sent to Telegram with status update\n6. Executor runs and completes the task (or reports errors)\n\n## Acceptance tests\n\n1. Create a test proposal via Telegram\n2. Click the ✅ Approve button\n3. Verify in `task_control(action: 'list')` that a new task was created with the executor agent\n4. Verify the executor completes the task (check logs or task status)\n5. Verify the confirmation message was sent to Telegram\n\n## Risks and compatibility\n\n- **Low risk**: This is a missing function call, not a structural change\n- **No breaking changes**: The function already exists and is called by the HTTP handler successfully\n- **Backward compatible**: Approved proposals will now execute as originally intended\n- **Side effect**: Proposals will actually execute now (this is the desired behavior)",
+  "sourceAgentId": "telegram_1799053599_1775336619713",
+  "sourceSessionId": "telegram_1799053599_1775336619713",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/telegram-handler.ts",
+      "action": "edit",
+      "description": "Add dispatchApprovedProposal() call to the approval callback handler"
+    }
+  ],
+  "requiresBuild": false,
+  "executorAgentId": "code_executor_synthesizer_v1",
+  "executorPrompt": "You are executing a code fix proposal. Read src/gateway/telegram-handler.ts lines 974-1006 to confirm the approveProposal() callback handler. Add the missing dispatchApprovedProposal(proposalId) call after the button is updated (line 999) and before the success message is sent (line 1000). Use find_replace_source to make this surgical edit. The function dispatchApprovedProposal already exists in the codebase — you are simply calling it where it was forgotten. After the edit is complete, call gateway_restart with a summary of the change.",
+  "riskTier": "low",
+  "id": "prop_1775337325204_2f4730",
+  "status": "executing",
+  "version": 1,
+  "revisionHistory": [
+    {
+      "version": 1,
+      "editedAt": 1775337325204,
+      "editedBy": "telegram_1799053599_1775336619713",
+      "note": "Initial proposal content",
+      "snapshot": {
+        "type": "src_edit",
+        "priority": "critical",
+        "title": "Fix Telegram Proposal Approve Button Not Executing Proposals",
+        "summary": "Telegram proposal approval callback approves proposals in the store but never dispatches execution. The button confirms approval but the executor never runs.",
+        "details": "## Why this change\n\nWhen a user clicks the ✅ Approve button on a proposal in Telegram, the callback handler (`approveProposal()`) updates the proposal status to \"approved\" in the store and sends a confirmation message, but it **never calls `dispatchApprovedProposal()`** — the function responsible for actually triggering the executor agent.\n\nComparison: The HTTP endpoint handler (proposals.router.ts lines 119-145) correctly calls `dispatchApprovedProposal()` on line 136 after approval. The Telegram handler is missing this critical step.\n\n## Exact source edits\n\n**File**: src/gateway/telegram-handler.ts\n**Lines**: 974-1006 (the `approveProposal()` callback handler)\n\n**Current code** (lines 994-1000):\n```typescript\nawait this.proposalsStore.approveProposal(proposalId);\n\n// Update the button to show approved\nbutton.text = '✅ Approved';\nbutton.callback_data = `proposal_approved:${proposalId}`;\n\nawait this.telegramApi.editMessageReplyMarkup(chatId, messageId, {\n  inline_keyboard: [[button]]\n});\n\nawait this.telegramApi.sendMessage(chatId, `✅ Proposal approved. Executor will begin shortly.`);\n```\n\n**Fixed code** (add after line 999, before the success message):\n```typescript\nawait this.proposalsStore.approveProposal(proposalId);\n\n// Update the button to show approved\nbutton.text = '✅ Approved';\nbutton.callback_data = `proposal_approved:${proposalId}`;\n\nawait this.telegramApi.editMessageReplyMarkup(chatId, messageId, {\n  inline_keyboard: [[button]]\n});\n\n// CRITICAL: Dispatch the approved proposal to the executor\nawait dispatchApprovedProposal(proposalId);\n\nawait this.telegramApi.sendMessage(chatId, `✅ Proposal approved. Executor will begin shortly.`);\n```\n\n## Deterministic behavior after patch\n\n1. User clicks ✅ Approve button in Telegram\n2. Proposal status changes to \"approved\" in store\n3. **`dispatchApprovedProposal(proposalId)` is called immediately**\n4. Executor agent spawns with the proposal instructions\n5. Confirmation message sent to Telegram with status update\n6. Executor runs and completes the task (or reports errors)\n\n## Acceptance tests\n\n1. Create a test proposal via Telegram\n2. Click the ✅ Approve button\n3. Verify in `task_control(action: 'list')` that a new task was created with the executor agent\n4. Verify the executor completes the task (check logs or task status)\n5. Verify the confirmation message was sent to Telegram\n\n## Risks and compatibility\n\n- **Low risk**: This is a missing function call, not a structural change\n- **No breaking changes**: The function already exists and is called by the HTTP handler successfully\n- **Backward compatible**: Approved proposals will now execute as originally intended\n- **Side effect**: Proposals will actually execute now (this is the desired behavior)",
+        "affectedFiles": [
+          {
+            "path": "src/gateway/telegram-handler.ts",
+            "action": "edit",
+            "description": "Add dispatchApprovedProposal() call to the approval callback handler"
+          }
+        ],
+        "requiresBuild": false,
+        "executorAgentId": "code_executor_synthesizer_v1",
+        "executorPrompt": "You are executing a code fix proposal. Read src/gateway/telegram-handler.ts lines 974-1006 to confirm the approveProposal() callback handler. Add the missing dispatchApprovedProposal(proposalId) call after the button is updated (line 999) and before the success message is sent (line 1000). Use find_replace_source to make this surgical edit. The function dispatchApprovedProposal already exists in the codebase — you are simply calling it where it was forgotten. After the edit is complete, call gateway_restart with a summary of the change.",
+        "riskTier": "low"
+      }
+    }
+  ],
+  "createdAt": 1775337325204,
+  "updatedAt": 1775346758088,
+  "approvalSnapshot": {
+    "approvedAt": 1775346757873,
+    "approvedVersion": 1,
+    "snapshot": {
+      "type": "src_edit",
+      "priority": "critical",
+      "title": "Fix Telegram Proposal Approve Button Not Executing Proposals",
+      "summary": "Telegram proposal approval callback approves proposals in the store but never dispatches execution. The button confirms approval but the executor never runs.",
+      "details": "## Why this change\n\nWhen a user clicks the ✅ Approve button on a proposal in Telegram, the callback handler (`approveProposal()`) updates the proposal status to \"approved\" in the store and sends a confirmation message, but it **never calls `dispatchApprovedProposal()`** — the function responsible for actually triggering the executor agent.\n\nComparison: The HTTP endpoint handler (proposals.router.ts lines 119-145) correctly calls `dispatchApprovedProposal()` on line 136 after approval. The Telegram handler is missing this critical step.\n\n## Exact source edits\n\n**File**: src/gateway/telegram-handler.ts\n**Lines**: 974-1006 (the `approveProposal()` callback handler)\n\n**Current code** (lines 994-1000):\n```typescript\nawait this.proposalsStore.approveProposal(proposalId);\n\n// Update the button to show approved\nbutton.text = '✅ Approved';\nbutton.callback_data = `proposal_approved:${proposalId}`;\n\nawait this.telegramApi.editMessageReplyMarkup(chatId, messageId, {\n  inline_keyboard: [[button]]\n});\n\nawait this.telegramApi.sendMessage(chatId, `✅ Proposal approved. Executor will begin shortly.`);\n```\n\n**Fixed code** (add after line 999, before the success message):\n```typescript\nawait this.proposalsStore.approveProposal(proposalId);\n\n// Update the button to show approved\nbutton.text = '✅ Approved';\nbutton.callback_data = `proposal_approved:${proposalId}`;\n\nawait this.telegramApi.editMessageReplyMarkup(chatId, messageId, {\n  inline_keyboard: [[button]]\n});\n\n// CRITICAL: Dispatch the approved proposal to the executor\nawait dispatchApprovedProposal(proposalId);\n\nawait this.telegramApi.sendMessage(chatId, `✅ Proposal approved. Executor will begin shortly.`);\n```\n\n## Deterministic behavior after patch\n\n1. User clicks ✅ Approve button in Telegram\n2. Proposal status changes to \"approved\" in store\n3. **`dispatchApprovedProposal(proposalId)` is called immediately**\n4. Executor agent spawns with the proposal instructions\n5. Confirmation message sent to Telegram with status update\n6. Executor runs and completes the task (or reports errors)\n\n## Acceptance tests\n\n1. Create a test proposal via Telegram\n2. Click the ✅ Approve button\n3. Verify in `task_control(action: 'list')` that a new task was created with the executor agent\n4. Verify the executor completes the task (check logs or task status)\n5. Verify the confirmation message was sent to Telegram\n\n## Risks and compatibility\n\n- **Low risk**: This is a missing function call, not a structural change\n- **No breaking changes**: The function already exists and is called by the HTTP handler successfully\n- **Backward compatible**: Approved proposals will now execute as originally intended\n- **Side effect**: Proposals will actually execute now (this is the desired behavior)",
+      "affectedFiles": [
+        {
+          "path": "src/gateway/telegram-handler.ts",
+          "action": "edit",
+          "description": "Add dispatchApprovedProposal() call to the approval callback handler"
+        }
+      ],
+      "requiresBuild": false,
+      "executorAgentId": "code_executor_synthesizer_v1",
+      "executorPrompt": "You are executing a code fix proposal. Read src/gateway/telegram-handler.ts lines 974-1006 to confirm the approveProposal() callback handler. Add the missing dispatchApprovedProposal(proposalId) call after the button is updated (line 999) and before the success message is sent (line 1000). Use find_replace_source to make this surgical edit. The function dispatchApprovedProposal already exists in the codebase — you are simply calling it where it was forgotten. After the edit is complete, call gateway_restart with a summary of the change.",
+      "riskTier": "low"
+    }
+  },
+  "decidedAt": 1775346757873,
+  "executorTaskId": "180b95f3-0126-42dc-a013-3d3c92fcb981"
+}

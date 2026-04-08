@@ -1,0 +1,18 @@
+{
+  "id": "4f581123-57f2-46c6-adb5-0a39cb0753fe",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw",
+      "timestamp": 1772066611285
+    },
+    {
+      "role": "assistant",
+      "content": "Hi there! How can I help today? 😊",
+      "timestamp": 1772066666516
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1772066604272,
+  "lastActiveAt": 1772066666516
+}

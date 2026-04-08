@@ -1,0 +1,36 @@
+{
+  "id": "9ffc5e85-9ea3-47fe-a9f7-5c2e7fac4191",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw!",
+      "timestamp": 1772164766309
+    },
+    {
+      "role": "assistant",
+      "content": "Hey there! How can I help you today?",
+      "timestamp": 1772164769444
+    },
+    {
+      "role": "user",
+      "content": "Can you go ahead and tell me the the status of codex on vs code - its open on my computer, tell me if its still coding or if it finished",
+      "timestamp": 1772164816636
+    },
+    {
+      "role": "assistant",
+      "content": "Got it! I'll take a look at your VS Code Codex session and follow up as soon as I can.",
+      "timestamp": 1772164821315
+    },
+    {
+      "role": "assistant",
+      "content": "Got it! I'll take a look at your VS Code Codex session and follow up as soon as I can.",
+      "timestamp": 1772164821318
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772164748310,
+  "lastActiveAt": 1772164821318,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 133
+}
