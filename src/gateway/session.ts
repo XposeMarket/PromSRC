@@ -28,6 +28,9 @@ export interface Session {
   pendingMemoryFlush?: boolean;
   pendingCompaction?: boolean;
   contextTokenEstimate?: number;
+  latestContextSummary?: string;
+  contextStartIndex?: number;
+  contextSummaryUpdatedAt?: number;
   tags?: string[];
   activatedToolCategories?: string[];
 }
@@ -138,33 +141,126 @@ function resolveSessionPolicy(): {
 }
 
 function trimHistory(session: Session, maxMessages: number): void {
-  if (session.history.length > maxMessages) {
-    session.history = session.history.slice(-maxMessages);
+  // Preserve full raw history for auditability.
+  // API-call context is compacted separately via getHistoryForApiCall().
+  void session;
+  void maxMessages;
+}
+
+function appendCompactionArtifacts(
+  sessionId: string,
+  kind: 'legacy' | 'rolling',
+  summaryText: string,
+  baseMessageCount: number,
+  extra?: Record<string, any>,
+): void {
+  try {
+    const cfg = getConfig();
+    const workspacePath = cfg.getWorkspacePath();
+    const compactionDir = path.join(workspacePath, 'audit', 'chats', 'compactions');
+    fs.mkdirSync(compactionDir, { recursive: true });
+
+    const ts = new Date().toISOString();
+    const payload = {
+      timestamp: ts,
+      sessionId,
+      kind,
+      baseMessageCount,
+      summary: String(summaryText || '').slice(0, 5000),
+      ...(extra || {}),
+    };
+
+    const jsonlPath = path.join(compactionDir, `${sessionId}.jsonl`);
+    fs.appendFileSync(jsonlPath, JSON.stringify(payload) + '\n', 'utf-8');
+
+    const mdPath = path.join(compactionDir, `${sessionId}.md`);
+    const mdLines = [
+      `### [${kind.toUpperCase()}_COMPACTION] ${ts}`,
+      `- Base message count: ${baseMessageCount}`,
+      ...(extra ? Object.entries(extra).map(([k, v]) => `- ${k}: ${String(v)}`) : []),
+      '',
+      String(summaryText || '').trim() || '(No summary generated.)',
+      '',
+    ];
+    fs.appendFileSync(mdPath, mdLines.join('\n'), 'utf-8');
+  } catch {
+    // Compaction artifacts are best-effort only.
   }
 }
 
-function compactHistoryWithSummary(session: Session, summaryText: string, maxMessages: number): boolean {
+function appendTranscriptArtifacts(
+  sessionId: string,
+  msg: ChatMessage,
+  opts?: { synthetic?: boolean },
+): void {
+  try {
+    const cfg = getConfig();
+    const workspacePath = cfg.getWorkspacePath();
+    const transcriptDir = path.join(workspacePath, 'audit', 'chats', 'transcripts');
+    fs.mkdirSync(transcriptDir, { recursive: true });
+
+    const ts = Number.isFinite(Number(msg.timestamp)) ? Number(msg.timestamp) : Date.now();
+    const iso = new Date(ts).toISOString();
+    const payload = {
+      timestamp: ts,
+      timestampIso: iso,
+      sessionId,
+      role: msg.role,
+      channel: msg.channel || undefined,
+      channelLabel: msg.channelLabel || undefined,
+      toolLog: msg.toolLog || undefined,
+      synthetic: opts?.synthetic === true,
+      content: String(msg.content || ''),
+    };
+
+    const jsonlPath = path.join(transcriptDir, `${sessionId}.jsonl`);
+    fs.appendFileSync(jsonlPath, JSON.stringify(payload) + '\n', 'utf-8');
+
+    const mdPath = path.join(transcriptDir, `${sessionId}.md`);
+    const mdLines = [
+      `### [${iso}] ${msg.role}${opts?.synthetic ? ' [synthetic]' : ''}`,
+      '',
+      String(msg.content || '').trim() || '(empty)',
+      '',
+    ];
+    fs.appendFileSync(mdPath, mdLines.join('\n'), 'utf-8');
+  } catch {
+    // Transcript logging is best-effort only.
+  }
+}
+
+export function recordSessionCompaction(
+  sessionId: string,
+  kind: 'legacy' | 'rolling',
+  summaryText: string,
+  baseMessageCount: number,
+  extra?: Record<string, any>,
+): void {
+  const session = getSession(sessionId);
+  const cleanSummary = String(summaryText || '').trim();
+  if (!cleanSummary) return;
+  session.latestContextSummary = cleanSummary.slice(0, 5000);
+  session.contextStartIndex = Math.max(0, Math.floor(Number(baseMessageCount) || 0));
+  session.contextSummaryUpdatedAt = Date.now();
+  appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);
+  saveSession(sessionId);
+}
+
+function compactHistoryWithSummary(sessionId: string, session: Session, summaryText: string, maxMessages: number): boolean {
   const promptIndex = session.history
     .map((m, i) => ({ m, i }))
     .reverse()
     .find((x) => x.m.role === 'user' && x.m.content === PRE_COMPACTION_SUMMARY_PROMPT)?.i ?? -1;
   if (promptIndex <= 0) return false;
 
-  const beforePrompt = session.history.slice(0, promptIndex);
-  const tailAfterSummary = session.history.slice(promptIndex + 2);
-  if (beforePrompt.length < 4) {
-    session.history = [...beforePrompt, ...tailAfterSummary];
-    trimHistory(session, maxMessages);
-    return true;
+  const beforePromptCount = promptIndex;
+  const cleanSummary = String(summaryText || '').trim();
+  if (cleanSummary) {
+    recordSessionCompaction(sessionId, 'legacy', cleanSummary, beforePromptCount, {
+      strategy: 'pre_compaction_prompt',
+      maxMessages,
+    });
   }
-
-  const droppedHalfEnd = Math.max(1, Math.floor(beforePrompt.length / 2));
-  const keptRecentHalf = beforePrompt.slice(droppedHalfEnd);
-  const summaryMsg: ChatMessage = {
-    role: 'assistant',
-    content: `[Compacted context summary]\n${String(summaryText || '').trim() || '(No summary generated.)'}`,
-    timestamp: Date.now(),
-  };
 
   // Persist compaction summary to intraday notes so restart does not lose condensed context.
   try {
@@ -180,10 +276,14 @@ function compactHistoryWithSummary(session: Session, summaryText: string, maxMes
     // Memory persistence must not break chat flow.
   }
 
-  session.history = [summaryMsg, ...keptRecentHalf, ...tailAfterSummary];
-  if (session.history.length > maxMessages) {
-    session.history = [summaryMsg, ...session.history.slice(-(maxMessages - 1))];
+  // Keep raw user/assistant messages intact, but strip internal compaction prompt
+  // and its assistant summary response from persisted history.
+  // This preserves real thread data while removing synthetic control turns.
+  const removeCount = Math.min(2, Math.max(0, session.history.length - promptIndex));
+  if (removeCount > 0) {
+    session.history.splice(promptIndex, removeCount);
   }
+  trimHistory(session, maxMessages);
   return true;
 }
 
@@ -233,6 +333,15 @@ export function getSession(id: string): Session {
         contextTokenEstimate: Number.isFinite(Number(data.contextTokenEstimate))
           ? Number(data.contextTokenEstimate)
           : undefined,
+        latestContextSummary: typeof data.latestContextSummary === 'string'
+          ? data.latestContextSummary
+          : undefined,
+        contextStartIndex: Number.isFinite(Number(data.contextStartIndex))
+          ? Math.max(0, Math.floor(Number(data.contextStartIndex)))
+          : undefined,
+        contextSummaryUpdatedAt: Number.isFinite(Number(data.contextSummaryUpdatedAt))
+          ? Number(data.contextSummaryUpdatedAt)
+          : undefined,
         activatedToolCategories: Array.isArray(data.activatedToolCategories) ? data.activatedToolCategories : [],
       };
       sessions.set(id, session);
@@ -252,6 +361,9 @@ export function getSession(id: string): Session {
     pendingMemoryFlush: false,
     pendingCompaction: false,
     contextTokenEstimate: 0,
+    latestContextSummary: undefined,
+    contextStartIndex: 0,
+    contextSummaryUpdatedAt: undefined,
   };
   sessions.set(id, session);
   saveSession(id);
@@ -309,11 +421,13 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
       .some((h) => h.role === 'user' && h.content === PRE_COMPACTION_SUMMARY_PROMPT);
     const shouldCompact = projectedTokens >= compactionThresholdTokens && !recentlyCompacted;
     if (shouldCompact) {
-      session.history.push({
+      const injectedMsg: ChatMessage = {
         role: 'user',
         content: PRE_COMPACTION_SUMMARY_PROMPT,
         timestamp: Math.max(0, msg.timestamp - 1),
-      });
+      };
+      session.history.push(injectedMsg);
+      appendTranscriptArtifacts(id, injectedMsg, { synthetic: true });
       session.pendingCompaction = true;
       compactionInjected = true;
       deferredForCompaction = options.deferOnCompaction === true;
@@ -332,11 +446,13 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
       .some((h) => h.role === 'user' && h.content === PRE_COMPACTION_MEMORY_FLUSH_PROMPT);
     const shouldInject = projectedTokens >= thresholdTokens && !recentlyPrompted;
     if (shouldInject) {
-      session.history.push({
+      const injectedMsg: ChatMessage = {
         role: 'user',
         content: PRE_COMPACTION_MEMORY_FLUSH_PROMPT,
         timestamp: Math.max(0, msg.timestamp - 1),
-      });
+      };
+      session.history.push(injectedMsg);
+      appendTranscriptArtifacts(id, injectedMsg, { synthetic: true });
       session.pendingMemoryFlush = true;
       memoryFlushInjected = true;
       deferredForMemoryFlush = options.deferOnMemoryFlush === true;
@@ -347,10 +463,11 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
 
   if (!deferredForCompaction && !deferredForMemoryFlush) {
     session.history.push(storedMsg);
+    appendTranscriptArtifacts(id, storedMsg, { synthetic: false });
   }
 
   if (storedMsg.role === 'assistant' && session.pendingCompaction) {
-    compactionApplied = compactHistoryWithSummary(session, storedMsg.content, maxMessages);
+    compactionApplied = compactHistoryWithSummary(id, session, storedMsg.content, maxMessages);
     session.pendingCompaction = false;
   }
 
@@ -395,7 +512,32 @@ const API_HISTORY_CONTENT_CAP_RECENT_CHARS = 3000;  // last 2 turns
 const API_HISTORY_CONTENT_CAP_OLDER_CHARS  = 1200;  // all older turns
 
 export function getHistoryForApiCall(id: string, maxTurns: number = 60): ChatMessage[] {
-  const messages = getHistory(id, maxTurns);
+  const session = getSession(id);
+  const maxMessages = maxTurns * 2;
+  const rawMessages = Array.isArray(session.history) ? session.history : [];
+
+  let messages: ChatMessage[];
+  const summary = String(session.latestContextSummary || '').trim();
+  const base = Number.isFinite(Number(session.contextStartIndex))
+    ? Math.max(0, Math.floor(Number(session.contextStartIndex)))
+    : 0;
+
+  if (summary) {
+    const summaryMsg: ChatMessage = {
+      role: 'assistant',
+      content: `[Rolling context summary]\n${summary}`,
+      timestamp: Number(session.contextSummaryUpdatedAt || Date.now()),
+      channel: 'system',
+    };
+    const since = base < rawMessages.length ? rawMessages.slice(base) : [];
+    messages = [summaryMsg, ...since];
+    if (messages.length > maxMessages) {
+      messages = [summaryMsg, ...messages.slice(-(maxMessages - 1))];
+    }
+  } else {
+    messages = rawMessages.slice(-maxMessages);
+  }
+
   const recentCutoff = messages.length - 4; // last 2 turns = 4 messages
   return messages.map((msg, idx) => {
     const cap = idx >= recentCutoff
@@ -463,6 +605,9 @@ export function clearHistory(id: string): void {
   session.pendingCompaction = false;
   session.pendingMemoryFlush = false;
   session.contextTokenEstimate = 0;
+  session.latestContextSummary = undefined;
+  session.contextStartIndex = 0;
+  session.contextSummaryUpdatedAt = undefined;
   session.lastActiveAt = Date.now();
   saveSession(id);
 }

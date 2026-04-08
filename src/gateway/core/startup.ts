@@ -49,6 +49,7 @@ import { broadcastWS, broadcastTeamEvent } from '../comms/broadcaster';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { setBackgroundAgentDeps } from '../tasks/task-runner';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
+import { startAuditMaterializer } from '../audit/materializer';
 
 // ─── Deps contract ────────────────────────────────────────────────────────────
 // All singletons that live in server-v2.ts and are needed during startup wiring.
@@ -517,6 +518,16 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
 
   const bootWorkspace = getConfig().getWorkspacePath() || (getConfig().getConfig() as any).workspace?.path || '';
   if (bootWorkspace) {
+    try {
+      startAuditMaterializer({
+        workspacePath: bootWorkspace,
+        configDir: getConfig().getConfigDir(),
+        intervalMs: 30_000,
+      });
+    } catch (err: any) {
+      console.warn('[AuditMaterializer] Could not start:', err?.message || err);
+    }
+
     loadWorkspaceHooks(bootWorkspace);
     hookBus
       .fire({ type: 'gateway:startup', workspacePath: bootWorkspace })

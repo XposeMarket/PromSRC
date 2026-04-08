@@ -25,7 +25,7 @@ import {
 import { getVault } from '../../security/vault';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, clearHistory, cleanupSessions, getSessionsByChannel } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, getSessionsByChannel, recordSessionCompaction } from '../session';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -532,7 +532,8 @@ async function maybeRunRollingCompaction(
   if (nonSummaryMessages.length < policy.messageCount) return { compacted: false };
 
   const recentWindow = nonSummaryMessages.slice(-policy.messageCount);
-  const previousSummary = extractLastCompactionSummary(session.history || []);
+  const previousSummary = String((session as any).latestContextSummary || '').trim()
+    || extractLastCompactionSummary(session.history || []);
   const recentMessagesBlock = formatCompactionMessages(recentWindow);
   const recentToolLogsBlock = formatCompactionToolLogs(recentWindow, policy.toolTurns);
 
@@ -583,16 +584,18 @@ async function maybeRunRollingCompaction(
     const boundedSummary = summary.slice(0, 5000).trim();
     if (!boundedSummary) return { compacted: false };
 
-    clearHistory(sessionId);
-    addMessage(
+    recordSessionCompaction(
       sessionId,
+      'rolling',
+      boundedSummary,
+      session.history.length,
       {
-        role: 'assistant',
-        content: `${ROLLING_COMPACTION_SUMMARY_PREFIX}\n${boundedSummary}`,
-        timestamp: Date.now(),
-        channel: 'system',
+        strategy: 'rolling_window',
+        message_window: policy.messageCount,
+        tool_turn_window: policy.toolTurns,
+        summary_max_words: policy.summaryMaxWords,
+        mode: 'llm',
       },
-      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
     );
     return { compacted: true, summaryText: boundedSummary, mode: 'llm' };
   } catch (err: any) {
@@ -600,16 +603,18 @@ async function maybeRunRollingCompaction(
     const fallbackSummary = buildFallbackCompactionSummary(previousSummary, recentWindow, policy.summaryMaxWords);
     if (!fallbackSummary) return { compacted: false };
     try {
-      clearHistory(sessionId);
-      addMessage(
+      recordSessionCompaction(
         sessionId,
+        'rolling',
+        fallbackSummary,
+        session.history.length,
         {
-          role: 'assistant',
-          content: `${ROLLING_COMPACTION_SUMMARY_PREFIX}\n${fallbackSummary}`,
-          timestamp: Date.now(),
-          channel: 'system',
+          strategy: 'rolling_window',
+          message_window: policy.messageCount,
+          tool_turn_window: policy.toolTurns,
+          summary_max_words: policy.summaryMaxWords,
+          mode: 'fallback',
         },
-        { disableCompactionCheck: true, disableMemoryFlushCheck: true },
       );
       return { compacted: true, summaryText: fallbackSummary, mode: 'fallback' };
     } catch (fallbackErr: any) {
