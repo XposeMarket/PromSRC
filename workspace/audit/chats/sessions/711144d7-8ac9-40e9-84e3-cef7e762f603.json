@@ -1,0 +1,23 @@
+{
+  "id": "711144d7-8ac9-40e9-84e3-cef7e762f603",
+  "history": [
+    {
+      "role": "user",
+      "content": "run the x post tool, make it say Hey guys",
+      "timestamp": 1775682095825
+    },
+    {
+      "role": "assistant",
+      "content": "Hey! How can I help?",
+      "timestamp": 1775682121916
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775682095825,
+  "lastActiveAt": 1775682121929,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 30,
+  "contextStartIndex": 0
+}

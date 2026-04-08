@@ -3321,19 +3321,32 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `Composite "${cName}" saved with ${args.steps.length} step(s). It will appear as a callable tool next message.`, error: false };
         }
 
+        if (name === 'get_composite') {
+          const cName = String(args.name || '').trim();
+          if (!cName) return { name, args, result: 'name is required', error: true };
+          const composites = loadComposites();
+          const existing = composites.get(cName);
+          if (!existing) return { name, args, result: `Composite "${cName}" not found.`, error: true };
+          return { name, args, result: JSON.stringify(existing, null, 2), error: false };
+        }
+
         if (name === 'edit_composite') {
           const cName = String(args.name || '').trim();
           if (!cName) return { name, args, result: 'name is required', error: true };
           const composites = loadComposites();
           const existing = composites.get(cName);
           if (!existing) return { name, args, result: `Composite "${cName}" not found.`, error: true };
-          saveComposite({
-            name: cName,
+          const newName = args.new_name ? String(args.new_name).trim() : cName;
+          const updated = {
+            name: newName,
             description: args.description !== undefined ? String(args.description) : existing.description,
             parameters: args.parameters !== undefined ? args.parameters : existing.parameters,
             steps: Array.isArray(args.steps) ? args.steps : existing.steps,
-          });
-          return { name, args, result: `Composite "${cName}" updated.`, error: false };
+          };
+          if (newName !== cName) deleteComposite(cName);
+          saveComposite(updated);
+          const renamed = newName !== cName ? ` (renamed from "${cName}")` : '';
+          return { name, args, result: `Composite "${newName}" updated${renamed}.`, error: false };
         }
 
         if (name === 'delete_composite') {

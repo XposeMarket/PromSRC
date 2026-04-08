@@ -1,6 +1,6 @@
 # Proposals Index
 
-Generated: 2026-04-08T16:19:31.112Z
+Generated: 2026-04-08T22:40:57.231Z
 
 - Total proposals: 97
 - pending: 5

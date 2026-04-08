@@ -246,6 +246,29 @@ export function recordSessionCompaction(
   saveSession(sessionId);
 }
 
+/**
+ * Replaces session history with a single summary message after rolling compaction.
+ * This is the critical step that actually resets the message count so compaction
+ * doesn't re-trigger on the very next turn.
+ */
+export function applyRollingCompactionToHistory(
+  sessionId: string,
+  summaryText: string,
+  summaryPrefix: string,
+): void {
+  const session = getSession(sessionId);
+  const cleanSummary = String(summaryText || '').trim();
+  if (!cleanSummary) return;
+  const summaryMsg: ChatMessage = {
+    role: 'assistant',
+    content: `${summaryPrefix}\n${cleanSummary}`,
+    timestamp: Date.now(),
+  };
+  session.history = [summaryMsg];
+  session.contextTokenEstimate = estimateHistoryTokens(session.history);
+  saveSession(sessionId);
+}
+
 function compactHistoryWithSummary(sessionId: string, session: Session, summaryText: string, maxMessages: number): boolean {
   const promptIndex = session.history
     .map((m, i) => ({ m, i }))

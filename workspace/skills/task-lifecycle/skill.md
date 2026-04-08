@@ -168,7 +168,8 @@ Look for:
 
 | Situation | Use |
 |---|---|
-| 2–6 phases, user is watching, done in this turn | `declare_plan` + `complete_plan_step` |
+| Browser/desktop automation, or actions with external side effects (post/send/delete/pay) | `declare_plan` + `complete_plan_step` — always |
+| 3+ phases where each phase's output gates the next, or work where the user benefits from seeing the sequence | `declare_plan` + `complete_plan_step` — judgment call |
 | Long autonomous work, background, many steps | `start_task` |
 | Check if a task exists | `task_control({ action: "list" })` |
 | Resume a stalled background task | `task_control({ action: "resume" })` |

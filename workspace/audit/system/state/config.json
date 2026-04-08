@@ -16,11 +16,11 @@
     }
   },
   "llm": {
-    "provider": "ollama",
+    "provider": "openai_codex",
     "providers": {
       "ollama": {
         "endpoint": "http://localhost:11434",
-        "model": "qwen3:1.7b"
+        "model": "qwen3:4b"
       },
       "lm_studio": {
         "endpoint": "http://localhost:1234",
@@ -35,7 +35,7 @@
         "model": "gpt-5.4"
       },
       "openai_codex": {
-        "model": "gpt-5.3-codex"
+        "model": "gpt-5.4"
       },
       "anthropic": {
         "model": "claude-haiku-4-5-20251001",
@@ -45,11 +45,11 @@
     }
   },
   "models": {
-    "primary": "qwen3:1.7b",
+    "primary": "claude-haiku-4-5-20251001",
     "roles": {
-      "manager": "qwen3:1.7b",
-      "executor": "qwen3:1.7b",
-      "verifier": "qwen3:1.7b"
+      "manager": "",
+      "executor": "",
+      "verifier": ""
     }
   },
   "tools": {
@@ -72,8 +72,8 @@
       },
       "files": {
         "allowed_paths": [
-          "/Applications/PromSRC-main/workspace",
-          "/Applications/PromSRC-main/workspace"
+          "D:\\Prometheus\\workspace",
+          "D:\\Prometheus\\src"
         ],
         "blocked_paths": [
           "D:\\etc",
@@ -90,7 +90,7 @@
     }
   },
   "skills": {
-    "directory": "/Applications/PromSRC-main/.prometheus/skills",
+    "directory": "D:\\Prometheus\\workspace\\skills",
     "registries": [
       "https://clawhub.ai"
     ],
@@ -98,7 +98,7 @@
   },
   "memory": {
     "provider": "chromadb",
-    "path": "/Applications/PromSRC-main/.prometheus/memory",
+    "path": "D:\\Prometheus\\.prometheus\\memory",
     "embedding_model": "nomic-embed-text"
   },
   "memory_options": {
@@ -112,14 +112,14 @@
     "workspace_file": "HEARTBEAT.md"
   },
   "workspace": {
-    "path": "/Applications/PromSRC-main/workspace"
+    "path": "D:\\Prometheus\\workspace"
   },
   "agents": [
     {
       "id": "code_analyst_v1",
       "name": "Code Analyst",
       "description": "Analyzes background-task-runner.ts lines 1-100 and summarizes imports, constants, and top-level architecture.",
-      "workspace": "/Applications/PromSRC-main/workspace/.prometheus/subagents/code_analyst_v1",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\code_analyst_v1",
       "default": true,
       "maxSteps": 20,
       "subagentType": "dynamic",
@@ -130,7 +130,7 @@
       "id": "src_reader_staleness_v1",
       "name": "Researcher",
       "description": "Finds and synthesizes information, returns structured evidence bundles the team can act on",
-      "workspace": "/Applications/PromSRC-main/workspace/.prometheus/subagents/src_reader_staleness_v1",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\src_reader_staleness_v1",
       "maxSteps": 20,
       "subagentType": "dynamic",
       "createdAt": 1775091709007,
@@ -140,7 +140,7 @@
       "id": "analyst_staleness_v1",
       "name": "Analyst",
       "description": "Turns raw information into decisions — evaluates tradeoffs, produces concrete recommendations",
-      "workspace": "/Applications/PromSRC-main/workspace/.prometheus/subagents/analyst_staleness_v1",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\analyst_staleness_v1",
       "maxSteps": 20,
       "subagentType": "dynamic",
       "createdAt": 1775091709502,
@@ -150,7 +150,7 @@
       "id": "report_writer_staleness_v1",
       "name": "Builder",
       "description": "Produces technical artifacts — code, scripts, documents, content, and other concrete deliverables",
-      "workspace": "/Applications/PromSRC-main/workspace/.prometheus/subagents/report_writer_staleness_v1",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\report_writer_staleness_v1",
       "maxSteps": 20,
       "subagentType": "dynamic",
       "createdAt": 1775091709961,
@@ -279,20 +279,20 @@
     "streamMode": "full"
   },
   "agent_model_defaults": {
-    "proposal_executor_high_risk": "ollama/qwen3.5:4b",
-    "proposal_executor_low_risk": "ollama/qwen3.5:1.7b",
-    "manager": "ollama/qwen3.5:4b",
-    "background_task": "ollama/qwen3.5:4b",
-    "subagent_planner": "ollama/qwen3.5:4b",
-    "subagent_orchestrator": "ollama/qwen3.5:4b",
-    "subagent_researcher": "ollama/qwen3.5:4b",
-    "subagent_analyst": "ollama/qwen3.5:4b",
-    "subagent_builder": "ollama/qwen3.5:4b",
-    "subagent_operator": "ollama/qwen3.5:9b",
-    "subagent_verifier": "ollama/qwen3.5:9b",
-    "switch_model_low": "ollama/qwen3.5:4b",
-    "switch_model_medium": "ollama/qwen3.5:9b",
-    "coordinator": "ollama/qwen3.5:4b",
-    "background_agent": "ollama/qwen3.5:4b"
+    "proposal_executor_high_risk": "openai_codex/gpt-5.3-codex",
+    "proposal_executor_low_risk": "anthropic/claude-haiku-4-5-20251001",
+    "manager": "anthropic/claude-sonnet-4-6",
+    "background_task": "anthropic/claude-haiku-4-5-20251001",
+    "subagent_planner": "anthropic/claude-haiku-4-5-20251001",
+    "subagent_orchestrator": "anthropic/claude-haiku-4-5-20251001",
+    "subagent_researcher": "anthropic/claude-haiku-4-5-20251001",
+    "subagent_analyst": "anthropic/claude-haiku-4-5-20251001",
+    "subagent_builder": "anthropic/claude-sonnet-4-5-20250514",
+    "subagent_operator": "anthropic/claude-opus-4-6",
+    "subagent_verifier": "anthropic/claude-opus-4-6",
+    "switch_model_low": "anthropic/claude-haiku-4-5-20251001",
+    "switch_model_medium": "anthropic/claude-haiku-4-5-20251001",
+    "coordinator": "anthropic/claude-haiku-4-5-20251001",
+    "background_agent": "anthropic/claude-haiku-4-5-20251001"
   }
 }

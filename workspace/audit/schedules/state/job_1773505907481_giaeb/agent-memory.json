@@ -1,21 +1,13 @@
 {
   "scheduleId": "job_1773505907481_giaeb",
   "createdAt": 1773591722987,
-  "updatedAt": 1775661237204,
+  "updatedAt": 1775675672233,
   "dedup": {},
   "learnedContext": [
     "Weekly review pattern: scheduled runs are succeeding most when prompts are narrow and produce concrete artifacts, while failures cluster around placeholder heartbeats, verifier loops, and runtimes that report actions without durable evidence. Tricky part: the control plane has almost no formal run-h",
     "The review worked best by combining schedule_job and task_control telemetry to infer patterns despite sparse formal run history. The trickiest part was cross-signal inconsistency (running vs paused metadata), which should be flagged explicitly in future reports."
   ],
   "runSummaries": [
-    {
-      "runId": "a2b29064-218f-47f9-a513-adaf684b5830",
-      "scheduledAt": 1774807318466,
-      "completedAt": 1774807319434,
-      "success": true,
-      "summary": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187546,\"eligible_promo\":null,\"resets_in_seconds\":380227}}",
-      "stepCount": 1
-    },
     {
       "runId": "39f10d86-70f5-4c7a-bf49-3f91e22a1160",
       "scheduledAt": 1774808982721,
@@ -246,6 +238,14 @@
       "completedAt": 1775661237190,
       "success": true,
       "summary": "Error: Ollama chat failed: fetch failed",
+      "stepCount": 1
+    },
+    {
+      "runId": "db11fc10-e403-44cd-b362-a5f1c00e533a",
+      "scheduledAt": 1775675637461,
+      "completedAt": 1775675672123,
+      "success": true,
+      "summary": "Perfect. Now I'll create the comprehensive performance review dashboard:\n\n```html\n<div style=\"font-family: sans-serif; padding: 16px;\">\n  <!-- Title -->\n  <div style=\"margin-bottom: 24px;\">\n    <h2 style=\"margin: 0 0 4px 0; font-size: 24px;\">📊 Weekly Performance Review</h2>\n    <div style=\"font-size: 12px; opacity: 0.6;\">Week of April 1–8, 2026 | Analysis Date: April 8, 2026</div>\n  </div>\n\n<!-- ",
       "stepCount": 1
     }
   ],

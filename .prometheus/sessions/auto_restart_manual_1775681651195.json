@@ -1,0 +1,23 @@
+{
+  "id": "auto_restart_manual_1775681651195",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Restart complete — Prometheus is back up from the Telegram quick restart, and I’m ready to continue. No files were changed during this restart; this was a clean runtime/gateway refresh to restore normal operation flow.\n\nI can verify next that gateway boot is healthy and Telegram polling is actively resumed—want me to run that check now?",
+      "timestamp": 1775681695053
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775681651283,
+  "lastActiveAt": 1775681695071,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 103,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "scheduling"
+  ]
+}

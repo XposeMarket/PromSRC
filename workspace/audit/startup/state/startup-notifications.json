@@ -1,32 +1,36 @@
 {
   "notifications": [
     {
-      "sessionId": "auto_boot_1775660924028",
-      "title": "🌅 Startup — Apr 8, 11:08 AM",
-      "text": "Startup summary: No tasks are currently pending, and today's notes are empty. The system is ready to assist with any requests.",
-      "source": "boot_startup",
+      "sessionId": "auto_restart_manual_1775687201087",
+      "title": "🔁 Restart (manual) — Apr 8, 06:26 PM",
+      "text": "Restart complete — Prometheus is back up, and Telegram polling should be resumed after the quick manual restart request. No files changed in this restart; this looks like a straight gateway/process reboot rather than a code update.\n\nWhat do you want me to verify next: Telegram message intake, outbound replies, or the broader gateway health?",
+      "source": "hot_restart",
       "automatedSession": {
-        "id": "auto_boot_1775660924028",
-        "title": "🌅 Startup — Apr 8, 11:08 AM",
+        "id": "auto_restart_manual_1775687201087",
+        "title": "🔁 Restart (manual) — Apr 8, 06:26 PM",
         "history": [
           {
             "role": "assistant",
-            "content": "Startup summary: No tasks are currently pending, and today's notes are empty. The system is ready to assist with any requests."
+            "content": "Restart complete — Prometheus is back up, and Telegram polling should be resumed after the quick manual restart request. No files changed in this restart; this looks like a straight gateway/process reboot rather than a code update.\n\nWhat do you want me to verify next: Telegram message intake, outbound replies, or the broader gateway health?"
           }
         ],
         "automated": true,
         "unread": true,
-        "createdAt": 1775660924028,
-        "source": "boot_startup"
+        "createdAt": 1775687201087,
+        "source": "hot_restart",
+        "previousSessionId": "6283415c-b2ca-446c-8e7d-954c46aa7c71"
       },
+      "previousSessionId": "6283415c-b2ca-446c-8e7d-954c46aa7c71",
       "telegram": {
-        "enabled": false
+        "enabled": true,
+        "chatId": 1799053599,
+        "userId": 1799053599
       },
-      "id": "start_note_mnq6qqzt_svhe",
-      "createdAt": 1775661050154,
+      "id": "start_note_mnqmc9b8_ue4s",
+      "createdAt": 1775687247908,
       "delivered": {
         "web": false,
-        "telegram": true
+        "telegram": false
       }
     }
   ]

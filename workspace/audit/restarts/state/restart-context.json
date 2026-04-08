@@ -1,0 +1,12 @@
+{
+  "reason": "manual",
+  "timestamp": 1775687187381,
+  "title": "Telegram quick restart",
+  "summary": "Quick restart requested from Telegram by user 1799053599.",
+  "previousSessionId": "6283415c-b2ca-446c-8e7d-954c46aa7c71",
+  "originChannel": "telegram",
+  "respondToTelegram": true,
+  "previousTelegramChatId": "1799053599",
+  "previousTelegramUserId": 1799053599,
+  "testInstructions": "Confirm gateway booted and Telegram polling resumed."
+}

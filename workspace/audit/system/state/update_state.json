@@ -1,5 +1,5 @@
 {
-  "checkedAt": 1775493861869,
+  "checkedAt": 1775674699353,
   "mode": "git",
   "packageName": "prometheus",
   "currentVersion": "1.0.1",
@@ -9,7 +9,7 @@
     "available": false,
     "message": "No updates available on branch \"main\".",
     "currentVersion": "1.0.1",
-    "latestVersion": "1feccfa",
+    "latestVersion": "0bd6df7",
     "branch": "main",
     "ahead": 0,
     "behind": 0

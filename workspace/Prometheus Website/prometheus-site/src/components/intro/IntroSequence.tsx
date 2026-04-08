@@ -5,12 +5,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { AsciiReveal } from "@/components/ascii/AsciiReveal";
 import { STARTUP_ASCII } from "@/content/ascii/startup";
 import { LOGO_ASCII } from "@/content/ascii/logo";
-import { TEXT_ASCII } from "@/content/ascii/text";
 import { parseAsciiToLines } from "@/lib/ascii/loader";
 import { Button } from "@/components/ui/Button";
 import { analytics } from "@/lib/analytics";
 
-type Phase = "startup" | "logo" | "text" | "cta";
+type Phase = "startup" | "logo" | "cta";
 
 interface IntroSequenceProps {
   onComplete: () => void;
@@ -31,7 +30,6 @@ export function IntroSequence({ onComplete }: IntroSequenceProps) {
 
   const startupLines = parseAsciiToLines(STARTUP_ASCII);
   const logoLines   = parseAsciiToLines(LOGO_ASCII);
-  const textLines   = parseAsciiToLines(TEXT_ASCII);
 
   return (
     <div className="fixed inset-0 z-[100] bg-black flex items-center justify-center overflow-hidden">
@@ -77,30 +75,13 @@ export function IntroSequence({ onComplete }: IntroSequenceProps) {
                 lines={logoLines}
                 color="ember"
                 msPerLine={25}
-                onComplete={() => setTimeout(() => setPhase("text"), 800)}
-              />
-            </motion.div>
-          )}
-
-          {/* Phase 3 — Prometheus text art, white */}
-          {phase === "text" && (
-            <motion.div
-              key="text"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.6 }}
-            >
-              <AsciiReveal
-                lines={textLines}
-                color="white"
-                msPerLine={40}
+                className="text-[8px] sm:text-[10px]"
                 onComplete={() => setTimeout(() => setPhase("cta"), 800)}
               />
             </motion.div>
           )}
 
-          {/* Phase 4 — CTA */}
+          {/* Phase 3 — CTA */}
           {phase === "cta" && (
             <motion.div
               key="cta"
@@ -109,14 +90,6 @@ export function IntroSequence({ onComplete }: IntroSequenceProps) {
               transition={{ duration: 0.8, delay: 0.2 }}
               className="flex flex-col items-center gap-10"
             >
-              {/* Static text art stays visible */}
-              <pre
-                className="font-mono text-xs sm:text-sm text-foreground/90 whitespace-pre leading-snug select-none"
-                aria-hidden="true"
-              >
-                {TEXT_ASCII}
-              </pre>
-
               <div className="flex flex-col items-center gap-3">
                 <Button size="lg" onClick={handleEnter} className="glow-ember-strong px-10 py-4 text-lg">
                   Enter the fire

@@ -1,0 +1,29 @@
+{
+  "name": "x_post_text",
+  "description": "Post text to X by using the inline home composer on x.com/home. This verified flow opens Home, focuses the inline composer textbox, fills the provided text, and relies on the verified live behavior where browser_fill submits the post successfully from the inline composer.",
+  "parameters": {},
+  "steps": [
+    {
+      "tool": "browser_open",
+      "args": {
+        "url": "https://x.com/home",
+        "observe": "snapshot"
+      }
+    },
+    {
+      "tool": "browser_click",
+      "args": {
+        "ref": 39,
+        "observe": "snapshot"
+      }
+    },
+    {
+      "tool": "browser_fill",
+      "args": {
+        "ref": 39,
+        "text": "{{post_text}}",
+        "observe": "snapshot"
+      }
+    }
+  ]
+}

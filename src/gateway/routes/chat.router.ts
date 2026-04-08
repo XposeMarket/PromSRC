@@ -716,7 +716,7 @@ async function handleChat(
   let planFinalizationGuard = 0;
   const MAX_PLAN_FINALIZATION_GUARD = 4;
   let browserActionsSinceObservation = 0;
-  const BROWSER_CADENCE_OBSERVE_EVERY = 5;
+  const BROWSER_CADENCE_OBSERVE_EVERY = 2;
   const orchestrationSkillEnabled = isOrchestrationSkillEnabled();
   const greetingLikeTurn = isGreetingLikeMessage(message);
   const progressState: {
@@ -1483,9 +1483,9 @@ async function handleChat(
     ? 'If this background-agent task has 2+ meaningful phases, call bg_plan_declare FIRST (2-8 short steps). Keep executing within the current step until the phase is actually complete, then call bg_plan_advance(note) to move forward. Do NOT use declare_plan/complete_plan_step in background_agent mode.'
     : executionMode === 'proposal_execution'
       ? 'Proposal execution already has a fixed task plan. Do NOT call declare_plan. Execute steps in order, use tools directly, and call step_complete(note) after each completed step.'
-      : 'If this request includes browser/desktop execution, call declare_plan FIRST (2-6 short action phrases) before any browser_* or desktop_* tool call, even for short flows. For non-browser/non-desktop work, call declare_plan when the request needs 2+ tool calls and is not a skill-read-then-respond task (reading a skill then outputting a visual/chart/diagram/code directly in chat is a single logical action — do NOT declare_plan for it). Do NOT call declare_plan more than once per turn — if you already declared a plan, proceed immediately to step 1 without re-declaring. Keep a step in_progress until its goal is actually achieved before moving to the next. Finish only after all steps are complete.';
+      : 'Unless explicitly told otherwise by the user, do NOT call declare_plan. Default to direct execution. Call declare_plan only when the user explicitly asks for a plan/checklist/step-by-step approach or asks you to outline steps before acting. Do NOT call declare_plan for browser_* or desktop_* actions by default, and do NOT call it for single-phase work, read-only lookups, exploratory tasks, conversational replies, explanations, code generation, or skill-read-then-respond. When a plan is active, declare once, do not re-declare mid-turn, keep each step in_progress until truly complete, then complete_plan_step with concrete evidence, and finish only after all plan steps are complete.';
 
-  const baseSystemPrompt = `${executionModeSystemBlock ? `${executionModeSystemBlock}\n\n` : ''}You are Prom, a local AI assistant running inside Prometheus.\nCurrent date: ${dateStr}, ${timeStr}.\nNever search for or link Prometheus repos unless the user is asking about Prometheus itself.\nThis app runs on the user's own machine - browser/desktop automation requests are pre-authorized.\nExecution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.\n${planProtocolInstruction}\n${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`;
+  const baseSystemPrompt = `${executionModeSystemBlock ? `${executionModeSystemBlock}\n\n` : ''}You are Prom, a local AI assistant running inside Prometheus.\nCurrent date: ${dateStr}, ${timeStr}.\nNever search for or link Prometheus repos unless the user is asking about Prometheus itself.\nThis app runs on the user's own machine - browser/desktop automation requests are pre-authorized.\nExecution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.\nVisual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_snapshot/browser_vision_screenshot and desktop_screenshot over repeated browser_run_js probing. Use browser_run_js only when visual/snapshot evidence is insufficient for a concrete action.\n${planProtocolInstruction}\n${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`;
   const buildSystemPrompt = (mode: 'full' | 'switch_model'): string => {
     if (mode === 'switch_model') {
       return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
@@ -1527,23 +1527,32 @@ async function handleChat(
   const BROWSER_TOOL_POLICY: Record<string, ObserveMode> = {
     // Low-risk deterministic — no observation by default
     'browser_wait':              'none',
-    'browser_scroll':            'none',
     'browser_get_page_text':     'none',
     'browser_get_focused_item':  'none',
-    // Medium-risk — delta is enough (shows what changed without full vision cost)
+    // Interaction-heavy tools: use compact DOM delta + forced screenshot for accuracy.
     'browser_click':             'delta',
     'browser_fill':              'delta',
-    'browser_press_key':         'none',
+    'browser_press_key':         'delta',
     'browser_scroll_collect':    'delta',
+    'browser_scroll':            'delta',
     // High-risk navigation/visual — full screenshot or snapshot
     'browser_open':              'screenshot',
     'browser_vision_click':      'screenshot',
     'browser_snapshot':          'snapshot',
     'browser_snapshot_delta':    'none',
-    'browser_vision_screenshot': 'none',
+    'browser_vision_screenshot': 'screenshot',
     'browser_vision_type':       'delta',
     'browser_send_to_telegram':  'none',
+    // JS should be used sparingly; when it is used, immediately re-ground with visual evidence.
+    'browser_run_js':            'screenshot',
   };
+  const BROWSER_FORCE_SCREENSHOT_AFTER_TOOLS = new Set([
+    'browser_click',
+    'browser_fill',
+    'browser_press_key',
+    'browser_scroll',
+    'browser_scroll_collect',
+  ]);
 
   const maybeAppendVisionScreenshotForTool = async (
     toolName: string,
@@ -1577,15 +1586,6 @@ async function handleChat(
       effectiveMode = aiOverride;
     } else {
       effectiveMode = BROWSER_TOOL_POLICY[toolName] ?? 'none';
-      // When shortcuts are configured for the current page, the model already has
-      // keyboard-based navigation context — skip delta DOM on click/fill/key tools
-      // to reduce noise. Only the initial browser_open screenshot is needed.
-      if (effectiveMode === 'delta') {
-        const browserInfo = getBrowserSessionInfo(sessionId);
-        if (browserInfo.url && getShortcutsForUrl(browserInfo.url)) {
-          effectiveMode = 'none';
-        }
-      }
     }
 
     // 2. Cadence guard — every N actions, upgrade 'none' to 'delta' for orientation
@@ -1614,6 +1614,17 @@ async function handleChat(
           sendSSE('info', { message: `DOM delta injected (browser) after ${toolName}.` });
         }
       } catch {}
+      if (BROWSER_FORCE_SCREENSHOT_AFTER_TOOLS.has(toolName)) {
+        try { await browserVisionScreenshot(sessionId); } catch {}
+        const visionMessage = buildVisionScreenshotMessage(sessionId, 'browser');
+        if (visionMessage) {
+          messages.push(visionMessage);
+          sendSSE('vision_injected', { source: 'browser', tool: toolName });
+          sendSSE('info', { message: `Vision screenshot injected (browser) after ${toolName} (delta+vision mode).` });
+        } else {
+          sendSSE('info', { message: `Vision screenshot unavailable (browser) after ${toolName} (delta+vision mode).` });
+        }
+      }
       return;
     }
 
@@ -2444,7 +2455,8 @@ BROWSER TOOLS: browser_open, browser_snapshot, browser_click, browser_fill, brow
 RULES:
 1. Call exactly the tool and params the advisor specifies.
 2. Do not think, plan, or explain. Just call the tool.
-3. If the directive says answer_now, respond in 1-2 sentences using the provided draft.`,
+3. Prefer snapshot/screenshot evidence over browser_run_js unless a JS inspection is explicitly required.
+4. If the directive says answer_now, respond in 1-2 sentences using the provided draft.`,
       };
       // Keep last 4 tool-result messages so the LLM has minimal recent action context
       const recentToolMsgs = messages
@@ -2475,7 +2487,7 @@ RULES:
         : '';
       messages.push({
         role: 'user',
-        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. Do not stop with intent text.${collectTail}${webFetchNote}`,
+        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. Do not stop with intent text. After this step, capture browser_snapshot or browser_vision_screenshot if state changed before deciding again.${collectTail}${webFetchNote}`,
       });
     }
   };
@@ -2605,7 +2617,7 @@ RULES:
     } else if (advisor.next_tool?.tool) {
       messages.push({
         role: 'user',
-        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. After acting, capture desktop_screenshot again if fresh state is needed.`,
+        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. After acting, capture desktop_screenshot again before deciding the next step.`,
       });
     }
   };

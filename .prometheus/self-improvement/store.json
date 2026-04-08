@@ -1,0 +1,17 @@
+{
+  "reports": [],
+  "promptLibrary": [],
+  "pendingSkillEvolutions": [],
+  "pendingProposedActions": [],
+  "behaviorChangelog": [
+    {
+      "date": "2026-04-08",
+      "change": "Completed weekly performance analysis for 2026-04-01 to 2026-04-08. Key findings: 2 recurring scheduled jobs running (weekly review, daily reflection); 4 background tasks tracked with 2 in error states; identified rate-limit and memory-pressure failure modes; confirmed narrow-scope prompts and concrete artifacts produce reliable completions.",
+      "reason": "Systematic review of 7-day task execution patterns to identify failure modes, success criteria, and operational patterns.",
+      "jobName": "📊 Weekly Performance Review",
+      "expectedImpact": "Documented critical blockers (rate limits, OOM on large proposals) and success patterns (daily reflection + X engagement working reliably); positions future skill evolutions toward prompt scoping and artifact-driven design."
+    }
+  ],
+  "lastRunAt": null,
+  "updatedAt": 1775673308445
+}

@@ -372,5 +372,16 @@
     "status": "success",
     "attempts": 1,
     "stepCount": 1
+  },
+  {
+    "runId": "db11fc10-e403-44cd-b362-a5f1c00e533a",
+    "jobId": "job_1773505907481_giaeb",
+    "jobName": "job_1773505907481_giaeb",
+    "triggeredAt": 1775675637461,
+    "completedAt": 1775675672123,
+    "durationMs": 34662,
+    "status": "success",
+    "attempts": 1,
+    "stepCount": 1
   }
 ]

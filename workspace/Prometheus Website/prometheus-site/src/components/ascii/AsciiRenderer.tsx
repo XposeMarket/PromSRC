@@ -19,15 +19,19 @@ export function AsciiRenderer({
   color = "green",
   className = "",
 }: AsciiRendererProps) {
-  const visible = revealedLines !== undefined ? lines.slice(0, revealedLines) : lines;
-
   return (
     <pre
-      className={`font-mono text-xs sm:text-sm leading-tight whitespace-pre overflow-x-auto select-none ${colorClasses[color]} ${className}`}
+      className={`font-mono text-xs sm:text-sm leading-tight whitespace-pre select-none ${colorClasses[color]} ${className}`}
       aria-hidden="true"
     >
-      {visible.map((line, i) => (
-        <div key={i} style={{ opacity: revealedLines !== undefined ? 1 : undefined }}>
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          style={{
+            visibility:
+              revealedLines !== undefined && i >= revealedLines ? "hidden" : undefined,
+          }}
+        >
           {line}
         </div>
       ))}

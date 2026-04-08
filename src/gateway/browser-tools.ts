@@ -2153,7 +2153,8 @@ export function getBrowserToolDefinitions(): any[] {
           'Top-level await is supported. Use this to: read React/Vue component state, trigger programmatic events, ' +
           'inspect hidden variables, extract data not visible in the DOM, run browser APIs. ' +
           'Return value is JSON-serialized. Example: `return document.cookie` or `return window.__STORE__.getState()`. ' +
-          'WARNING: only use for inspection/read-only operations unless you intentionally want to modify page state.',
+          'WARNING: treat this as a fallback tool. Prefer browser_snapshot/browser_vision_screenshot + browser_click/browser_fill first, and only use browser_run_js when visual/DOM refs are insufficient. ' +
+          'Only use for inspection/read-only operations unless you intentionally want to modify page state.',
         parameters: {
           type: 'object',
           required: ['code'],
