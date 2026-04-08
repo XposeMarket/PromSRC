@@ -260,6 +260,8 @@ function isAllowedShellSegment(segment: string): boolean {
   const token = (cleaned.match(/^[^\s]+/)?.[0] || '').toLowerCase();
   const allowed = new Set([
     'cd', 'if', 'set', 'echo', 'dir', 'ls', 'pwd', 'cat', 'type', 'more', 'find', 'findstr', 'where', 'whoami',
+    'rg', 'grep', 'egrep', 'fgrep', 'wc', 'cut', 'tr', 'sort', 'uniq', 'head', 'tail', 'tee',
+    'basename', 'dirname', 'realpath', 'stat', 'du', 'df', 'date', 'uname', 'env', 'printenv', 'which',
     'git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'python', 'python3', 'pip', 'pip3', 'tsc', 'ts-node',
     'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'dotnet', 'docker', 'kubectl', 'az', 'aws',
     'curl', 'wget', 'cmd', 'powershell', 'pwsh',
@@ -1109,5 +1111,4 @@ export function recordOrchestrationEvent(
 export function ensureMultiAgentSkill(): void {
   // no-op: multi-agent skill system removed
 }
-
 

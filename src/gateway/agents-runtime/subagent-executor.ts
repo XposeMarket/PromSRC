@@ -975,6 +975,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'run_command': {
         const rawCmd = (args.command || '').trim();
+        if (!rawCmd) return { name, args, result: 'command is required', error: true };
         const cmd = rawCmd.toLowerCase();
         // Check blocked patterns
         for (const blocked of deps.BLOCKED_PATTERNS) {
@@ -983,6 +984,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
         }
 
+        const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
+        const wantVisible = args.visible === true || args.window === true;
         let execCmd = '';
 
         // 1. Check allowlist (exact match)
@@ -1023,18 +1026,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
         // 8. Dev CLI tools: git, npm, node, npx, python, pip, tsc, cargo, etc.
         //    DEFAULT: captured mode (returns stdout/stderr). Pass visible:true to open a window.
         else if (/^(git|npm|node|npx|yarn|pnpm|python|python3|pip|pip3|tsc|ts-node|cargo|rustc|go|java|javac|mvn|gradle|dotnet|docker|kubectl|az|aws)\b/.test(cmd)) {
-          const wantVisible = args.visible === true || args.window === true;
           if (!wantVisible) {
             // Captured mode (DEFAULT) — wait for completion and return output
             const projectRoot = path.resolve(workspacePath, '..');
             const cwd = fs.existsSync(path.join(projectRoot, 'package.json')) ? projectRoot : workspacePath;
             try {
-              const captured = await deps.runCommandCaptured(rawCmd, cwd, 120_000);
+              const captured = await deps.runCommandCaptured(normalizedCmd, cwd, 120_000);
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
               return {
                 name, args,
-                result: `${rawCmd} [${exitLabel}]\n${output.slice(0, 4000) || '(no output)'}`,
+                result: `${normalizedCmd} [${exitLabel}]\n${output.slice(0, 4000) || '(no output)'}`,
                 error: (captured.code !== 0 && !captured.timedOut),
               };
             } catch (capErr: any) {
@@ -1043,10 +1045,43 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
           // Windowed mode (only when explicitly requested) — open visible cmd
           if (deps.isWindows) {
-            const escaped = rawCmd.replace(/"/g, '""');
+            const escaped = normalizedCmd.replace(/"/g, '""');
             execCmd = `start cmd /k "${escaped}"`;
           } else {
-            execCmd = rawCmd;
+            execCmd = normalizedCmd;
+          }
+        }
+        // 9. Fallback: allow broader shell commands when they pass shell allowlist checks.
+        else {
+          if (!deps.isAllowedShellCommand(normalizedCmd)) {
+            return {
+              name,
+              args,
+              result: `Blocked: shell command is not allowed by policy: "${rawCmd}"`,
+              error: true,
+            };
+          }
+          if (!wantVisible) {
+            const projectRoot = path.resolve(workspacePath, '..');
+            const cwd = fs.existsSync(path.join(projectRoot, 'package.json')) ? projectRoot : workspacePath;
+            try {
+              const captured = await deps.runCommandCaptured(normalizedCmd, cwd, 120_000);
+              const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
+              const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
+              return {
+                name, args,
+                result: `${normalizedCmd} [${exitLabel}]\n${output.slice(0, 4000) || '(no output)'}`,
+                error: (captured.code !== 0 && !captured.timedOut),
+              };
+            } catch (capErr: any) {
+              return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };
+            }
+          }
+          if (deps.isWindows) {
+            const escaped = normalizedCmd.replace(/"/g, '""');
+            execCmd = `start cmd /k "${escaped}"`;
+          } else {
+            execCmd = normalizedCmd;
           }
         }
 
@@ -1054,7 +1089,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return {
             name,
             args,
-            result: `Command "${rawCmd}" not recognized. Try: chrome, notepad, code <path>, git <args>, npm <args>, or a URL`,
+            result: `Command "${rawCmd}" was not executable.`,
             error: true,
           };
         }
