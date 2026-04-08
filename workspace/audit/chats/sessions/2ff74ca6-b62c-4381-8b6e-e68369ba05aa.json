@@ -1,0 +1,26 @@
+{
+  "id": "2ff74ca6-b62c-4381-8b6e-e68369ba05aa",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw - can you open up x, and on the composer at the top make an intro post introducing smallclaw to the world",
+      "timestamp": 1772676686963
+    },
+    {
+      "role": "assistant",
+      "content": "Got it — I’ll open X, draft an intro post for smallclaw in the top composer, and share the text here so you can review it before posting.",
+      "timestamp": 1772676691981
+    },
+    {
+      "role": "assistant",
+      "content": "Got it — I’ll open X, draft an intro post for smallclaw in the top composer, and share the text here so you can review it before posting.",
+      "timestamp": 1772676691981
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772676683930,
+  "lastActiveAt": 1772676691981,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 131
+}

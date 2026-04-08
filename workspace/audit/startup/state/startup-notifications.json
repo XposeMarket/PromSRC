@@ -1,0 +1,33 @@
+{
+  "notifications": [
+    {
+      "sessionId": "auto_boot_1775660924028",
+      "title": "🌅 Startup — Apr 8, 11:08 AM",
+      "text": "Startup summary: No tasks are currently pending, and today's notes are empty. The system is ready to assist with any requests.",
+      "source": "boot_startup",
+      "automatedSession": {
+        "id": "auto_boot_1775660924028",
+        "title": "🌅 Startup — Apr 8, 11:08 AM",
+        "history": [
+          {
+            "role": "assistant",
+            "content": "Startup summary: No tasks are currently pending, and today's notes are empty. The system is ready to assist with any requests."
+          }
+        ],
+        "automated": true,
+        "unread": true,
+        "createdAt": 1775660924028,
+        "source": "boot_startup"
+      },
+      "telegram": {
+        "enabled": false
+      },
+      "id": "start_note_mnq6qqzt_svhe",
+      "createdAt": 1775661050154,
+      "delivered": {
+        "web": false,
+        "telegram": true
+      }
+    }
+  ]
+}

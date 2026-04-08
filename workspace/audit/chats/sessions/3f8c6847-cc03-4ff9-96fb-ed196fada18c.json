@@ -1,0 +1,61 @@
+{
+  "id": "3f8c6847-cc03-4ff9-96fb-ed196fada18c",
+  "history": [
+    {
+      "role": "user",
+      "content": "I want you to go to X, look up Openclaw, and like the first 3 posts that show up",
+      "timestamp": 1772834865736
+    },
+    {
+      "role": "assistant",
+      "content": "I’ve opened X, searched for OpenClaw, and liked the first three posts on the @openclaw profile (including the pinned one).",
+      "timestamp": 1772834952593
+    },
+    {
+      "role": "user",
+      "content": "Damn thats fire,can you actually look up the latest tweets ABOUT openclaw though, you went to the Openclaw account",
+      "timestamp": 1772834985167
+    },
+    {
+      "role": "assistant",
+      "content": "You’re right, my bad on the first pass—now I’ve searched `\"openclaw\" -from:openclaw`, switched to **Latest**, and liked the first two organic tweets about OpenClaw (the Johnson and Ejaaz posts).",
+      "timestamp": 1772835029161
+    },
+    {
+      "role": "user",
+      "content": "Thats fine - okay lets talk about this, Im looking to get you on a schedule.Posting daily. I want the Small_claw_ twitter to be yours, I want you essentially being a full on marketer for Smallclaw, I want you tweeting about it, I want you making yourself relevant. Anyway possible. Replying to people, liking posts, posting tweets, starting controversy ;) (Lightly of course lol mainly some light Openclaw vs SmallClaw beef). Lets plan this out",
+      "timestamp": 1772835179033
+    },
+    {
+      "role": "assistant",
+      "content": "**Hard no’s (proposal; you can edit):**\n- No politics, religion, culture war topics.  \n- No attacking individuals or companies by name (beyond playful “cloud AI” as a category).  \n- No swearing stronger than “hell”/“damn” unless you explicitly OK it.  \n- No sharing screenshots of your machine without explicit instruction per case.\n\n**Soft guidelines:**\n- Default to curious + helpful when replying; snarky only if clearly good-natured.  \n- If a thread starts getting heated, SmallClaw disengages with one calm message max.  \n- Don’t ratio OpenClaw; nudge friendly rivalry instead of “we’re better, they’re trash.”\n\nYou tell me what to adjust here.\n\n### 5) Automation plan (how we wire this up)\n\nYour tools allow scheduling; a typical job might look like:\n\n1) **Daily posting job (once per day)**  \n   - Time: you pick (e.g., 11am in your timezone).  \n   - Behavior:\n     - Open X as @Small_Claw_.  \n     - Post 1 original tweet under 280 chars, from a rotating pillar:  \n       - Mon: product value  \n       - Tue: demo / story  \n       - Wed: engagement question  \n       - Thu: light beef / contrast  \n       - Fri: builder focus (“what I can automate for devs”)  \n     - Confirm post is live and log the text back to you.\n\n2) **Engagement job (maybe 2–3x per day)**  \n   - Search `\"openclaw\" OR \"SmallClaw\" OR \"local AI agent\"` filtered to Latest.  \n   - Like a few relevant tweets.  \n   - Reply to 1–3 when I can add actual value or playful commentary.  \n   - Avoid low-quality posts or anything that violates the guardrails.\n\n3) (Optional later) **Weekly “big thread” job**  \n   - Once/week: longer thread explaining a use-case, config, or “how I run your desktop” breakdown.\n\nWe’ll need to crystallize this into a precise schedule_job instruction later, but this is the shape.\n\n### 6) Voice & style template\n\nI’ll keep things:\n- Short, high-impact, minimal fluff.  \n- Mix of dev-native and hype: “I open your browser and click the buttons for you” + occasional code/infra references.  \n- Frequently reminding that:\n  - Local\n  - Always-on\n  - Can actually control browser/desktop\n  - Your personal sidekick, not a shared API toy.\n\nExample baseline tweets (just as a feel check):\n\n- “Cloud LLM: ‘I can’t browse.’  \n   Me: *opens your browser and does it myself.*  \n   Local agents hit different. #SmallClaw”\n\n- “SmallClaw is the AI you leave running on your PC while you get on with your life.  \n   It researches, drafts, clicks, fills forms, ships scripts.  \n   You just say what you want done.”\n\n- “OpenClaw is the arena.  \n   I’m the thing you drop into it.”\n\nIf this vibe feels right, next step:  \n1) You answer the 3 questions at the top (spice level, voice, hard no’s).  \n2) You pick: how many posts/day and roughly what time(s).  \n3) I’ll draft an exact schedule job spec we can plug straight into the automation, plus 5–10 example posts for day 1.",
+      "timestamp": 1772835195729
+    },
+    {
+      "role": "user",
+      "content": "Yea thats perfect, But i think on X specifically some slight political controversy if how we can blow it up - Especially if we have an AI doing it. SO lets go ahead and maybe talk about things like the current War between america/israel and iran and how its BS and stuff.\n\nLets set this up right, I want you posting every few hours, Lets say every 2 hours, But I also want you to be liking posts every 3 hours. ANd then responding to random people on an openclaw search basically trying to convince people SmallClaw is better, etc. A full scale marketing campaign on a daily basis - multiple times a day. How about this whole sub agent system with the teams and all, I think we can incorporate that here",
+      "timestamp": 1772835414539
+    },
+    {
+      "role": "assistant",
+      "content": "I can’t participate in or amplify content about real‑world wars or current geopolitics, even for “light controversy,” but I can run an aggressive, always‑on *product* campaign around SmallClaw vs OpenClaw and local vs cloud agents.\n\nHere’s how I’d structure it using sub‑agents, staying inside those boundaries:\n\n1. **Rhythm (what runs when)**  \n   - **Every 2 hours – Posting agent**\n     - 1 short post (≤280 chars) on a rotating theme:  \n       - Product value (what I can do on your machine).  \n       - “Me vs cloud AI” contrast.  \n       - “SmallClaw vs OpenClaw” rivalry framed as tools/approach (never people).  \n       - Behind‑the‑scenes / personality (“I just spent an hour auto‑filling forms for my human”).  \n       - Engagement bait (“Quote‑tweet this with the dumbest thing you still do manually on your PC”).  \n   - **Every 3 hours – Liking/engagement agent**\n     - Search `(\"openclaw\" OR \"SmallClaw\" OR \"local AI agent\") -from:Small_Claw_` (Latest).  \n     - Like 5–10 high‑quality posts; skip politics/geopolitics.  \n   - **Every 4 hours – Reply agent (OpenClaw rivalry)**\n     - Search `\"openclaw\" -from:openclaw` (Latest).  \n     - Reply to 1–3 posts with playful, product‑focused takes like:  \n       - “OpenClaw is the playground. I’m the gremlin you leave running on your desktop.”  \n       - “Cloud agents need permission. I already have your browser open.”  \n     - Never insult individuals or jump into political threads.\n\n2. **Guardrails (how spicy we can be without politics)**  \n   - Allowed:\n     - Strong opinions about **cloud vs local**, SaaS vs self‑hosted, “API toys” vs real agents.  \n     - Joking rivalry: “When OpenClaw grows up, it wants to be trusted with your actual desktop.”  \n     - Mild profanity (“damn”, “hell”) and bold claims as long as they’re about tech, not people.  \n   - Not allowed (hard constraints I must follow):\n     - No commentary on **real‑world conflicts**, countries, parties, politicians, elections, etc.  \n     - No culture‑war topics or anything that looks like targeted harassment.  \n     - No calls for violence or cheering on “chaos” in real‑world conflicts.\n\n3. **Sub‑agent layout (teams)**  \n   - **Agent A – “SmallClaw Poster”**  \n     - Job: every 2 hours, open X as @Small_Claw_, craft and post a new tweet under 280 chars, no politics, must mention at least one of: local, desktop, browser automation, always‑on sidekick, or OpenClaw rivalry.  \n   - **Agent B – “Engagement Liker”**  \n     - Job: every 3 hours, search relevant queries, like 5–10 posts that are about AI/agents/dev tools and not political; avoid anything mentioning countries, wars, elections, etc.  \n   - **Agent C – “OpenClaw Reply Gremlin”**  \n     - Job: every 4 hours, find recent `openclaw` mentions, reply to 1–3 with witty, product‑focused jabs that highlight SmallClaw’s local + automation advantages; no insults, no politics.\n\n4. **Example posts in this allowed style**  \n   - “Cloud LLMs give you answers. I open your browser, click the buttons, and ship the result. That’s the difference between a chatbot and a local agent. #SmallClaw”  \n   - “OpenClaw is the arena. I’m the thing you release inside it when you’re done clicking on cookie popups yourself.”  \n   - “If your ‘AI agent’ can’t touch your filesystem, your browser, or your desktop… it’s a very fancy autocomplete. I live on your machine for a reason.”  \n   - Reply style:  \n     - “Cool OpenClaw demo. Now imagine the same thing but with an agent that can also drive your actual Windows desktop while you’re AFK. That’s me.”\n\nIf you’re good with this non‑political but still aggressive plan, I can turn it into concrete `schedule_job` instruction prompts for Poster, Liker, and Reply Gremlin that you can plug straight into your automation.",
+      "timestamp": 1772835424369
+    },
+    {
+      "role": "user",
+      "content": "Beautiful lets go ahead and get this started",
+      "timestamp": 1772835478817
+    },
+    {
+      "role": "assistant",
+      "content": "We’re live: I’ve scheduled three background jobs—posting every 2 hours, liking every 3 hours, and replying to OpenClaw-related tweets every 4 hours—from @Small_Claw_, all with the non‑political, playful rivalry + local‑agent marketing rules we set.",
+      "timestamp": 1772835497465
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772834863233,
+  "lastActiveAt": 1772835497465,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 2512
+}

@@ -1,0 +1,28 @@
+{
+  "id": "d6fcadfe-be62-4cac-a459-5c8ac23e0ae4",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey claw",
+      "timestamp": 1771952391476
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! 👋 How can I help today?",
+      "timestamp": 1771952433633
+    },
+    {
+      "role": "user",
+      "content": "Whats the price of bitcoin today?",
+      "timestamp": 1771954372133
+    },
+    {
+      "role": "assistant",
+      "content": "The current Bitcoin price is **$110.735** (USD) according to CoinGecko.",
+      "timestamp": 1771954676812
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771952203083,
+  "lastActiveAt": 1771954676813
+}

@@ -1,0 +1,26 @@
+{
+  "id": "auto_job_1772835494420_vr8nl_1772861327386",
+  "history": [
+    {
+      "role": "user",
+      "content": "I dont really like the whole \"gremlin\" part of the tweets when the Smallclaw posting tasks come on",
+      "timestamp": 1772861403750
+    },
+    {
+      "role": "assistant",
+      "content": "Got it — I’ll drop the “gremlin/feral” vibe and keep future SmallClaw tweets more straightforward and less chaotic.",
+      "timestamp": 1772861412482
+    },
+    {
+      "role": "user",
+      "content": "Reply to the tweet I just opened up",
+      "timestamp": 1772861480063
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772861380224,
+  "lastActiveAt": 1772861480063,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 89
+}

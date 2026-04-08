@@ -1,0 +1,21 @@
+{
+  "id": "ae036b9f-0d7c-4260-ab59-c544a81bb98c",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey prom",
+      "timestamp": 1773617116130
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Ollama chat failed: fetch failed",
+      "timestamp": 1773617434286
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1773617116246,
+  "lastActiveAt": 1773617434286,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 27
+}

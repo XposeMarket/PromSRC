@@ -1,0 +1,23 @@
+{
+  "id": "auto_boot_1775078245574",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Quick startup state: task and schedule systems are currently unavailable in this snapshot, so there are no live task/schedule items I can verify right now. Today’s notes emphasize that memory sync correctly no-op’d when signal was low, intraday logs can be intermittent (so graceful no-file handling is important), and a prior X→Telegram flow stalled because `browser_send_to_telegram` was an unknown tool with no immediate fallback, leaving a plan step unfinished. Where things left off: we clarified runtime context/compaction behavior and identified the need for explicit fallback handling when a tool call fails.",
+      "timestamp": 1775078251623
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775078245666,
+  "lastActiveAt": 1775078251624,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 182,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

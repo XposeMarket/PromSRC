@@ -1,0 +1,16 @@
+{
+  "id": "meta_coordinator_mngqm53d",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775089765812,
+  "lastActiveAt": 1775089765812,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "team_ops",
+    "browser",
+    "scheduling"
+  ]
+}

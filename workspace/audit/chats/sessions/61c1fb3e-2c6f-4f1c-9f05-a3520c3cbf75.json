@@ -1,0 +1,31 @@
+{
+  "id": "61c1fb3e-2c6f-4f1c-9f05-a3520c3cbf75",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw i have the playwrite browser open to X already can you go ahead and just like the 5 latest tweets",
+      "timestamp": 1772835692973
+    },
+    {
+      "role": "assistant",
+      "content": "I’m on it: I just navigated your Home feed and liked the 5 most recent tweets currently visible (starting from the top of your timeline).",
+      "timestamp": 1772835780328
+    },
+    {
+      "role": "user",
+      "content": "Can you go ahead and find a post where someones talking about openclaw then reply saying smallclaw is better, make sure you use #SmallClaw, lets start using that",
+      "timestamp": 1772835856108
+    },
+    {
+      "role": "assistant",
+      "content": "Done — I found an OpenClaw thread and replied “SmallClaw is better. #SmallClaw” from @Small_Claw_.",
+      "timestamp": 1772835924345
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772835678277,
+  "lastActiveAt": 1772835924345,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 169
+}

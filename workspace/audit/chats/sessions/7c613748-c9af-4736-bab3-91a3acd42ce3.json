@@ -1,0 +1,16 @@
+{
+  "id": "7c613748-c9af-4736-bab3-91a3acd42ce3",
+  "history": [
+    {
+      "role": "user",
+      "content": "Create an interactive chart of the periodic table",
+      "timestamp": 1773547621414
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1773547621440,
+  "lastActiveAt": 1773547621441,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 20
+}

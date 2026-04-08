@@ -1,0 +1,23 @@
+{
+  "id": "d8949f21-4d04-4bcc-9cfe-479586ac2656",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw - So I want you to go ahead and open up my computer - go to Chatgpt.com, and plan out a Marketing plan for Cadence CRM - its a CRM I built - ChatGPT will know more about it  - I want you and chatgpt to converse and come up with a free solid marketing plan I can use to promote Cadence. Send a message to chatgpt regarding the plan , wait for the response, and proceed to go back and forth chatting about the marketing plan. Ask any back and forth questions to chatgpt youd like even like \"what is Cadence\" it doesnt matter.",
+      "timestamp": 1772141743781
+    },
+    {
+      "role": "assistant",
+      "content": "Thanks! I’ll get the browser open, hop over to ChatGPT, and work with it to craft a marketing plan for Cadence CRM.",
+      "timestamp": 1772141747042
+    },
+    {
+      "role": "assistant",
+      "content": "Thanks! I’ll get the browser open, hop over to ChatGPT, and work with it to craft a marketing plan for Cadence CRM.",
+      "timestamp": 1772141747043
+    }
+  ],
+  "workspace": "d:\\SmallClaw\\workspace",
+  "createdAt": 1772141740942,
+  "lastActiveAt": 1772141747043
+}

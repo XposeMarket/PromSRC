@@ -1,0 +1,23 @@
+{
+  "id": "auto_boot_1775085665528",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Startup state is partially degraded: both task and schedule backends are currently unavailable, so there’s no live visibility into active tasks or upcoming jobs from this snapshot. Today’s notes highlight two key operational lessons: memory sync correctly no-op’d when signal was low/missing, and a prior X→Telegram flow stalled because a non-existent `browser_send_to_telegram` tool was used without immediate fallback, leaving a plan step stuck. Where things left off: you were refining low-token context compaction and clarifying runtime context boundaries, with emphasis on graceful no-file handling and explicit fallback paths when tools fail.",
+      "timestamp": 1775085672187
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775085665670,
+  "lastActiveAt": 1775085672188,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 192,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

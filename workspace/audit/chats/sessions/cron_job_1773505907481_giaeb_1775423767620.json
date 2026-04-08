@@ -1,0 +1,15 @@
+{
+  "id": "cron_job_1773505907481_giaeb_1775423767620",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775423767623,
+  "lastActiveAt": 1775423768757,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "browser",
+    "scheduling"
+  ]
+}

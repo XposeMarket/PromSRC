@@ -1,0 +1,16 @@
+{
+  "id": "e56960a2-fc35-4348-9f1f-112c17772657",
+  "history": [
+    {
+      "role": "user",
+      "content": "restart gateway for me",
+      "timestamp": 1774464776706
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774464776797,
+  "lastActiveAt": 1774464802307,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 13
+}

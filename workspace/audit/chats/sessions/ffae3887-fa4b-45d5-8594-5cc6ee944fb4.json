@@ -1,0 +1,17 @@
+{
+  "id": "ffae3887-fa4b-45d5-8594-5cc6ee944fb4",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey!",
+      "timestamp": 1775529051923
+    }
+  ],
+  "workspace": "/Applications/PromSRC-main/workspace",
+  "channel": "web",
+  "createdAt": 1775529051939,
+  "lastActiveAt": 1775529051941,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 8
+}

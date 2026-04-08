@@ -1,0 +1,21 @@
+{
+  "id": "187cec7d-5959-4b47-b48a-98505a735e3a",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom! how are you",
+      "timestamp": 1774601018719
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul — I’m doing great, thanks for asking. 😊  \nHow are you doing?",
+      "timestamp": 1774601033844
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774601018719,
+  "lastActiveAt": 1774601033844,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 38
+}

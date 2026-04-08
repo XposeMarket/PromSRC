@@ -1,0 +1,89 @@
+# Chats Index
+
+Generated: 2026-04-08T16:19:31.112Z
+
+- Sessions mirrored: 1274
+- Transcript files: 0
+- Compaction artifacts: 0
+
+## Recent Sessions
+- cron_job_1773505907481_giaeb_1775660933792 | messages=0 | lastActive=2026-04-08T15:13:57.286Z | summary=no
+- auto_boot_1775660924028 | messages=1 | lastActive=2026-04-08T15:10:50.152Z | summary=no
+- 2f267492-7ba1-4007-a8cd-c6ddcfe63678 | messages=2 | lastActive=2026-04-07T17:30:56.123Z | summary=no
+- d40840c6-d55a-4450-b2c1-98fb12d6bd77 | messages=1 | lastActive=2026-04-07T17:22:17.482Z | summary=no
+- 8615b2a7-a717-49bb-bf20-446e2f3ab06d | messages=1 | lastActive=2026-04-07T17:15:55.326Z | summary=no
+- 60bef109-3d6b-4f05-8449-53e27d58e338 | messages=2 | lastActive=2026-04-07T17:04:26.753Z | summary=no
+- cron_job_1773505907481_giaeb_1775580759527 | messages=0 | lastActive=2026-04-07T16:57:42.108Z | summary=no
+- 35eb659a-23db-497d-968c-e8f3c2be79c3 | messages=1 | lastActive=2026-04-07T16:54:27.483Z | summary=no
+- auto_boot_1775580749754 | messages=1 | lastActive=2026-04-07T16:54:12.638Z | summary=no
+- ffae3887-fa4b-45d5-8594-5cc6ee944fb4 | messages=1 | lastActive=2026-04-07T02:30:51.941Z | summary=no
+- dafb4c34-e289-4e32-abb8-b4259ae510c6 | messages=1 | lastActive=2026-04-07T02:30:15.052Z | summary=no
+- 93121f87-e230-43ef-9c28-b36484206e72 | messages=1 | lastActive=2026-04-07T02:16:22.359Z | summary=no
+- 32771340-90b4-48f2-8e81-544d8ef4aa40 | messages=2 | lastActive=2026-04-07T02:09:25.507Z | summary=no
+- c6120949-3453-4e94-a1f7-9ea1fbfae22a | messages=1 | lastActive=2026-04-07T01:51:22.005Z | summary=no
+- cron_job_1773505907481_giaeb_1775526573401 | messages=0 | lastActive=2026-04-07T01:49:34.344Z | summary=no
+- 0198aa71-c423-4096-9981-ed1679867e85 | messages=4 | lastActive=2026-03-19T22:26:57.960Z | summary=no
+- 01cce607-22c8-4760-8e20-d142efb13c26 | messages=2 | lastActive=2026-03-14T02:40:47.608Z | summary=no
+- 01f723fe-6121-4979-9585-e836c0068d4b | messages=0 | lastActive=2026-02-25T23:26:30.393Z | summary=no
+- 0210ae2a-3fa2-4090-a4a7-97f6cc69ee79 | messages=3 | lastActive=2026-03-14T07:40:19.501Z | summary=no
+- 03f3b9ac-5e1f-46a3-a026-f7e0636c10c9 | messages=2 | lastActive=2026-03-25T20:11:17.948Z | summary=no
+- 0414b121-9b20-49c4-90f7-6f642b571cf3 | messages=9 | lastActive=2026-03-03T02:58:42.654Z | summary=no
+- 047ec4e4-f783-471a-a107-4667e5cf2a71 | messages=7 | lastActive=2026-03-02T22:20:13.658Z | summary=no
+- 05398890-cad5-49c5-aca8-e64249b02283 | messages=2 | lastActive=2026-02-26T08:31:05.614Z | summary=no
+- 056e494d-6379-4d8f-a605-5cf2bcbffc13 | messages=6 | lastActive=2026-04-02T16:50:19.911Z | summary=no
+- 05be6b1d-5c08-4de8-9abf-1363dfd71263 | messages=5 | lastActive=2026-03-20T17:28:21.630Z | summary=no
+- 05ffd7e2-a33f-4a23-8bd7-a4ca5a00c87f | messages=2 | lastActive=2026-02-26T06:20:42.276Z | summary=no
+- 06601837-76ee-4e49-9815-8c3fd7953265 | messages=4 | lastActive=2026-02-27T07:01:18.038Z | summary=no
+- 06a0852a-ed61-44f3-9359-d7d4e1fdbc88 | messages=0 | lastActive=2026-02-28T02:11:47.204Z | summary=no
+- 06f07f7c-5c76-4150-94fc-ad927f706360 | messages=9 | lastActive=2026-03-27T07:19:15.823Z | summary=no
+- 06f5792e-4272-4a63-9ce5-d64180cce6cc | messages=2 | lastActive=2026-02-26T06:06:41.718Z | summary=no
+- 071dc337-086a-4576-8a45-781f3ba5614e | messages=7 | lastActive=2026-03-27T05:48:09.358Z | summary=no
+- 07b5d7e9-3b48-4a35-884e-2b2e2638c725 | messages=2 | lastActive=2026-02-22T19:42:11.857Z | summary=no
+- 0807fa4d-4cc2-4c85-ace7-baede1ac909d | messages=2 | lastActive=2026-04-02T00:29:31.319Z | summary=no
+- 084a882f-dab6-4fff-ab7c-123d34f7e813 | messages=4 | lastActive=2026-03-15T04:48:04.251Z | summary=no
+- 08771868-a41d-4c39-9828-06202785394a | messages=8 | lastActive=2026-03-18T19:04:35.170Z | summary=no
+- 095533ec-b904-4116-bcbe-628c1964f1f2 | messages=2 | lastActive=2026-03-13T20:50:07.084Z | summary=no
+- 0a037dab-195d-4fb6-b7bc-2be22d7ef9a5 | messages=2 | lastActive=2026-03-09T01:17:48.070Z | summary=no
+- 0b17aa63-14c4-494e-b2b8-04b12a64c72b | messages=2 | lastActive=2026-04-02T01:02:05.474Z | summary=no
+- 0bd51fa0-f679-4b06-96ff-d420ffa96fcd | messages=4 | lastActive=2026-02-25T16:26:45.603Z | summary=no
+- 0d1b3b62-4cfe-461e-acb7-d67a0fc2ebe3 | messages=9 | lastActive=2026-03-05T01:57:19.674Z | summary=no
+- 0dc5c8e8-ed12-4836-b22d-9ef96c31ec49 | messages=6 | lastActive=2026-03-27T07:29:30.652Z | summary=no
+- 0dc7fc1e-6b99-4099-91a8-d8aa1af390b0 | messages=0 | lastActive=2026-02-25T21:19:08.332Z | summary=no
+- 0e3711ec-d946-4714-8b12-e582fa3c111a | messages=8 | lastActive=2026-03-27T04:53:32.459Z | summary=no
+- 0e5463d5-a986-4315-9c8b-7c5c08998864 | messages=13 | lastActive=2026-04-01T20:51:41.874Z | summary=no
+- 0e594c21-8046-462d-a042-22608cd7e6de | messages=4 | lastActive=2026-02-21T22:56:17.170Z | summary=no
+- 0e9dc786-a68c-4174-b32b-c27a84027cf2 | messages=1 | lastActive=2026-02-25T23:33:13.861Z | summary=no
+- 0eab75ef-bb37-4508-813e-776bed698c07 | messages=8 | lastActive=2026-02-22T01:07:35.750Z | summary=no
+- 0eb2f171-ec57-4922-a23c-ba65d34b8d63 | messages=2 | lastActive=2026-03-14T03:17:11.383Z | summary=no
+- 0eb5a5a0-c742-454a-ac05-8473fbfbe1e0 | messages=2 | lastActive=2026-03-15T19:11:51.719Z | summary=no
+- 0ec01354-a564-4256-8741-36bc8bf921c0 | messages=4 | lastActive=2026-03-27T05:30:46.985Z | summary=no
+- 0f42eb6c-e5b5-4b40-8918-35d7373fb7ca | messages=1 | lastActive=2026-02-22T22:00:52.153Z | summary=no
+- 0fc8d750-3ad1-4299-a545-91725c1e52b7 | messages=6 | lastActive=2026-03-22T07:21:07.465Z | summary=no
+- 0feef3ef-2d05-48fb-bc45-2c6d3f761cf0 | messages=4 | lastActive=2026-03-20T00:22:52.357Z | summary=no
+- 106d5e93-2881-4141-9b1f-2b2aefd695af | messages=6 | lastActive=2026-03-26T01:38:45.516Z | summary=no
+- 10be3a18-3881-41b8-810f-bb7fec7ae962 | messages=10 | lastActive=2026-03-14T05:29:03.123Z | summary=no
+- 11fda8c9-6340-4fb9-acdb-f908300d358a | messages=2 | lastActive=2026-03-07T18:03:39.395Z | summary=no
+- 12946c21-25a8-4f21-8aef-6301d90ea8e0 | messages=2 | lastActive=2026-02-21T23:31:24.349Z | summary=no
+- 12a530c4-dfa6-4e9e-909e-c68902363c9e | messages=2 | lastActive=2026-03-22T22:34:18.541Z | summary=no
+- 12bfe0d2-becf-411e-823e-d9ed357a04f1 | messages=2 | lastActive=2026-03-03T04:11:32.379Z | summary=no
+- 133e1295-4394-4fc8-9572-5bbe41a349a8 | messages=20 | lastActive=2026-02-22T23:28:10.197Z | summary=no
+- 142325db-4e21-4b29-992e-ebf1e0a3bfb6 | messages=10 | lastActive=2026-03-27T09:11:57.456Z | summary=no
+- 1425d77c-263b-4da9-8e7e-0d55aaa961a1 | messages=10 | lastActive=2026-04-02T00:58:09.944Z | summary=no
+- 1428e1f1-5c83-485c-8f6d-2972ddc99562 | messages=2 | lastActive=2026-03-20T17:53:37.732Z | summary=no
+- 143348b6-1767-4964-a27e-5a4d136a2eec | messages=5 | lastActive=2026-03-05T05:43:48.584Z | summary=no
+- 150bc61d-d426-4943-9c7c-49d2176c1b4c | messages=6 | lastActive=2026-02-23T00:23:42.235Z | summary=no
+- 159cb82e-1c33-41bd-b321-ff85b2a7193f | messages=2 | lastActive=2026-03-07T00:27:52.796Z | summary=no
+- 15d2b395-6fe6-453c-a253-f4a39e64e693 | messages=3 | lastActive=2026-02-26T21:54:24.465Z | summary=no
+- 160493e9-7b35-45eb-80a1-d10629ebb62e | messages=2 | lastActive=2026-02-21T22:46:29.073Z | summary=no
+- 16c867ca-129d-4c19-8d47-85601b10fc22 | messages=12 | lastActive=2026-03-18T21:55:10.713Z | summary=no
+- 1701e27d-98fd-4521-b8c7-b79b398bc08e | messages=8 | lastActive=2026-03-06T21:46:44.519Z | summary=no
+- 1725a3c6-0be9-4718-95ca-4ae56ef2ebd3 | messages=2 | lastActive=2026-03-03T04:10:33.760Z | summary=no
+- 17260c9b-6a32-4ae3-ba11-e6547f0bf089 | messages=4 | lastActive=2026-04-02T17:59:55.918Z | summary=no
+- 187cec7d-5959-4b47-b48a-98505a735e3a | messages=2 | lastActive=2026-03-27T08:43:53.844Z | summary=no
+- 1890ae44-8686-43fc-86cd-d1cf90e8dd3e | messages=5 | lastActive=2026-02-28T02:32:09.291Z | summary=no
+- 18af93d6-75b5-4bb2-a64c-3e4a9c3da4e0 | messages=13 | lastActive=2026-03-27T06:06:57.784Z | summary=no
+- 18dbd27d-64bd-411f-8056-91e7778784e6 | messages=2 | lastActive=2026-02-26T08:57:07.319Z | summary=no
+- 18eb00ea-29d8-42dd-b02a-5c82e7712667 | messages=6 | lastActive=2026-03-09T18:58:25.948Z | summary=no
+- 19a4b411-dbae-40e0-adfc-12b60fcc7d94 | messages=5 | lastActive=2026-03-02T20:42:56.780Z | summary=no
+- 1a1bdb54-16e0-46fb-a36e-b1a690445ebf | messages=6 | lastActive=2026-03-27T04:18:15.788Z | summary=no
+- 1b8bc875-be13-4bd2-9e14-6d0377dc121c | messages=7 | lastActive=2026-02-22T00:37:40.787Z | summary=no

@@ -1,0 +1,22 @@
+{
+  "scheduleId": "job_1773506476968_9hzss",
+  "createdAt": 1773506736239,
+  "updatedAt": 1773506774624,
+  "dedup": {},
+  "learnedContext": [
+    "Tried command-based HTTP execution first; direct POST tooling is constrained here, so fallback URL open can trigger endpoint but doesn’t return structured dispatch JSON. Pattern: prefer a command-capable HTTP client path when available to capture dispatched count reliably.",
+    "Execution endpoint was triggerable via URL open but this runtime cannot capture POST response bodies through available command interface, preventing dispatched-count reporting; fallback behavior remains HEARTBEAT_OK when count is unknown.",
+    "Plan step 4 finalized: reflection note written after execution attempts; maintained fallback HEARTBEAT_OK behavior when dispatched count cannot be read in this runtime."
+  ],
+  "runSummaries": [
+    {
+      "runId": "e61ae6b7-5dc9-4bd4-9ddd-d161a9f23f16",
+      "scheduledAt": 1773506707257,
+      "completedAt": 1773506774615,
+      "success": true,
+      "summary": "HEARTBEAT_OK",
+      "stepCount": 1
+    }
+  ],
+  "notes": {}
+}

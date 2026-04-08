@@ -1,0 +1,28 @@
+{
+  "id": "0bd51fa0-f679-4b06-96ff-d420ffa96fcd",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw",
+      "timestamp": 1772036706256
+    },
+    {
+      "role": "assistant",
+      "content": "I'll say something like \"Hi there! 👋 How can I help today?\" to be friendly and prompt for their needs.\n\nHi there! 👋 How can I help today?",
+      "timestamp": 1772036729096
+    },
+    {
+      "role": "user",
+      "content": "How are you!?",
+      "timestamp": 1772036757301
+    },
+    {
+      "role": "assistant",
+      "content": "😊 How can I help you today?",
+      "timestamp": 1772036805603
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1772036700947,
+  "lastActiveAt": 1772036805603
+}

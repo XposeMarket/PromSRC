@@ -1,0 +1,31 @@
+{
+  "id": "53c48d58-786c-4b94-85c2-7c4edd296578",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom what MCP connections do we have setup currently",
+      "timestamp": 1773557011296
+    },
+    {
+      "role": "assistant",
+      "content": "Current setup I can confirm from this session:\n\n- **Connected and available now:** `Supabase MCP`, `Vercel MCP`  \n- I checked workspace + `.prometheus` tree and didn’t find a central MCP server config file exposed here, so I can’t enumerate any additional dormant/disconnected MCP entries beyond those two active integrations.",
+      "timestamp": 1773557073782
+    },
+    {
+      "role": "user",
+      "content": "Sorry Im gonna fix that right now, the mcp manage tool didnt work",
+      "timestamp": 1773560611017
+    },
+    {
+      "role": "assistant",
+      "content": "Yep—you’re right, and thanks for flagging it.\n\nI just tested it and got: **“Unknown tool: mcp_server_manage.”**  \nSo in this session, the MCP management endpoint itself isn’t registered/available yet.\n\nOnce you re-enable/fix it, tell me “try again” and I’ll immediately list all configured MCP servers and connection status.",
+      "timestamp": 1773560621126
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1773557011456,
+  "lastActiveAt": 1773560621126,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 246
+}

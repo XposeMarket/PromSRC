@@ -1,0 +1,23 @@
+{
+  "id": "auto_restart_manual_1774649920413",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "1) ✅ **Manual hot-restart rerun completed** — gateway is back online and responsive, with **no source/file changes** in this run; latest known build status remains healthy from earlier today (`npm run build` / `tsc` passing, no new build triggered for this restart).\n\n2) **High-level change:** this was an additional restart-only validation pass to test notification flow; the previously shipped routing/notification updates remain in effect (fresh unread automated session + consistent hot-restart event delivery behavior).\n\n3) Can you confirm whether Telegram received this hot-restart notification in the expected sequence, and what you want me to verify next (ordering, duplication, or delivery latency)?",
+      "timestamp": 1774649926622
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774649920428,
+  "lastActiveAt": 1774649926623,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 209,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling",
+    "integrations"
+  ]
+}

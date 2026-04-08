@@ -1,0 +1,56 @@
+{
+  "id": "06f07f7c-5c76-4150-94fc-ad927f706360",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom!",
+      "timestamp": 1774595781588
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul 🙂",
+      "timestamp": 1774595799961
+    },
+    {
+      "role": "user",
+      "content": "Can you tell me what runtime prompt told you to use the memory browse tool :)",
+      "timestamp": 1774595818588
+    },
+    {
+      "role": "assistant",
+      "content": "Yep — it came from the **runtime prompt’s `memory_rules` section in SOUL context**, specifically:\n\n- “**Use memory_browse to find the right category before writing.**”\n- “When you learn something about the user, write it immediately with memory_write.”\n- “When you learn something about yourself or your working style, update SOUL.md with memory_write.”\n\nSo the direct instruction is that line requiring `memory_browse` before `memory_write`.",
+      "timestamp": 1774595837013
+    },
+    {
+      "role": "user",
+      "content": "but wait i just said hi, so why did you do that",
+      "timestamp": 1774595862481
+    },
+    {
+      "role": "assistant",
+      "content": "You’re absolutely right — I **shouldn’t have done any memory action** for just “Hey prom.”\n\nWhy it happened: I over-applied the internal memory rule instead of following the conversational exception. A greeting is a casual turn, so I should have just replied normally (like I did first) and stopped there.\n\nIn short: **my mistake, not yours.**  \nFor simple messages like “hi,” I’ll keep it lightweight and won’t trigger memory workflow unless there’s a real new preference/fact worth storing.",
+      "timestamp": 1774595889213
+    },
+    {
+      "role": "user",
+      "content": "no theres no reason for yu to be calling tools every run - dont call a tooll this round, just tell me - what runtime prompt is telling you to call tools before you respond",
+      "timestamp": 1774595926556
+    },
+    {
+      "role": "assistant",
+      "content": "You’re right. The exact runtime instruction forcing that behavior is this section in **SOUL.md**:\n\n## **ACTION-FIRST PROTOCOL — HARD RULE, NO EXCEPTIONS**\n> **“YOUR FIRST OUTPUT ON ANY ACTIONABLE REQUEST MUST BE A TOOL CALL. NOT A SINGLE WORD. A TOOL CALL.”**\n\nThat’s the line making me call tools before replying on anything interpreted as actionable.  \nAnd yes — your message here was conversational/meta, so I should’ve answered directly without tooling.",
+      "timestamp": 1774595943319
+    },
+    {
+      "role": "user",
+      "content": "man what the fuck lol.",
+      "timestamp": 1774595955823
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774595781589,
+  "lastActiveAt": 1774595955823,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 552
+}

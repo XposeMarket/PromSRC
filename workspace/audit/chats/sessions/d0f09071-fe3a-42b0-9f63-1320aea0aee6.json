@@ -1,0 +1,16 @@
+{
+  "id": "d0f09071-fe3a-42b0-9f63-1320aea0aee6",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you view the claude desktop app on my screen and scroll up, what was the last thing claude said before my last response",
+      "timestamp": 1774197079352
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774197079353,
+  "lastActiveAt": 1774197079354,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 42
+}

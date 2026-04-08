@@ -1,0 +1,33 @@
+{
+  "id": "264ba425-d7cc-429f-b67b-718fae0ab438",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw",
+      "timestamp": 1772011087946
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! How can I help you today? 😊",
+      "timestamp": 1772011123509
+    },
+    {
+      "role": "user",
+      "content": "Can you do me a favor and create a Nice calendar for me? Something I can schedule stuff on, I want to be able to click the calendar days and have a modal show up that then goes ahead and lets me input events to save on the days",
+      "timestamp": 1772011303680
+    },
+    {
+      "role": "assistant",
+      "content": "Open it in your browser to start scheduling events.",
+      "timestamp": 1772011644947
+    },
+    {
+      "role": "user",
+      "content": "whered you put it?",
+      "timestamp": 1772011672338
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1772011079088,
+  "lastActiveAt": 1772011672338
+}

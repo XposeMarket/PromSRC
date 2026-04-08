@@ -1,0 +1,333 @@
+{
+  "id": "c61012bc-fa51-4558-9d8d-2d80a9b428ef",
+  "title": "📊 Weekly Performance Review",
+  "prompt": "Run the weekly self-improvement performance review. Analyze all scheduled task run histories from the past 7 days, identify patterns, propose skill evolutions, and generate a performance report.",
+  "sessionId": "cron_job_1773505907481_giaeb_1773591668196",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "scheduleId": "job_1773505907481_giaeb",
+  "plan": [
+    {
+      "index": 0,
+      "description": "Run the weekly self-improvement performance review. Analyze all scheduled task run histories from the past 7 days, ident",
+      "status": "done",
+      "completedAt": 1773591775887,
+      "notes": "# Weekly Self-Improvement Performance Review\n**Window:** 2026-03-08 to 2026-03-15  \n**Run date:** 2026-03-15\n\n## Summary\nThis was a noisy but revealing week. The strongest pattern is that Prom perform"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1773591668204,
+      "type": "status_push",
+      "content": "Task created: 📊 Weekly Performance Review"
+    },
+    {
+      "t": 1773591677895,
+      "type": "tool_call",
+      "content": "declare_plan({\"steps\":[\"Inspect recent task history\",\"Review self-improvement signals\",\"Draft)"
+    },
+    {
+      "t": 1773591677905,
+      "type": "tool_result",
+      "content": "declare_plan: Plan set (4 steps): Inspect recent task history → Review self-improvement signals → Draft report and proposals → Log ref"
+    },
+    {
+      "t": 1773591683375,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"skills/report-generator/SKILL.md\"})"
+    },
+    {
+      "t": 1773591683451,
+      "type": "tool_result",
+      "content": "read_file: skills/report-generator/SKILL.md (216 lines):\n1: ---\n2: name: Report Generator\n3: description: Turn structured data, res"
+    },
+    {
+      "t": 1773591695432,
+      "type": "tool_call",
+      "content": "task_control({\"action\":\"list\",\"task_id\":\"\",\"status\":\"\",\"include_all_sessions\":true,\"limit\":10)"
+    },
+    {
+      "t": 1773591699143,
+      "type": "tool_result",
+      "content": "task_control: {\n  \"success\": true,\n  \"action\": \"list\",\n  \"scope\": \"all_sessions\",\n  \"tasks\": [\n    {\n      \"task_id\": \"c61012bc-fa51-4"
+    },
+    {
+      "t": 1773591699148,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_summary\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expected_impact\":)"
+    },
+    {
+      "t": 1773591699525,
+      "type": "tool_result",
+      "content": "self_improve: {\n  \"lastReportId\": null,\n  \"lastReportAt\": null,\n  \"pendingSkillEvolutions\": 0,\n  \"pendingProposedActions\": 0,\n  \"promp"
+    },
+    {
+      "t": 1773591699527,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_latest_report\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expected_im)"
+    },
+    {
+      "t": 1773591699533,
+      "type": "tool_result",
+      "content": "self_improve: No performance reports yet."
+    },
+    {
+      "t": 1773591699534,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_schedule_health\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expected_)"
+    },
+    {
+      "t": 1773591699539,
+      "type": "tool_result",
+      "content": "self_improve: (no scheduled jobs with run history)"
+    },
+    {
+      "t": 1773591699609,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_error_summary\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expected_im)"
+    },
+    {
+      "t": 1773591699617,
+      "type": "tool_result",
+      "content": "self_improve: Total errors tracked: 0\nSource code errors: 0\nRecurring (3+ times): 0\nRepairs proposed: 0"
+    },
+    {
+      "t": 1773591699621,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_pending_skills\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expected_i)"
+    },
+    {
+      "t": 1773591699630,
+      "type": "tool_result",
+      "content": "self_improve: (no pending skill evolutions)"
+    },
+    {
+      "t": 1773591699634,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_proven_patterns\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expected_)"
+    },
+    {
+      "t": 1773591699644,
+      "type": "tool_result",
+      "content": "self_improve: (no data)"
+    },
+    {
+      "t": 1773591705847,
+      "type": "tool_call",
+      "content": "schedule_job({\"action\":\"list\",\"job_id\":\"\",\"name\":\"\",\"instruction_prompt\":\"\",\"schedule\":{\"kind)"
+    },
+    {
+      "t": 1773591705852,
+      "type": "tool_result",
+      "content": "schedule_job: {\n  \"success\": true,\n  \"count\": 1,\n  \"jobs\": [\n    {\n      \"id\": \"job_1773505907481_giaeb\",\n      \"name\": \"📊 Weekly Per"
+    },
+    {
+      "t": 1773591705857,
+      "type": "tool_call",
+      "content": "list_directory({\"path\":\"memory\"})"
+    },
+    {
+      "t": 1773591705863,
+      "type": "tool_result",
+      "content": "list_directory: [FILE] memory/2026-02-18.md\n[FILE] memory/2026-02-19.md\n[FILE] memory/2026-02-20.md\n[FILE] memory/2026-02-21.md\n[FILE] m"
+    },
+    {
+      "t": 1773591705866,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_pending_proposals\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expecte)"
+    },
+    {
+      "t": 1773591705876,
+      "type": "tool_result",
+      "content": "self_improve: • [LOW] Show Prometheus version in gateway startup banner (src_edit) — Add the current Prometheus version from package.j"
+    },
+    {
+      "t": 1773591705880,
+      "type": "tool_call",
+      "content": "self_improve({\"action\":\"get_changelog\",\"change\":\"\",\"reason\":\"\",\"job_name\":\"\",\"expected_impact)"
+    },
+    {
+      "t": 1773591705889,
+      "type": "tool_result",
+      "content": "self_improve: (no behavior changes recorded)"
+    },
+    {
+      "t": 1773591713164,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-08.md\"})"
+    },
+    {
+      "t": 1773591713206,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-08.md (809 lines):\n1: [19:00:05] **User**: You are SmallClaw, running as a scheduled cron X poster (x_pos"
+    },
+    {
+      "t": 1773591713209,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-09.md\"})"
+    },
+    {
+      "t": 1773591713247,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-09.md (574 lines):\n1: [20:02:08] **User**: BOOT STARTUP SUMMARY:\n2: The following data has already been f"
+    },
+    {
+      "t": 1773591713250,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-10.md\"})"
+    },
+    {
+      "t": 1773591713297,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-10.md (9 lines):\n1: [21:00:01] **User**: You have been woken by the scheduler. Read your HEARTBEAT.md and"
+    },
+    {
+      "t": 1773591713299,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-11.md\"})"
+    },
+    {
+      "t": 1773591713323,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-11.md (119 lines):\n1: [14:35:24] **User**: BOOT STARTUP SUMMARY:\n2: The following data has already been f"
+    },
+    {
+      "t": 1773591713327,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-12.md\"})"
+    },
+    {
+      "t": 1773591713355,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-12.md (19 lines):\n1: # 2026-03-12\n2: \n3: ## Scheduler Journal (Jake)\n4: - Woke via scheduler and read HEA"
+    },
+    {
+      "t": 1773591713357,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-13.md\"})"
+    },
+    {
+      "t": 1773591713515,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-13.md (917 lines):\n1: [22:46:21] **User**: BOOT STARTUP SUMMARY:\n2: The following data has already been f"
+    },
+    {
+      "t": 1773591713517,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-14.md\"})"
+    },
+    {
+      "t": 1773591713576,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-14.md (927 lines):\n1: [20:00:09] **User**: You are SmallClaw, running as a scheduled cron X poster (x_pos"
+    },
+    {
+      "t": 1773591713579,
+      "type": "tool_call",
+      "content": "read_file({\"filename\":\"memory/2026-03-15.md\"})"
+    },
+    {
+      "t": 1773591713644,
+      "type": "tool_result",
+      "content": "read_file: memory/2026-03-15.md (431 lines):\n1: [20:42:23] **User**: BOOT STARTUP SUMMARY:\n2: The following data has already been f"
+    },
+    {
+      "t": 1773591722940,
+      "type": "tool_call",
+      "content": "write_note({\"content\":\"Weekly review pattern: scheduled runs are succeeding most when promp)"
+    },
+    {
+      "t": 1773591723008,
+      "type": "tool_result",
+      "content": "write_note: Note saved [last_run_insight] (373 chars) â†’ intraday-notes"
+    },
+    {
+      "t": 1773591775887,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"# Weekly Self-Improvement Performance Review\\n**Window:** 2026-03-08 to 2026-03-15  \\n**Run date:** 2026-03-15\\n\\n## Summary\\nThis was a noisy but revealing week. The strongest pattern is that Prom perform\"}]"
+    },
+    {
+      "t": 1773591775891,
+      "type": "status_push",
+      "content": "Done: # Weekly Self-Improvement Performance Review\n**Window:** 2026-03-08 to 2026-03-15  \n**Run date:** 2026-03-15\n\n## Summary\nThis was a noisy but revealing week. The strongest pattern is that Prom perform"
+    }
+  ],
+  "lastProgressAt": 1773591775891,
+  "startedAt": 1773591668204,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Inspect recent task history",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Review self-improvement signals",
+        "status": "done"
+      },
+      {
+        "id": "p3",
+        "text": "Draft report and proposals",
+        "status": "done"
+      },
+      {
+        "id": "p4",
+        "text": "Log reflection note",
+        "status": "done"
+      },
+      {
+        "id": "p5",
+        "text": "Run Self Improve",
+        "status": "done"
+      },
+      {
+        "id": "p6",
+        "text": "Run Self Improve",
+        "status": "done"
+      },
+      {
+        "id": "p7",
+        "text": "Run Self Improve",
+        "status": "done"
+      },
+      {
+        "id": "p8",
+        "text": "Run Schedule Job",
+        "status": "done"
+      },
+      {
+        "id": "p9",
+        "text": "Run List Directory",
+        "status": "done"
+      },
+      {
+        "id": "p10",
+        "text": "Run Self Improve",
+        "status": "done"
+      },
+      {
+        "id": "p11",
+        "text": "Run Read File",
+        "status": "done"
+      }
+    ],
+    "updatedAt": 1773591775857
+  },
+  "lastToolCall": "write_note({\"content\":\"Weekly review pattern: scheduled runs are succeeding most when promp)",
+  "lastToolCallAt": 1773591722940,
+  "finalSummary": "# Weekly Self-Improvement Performance Review\n**Window:** 2026-03-08 to 2026-03-15  \n**Run date:** 2026-03-15\n\n## Summary\nThis was a noisy but revealing week. The strongest pattern is that Prom performs well when scheduled jobs have **tight prompts, concrete outputs, and one clear tool path**, but degrades when jobs rely on **placeholder HEARTBEATs, weak verification, or “say done” style completion language**. Formal self-improvement telemetry is still sparse, so the best evidence came from task ",
+  "completedAt": 1773591775889
+}

@@ -1,0 +1,18 @@
+{
+  "id": "f8a34412-a0df-432e-8471-4d9d354e37dd",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey claw",
+      "timestamp": 1771721074763
+    },
+    {
+      "role": "assistant",
+      "content": "The rules state: \"Output the node_call block immediately. No explanation before or after it.\" But that",
+      "timestamp": 1771721111696
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771721074764,
+  "lastActiveAt": 1771721111696
+}

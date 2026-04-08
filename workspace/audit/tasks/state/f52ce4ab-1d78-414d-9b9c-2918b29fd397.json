@@ -1,0 +1,54 @@
+{
+  "id": "f52ce4ab-1d78-414d-9b9c-2918b29fd397",
+  "title": "PG Ops Coordinator: Remediate the failed scheduled-run audit output. Produce a clean, final operatio",
+  "prompt": "Remediate the failed scheduled-run audit output. Produce a clean, final operations status pack for the latest completed scheduled run with exactly these sections and no extra text: runner_agent_id, run_goal_intent, accomplished (yes/no + one-sentence evidence), artifacts_created_or_updated (paths), blockers_or_issues, required_followups (agent_id + task), owner_escalation_needed (yes/no + reason). Use concrete evidence references and ensure it is decision-ready for manager action.",
+  "sessionId": "team_dispatch_pg_ops_coordinator_v1_1774508540941",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "Remediate the failed scheduled-run audit output. Produce a clean, final operations status pack for the latest completed ",
+      "status": "done",
+      "completedAt": 1774508593412,
+      "notes": "runner_agent_id  \n`pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`)\n\nrun_goal_intent  \nAudit the latest completed scheduled run for team `team_mn74d1g9_0f4d45` and return a concise "
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774508541007,
+      "type": "status_push",
+      "content": "Task created: PG Ops Coordinator: Remediate the failed scheduled-run audit output. Produce a clean, final operatio"
+    },
+    {
+      "t": 1774508593412,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"runner_agent_id  \\n`pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`)\\n\\nrun_goal_intent  \\nAudit the latest completed scheduled run for team `team_mn74d1g9_0f4d45` and return a concise \"}]"
+    },
+    {
+      "t": 1774508593415,
+      "type": "status_push",
+      "content": "Done: runner_agent_id  \n`pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`)\n\nrun_goal_intent  \nAudit the latest completed scheduled run for team `team_mn74d1g9_0f4d45` and return a concise "
+    }
+  ],
+  "lastProgressAt": 1774508593415,
+  "startedAt": 1774508541007,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1774508541017
+  },
+  "finalSummary": "runner_agent_id  \n`pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`)\n\nrun_goal_intent  \nAudit the latest completed scheduled run for team `team_mn74d1g9_0f4d45` and return a concise operations status pack (evidence: `memory/2026-03-26.md:1193-1200`).\n\naccomplished (yes/no + one-sentence evidence)  \n**No** — the run returned a raw file/log dump instead of the required decision-ready structured pack fields (evidence: `memory/2026-03-26.md:1187`, corroborated by non-compliance called out at `1207-1208`).\n\nartifacts_created_or_updated (paths)  \n- `teams/team_mn74d1g9_0f4d45/workspace/README.md`  \n- `tool_audit.log`  \n- `memory/2026-03-26-intraday-notes.md`  \n- `memory/2026-03-26.md`  \n(evidence chain: run dump at `memory/2026-03-26.md:1187`; validated in fact-check response at `1226-1227`)\n\nblockers_or_issues  \n- Output schema non-compliance (required sections missing in the failed run).  \n- Evidence targeting drift (broad log dump vs latest completed scheduled-run proof chain).  \n- Reliability issue: repeat prompt required to get structured audit behavior (evidence: manager retry at `1193-1200` after failed output at `1187`).\n\nrequired_followups (agent_id + task)  \n- `pg_ops_coordinator_v1` + Enforce fixed audit response template for scheduled-run reviews (exact required fields only, with line-referenced proof).  \n- `pg_growth_analyst_v1` + Add QC gate: verify runner/goal/completion/artifacts before Ops posts final manager-facing pack.\n\nowner_escalation_needed (yes/no + reason)  \n**Yes** — this was a failed scheduled audit with repeat prompt dependency before compliant structure/decision quality, so manager should require template/QC guardrails on next scheduled run.",
+  "completedAt": 1774508593414
+}

@@ -1,0 +1,16 @@
+{
+  "id": "4622ff2a-8470-483a-9e62-6820a654d6ae",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw",
+      "timestamp": 1773538094480
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1773538094481,
+  "lastActiveAt": 1773538094481,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 9
+}

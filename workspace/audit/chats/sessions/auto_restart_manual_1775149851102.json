@@ -1,0 +1,21 @@
+{
+  "id": "auto_restart_manual_1775149851102",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Restart complete — Prometheus is back up, and Telegram-triggered boot finished successfully. This was a quick restart path (no file changes, no proposal/repair artifacts), focused on reinitializing runtime services and restoring the messaging loop.\n\nGateway looks reattached from the restart context, and Telegram polling should be resumed; what do you want me to verify next: inbound message handling, outbound send, or full round-trip?",
+      "timestamp": 1775149855305
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775149851114,
+  "lastActiveAt": 1775149855305,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 131,
+  "activatedToolCategories": [
+    "browser",
+    "scheduling"
+  ]
+}

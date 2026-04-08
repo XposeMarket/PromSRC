@@ -1,0 +1,15 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Fix workflow prompt truncation — raise extraChars budget",
+  "summary": "PROMPT_BUDGET_FULL.extraChars is 1,000 chars but BASE_WORKFLOW_PROMPT is ~3,800 chars. Rules 5–9 are silently dropped every turn. Raise extraChars to 4,500 and totalChars to 6,000.",
+  "details": "In src/config/soul-loader.ts, the PROMPT_BUDGET_FULL constant caps extraChars at 1,000. The workflow prompt built in src/config/prompts.ts (BASE_WORKFLOW_PROMPT) is approximately 3,800 characters and is passed as extraInstructions to buildSystemPrompt(). The clampText() call inside buildSystemPrompt silently truncates it to 1,000 chars, meaning Rules 5–9 (status/memory, ambiguity, post-action reporting, user_message relay, credential link relay) are never injected into the context. This is a silent data loss bug — the rules are written but never seen by the model.\n\nFix: raise PROMPT_BUDGET_FULL.extraChars from 1000 to 4500, and raise totalChars from 3600 to 6000. The env var overrides (PROMETHEUS_PROMPT_TOTAL_CHARS) still take precedence, so production deployments with custom budgets are unaffected.",
+  "sourceAgentId": "unknown",
+  "affectedFiles": [],
+  "requiresBuild": false,
+  "id": "prop_1773594095888_425a5f",
+  "status": "denied",
+  "createdAt": 1773594095889,
+  "updatedAt": 1773594590643,
+  "decidedAt": 1773594590643
+}

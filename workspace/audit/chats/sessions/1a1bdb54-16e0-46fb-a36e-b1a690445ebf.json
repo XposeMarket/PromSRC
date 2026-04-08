@@ -1,0 +1,41 @@
+{
+  "id": "1a1bdb54-16e0-46fb-a36e-b1a690445ebf",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you give me a visual of all the runtime prompts youre currently getting",
+      "timestamp": 1774584651641
+    },
+    {
+      "role": "assistant",
+      "content": "```mermaid\nflowchart TD\n  A[Runtime Prompt Stack]\n\nA --> S[System Prompt]\n  S --> S1[Global assistant rules]\n  S --> S2[Tooling + channel constraints]\n\nA --> D[Developer Prompt]\n  D --> D1[Identity: Prom in Prometheus]\n  D --> D2[Date/time context]\n  D --> D3[Behavior rules<br/>- concise by default<br/>- no unnecessary repo links]\n  D --> D4[Planning rule<br/>declare_plan for 2+ tool calls]\n  D --> D5[Skill check required before every response]\n\nA --> U[Injected User Profiles]\n  U --> U1[USER.md<br/>identity + preferences]\n  U --> U2[SOUL.md<br/>core principles]\n  U --> U3[BUSINESS.md<br/>canonical business context]\n\nA --> P[Project Runtime Context]\n  P --> P1[Project: Prometheus Self Improving]\n  P --> P2[Current feature focus:<br/>Background Agents]\n  P --> P3[Mandatory rule:<br/>update CONTEXT.md when new project info appears]\n\nA --> T[Runtime Tool Envelope]\n  T --> T1[Full tool catalog]\n  T --> T2[Execution constraints per tool]\n  T --> T3[Special MCP integrations<br/>(Supabase, Vercel, etc.)]\n\nA --> K[Skill Runtime Envelope]\n  K --> K1[58 skills available]\n  K --> K2[Must run skill_list first for task-like requests]\n  K --> K3[Must skill_read relevant skill before acting]\n\nA --> C[Conversation Turn Context]\n  C --> C1[Your latest request]\n  C --> C2[Goal reminder injection]\n```",
+      "timestamp": 1774584689589
+    },
+    {
+      "role": "user",
+      "content": "how can i install mermaid - or can you install it with your tools? - path is \"D:/Prometheus\"",
+      "timestamp": 1774584735230
+    },
+    {
+      "role": "assistant",
+      "content": "Done — I installed it for you in `D:\\Prometheus`.\n\nInstalled package:\n- `mermaid@11.13.0` (verified with `npm ls mermaid --depth=0`)\n\nIf you want to do it manually next time, from `D:\\Prometheus` run:\n```bash\nnpm install mermaid\n```\n\nWant me to also add a tiny `mermaid` test script (or HTML file) in the project so you can quickly confirm rendering works in-browser?",
+      "timestamp": 1774584938092
+    },
+    {
+      "role": "user",
+      "content": "wow that was great go ahead and run npm run build and then restart gateway",
+      "timestamp": 1774584961596
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Not connected to OpenAI. Go to Settings → Models → OpenAI Codex and click Connect.",
+      "timestamp": 1774585095787
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774584651641,
+  "lastActiveAt": 1774585095788,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 611
+}

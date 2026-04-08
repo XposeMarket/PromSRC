@@ -1,0 +1,37 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Scope mandatory skill checks to task/tool turns; skip conversational replies",
+  "summary": "Adjust runtime prompt policy so skill_list/skill_read are required for task-like/tool-executing requests, but not for pure conversational turns (e.g., greetings, quick acknowledgements). This prevents unnecessary tool calls while preserving skill discipline where execution risk exists.",
+  "details": "## Why this change\nCurrent runtime behavior is over-constrained by a universal requirement that effectively triggers skill checks even on pure conversational messages (e.g., “Hey prom”). This causes unnecessary tool calls and latency/noise in simple chats. We should keep strict skill gating for execution contexts, while explicitly exempting non-task conversational turns.\n\n## Exact source edits\n1) **`src/gateway/prompt-context.ts`**\n   - Locate the injected “SKILL CHECK” policy block that currently states skill checks are required before every response.\n   - Replace that wording with conditional gating:\n     - Required when the request is task-like, tool-using, or multi-step.\n     - Optional/skip for pure conversational turns (greeting, acknowledgement, short Q&A not requiring execution).\n   - Preserve existing direction to use `skill_list` + `skill_read(id)` when a relevant skill exists.\n\n   **Line references to update:**\n   - `src/gateway/prompt-context.ts` around the prompt assembly section that injects the SKILLS policy text (the block containing/adjacent to the phrase similar to “SKILL CHECK — REQUIRED BEFORE EVERY RESPONSE”).\n\n2) **`src/gateway/chat/chat-helpers.ts`**\n   - Keep existing intent detection helpers and ensure policy text aligns with runtime heuristics already present for distinguishing execution-like requests vs conversational ones.\n   - No behavior change required to tool execution guards unless a mismatch is found; if mismatch exists, minimally update the helper/policy bridge comment or condition so greeting-like turns do not force skill tool calls.\n\n   **Relevant existing references reviewed:**\n   - `src/gateway/chat/chat-helpers.ts:599-618` (`isExecutionLikeRequest`, `isBrowserAutomationRequest`, `isDesktopAutomationRequest`)\n   - `src/gateway/chat/chat-helpers.ts:652-656` (`isContinuationCue`)\n\n3) **`src/gateway/skills-runtime/skills-manager.ts`**\n   - No direct logic change required unless prompt injection currently hard-codes “every turn” semantics here; if so, update comments/docs only to reflect conditional policy.\n\n   **Relevant existing references reviewed:**\n   - `src/gateway/skills-runtime/skills-manager.ts:8-11` (comment states every turn injects a short skills policy)\n   - `src/gateway/skills-runtime/skills-manager.ts:181-185` (message-based matching API)\n\n## Deterministic behavior after patch\n- Message: “Hey prom” → assistant responds conversationally with **no mandatory `skill_list` call**.\n- Message requiring tools/tasks (file edits, automation, research, scraping, multi-step execution) → assistant performs skill check workflow (`skill_list` then `skill_read(id)` when relevant) before execution.\n- Existing tool safety and execution classification remain unchanged except where needed to align with the prompt rule.\n\n## Acceptance tests\n1. **Conversational smoke test**\n   - Input: “Hey prom”\n   - Expect: direct conversational response, no skill-check tool calls.\n2. **Simple Q&A test**\n   - Input: “What day is it?”\n   - Expect: direct answer, no skill-check tool calls.\n3. **Task/tool test**\n   - Input: “Read SELF.md and summarize src change protocol.”\n   - Expect: skill check path still enforced before task execution.\n4. **Automation test**\n   - Input: “Open github.com and search for X.”\n   - Expect: skill check still enforced; browser workflow unaffected.\n5. **Regression test**\n   - Validate no changes to proposal requirements or src-edit guardrails.\n\n## Risks and compatibility\n- **Risk:** Over-broad conversational exemption could skip useful skills on borderline requests.\n  - **Mitigation:** Restrict exemption to clearly non-task turns; maintain current execution intent detectors.\n- **Compatibility:** Backward-compatible for task execution; only reduces unnecessary tool invocations on non-execution turns.\n",
+  "sourceAgentId": "1f0613a3-045c-44f1-9cd5-235ac1e3e1a4",
+  "sourceSessionId": "1f0613a3-045c-44f1-9cd5-235ac1e3e1a4",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/prompt-context.ts",
+      "action": "edit",
+      "description": "Change SKILL CHECK policy text from universal per-response requirement to conditional task/tool requirement with conversational exemption."
+    },
+    {
+      "path": "src/gateway/chat/chat-helpers.ts",
+      "action": "edit",
+      "description": "If needed, align helper/policy bridge so greeting-like and pure conversational turns do not force skill tools."
+    },
+    {
+      "path": "src/gateway/skills-runtime/skills-manager.ts",
+      "action": "edit",
+      "description": "If needed, update comments/doc semantics to match conditional skill-check policy."
+    }
+  ],
+  "diffPreview": "- SKILL CHECK — REQUIRED BEFORE EVERY RESPONSE\n+ SKILL CHECK — REQUIRED FOR TASK/TOOL/MULTI-STEP REQUESTS\n+ For pure conversational turns (greetings, acknowledgements, direct non-execution Q&A), respond directly without mandatory skill tool calls.\n",
+  "estimatedImpact": "Reduces unnecessary skill tool calls on conversational turns, improving responsiveness and lowering tool noise while preserving safety/discipline for execution tasks.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved patch in src/ with minimal, targeted edits: update skills policy injection text in gateway/prompt-context.ts to conditional task/tool gating with explicit conversational exemption; align any bridging logic/comments in gateway/chat/chat-helpers.ts and gateway/skills-runtime/skills-manager.ts only if required for consistency. Keep behavior deterministic as specified in acceptance tests. Run npm run build and report changed files + line ranges.",
+  "id": "prop_1774223432987_759ee7",
+  "status": "executing",
+  "createdAt": 1774223432987,
+  "updatedAt": 1774223464984,
+  "decidedAt": 1774223464977,
+  "executorTaskId": "proposal_prop_1774223432987_759ee7"
+}

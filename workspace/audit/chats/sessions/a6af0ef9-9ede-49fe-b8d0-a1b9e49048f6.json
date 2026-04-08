@@ -1,0 +1,21 @@
+{
+  "id": "a6af0ef9-9ede-49fe-b8d0-a1b9e49048f6",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom so this project is gonna be where I plan out all the new features and everything with you so i can keep it all in line together etc",
+      "timestamp": 1774543398274
+    },
+    {
+      "role": "assistant",
+      "content": "Done.",
+      "timestamp": 1774543433921
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774543398275,
+  "lastActiveAt": 1774543433921,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 54
+}

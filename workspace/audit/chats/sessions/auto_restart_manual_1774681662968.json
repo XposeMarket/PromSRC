@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774681662968",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "**✅ Prometheus gateway rebooted and Telegram polling resumed.**\n\nThe restart picked up three completed tasks from this morning:\n- **Tool pairing fix** in Anthropic adapter (deterministic tool_use/tool_result tracking)\n- **Switch-model hardening** (fail-open behavior + dynamic provider wording)\n- **Intraday notes injection** (removed truncation, full notes now in interactive context)\n\nAll builds verified. What would you like me to check or continue with?",
+      "timestamp": 1774681666481
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774681663038,
+  "lastActiveAt": 1774681666482,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 137,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "auto_restart_manual_1775336090521",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Hey Raul — Prometheus is back up and Telegram polling is live. The restart was clean with no file changes, so you're running the same build as before. What would you like me to verify or pick up next?",
+      "timestamp": 1775336092704
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775336090600,
+  "lastActiveAt": 1775336092704,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 64,
+  "activatedToolCategories": [
+    "browser",
+    "scheduling"
+  ]
+}

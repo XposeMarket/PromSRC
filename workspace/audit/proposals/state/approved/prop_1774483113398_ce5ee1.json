@@ -1,0 +1,32 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Deterministic Telegram-origin restart routing for post-boot completion",
+  "summary": "Ensure hot-restart completion routing preserves Telegram origin/channel identity and avoids default startup-session fallback when restart was initiated from Telegram.",
+  "details": "## Why this change\nWhen a restart is triggered from Telegram, the current boot flow can route completion/notify output to the default startup session instead of Telegram. This creates wrong-channel confirmations and breaks operator trust. We need deterministic origin-aware routing with no fallback ambiguity.\n\nSource evidence (current files read):\n- `src/gateway/lifecycle.ts` defines `RestartContext` and persisted restart metadata used at next boot.\n- `src/gateway/boot.ts` hot-restart path currently calls `handleChat(..., restartCtx.previousSessionId || 'boot-startup', ...)`, which allows Telegram-initiated restarts with missing session id to fall back to startup session.\n\n## Exact source edits\n1) File: `src/gateway/lifecycle.ts`\n\nEdit A — extend `RestartContext` shape with explicit Telegram origin metadata\n- Ensure restart context includes:\n  - `previousTelegramChatId?: string`\n  - `previousTelegramUserId?: number`\n- (These fields are optional for backward compatibility.)\n\nEdit B — persist Telegram origin fields when saving restart context\n- In the restart-context persistence object, include:\n  - `previousTelegramChatId: sessionContext?.telegramChatId`\n  - `previousTelegramUserId: sessionContext?.telegramUserId`\n- Preserve existing previous session/channel/origin persistence.\n\n2) File: `src/gateway/boot.ts`\n\nEdit A — import Telegram origin type\n- Update session-context import to include `SESSION_ORIGIN_TELEGRAM` alongside existing symbols.\n\nEdit B — replace hardcoded startup routing with resolved context target\n- Replace branchy fallback logic with deterministic resolved values:\n  - `resolvedChannel = restartContext.previousChannel || 'web'`\n  - `resolvedOrigin = restartContext.previousOrigin || SESSION_ORIGIN_API`\n  - `resolvedSessionId = restartContext.previousSessionId || (resolvedChannel === 'telegram' ? 'telegram-bootstrap' : 'boot-startup')`\n- Build `postRestartContext` from resolved values.\n\nEdit C — restore Telegram identity fields before setting current session context\n- If channel/origin indicates Telegram:\n  - set `postRestartContext.telegramChatId = restartContext.previousTelegramChatId`\n  - set `postRestartContext.telegramUserId = restartContext.previousTelegramUserId`\n  - force `postRestartContext.origin = SESSION_ORIGIN_TELEGRAM`\n- Expand routing log payload to include telegram identifiers.\n\n## Deterministic behavior after patch\n- If restart originates from Telegram and prior session data exists, post-restart completion is always emitted with:\n  - `channel='telegram'`\n  - `origin=SESSION_ORIGIN_TELEGRAM`\n  - restored `telegramChatId` / `telegramUserId`\n- If prior session id is missing:\n  - Telegram channel resolves to `sessionId='telegram-bootstrap'`\n  - Non-Telegram resolves to `sessionId='boot-startup'`\n- No path hardcodes `boot-startup` for Telegram completions.\n- Non-Telegram restart routing remains unchanged except deterministic defaulting via resolved channel/origin/session id.\n\n## Acceptance tests\n1. Telegram-origin restart happy path\n   - Trigger restart from Telegram.\n   - After reboot, verify boot routing log contains:\n     - `channel: 'telegram'`\n     - `origin: SESSION_ORIGIN_TELEGRAM`\n     - non-empty `telegramChatId` and `telegramUserId` (when present before restart)\n   - Verify completion message appears in Telegram chat.\n\n2. Telegram restart with missing `previousSessionId`\n   - Omit `previousSessionId` in persisted restart context.\n   - Reboot.\n   - Verify routing uses `sessionId='telegram-bootstrap'` and still targets Telegram.\n\n3. Web/API-origin restart regression check\n   - Trigger restart from web/API.\n   - Verify routing uses previous channel/origin; if missing, defaults to:\n     - `channel='web'`\n     - `origin=SESSION_ORIGIN_API`\n     - `sessionId='boot-startup'`\n\n4. Type safety/build\n   - Run `npm run build` successfully with added restart-context fields and updated imports.\n\n## Risks and compatibility\n- Low risk: changes are scoped to restart-context serialization and boot-time session restoration.\n- Backward compatibility: optional new fields (`previousTelegramChatId`, `previousTelegramUserId`) do not break older persisted contexts; undefined values are tolerated.\n- Operational risk: if Telegram identifiers were absent at restart-time, routing still correctly marks Telegram origin/channel but may rely on transport defaults for delivery.",
+  "sourceAgentId": "b9c31663-cc14-4c4d-a8d4-0830ed84c61a",
+  "sourceSessionId": "b9c31663-cc14-4c4d-a8d4-0830ed84c61a",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/lifecycle.ts",
+      "action": "edit",
+      "description": "Extend and persist restart context metadata for Telegram identity restoration."
+    },
+    {
+      "path": "src/gateway/boot.ts",
+      "action": "edit",
+      "description": "Deterministic hot-restart routing resolution and Telegram-origin context restoration."
+    }
+  ],
+  "diffPreview": "- Boot fallback can route Telegram-origin completion to 'boot-startup' when previous session is missing.\n+ Introduce resolvedChannel/resolvedOrigin/resolvedSessionId defaults, with Telegram-specific session fallback 'telegram-bootstrap'.\n+ Restore telegramChatId/telegramUserId and force SESSION_ORIGIN_TELEGRAM when restart origin/channel is Telegram.\n+ Persist Telegram identifiers in restart context so post-restart channel routing is origin-faithful.",
+  "estimatedImpact": "Eliminates wrong-channel restart confirmations for Telegram-triggered restarts and improves operator trust with deterministic post-restart routing.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Apply the approved src edits exactly as described in the proposal details for src/gateway/lifecycle.ts and src/gateway/boot.ts. Preserve existing behavior outside restart routing/context handling. Run npm run build, report results, and if successful restart gateway via the normal restart flow.",
+  "id": "prop_1774483113398_ce5ee1",
+  "status": "executing",
+  "createdAt": 1774483113398,
+  "updatedAt": 1774483126223,
+  "decidedAt": 1774483126214,
+  "executorTaskId": "proposal_prop_1774483113398_ce5ee1"
+}

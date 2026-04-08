@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774660499524",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "1) **Restart/build status:** Hot restart completed successfully after the manual `/restart`; gateway is up and Telegram polling has resumed.\n\n2) **What changed:** Internal runtime refresh only — no file changes, no proposal work, and no repair work were applied.\n\n3) **What should I verify next?** If you want, I can now run a quick end-to-end check (Telegram receive/send path, tool routing behavior, or a specific feature test).",
+      "timestamp": 1774660505216
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774660499597,
+  "lastActiveAt": 1774660505217,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 129,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

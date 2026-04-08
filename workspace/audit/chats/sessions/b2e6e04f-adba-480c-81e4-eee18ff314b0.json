@@ -1,0 +1,32 @@
+{
+  "id": "b2e6e04f-adba-480c-81e4-eee18ff314b0",
+  "history": [
+    {
+      "role": "user",
+      "content": "hi",
+      "timestamp": 1775090172261
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul 👋",
+      "timestamp": 1775090175631
+    },
+    {
+      "role": "user",
+      "content": "hows it going",
+      "timestamp": 1775090181349
+    },
+    {
+      "role": "assistant",
+      "content": "Going well — sharp and ready. You?",
+      "timestamp": 1775090183858
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775090172262,
+  "lastActiveAt": 1775090183858,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 43
+}

@@ -1,0 +1,40 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Scope proposal pending-actions to originating chat session only",
+  "summary": "Fix pending-action leakage across chats by attaching source session metadata to proposals and filtering proposal-created events client-side by current session.",
+  "details": "## Problem\n`proposal_created` events currently broadcast to all connected chat sessions without origin session context. As a result, the pending action indicator appears in every chat session, even when the proposal was created in only one session.\n\n## Proposed implementation\n\n### 1) Persist proposal origin session\n- **File:** `src/gateway/proposals/proposal-types.ts`\n- Add optional field to `Proposal`:\n  - `sourceSessionId?: string`\n\n### 2) Capture source session at proposal creation time\n- **File:** `src/gateway/tools/write-proposal.ts` (or the tool handler where `createProposal` is invoked)\n- Ensure the current runtime/chat `sessionId` is passed into the proposal creation payload as `sourceSessionId`.\n- Keep backward compatibility: if unavailable, leave undefined.\n\n### 3) Include session context in broadcast payload\n- **File:** `src/gateway/proposals/proposal-store.ts`\n- In `createProposal()`, when emitting `proposal_created`, include:\n  - `sessionId: proposal.sourceSessionId`\n- Do not change global transport semantics yet; only enrich payload to enable precise filtering.\n\n### 4) Client-side filter for pending action rendering\n- **File:** Chat UI websocket/event handler file(s) (likely under `src/gateway/ui/*` or frontend state store)\n- When handling `proposal_created`, only attach/show pending proposal action if:\n  - `event.sessionId` exists **and** equals `currentSessionId`\n- Preserve compatibility:\n  - If `event.sessionId` is missing (legacy proposals), avoid cross-session leakage by defaulting to no pending-action injection unless event source can be inferred safely.\n\n### 5) Optional hardening tests\n- Add/adjust tests to verify:\n  - Proposal created in Session A shows pending action in A.\n  - Session B does not show it.\n  - Legacy event without `sessionId` does not fan out pending actions.\n\n## Notes\n- This is a targeted behavior fix with minimal blast radius.\n- Existing proposal approval workflow remains unchanged.\n- No migration required since new field is optional.",
+  "sourceAgentId": "f35a7837-2033-47ed-80cc-e15675c1c7ed",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/proposals/proposal-types.ts",
+      "action": "edit",
+      "description": "Add optional sourceSessionId to Proposal type."
+    },
+    {
+      "path": "src/gateway/tools/write-proposal.ts",
+      "action": "edit",
+      "description": "Pass current sessionId into proposal creation metadata."
+    },
+    {
+      "path": "src/gateway/proposals/proposal-store.ts",
+      "action": "edit",
+      "description": "Include source session in proposal_created event payload."
+    },
+    {
+      "path": "src/gateway/ui/**",
+      "action": "edit",
+      "description": "Filter proposal-created pending action display by current session ID."
+    }
+  ],
+  "diffPreview": "// proposal-types.ts\nexport interface Proposal {\n  id: string;\n  // ...existing fields\n  sourceSessionId?: string;\n}\n\n// write-proposal.ts (handler)\nawait proposalStore.createProposal({\n  ...input,\n  sourceSessionId: context.sessionId,\n});\n\n// proposal-store.ts\nbroadcastWS({\n  type: 'proposal_created',\n  proposal,\n  sessionId: proposal.sourceSessionId,\n});\n\n// chat event handler\nif (event.type === 'proposal_created') {\n  if (!event.sessionId || event.sessionId !== currentSessionId) return;\n  showPendingAction(event.proposal);\n}",
+  "estimatedImpact": "Eliminates cross-session pending-action noise; restores correct per-chat proposal UX and reduces user confusion immediately.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved patch to scope proposal pending-actions to the originating chat session only.\n\n1) Read these files first:\n- src/gateway/proposals/proposal-types.ts\n- src/gateway/tools/write-proposal.ts (or actual write_proposal handler)\n- src/gateway/proposals/proposal-store.ts\n- frontend/chat websocket event handler file(s) that consume `proposal_created`\n\n2) Implement:\n- Add optional `sourceSessionId?: string` on Proposal.\n- Ensure proposal creation path from write_proposal passes runtime session ID.\n- Emit `sessionId` on `proposal_created` events from proposal-store using proposal.sourceSessionId.\n- Update UI/event consumer to only create/show pending action when event.sessionId matches the current chat session ID.\n- For missing sessionId events, do NOT inject pending actions across sessions.\n\n3) Preserve backward compatibility and avoid unrelated refactors.\n\n4) Run build/tests:\n- npm run build (required)\n- Run targeted tests if present around proposals/websocket/chat state.\n\n5) Return a concise change log including exact files/lines edited and any follow-up recommendations.",
+  "id": "prop_1773868747331_8534a7",
+  "status": "denied",
+  "createdAt": 1773868747332,
+  "updatedAt": 1773889820347,
+  "decidedAt": 1773889820347
+}

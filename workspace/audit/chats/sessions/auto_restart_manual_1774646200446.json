@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774646200446",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "✅ Hot restart complete — gateway is back up after the manual restart request. No new code changes were applied in this restart, and the prior build/runtime improvements for fresh unread automated sessions remain in effect.\n\nHigh-level: this restart was to refresh runtime state only (no file edits), so behavior should now reflect the latest already-deployed session routing + notification logic.\n\nWhat do you want me to verify first: a simple reply check (e.g., you send “ping”) or a specific tool availability check (browser/desktop/other)?",
+      "timestamp": 1774646206973
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774646200529,
+  "lastActiveAt": 1774646206974,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 161,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

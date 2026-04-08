@@ -1,0 +1,54 @@
+{
+  "id": "614ed65d-05f7-49a7-8455-921ca1cc48b4",
+  "title": "PG Growth Analyst: QC the newly created audit artifact at teams/team_mn74d1g9_0f4d45/workspace/sche",
+  "prompt": "QC the newly created audit artifact at teams/team_mn74d1g9_0f4d45/workspace/scheduled-run-audit-latest.md against the checklist in teams/team_mn74d1g9_0f4d45/workspace/scheduled_run_audit_qc_checklist.md. Return PASS/FAIL with concise reasons and, if PASS, append a short QC verdict section to the audit file with timestamp and your verdict.",
+  "sessionId": "team_dispatch_pg_growth_analyst_v1_1774508884243",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "QC the newly created audit artifact at teams/team_mn74d1g9_0f4d45/workspace/scheduled-run-audit-latest.md against the ch",
+      "status": "done",
+      "completedAt": 1774508924372,
+      "notes": "FAIL\n\n- The audit artifact does **not** match the required 7-section schema in exact order (`scheduled_run_audit_qc_checklist.md:7-15,52-53`); it uses different sections (`scheduled-run-audit-latest.m"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774508884245,
+      "type": "status_push",
+      "content": "Task created: PG Growth Analyst: QC the newly created audit artifact at teams/team_mn74d1g9_0f4d45/workspace/sche"
+    },
+    {
+      "t": 1774508924372,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"FAIL\\n\\n- The audit artifact does **not** match the required 7-section schema in exact order (`scheduled_run_audit_qc_checklist.md:7-15,52-53`); it uses different sections (`scheduled-run-audit-latest.m\"}]"
+    },
+    {
+      "t": 1774508924374,
+      "type": "status_push",
+      "content": "Done: FAIL\n\n- The audit artifact does **not** match the required 7-section schema in exact order (`scheduled_run_audit_qc_checklist.md:7-15,52-53`); it uses different sections (`scheduled-run-audit-latest.m"
+    }
+  ],
+  "lastProgressAt": 1774508924374,
+  "startedAt": 1774508884245,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1774508884254
+  },
+  "finalSummary": "FAIL\n\n- The audit artifact does **not** match the required 7-section schema in exact order (`scheduled_run_audit_qc_checklist.md:7-15,52-53`); it uses different sections (`scheduled-run-audit-latest.md:3,8,13,20,25`).\n- Required explicit fields are missing as headers: `runner_agent_id`, `run_goal_intent`, `accomplished (yes/no + one-sentence evidence)`, `artifacts_created_or_updated`, `blockers_or_issues`, `required_followups`, `owner_escalation_needed`.\n- Citation standard is only partially met: some artifact claims are file-path-only without line-level citations (`scheduled-run-audit-latest.md:17-18` vs required standard at `scheduled_run_audit_qc_checklist.md:16-19`).\n\nI did **not** append a QC verdict section to the audit file because append is only requested if PASS.",
+  "completedAt": 1774508924373
+}

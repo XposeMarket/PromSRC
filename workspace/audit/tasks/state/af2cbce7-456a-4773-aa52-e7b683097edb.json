@@ -1,0 +1,65 @@
+{
+  "id": "af2cbce7-456a-4773-aa52-e7b683097edb",
+  "title": "SRC Plan Architect: Using src/ evidence, create a phased execution plan for addressing: (A) all Smal",
+  "prompt": "Using src/ evidence, create a phased execution plan for addressing: (A) all SmallClaw legacy references by priority and (B) the bug-risk findings from static review. Include Phase 0/1/2, dependencies, risk controls, and acceptance checklist per phase.",
+  "sessionId": "team_dispatch_src_plan_architect_v1_1774472671031",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "Using src/ evidence, create a phased execution plan for addressing: (A) all SmallClaw legacy references by priority and ",
+      "status": "done",
+      "completedAt": 1774472765542,
+      "notes": "## Phased Execution Plan (src/-evidence based)\n\n### Evidence baseline (for prioritization)\n- Legacy naming footprint: **246 matches across 164 files** (`smallclaw|small claw|small_claw`, case-insensit"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774472671035,
+      "type": "status_push",
+      "content": "Task created: SRC Plan Architect: Using src/ evidence, create a phased execution plan for addressing: (A) all Smal"
+    },
+    {
+      "t": 1774472765542,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"## Phased Execution Plan (src/-evidence based)\\n\\n### Evidence baseline (for prioritization)\\n- Legacy naming footprint: **246 matches across 164 files** (`smallclaw|small claw|small_claw`, case-insensit\"}]"
+    },
+    {
+      "t": 1774472765546,
+      "type": "status_push",
+      "content": "Done: ## Phased Execution Plan (src/-evidence based)\n\n### Evidence baseline (for prioritization)\n- Legacy naming footprint: **246 matches across 164 files** (`smallclaw|small claw|small_claw`, case-insensit"
+    }
+  ],
+  "lastProgressAt": 1774472765546,
+  "startedAt": 1774472671035,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Run Grep Source",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Run Read Source",
+        "status": "done"
+      }
+    ],
+    "updatedAt": 1774472765428
+  },
+  "finalSummary": "## Phased Execution Plan (src/-evidence based)\n\n### Evidence baseline (for prioritization)\n- Legacy naming footprint: **246 matches across 164 files** (`smallclaw|small claw|small_claw`, case-insensitive scan).\n- Confirmed high-risk runtime issues from static review/evidence:\n  - `src/gateway/routes/goals.router.ts:79` → `require('./goal-decomposer')` (module not in `routes/`).\n  - `src/gateway/routes/goals.router.ts:168` → `require('./prompt-mutation')` (module not in `routes/`).\n  - `src/gatew",
+  "completedAt": 1774472765544
+}

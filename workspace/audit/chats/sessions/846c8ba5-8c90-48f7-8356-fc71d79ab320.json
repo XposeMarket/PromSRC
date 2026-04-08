@@ -1,0 +1,21 @@
+{
+  "id": "846c8ba5-8c90-48f7-8356-fc71d79ab320",
+  "history": [
+    {
+      "role": "user",
+      "content": "CAN ou show me a visual of all of the runtime prompts and context that the scheduled tasks and tasks get?. send a screenshot of the webui to my telegram after you send the visual",
+      "timestamp": 1774169449493
+    },
+    {
+      "role": "assistant",
+      "content": "```mermaid\nflowchart TD\n  A[Trigger Source] --> B{Execution Type}\n\nB -->|Manual/Interactive request| C[Task run]\n  B -->|Cron/one-shot schedule fires| D[Scheduled job run]\n\n%% Task path\n  C --> C1[Core runtime context]\n  C1 --> C1a[System instructions]\n  C1 --> C1b[Developer/tool rules]\n  C1 --> C1c[User message]\n  C1 --> C1d[Loaded memory files<br/>USER.md / SOUL.md / BUSINESS.md]\n  C1 --> C1e[Tool schemas + policies]\n  C --> C2[Optional: task metadata<br/>goal, step state, task id]\n  C2 --> C3[Prompt assembled for this run]\n\n%% Scheduled path\n  D --> D1[Core runtime context]\n  D1 --> D1a[System instructions]\n  D1 --> D1b[Developer/tool rules]\n  D1 --> D1c[Tool schemas + policies]\n  D --> D2[Job payload context]\n  D2 --> D2a[instruction_prompt<br/>(the ONLY guaranteed job instruction)]\n  D2 --> D2b[schedule metadata<br/>job id, cron, timezone, delivery]\n  D2 --> D2c[subagent_id (optional)]\n  D2 --> D2d[If subagent set:<br/>inject system_prompt + constraints + heartbeat hints]\n  D2 --> D3[Prompt assembled for this run]\n\nC3 --> E[Model executes tools/actions]\n  D3 --> E\n  E --> F[Output delivery<br/>web / telegram / discord / whatsapp]\n```\n\nI’ll now capture and send a WebUI screenshot to your Telegram.",
+      "timestamp": 1774169472946
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774169449494,
+  "lastActiveAt": 1774169472946,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 412
+}

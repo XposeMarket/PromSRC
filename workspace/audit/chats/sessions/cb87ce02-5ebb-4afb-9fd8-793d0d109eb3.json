@@ -1,0 +1,36 @@
+{
+  "id": "cb87ce02-5ebb-4afb-9fd8-793d0d109eb3",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you give me a visual of all the runtime prompts and files youre currently being sent/injected with",
+      "timestamp": 1773864944344
+    },
+    {
+      "role": "user",
+      "content": "hey prom",
+      "timestamp": 1773866173144
+    },
+    {
+      "role": "assistant",
+      "content": "hey prom ⚡",
+      "timestamp": 1773866210845
+    },
+    {
+      "role": "user",
+      "content": "Hey prom",
+      "timestamp": 1773866458462
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul — I’m here. 👋",
+      "timestamp": 1773866469383
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1773864944345,
+  "lastActiveAt": 1773866469383,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 76
+}

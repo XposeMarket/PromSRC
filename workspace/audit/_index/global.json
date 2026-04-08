@@ -1,0 +1,32 @@
+{
+  "generatedAt": "2026-04-08T16:19:31.112Z",
+  "materializer": {
+    "intervalMs": 30000,
+    "lastRunAt": 1775665171109,
+    "filesMirrored": 1605,
+    "copied": 0,
+    "skipped": 1605,
+    "errors": 0
+  },
+  "counts": {
+    "sessionsPreviewed": 80,
+    "tasks": 113,
+    "proposals": 97,
+    "teams": 1,
+    "teamRuns": 3,
+    "chatTranscripts": 0,
+    "chatCompactions": 0
+  },
+  "byDomain": {
+    "chats": 1274,
+    "projects": 2,
+    "tasks": 132,
+    "proposals": 97,
+    "cron": 29,
+    "schedules": 56,
+    "teams": 2,
+    "connections": 2,
+    "startup": 2,
+    "system": 9
+  }
+}

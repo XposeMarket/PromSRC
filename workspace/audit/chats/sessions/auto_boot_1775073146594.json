@@ -1,0 +1,23 @@
+{
+  "id": "auto_boot_1775073146594",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Startup snapshot is healthy but visibility is partial: both task and schedule APIs are currently unavailable, and there’s one blocked item needing assistance (`cdb4a7b0...`) to finish the windows-shell-playbook branding/path/fallback update. Today’s notes emphasize that memory sync correctly no-op’d to avoid duplicate low-signal writes, intraday logs are intermittent (so no-file handling must stay graceful), and recent compaction/debug work clarified runtime directive behavior plus the X→Telegram hang root cause (`browser_send_to_telegram` unknown tool with an unfinished plan step). Where things left off: tighten fallback handling after tool failures, explicitly flag cross-signal status inconsistencies, and complete the blocked playbook update.",
+      "timestamp": 1775073152799
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775073146701,
+  "lastActiveAt": 1775073152799,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 222,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

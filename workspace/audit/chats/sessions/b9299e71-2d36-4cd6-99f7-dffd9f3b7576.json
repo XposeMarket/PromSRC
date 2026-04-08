@@ -1,0 +1,20 @@
+{
+  "id": "b9299e71-2d36-4cd6-99f7-dffd9f3b7576",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom can you go ahead and run a quick web search for me on openclaw - and its latest updates, and also id like you to go ahead and go on my X and like a post about openclaw, and id also like you to write a note saying testing testing for me -",
+      "timestamp": 1775185590830
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775185590830,
+  "lastActiveAt": 1775185590832,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 77,
+  "activatedToolCategories": [
+    "browser"
+  ]
+}

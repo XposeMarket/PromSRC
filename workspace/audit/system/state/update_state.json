@@ -1,0 +1,17 @@
+{
+  "checkedAt": 1775493861869,
+  "mode": "git",
+  "packageName": "prometheus",
+  "currentVersion": "1.0.1",
+  "result": {
+    "mode": "git",
+    "source": "git",
+    "available": false,
+    "message": "No updates available on branch \"main\".",
+    "currentVersion": "1.0.1",
+    "latestVersion": "1feccfa",
+    "branch": "main",
+    "ahead": 0,
+    "behind": 0
+  }
+}

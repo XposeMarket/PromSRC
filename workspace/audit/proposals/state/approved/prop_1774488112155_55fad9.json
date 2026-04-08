@@ -1,0 +1,27 @@
+{
+  "type": "skill_evolution",
+  "priority": "medium",
+  "title": "Fix duplicate frontmatter in src-edit-proposal-rigor skill",
+  "summary": "Repair metadata integrity in src-edit-proposal-rigor by reducing to one valid frontmatter block and preserving behavior.",
+  "details": "Apply a surgical metadata fix to `skills/src-edit-proposal-rigor/SKILL.md`.\n\nScope:\n1. Remove duplicate frontmatter block(s).\n2. Keep one valid YAML frontmatter with consistent keys.\n3. Preserve existing instructional body unless minimally required for frontmatter consistency.\n4. Verify no duplicate top-level metadata sections remain.\n\nAcceptance:\n- Exactly one valid frontmatter block exists.\n- Skill content remains functionally equivalent.",
+  "sourceAgentId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "sourceSessionId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "affectedFiles": [
+    {
+      "path": "skills/src-edit-proposal-rigor/SKILL.md",
+      "action": "edit",
+      "description": "Remove duplicate frontmatter and normalize metadata."
+    }
+  ],
+  "diffPreview": "- Duplicate frontmatter block causing metadata inconsistency.\n+ Single valid frontmatter block with preserved intent.",
+  "estimatedImpact": "Improves skill parsing reliability and prevents metadata-related routing issues.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Edit `skills/src-edit-proposal-rigor/SKILL.md` to ensure there is exactly one valid YAML frontmatter block. Remove duplicate metadata sections and keep instructional content unchanged except for minimal consistency fixes. Return a brief validation note confirming single frontmatter presence.",
+  "id": "prop_1774488112155_55fad9",
+  "status": "executing",
+  "createdAt": 1774488112155,
+  "updatedAt": 1774493275017,
+  "decidedAt": 1774493274902,
+  "executorTaskId": "proposal_prop_1774488112155_55fad9"
+}

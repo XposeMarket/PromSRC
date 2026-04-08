@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774713199804",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "**Prometheus restart complete.** ✓\n\nGateway booted and Telegram polling resumed. No source changes in this cycle — this was a clean restart from Telegram `/restart` command.\n\n**Context from your last session:** You were troubleshooting token overhead and context re-injection behavior. The good news: your earlier fixes (Anthropic adapter pairing, hardened model-switch fail-open, and full intraday notes injection without truncation) are all still in place and verified.\n\n**What do you want me to check or pick up on next?** Are you ready to dive back into the proposal executor task (step 2/4 on the windows-shell-playbook update), or do you want to run a quick verification first?",
+      "timestamp": 1774713204030
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774713199816,
+  "lastActiveAt": 1774713204030,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 202,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

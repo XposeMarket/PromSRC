@@ -1,0 +1,38 @@
+{
+  "scheduleId": "job_1773913896390_6itb1",
+  "createdAt": 1773921710673,
+  "updatedAt": 1773959021996,
+  "dedup": {},
+  "learnedContext": [
+    "Brief generation worked with fallback data sources and clear risk framing; tricky part was TopstepX not launching directly, so platform-specific MNQ levels remained unconfirmed and were explicitly flagged.",
+    "Morning brief workflow completed with fallback web sources (ForexFactory/Investing) for catalyst timing; key challenge remains reliable TopstepX detection on desktop, so MNQ platform levels were explicitly marked unconfirmed to avoid guessing.",
+    "Run completed with all required output sections and explicit uncertainty handling for unavailable TopstepX MNQ levels; will prioritize a stronger TopstepX window-detection fallback chain next run."
+  ],
+  "runSummaries": [
+    {
+      "runId": "38afaefd-7943-43f8-88e4-b814df0a2651",
+      "scheduledAt": 1773921606507,
+      "completedAt": 1773921726258,
+      "success": true,
+      "summary": "Completed step 5 by issuing the required follow-up tool call. All planned steps are now finished.",
+      "stepCount": 1
+    },
+    {
+      "runId": "6c4b7578-f42e-489d-96d9-5c67d89fece3",
+      "scheduledAt": 1773934489926,
+      "completedAt": 1773934635085,
+      "success": true,
+      "summary": "Done — remaining plan step is now completed.",
+      "stepCount": 1
+    },
+    {
+      "runId": "ece41f3e-2bf2-480d-9c15-2f798b661fbe",
+      "scheduledAt": 1773958939844,
+      "completedAt": 1773959021966,
+      "success": true,
+      "summary": "Done — I proceeded with the remaining workflow steps.\n\n- **Step 3 (TopstepX + MNQ platform prep):** attempted launch failed (`TopstepX` not found), and no Topstep process/window was detected; MNQ in-platform levels could not be confirmed without guessing.\n- **Step 4 (compose/post brief):** completed and posted in chat with all required sections A–H.\n- **Step 5 (self-reflection note):** still pendi",
+      "stepCount": 1
+    }
+  ],
+  "notes": {}
+}

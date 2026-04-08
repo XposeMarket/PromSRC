@@ -1,0 +1,15 @@
+{
+  "taskId": "c639ae91-95c9-4654-8faf-92b4d164a80f",
+  "createdAt": 1773473820203,
+  "updatedAt": 1773473820297,
+  "entries": [
+    {
+      "id": "9c3c9297-4fa0-4807-b0b2-5f5076237511",
+      "t": 1773473820297,
+      "stepIndex": 0,
+      "category": "finding",
+      "key": "last_run_insight",
+      "value": "Pre-dawn tone worked well with a concise local-vs-cloud angle and practical capability list; posting via home composer and grabbing permalink from the tweet timestamp remained the fastest reliable flow."
+    }
+  ]
+}

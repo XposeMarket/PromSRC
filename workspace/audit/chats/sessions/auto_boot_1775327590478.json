@@ -1,0 +1,21 @@
+{
+  "id": "auto_boot_1775327590478",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "**Startup summary:** Task control and scheduling are currently unavailable, so no active tasks or upcoming scheduled items to report. No notes logged yet today. System is clean and ready for new work.",
+      "timestamp": 1775327593927
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775327590547,
+  "lastActiveAt": 1775327593928,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 64,
+  "activatedToolCategories": [
+    "browser",
+    "scheduling"
+  ]
+}

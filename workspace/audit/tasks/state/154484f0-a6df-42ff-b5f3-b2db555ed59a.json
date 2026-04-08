@@ -1,0 +1,65 @@
+{
+  "id": "154484f0-a6df-42ff-b5f3-b2db555ed59a",
+  "title": "SRC SmallClaw Reference Finder: Analyze the entire src/ tree and report every reference to SmallClaw naming. Sea",
+  "prompt": "Analyze the entire src/ tree and report every reference to SmallClaw naming. Search for: smallclaw, SmallClaw, small claw, small_claw (case-insensitive). Include exact file:line citations, grouped by file, with short context and risk label (user-visible/internal/harmless).",
+  "sessionId": "team_dispatch_src_smallclaw_ref_finder_v1_1774472160746",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "Analyze the entire src/ tree and report every reference to SmallClaw naming. Search for: smallclaw, SmallClaw, small cla",
+      "status": "done",
+      "completedAt": 1774472355904,
+      "notes": "## SmallClaw Reference Audit (`src/`, case-insensitive)\n\n### Executive summary\n- **Total matches found:** **246** (`smallclaw|small claw|small_claw`, per grep scan)\n- **`small claw` matches:** **0**\n-"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774472160752,
+      "type": "status_push",
+      "content": "Task created: SRC SmallClaw Reference Finder: Analyze the entire src/ tree and report every reference to SmallClaw naming. Sea"
+    },
+    {
+      "t": 1774472355904,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"## SmallClaw Reference Audit (`src/`, case-insensitive)\\n\\n### Executive summary\\n- **Total matches found:** **246** (`smallclaw|small claw|small_claw`, per grep scan)\\n- **`small claw` matches:** **0**\\n-\"}]"
+    },
+    {
+      "t": 1774472355907,
+      "type": "status_push",
+      "content": "Done: ## SmallClaw Reference Audit (`src/`, case-insensitive)\n\n### Executive summary\n- **Total matches found:** **246** (`smallclaw|small claw|small_claw`, per grep scan)\n- **`small claw` matches:** **0**\n-"
+    }
+  ],
+  "lastProgressAt": 1774472355907,
+  "startedAt": 1774472160752,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Run List Source",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Run Grep Source",
+        "status": "done"
+      }
+    ],
+    "updatedAt": 1774472355893
+  },
+  "finalSummary": "## SmallClaw Reference Audit (`src/`, case-insensitive)\n\n### Executive summary\n- **Total matches found:** **246** (`smallclaw|small claw|small_claw`, per grep scan)\n- **`small claw` matches:** **0**\n- **`small_claw` matches:** **1** (`src/gateway/prompt-context.ts:230`, `@Small_Claw_`)\n- **Primary pattern:** mostly legacy env vars, paths (`.smallclaw`), comments/docs, and a few user-visible strings.\n\n## Results grouped by file (exact `file:line`, short context, risk)\n\n> Risk labels: **user-visib",
+  "completedAt": 1774472355906
+}

@@ -1,0 +1,54 @@
+{
+  "id": "5a32f8f2-18fe-4757-aa56-24510a1c58ab",
+  "title": "PG Growth Analyst: For team_mn74d1g9_0f4d45, validate the latest completed scheduled run evidence c",
+  "prompt": "For team_mn74d1g9_0f4d45, validate the latest completed scheduled run evidence chain and return a concise fact-check with:\n- runner_agent_id (proven)\n- intended_goal (proven)\n- completion_status (complete/incomplete + proof)\n- artifacts_touched (proven paths only)\n- confidence (high/medium/low)\nUse concrete evidence references only and keep it under 10 lines.",
+  "sessionId": "team_dispatch_pg_growth_analyst_v1_1774508471962",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "For team_mn74d1g9_0f4d45, validate the latest completed scheduled run evidence chain and return a concise fact-check wit",
+      "status": "done",
+      "completedAt": 1774508530536,
+      "notes": "- **runner_agent_id (proven):** `pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`, plus team chat ops status pack).\n- **intended_goal (proven):** “Audit the latest completed schedule"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774508471965,
+      "type": "status_push",
+      "content": "Task created: PG Growth Analyst: For team_mn74d1g9_0f4d45, validate the latest completed scheduled run evidence c"
+    },
+    {
+      "t": 1774508530536,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"- **runner_agent_id (proven):** `pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`, plus team chat ops status pack).\\n- **intended_goal (proven):** “Audit the latest completed schedule\"}]"
+    },
+    {
+      "t": 1774508530538,
+      "type": "status_push",
+      "content": "Done: - **runner_agent_id (proven):** `pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`, plus team chat ops status pack).\n- **intended_goal (proven):** “Audit the latest completed schedule"
+    }
+  ],
+  "lastProgressAt": 1774508530538,
+  "startedAt": 1774508471965,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1774508471977
+  },
+  "finalSummary": "- **runner_agent_id (proven):** `pg_ops_coordinator_v1` (evidence: `memory/2026-03-26.md:1201-1203`, plus team chat ops status pack).\n- **intended_goal (proven):** “Audit the latest completed scheduled run for team `team_mn74d1g9_0f4d45` and return a concise operations status pack.” (evidence: `memory/2026-03-26.md:1193-1206`).\n- **completion_status:** **incomplete** — required structured audit was not delivered; output was a raw file dump/non-compliant format (evidence: `memory/2026-03-26.md:1187`, `1207-1208`; corroborated by team chat fact pattern).\n- **artifacts_touched (proven paths only):** `teams/team_mn74d1g9_0f4d45/workspace/README.md`, `tool_audit.log`, `memory/2026-03-26-intraday-notes.md`, `memory/2026-03-26.md` (evidence: run output dump at `memory/2026-03-26.md:1187` and team chat transcript).\n- **confidence:** **high** (direct, timestamp-adjacent evidence chain across run output + subsequent structured audit verdict).",
+  "completedAt": 1774508530537
+}
