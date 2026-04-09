@@ -1,12 +1,13 @@
 # Chats Index
 
-Generated: 2026-04-09T02:08:41.242Z
+Generated: 2026-04-09T03:56:31.850Z
 
-- Sessions mirrored: 1310
+- Sessions mirrored: 1309
 - Transcript files: 62
 - Compaction artifacts: 2
 
 ## Recent Sessions
+- brain_dream_2026-04-08 | messages=0 | lastActive=2026-04-09T03:34:42.246Z | summary=no
 - telegram_1799053599 | messages=66 | lastActive=2026-04-09T02:04:32.830Z | summary=no
 - auto_restart_manual_1775700272643 | messages=1 | lastActive=2026-04-09T02:04:32.785Z | summary=no
 - auto_restart_manual_1775695941818 | messages=1 | lastActive=2026-04-09T00:52:21.894Z | summary=no
@@ -86,4 +87,3 @@ Generated: 2026-04-09T02:08:41.242Z
 - auto_restart_manual_1775367693696 | messages=1 | lastActive=2026-04-05T05:41:38.175Z | summary=no
 - auto_restart_manual_1775367408037 | messages=1 | lastActive=2026-04-05T05:37:02.836Z | summary=no
 - 58eea2df-99fa-4697-b29c-949b0f09ed80 | messages=4 | lastActive=2026-04-05T05:01:45.779Z | summary=no
-- auto_restart_manual_1775365303820 | messages=1 | lastActive=2026-04-05T05:01:45.765Z | summary=no

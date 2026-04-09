@@ -1,5 +1,12 @@
 [
   {
+    "id": "brain_dream_2026-04-08",
+    "mtimeMs": 1775705708377.4219,
+    "lastActiveAt": 1775705682246,
+    "historyLength": 0,
+    "hasSummary": false
+  },
+  {
     "id": "telegram_1799053599",
     "mtimeMs": 1775700273626.1016,
     "lastActiveAt": 1775700272830,
@@ -550,13 +557,6 @@
     "mtimeMs": 1775365306290.8828,
     "lastActiveAt": 1775365305779,
     "historyLength": 4,
-    "hasSummary": false
-  },
-  {
-    "id": "auto_restart_manual_1775365303820",
-    "mtimeMs": 1775365306274.88,
-    "lastActiveAt": 1775365305765,
-    "historyLength": 1,
     "hasSummary": false
   }
 ]

@@ -374,6 +374,9 @@
         <div class="memory-page-subtitle">Audit-indexed knowledge web across sessions, tasks, schedules, teams, projects, and durable memory.</div>
       </div>
       <div class="memory-page-actions">
+        <input id="memory-image-input" type="file" accept="image/*" style="display:none" />
+        <button class="memory-action-btn" type="button" onclick="triggerMemoryImageInput()">Image Shape</button>
+        <button class="memory-action-btn" type="button" onclick="shuffleMemoryGraph()">Shuffle Nodes</button>
         <button class="memory-action-btn" type="button" onclick="refreshMemoryGraph(true)">Refresh Index</button>
       </div>
     </div>
@@ -387,9 +390,14 @@
           <canvas id="memory-graph-canvas"></canvas>
           <div id="memory-graph-tooltip" class="memory-graph-tooltip" style="display:none"></div>
           <div id="memory-graph-empty" class="memory-graph-empty">Loading memory graph...</div>
+          <div id="memory-drop-overlay" class="memory-drop-overlay" style="display:none">Drop image to reshape node outline</div>
         </div>
       </div>
-      <aside class="memory-side-panel">
+      <aside id="memory-side-panel" class="memory-side-panel">
+        <div class="memory-side-panel-header">
+          <div class="memory-side-panel-title">Controls</div>
+          <button class="memory-panel-collapse-btn" type="button" onclick="toggleMemoryControlsPanel()">&times;</button>
+        </div>
         <section class="memory-panel-card">
           <div class="memory-panel-title">Filters</div>
           <div class="memory-control-stack">
@@ -401,12 +409,16 @@
             </label>
             <label class="memory-control">
               <span>Minimum edge weight</span>
-              <input id="memory-edge-weight" type="range" min="0" max="100" step="1" value="12" />
-              <div id="memory-edge-weight-value" class="memory-control-hint">0.12+</div>
+              <input id="memory-edge-weight" type="range" min="0" max="100" step="1" value="34" />
+              <div id="memory-edge-weight-value" class="memory-control-hint">0.34+</div>
             </label>
             <label class="memory-control memory-check">
               <input id="memory-show-labels" type="checkbox" checked />
               <span>Show labels for important nodes</span>
+            </label>
+            <label class="memory-control memory-check">
+              <input id="memory-organize-type" type="checkbox" />
+              <span>Organize by type</span>
             </label>
           </div>
         </section>
@@ -427,12 +439,16 @@
             </label>
           </div>
         </section>
-        <section class="memory-panel-card memory-detail-card">
-          <div class="memory-panel-title">Node Detail</div>
-          <div id="memory-detail-panel" class="memory-detail-panel">
-            <div class="memory-detail-empty">Select a node to inspect its summary, source, and related records.</div>
-          </div>
-        </section>
+      </aside>
+      <button id="memory-controls-fab" class="memory-controls-fab" type="button" style="display:none" onclick="toggleMemoryControlsPanel()">Filters</button>
+      <aside id="memory-detail-drawer" class="memory-detail-drawer" style="display:none">
+        <div class="memory-detail-drawer-header">
+          <div class="memory-side-panel-title">Node Detail</div>
+          <button class="memory-panel-collapse-btn" type="button" onclick="closeMemoryDetailDrawer()">&times;</button>
+        </div>
+        <div id="memory-detail-panel" class="memory-detail-panel">
+          <div class="memory-detail-empty">Select a node to inspect its summary, source, and related records.</div>
+        </div>
       </aside>
     </div>
   </div>

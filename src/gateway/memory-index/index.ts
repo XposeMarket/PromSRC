@@ -73,7 +73,7 @@ type RelationItem = {
   id: string;
   fromId: string;
   toId: string;
-  type: 'same_day' | 'same_project' | 'same_source_type' | 'semantic_neighbor';
+  type: 'record_family' | 'same_project' | 'shared_terms' | 'semantic_neighbor';
   score: number;
 };
 
@@ -259,62 +259,131 @@ function recordEmbedding(recordId: string, chunks: Record<string, ChunkItem>): n
   return acc;
 }
 
+function recordTerms(recordId: string, chunks: Record<string, ChunkItem>): string[] {
+  const picked = Object.values(chunks).filter((c) => c.recordId === recordId);
+  const merged: string[] = [];
+  for (const chunk of picked) merged.push(...(chunk.terms || []).slice(0, 24));
+  return uniqTop(merged, 28);
+}
+
+function relRoot(sourcePath: string): string {
+  return String(sourcePath || '').split('/')[0] || '';
+}
+
+function relStem(sourcePath: string): string {
+  const base = path.basename(String(sourcePath || ''), path.extname(String(sourcePath || '')));
+  return base.replace(/\.(jsonl|md)$/i, '').trim().toLowerCase();
+}
+
+function overlapScore(aTerms: string[], bTerms: string[]): { count: number; score: number } {
+  if (!aTerms.length || !bTerms.length) return { count: 0, score: 0 };
+  const a = new Set(aTerms);
+  const b = new Set(bTerms);
+  let shared = 0;
+  for (const term of a) {
+    if (b.has(term)) shared += 1;
+  }
+  const denom = Math.max(1, Math.min(a.size, b.size));
+  return { count: shared, score: shared / denom };
+}
+
 function buildRelations(records: Record<string, RecordItem>, chunks: Record<string, ChunkItem>): RelationItem[] {
   const recs = Object.values(records);
   if (recs.length < 2) return [];
-  const byDay = new Map<string, RecordItem[]>();
   const byProject = new Map<string, RecordItem[]>();
-  const byType = new Map<string, RecordItem[]>();
+  const byFamily = new Map<string, RecordItem[]>();
   const recEmbedding = new Map<string, number[]>();
+  const recTerms = new Map<string, string[]>();
+  const tokenBuckets = new Map<string, string[]>();
 
   for (const r of recs) {
-    if (r.day) {
-      if (!byDay.has(r.day)) byDay.set(r.day, []);
-      byDay.get(r.day)?.push(r);
-    }
     if (r.projectId) {
       if (!byProject.has(r.projectId)) byProject.set(r.projectId, []);
       byProject.get(r.projectId)?.push(r);
     }
-    if (!byType.has(r.sourceType)) byType.set(r.sourceType, []);
-    byType.get(r.sourceType)?.push(r);
+    const familyKey = relStem(r.sourcePath);
+    if (familyKey) {
+      if (!byFamily.has(familyKey)) byFamily.set(familyKey, []);
+      byFamily.get(familyKey)?.push(r);
+    }
     recEmbedding.set(r.id, recordEmbedding(r.id, chunks));
+    const termsForRecord = recordTerms(r.id, chunks);
+    recTerms.set(r.id, termsForRecord);
+    for (const term of termsForRecord.slice(0, 12)) {
+      if (!tokenBuckets.has(term)) tokenBuckets.set(term, []);
+      tokenBuckets.get(term)?.push(r.id);
+    }
   }
 
   const rels: RelationItem[] = [];
-  const addNearbyLinks = (
-    arr: RecordItem[],
-    type: RelationItem['type'],
-    baseScore: number,
-  ): void => {
+  const addNearbyLinks = (arr: RecordItem[], type: RelationItem['type'], baseScore: number): void => {
     if (arr.length < 2) return;
     const sorted = [...arr].sort((a, b) => b.timestampMs - a.timestampMs);
-    for (let i = 0; i < sorted.length - 1; i++) {
+    for (let i = 0; i < sorted.length - 1; i += 1) {
       const a = sorted[i];
-      const b = sorted[i + 1];
-      rels.push({
-        id: id('rel', `${type}:${a.id}:${b.id}`),
-        fromId: a.id,
-        toId: b.id,
-        type,
-        score: baseScore,
-      });
+      for (let j = i + 1; j < Math.min(sorted.length, i + 3); j += 1) {
+        const b = sorted[j];
+        const rootBoost = relRoot(a.sourcePath) === relRoot(b.sourcePath) ? 0.04 : 0;
+        rels.push({
+          id: id('rel', `${type}:${a.id}:${b.id}`),
+          fromId: a.id,
+          toId: b.id,
+          type,
+          score: Number((baseScore - ((j - i - 1) * 0.06) + rootBoost).toFixed(4)),
+        });
+      }
     }
   };
 
-  for (const [, arr] of byDay) addNearbyLinks(arr, 'same_day', 0.68);
-  for (const [, arr] of byProject) addNearbyLinks(arr, 'same_project', 0.86);
-  for (const [, arr] of byType) addNearbyLinks(arr, 'same_source_type', 0.52);
+  for (const [, arr] of byProject) addNearbyLinks(arr, 'same_project', 0.88);
+  for (const [, arr] of byFamily) {
+    if (arr.length < 2) continue;
+    const sameRoot = new Set(arr.map((item) => relRoot(item.sourcePath)));
+    if (sameRoot.size < 2) continue;
+    addNearbyLinks(arr, 'record_family', 0.94);
+  }
 
-  // Semantic neighbor edge: each record points to its best non-self semantic match.
+  const seenSharedPairs = new Set<string>();
+  for (const [term, recordIds] of tokenBuckets) {
+    if (!term || recordIds.length < 2) continue;
+    const uniqueIds = [...new Set(recordIds)].slice(0, 24);
+    for (let i = 0; i < uniqueIds.length - 1; i += 1) {
+      const aId = uniqueIds[i];
+      const a = records[aId];
+      if (!a) continue;
+      for (let j = i + 1; j < uniqueIds.length; j += 1) {
+        const bId = uniqueIds[j];
+        const b = records[bId];
+        if (!b) continue;
+        if (relRoot(a.sourcePath) !== relRoot(b.sourcePath) && String(a.projectId || '') !== String(b.projectId || '')) continue;
+        const pairKey = [aId, bId].sort().join(':');
+        if (seenSharedPairs.has(pairKey)) continue;
+        const overlap = overlapScore(recTerms.get(aId) || [], recTerms.get(bId) || []);
+        if (overlap.count < 3 || overlap.score < 0.2) continue;
+        seenSharedPairs.add(pairKey);
+        rels.push({
+          id: id('rel', `shared_terms:${aId}:${bId}`),
+          fromId: aId,
+          toId: bId,
+          type: 'shared_terms',
+          score: Number((0.52 + Math.min(0.34, overlap.score)).toFixed(4)),
+        });
+      }
+    }
+  }
+
   for (const a of recs) {
     const aVec = recEmbedding.get(a.id) || [];
+    const aTerms = recTerms.get(a.id) || [];
     let best: { recId: string; score: number } | null = null;
     for (const b of recs) {
       if (b.id === a.id) continue;
+      const overlap = overlapScore(aTerms, recTerms.get(b.id) || []);
+      if (overlap.count < 2) continue;
+      if (relRoot(a.sourcePath) !== relRoot(b.sourcePath) && String(a.projectId || '') !== String(b.projectId || '') && overlap.count < 4) continue;
       const bVec = recEmbedding.get(b.id) || [];
       const sim = cosine(aVec, bVec);
-      if (sim <= 0.2) continue;
+      if (sim <= 0.56) continue;
       if (!best || sim > best.score) best = { recId: b.id, score: sim };
     }
     if (best) {
@@ -332,11 +401,11 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
   const seen = new Set<string>();
   const deduped: RelationItem[] = [];
   for (const r of rels) {
-    const k = `${r.type}:${r.fromId}:${r.toId}`;
+    const k = `${r.type}:${[r.fromId, r.toId].sort().join(':')}`;
     if (seen.has(k)) continue;
     seen.add(k);
     deduped.push(r);
-    if (deduped.length >= 8000) break;
+    if (deduped.length >= 5000) break;
   }
   return deduped;
 }

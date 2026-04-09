@@ -2579,6 +2579,10 @@
     "mtimeMs": 1774638744916.3894,
     "size": 1104
   },
+  "D:\\Prometheus\\.prometheus\\sessions\\brain_dream_2026-04-08.json": {
+    "mtimeMs": 1775705708377.4219,
+    "size": 379
+  },
   "D:\\Prometheus\\.prometheus\\sessions\\brain_thought_2026-04-08_13-40.json": {
     "mtimeMs": 1775691626047.077,
     "size": 403
@@ -2789,10 +2793,6 @@
   },
   "D:\\Prometheus\\.prometheus\\sessions\\cron_job_1773505907481_giaeb_1774969367321.json": {
     "mtimeMs": 1775674354687.5012,
-    "size": 303
-  },
-  "D:\\Prometheus\\.prometheus\\sessions\\cron_job_1773505907481_giaeb_1775067790117.json": {
-    "mtimeMs": 1775100669114.0166,
     "size": 303
   },
   "D:\\Prometheus\\.prometheus\\sessions\\cron_job_1773505907481_giaeb_1775394005199.json": {
@@ -3498,10 +3498,6 @@
   "D:\\Prometheus\\.prometheus\\sessions\\task_180b95f3-0126-42dc-a013-3d3c92fcb981.json": {
     "mtimeMs": 1775347070957.8533,
     "size": 411
-  },
-  "D:\\Prometheus\\.prometheus\\sessions\\task_7fbdf6e7-cd20-4bf6-85ea-2a2e68c9d54b.json": {
-    "mtimeMs": 1775100669119.0154,
-    "size": 407
   },
   "D:\\Prometheus\\.prometheus\\sessions\\task_c9ecd394-5341-4bbe-b7ce-d31aee00c462.json": {
     "mtimeMs": 1775368179713.4485,

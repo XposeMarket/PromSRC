@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-09T02:08:29.543Z",
-  "lastRunAtMs": 1775700509543,
+  "updatedAt": "2026-04-09T03:59:54.471Z",
+  "lastRunAtMs": 1775707194471,
   "files": {
     "chats/transcripts/03991351-a31f-4f92-9ff8-3bcc515c240c.jsonl": {
       "mtimeMs": 1775687615242.2898,
@@ -16269,6 +16269,14 @@
       "recordId": "rec_aa25c2ea5533b6f8",
       "chunkIds": [
         "chk_f751d1d55d78f980"
+      ]
+    },
+    "chats/sessions/brain_dream_2026-04-08.json": {
+      "mtimeMs": 1775705708377.4219,
+      "size": 379,
+      "recordId": "rec_4b186366a318f0f1",
+      "chunkIds": [
+        "chk_7ac5d3eea81d1f38"
       ]
     }
   }
