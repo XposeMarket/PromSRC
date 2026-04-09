@@ -391,6 +391,15 @@ function layoutByRandomShape(nodes, kind = 'constellation') {
       const posInRow = index - rowStart;
       x = (posInRow - (rowSize - 1) / 2) * 38;
       y = row * 38 - (Math.sqrt(count * 2) / 3) * 38;
+    } else if (kind === 'flame') {
+      const H = Math.max(180, Math.min(500, 110 + Math.sqrt(count) * 22));
+      const W = H * 0.64;
+      const flameHalfW2 = (t) => W * Math.pow(t, 0.42) * (0.88 + 0.22 * Math.pow(1 - t, 1.6));
+      const r1 = (hashString(`${node.id}:flm:t`) % 10000) / 10000;
+      const r2 = (hashString(`${node.id}:flm:x`) % 10000) / 10000;
+      const t = Math.pow(r1, 0.6);
+      x = (r2 * 2 - 1) * flameHalfW2(t);
+      y = -H + t * H * 1.9;
     } else {
       x = ((hashString(`${node.id}:shuffle:x`) % width) - width / 2) * 0.9;
       y = ((hashString(`${node.id}:shuffle:y`) % height) - height / 2) * 0.9;
@@ -427,64 +436,25 @@ function layoutByRandomShape(nodes, kind = 'constellation') {
 
 function layoutPrometheus(nodes) {
   if (!nodes.length) return;
-  // Prometheus flame outline — normalized [-1, 1], y-down (positive = bottom)
-  // Symmetric flame with two base tongues and pointed tip at top
-  const outline = [
-    [0, 1],           // base center
-    [-0.13, 0.62],
-    [-0.3, 0.96],     // left base tongue
-    [-0.44, 0.52],
-    [-0.6, 0.08],
-    [-0.64, -0.32],
-    [-0.5, -0.68],
-    [-0.26, -0.88],
-    [0, -1],          // flame tip (top)
-    [0.26, -0.88],
-    [0.5, -0.68],
-    [0.64, -0.32],
-    [0.6, 0.08],
-    [0.44, 0.52],
-    [0.3, 0.96],      // right base tongue
-    [0.13, 0.62],
-    [0, 1],           // close path
-  ];
+  const count = nodes.length;
 
-  // Compute raw perimeter then scale so each node gets ≥ 30px of arc
-  const rawPerimeter = outline.reduce((sum, pt, i) => {
-    if (i === 0) return sum;
-    const prev = outline[i - 1];
-    return sum + Math.hypot(pt[0] - prev[0], pt[1] - prev[1]);
-  }, 0);
-  const scale = Math.max(200, (nodes.length * 30) / rawPerimeter);
+  // Filled flame silhouette — nodes fill the interior of a flame shape.
+  // Tip points up (negative y). t=0 at tip, t=1 at base.
+  const H = Math.max(180, Math.min(500, 110 + Math.sqrt(count) * 22));
+  const W = H * 0.64;
 
-  const world = outline.map(([x, y]) => ({ x: x * scale, y: y * scale }));
-  const segments = [];
-  let totalLen = 0;
-  for (let i = 1; i < world.length; i++) {
-    const p0 = world[i - 1];
-    const p1 = world[i];
-    const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-    segments.push({ x0: p0.x, y0: p0.y, dx: p1.x - p0.x, dy: p1.y - p0.y, len });
-    totalLen += len;
-  }
+  // Half-width of flame at normalized height t: 0 at tip, widens quickly, slight flare at base
+  const flameHalfW = (t) => W * Math.pow(t, 0.42) * (0.88 + 0.22 * Math.pow(1 - t, 1.6));
 
-  const n = nodes.length;
-  nodes.forEach((node, i) => {
-    let t = (i / Math.max(1, n)) * totalLen;
-    let acc = 0;
-    for (const seg of segments) {
-      if (t <= acc + seg.len + 0.001) {
-        const localT = seg.len > 0 ? Math.min(1, (t - acc) / seg.len) : 0;
-        node.baseX = seg.x0 + seg.dx * localT;
-        node.baseY = seg.y0 + seg.dy * localT;
-        node.sleeping = false;
-        return;
-      }
-      acc += seg.len;
-    }
-    const last = world[world.length - 1];
-    node.baseX = last.x;
-    node.baseY = last.y;
+  nodes.forEach((node) => {
+    // Deterministic per-node "random" using hash — same result every layout
+    const r1 = (hashString(`${node.id}:flm:t`) % 10000) / 10000;
+    const r2 = (hashString(`${node.id}:flm:x`) % 10000) / 10000;
+    // Skew t toward base so the wider sections are proportionally denser
+    const t = Math.pow(r1, 0.6);
+    const halfW = flameHalfW(t);
+    node.baseY = -H + t * H * 1.9;
+    node.baseX = (r2 * 2 - 1) * halfW;
     node.sleeping = false;
   });
 
@@ -634,7 +604,7 @@ function rebuildRenderGraph(relayout = true) {
     state.renderEdges = [...filteredEdges];
   } else if (state.shapeMode === 'shuffle') {
     if (relayout) {
-      const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation'];
+      const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation', 'flame'];
       state.shuffleKindIndex = (state.shuffleKindIndex + 1) % kinds.length;
       layoutByRandomShape(visibleNodes, kinds[state.shuffleKindIndex]);
     }
@@ -1160,6 +1130,7 @@ function loadImageShapeFromFile(file) {
       state.shuffleTimer = setTimeout(() => {
         commitLayoutMode('image', true);
         showToast('Image shape applied', `${file.name} now defines the node outline.`, 'success', 2200);
+        updateDefaultShapeBtn();
       }, 220);
     };
     img.src = reader.result;
@@ -1272,7 +1243,7 @@ function shuffleMemoryGraph() {
     // Zero velocities so explosion momentum doesn't overpower the spring toward new positions
     state.recordNodes.forEach((n) => { n.vx = 0; n.vy = 0; });
     commitLayoutMode('shuffle', true);
-    const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation'];
+    const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation', 'flame'];
     const kindName = kinds[state.shuffleKindIndex] || 'shape';
     showToast('Nodes shuffled', `Settled into ${kindName} layout.`, 'success', 2200);
   }, 220);
@@ -1376,11 +1347,62 @@ function setupCanvas() {
   }
 }
 
+const DEFAULT_SHAPE_KEY = 'prometheus-memory-default-shape';
+
+function loadSavedDefaultShape() {
+  try {
+    const raw = localStorage.getItem(DEFAULT_SHAPE_KEY);
+    if (!raw) return false;
+    const points = JSON.parse(raw);
+    if (!Array.isArray(points) || points.length < 30) return false;
+    state.imagePoints = points;
+    state.shapeMode = 'image';
+    updateDefaultShapeBtn();
+    return true;
+  } catch { return false; }
+}
+
+function updateDefaultShapeBtn() {
+  const btn = document.getElementById('memory-set-default-btn');
+  if (!btn) return;
+  const saved = !!localStorage.getItem(DEFAULT_SHAPE_KEY);
+  const inImageMode = state.shapeMode === 'image' && state.imagePoints?.length;
+  if (inImageMode && !saved) {
+    btn.textContent = 'Set as Default';
+    btn.style.opacity = '1';
+  } else if (saved) {
+    btn.textContent = 'Clear Default';
+    btn.style.opacity = '1';
+  } else {
+    btn.textContent = 'Set as Default';
+    btn.style.opacity = '0.4';
+  }
+}
+
+function toggleDefaultShape() {
+  const saved = !!localStorage.getItem(DEFAULT_SHAPE_KEY);
+  if (saved) {
+    localStorage.removeItem(DEFAULT_SHAPE_KEY);
+    showToast('Default shape cleared', 'Page will start with flame layout on next load.', 'success', 2200);
+  } else if (state.shapeMode === 'image' && state.imagePoints?.length) {
+    try {
+      localStorage.setItem(DEFAULT_SHAPE_KEY, JSON.stringify(state.imagePoints));
+      showToast('Default shape saved', 'This image layout will be used on every page load.', 'success', 2200);
+    } catch (e) {
+      showToast('Save failed', 'Could not save to localStorage — image may be too large.', 'error');
+    }
+  } else {
+    showToast('No image shape active', 'Upload an image first, then set it as default.', 'warning');
+  }
+  updateDefaultShapeBtn();
+}
+
 function init() {
   if (state.initialized) return;
   state.initialized = true;
   setupCanvas();
   bindControls();
+  loadSavedDefaultShape();
   if (state.detailEl) renderDetail(null);
   fetchGraph().catch((err) => {
     if (state.emptyEl) {
@@ -1412,5 +1434,6 @@ window.toggleMemoryControlsPanel = toggleMemoryControlsPanel;
 window.closeMemoryDetailDrawer = closeMemoryDetailDrawer;
 window.shuffleMemoryGraph = shuffleMemoryGraph;
 window.triggerMemoryImageInput = triggerMemoryImageInput;
+window.toggleDefaultShape = toggleDefaultShape;
 
 init();
