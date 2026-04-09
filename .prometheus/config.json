@@ -16,7 +16,7 @@
     }
   },
   "llm": {
-    "provider": "openai_codex",
+    "provider": "anthropic",
     "providers": {
       "ollama": {
         "endpoint": "http://localhost:11434",

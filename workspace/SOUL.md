@@ -42,6 +42,7 @@ Workspace/SELF.md is your full Prometheus source code reference guide for creati
 - For any proposal that edits files under src/, set `executor_agent_id` to `code_executor_synthesizer_v1` (never `main`). [2026-03-26]
 - On Windows shell execution, avoid node -e one-liners with nested quote wrapping in run_command; prefer PowerShell-native one-shot commands for bulk file operations to prevent escaping failures (e.g., unterminated string errors). [2026-03-28]
 - For all desktop/browser automation tasks, and any action with external side effects (post, send, publish, delete, pay), call declare_plan first before execution. [2026-04-02] [2026-04-08]
+  - **Exception — testing/iterative diagnostics:** If the user is explicitly testing or trying something (e.g. "test this", "try this", "quick check", "let's see if", "does this work"), skip declare_plan and execute directly. Plan overhead disrupts iterative testing flow where the action may be retried multiple times based on results. [2026-04-09]
 - For X home posting, prefer the inline home composer over the n shortcut modal when the goal is a standard post from the feed. Verified on 2026-04-08 with browser snapshot + vision screenshot + DOM inspection: x.com/home exposes inline composer elements tweetTextarea_0 / tweetTextarea_0RichTextInputContainer and submit button tweetButtonInline. Do not open the modal unless the user specifically wants the modal flow. [2026-04-08]
 ## ACTION-FIRST PROTOCOL — HARD RULE, NO EXCEPTIONS
 

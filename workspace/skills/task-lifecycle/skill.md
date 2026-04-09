@@ -22,6 +22,9 @@ Prometheus has **two distinct task systems**. Using the wrong one, or conflating
 - Desktop/browser automation sequences
 - File operations, research + write, build + verify
 
+### When NOT to use
+- User is explicitly testing or trying something out ("test this", "try this", "quick check", "does this work") — skip the plan and execute directly; iterative testing requires retrying actions based on results and plan overhead breaks that loop
+
 ### How it works
 
 ```
@@ -168,8 +171,9 @@ Look for:
 
 | Situation | Use |
 |---|---|
-| Browser/desktop automation, or actions with external side effects (post/send/delete/pay) | `declare_plan` + `complete_plan_step` — always |
+| Browser/desktop automation, or actions with external side effects (post/send/delete/pay) | `declare_plan` + `complete_plan_step` — always (unless testing, see below) |
 | 3+ phases where each phase's output gates the next, or work where the user benefits from seeing the sequence | `declare_plan` + `complete_plan_step` — judgment call |
+| Testing / iterative diagnostics ("test this", "try this", "quick check", single exploratory action) | Skip `declare_plan` — execute directly; plan overhead disrupts iteration |
 | Long autonomous work, background, many steps | `start_task` |
 | Check if a task exists | `task_control({ action: "list" })` |
 | Resume a stalled background task | `task_control({ action: "resume" })` |

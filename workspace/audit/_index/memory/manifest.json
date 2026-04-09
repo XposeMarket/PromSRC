@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-09T04:01:23.638Z",
-  "lastRunAtMs": 1775707283638,
+  "updatedAt": "2026-04-09T05:35:52.046Z",
+  "lastRunAtMs": 1775712952046,
   "files": {
     "chats/transcripts/03991351-a31f-4f92-9ff8-3bcc515c240c.jsonl": {
       "mtimeMs": 1775687615242.2898,
@@ -16277,6 +16277,78 @@
       "recordId": "rec_4b186366a318f0f1",
       "chunkIds": [
         "chk_7ac5d3eea81d1f38"
+      ]
+    },
+    "chats/transcripts/auto_boot_1775707736106.jsonl": {
+      "mtimeMs": 1775707736986.1992,
+      "size": 177,
+      "recordId": "rec_92955ec521c9265f",
+      "chunkIds": [
+        "chk_72212de0bca9e3d3"
+      ]
+    },
+    "chats/transcripts/auto_boot_1775707736106.md": {
+      "mtimeMs": 1775707736987.1982,
+      "size": 62,
+      "recordId": "rec_4b6e3dce1a81b3d1",
+      "chunkIds": [
+        "chk_e84496b77f24d0d2"
+      ]
+    },
+    "chats/sessions/auto_boot_1775707736106.json": {
+      "mtimeMs": 1775707737499.5269,
+      "size": 484,
+      "recordId": "rec_fb7349cc1cfb18c1",
+      "chunkIds": [
+        "chk_a4fefcec30ea49ce"
+      ]
+    },
+    "chats/transcripts/27efbc12-23cd-4a35-8622-25ab0254fb60.jsonl": {
+      "mtimeMs": 1775709542199.1267,
+      "size": 170,
+      "recordId": "rec_d9796aab74cf2a7c",
+      "chunkIds": [
+        "chk_43d003a89ab3d295"
+      ]
+    },
+    "chats/transcripts/27efbc12-23cd-4a35-8622-25ab0254fb60.md": {
+      "mtimeMs": 1775709542200.125,
+      "size": 42,
+      "recordId": "rec_8e57835751310eaf",
+      "chunkIds": [
+        "chk_1ef4798b6f97c3da"
+      ]
+    },
+    "chats/transcripts/fc58e992-66e8-4386-ab57-6c80019e58bb.jsonl": {
+      "mtimeMs": 1775709551660.2732,
+      "size": 377,
+      "recordId": "rec_edbdd94a90e30c72",
+      "chunkIds": [
+        "chk_dc9c5d062e5ed785"
+      ]
+    },
+    "chats/transcripts/fc58e992-66e8-4386-ab57-6c80019e58bb.md": {
+      "mtimeMs": 1775709551660.2732,
+      "size": 121,
+      "recordId": "rec_1c479755a6b44a81",
+      "chunkIds": [
+        "chk_01b47edd6d8a895d"
+      ]
+    },
+    "chats/sessions/27efbc12-23cd-4a35-8622-25ab0254fb60.json": {
+      "mtimeMs": 1775709543298.8037,
+      "size": 405,
+      "recordId": "rec_41b25958dae939e3",
+      "chunkIds": [
+        "chk_417d400641ad1ac8"
+      ]
+    },
+    "chats/sessions/fc58e992-66e8-4386-ab57-6c80019e58bb.json": {
+      "mtimeMs": 1775709552171.5178,
+      "size": 536,
+      "recordId": "rec_db46dd94aedaf6d9",
+      "chunkIds": [
+        "chk_41b8ced871c5c063"
       ]
     }
   }

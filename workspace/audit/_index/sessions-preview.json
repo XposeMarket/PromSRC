@@ -1,5 +1,26 @@
 [
   {
+    "id": "fc58e992-66e8-4386-ab57-6c80019e58bb",
+    "mtimeMs": 1775709552171.5178,
+    "lastActiveAt": 1775709551660,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "27efbc12-23cd-4a35-8622-25ab0254fb60",
+    "mtimeMs": 1775709543298.8037,
+    "lastActiveAt": 1775709542200,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "auto_boot_1775707736106",
+    "mtimeMs": 1775707737499.5269,
+    "lastActiveAt": 1775707736983,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
     "id": "brain_dream_2026-04-08",
     "mtimeMs": 1775705708377.4219,
     "lastActiveAt": 1775705682246,
@@ -536,27 +557,6 @@
     "mtimeMs": 1775368179713.4485,
     "lastActiveAt": 1775368106750,
     "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "auto_restart_manual_1775367693696",
-    "mtimeMs": 1775367698690.2185,
-    "lastActiveAt": 1775367698175,
-    "historyLength": 1,
-    "hasSummary": false
-  },
-  {
-    "id": "auto_restart_manual_1775367408037",
-    "mtimeMs": 1775367423351.51,
-    "lastActiveAt": 1775367422836,
-    "historyLength": 1,
-    "hasSummary": false
-  },
-  {
-    "id": "58eea2df-99fa-4697-b29c-949b0f09ed80",
-    "mtimeMs": 1775365306290.8828,
-    "lastActiveAt": 1775365305779,
-    "historyLength": 4,
     "hasSummary": false
   }
 ]

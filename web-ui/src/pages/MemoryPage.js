@@ -65,7 +65,7 @@ const state = {
   detailCache: new Map(),
   dragState: null,
   controlsCollapsed: false,
-  shapeMode: 'default',
+  shapeMode: 'prometheus',
   dragOverDropzone: false,
   imagePoints: null,
   shuffleTimer: 0,
@@ -182,6 +182,13 @@ function resetNodePhysics(node) {
   node.sleeping = false;
 }
 
+function stopNode(node) {
+  if (!node) return;
+  node.vx = 0;
+  node.vy = 0;
+  node.sleeping = false;
+}
+
 function wakeSimulation(intensity = 1) {
   state.simulationHeat = Math.max(state.simulationHeat, intensity);
   state.renderNodes.forEach((node) => { node.sleeping = false; });
@@ -224,11 +231,9 @@ function resolveClusterOverlap(nodeIds, iterations = 10) {
   }
 
   members.forEach((node) => {
-    node.x = node.baseX;
-    node.y = node.baseY;
     node.vx = 0;
     node.vy = 0;
-    node.sleeping = true;
+    node.sleeping = false;
   });
 }
 
@@ -343,6 +348,118 @@ function layoutByRandomShape(nodes, kind = 'constellation') {
     node.baseY = y;
     node.sleeping = false;
   });
+
+  // Push apart any overlapping nodes after layout
+  for (let pass = 0; pass < 12; pass++) {
+    let moved = false;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        let dx = b.baseX - a.baseX;
+        let dy = b.baseY - a.baseY;
+        let dist = Math.hypot(dx, dy);
+        if (dist < 0.01) { dx = 1; dy = 0; dist = 1; }
+        const minDist = (a.radius || 8) + (b.radius || 8) + 6;
+        if (dist >= minDist) continue;
+        const push = (minDist - dist) * 0.5;
+        a.baseX -= (dx / dist) * push;
+        a.baseY -= (dy / dist) * push;
+        b.baseX += (dx / dist) * push;
+        b.baseY += (dy / dist) * push;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+}
+
+function layoutPrometheus(nodes) {
+  if (!nodes.length) return;
+  // Prometheus flame outline — normalized [-1, 1], y-down (positive = bottom)
+  // Symmetric flame with two base tongues and pointed tip at top
+  const outline = [
+    [0, 1],           // base center
+    [-0.13, 0.62],
+    [-0.3, 0.96],     // left base tongue
+    [-0.44, 0.52],
+    [-0.6, 0.08],
+    [-0.64, -0.32],
+    [-0.5, -0.68],
+    [-0.26, -0.88],
+    [0, -1],          // flame tip (top)
+    [0.26, -0.88],
+    [0.5, -0.68],
+    [0.64, -0.32],
+    [0.6, 0.08],
+    [0.44, 0.52],
+    [0.3, 0.96],      // right base tongue
+    [0.13, 0.62],
+    [0, 1],           // close path
+  ];
+
+  // Compute raw perimeter then scale so each node gets ≥ 30px of arc
+  const rawPerimeter = outline.reduce((sum, pt, i) => {
+    if (i === 0) return sum;
+    const prev = outline[i - 1];
+    return sum + Math.hypot(pt[0] - prev[0], pt[1] - prev[1]);
+  }, 0);
+  const scale = Math.max(200, (nodes.length * 30) / rawPerimeter);
+
+  const world = outline.map(([x, y]) => ({ x: x * scale, y: y * scale }));
+  const segments = [];
+  let totalLen = 0;
+  for (let i = 1; i < world.length; i++) {
+    const p0 = world[i - 1];
+    const p1 = world[i];
+    const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+    segments.push({ x0: p0.x, y0: p0.y, dx: p1.x - p0.x, dy: p1.y - p0.y, len });
+    totalLen += len;
+  }
+
+  const n = nodes.length;
+  nodes.forEach((node, i) => {
+    let t = (i / Math.max(1, n)) * totalLen;
+    let acc = 0;
+    for (const seg of segments) {
+      if (t <= acc + seg.len + 0.001) {
+        const localT = seg.len > 0 ? Math.min(1, (t - acc) / seg.len) : 0;
+        node.baseX = seg.x0 + seg.dx * localT;
+        node.baseY = seg.y0 + seg.dy * localT;
+        node.sleeping = false;
+        return;
+      }
+      acc += seg.len;
+    }
+    const last = world[world.length - 1];
+    node.baseX = last.x;
+    node.baseY = last.y;
+    node.sleeping = false;
+  });
+
+  // Push apart any overlapping nodes
+  for (let pass = 0; pass < 12; pass++) {
+    let moved = false;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        let dx = b.baseX - a.baseX;
+        let dy = b.baseY - a.baseY;
+        let dist = Math.hypot(dx, dy);
+        if (dist < 0.01) { dx = 1; dy = 0; dist = 1; }
+        const minDist = (a.radius || 8) + (b.radius || 8) + 6;
+        if (dist >= minDist) continue;
+        const push = (minDist - dist) * 0.5;
+        a.baseX -= (dx / dist) * push;
+        a.baseY -= (dy / dist) * push;
+        b.baseX += (dx / dist) * push;
+        b.baseY += (dy / dist) * push;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
 }
 
 function applyImageShapeToNodes(nodes, points) {
@@ -444,7 +561,7 @@ function fitGraphToViewport() {
   });
   const graphWidth = Math.max(1, maxX - minX + 280);
   const graphHeight = Math.max(1, maxY - minY + 280);
-  const scale = clamp(Math.min(width / graphWidth, height / graphHeight), 0.18, 1.08);
+  const scale = clamp(Math.min(width / graphWidth, height / graphHeight), 0.05, 1.08);
   state.transform.scale = scale;
   state.transform.x = width / 2 - ((minX + maxX) / 2) * scale;
   state.transform.y = height / 2 - ((minY + maxY) / 2) * scale;
@@ -456,7 +573,11 @@ function rebuildRenderGraph(relayout = true) {
   const filteredEdges = state.realEdges.filter((edge) => edge.visible && nodeMap.has(edge.source) && nodeMap.has(edge.target));
   state.visibleAdjacency = buildAdjacency(filteredEdges);
 
-  if (state.shapeMode === 'image' && state.imagePoints?.length) {
+  if (state.shapeMode === 'prometheus') {
+    if (relayout) layoutPrometheus(visibleNodes);
+    state.renderNodes = [...visibleNodes];
+    state.renderEdges = [...filteredEdges];
+  } else if (state.shapeMode === 'image' && state.imagePoints?.length) {
     if (relayout) applyImageShapeToNodes(visibleNodes, state.imagePoints);
     state.renderNodes = [...visibleNodes];
     state.renderEdges = [...filteredEdges];
@@ -674,6 +795,7 @@ function stepSimulation() {
   const draggingNode = state.dragState?.type === 'node';
   const organizeMode = state.controls.organizeByType;
   const heat = draggingNode ? 1 : state.simulationHeat;
+  const draggedFollowers = draggingNode ? (state.dragState.followers || new Map()) : null;
 
   if (!draggingNode && heat < 0.018) {
     let changed = false;
@@ -698,7 +820,7 @@ function stepSimulation() {
       node.sleeping = false;
       changed = true;
     });
-    if (!changed) return;
+    return; // Never run repulsion at near-zero heat — pure spring snap only
   }
 
   const cellSize = 72;
@@ -735,6 +857,7 @@ function stepSimulation() {
   const repulsionBase = Number(state.controls.repulsion || 90) * (organizeMode ? 0.62 : 1) * (0.56 + heat * 0.44);
   const collisionStrength = Number(state.controls.collision || 24) / 100;
   visibleNodes.forEach((node) => {
+    if (draggingNode && draggedFollowers?.has(node.id)) return;
     if (node.sleeping && !draggingNode) return;
     const gx = Math.floor(node.x / cellSize);
     const gy = Math.floor(node.y / cellSize);
@@ -744,6 +867,7 @@ function stepSimulation() {
         if (!list) continue;
         list.forEach((other) => {
           if (other.id === node.id || other.id < node.id) return;
+          if (draggingNode && (draggedFollowers?.has(node.id) || draggedFollowers?.has(other.id))) return;
           const dx = other.x - node.x;
           const dy = other.y - node.y;
           const distSq = dx * dx + dy * dy + 0.01;
@@ -774,6 +898,7 @@ function stepSimulation() {
     const source = state.nodeById.get(edge.source);
     const target = state.nodeById.get(edge.target);
     if (!source || !target) return;
+    if (draggingNode && (draggedFollowers?.has(source.id) || draggedFollowers?.has(target.id))) return;
     const dx = target.x - source.x;
     const dy = target.y - source.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -793,9 +918,9 @@ function stepSimulation() {
       if (!node || !node.visible) return;
       const desiredX = state.dragState.worldX + offset.x;
       const desiredY = state.dragState.worldY + offset.y;
-      node.vx += (desiredX - node.x) * 0.04;
-      node.vy += (desiredY - node.y) * 0.04;
-      node.sleeping = false;
+      node.x += (desiredX - node.x) * 0.28;
+      node.y += (desiredY - node.y) * 0.28;
+      stopNode(node);
     });
 
     visibleNodes.forEach((node) => {
@@ -1016,6 +1141,7 @@ function handlePointerDown(event) {
       const follower = state.recordNodeById.get(id);
       if (!follower) return;
       followers.set(id, { x: follower.x - node.x, y: follower.y - node.y });
+      stopNode(follower);
     });
     state.dragState = { type: 'node', nodeId: node.id, worldX: node.x, worldY: node.y, offsetX: world.x - node.x, offsetY: world.y - node.y, followers };
     state.canvas.classList.add('is-dragging');
@@ -1030,27 +1156,33 @@ function handlePointerUp() {
   if (state.dragState?.type === 'node') {
     const anchor = state.recordNodeById.get(state.dragState.nodeId);
     if (anchor) {
-      anchor.baseX = state.dragState.worldX;
-      anchor.baseY = state.dragState.worldY;
-      anchor.sleeping = false;
+      anchor.x = state.dragState.worldX;
+      anchor.y = state.dragState.worldY;
+      anchor.baseX = anchor.x;
+      anchor.baseY = anchor.y;
+      stopNode(anchor);
     }
     const followers = state.dragState.followers || new Map();
     followers.forEach((offset, nodeId) => {
       const node = state.recordNodeById.get(nodeId);
       if (!node) return;
-      node.baseX = state.dragState.worldX + offset.x;
-      node.baseY = state.dragState.worldY + offset.y;
-      node.sleeping = false;
+      if (nodeId === state.dragState.nodeId) return;
+      node.baseX = node.x;
+      node.baseY = node.y;
+      stopNode(node);
     });
     resolveClusterOverlap(followers.keys());
-    if (anchor) {
-      anchor.x = anchor.baseX;
-      anchor.y = anchor.baseY;
-      anchor.vx = 0;
-      anchor.vy = 0;
-      anchor.sleeping = true;
-    }
-    state.simulationHeat = 0.02;
+    followers.forEach((offset, nodeId) => {
+      const node = state.recordNodeById.get(nodeId);
+      if (!node) return;
+      node.x = node.baseX;
+      node.y = node.baseY;
+      stopNode(node);
+    });
+    // Kill ALL node momentum so nothing explodes, then let spring-snap animate
+    state.renderNodes.forEach((n) => { n.vx = 0; n.vy = 0; });
+    // Drop heat below 0.018 threshold — pure spring snap, no repulsion
+    state.simulationHeat = 0.008;
   }
   state.dragState = null;
   if (state.canvas) state.canvas.classList.remove('is-dragging');
@@ -1060,7 +1192,7 @@ function handleWheel(event) {
   if (!state.canvas) return;
   event.preventDefault();
   const before = uiToWorld(event.clientX, event.clientY);
-  const nextScale = clamp(state.transform.scale * (event.deltaY > 0 ? 0.92 : 1.08), 0.14, 2.8);
+  const nextScale = clamp(state.transform.scale * (event.deltaY > 0 ? 0.92 : 1.08), 0.04, 2.8);
   state.transform.scale = nextScale;
   state.transform.x = event.clientX - state.canvas.getBoundingClientRect().left - before.x * nextScale;
   state.transform.y = event.clientY - state.canvas.getBoundingClientRect().top - before.y * nextScale;
@@ -1098,10 +1230,10 @@ function bindControls() {
 
   if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`;
   searchInput?.addEventListener('input', () => { state.controls.search = searchInput.value || ''; applyFilters({ relayout: false }); });
-  typeFilter?.addEventListener('change', () => { state.controls.typeFilter = typeFilter.value || ''; if (state.shapeMode !== 'image') state.shapeMode = 'default'; applyFilters({ relayout: true }); });
-  edgeWeight?.addEventListener('input', () => { state.controls.minEdgeWeight = Number(edgeWeight.value || 0) / 100; if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`; if (state.shapeMode !== 'image') state.shapeMode = 'default'; applyFilters({ relayout: true }); });
+  typeFilter?.addEventListener('change', () => { state.controls.typeFilter = typeFilter.value || ''; if (state.shapeMode !== 'image') state.shapeMode = 'prometheus'; applyFilters({ relayout: true }); });
+  edgeWeight?.addEventListener('input', () => { state.controls.minEdgeWeight = Number(edgeWeight.value || 0) / 100; if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`; if (state.shapeMode !== 'image') state.shapeMode = 'prometheus'; applyFilters({ relayout: true }); });
   showLabels?.addEventListener('change', () => { state.controls.showLabels = !!showLabels.checked; });
-  organizeByType?.addEventListener('change', () => { state.controls.organizeByType = !!organizeByType.checked; if (state.controls.organizeByType) state.shapeMode = 'default'; applyFilters({ relayout: true }); });
+  organizeByType?.addEventListener('change', () => { state.controls.organizeByType = !!organizeByType.checked; if (state.controls.organizeByType) state.shapeMode = 'prometheus'; applyFilters({ relayout: true }); });
   repulsion?.addEventListener('input', () => { state.controls.repulsion = Number(repulsion.value || 90); });
   link?.addEventListener('input', () => { state.controls.linkStrength = Number(link.value || 26) / 1000; });
   collision?.addEventListener('input', () => { state.controls.collision = Number(collision.value || 24); });
@@ -1220,5 +1352,3 @@ window.shuffleMemoryGraph = shuffleMemoryGraph;
 window.triggerMemoryImageInput = triggerMemoryImageInput;
 
 init();
-
-

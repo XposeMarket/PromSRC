@@ -1,12 +1,15 @@
 # Chats Index
 
-Generated: 2026-04-09T04:01:22.988Z
+Generated: 2026-04-09T05:33:11.920Z
 
-- Sessions mirrored: 1309
-- Transcript files: 62
+- Sessions mirrored: 1312
+- Transcript files: 68
 - Compaction artifacts: 2
 
 ## Recent Sessions
+- fc58e992-66e8-4386-ab57-6c80019e58bb | messages=2 | lastActive=2026-04-09T04:39:11.660Z | summary=no
+- 27efbc12-23cd-4a35-8622-25ab0254fb60 | messages=1 | lastActive=2026-04-09T04:39:02.200Z | summary=no
+- auto_boot_1775707736106 | messages=1 | lastActive=2026-04-09T04:08:56.983Z | summary=no
 - brain_dream_2026-04-08 | messages=0 | lastActive=2026-04-09T03:34:42.246Z | summary=no
 - telegram_1799053599 | messages=66 | lastActive=2026-04-09T02:04:32.830Z | summary=no
 - auto_restart_manual_1775700272643 | messages=1 | lastActive=2026-04-09T02:04:32.785Z | summary=no
@@ -84,6 +87,3 @@ Generated: 2026-04-09T04:01:22.988Z
 - cron_job_1773505907481_giaeb_1775394005199 | messages=0 | lastActive=2026-04-05T13:00:06.143Z | summary=no
 - proposal_prop_1775368084843_2d8974 | messages=2 | lastActive=2026-04-05T05:49:58.890Z | summary=no
 - task_c9ecd394-5341-4bbe-b7ce-d31aee00c462 | messages=0 | lastActive=2026-04-05T05:48:26.750Z | summary=no
-- auto_restart_manual_1775367693696 | messages=1 | lastActive=2026-04-05T05:41:38.175Z | summary=no
-- auto_restart_manual_1775367408037 | messages=1 | lastActive=2026-04-05T05:37:02.836Z | summary=no
-- 58eea2df-99fa-4697-b29c-949b0f09ed80 | messages=4 | lastActive=2026-04-05T05:01:45.779Z | summary=no
