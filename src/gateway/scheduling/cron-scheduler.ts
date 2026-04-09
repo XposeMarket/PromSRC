@@ -1,5 +1,5 @@
 /**
- * cron-scheduler.ts — SmallClaw Tasks / Cron System
+ * cron-scheduler.ts — Prometheus Tasks / Cron System
  *
  * Design constraints (4B model reality):
  *  - One task at a time, no parallelism
@@ -42,7 +42,7 @@ export interface CronJob {
   payloadKind: 'agentTurn' | 'systemEvent'; // default: agentTurn
   systemEventText?: string;                  // used when payloadKind=systemEvent
   model?: string;                            // optional per-job model override
-  subagent_id?: string;      // optional: ID of a subagent definition in workspace/.smallclaw/subagents/
+  subagent_id?: string;      // optional: ID of a subagent definition in workspace/.prometheus/subagents/
   runAt: string | null;      // ISO timestamp for one-shots
   enabled: boolean;
   priority: number;          // lower number = higher priority

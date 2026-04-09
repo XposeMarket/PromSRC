@@ -46,7 +46,7 @@ When you need to create a NEW workflow, follow this exact sequence:
    → If test passes, continue.
 
 4. deploy_workflow(workflow_id, name, description, type, action, tags, ...)
-   → This saves the workflow permanently. SmallClaw will remember it.
+   → This saves the workflow permanently. Prometheus will remember it.
    → After this: tell the user the workflow is live and how to call it.
 \`\`\`
 

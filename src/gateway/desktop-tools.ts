@@ -1,7 +1,7 @@
 /**
  * desktop-tools.ts
  *
- * Windows desktop automation primitives for SmallClaw.
+ * Windows desktop automation primitives for Prometheus.
  * Uses PowerShell + Win32 APIs (no native npm dependency required).
  *
  * NOTE: Current implementation targets Windows only.
@@ -213,14 +213,14 @@ function getPlatformUnsupportedMessage(feature: string): string {
     return (
       `Desktop tool '${feature}' is not yet implemented on macOS. ` +
       `Planned implementation: screencapture (screenshot), cliclick or Swift helper (click/type). ` +
-      `Set SMALLCLAW_DESKTOP_PLATFORM=macos once the macOS backend is available.`
+      `Set PROMETHEUS_DESKTOP_PLATFORM=macos once the macOS backend is available.`
     );
   }
   if (PLATFORM === 'linux') {
     return (
       `Desktop tool '${feature}' is not yet implemented on Linux. ` +
       `Planned implementation: scrot/import (screenshot), xdotool (click/type/key). ` +
-      `Set SMALLCLAW_DESKTOP_PLATFORM=linux once the Linux backend is available.`
+      `Set PROMETHEUS_DESKTOP_PLATFORM=linux once the Linux backend is available.`
     );
   }
   return `Desktop tool '${feature}' is not supported on platform: ${PLATFORM}.`;
@@ -243,7 +243,7 @@ export function getDesktopPlatformStatus(): string | null {
 
 /**
  * macOS screenshot stub — ready for implementation.
- * Planned: `screencapture -x /tmp/smallclaw-desktop-XXXX.png`
+ * Planned: `screencapture -x /tmp/prometheus-desktop-XXXX.png`
  */
 async function captureScreenshotMacOS(): Promise<never> {
   throw new Error(getPlatformUnsupportedMessage('desktop_screenshot'));
@@ -251,7 +251,7 @@ async function captureScreenshotMacOS(): Promise<never> {
 
 /**
  * Linux screenshot stub — ready for implementation.
- * Planned: `scrot /tmp/smallclaw-desktop-XXXX.png` or `import -window root`
+ * Planned: `scrot /tmp/prometheus-desktop-XXXX.png` or `import -window root`
  */
 async function captureScreenshotLinux(): Promise<never> {
   throw new Error(getPlatformUnsupportedMessage('desktop_screenshot'));
@@ -326,12 +326,12 @@ function normalizeWindows(raw: any): DesktopWindowInfo[] {
 // PowerShell compiles Add-Type C# on each new process; guard pattern limits cost.
 
 const PS_WINAPI_HEADER = `
-if (-not ([System.Management.Automation.PSTypeName]'SmallClawWinApi').Type) {
+if (-not ([System.Management.Automation.PSTypeName]'PrometheusWinApi').Type) {
   Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
-public static class SmallClawWinApi {
+public static class PrometheusWinApi {
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT {
     public int Left;
@@ -356,11 +356,11 @@ public static class SmallClawWinApi {
 `;
 
 const PS_INPUTAPI_HEADER = `
-if (-not ([System.Management.Automation.PSTypeName]'SmallClawInputApi').Type) {
+if (-not ([System.Management.Automation.PSTypeName]'PrometheusInputApi').Type) {
   Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public static class SmallClawInputApi {
+public static class PrometheusInputApi {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
   // dwData must be signed for MOUSEEVENTF_WHEEL / MOUSEEVENTF_HWHEEL (e.g. -120 per tick down).
   // Using uint breaks negative deltas and Chromium/Electron apps often ignore the scroll.
@@ -376,11 +376,11 @@ public static class SmallClawInputApi {
 // Without this, multi-monitor bounds can be scaled/virtualized on high-DPI setups,
 // causing side monitors to be clipped in "all monitors" screenshots.
 const PS_DPI_AWARE_HEADER = `
-if (-not ([System.Management.Automation.PSTypeName]'SmallClawDpiApi').Type) {
+if (-not ([System.Management.Automation.PSTypeName]'PrometheusDpiApi').Type) {
   Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public static class SmallClawDpiApi {
+public static class PrometheusDpiApi {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
 }
@@ -388,9 +388,9 @@ public static class SmallClawDpiApi {
 }
 try {
   # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
-  [void][SmallClawDpiApi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
+  [void][PrometheusDpiApi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 } catch {
-  try { [void][SmallClawDpiApi]::SetProcessDPIAware() } catch {}
+  try { [void][PrometheusDpiApi]::SetProcessDPIAware() } catch {}
 }
 `;
 
@@ -496,8 +496,8 @@ $windows = New-Object System.Collections.ArrayList
 foreach ($r in $winRows) {
   $hPtr = [IntPtr]::new([Int64]$r.MainWindowHandle)
   $mi = Get-MonitorIndex $hPtr
-  $rect = New-Object SmallClawWinApi+RECT
-  $okRect = [SmallClawWinApi]::GetWindowRect($hPtr, [ref]$rect)
+  $rect = New-Object PrometheusWinApi+RECT
+  $okRect = [PrometheusWinApi]::GetWindowRect($hPtr, [ref]$rect)
   $left = if ($okRect) { [int]$rect.Left } else { 0 }
   $top = if ($okRect) { [int]$rect.Top } else { 0 }
   $w = if ($okRect) { [int]($rect.Right - $rect.Left) } else { 0 }
@@ -514,18 +514,18 @@ foreach ($r in $winRows) {
     height = $h
   })
 }
-$hFg = [SmallClawWinApi]::GetForegroundWindow()
+$hFg = [PrometheusWinApi]::GetForegroundWindow()
 $apid = [uint32]0
-[void][SmallClawWinApi]::GetWindowThreadProcessId($hFg, [ref]$apid)
+[void][PrometheusWinApi]::GetWindowThreadProcessId($hFg, [ref]$apid)
 $aproc = $null
 if ($apid -gt 0) { $aproc = Get-Process -Id ([int]$apid) -ErrorAction SilentlyContinue }
 $actMi = Get-MonitorIndex $hFg
 $winTitle = ''
 if ($hFg -ne [IntPtr]::Zero) {
-  $tlen = [SmallClawWinApi]::GetWindowTextLength($hFg)
+  $tlen = [PrometheusWinApi]::GetWindowTextLength($hFg)
   if ($tlen -gt 0) {
     $sb = New-Object System.Text.StringBuilder ($tlen + 1)
-    [void][SmallClawWinApi]::GetWindowText($hFg, $sb, $sb.Capacity)
+    [void][PrometheusWinApi]::GetWindowText($hFg, $sb, $sb.Capacity)
     $winTitle = $sb.ToString().Trim()
   }
 }
@@ -731,7 +731,7 @@ if ($cropX2 -gt $cropX1 -and $cropY2 -gt $cropY1) {
   }
 }
 # --- End crop ---
-$tmp = Join-Path $env:TEMP ("smallclaw-desktop-" + [guid]::NewGuid().ToString() + ".png")
+$tmp = Join-Path $env:TEMP ("prometheus-desktop-" + [guid]::NewGuid().ToString() + ".png")
 $bmp.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
 [PSCustomObject]@{
@@ -790,31 +790,31 @@ $hWnd = [IntPtr]::new([Int64]${h})
 $wsh = New-Object -ComObject WScript.Shell
 
 # 1. Restore only if minimized (avoid changing normal window size/position)
-if ([SmallClawWinApi]::IsIconic($hWnd)) {
+if ([PrometheusWinApi]::IsIconic($hWnd)) {
   # SW_RESTORE = 9
-  [void][SmallClawWinApi]::ShowWindowAsync($hWnd, 9)
+  [void][PrometheusWinApi]::ShowWindowAsync($hWnd, 9)
   Start-Sleep -Milliseconds 120
 }
 
 # 2. Attach to foreground thread then SetForegroundWindow (bypasses foreground lock)
-$fg = [SmallClawWinApi]::GetForegroundWindow()
+$fg = [PrometheusWinApi]::GetForegroundWindow()
 $procId = 0
 $fgTid = 0
-$ourTid = [SmallClawWinApi]::GetCurrentThreadId()
+$ourTid = [PrometheusWinApi]::GetCurrentThreadId()
 if ($fg -ne [IntPtr]::Zero) {
-  $fgTid = [SmallClawWinApi]::GetWindowThreadProcessId($fg, [ref]$procId)
-  if ($fgTid -ne 0) { [void][SmallClawWinApi]::AttachThreadInput($ourTid, $fgTid, $true) }
+  $fgTid = [PrometheusWinApi]::GetWindowThreadProcessId($fg, [ref]$procId)
+  if ($fgTid -ne 0) { [void][PrometheusWinApi]::AttachThreadInput($ourTid, $fgTid, $true) }
 }
 $wsh.SendKeys('%')
 Start-Sleep -Milliseconds 60
-$ok = [SmallClawWinApi]::SetForegroundWindow($hWnd)
-if ($fgTid -ne 0) { [void][SmallClawWinApi]::AttachThreadInput($ourTid, $fgTid, $false) }
+$ok = [PrometheusWinApi]::SetForegroundWindow($hWnd)
+if ($fgTid -ne 0) { [void][PrometheusWinApi]::AttachThreadInput($ourTid, $fgTid, $false) }
 
 # 3. Fallback: BringWindowToTop
 if (-not $ok) {
-  $ok = [SmallClawWinApi]::BringWindowToTop($hWnd)
+  $ok = [PrometheusWinApi]::BringWindowToTop($hWnd)
   Start-Sleep -Milliseconds 80
-  $ok = $ok -or [SmallClawWinApi]::SetForegroundWindow($hWnd)
+  $ok = $ok -or [PrometheusWinApi]::SetForegroundWindow($hWnd)
 }
 
 # 4. Fallback: AppActivate by PID
@@ -890,9 +890,9 @@ function computeContentHash(base64: string): string {
 
 async function runOcr(imagePath: string): Promise<{ text: string; confidence: number } | null> {
   try {
-    const ocrEnabled = String(process.env.SMALLCLAW_DESKTOP_OCR || '1').trim() !== '0';
+    const ocrEnabled = String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0';
     if (!ocrEnabled) return null;
-    const timeoutMs = clampInt(process.env.SMALLCLAW_OCR_TIMEOUT_MS, 1000, 120000, 15000);
+    const timeoutMs = clampInt(process.env.PROMETHEUS_OCR_TIMEOUT_MS, 1000, 120000, 15000);
     const ocrCacheDir = path.join(process.cwd(), '.prometheus', 'ocr-cache');
     fs.mkdirSync(ocrCacheDir, { recursive: true });
     const { stdout } = await execFileAsync(
@@ -1063,17 +1063,17 @@ export async function desktopClick(
   const repeat = doubleClick ? 2 : 1;
   // Modifier key VK codes: Shift=0x10, Ctrl=0x11, Alt=0x12
   const modVk = modifier === 'shift' ? '0x10' : modifier === 'ctrl' ? '0x11' : modifier === 'alt' ? '0x12' : null;
-  const modDown = modVk ? `[SmallClawInputApi]::keybd_event(${modVk}, 0, 0, [UIntPtr]::Zero)` : '';
-  const modUp = modVk ? `[SmallClawInputApi]::keybd_event(${modVk}, 0, 0x0002, [UIntPtr]::Zero)` : '';
+  const modDown = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0, [UIntPtr]::Zero)` : '';
+  const modUp = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0x0002, [UIntPtr]::Zero)` : '';
 
   const script = `
 ${PS_INPUTAPI_HEADER}
-[void][SmallClawInputApi]::SetCursorPos(${xx}, ${yy})
+[void][PrometheusInputApi]::SetCursorPos(${xx}, ${yy})
 Start-Sleep -Milliseconds 40
 ${modDown}
 for ($i = 0; $i -lt ${repeat}; $i++) {
-  [SmallClawInputApi]::mouse_event(${downFlag}, 0, 0, 0, [UIntPtr]::Zero)
-  [SmallClawInputApi]::mouse_event(${upFlag}, 0, 0, 0, [UIntPtr]::Zero)
+  [PrometheusInputApi]::mouse_event(${downFlag}, 0, 0, 0, [UIntPtr]::Zero)
+  [PrometheusInputApi]::mouse_event(${upFlag}, 0, 0, 0, [UIntPtr]::Zero)
   if ($i -lt ${repeat - 1}) { Start-Sleep -Milliseconds 80 }
 }
 ${modUp}
@@ -1121,16 +1121,16 @@ export async function desktopDrag(
 
   const script = `
 ${PS_INPUTAPI_HEADER}
-[void][SmallClawInputApi]::SetCursorPos(${fx}, ${fy})
+[void][PrometheusInputApi]::SetCursorPos(${fx}, ${fy})
 Start-Sleep -Milliseconds 30
-[SmallClawInputApi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+[PrometheusInputApi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
 for ($i = 1; $i -le ${st}; $i++) {
   $x = [int](${fx} + ((${tx} - ${fx}) * $i / ${st}))
   $y = [int](${fy} + ((${ty} - ${fy}) * $i / ${st}))
-  [void][SmallClawInputApi]::SetCursorPos($x, $y)
+  [void][PrometheusInputApi]::SetCursorPos($x, $y)
   Start-Sleep -Milliseconds 8
 }
-[SmallClawInputApi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+[PrometheusInputApi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
 Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 9000 });
@@ -1341,12 +1341,12 @@ export async function desktopScroll(
   }
   const movePart =
     mx !== undefined && my !== undefined
-      ? `[void][SmallClawInputApi]::SetCursorPos(${mx}, ${my}); Start-Sleep -Milliseconds 75;`
+      ? `[void][PrometheusInputApi]::SetCursorPos(${mx}, ${my}); Start-Sleep -Milliseconds 75;`
       : '';
   const script = `
 ${PS_INPUTAPI_HEADER}
 ${movePart}
-[SmallClawInputApi]::mouse_event(${flag}, 0, 0, [int]${delta}, [UIntPtr]::Zero)
+[PrometheusInputApi]::mouse_event(${flag}, 0, 0, [int]${delta}, [UIntPtr]::Zero)
 Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 6000 });
@@ -1872,12 +1872,12 @@ ${PS_WINAPI_HEADER}
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public static class SmallClawClose {
+public static class PrometheusClose {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 }
 "@ -Language CSharp -ErrorAction SilentlyContinue
 $hWnd = [IntPtr]::new([Int64]${target.handle})
-[void][SmallClawClose]::PostMessage($hWnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+[void][PrometheusClose]::PostMessage($hWnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
 Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 8000 });

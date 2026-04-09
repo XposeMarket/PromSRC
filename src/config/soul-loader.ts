@@ -5,7 +5,7 @@ import { resolveSkillsRoot } from '../skills/store.js';
 
 // Prefer config next to the project, fall back to home
 const PROJECT_CONFIG_NEW = path.join(process.cwd(), '.prometheus');
-const PROJECT_CONFIG_OLD = path.join(process.cwd(), '.smallclaw');
+const PROJECT_CONFIG_OLD = path.join(process.cwd(), '.smallclaw'); // legacy fallback
 const PROJECT_CONFIG = fs.existsSync(PROJECT_CONFIG_NEW) ? PROJECT_CONFIG_NEW : PROJECT_CONFIG_OLD;
 const CONFIG_DIR = fs.existsSync(PROJECT_CONFIG) ? PROJECT_CONFIG : path.join(os.homedir(), '.prometheus');
 const SOUL_PATHS = [
@@ -21,7 +21,7 @@ function intEnv(name: string, fallback: number): number {
 }
 
 const PROMPT_BUDGET_FULL = {
-  totalChars: intEnv('PROMETHEUS_PROMPT_TOTAL_CHARS', 6000) || intEnv('SMALLCLAW_PROMPT_TOTAL_CHARS', 6000),
+  totalChars: intEnv('PROMETHEUS_PROMPT_TOTAL_CHARS', 6000),
   soulChars: 1400,
   memoryChars: 700,
   skillsTotalChars: 1400,
@@ -30,7 +30,7 @@ const PROMPT_BUDGET_FULL = {
 };
 
 const PROMPT_BUDGET_MINIMAL = {
-  totalChars: intEnv('PROMETHEUS_SUBAGENT_PROMPT_TOTAL_CHARS', 2000) || intEnv('SMALLCLAW_SUBAGENT_PROMPT_TOTAL_CHARS', 2000),
+  totalChars: intEnv('PROMETHEUS_SUBAGENT_PROMPT_TOTAL_CHARS', 2000),
   soulChars: 0,
   memoryChars: 0,
   skillsTotalChars: 0,
@@ -118,7 +118,7 @@ export function loadSkills(): SkillInfo[] {
 function tokenizeSkillQuery(input: string): string[] {
   const stop = new Set([
     'the', 'a', 'an', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at', 'is', 'are',
-    'be', 'can', 'you', 'please', 'use', 'run', 'help', 'skill', 'skills', 'smallclaw',
+    'be', 'can', 'you', 'please', 'use', 'run', 'help', 'skill', 'skills', 'prometheus',
   ]);
   const tokens = String(input || '')
     .toLowerCase()

@@ -47,7 +47,7 @@ const FINGERPRINT_MAX_LENGTH = 200;
 // ─── Source Error Detection ────────────────────────────────────────────────────
 
 /**
- * Determines if an error message/stack trace points to SmallClaw source code.
+ * Determines if an error message/stack trace points to Prometheus source code.
  * Returns file path and line if detected.
  */
 export function detectSourceError(errorText: string): {
@@ -59,7 +59,7 @@ export function detectSourceError(errorText: string): {
   const text = String(errorText || '');
 
   // Look for dist/ or src/ paths in stack traces
-  // e.g. "at Object.<anonymous> (D:\SmallClaw\dist\gateway\server-v2.js:450:12)"
+  // e.g. "at Object.<anonymous> (D:\Prometheus\dist\gateway\server-v2.js:450:12)"
   const stackPatterns = [
     /(?:dist|src)[\/\\]([a-zA-Z0-9_\-\/\\]+\.(?:ts|js)):(\d+)/,
     /at .+ \(.*(?:dist|src)[\/\\]([^:]+):(\d+):\d+\)/,
@@ -142,7 +142,7 @@ function getWatchdogStatePath(): string {
   try {
     base = getConfig().getConfigDir();
   } catch {
-    base = path.join(process.cwd(), '.smallclaw');
+    base = path.join(process.cwd(), '.prometheus');
   }
   return path.join(base, 'error-watchdog.json');
 }

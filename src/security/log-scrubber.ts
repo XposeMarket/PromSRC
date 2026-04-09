@@ -1,5 +1,5 @@
 /**
- * log-scrubber.ts — SmallClaw Secure Logger
+ * log-scrubber.ts — Prometheus Secure Logger
  *
  * Drop-in replacement for console.log / console.warn / console.error.
  * Every message is scrubbed for secrets before being written to disk or stdout.
@@ -24,8 +24,8 @@ import { scrubSecrets } from './vault';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const LOG_DIR_ENV   = process.env.SMALLCLAW_LOG_DIR;
-const LOG_LEVEL_ENV = (process.env.SMALLCLAW_LOG_LEVEL ?? 'info').toLowerCase();
+const LOG_DIR_ENV   = process.env.PROMETHEUS_LOG_DIR;
+const LOG_LEVEL_ENV = (process.env.PROMETHEUS_LOG_LEVEL ?? 'info').toLowerCase();
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3, security: 4 } as const;
 type LogLevel = keyof typeof LEVELS;

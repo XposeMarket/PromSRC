@@ -6,7 +6,7 @@
  * PROBLEM SOLVED:
  *   All file tools (read, write, edit, list, mkdir, etc.) previously resolved
  *   paths against the GLOBAL workspace config. This meant a subagent spawned
- *   with workspacePath = ".smallclaw/agents/news_harvester_v1/workspace" could
+ *   with workspacePath = ".prometheus/agents/news_harvester_v1/workspace" could
  *   still read/write anywhere in the global workspace — a major security/isolation
  *   gap when running autonomous teams.
  *

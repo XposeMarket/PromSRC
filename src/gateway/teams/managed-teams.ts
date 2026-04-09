@@ -4,7 +4,7 @@
  * Extends the existing agent-teams.ts with the full management layer:
  * - ManagedTeam type (extends AgentTeam with manager config, chat, changes)
  * - TeamChatMessage, TeamChange types
- * - Storage: workspace/.smallclaw/managed-teams.json
+ * - Storage: workspace/.prometheus/managed-teams.json
  * - CRUD helpers used by team-manager-runner.ts and server-v2.ts
  *
  * Design principle: subagents remain as AgentDefinition entries in config.agents[].

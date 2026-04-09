@@ -1,5 +1,5 @@
 /**
- * vault.ts — SmallClaw Secret Vault
+ * vault.ts — Prometheus Secret Vault
  *
  * Provides AES-256-GCM encrypted storage for all credentials.
  * Keys are derived from a machine-scoped master key (never stored alongside secrets).

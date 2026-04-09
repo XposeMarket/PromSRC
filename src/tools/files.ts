@@ -197,8 +197,8 @@ export interface ReadToolArgs {
 type RetrievalMode = 'fast' | 'standard' | 'deep';
 
 function getLocalConfigFilePath(): string {
-  const projectCfg = path.join(process.cwd(), '.smallclaw', 'config.json');
-  return fsSync.existsSync(projectCfg) ? projectCfg : path.join(os.homedir(), '.smallclaw', 'config.json');
+  const projectCfg = path.join(process.cwd(), '.prometheus', 'config.json');
+  return fsSync.existsSync(projectCfg) ? projectCfg : path.join(os.homedir(), '.prometheus', 'config.json');
 }
 
 function getRetrievalMode(): RetrievalMode {
@@ -871,7 +871,7 @@ export async function executeApplyPatch(args: ApplyPatchArgs): Promise<ToolResul
   const workspacePath = getConfig().getConfig().workspace.path;
   const tempPatchPath = path.join(
     os.tmpdir(),
-    `smallclaw-apply-${Date.now()}-${Math.random().toString(36).slice(2)}.patch`
+    `prometheus-apply-${Date.now()}-${Math.random().toString(36).slice(2)}.patch`
   );
 
   try {

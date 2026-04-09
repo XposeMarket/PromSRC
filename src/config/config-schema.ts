@@ -1,12 +1,12 @@
 /**
  * src/config/config-schema.ts
  *
- * Zod schema for SmallClawConfig — typed validation replacing the legacy
+ * Zod schema for PrometheusConfig — typed validation replacing the legacy
  * manual type-checking and redactConfigForUI() gymnastics.
  *
  * Usage:
- *   import { SmallClawConfigSchema, parseConfig } from './config-schema';
- *   const result = SmallClawConfigSchema.safeParse(rawJson);
+ *   import { PrometheusConfigSchema, parseConfig } from './config-schema';
+ *   const result = PrometheusConfigSchema.safeParse(rawJson);
  *
  * Step 30.1 of Phase 6 refactor.
  */
@@ -140,7 +140,7 @@ const WhatsappConfigSchema = z.object({
 
 // ─── Top-Level Config Schema ─────────────────────────────────────────────────
 
-export const SmallClawConfigSchema = z.object({
+export const PrometheusConfigSchema = z.object({
   version: z.string(),
 
   gateway: z.object({
@@ -281,9 +281,9 @@ export const SmallClawConfigSchema = z.object({
 });
 
 // ─── Inferred Type ───────────────────────────────────────────────────────────
-// Use this instead of importing SmallClawConfig from types.ts when you want
+// Use this instead of importing PrometheusConfig from types.ts when you want
 // the schema-derived version (guaranteed to match validation).
-export type ValidatedConfig = z.infer<typeof SmallClawConfigSchema>;
+export type ValidatedConfig = z.infer<typeof PrometheusConfigSchema>;
 
 // ─── Parse helpers ───────────────────────────────────────────────────────────
 
@@ -292,15 +292,15 @@ export type ValidatedConfig = z.infer<typeof SmallClawConfigSchema>;
  * Returns { success: true, data } or { success: false, error }.
  * Safe to call at startup — never throws.
  */
-export function parseConfig(raw: unknown): z.SafeParseReturnType<typeof SmallClawConfigSchema._type, ValidatedConfig> {
-  return SmallClawConfigSchema.safeParse(raw);
+export function parseConfig(raw: unknown): z.SafeParseReturnType<typeof PrometheusConfigSchema._type, ValidatedConfig> {
+  return PrometheusConfigSchema.safeParse(raw);
 }
 
 /**
  * Validate and throw on failure — useful for startup assertions.
  */
 export function assertConfig(raw: unknown): ValidatedConfig {
-  return SmallClawConfigSchema.parse(raw);
+  return PrometheusConfigSchema.parse(raw);
 }
 
 /**
@@ -308,7 +308,7 @@ export function assertConfig(raw: unknown): ValidatedConfig {
  * Returns an empty array if config is valid.
  */
 export function getConfigErrors(raw: unknown): string[] {
-  const result = SmallClawConfigSchema.safeParse(raw);
+  const result = PrometheusConfigSchema.safeParse(raw);
   if (result.success) return [];
   return result.error.issues.map(
     (issue) => `${issue.path.join('.')}: ${issue.message}`

@@ -1,9 +1,9 @@
 /**
- * browser-tools.ts - Browser Automation for SmallClaw
+ * browser-tools.ts - Browser Automation for Prometheus
  * 
  * Strategy: Connect to user's Chrome via CDP (--remote-debugging-port=9222).
  * If Chrome isn't running with the debug port, launch it ourselves with a
- * dedicated SmallClaw profile so it doesn't conflict with the user's Chrome.
+ * dedicated Prometheus profile so it doesn't conflict with the user's Chrome.
  * 
  * Snapshot: DOM-based element scraping (reliable across all Playwright versions).
  * No dependency on deprecated page.accessibility or page.ariaSnapshot APIs.
@@ -285,7 +285,7 @@ async function getOrCreateSession(sessionId: string): Promise<BrowserSession> {
       const path = await import('path');
       const os = await import('os');
       const profileDir = process.env.CHROME_PROFILE
-        || path.join(os.homedir(), '.smallclaw', 'chrome-debug-profile');
+        || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile');
 
       // Ensure profile dir exists
       if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });

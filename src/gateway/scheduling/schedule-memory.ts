@@ -8,8 +8,8 @@
  *   - run-log.json       — full audit trail of every run
  *
  * Both live at:
- *   .smallclaw/schedules/<scheduleId>/agent-memory.json
- *   .smallclaw/schedules/<scheduleId>/run-log.json
+ *   .prometheus/schedules/<scheduleId>/agent-memory.json
+ *   .prometheus/schedules/<scheduleId>/run-log.json
  *
  * Design rules:
  *   - agent-memory is NOT the evidence bus (bus = ephemeral per-run)
@@ -124,7 +124,7 @@ function getSchedulesDir(): string {
   try {
     base = getConfig().getConfigDir();
   } catch {
-    base = path.join(process.cwd(), '.smallclaw');
+    base = path.join(process.cwd(), '.prometheus');
   }
   const dir = path.join(base, 'schedules');
   fs.mkdirSync(dir, { recursive: true });
@@ -368,7 +368,7 @@ export function startRunLogEntry(input: {
 }
 
 // ─── Structured Observability Log ────────────────────────────────────────────
-// One JSON file per schedule: .smallclaw/schedules/<id>/structured-log.json
+// One JSON file per schedule: .prometheus/schedules/<id>/structured-log.json
 // Capped at 200 entries. Used by weekly review for richer aggregation.
 
 const MAX_STRUCTURED_LOG = 200;

@@ -186,7 +186,7 @@ export const getTeamLogsTool = {
       }
 
       // Also read cron job run history JSONL files
-      const runsDir = path.join(process.cwd(), '.smallclaw', 'jobs', 'runs');
+      const runsDir = path.join(process.cwd(), '.prometheus', 'jobs', 'runs');
       if (fs.existsSync(runsDir)) {
         const files = fs.readdirSync(runsDir).filter(f => f.endsWith('.jsonl'));
         for (const file of files.slice(0, 15)) {

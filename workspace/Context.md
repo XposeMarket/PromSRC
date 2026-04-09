@@ -289,7 +289,7 @@ Config schema:
 Key anchors:
 
 - provider enum includes `ollama|llama_cpp|lm_studio|openai|openai_codex|anthropic` at line 18
-- top-level schema `SmallClawConfigSchema` at line 143
+- top-level schema `PrometheusConfigSchema` at line 143
 - `session` schema block at line 232
 - `heartbeat` schema block at line 220
 

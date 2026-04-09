@@ -1,7 +1,7 @@
 /**
- * self-update.ts — SmallClaw Self-Update Tool
+ * self-update.ts — Prometheus Self-Update Tool
  *
- * Allows the AI to trigger a self-update of SmallClaw via a Telegram message
+ * Allows the AI to trigger a self-update of Prometheus via a Telegram message
  * or chat command. The tool:
  *   1. Launches self-update.bat detached (so the current gateway can exit)
  *   2. Returns a "starting update" message immediately
@@ -17,26 +17,26 @@ import path from 'path';
 import fs from 'fs';
 import { ToolResult } from '../types.js';
 
-// Resolve the SmallClaw root (two levels up from dist/tools/ or src/tools/)
-function resolveSmallClawRoot(): string {
+// Resolve the Prometheus root (two levels up from dist/tools/ or src/tools/)
+function resolvePrometheusRoot(): string {
   return path.resolve(__dirname, '..', '..');
 }
 
 export async function executeSelfUpdate(): Promise<ToolResult> {
-  const root = resolveSmallClawRoot();
+  const root = resolvePrometheusRoot();
   const batPath = path.join(root, 'self-update.bat');
 
   if (!fs.existsSync(batPath)) {
     return {
       success: false,
-      error: `self-update.bat not found at: ${batPath}. Make sure SmallClaw is properly installed.`,
+      error: `self-update.bat not found at: ${batPath}. Make sure Prometheus is properly installed.`,
     };
   }
 
   // Write a "pending" marker so the restart knows an update was triggered
   // (will be replaced by self-update.bat with SUCCESS or FAILED)
   try {
-    const statusDir = path.join(require('os').homedir(), '.smallclaw');
+    const statusDir = path.join(require('os').homedir(), '.prometheus');
     if (!fs.existsSync(statusDir)) fs.mkdirSync(statusDir, { recursive: true });
     // Don't write yet — self-update.bat will write the final status itself
   } catch {}
@@ -54,9 +54,9 @@ export async function executeSelfUpdate(): Promise<ToolResult> {
     return {
       success: true,
       stdout: [
-        '🦞 Self-update initiated!',
+        '🔥 Self-update initiated!',
         '',
-        'SmallClaw is now:',
+        'Prometheus is now:',
         '  1. Pulling the latest code',
         '  2. Rebuilding',
         '  3. Restarting the gateway',
@@ -78,7 +78,7 @@ export async function executeSelfUpdate(): Promise<ToolResult> {
 export const selfUpdateTool = {
   name: 'self_update',
   description:
-    'Trigger a SmallClaw self-update. Pulls latest code, rebuilds, and restarts the gateway. ' +
+    'Trigger a Prometheus self-update. Pulls latest code, rebuilds, and restarts the gateway. ' +
     'A Telegram message is sent when the update is complete. ' +
     'IMPORTANT: Before calling this tool, tell the user you are starting the update and will message them when back online.',
   execute: executeSelfUpdate,

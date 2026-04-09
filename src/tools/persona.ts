@@ -6,7 +6,7 @@
  *   - memory_flush:   write end-of-session memory before context compresses (called internally)
  *   - persona_read:   read a persona file so the AI can inspect before editing
  *
- * These tools let SmallClaw grow its personality, build knowledge of its user,
+ * These tools let Prometheus grow its personality, build knowledge of its user,
  * and preserve that knowledge across sessions and context resets.
  */
 
@@ -249,7 +249,7 @@ export interface MemoryFlushResult {
 /**
  * Check if a memory flush should fire based on history length.
  * OpenClaw triggers this at ~70% context utilization.
- * For SmallClaw with 8K context, trigger at 25+ messages.
+ * For Prometheus with 8K context, trigger at 25+ messages.
  */
 export function shouldTriggerMemoryFlush(historyLength: number, maxMessages: number = 30): boolean {
   return historyLength >= Math.floor(maxMessages * 0.8);

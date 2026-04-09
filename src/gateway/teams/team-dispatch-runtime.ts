@@ -453,8 +453,8 @@ function readSubagentConfig(agentId: string, workspace: string): any | null {
   const cfg = getConfig().getConfig() as any;
   const roots = new Set<string>([
     path.join(workspace, 'config.json'),
-    path.join(String(cfg?.workspace?.path || process.cwd()), '.smallclaw', 'subagents', agentId, 'config.json'),
-    path.join(process.cwd(), '.smallclaw', 'subagents', agentId, 'config.json'),
+    path.join(String(cfg?.workspace?.path || process.cwd()), '.prometheus', 'subagents', agentId, 'config.json'),
+    path.join(process.cwd(), '.prometheus', 'subagents', agentId, 'config.json'),
   ]);
 
   for (const p of roots) {

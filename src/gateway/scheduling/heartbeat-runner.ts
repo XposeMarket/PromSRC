@@ -62,7 +62,7 @@ export interface AgentHeartbeatEntry {
 }
 
 interface HeartbeatRunnerDeps {
-  configPath: string;               // .smallclaw/heartbeat/config.json
+  configPath: string;               // .prometheus/heartbeat/config.json
   handleChat: (
     message: string,
     sessionId: string,

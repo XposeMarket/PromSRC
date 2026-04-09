@@ -268,7 +268,7 @@ router.get('/api/mcp/tools', (_req, res) => {
 })();
 
 // ─── Internal Agent Task endpoint (called by Agent Builder for AI-authoring nodes)
-// Localhost-only unless SMALLCLAW_INTERNAL_TOKEN is set.
+// Localhost-only unless PROMETHEUS_INTERNAL_TOKEN is set.
 // NOTE: /internal/agent-task is mounted globally in server-v2.ts
 
 // ── Site Shortcuts API ─────────────────────────────────────────────────────────

@@ -358,7 +358,7 @@ export class MCPManager {
         this.sendRequest(session, 'initialize', {
           protocolVersion: '2024-11-05',
           capabilities: { tools: {} },
-          clientInfo: { name: 'SmallClaw', version: '1.0.0' },
+          clientInfo: { name: 'Prometheus', version: '1.0.0' },
         }).then(async () => {
           clearTimeout(timeout);
           this.sendNotification(session, 'notifications/initialized', {});
@@ -430,7 +430,7 @@ export class MCPManager {
           params: {
             protocolVersion: MCP_PROTOCOL_VERSION,
             capabilities: { tools: {} },
-            clientInfo: { name: 'SmallClaw', version: '2.0.0' },
+            clientInfo: { name: 'Prometheus', version: '2.0.0' },
           },
         }),
         signal: AbortSignal.timeout(12000),

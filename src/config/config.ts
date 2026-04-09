@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { AgentDefinition, SmallClawConfig } from '../types.js';
+import { AgentDefinition, PrometheusConfig } from '../types.js';
 import { getVault, scrubSecrets } from '../security/vault.js';
 import { getConfigErrors } from './config-schema.js';
 
@@ -51,9 +51,9 @@ migrateLegacyData();
 
 // ── Config & workspace directory resolution ──────────────────────────────────
 // Priority:
-//   1. SMALLCLAW_DATA_DIR env var   (set by Docker / CI)
-//   2. .smallclaw/ next to the project root
-//   3. ~/.smallclaw in the user's home directory
+//   1. PROMETHEUS_DATA_DIR env var  (set by Docker / CI)
+//   2. .prometheus/ next to the project root
+//   3. ~/.prometheus in the user's home directory
 const PROJECT_CONFIG_NEW = path.join(__dirname, '..', '..', '.prometheus');
 const PROJECT_CONFIG_OLD = path.join(__dirname, '..', '..', '.smallclaw');
 const PROJECT_CONFIG = fs.existsSync(PROJECT_CONFIG_NEW) ? PROJECT_CONFIG_NEW : PROJECT_CONFIG_OLD;
@@ -61,23 +61,20 @@ const HOME_CONFIG    = path.join(os.homedir(), '.prometheus');
 const CONFIG_DIR =
   process.env.PROMETHEUS_DATA_DIR
     ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
-    : process.env.SMALLCLAW_DATA_DIR
-      ? path.join(process.env.SMALLCLAW_DATA_DIR, '.prometheus')
-      : fs.existsSync(PROJECT_CONFIG_NEW)
-        ? PROJECT_CONFIG_NEW
-        : fs.existsSync(PROJECT_CONFIG_OLD)
-          ? PROJECT_CONFIG_OLD
-          : HOME_CONFIG;
+    : fs.existsSync(PROJECT_CONFIG_NEW)
+      ? PROJECT_CONFIG_NEW
+      : fs.existsSync(PROJECT_CONFIG_OLD)
+        ? PROJECT_CONFIG_OLD
+        : HOME_CONFIG;
 
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 // Workspace: env var → config-dir-relative default (cross-platform safe)
 const WORKSPACE_DIR =
   process.env.PROMETHEUS_WORKSPACE_DIR ??
-  process.env.SMALLCLAW_WORKSPACE_DIR ??
   path.join(CONFIG_DIR, '..', 'workspace');
 
-export const DEFAULT_CONFIG: SmallClawConfig = {
+export const DEFAULT_CONFIG: PrometheusConfig = {
   version: '1.0.1',
   gateway: {
     port: process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789,
@@ -98,7 +95,7 @@ export const DEFAULT_CONFIG: SmallClawConfig = {
   // ── Provider config – built from env vars so Docker works out of the box.
   // Any values in config.json will override these at load time.
   llm: {
-    provider: (process.env.PROMETHEUS_PROVIDER as any) ?? (process.env.SMALLCLAW_PROVIDER as any) ?? 'ollama',
+    provider: (process.env.PROMETHEUS_PROVIDER as any) ?? 'ollama',
     providers: {
       ollama: {
         endpoint: process.env.OLLAMA_HOST ?? 'http://localhost:11434',
@@ -440,13 +437,13 @@ function migrateSecretsToVault(config: any, configDir: string): any {
 }
 
 export class ConfigManager {
-  private config: SmallClawConfig;
+  private config: PrometheusConfig;
 
   constructor() {
     this.config = this.loadConfig();
   }
 
-  private loadConfig(): SmallClawConfig {
+  private loadConfig(): PrometheusConfig {
     try {
       if (fs.existsSync(CONFIG_FILE)) {
         const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
@@ -476,7 +473,7 @@ export class ConfigManager {
           },
         };
 
-        const merged: SmallClawConfig = {
+        const merged: PrometheusConfig = {
           ...DEFAULT_CONFIG,
           ...loaded,
           llm: mergedLlm,
@@ -499,11 +496,11 @@ export class ConfigManager {
     return DEFAULT_CONFIG;
   }
 
-  public getConfig(): SmallClawConfig {
+  public getConfig(): PrometheusConfig {
     return this.config;
   }
 
-  public updateConfig(updates: Partial<SmallClawConfig>): void {
+  public updateConfig(updates: Partial<PrometheusConfig>): void {
     this.config = { ...this.config, ...updates };
     this.saveConfig();
   }

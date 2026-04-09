@@ -1,12 +1,12 @@
 /**
- * webhook-handler.ts — SmallClaw Webhook Endpoint
+ * webhook-handler.ts — Prometheus Webhook Endpoint
  *
  * Exposes two core HTTP endpoints on the gateway:
  *
  *   POST /hooks/wake   — lightweight "nudge" that enqueues a system event
  *   POST /hooks/agent  — full agent run in an isolated session, optional reply delivery
  *
- * Auth: Bearer token or x-smallclaw-token header. Query-string tokens rejected (400).
+ * Auth: Bearer token or x-prometheus-token header. Query-string tokens rejected (400).
  *
  * Config block in config.json:
  * {
@@ -123,13 +123,13 @@ function createAuthMiddleware(getConfig: () => HookConfig) {
 
     // Reject query-string token (security: tokens must not appear in URLs/logs)
     if (req.query.token) {
-      res.status(400).json({ error: 'Query-string tokens are not accepted. Use Authorization header or x-smallclaw-token.' });
+      res.status(400).json({ error: 'Query-string tokens are not accepted. Use Authorization header or x-prometheus-token.' });
       return;
     }
 
     // Extract token from headers
     const authHeader = String(req.headers['authorization'] || '');
-    const xToken = String(req.headers['x-smallclaw-token'] || '');
+    const xToken = String(req.headers['x-prometheus-token'] || req.headers['x-smallclaw-token'] || ''); // x-smallclaw-token kept for backward compat
     let providedToken = '';
 
     if (authHeader.toLowerCase().startsWith('bearer ')) {

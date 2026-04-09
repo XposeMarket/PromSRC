@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const historyPath = path.join(process.cwd(), '.smallclaw', 'agents', 'run-history.json');
+const historyPath = path.join(process.cwd(), '.prometheus', 'agents', 'run-history.json');
 const MAX_HISTORY = 300;
 
 export interface AgentRunHistoryEntry {

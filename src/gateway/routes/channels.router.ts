@@ -181,7 +181,7 @@ router.post('/api/channels/send-test/:channel', async (req, res) => {
 
   if (channel === 'telegram') {
     try {
-      await _telegramChannel.sendToAllowed('🦞 SmallClaw test message - Telegram is connected!');
+      await _telegramChannel.sendToAllowed('🦞 Prometheus test message - Telegram is connected!');
       res.json({ success: true });
     } catch (err: any) {
       res.json({ success: false, error: String(err?.message || err) });
@@ -191,7 +191,7 @@ router.post('/api/channels/send-test/:channel', async (req, res) => {
 
   if (channel === 'discord') {
     const dc = normalizeDiscordConfig({ ...channels.discord, ...(req.body || {}) });
-    const text = String(req.body?.text || '🦞 SmallClaw test message - Discord is connected!');
+    const text = String(req.body?.text || '🦞 Prometheus test message - Discord is connected!');
     if (dc.webhookUrl) {
       try {
         const resp = await fetch(dc.webhookUrl, {
@@ -238,7 +238,7 @@ router.post('/api/channels/send-test/:channel', async (req, res) => {
   if (channel === 'whatsapp') {
     const wa = normalizeWhatsAppConfig({ ...channels.whatsapp, ...(req.body || {}) });
     const to = String(req.body?.to || wa.testRecipient || '').trim();
-    const text = String(req.body?.text || 'SmallClaw test message - WhatsApp is connected!');
+    const text = String(req.body?.text || 'Prometheus test message - WhatsApp is connected!');
     if (!wa.accessToken || !wa.phoneNumberId || !to) {
       res.json({ success: false, error: 'Provide WhatsApp access token, phone number ID, and test recipient number' });
       return;

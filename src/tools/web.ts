@@ -245,7 +245,7 @@ function selectDominantStoryCluster(query: string, ranked: SearchResultItem[]): 
 
 async function fetchCleanArticle(url: string, maxChars = 5000): Promise<string> {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SmallClaw/1.0' },
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0' },
     signal: AbortSignal.timeout(15_000),
     redirect: 'follow',
   });
@@ -503,9 +503,9 @@ function getSearchConfig(): {
     // Final fallback: try reading config.json directly from known paths
     try {
       const candidates = [
-        path.join(process.env.SMALLCLAW_DATA_DIR || '', '.smallclaw', 'config.json'),
-        path.join(process.cwd(), '.smallclaw', 'config.json'),
-        path.join(os.homedir(), '.smallclaw', 'config.json'),
+        path.join(process.env.PROMETHEUS_DATA_DIR || '', '.prometheus', 'config.json'),
+        path.join(process.cwd(), '.prometheus', 'config.json'),
+        path.join(os.homedir(), '.prometheus', 'config.json'),
       ].filter(Boolean);
       for (const cfgPath of candidates) {
         if (fs.existsSync(cfgPath)) {
@@ -627,7 +627,7 @@ async function searchDDG(query: string, limit: number): Promise<ToolResult> {
   // DDG instant answer API — gives structured results without scraping HTML
   const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'SmallClaw/1.0' },
+    headers: { 'User-Agent': 'Prometheus/1.0' },
     signal: AbortSignal.timeout(12_000),
   });
 
@@ -962,7 +962,7 @@ export async function executeWebFetch(args: { url: string; max_chars?: number })
 
   try {
     const res = await fetch(args.url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SmallClaw/1.0' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0' },
       signal: AbortSignal.timeout(20_000),
       redirect: 'follow',
     });

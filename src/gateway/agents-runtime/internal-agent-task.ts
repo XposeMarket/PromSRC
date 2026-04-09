@@ -1,6 +1,6 @@
 /**
  * internal-agent-task.ts
- * SmallClaw headless agent runner — called by Agent Builder during workflow execution.
+ * Prometheus headless agent runner — called by Agent Builder during workflow execution.
  *
  * Endpoint: POST /internal/agent-task
  *   Body: { agentId, task, context?, output_field?, timeoutMs? }
@@ -10,7 +10,7 @@
  *   Response: { success, agents: [{ id, name, description, output_field }] }
  *
  * Auth: localhost-only by default (same as requireGatewayAuth without a token configured).
- * Set SMALLCLAW_INTERNAL_TOKEN env var to require a bearer token from Agent Builder.
+ * Set PROMETHEUS_INTERNAL_TOKEN env var to require a bearer token from Agent Builder.
  */
 
 import express from 'express';
@@ -27,20 +27,20 @@ export const internalAgentTaskRouter = express.Router();
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // Primary dynamic subagent location (matches SubagentManager):
-// <workspace>/.smallclaw/subagents/<agentId>/
+// <workspace>/.prometheus/subagents/<agentId>/
 function getPrimarySubagentStoreDir(): string {
   try {
     const workspace = String(getConfig().getConfig()?.workspace?.path || process.cwd());
-    return path.join(workspace, '.smallclaw', 'subagents');
+    return path.join(workspace, '.prometheus', 'subagents');
   } catch {
-    return path.join(process.cwd(), '.smallclaw', 'subagents');
+    return path.join(process.cwd(), '.prometheus', 'subagents');
   }
 }
 
 // Legacy location used by earlier builds of this endpoint:
-// <SMALLCLAW_DATA_DIR>/subagents OR ~/.smallclaw/subagents
+// <PROMETHEUS_DATA_DIR>/subagents OR ~/.prometheus/subagents
 function getLegacySubagentStoreDir(): string {
-  const dataDir = process.env.SMALLCLAW_DATA_DIR || path.join(os.homedir(), '.smallclaw');
+  const dataDir = process.env.PROMETHEUS_DATA_DIR || path.join(os.homedir(), '.prometheus');
   return path.join(dataDir, 'subagents');
 }
 
@@ -204,13 +204,13 @@ async function runAgent(
     return { success: r.success, result: r.result || r.error || '', durationMs: r.durationMs, error: r.error };
   }
 
-  // Path B: Dynamic subagent stored in .smallclaw/subagents/
+  // Path B: Dynamic subagent stored in .prometheus/subagents/
   const def = loadDef(agentId);
   if (!def) {
     return {
       success: false, result: '',
       durationMs: Date.now() - startMs,
-      error: `Subagent "${agentId}" not found. Create it first using SmallClaw's create_node_subagent tool.`,
+      error: `Subagent "${agentId}" not found. Create it first using Prometheus's create_node_subagent tool.`,
     };
   }
 
@@ -247,8 +247,8 @@ async function runAgent(
 // ─── POST /internal/agent-task ────────────────────────────────────────────────
 
 internalAgentTaskRouter.post('/', async (req: express.Request, res: express.Response) => {
-  // Token check — if SMALLCLAW_INTERNAL_TOKEN is set, enforce it
-  const requiredToken = process.env.SMALLCLAW_INTERNAL_TOKEN || '';
+  // Token check — if PROMETHEUS_INTERNAL_TOKEN is set, enforce it
+  const requiredToken = process.env.PROMETHEUS_INTERNAL_TOKEN || '';
   if (requiredToken) {
     const provided = String(req.headers['authorization'] || '').replace(/^bearer /i, '').trim();
     if (provided !== requiredToken) {

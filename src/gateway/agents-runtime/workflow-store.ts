@@ -1,13 +1,13 @@
 /**
- * WorkflowStore — Persistent SmallClaw-side workflow registry
+ * WorkflowStore — Persistent Prometheus-side workflow registry
  *
- * This is the SmallClaw brain for workflow memory. Every workflow
+ * This is the Prometheus brain for workflow memory. Every workflow
  * deployed through Agent Builder gets saved here permanently, keyed
- * by its workflow_id. On next request, SmallClaw checks this store
+ * by its workflow_id. On next request, Prometheus checks this store
  * BEFORE calling architect_workflow(), preventing duplicates and
  * saving API calls / build time.
  *
- * Storage: .smallclaw/workflows.json (same pattern as CronScheduler jobs)
+ * Storage: .prometheus/workflows.json (same pattern as CronScheduler jobs)
  * Format:  JSON file, human-readable, persists across restarts
  *
  * File location: src/gateway/workflow-store.ts
@@ -48,7 +48,7 @@ export interface StoredWorkflow {
   action: string;
 
   /**
-   * Searchable tags. Used by SmallClaw to match user intent.
+   * Searchable tags. Used by Prometheus to match user intent.
    * e.g. ["social", "x", "twitter", "post", "quick"]
    */
   tags: string[];
@@ -65,7 +65,7 @@ export interface StoredWorkflow {
   /** Cron expression if scheduled, e.g. "0 9 * * *" */
   cron_expression?: string;
 
-  /** Number of times this workflow has been executed via SmallClaw */
+  /** Number of times this workflow has been executed via Prometheus */
   execution_count: number;
 
   /** ISO timestamp of last execution */
@@ -88,7 +88,7 @@ export interface StoredWorkflow {
 
   /**
    * Short phrases that should trigger this workflow.
-   * SmallClaw learns these over time.
+   * Prometheus learns these over time.
    * e.g. ["post to x", "tweet about", "x post"]
    */
   trigger_phrases: string[];
@@ -115,10 +115,10 @@ export interface WorkflowStoreData {
 
 const STORE_VERSION = 1;
 
-// Default store path — respects SMALLCLAW_DATA_DIR env var if set
+// Default store path — respects PROMETHEUS_DATA_DIR env var if set
 function getStorePath(): string {
-  const dataDir = process.env.SMALLCLAW_DATA_DIR
-    || path.join(os.homedir(), '.smallclaw');
+  const dataDir = process.env.PROMETHEUS_DATA_DIR
+    || path.join(os.homedir(), '.prometheus');
 
   return path.join(dataDir, 'workflows.json');
 }
@@ -297,7 +297,7 @@ export class WorkflowStore {
   }
 
   /**
-   * Returns true if SmallClaw has a workflow registered for this ID.
+   * Returns true if Prometheus has a workflow registered for this ID.
    */
   has(workflowId: string): boolean {
     return workflowId in this.data.workflows;
@@ -416,7 +416,7 @@ export class WorkflowStore {
 
   /**
    * Human-readable summary for LLM context injection.
-   * SmallClaw can include this in its system prompt or tool descriptions.
+   * Prometheus can include this in its system prompt or tool descriptions.
    */
   toLLMSummary(): string {
     const all = this.getActive();

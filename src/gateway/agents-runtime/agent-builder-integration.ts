@@ -1,6 +1,6 @@
 /**
  * agent-builder-integration.ts
- * SmallClaw ↔ Agent Builder bridge — with persistent workflow memory
+ * Prometheus ↔ Agent Builder bridge — with persistent workflow memory
  *
  * Tools exposed to the LLM:
  *   1. architect_workflow          — Design + create a new workflow
@@ -52,7 +52,7 @@ function abCall(method: string, path: string, body?: object): Promise<any> {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'SmallClaw-AgentBuilder/1.5',
+        'User-Agent': 'Prometheus-AgentBuilder/1.5',
         ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
       },
       timeout: REQUEST_TIMEOUT_MS
@@ -158,7 +158,7 @@ async function verify_workflow_credentials(args: { workflow_id: string }): Promi
       console.log(`[WorkflowStore] Credentials verified for ${args.workflow_id}`);
     }
 
-    // Build a human-friendly message SmallClaw can relay directly to the user.
+    // Build a human-friendly message Prometheus can relay directly to the user.
     // If credentials are missing, include the deep-link URLs so the user can
     // click straight into the right Agent Builder credential form.
     if (!result.all_credentials_present && result.credential_actions?.length) {
@@ -202,7 +202,7 @@ async function test_workflow(args: { workflow_id: string }): Promise<string> {
  * Tool 4: deploy_workflow
  *
  * This is the critical persistence point. After a successful deploy,
- * the workflow is saved to WorkflowStore so SmallClaw remembers it forever.
+ * the workflow is saved to WorkflowStore so Prometheus remembers it forever.
  */
 async function deploy_workflow(args: {
   workflow_id: string;
@@ -256,7 +256,7 @@ async function deploy_workflow(args: {
       console.log(`[AgentBuilder] Registry template ID: ${templateId}`);
     }
 
-    // 3. Save to SmallClaw's persistent store — includes template_id for future execute calls
+    // 3. Save to Prometheus's persistent store — includes template_id for future execute calls
     const stored = workflowStore.register({
       workflow_id: args.workflow_id,
       template_id: templateId,
@@ -335,8 +335,8 @@ async function get_workflow_status(args: { workflow_id: string }): Promise<strin
 /**
  * Tool 6: search_workflow_templates
  *
- * LOCAL-FIRST: Searches SmallClaw's persistent store before hitting Agent Builder.
- * This is the primary way SmallClaw avoids creating duplicate workflows.
+ * LOCAL-FIRST: Searches Prometheus's persistent store before hitting Agent Builder.
+ * This is the primary way Prometheus avoids creating duplicate workflows.
  *
  * LLM should ALWAYS call this before architect_workflow().
  */
@@ -491,7 +491,7 @@ async function execute_workflow_template(args: {
     const duration = result?.result?.duration || result?.duration || null;
 
     // Build a plain-English summary the LLM should relay to the user verbatim.
-    // This is the notification bridge — Agent Builder ran something, SmallClaw tells you.
+    // This is the notification bridge — Agent Builder ran something, Prometheus tells you.
     let user_message: string;
     if (wasSuccess) {
       const parts = [`✅ **${name}** ran successfully.`];
@@ -624,7 +624,7 @@ async function create_node_subagent(args: {
   ].join('\n');
 
   // Write all workspace files via Agent Builder's subagent registry endpoint
-  // (Agent Builder stores them and SmallClaw reads them at runtime)
+  // (Agent Builder stores them and Prometheus reads them at runtime)
   const result = await abCallWithRetry('POST', '/api/v1/subagents/create', {
     agent_id: agentId,
     workflow_id,
@@ -757,7 +757,7 @@ export const AGENT_BUILDER_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'deploy_workflow',
-      description: 'Activate a workflow and save it to SmallClaw\'s persistent registry. After this, the workflow is remembered forever and can be reused with execute_workflow_template(). Call only after test_workflow() passes.',
+      description: 'Activate a workflow and save it to Prometheus\'s persistent registry. After this, the workflow is remembered forever and can be reused with execute_workflow_template(). Call only after test_workflow() passes.',
       parameters: {
         type: 'object',
         properties: {
@@ -798,7 +798,7 @@ export const AGENT_BUILDER_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'search_workflow_templates',
-      description: `Search for existing workflows before creating new ones. \nALWAYS call this FIRST when a user asks to automate something. \nSearches SmallClaw's local registry (instant) then Agent Builder.\nIf results found, use execute_workflow_template() — do NOT call architect_workflow().`,
+      description: `Search for existing workflows before creating new ones. \nALWAYS call this FIRST when a user asks to automate something. \nSearches Prometheus's local registry (instant) then Agent Builder.\nIf results found, use execute_workflow_template() — do NOT call architect_workflow().`,
       parameters: {
         type: 'object',
         properties: {
@@ -829,7 +829,7 @@ export const AGENT_BUILDER_TOOL_DEFINITIONS = [
           },
           trigger_phrase: {
             type: 'string',
-            description: 'The phrase the user said that triggered this execution (helps SmallClaw learn patterns)'
+            description: 'The phrase the user said that triggered this execution (helps Prometheus learn patterns)'
           }
         },
         required: ['workflow_id']
@@ -840,7 +840,7 @@ export const AGENT_BUILDER_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'create_node_subagent',
-      description: 'Create a persistent SmallClaw writing subagent for an AI-authoring workflow node (tweet/email/slack/etc), then attach it to the node via subagent_config.',
+      description: 'Create a persistent Prometheus writing subagent for an AI-authoring workflow node (tweet/email/slack/etc), then attach it to the node via subagent_config.',
       parameters: {
         type: 'object',
         properties: {
@@ -893,7 +893,7 @@ export async function executeAgentBuilderTool(name: string, args: any): Promise<
 // ─── Registration (fixed return type bug) ─────────────────────────────────────
 
 /**
- * Register all Agent Builder tools into SmallClaw's tool array.
+ * Register all Agent Builder tools into Prometheus's tool array.
  *
  * FIX: Now returns the definitions array so callers can spread it:
  *   tools.push(...registerAgentBuilderTools(tools))  <- wrong pattern
@@ -916,7 +916,7 @@ export function registerAgentBuilderTools(toolsArray: any[]): any[] {
 // ─── Utility: inject workflow memory into system prompt ───────────────────────
 
 /**
- * Returns a block to append to SmallClaw's system prompt.
+ * Returns a block to append to Prometheus's system prompt.
  * Tells the LLM what workflows already exist so it doesn't try to recreate them.
  *
  * Usage in server-v2.ts:

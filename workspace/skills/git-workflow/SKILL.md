@@ -133,7 +133,7 @@ git reflog                        # Full HEAD history (recovery lifeline)
 
 ---
 
-## Common SmallClaw Workflows
+## Common Prometheus Workflows
 
 ### Save and push work
 ```bash

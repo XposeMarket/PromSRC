@@ -1,5 +1,5 @@
 /**
- * hooks.ts - Lightweight internal event hook system for SmallClaw.
+ * hooks.ts - Lightweight internal event hook system for Prometheus.
  *
  * No discovery, no YAML frontmatter, no plugin loading.
  * Just a typed EventEmitter with named events for:

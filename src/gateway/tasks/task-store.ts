@@ -1,7 +1,7 @@
 /**
  * task-store.ts Ã¢â‚¬â€ Persistent background task storage
  *
- * Tasks are stored as individual JSON files in .smallclaw/tasks/
+ * Tasks are stored as individual JSON files in .prometheus/tasks/
  * plus an index file for fast listing.
  *
  * This is the data layer only Ã¢â‚¬â€ no execution logic.
@@ -208,7 +208,7 @@ function getStateBaseDir(): string {
   try {
     return getConfig().getConfigDir();
   } catch {
-    return path.join(process.cwd(), '.smallclaw');
+    return path.join(process.cwd(), '.prometheus');
   }
 }
 

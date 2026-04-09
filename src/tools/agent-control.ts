@@ -1,5 +1,5 @@
 /**
- * agent-control.ts — SmallClaw Agent Inspection & Control Tools
+ * agent-control.ts — Prometheus Agent Inspection & Control Tools
  *
  * Gives the AI the ability to:
  *   - List all defined agents (agent_list)
@@ -27,7 +27,7 @@ export async function executeAgentList(_args: any): Promise<ToolResult> {
   if (agents.length === 0) {
     return {
       success: true,
-      stdout: 'No agents are defined in config. You are running in single-agent mode.\n\nTo add agents, edit .smallclaw/config.json and add an "agents" array with AgentDefinition objects.',
+      stdout: 'No agents are defined in config. You are running in single-agent mode.\n\nTo add agents, edit .prometheus/config.json and add an "agents" array with AgentDefinition objects.',
       data: { agents: [], mode: 'single-agent' },
     };
   }

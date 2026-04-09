@@ -127,21 +127,21 @@ export function listGoals(filter?: { status?: Goal['status'][] }): Goal[] {
 // ─── Decomposition Prompt ──────────────────────────────────────────────────────
 
 function buildDecompositionPrompt(goalText: string, contextHints?: string): string {
-  return `You are a strategic planning assistant for an autonomous AI agent system (SmallClaw).
+  return `You are a strategic planning assistant for an autonomous AI agent system (Prometheus).
 
 A user has given you this high-level goal:
 "${goalText}"
 
 ${contextHints ? `Additional context: ${contextHints}\n` : ''}
 
-Your job is to decompose this goal into 2-6 automated sub-tasks that SmallClaw can execute as scheduled jobs.
+Your job is to decompose this goal into 2-6 automated sub-tasks that Prometheus can execute as scheduled jobs.
 
 Each sub-task should be:
 - Concrete and executable (the AI can actually DO it with tools it has: browser, web search, files, shell)
 - Scheduled appropriately (daily, weekly, etc.)
 - Independently verifiable (you can tell if it succeeded)
 
-AVAILABLE TOOLS SmallClaw has:
+AVAILABLE TOOLS Prometheus has:
 - Browser automation (browse websites, fill forms, click buttons)
 - Web search and content fetching
 - File read/write operations

@@ -59,7 +59,7 @@ function getMutationStateDir(): string {
   try {
     base = getConfig().getConfigDir();
   } catch {
-    base = path.join(process.cwd(), '.smallclaw');
+    base = path.join(process.cwd(), '.prometheus');
   }
   const dir = path.join(base, 'prompt-mutations');
   fs.mkdirSync(dir, { recursive: true });

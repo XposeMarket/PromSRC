@@ -35,7 +35,7 @@ export interface EvidenceBusToolArgs {
 
 /**
  * Creates a write_evidence tool bound to a specific task and step.
- * Returns a tool object compatible with the SmallClaw tool registry.
+ * Returns a tool object compatible with the Prometheus tool registry.
  */
 export function createEvidenceBusTool(taskId: string, stepIndex: number, agentId?: string) {
   return {

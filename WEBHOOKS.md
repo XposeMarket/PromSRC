@@ -1,13 +1,13 @@
-# SmallClaw Webhook System
+# Prometheus Webhook System
 
 ## Overview
 
-SmallClaw includes a built-in webhook server that runs directly inside the gateway. Any service that can make an HTTP POST request can trigger it — no middleware, no n8n, no Zapier required.
+Prometheus includes a built-in webhook server that runs directly inside the gateway. Any service that can make an HTTP POST request can trigger it — no middleware, no n8n, no Zapier required.
 
 The basic architecture is:
 
 ```
-External Service → POST → SmallClaw Gateway (localhost:18789/hooks/agent)
+External Service → POST → Prometheus Gateway (localhost:18789/hooks/agent)
 ```
 
 Services that already support outgoing webhooks (GitHub, Stripe, Shopify, Vercel, etc.) connect directly. For apps that can't fire webhooks themselves (Google Sheets, RSS feeds, etc.), you can optionally add **n8n** as a local middleware layer — but it's never required.
@@ -19,13 +19,13 @@ Services that already support outgoing webhooks (GitHub, Stripe, Shopify, Vercel
 ### Step 1 — Build
 
 ```bat
-cd D:\SmallClaw
+cd D:\Prometheus
 .\build-webhooks.bat
 ```
 
 ### Step 2 — Enable in config
 
-Edit `%USERPROFILE%\.smallclaw\config.json` and add:
+Edit `%USERPROFILE%\.prometheus\config.json` and add:
 
 ```json
 "hooks": {
@@ -112,7 +112,7 @@ A fast, low-overhead endpoint for simple event notifications. Injects a system e
 
 ```bash
 curl -X POST http://localhost:18789/hooks/wake \
-  -H "x-smallclaw-token: your-token" \
+  -H "x-prometheus-token: your-token" \
   -H "Content-Type: application/json" \
   -d '{"text": "Build pipeline failed on main branch", "mode": "now"}'
 ```
@@ -125,7 +125,7 @@ Returns the current state of the webhook system. Useful for monitoring or testin
 
 ```bash
 curl -X GET http://localhost:18789/hooks/status \
-  -H "x-smallclaw-token: your-token"
+  -H "x-prometheus-token: your-token"
 ```
 
 **Response:**
@@ -149,7 +149,7 @@ All endpoints require a token. Two accepted header formats:
 Authorization: Bearer your-token
 ```
 ```
-x-smallclaw-token: your-token
+x-prometheus-token: your-token
 ```
 
 Query-string tokens are **explicitly rejected** with a `400` error — this is intentional, since query params appear in server logs and browser history.
@@ -160,7 +160,7 @@ Query-string tokens are **explicitly rejected** with a `400` error — this is i
 
 ## The localhost Problem (and Solutions)
 
-SmallClaw runs on your local PC. Services like GitHub and Stripe can't reach `localhost:18789` from the internet. Pick one of the following:
+Prometheus runs on your local PC. Services like GitHub and Stripe can't reach `localhost:18789` from the internet. Pick one of the following:
 
 ### Tailscale (recommended for permanent setups)
 
@@ -201,15 +201,15 @@ In your repo: **Settings → Webhooks → Add webhook**
 
 - Payload URL: `https://your-tunnel/hooks/agent`
 - Content type: `application/json`
-- Secret: *(leave blank — use `x-smallclaw-token` in a custom header if your CI supports it, otherwise use Tailscale + no public exposure)*
+- Secret: *(leave blank — use `x-prometheus-token` in a custom header if your CI supports it, otherwise use Tailscale + no public exposure)*
 
 For a cleaner setup, use a GitHub Actions workflow that calls the webhook after events:
 
 ```yaml
-- name: Notify SmallClaw
+- name: Notify Prometheus
   run: |
-    curl -X POST ${{ secrets.SMALLCLAW_WEBHOOK_URL }}/hooks/agent \
-      -H "x-smallclaw-token: ${{ secrets.SMALLCLAW_TOKEN }}" \
+    curl -X POST ${{ secrets.PROMETHEUS_WEBHOOK_URL }}/hooks/agent \
+      -H "x-prometheus-token: ${{ secrets.PROMETHEUS_TOKEN }}" \
       -H "Content-Type: application/json" \
       -d "{\"message\": \"PR #${{ github.event.number }} opened: ${{ github.event.pull_request.title }}\", \"name\": \"GitHub\"}"
 ```
@@ -229,7 +229,7 @@ External App (Google Sheets, RSS, etc.)
          ↓
    n8n (localhost:5678)
          ↓
-SmallClaw /hooks/agent
+Prometheus /hooks/agent
          ↓
    Response → Telegram
 ```
@@ -242,11 +242,11 @@ n8n start
 # Web UI at http://localhost:5678
 ```
 
-**Example n8n HTTP node config** (to call SmallClaw):
+**Example n8n HTTP node config** (to call Prometheus):
 
 - Method: `POST`
 - URL: `http://localhost:18789/hooks/agent`
-- Headers: `x-smallclaw-token: your-token`
+- Headers: `x-prometheus-token: your-token`
 - Body: `{"message": "{{your dynamic content}}", "name": "n8n", "deliver": true}`
 
 ### IFTTT
@@ -261,7 +261,7 @@ rest_command:
     url: "http://localhost:18789/hooks/agent"
     method: POST
     headers:
-      x-smallclaw-token: "your-token"
+      x-prometheus-token: "your-token"
       Content-Type: "application/json"
     payload: '{"message": "{{ message }}", "name": "HomeAssistant", "deliver": true}'
 ```
@@ -294,12 +294,12 @@ Using the local stack means all data stays on your machine. No third-party serve
 
 **Cloud-based (Zapier/Make):**
 ```
-Gmail → Third-party servers (US) → SmallClaw
+Gmail → Third-party servers (US) → Prometheus
 ```
 
-**Local stack (SmallClaw webhooks + optional n8n):**
+**Local stack (Prometheus webhooks + optional n8n):**
 ```
-Gmail → n8n (your PC) → SmallClaw (your PC)
+Gmail → n8n (your PC) → Prometheus (your PC)
 ```
 
 ---
@@ -311,7 +311,7 @@ Gmail → n8n (your PC) → SmallClaw (your PC)
 | `src/gateway/webhook-handler.ts` | Core webhook logic — auth, rate limiting, endpoints, async agent runner |
 | `src/gateway/server-v2.ts` | Modified to import and mount the webhook router |
 | `src/config/config.ts` | Added `hooks` block to `DEFAULT_CONFIG` |
-| `src/types.ts` | Added `hooks` TypeScript type to `SmallClawConfig` |
+| `src/types.ts` | Added `hooks` TypeScript type to `PrometheusConfig` |
 | `build-webhooks.bat` | One-click build script |
 | `test-webhooks.bat` | Smoke test script — run after enabling to verify everything works |
 
@@ -332,5 +332,5 @@ Full `hooks` config block with all options:
 | Key | Default | Description |
 |---|---|---|
 | `enabled` | `false` | Master switch — set to `true` to activate |
-| `token` | `""` | Required. Any string. Used for Bearer auth and `x-smallclaw-token` header |
+| `token` | `""` | Required. Any string. Used for Bearer auth and `x-prometheus-token` header |
 | `path` | `"/hooks"` | URL prefix for all webhook endpoints |

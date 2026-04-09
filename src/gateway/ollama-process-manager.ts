@@ -29,7 +29,7 @@ export class OllamaProcessManager {
   private isWindows = process.platform === 'win32';
 
   constructor(opts: OllamaProcessManagerOptions) {
-    const modeFromEnv = String(process.env.SMALLCLAW_OLLAMA_RESTART_MODE || '').trim().toLowerCase();
+    const modeFromEnv = String(process.env.PROMETHEUS_OLLAMA_RESTART_MODE || '').trim().toLowerCase();
     const requestedMode = String(opts.restartMode || modeFromEnv || '').trim().toLowerCase();
     this.endpoint = String(opts.endpoint || 'http://localhost:11434').replace(/\/$/, '');
     this.readyTimeoutMs = opts.readyTimeoutMs ?? 15000;

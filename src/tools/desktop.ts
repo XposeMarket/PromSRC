@@ -5,7 +5,7 @@
  * ToolRegistry so that sub-agents and scheduled tasks can use desktop tools
  * without going through a live chat session.
  *
- * Phase 2 of the SmallClaw feature expansion plan.
+ * Phase 2 of the Prometheus feature expansion plan.
  */
 
 import type { Tool } from './registry.js';

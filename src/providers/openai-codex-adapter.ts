@@ -55,7 +55,7 @@ export class OpenAICodexAdapter implements LLMProvider {
     return headers;
   }
 
-  // Convert SmallClaw ChatMessage[] -> Codex input[] format.
+  // Convert Prometheus ChatMessage[] -> Codex input[] format.
   // Handles both plain string content and ContentPart[] (multimodal vision calls).
   // Guarantees non-empty function call IDs for both function_call and function_call_output.
   private buildInput(messages: ChatMessage[]): any[] {

@@ -364,7 +364,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'write_proposal',
         description:
-          'Submit a proposal for human approval. Use for any change that requires human review before execution: src/ code edits, new features, major config changes. The proposal will appear in the SmallClaw proposals panel for you to approve or deny. ' +
+          'Submit a proposal for human approval. Use for any change that requires human review before execution: src/ code edits, new features, major config changes. The proposal will appear in the Prometheus proposals panel for you to approve or deny. ' +
           'REQUIRED for src/ edits: details MUST contain these exact section headings: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Proposals without them will be rejected.',
         parameters: {
           type: 'object',

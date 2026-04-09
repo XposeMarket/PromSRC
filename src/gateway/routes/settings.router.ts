@@ -96,7 +96,7 @@ router.get('/api/credentials/audit', (_req, res) => {
   const fs = require('fs');
   const path = require('path');
   try {
-    const auditPath = path.join(process.cwd(), '.smallclaw', 'vault', 'vault-audit.log');
+    const auditPath = path.join(process.cwd(), '.prometheus', 'vault', 'vault-audit.log');
     if (!fs.existsSync(auditPath)) { res.json({ success: true, lines: [] }); return; }
     const raw = fs.readFileSync(auditPath, 'utf-8');
     const lines = raw.split('\n').filter((l: string) => l.trim());

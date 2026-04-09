@@ -1067,7 +1067,7 @@ async function handleChat(
     const preemptRaw = {
       ...(oc?.preempt || {}),
       restart_mode: oc?.preempt?.restart_mode
-        || process.env.SMALLCLAW_OLLAMA_RESTART_MODE
+        || process.env.PROMETHEUS_OLLAMA_RESTART_MODE
         || (process.platform === 'win32' ? 'inherit_console' : 'detached_hidden'),
     };
     const normalizedPreempt = clampPreemptConfig(preemptRaw);
@@ -5024,7 +5024,7 @@ router.get('/api/sessions', async (req, res) => {
         try {
           return path.join(getConfig().getConfigDir(), 'sessions');
         } catch {
-          return path.join(process.cwd(), '.smallclaw', 'sessions');
+          return path.join(process.cwd(), '.prometheus', 'sessions');
         }
       })();
       

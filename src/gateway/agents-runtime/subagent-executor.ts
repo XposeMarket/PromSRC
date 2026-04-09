@@ -2332,7 +2332,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           const configuredAgents = getAgents();
           if (!configuredAgents || configuredAgents.length === 0) {
-            return { name, args, result: 'No agents configured. You can create one via the Agents UI or by defining one in .smallclaw/config.json under the "agents" array.', error: false };
+            return { name, args, result: 'No agents configured. You can create one via the Agents UI or by defining one in .prometheus/config.json under the "agents" array.', error: false };
           }
           const agentSummaries = configuredAgents.map((a: any) => ({
             id: a.id,
@@ -2935,7 +2935,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               let workspacePath: string;
               const fs = require('fs');
               const path = require('path');
-              const subagentPath = path.join(getConfig().getWorkspacePath(), '.smallclaw', 'subagents', targetAgentId);
+              const subagentPath = path.join(getConfig().getWorkspacePath(), '.prometheus', 'subagents', targetAgentId);
               if (fs.existsSync(subagentPath)) {
                 workspacePath = subagentPath;
               } else if (agent) {

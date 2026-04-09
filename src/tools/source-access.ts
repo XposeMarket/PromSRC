@@ -1,5 +1,5 @@
 /**
- * source-access.ts — Read-Only Access to SmallClaw Source Code
+ * source-access.ts — Read-Only Access to Prometheus Source Code
  *
  * Gives the AI the ability to read its own source files for error analysis
  * and self-repair planning. Deliberately READ-ONLY — no writes, no deletes.
@@ -114,9 +114,9 @@ export async function executeReadSource(args: ReadSourceArgs): Promise<ToolResul
 export const readSourceTool = {
   name: 'read_source',
   description:
-    'Read a SmallClaw source file (READ-ONLY, src/ only). ' +
-    'WHEN TO USE: Only when diagnosing a SmallClaw error or planning a src/ change, and only after reading workspace/SELF.md first. ' +
-    'DO NOT call this for general workspace file requests, user file tasks, or anything unrelated to SmallClaw source code. ' +
+    'Read a Prometheus source file (READ-ONLY, src/ only). ' +
+    'WHEN TO USE: Only when diagnosing a Prometheus error or planning a src/ change, and only after reading workspace/SELF.md first. ' +
+    'DO NOT call this for general workspace file requests, user file tasks, or anything unrelated to Prometheus source code. ' +
     'Paths are relative to src/ e.g. "gateway/server-v2.ts". Returns numbered lines. Use start_line + num_lines to paginate.',
   execute: executeReadSource,
   schema: {
@@ -209,9 +209,9 @@ export async function executeListSource(args: ListSourceArgs): Promise<ToolResul
 export const listSourceTool = {
   name: 'list_source',
   description:
-    'List files and directories inside the SmallClaw src/ folder (READ-ONLY, src/ only). ' +
-    'WHEN TO USE: Only when diagnosing a SmallClaw error or planning a src/ change, and only after reading workspace/SELF.md first. ' +
-    'DO NOT call this for general workspace file requests or anything unrelated to SmallClaw source code.',
+    'List files and directories inside the Prometheus src/ folder (READ-ONLY, src/ only). ' +
+    'WHEN TO USE: Only when diagnosing a Prometheus error or planning a src/ change, and only after reading workspace/SELF.md first. ' +
+    'DO NOT call this for general workspace file requests or anything unrelated to Prometheus source code.',
   execute: executeListSource,
   schema: {
     path: 'string (optional) — subdirectory relative to src/, e.g. "gateway" or "tools". Omit for root.',

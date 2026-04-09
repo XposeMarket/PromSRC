@@ -766,7 +766,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'save_site_shortcut',
-        description: 'Save a keyboard shortcut for a website so SmallClaw remembers it for all future sessions. Call this when you discover that a keyboard shortcut works on a site. Example: after pressing "n" successfully opens the X.com composer, save it.',
+        description: 'Save a keyboard shortcut for a website so Prometheus remembers it for all future sessions. Call this when you discover that a keyboard shortcut works on a site. Example: after pressing "n" successfully opens the X.com composer, save it.',
         parameters: {
           type: 'object', required: ['hostname', 'key', 'action'],
           properties: {

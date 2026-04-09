@@ -127,7 +127,7 @@ function getSelfImprovementDir(): string {
   try {
     base = getConfig().getConfigDir();
   } catch {
-    base = path.join(process.cwd(), '.smallclaw');
+    base = path.join(process.cwd(), '.prometheus');
   }
   const dir = path.join(base, 'self-improvement');
   fs.mkdirSync(dir, { recursive: true });
@@ -382,7 +382,7 @@ function buildInsightGenerationPrompt(
       ).join('\n')
     : '  (no behavior changes recorded yet)';
 
-  return `You are the SmallClaw agent analyzing your own performance over the last ${periodDays} days.
+  return `You are the Prometheus agent analyzing your own performance over the last ${periodDays} days.
 
 STRUCTURED JOB INVENTORY (${metrics.length} jobs):
 ${jobInventory || '(no scheduled tasks with run data)'}
@@ -577,7 +577,7 @@ export async function runWeeklyPerformanceReview(
 
         const skillId = `skill_evo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const safeName = opp.pattern_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
-        const skillPath = `workspace/.smallclaw/evolved-skills/${safeName}.md`;
+        const skillPath = `workspace/.prometheus/evolved-skills/${safeName}.md`;
 
         skillEvolutions.push({
           id: skillId,
@@ -854,7 +854,7 @@ export function formatPerformanceReport(report: PerformanceReport): string {
   const period = `${report.periodStart.slice(0, 10)} → ${report.periodEnd.slice(0, 10)}`;
 
   const lines = [
-    `📊 <b>SmallClaw Weekly Performance Report</b>`,
+    `📊 <b>Prometheus Weekly Performance Report</b>`,
     `Period: ${period}  |  ${report.totalScheduledJobs} jobs  |  ${report.totalTaskRuns} runs  |  <b>${successPct}% overall success</b>`,
     ``,
   ];

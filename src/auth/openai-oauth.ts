@@ -21,8 +21,8 @@ import { log } from '../security/log-scrubber';
 
 const AUTH_URL      = 'https://auth.openai.com/oauth/authorize';
 const TOKEN_URL     = 'https://auth.openai.com/oauth/token';
-const CALLBACK_HOST = process.env.SMALLCLAW_OPENAI_OAUTH_HOST || 'localhost';
-const CALLBACK_PORT = Number(process.env.SMALLCLAW_OPENAI_OAUTH_PORT || '1455');
+const CALLBACK_HOST = process.env.PROMETHEUS_OPENAI_OAUTH_HOST || 'localhost';
+const CALLBACK_PORT = Number(process.env.PROMETHEUS_OPENAI_OAUTH_PORT || '1455');
 const CALLBACK_PATH = '/auth/callback';
 const CALLBACK_URL  = `http://${CALLBACK_HOST}:${CALLBACK_PORT}${CALLBACK_PATH}`;
 
@@ -327,7 +327,7 @@ export async function startOAuthFlow(configDir: string): Promise<OAuthFlowResult
         clearFlow(configDir);
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>✅ Connected to SmallClaw!</h2><p>You can close this window and return to the app.</p></body></html>');
+        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>✅ Connected to Prometheus!</h2><p>You can close this window and return to the app.</p></body></html>');
         server.close();
         resolve({ success: true, account_id: accountId });
       } catch (err: any) {

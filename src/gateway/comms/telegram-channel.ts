@@ -1,5 +1,5 @@
 ﻿/**
- * telegram-channel.ts — Telegram Bot for SmallClaw
+ * telegram-channel.ts — Telegram Bot for Prometheus
  *
  * Uses raw Telegram Bot API via fetch() — no external dependencies.
  * Long polling loop: zero port forwarding, works from anywhere.
@@ -19,6 +19,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { getConfig } from '../../config/config';
 import { loadPendingRepair, listPendingRepairs, applyApprovedRepair, deletePendingRepair, formatRepairProposal, getRepairButtonPayload } from '../../tools/self-repair';
 import { getLinkedSession, unlinkTelegramSession, getLastMainSessionId, linkTelegramSession, setSessionChannelHint } from './broadcaster';
@@ -36,6 +37,17 @@ interface TelegramConfig {
   botToken: string;
   allowedUserIds: number[];
   streamMode: 'full' | 'partial';
+}
+
+interface UpdateCheckResult {
+  ok: boolean;
+  available: boolean;
+  branch?: string;
+  ahead?: number;
+  behind?: number;
+  commits?: Array<{ hash: string; subject: string }>;
+  message: string;
+  error?: string;
 }
 
 // Team management deps injected after boot
@@ -111,7 +123,7 @@ function idResolve(key: string): string | null {
 }
 
 // ─── File path key map — keeps callback_data under 64 bytes ──────────────────
-// File paths can be long (e.g. D:\SmallClaw\workspace\skills\web-researcher\skill.md)
+// File paths can be long (e.g. D:\Prometheus\workspace\skills\web-researcher\skill.md)
 // which would exceed Telegram's 64-byte callback_data limit when base64-encoded.
 // We store full paths here and use an 8-char hash as the key in callback_data.
 // The map persists for the lifetime of the gateway process — buttons always work
@@ -264,6 +276,163 @@ export class TelegramChannel {
     };
   }
 
+  private buildUpdateReplyMarkup(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    return {
+      inline_keyboard: [
+        [{ text: '✅ Update Now', callback_data: 'us:apply' }],
+        [{ text: '🔎 Re-check', callback_data: 'us:check' }],
+        [{ text: '❌ Cancel', callback_data: 'us:cancel' }],
+      ],
+    };
+  }
+
+  private runShellCapture(command: string, cwd: string, timeoutMs: number = 15000): { ok: boolean; stdout: string; stderr: string } {
+    try {
+      const out = execSync(command, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+        timeout: timeoutMs,
+      });
+      return { ok: true, stdout: String(out || '').trim(), stderr: '' };
+    } catch (err: any) {
+      const stdout = String(err?.stdout || '').trim();
+      const stderr = String(err?.stderr || err?.message || '').trim();
+      return { ok: false, stdout, stderr };
+    }
+  }
+
+  private checkForGitUpdate(): UpdateCheckResult {
+    const root = path.resolve(__dirname, '..', '..', '..');
+    const gitProbe = this.runShellCapture('git rev-parse --is-inside-work-tree', root, 6000);
+    if (!gitProbe.ok || gitProbe.stdout !== 'true') {
+      return {
+        ok: false,
+        available: false,
+        message: 'This install is not a git working tree. /update currently supports git installs.',
+      };
+    }
+
+    const branchRes = this.runShellCapture('git rev-parse --abbrev-ref HEAD', root, 6000);
+    if (!branchRes.ok || !branchRes.stdout) {
+      return { ok: false, available: false, message: 'Could not resolve current git branch.' };
+    }
+    const branch = branchRes.stdout;
+    const upstreamRes = this.runShellCapture('git rev-parse --abbrev-ref --symbolic-full-name @{u}', root, 6000);
+    if (!upstreamRes.ok) {
+      return {
+        ok: false,
+        available: false,
+        branch,
+        message: `No upstream tracking branch is configured for "${branch}".`,
+      };
+    }
+
+    this.runShellCapture('git fetch --quiet', root, 20000);
+    const countsRes = this.runShellCapture('git rev-list --left-right --count HEAD...@{u}', root, 6000);
+    if (!countsRes.ok) {
+      return { ok: false, available: false, branch, message: 'Unable to compare local branch with upstream.' };
+    }
+
+    const [aheadRaw, behindRaw] = countsRes.stdout.split(/\s+/);
+    const ahead = Number(aheadRaw || 0);
+    const behind = Number(behindRaw || 0);
+    const available = Number.isFinite(behind) && behind > 0;
+    let message = `Already up to date on "${branch}".`;
+    if (available && ahead > 0) message = `Update available: behind ${behind}, ahead ${ahead} on "${branch}".`;
+    else if (available) message = `Update available: behind by ${behind} commit(s) on "${branch}".`;
+    else if (ahead > 0) message = `Local branch "${branch}" is ahead by ${ahead} commit(s).`;
+
+    let commits: Array<{ hash: string; subject: string }> = [];
+    if (available) {
+      const logRes = this.runShellCapture('git log --oneline -n 6 HEAD..@{u}', root, 8000);
+      if (logRes.ok && logRes.stdout) {
+        commits = logRes.stdout.split(/\r?\n/).map((line) => {
+          const trimmed = String(line || '').trim();
+          const sp = trimmed.indexOf(' ');
+          return sp > 0
+            ? { hash: trimmed.slice(0, sp), subject: trimmed.slice(sp + 1) }
+            : { hash: trimmed, subject: '' };
+        }).filter((c) => c.hash);
+      }
+    }
+
+    return { ok: true, available, branch, ahead, behind, commits, message };
+  }
+
+  private formatUpdateCheckMessage(check: UpdateCheckResult): string {
+    const lines: string[] = ['🔥 <b>Update Check</b>', ''];
+    lines.push(check.ok ? `Status: ${check.message}` : `Status: ${check.message}`);
+    if (typeof check.branch === 'string' && check.branch) lines.push(`Branch: <code>${check.branch}</code>`);
+    if (typeof check.behind === 'number' || typeof check.ahead === 'number') {
+      lines.push(`Ahead/Behind: ${Number(check.ahead || 0)} / ${Number(check.behind || 0)}`);
+    }
+    if (check.available && Array.isArray(check.commits) && check.commits.length > 0) {
+      lines.push('');
+      lines.push('<b>Incoming commits:</b>');
+      for (const c of check.commits.slice(0, 6)) {
+        lines.push(`• <code>${c.hash}</code> ${String(c.subject || '').slice(0, 120)}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  private async runTelegramSelfUpdate(chatId: number, userId: number): Promise<void> {
+    const sessionId = this.getTelegramSessionId(userId, chatId);
+    const root = path.resolve(__dirname, '..', '..', '..');
+    const check = this.checkForGitUpdate();
+    if (!check.ok) {
+      await this.sendMessage(chatId, `❌ ${check.message}`);
+      return;
+    }
+    if (!check.available) {
+      await this.sendMessage(chatId, `✅ ${check.message}`);
+      return;
+    }
+
+    const dirty = this.runShellCapture('git status --porcelain', root, 6000);
+    if (dirty.ok && dirty.stdout) {
+      await this.sendMessage(chatId, '❌ Update blocked: local git changes detected. Commit/stash changes first.');
+      return;
+    }
+
+    await this.sendMessage(chatId, '🔥 Update confirmed. Running: fetch → pull --ff-only → npm install → npm run build');
+
+    const pullRes = this.runShellCapture('git pull --ff-only', root, 45000);
+    if (!pullRes.ok) {
+      await this.sendMessage(chatId, `❌ git pull failed.\n\n<code>${String(pullRes.stderr || pullRes.stdout).slice(-1200)}</code>`);
+      return;
+    }
+
+    const installRes = this.runShellCapture('npm install', root, 180000);
+    if (!installRes.ok) {
+      await this.sendMessage(chatId, `❌ npm install failed.\n\n<code>${String(installRes.stderr || installRes.stdout).slice(-1200)}</code>`);
+      return;
+    }
+
+    const buildRes = this.runShellCapture('npm run build', root, 240000);
+    if (!buildRes.ok) {
+      await this.sendMessage(chatId, `❌ Build failed. Gateway will stay online.\n\n<code>${String(buildRes.stderr || buildRes.stdout).slice(-1200)}</code>`);
+      return;
+    }
+
+    await this.sendMessage(chatId, '✅ Update build succeeded. Restarting gateway now...');
+    const { gracefulRestart } = await import('../lifecycle.js');
+    await gracefulRestart({
+      reason: 'self_update',
+      timestamp: Date.now(),
+      title: 'Telegram self-update',
+      summary: `Self-update requested from Telegram by user ${userId}.`,
+      previousSessionId: sessionId,
+      originChannel: 'telegram',
+      respondToTelegram: true,
+      previousTelegramChatId: String(chatId),
+      previousTelegramUserId: userId,
+      buildOutput: String(buildRes.stdout || '').slice(-2000),
+      testInstructions: 'Confirm update pulled latest commits, gateway restarted, and Telegram polling resumed.',
+    });
+  }
+
   private async runFullRestart(chatId: number, userId: number): Promise<void> {
     const sessionId = this.getTelegramSessionId(userId, chatId);
     await this.sendMessage(chatId, '🔁 Full restart requested. Running build now...');
@@ -366,7 +535,7 @@ export class TelegramChannel {
 
   private buildTelegramCommandsMessage(userId: number): string {
     return [
-      `🦞 <b>Prometheus Telegram Commands</b>`,
+      `🔥 <b>Prometheus Telegram Commands</b>`,
       ``,
       `<b>Core Chat</b>`,
       `/start — welcome + quick start`,
@@ -382,6 +551,7 @@ export class TelegramChannel {
       `/download &lt;path&gt; — download a workspace file`,
       `/screenshot — browser screenshot or per-monitor desktop screenshot`,
       `/restart — choose full or quick gateway restart`,
+      `/update — check for updates, preview commits, and confirm install`,
       ``,
       `<b>Teams, Agents, Tasks</b>`,
       `/teams — team browser + manager/agent controls`,
@@ -1322,6 +1492,35 @@ export class TelegramChannel {
         }
       } catch (err: any) {
         await this.sendMessage(chatId, `❌ Restart failed: ${String(err?.message || err)}`);
+      }
+      return;
+    }
+
+    if (data.startsWith('us:')) {
+      const action = data.slice('us:'.length).trim().toLowerCase();
+      await this.apiCall('editMessageReplyMarkup', {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] },
+      }).catch(() => {});
+      try {
+        if (action === 'check') {
+          const check = this.checkForGitUpdate();
+          await this.apiCall('sendMessage', {
+            chat_id: chatId,
+            text: this.formatUpdateCheckMessage(check),
+            parse_mode: 'HTML',
+            reply_markup: check.ok && check.available ? this.buildUpdateReplyMarkup() : undefined,
+          });
+        } else if (action === 'apply') {
+          await this.runTelegramSelfUpdate(chatId, userId);
+        } else if (action === 'cancel') {
+          await this.sendMessage(chatId, 'Update canceled.');
+        } else {
+          await this.sendMessage(chatId, '❌ Unknown update option. Use /update to open the update menu again.');
+        }
+      } catch (err: any) {
+        await this.sendMessage(chatId, `❌ Update action failed: ${String(err?.message || err)}`);
       }
       return;
     }
@@ -2705,7 +2904,7 @@ export class TelegramChannel {
     // Check allowlist
     if (this.config.allowedUserIds.length > 0 && !this.config.allowedUserIds.includes(userId)) {
       console.log(`[Telegram] Rejected message from unauthorized user ${userId}`);
-      await this.sendMessage(chatId, '🦞 Unauthorized. Your Telegram user ID is not in the allowlist.\n\nYour ID: <code>' + userId + '</code>');
+      await this.sendMessage(chatId, '🔥 Unauthorized. Your Telegram user ID is not in the allowlist.\n\nYour ID: <code>' + userId + '</code>');
       return;
     }
 
@@ -3072,6 +3271,19 @@ export class TelegramChannel {
       return;
     }
 
+    if (text === '/update' || text === '/update ' || text === '/update check') {
+      const check = this.checkForGitUpdate();
+      await this.apiCall('sendMessage', {
+        chat_id: chatId,
+        text: this.formatUpdateCheckMessage(check),
+        parse_mode: 'HTML',
+        reply_markup: check.ok && check.available ? this.buildUpdateReplyMarkup() : undefined,
+      }).catch(async (err: any) => {
+        await this.sendMessage(chatId, `❌ Could not run update check: ${String(err?.message || err)}`);
+      });
+      return;
+    }
+
     if (text.startsWith('/download')) {
       const arg = text.slice('/download'.length).trim();
       if (!arg) {
@@ -3101,7 +3313,7 @@ export class TelegramChannel {
 
     // ── Built-in commands ──────────────────────────────────────────────────────
     if (text === '/start') {
-      await this.sendMessage(chatId, `🦞 <b>SmallClaw connected!</b>\n\nYour Telegram user ID: <code>${userId}</code>\n\nJust send me a message and I'll respond using your local LLM.\n\nUse <code>/commands</code> any time for the full command catalog.\n\n<b>Core Commands:</b>\n/status — check connection\n/clear — reset chat history\n/new — start a new Telegram channel session\n/browse — browse workspace files\n/download &lt;path&gt; — download a file\n/teams — view and manage agent teams\n/agents — browse all agents (chat/dispatch/edit prompt/model)\n/tasks — list queued/paused/stalled tasks (chat/resume/cancel/delete)\n/schedule — list schedules (run now/edit/delete)\n/models — switch provider/model\n/screenshot — browser screenshot or per-monitor desktop screenshot\n/restart — choose full or quick gateway restart\n\n<b>Integrations:</b>\n/integrations — list configured integrations\n/mcp-status — show MCP server status\n/setup &lt;service&gt; — connect any service (github, slack, jira, etc.)\n\n<b>Proposals:</b>\n/proposals — list pending proposals (pending/done)
+      await this.sendMessage(chatId, `🔥 <b>Prometheus connected!</b>\n\nYour Telegram user ID: <code>${userId}</code>\n\nJust send me a message and I'll respond using your local LLM.\n\nUse <code>/commands</code> any time for the full command catalog.\n\n<b>Core Commands:</b>\n/status — check connection\n/clear — reset chat history\n/new — start a new Telegram channel session\n/browse — browse workspace files\n/download &lt;path&gt; — download a file\n/teams — view and manage agent teams\n/agents — browse all agents (chat/dispatch/edit prompt/model)\n/tasks — list queued/paused/stalled tasks (chat/resume/cancel/delete)\n/schedule — list schedules (run now/edit/delete)\n/models — switch provider/model\n/screenshot — browser screenshot or per-monitor desktop screenshot\n/restart — choose full or quick gateway restart\n/update — check and apply updates (with confirmation)\n\n<b>Integrations:</b>\n/integrations — list configured integrations\n/mcp-status — show MCP server status\n/setup &lt;service&gt; — connect any service (github, slack, jira, etc.)\n\n<b>Proposals:</b>\n/proposals — list pending proposals (pending/done)
 /proposals [id] — show proposal details\n\n<b>Self-Repair:</b>\n/repairs — list pending repair proposals\n/repair &lt;id&gt; — show full details of a repair\n/approve &lt;id&gt; — apply a repair, rebuild &amp; restart\n/reject &lt;id&gt; — discard a repair`);
       return;
     }
@@ -3111,7 +3323,7 @@ export class TelegramChannel {
     }
     if (text === '/status') {
       const busy = this.deps.getIsModelBusy();
-      await this.sendMessage(chatId, `🦞 <b>Status</b>\n\nModel: ${busy ? '🔄 Busy' : '✅ Ready'}\nBot: @${this.botInfo?.username || 'unknown'}\nYour ID: <code>${userId}</code>`);
+      await this.sendMessage(chatId, `🔥 <b>Status</b>\n\nModel: ${busy ? '🔄 Busy' : '✅ Ready'}\nBot: @${this.botInfo?.username || 'unknown'}\nYour ID: <code>${userId}</code>`);
       return;
     }
     if (text === '/clear') {
@@ -3125,7 +3337,7 @@ export class TelegramChannel {
           unlinkTelegramSession(userId);
         }
       } catch {}
-      await this.sendMessage(chatId, '🦞 Chat history cleared (web + Telegram sessions).');
+      await this.sendMessage(chatId, '🔥 Chat history cleared (web + Telegram sessions).');
       return;
     }
 
@@ -3205,13 +3417,13 @@ export class TelegramChannel {
     if (text === '/repairs') {
       const pending = listPendingRepairs();
       if (pending.length === 0) {
-        await this.sendMessage(chatId, '🦞 No pending repairs.');
+        await this.sendMessage(chatId, '🔥 No pending repairs.');
         return;
       }
       const lines = pending.map(r =>
         `🔧 <b>#${r.id}</b> — <code>${r.affectedFile}</code>\n   ${r.errorSummary.slice(0, 80)}`
       );
-      await this.sendMessage(chatId, `🦞 <b>Pending Repairs (${pending.length})</b>\n\n${lines.join('\n\n')}\n\nUse /approve &lt;id&gt; or /reject &lt;id&gt;`);
+      await this.sendMessage(chatId, `🔥 <b>Pending Repairs (${pending.length})</b>\n\n${lines.join('\n\n')}\n\nUse /approve &lt;id&gt; or /reject &lt;id&gt;`);
       return;
     }
 
@@ -3329,7 +3541,7 @@ export class TelegramChannel {
         return;
       }
       if (this.deps.getIsModelBusy()) {
-        await this.sendMessage(chatId, '🦞 I\'m currently busy. Try again in a moment.');
+        await this.sendMessage(chatId, '🔥 I\'m currently busy. Try again in a moment.');
         return;
       }
       await this.apiCall('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
@@ -3455,7 +3667,7 @@ export class TelegramChannel {
 
     // Check if model is busy
     if (this.deps.getIsModelBusy()) {
-      await this.sendMessage(chatId, '🦞 I\'m currently busy with another task. Try again in a moment.');
+      await this.sendMessage(chatId, '🔥 I\'m currently busy with another task. Try again in a moment.');
       return;
     }
 
@@ -3649,7 +3861,7 @@ export class TelegramChannel {
       console.log(`[Telegram] Replied to ${userName}: ${responseText.slice(0, 80)}`);
     } catch (err: any) {
       console.error(`[Telegram] handleChat error:`, err.message);
-      await this.sendMessage(chatId, `🦞 Error: ${err.message}`);
+      await this.sendMessage(chatId, `🔥 Error: ${err.message}`);
     }
   }
 

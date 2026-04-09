@@ -340,7 +340,7 @@ export function getAgentTeamScheduleTools(): any[] {
               },
             },
             model_override: { type: 'string', description: 'Optional model override for this scheduled job' },
-            subagent_id: { type: 'string', description: 'Optional: ID of a subagent definition in workspace/.smallclaw/subagents/ to use for this job. When set, the subagent system instructions and constraints are automatically injected at runtime.' },
+            subagent_id: { type: 'string', description: 'Optional: ID of a subagent definition in workspace/.prometheus/subagents/ to use for this job. When set, the subagent system instructions and constraints are automatically injected at runtime.' },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
           },

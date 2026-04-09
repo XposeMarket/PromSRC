@@ -457,7 +457,7 @@ export interface PrometheusConfig {
   /**
    * Agent Builder integration.
    * Set enabled: true only when Agent Builder (localhost:3005) is running and
-   * you want SmallClaw to use its workflow design + execution tools.
+   * you want Prometheus to use its workflow design + execution tools.
    * When false (default), the 8 Agent Builder tools are NOT registered,
    * not visible to the AI, and workflow context is not injected into prompts.
    */

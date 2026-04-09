@@ -64,7 +64,7 @@ mcp-server
 }
 ```
 
-## SmallClaw Setup Commands
+## Prometheus Setup Commands
 1. Import or upsert config:
 ```json
 mcp_server_manage({

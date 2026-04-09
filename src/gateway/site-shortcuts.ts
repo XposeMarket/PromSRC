@@ -39,8 +39,8 @@ export type SiteShortcutsStore = Record<string, SiteShortcutEntry>;
 // ─── Storage ────────────────────────────────────────────────────────────────────
 
 const CONFIG_DIR = path.join(
-  process.env.SMALLCLAW_CONFIG_DIR
-    || path.join(process.env.USERPROFILE || process.env.HOME || '', '.smallclaw'),
+  process.env.PROMETHEUS_CONFIG_DIR
+    || path.join(process.env.USERPROFILE || process.env.HOME || '', '.prometheus'),
   'site-shortcuts.json',
 );
 

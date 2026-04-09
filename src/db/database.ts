@@ -4,7 +4,7 @@ import os from 'os';
 import fs from 'fs';
 import { Job, Task, Step, Artifact, Approval, TaskState, JobStatus, TaskStatus } from '../types';
 
-const DB_PATH = path.join(os.homedir(), '.smallclaw', 'jobs.db');
+const DB_PATH = path.join(os.homedir(), '.prometheus', 'jobs.db');
 
 export class JobDatabase {
   private db: Database.Database;
