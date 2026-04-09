@@ -1,15 +1,25 @@
 # Chats Index
 
-Generated: 2026-04-09T17:04:35.152Z
+Generated: 2026-04-09T20:25:14.595Z
 
-- Sessions mirrored: 1316
-- Transcript files: 72
-- Compaction artifacts: 2
+- Sessions mirrored: 1326
+- Transcript files: 86
+- Compaction artifacts: 4
 
 ## Recent Sessions
+- brain_thought_2026-04-09_07-58 | messages=2 | lastActive=2026-04-09T20:21:45.838Z | summary=no
+- proposal_prop_1774488185640_a65bec | messages=6 | lastActive=2026-04-09T20:12:00.108Z | summary=no
+- task_1e754ab2-4295-4140-96a7-728fb22eadfe | messages=1 | lastActive=2026-04-09T20:10:57.897Z | summary=no
+- telegram_1799053599 | messages=80 | lastActive=2026-04-09T19:38:44.760Z | summary=yes
+- auto_restart_manual_1775760350263 | messages=1 | lastActive=2026-04-09T18:45:50.278Z | summary=no
+- task_b540f050-4464-4b7c-8a7d-f2845778edf2 | messages=0 | lastActive=2026-04-09T18:37:46.739Z | summary=no
+- proposal_prop_1775759744962_a7c1d3 | messages=0 | lastActive=2026-04-09T18:37:46.739Z | summary=no
+- telegram_1799053599_1775758182985 | messages=4 | lastActive=2026-04-09T18:17:01.795Z | summary=no
+- auto_restart_manual_1775758621769 | messages=1 | lastActive=2026-04-09T18:17:01.793Z | summary=no
+- meta_coordinator_mnrslv5j | messages=0 | lastActive=2026-04-09T18:10:40.257Z | summary=no
+- telegram_1799053599_1775757556700 | messages=21 | lastActive=2026-04-09T18:07:38.639Z | summary=no
 - 3e44f40b-97cb-452f-b1f7-203da17bead6 | messages=2 | lastActive=2026-04-09T16:15:31.147Z | summary=no
 - brain_thought_2026-04-09_01-52 | messages=0 | lastActive=2026-04-09T11:58:38.256Z | summary=no
-- telegram_1799053599 | messages=69 | lastActive=2026-04-09T05:58:44.059Z | summary=no
 - auto_restart_manual_1775714324035 | messages=1 | lastActive=2026-04-09T05:58:44.056Z | summary=no
 - brain_thought_2026-04-09_19-40 | messages=0 | lastActive=2026-04-09T05:52:49.432Z | summary=no
 - fc58e992-66e8-4386-ab57-6c80019e58bb | messages=2 | lastActive=2026-04-09T04:39:11.660Z | summary=no
@@ -77,13 +87,3 @@ Generated: 2026-04-09T17:04:35.152Z
 - cron_job_1773505907481_giaeb_1775466987375 | messages=0 | lastActive=2026-04-06T09:16:30.908Z | summary=no
 - cron_job_1773505907481_giaeb_1775452575437 | messages=0 | lastActive=2026-04-06T05:16:18.013Z | summary=no
 - cron_job_1773505907481_giaeb_1775438172612 | messages=0 | lastActive=2026-04-06T01:16:13.585Z | summary=no
-- cron_job_1773505907481_giaeb_1775423767620 | messages=0 | lastActive=2026-04-05T21:16:08.757Z | summary=no
-- cron_job_1773505907481_giaeb_1775409365603 | messages=0 | lastActive=2026-04-05T17:16:06.546Z | summary=no
-- telegram_1799053599_1775368214035 | messages=4 | lastActive=2026-04-05T15:08:34.082Z | summary=no
-- auto_restart_manual_1775401713406 | messages=1 | lastActive=2026-04-05T15:08:34.060Z | summary=no
-- cron_job_1773505907481_giaeb_1775401682012 | messages=0 | lastActive=2026-04-05T15:08:03.279Z | summary=no
-- cron_job_1773505907481_giaeb_1775397838853 | messages=0 | lastActive=2026-04-05T14:03:59.797Z | summary=no
-- cron_job_1773505907481_giaeb_1775395916610 | messages=0 | lastActive=2026-04-05T13:31:57.203Z | summary=no
-- cron_job_1773505907481_giaeb_1775394945873 | messages=0 | lastActive=2026-04-05T13:15:46.821Z | summary=no
-- cron_job_1773505907481_giaeb_1775394455413 | messages=0 | lastActive=2026-04-05T13:07:36.011Z | summary=no
-- cron_job_1773505907481_giaeb_1775394205238 | messages=0 | lastActive=2026-04-05T13:03:26.130Z | summary=no

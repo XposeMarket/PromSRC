@@ -156,6 +156,15 @@ interface TelegramDeps {
     toolFilter?: string[],
     attachments?: Array<{ base64: string; mimeType: string; name: string }>,
   ) => Promise<{ type: string; text: string; thinking?: string }>;
+  runInteractiveTurn?: (
+    message: string,
+    sessionId: string,
+    sendSSE: (event: string, data: any) => void,
+    pinnedMessages?: Array<{ role: string; content: string }>,
+    abortSignal?: { aborted: boolean },
+    callerContext?: string,
+    attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+  ) => Promise<{ type: string; text: string; thinking?: string; toolResults?: any[] }>;
   addMessage: (
     sessionId: string,
     msg: { role: 'user' | 'assistant'; content: string; timestamp: number },
@@ -3557,10 +3566,10 @@ export class TelegramChannel {
       const setupPrompt = `The user wants to set up the ${serviceName} integration via Telegram. Use the integration-setup skill. Check workspace/integrations/${serviceName}.md first — if it has a full definition use it, otherwise research the ${serviceName} MCP server or webhook setup yourself (web_search), build the definition file, then guide the user through setup step by step.`;
       const setupContext = `CONTEXT: You are responding via Telegram via a direct interactive session. You have FULL ACCESS to all tools including workspace file access (read_file, list_files, list_directory). The user triggered /setup ${serviceName}. You are running a guided integration setup flow using the integration-setup skill. You can connect to any service — research and build the definition if it does not already exist.`;
       try {
-        const result = await this.deps.handleChat(setupPrompt, sessionId, sendSSE, undefined, undefined, setupContext);
+        const result = this.deps.runInteractiveTurn
+          ? await this.deps.runInteractiveTurn(setupPrompt, sessionId, sendSSE, undefined, undefined, setupContext)
+          : await this.deps.handleChat(setupPrompt, sessionId, sendSSE, undefined, undefined, setupContext);
         const responseText = result.text || 'Unable to start setup. Make sure the integration-setup skill is enabled.';
-        this.deps.addMessage(sessionId, { role: 'user', content: setupPrompt, timestamp: Date.now() }, { disableMemoryFlushCheck: true });
-        this.deps.addMessage(sessionId, { role: 'assistant', content: responseText, timestamp: Date.now() }, { disableMemoryFlushCheck: true });
         await this.sendAiMessage(chatId, responseText);
         // Present any files created during setup (e.g. integrations/<service>.md)
         this.filePresented.clear();
@@ -3818,22 +3827,28 @@ export class TelegramChannel {
         ? 'CONTEXT: This Telegram request is a desktop status check. First action should be desktop_screenshot (then desktop advisor flow), not browser tools.'
         : '';
       const callerContext = statusContext ? `${telegramContext}\n${statusContext}` : telegramContext;
-      const result = await this.deps.handleChat(
-        effectiveText, sessionId, sendSSE,
-        undefined, undefined, callerContext,
-        undefined, undefined, undefined,
-        imageAttachment ? [imageAttachment] : undefined,
-      );
+      const result = this.deps.runInteractiveTurn
+        ? await this.deps.runInteractiveTurn(
+            effectiveText,
+            sessionId,
+            sendSSE,
+            undefined,
+            undefined,
+            callerContext,
+            imageAttachment ? [imageAttachment] : undefined,
+          )
+        : await this.deps.handleChat(
+            effectiveText, sessionId, sendSSE,
+            undefined, undefined, callerContext,
+            undefined, undefined, undefined,
+            imageAttachment ? [imageAttachment] : undefined,
+          );
       const responseText = result.text || 'No response generated.';
       const now = Date.now();
 
-      // Persist both messages to session history AFTER handleChat completes
-      // (handleChat reads history internally, so we save after to avoid duplication)
       const userContent = imageAttachment
         ? `${text ? text + ' ' : ''}[Image attached via Telegram]`
         : effectiveText;
-      this.deps.addMessage(sessionId, { role: 'user', content: userContent, timestamp: now }, { disableMemoryFlushCheck: true });
-      this.deps.addMessage(sessionId, { role: 'assistant', content: responseText, timestamp: now }, { disableMemoryFlushCheck: true });
 
       await this.sendAiMessage(chatId, responseText);
 

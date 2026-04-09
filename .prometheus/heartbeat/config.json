@@ -39,6 +39,26 @@
       "enabled": false,
       "intervalMinutes": 30,
       "model": ""
+    },
+    "researcher_skill_inventory_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "operator_browser_tester_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "operator_desktop_tester_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "analyst_audit_reporter_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
     }
   }
 }

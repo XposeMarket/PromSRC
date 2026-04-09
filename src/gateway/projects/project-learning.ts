@@ -17,9 +17,15 @@
 import fs from 'fs';
 import path from 'path';
 import {
+  getSession,
+  PRE_COMPACTION_MEMORY_FLUSH_PROMPT,
+  PRE_COMPACTION_SUMMARY_PROMPT,
+} from '../session.js';
+import {
+  getProject,
   findProjectBySessionId,
   getProjectWorkspaceDir,
-} from './project-store';
+} from './project-store.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +55,7 @@ const MAX_CONVO_CHARS   = 8000;
 export async function extractAndWriteProjectContext(
   messages: ConversationMessage[],
   sessionId: string,
+  options?: { extraTextBlocks?: string[] },
 ): Promise<ProjectLearningResult> {
   const project = findProjectBySessionId(sessionId);
   if (!project) {
@@ -62,10 +69,10 @@ export async function extractAndWriteProjectContext(
     return { skipped: true, reason: 'too short', sectionsUpdated: [], linesAdded: 0 };
   }
 
-  const transcript = userMessages
-    .map(m => String(m.content || '').trim())
-    .join('\n')
-    .slice(0, MAX_CONVO_CHARS);
+  const transcript = buildLearningTranscript(userMessages, options?.extraTextBlocks);
+  if (!transcript) {
+    return { skipped: true, reason: 'no usable project context', sectionsUpdated: [], linesAdded: 0 };
+  }
 
   const contextPath = path.join(getProjectWorkspaceDir(project.id), 'CONTEXT.md');
 
@@ -155,6 +162,49 @@ export async function extractAndWriteProjectContext(
   }
 
   return { skipped: false, sectionsUpdated, linesAdded };
+}
+
+export async function refreshProjectContextForSession(
+  sessionId: string,
+  options?: { extraTextBlocks?: string[] },
+): Promise<ProjectLearningResult> {
+  const project = findProjectBySessionId(sessionId);
+  if (!project) {
+    return { skipped: true, reason: 'not a project session', sectionsUpdated: [], linesAdded: 0 };
+  }
+
+  const session = getSession(sessionId);
+  const messages: ConversationMessage[] = (Array.isArray(session.history) ? session.history : [])
+    .filter((msg) => !isSyntheticProjectLearningNoise(msg?.content))
+    .map((msg) => ({
+      role: msg.role,
+      content: String(msg.content || ''),
+    }));
+
+  return extractAndWriteProjectContext(messages, sessionId, options);
+}
+
+export async function refreshProjectContextFromLatestPriorSession(
+  projectId: string,
+  excludeSessionId?: string,
+): Promise<ProjectLearningResult> {
+  const project = getProject(projectId);
+  if (!project) {
+    return { skipped: true, reason: 'project not found', sectionsUpdated: [], linesAdded: 0 };
+  }
+
+  const priorSessions = project.sessions
+    .filter((session) => session.id !== excludeSessionId)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  for (const session of priorSessions) {
+    const result = await refreshProjectContextForSession(session.id);
+    if (!result.skipped || result.reason !== 'too short') {
+      return result;
+    }
+  }
+
+  return { skipped: true, reason: 'no previous project session with usable context', sectionsUpdated: [], linesAdded: 0 };
 }
 
 // ─── Extractors ───────────────────────────────────────────────────────────────
@@ -301,6 +351,36 @@ function appendToSection(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function isSyntheticProjectLearningNoise(raw: string): boolean {
+  const text = String(raw || '').trim();
+  if (!text) return true;
+  if (text === PRE_COMPACTION_SUMMARY_PROMPT) return true;
+  if (text === PRE_COMPACTION_MEMORY_FLUSH_PROMPT) return true;
+  if (text === 'NO_REPLY') return true;
+  if (/^\[(?:Rolling|Compacted) context summary\]/i.test(text)) return true;
+  if (/^CONTEXT:\s+Internal context compaction turn\./i.test(text)) return true;
+  if (/^CONTEXT:\s+Internal pre-compaction memory flush turn\./i.test(text)) return true;
+  return false;
+}
+
+function buildLearningTranscript(
+  messages: ConversationMessage[],
+  extraTextBlocks?: string[],
+): string {
+  const parts: string[] = [];
+  const userBlock = messages
+    .filter((m) => m.role === 'user')
+    .map((m) => String(m.content || '').trim())
+    .filter(Boolean)
+    .join('\n');
+  if (userBlock) parts.push(userBlock);
+  for (const block of extraTextBlocks || []) {
+    const clean = String(block || '').trim();
+    if (clean) parts.push(clean);
+  }
+  return parts.join('\n\n').slice(0, MAX_CONVO_CHARS);
+}
 
 function cleanValue(raw: string): string {
   return raw

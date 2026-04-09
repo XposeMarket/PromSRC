@@ -23,7 +23,9 @@
       "Bash(npm install:*)",
       "Bash(curl:*)",
       "Bash(python -m json.tool)",
-      "Bash(TMPDIR=/d/tmp TEMP=/d/tmp TMP=/d/tmp npm run:*)"
+      "Bash(TMPDIR=/d/tmp TEMP=/d/tmp TMP=/d/tmp npm run:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }

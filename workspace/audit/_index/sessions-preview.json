@@ -1,5 +1,82 @@
 [
   {
+    "id": "brain_thought_2026-04-09_07-58",
+    "mtimeMs": 1775766108180.988,
+    "lastActiveAt": 1775766105838,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "proposal_prop_1774488185640_a65bec",
+    "mtimeMs": 1775765520785.2969,
+    "lastActiveAt": 1775765520108,
+    "historyLength": 6,
+    "hasSummary": false
+  },
+  {
+    "id": "task_1e754ab2-4295-4140-96a7-728fb22eadfe",
+    "mtimeMs": 1775765520117.2969,
+    "lastActiveAt": 1775765457897,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "telegram_1799053599",
+    "mtimeMs": 1775763560312.448,
+    "lastActiveAt": 1775763524760,
+    "historyLength": 80,
+    "hasSummary": true
+  },
+  {
+    "id": "auto_restart_manual_1775760350263",
+    "mtimeMs": 1775760363033.8857,
+    "lastActiveAt": 1775760350278,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "task_b540f050-4464-4b7c-8a7d-f2845778edf2",
+    "mtimeMs": 1775760315924.5176,
+    "lastActiveAt": 1775759866739,
+    "historyLength": 0,
+    "hasSummary": false
+  },
+  {
+    "id": "proposal_prop_1775759744962_a7c1d3",
+    "mtimeMs": 1775759867241.2578,
+    "lastActiveAt": 1775759866739,
+    "historyLength": 0,
+    "hasSummary": false
+  },
+  {
+    "id": "telegram_1799053599_1775758182985",
+    "mtimeMs": 1775758622482.4602,
+    "lastActiveAt": 1775758621795,
+    "historyLength": 4,
+    "hasSummary": false
+  },
+  {
+    "id": "auto_restart_manual_1775758621769",
+    "mtimeMs": 1775758622481.465,
+    "lastActiveAt": 1775758621793,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "meta_coordinator_mnrslv5j",
+    "mtimeMs": 1775758240768.1228,
+    "lastActiveAt": 1775758240257,
+    "historyLength": 0,
+    "hasSummary": false
+  },
+  {
+    "id": "telegram_1799053599_1775757556700",
+    "mtimeMs": 1775758059147.6582,
+    "lastActiveAt": 1775758058639,
+    "historyLength": 21,
+    "hasSummary": false
+  },
+  {
     "id": "3e44f40b-97cb-452f-b1f7-203da17bead6",
     "mtimeMs": 1775751331663.5137,
     "lastActiveAt": 1775751331147,
@@ -11,13 +88,6 @@
     "mtimeMs": 1775735919032.1433,
     "lastActiveAt": 1775735918256,
     "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599",
-    "mtimeMs": 1775714340063.611,
-    "lastActiveAt": 1775714324059,
-    "historyLength": 69,
     "hasSummary": false
   },
   {
@@ -486,76 +556,6 @@
     "id": "cron_job_1773505907481_giaeb_1775438172612",
     "mtimeMs": 1775438174101.367,
     "lastActiveAt": 1775438173585,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775423767620",
-    "mtimeMs": 1775423769264.8816,
-    "lastActiveAt": 1775423768757,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775409365603",
-    "mtimeMs": 1775409367063.5728,
-    "lastActiveAt": 1775409366546,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599_1775368214035",
-    "mtimeMs": 1775401714585.5771,
-    "lastActiveAt": 1775401714082,
-    "historyLength": 4,
-    "hasSummary": false
-  },
-  {
-    "id": "auto_restart_manual_1775401713406",
-    "mtimeMs": 1775401714570.6191,
-    "lastActiveAt": 1775401714060,
-    "historyLength": 1,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775401682012",
-    "mtimeMs": 1775401683794.5728,
-    "lastActiveAt": 1775401683279,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775397838853",
-    "mtimeMs": 1775397840304.5222,
-    "lastActiveAt": 1775397839797,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775395916610",
-    "mtimeMs": 1775395918065.5288,
-    "lastActiveAt": 1775395917203,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775394945873",
-    "mtimeMs": 1775394947324.3748,
-    "lastActiveAt": 1775394946821,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775394455413",
-    "mtimeMs": 1775394456525.0361,
-    "lastActiveAt": 1775394456011,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775394205238",
-    "mtimeMs": 1775394206645.3938,
-    "lastActiveAt": 1775394206130,
     "historyLength": 0,
     "hasSummary": false
   }

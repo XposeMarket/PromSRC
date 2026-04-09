@@ -29,6 +29,7 @@ import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentTool
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
+import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
@@ -875,6 +876,7 @@ async function handleChat(
   // Declared-plan skill scout gate:
   // Step 1 should run a quick skill scan (skill_list, optional skill_read) before other actions.
   let manualPlanSkillScoutRequired = false;
+  let manualPlanSkillScoutCompleted = false;
   let manualPlanSkillListDone = false;
   let manualPlanSkillReadCount = 0;
   // consecutiveFailures: how many times the current step has failed in a row.
@@ -3765,6 +3767,7 @@ RULES:
       // This keeps skill discovery contained to the first step so later steps stay focused.
       if (
         manualPlanSkillScoutRequired
+        && !manualPlanSkillScoutCompleted
         && progressState.manualStepAdvance
         && stepCursor === 0
       ) {
@@ -4130,7 +4133,9 @@ RULES:
       }
 
       console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
-      markProgressStepStart(toolName);
+      if (toolName !== 'declare_plan') {
+        markProgressStepStart(toolName);
+      }
       sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1 });
 
       // ── declare_plan: seed the progress panel and short-circuit (no executeTool needed) ──
@@ -4141,15 +4146,19 @@ RULES:
         if (plannedSteps.length >= 2) {
           seedProgressFromLines(plannedSteps, 'declared', { manualStepAdvance: true });
           stepCursor = 0; // reset cursor whenever a fresh plan is declared
-          manualPlanSkillScoutRequired = true;
+          manualPlanSkillScoutRequired = plannedSteps.length >= 2;
+          manualPlanSkillScoutCompleted = false;
           manualPlanSkillListDone = false;
           manualPlanSkillReadCount = 0;
           consecutiveStepFailures = 0;
           console.log(`[v2] declare_plan: seeded ${plannedSteps.length} steps: ${plannedSteps.join(' -> ')}`);
         } else {
           manualPlanSkillScoutRequired = false;
+          manualPlanSkillScoutCompleted = false;
           manualPlanSkillListDone = false;
           manualPlanSkillReadCount = 0;
+          stepCursor = 0;
+          consecutiveStepFailures = 0;
         }
         const planSummary = plannedSteps.length >= 2
           ? `Plan set (${plannedSteps.length} steps): ${plannedSteps.join(' -> ')}`
@@ -4161,7 +4170,7 @@ RULES:
           role: 'tool',
           tool_name: toolName,
           tool_call_id: toolCallId || undefined,
-          content: `${planSummary} Step 1 hint: call skill_list now, then skill_read only if a relevant skill appears, then complete_plan_step. This closes the skill-scout pre-step and keeps your declared step 1 as the next action.`,
+          content: `${planSummary} Skill scout pre-step is now active. Call skill_list now, then skill_read only if a relevant skill appears, then complete_plan_step. This closes only the hidden scout pre-step; declared step 1 remains the next visible action.`,
         });
         resetProgressRoundStats();
         continue;
@@ -4214,6 +4223,12 @@ RULES:
       if (toolName === 'complete_plan_step' || toolName === 'step_complete') {
         const note = String(toolArgs?.note || '').trim();
         const isTaskSession = sessionId.startsWith('task_');
+        const completingSkillScoutOnly =
+          progressState.manualStepAdvance
+          && manualPlanSkillScoutRequired
+          && !manualPlanSkillScoutCompleted
+          && stepCursor === 0
+          && manualPlanSkillListDone;
         let completedSkillScoutOnly = false;
         let completionSummary = note
           ? `Plan step completed: ${note}`
@@ -4221,6 +4236,7 @@ RULES:
 
         if (
           manualPlanSkillScoutRequired
+          && !manualPlanSkillScoutCompleted
           && progressState.manualStepAdvance
           && stepCursor === 0
           && !manualPlanSkillListDone
@@ -4241,7 +4257,7 @@ RULES:
 
         // Task-runner sessions must persist step completion in task-store so
         // background-task-runner can detect the step advancement.
-        if (isTaskSession) {
+        if (isTaskSession && !completingSkillScoutOnly) {
           const taskId = sessionId.replace(/^task_/, '');
           const liveTask = loadTask(taskId);
           if (!liveTask) {
@@ -4288,16 +4304,19 @@ RULES:
               note: note || undefined,
             });
           }
-        } else if (toolName === 'step_complete') {
+        } else if (!isTaskSession && toolName === 'step_complete') {
           completionSummary = `${completionSummary} (Handled as plan-step completion in interactive chat.)`;
         }
 
         if (
           manualPlanSkillScoutRequired
+          && !manualPlanSkillScoutCompleted
           && progressState.manualStepAdvance
           && stepCursor === 0
+          && manualPlanSkillListDone
         ) {
           completionSummary = `Skill scout pre-step completed (skill_list + ${manualPlanSkillReadCount} skill_read call(s)). Declared plan step 1 has NOT advanced; proceed with step 1 now.`;
+          manualPlanSkillScoutCompleted = true;
           manualPlanSkillScoutRequired = false;
           manualPlanSkillListDone = false;
           manualPlanSkillReadCount = 0;
@@ -4316,7 +4335,9 @@ RULES:
           tool_call_id: toolCallId || undefined,
           content: completionSummary,
         });
-        markProgressStepResult(true, toolName);
+        if (!completedSkillScoutOnly) {
+          markProgressStepResult(true, toolName);
+        }
         resetProgressRoundStats();
         continue;
       }
@@ -4540,6 +4561,7 @@ RULES:
       const toolResult = await executeTool(toolName, toolArgs, workspacePath, { cronScheduler: _cronScheduler, handleChat, telegramChannel: _telegramChannel, skillsManager: _skillsManager, sanitizeAgentId, normalizeAgentsForSave, buildTeamDispatchContext, runTeamAgentViaChat, bindTeamNotificationTargetFromSession, pauseManagedTeamInternal, resumeManagedTeamInternal, handleTaskControlAction, makeBroadcastForTask, sendSSE }, sessionId);
       if (
         manualPlanSkillScoutRequired
+        && !manualPlanSkillScoutCompleted
         && progressState.manualStepAdvance
         && stepCursor === 0
         && !toolResult.error
@@ -4746,6 +4768,194 @@ ${autoShotContent}`
 
 // ─── SSE + Routes ──────────────────────────────────────────────────────────────
 
+async function maybeRefreshProjectLearning(
+  sessionId: string,
+  extraTextBlocks?: string[],
+): Promise<void> {
+  try {
+    await refreshProjectContextForSession(sessionId, { extraTextBlocks });
+  } catch (err: any) {
+    console.warn(`[ProjectLearning] Refresh failed for session ${sessionId}:`, err?.message || err);
+  }
+}
+
+async function runInteractiveTurn(
+  message: string,
+  sessionId: string,
+  sendSSE: (event: string, data: any) => void,
+  pinnedMessages?: Array<{ role: string; content: string }>,
+  abortSignal?: { aborted: boolean },
+  callerContext?: string,
+  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+): Promise<HandleChatResult> {
+  const userMsg = { role: 'user' as const, content: message, timestamp: Date.now() };
+  const rollingCompactionPolicy = resolveRollingCompactionPolicy();
+  let rollingCompactionApplied = false;
+
+  if (rollingCompactionPolicy.enabled) {
+    const currentNonSummaryCount = getSession(sessionId).history.filter((msg) => !isCompactionSummaryMessage(msg)).length + 1;
+    const shouldAttemptRollingCompaction = currentNonSummaryCount >= rollingCompactionPolicy.messageCount;
+    if (shouldAttemptRollingCompaction) {
+      sendSSE('tool_call', {
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        args: {
+          phase: 'start',
+          threshold_messages: rollingCompactionPolicy.messageCount,
+          candidate_messages: currentNonSummaryCount,
+          tool_turn_window: rollingCompactionPolicy.toolTurns,
+          summary_max_words: rollingCompactionPolicy.summaryMaxWords,
+        },
+        synthetic: true,
+        actor: 'system',
+      });
+    }
+    const rollingResult = await maybeRunRollingCompaction(sessionId, userMsg, abortSignal);
+    if (rollingResult.compacted) {
+      rollingCompactionApplied = true;
+      const modeLabel = rollingResult.mode === 'fallback' ? 'fallback summary' : 'LLM summary';
+      const summaryText = String(rollingResult.summaryText || '').trim();
+      const summaryWordCount = summaryText ? summaryText.split(/\s+/).filter(Boolean).length : 0;
+      console.log(`[v2] Rolling context compaction applied for session ${sessionId} at ${rollingCompactionPolicy.messageCount} messages (${modeLabel}).`);
+      await maybeRefreshProjectLearning(sessionId, summaryText ? [summaryText] : undefined);
+      if (shouldAttemptRollingCompaction) {
+        sendSSE('tool_result', {
+          action: CONTEXT_COMPACTION_TOOL_NAME,
+          result: summaryText
+            ? `Thread compacted (${modeLabel}).\n\n${summaryText}`
+            : `Thread compacted (${modeLabel}).`,
+          error: false,
+          synthetic: true,
+          actor: 'system',
+          extra: {
+            phase: 'result',
+            status: 'compacted',
+            mode: modeLabel,
+            summary: summaryText,
+            summary_word_count: summaryWordCount,
+            message_window: rollingCompactionPolicy.messageCount,
+            tool_turn_window: rollingCompactionPolicy.toolTurns,
+            summary_max_words: rollingCompactionPolicy.summaryMaxWords,
+          },
+        });
+      }
+    } else if (shouldAttemptRollingCompaction) {
+      sendSSE('tool_result', {
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        result: 'Thread compaction skipped (continuing with normal flow).',
+        error: false,
+        synthetic: true,
+        actor: 'system',
+        extra: {
+          phase: 'result',
+          status: 'skipped',
+          message_window: rollingCompactionPolicy.messageCount,
+          tool_turn_window: rollingCompactionPolicy.toolTurns,
+          summary_max_words: rollingCompactionPolicy.summaryMaxWords,
+        },
+      });
+    }
+  }
+
+  const addResult = addMessage(sessionId, userMsg, {
+    deferOnMemoryFlush: true,
+    deferOnCompaction: true,
+    disableCompactionCheck: rollingCompactionApplied,
+  });
+
+  if (addResult.deferredForCompaction && addResult.compactionPrompt) {
+    console.log(`[v2] Context compaction triggered for session ${sessionId} (${addResult.estimatedTokens}/${addResult.contextLimitTokens} est. tokens)`);
+    try {
+      const internalCompactionContext = 'CONTEXT: Internal context compaction turn. Summarize prior conversation into compact retained context only.';
+      const compactResult = await handleChat(
+        addResult.compactionPrompt,
+        sessionId,
+        () => {},
+        undefined,
+        abortSignal,
+        internalCompactionContext,
+      );
+      if (!abortSignal?.aborted && compactResult?.text) {
+        addMessage(
+          sessionId,
+          { role: 'assistant', content: compactResult.text, timestamp: Date.now() },
+          { disableMemoryFlushCheck: true, disableCompactionCheck: true },
+        );
+        await maybeRefreshProjectLearning(sessionId, [compactResult.text]);
+      }
+    } catch (compactErr: any) {
+      console.warn('[v2] Context compaction turn failed:', compactErr?.message || compactErr);
+    }
+    if (abortSignal?.aborted) return { type: 'chat', text: '' };
+    addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
+  } else if (addResult.deferredForMemoryFlush && addResult.memoryFlushPrompt) {
+    console.log(`[v2] Pre-compaction memory flush triggered for session ${sessionId} (${addResult.estimatedTokens}/${addResult.contextLimitTokens} est. tokens)`);
+    try {
+      const internalFlushContext = 'CONTEXT: Internal pre-compaction memory flush turn. Before continuing, save important durable user/task facts to memory now.';
+      const flushResult = await handleChat(
+        addResult.memoryFlushPrompt,
+        sessionId,
+        () => {},
+        undefined,
+        abortSignal,
+        internalFlushContext,
+      );
+      if (!abortSignal?.aborted && flushResult?.text) {
+        addMessage(
+          sessionId,
+          { role: 'assistant', content: flushResult.text, timestamp: Date.now() },
+          { disableMemoryFlushCheck: true, disableCompactionCheck: true },
+        );
+      }
+    } catch (flushErr: any) {
+      console.warn('[v2] Pre-compaction memory flush failed:', flushErr?.message || flushErr);
+    }
+    if (abortSignal?.aborted) return { type: 'chat', text: '' };
+    addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
+  }
+
+  console.log(`\n[v2] USER: ${message.slice(0, 100)}`);
+  const followupHandled = await tryHandleBlockedTaskFollowup(sessionId, message);
+  if (followupHandled) {
+    if (!abortSignal?.aborted) {
+      addMessage(sessionId, { role: 'assistant', content: followupHandled, timestamp: Date.now() });
+      await maybeRefreshProjectLearning(sessionId);
+    }
+    return { type: 'chat', text: followupHandled };
+  }
+
+  const pins = Array.isArray(pinnedMessages) ? pinnedMessages.slice(0, 3) : [];
+  const canvasCtx = getCanvasContextBlock(sessionId);
+  const mergedCallerContext = [callerContext, canvasCtx || undefined].filter(Boolean).join('\n\n') || undefined;
+  const result = await handleChat(
+    message,
+    sessionId,
+    sendSSE,
+    pins.length > 0 ? pins : undefined,
+    abortSignal,
+    mergedCallerContext,
+    undefined,
+    undefined,
+    undefined,
+    Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
+  );
+
+  if (!abortSignal?.aborted) {
+    if (result.toolResults && result.toolResults.length > 0) {
+      const toolLogLines = result.toolResults.slice(-8).map((r) => {
+        const ok = r.error ? '\u2717' : '\u2713';
+        const args = r.args ? JSON.stringify(r.args).slice(0, 60) : '';
+        const preview = String(r.result || '').slice(0, 100).replace(/\n/g, ' ');
+        return `${ok} ${r.name}(${args}): ${preview}`;
+      });
+      persistToolLog(sessionId, toolLogLines.join('\n'));
+    }
+    addMessage(sessionId, { role: 'assistant', content: result.text, timestamp: Date.now() });
+    await maybeRefreshProjectLearning(sessionId);
+  }
+
+  return result;
+}
+
 function createSSESender(res: express.Response): (event: string, data: any) => void {
   return (type: string, data: any) => { try { res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`); } catch {} };
 }
@@ -4832,158 +5042,16 @@ router.post('/api/chat', async (req, res) => {
   });
 
   try {
-    const userMsg = { role: 'user' as const, content: message, timestamp: Date.now() };
-    const rollingCompactionPolicy = resolveRollingCompactionPolicy();
-    let rollingCompactionApplied = false;
-    if (rollingCompactionPolicy.enabled) {
-      const currentNonSummaryCount = getSession(sessionId).history.filter((msg) => !isCompactionSummaryMessage(msg)).length + 1;
-      const shouldAttemptRollingCompaction = currentNonSummaryCount >= rollingCompactionPolicy.messageCount;
-      if (shouldAttemptRollingCompaction) {
-        sendSSE('tool_call', {
-          action: CONTEXT_COMPACTION_TOOL_NAME,
-          args: {
-            phase: 'start',
-            threshold_messages: rollingCompactionPolicy.messageCount,
-            candidate_messages: currentNonSummaryCount,
-            tool_turn_window: rollingCompactionPolicy.toolTurns,
-            summary_max_words: rollingCompactionPolicy.summaryMaxWords,
-          },
-          synthetic: true,
-          actor: 'system',
-        });
-      }
-      const rollingResult = await maybeRunRollingCompaction(sessionId, userMsg, abortSignal);
-      if (rollingResult.compacted) {
-        rollingCompactionApplied = true;
-        const modeLabel = rollingResult.mode === 'fallback' ? 'fallback summary' : 'LLM summary';
-        const summaryText = String(rollingResult.summaryText || '').trim();
-        const summaryWordCount = summaryText ? summaryText.split(/\s+/).filter(Boolean).length : 0;
-        console.log(`[v2] Rolling context compaction applied for session ${sessionId} at ${rollingCompactionPolicy.messageCount} messages (${modeLabel}).`);
-        if (shouldAttemptRollingCompaction) {
-          sendSSE('tool_result', {
-            action: CONTEXT_COMPACTION_TOOL_NAME,
-            result: summaryText
-              ? `Thread compacted (${modeLabel}).\n\n${summaryText}`
-              : `Thread compacted (${modeLabel}).`,
-            error: false,
-            synthetic: true,
-            actor: 'system',
-            extra: {
-              phase: 'result',
-              status: 'compacted',
-              mode: modeLabel,
-              summary: summaryText,
-              summary_word_count: summaryWordCount,
-              message_window: rollingCompactionPolicy.messageCount,
-              tool_turn_window: rollingCompactionPolicy.toolTurns,
-              summary_max_words: rollingCompactionPolicy.summaryMaxWords,
-            },
-          });
-        }
-      } else if (shouldAttemptRollingCompaction) {
-        sendSSE('tool_result', {
-          action: CONTEXT_COMPACTION_TOOL_NAME,
-          result: 'Thread compaction skipped (continuing with normal flow).',
-          error: false,
-          synthetic: true,
-          actor: 'system',
-          extra: {
-            phase: 'result',
-            status: 'skipped',
-            message_window: rollingCompactionPolicy.messageCount,
-            tool_turn_window: rollingCompactionPolicy.toolTurns,
-            summary_max_words: rollingCompactionPolicy.summaryMaxWords,
-          },
-        });
-      }
-    }
-
-    const addResult = addMessage(sessionId, userMsg, {
-      deferOnMemoryFlush: true,
-      deferOnCompaction: true,
-      disableCompactionCheck: rollingCompactionApplied,
-    });
-    if (addResult.deferredForCompaction && addResult.compactionPrompt) {
-      console.log(`[v2] Context compaction triggered for session ${sessionId} (${addResult.estimatedTokens}/${addResult.contextLimitTokens} est. tokens)`);
-      try {
-        const internalCompactionContext = 'CONTEXT: Internal context compaction turn. Summarize prior conversation into compact retained context only.';
-        const compactResult = await handleChat(
-          addResult.compactionPrompt,
-          sessionId,
-          () => {},
-          undefined,
-          abortSignal,
-          internalCompactionContext,
-        );
-        if (!abortSignal.aborted && compactResult?.text) {
-          addMessage(
-            sessionId,
-            { role: 'assistant', content: compactResult.text, timestamp: Date.now() },
-            { disableMemoryFlushCheck: true, disableCompactionCheck: true },
-          );
-        }
-      } catch (compactErr: any) {
-        console.warn('[v2] Context compaction turn failed:', compactErr?.message || compactErr);
-      }
-      if (abortSignal.aborted) return;
-      addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
-    } else if (addResult.deferredForMemoryFlush && addResult.memoryFlushPrompt) {
-      console.log(`[v2] Pre-compaction memory flush triggered for session ${sessionId} (${addResult.estimatedTokens}/${addResult.contextLimitTokens} est. tokens)`);
-      try {
-        const internalFlushContext = 'CONTEXT: Internal pre-compaction memory flush turn. Before continuing, save important durable user/task facts to memory now.';
-        const flushResult = await handleChat(
-          addResult.memoryFlushPrompt,
-          sessionId,
-          () => {},
-          undefined,
-          abortSignal,
-          internalFlushContext,
-        );
-        if (!abortSignal.aborted && flushResult?.text) {
-          addMessage(
-            sessionId,
-            { role: 'assistant', content: flushResult.text, timestamp: Date.now() },
-            { disableMemoryFlushCheck: true, disableCompactionCheck: true },
-          );
-        }
-      } catch (flushErr: any) {
-        console.warn('[v2] Pre-compaction memory flush failed:', flushErr?.message || flushErr);
-      }
-      if (abortSignal.aborted) return;
-      addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
-    }
-
-    console.log(`\n[v2] USER: ${message.slice(0, 100)}`);
-    const followupHandled = await tryHandleBlockedTaskFollowup(sessionId, message);
-    if (followupHandled) {
-      if (!abortSignal.aborted) {
-        addMessage(sessionId, { role: 'assistant', content: followupHandled, timestamp: Date.now() });
-        sendSSE('final', { text: followupHandled });
-        sendSSE('done', {
-          reply: followupHandled,
-          mode: 'chat',
-          sections: [{ type: 'text', content: followupHandled }],
-        });
-      }
-      return;
-    }
-    const pins = Array.isArray(pinnedMessages) ? pinnedMessages.slice(0, 3) : [];
-    // Inject canvas file context so the AI knows exactly which files are open
-    const canvasCtx = getCanvasContextBlock(sessionId);
-    const result = await handleChat(message, sessionId, sendSSE, pins.length > 0 ? pins : undefined, abortSignal, canvasCtx || undefined, undefined, undefined, undefined, Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined);
+    const result = await runInteractiveTurn(
+      message,
+      sessionId,
+      sendSSE,
+      pinnedMessages,
+      abortSignal,
+      undefined,
+      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
+    );
     if (!abortSignal.aborted) {
-      // Persist compact tool log onto the assistant message so future turns can
-      // inject it as [RECENT_TOOL_LOG] context via getRecentToolLog().
-      if (result.toolResults && result.toolResults.length > 0) {
-        const toolLogLines = result.toolResults.slice(-8).map((r) => {
-          const ok = r.error ? '\u2717' : '\u2713';
-          const args = r.args ? JSON.stringify(r.args).slice(0, 60) : '';
-          const preview = String(r.result || '').slice(0, 100).replace(/\n/g, ' ');
-          return `${ok} ${r.name}(${args}): ${preview}`;
-        });
-        persistToolLog(sessionId, toolLogLines.join('\n'));
-      }
-      addMessage(sessionId, { role: 'assistant', content: result.text, timestamp: Date.now() });
       sendSSE('final', { text: result.text });
       sendSSE('done', {
         reply: result.text, mode: result.type,
@@ -5098,4 +5166,4 @@ router.get('/api/sessions/:id', (req, res) => {
   }
 });
 
-export { handleChat, bindTeamNotificationTargetFromSession };
+export { handleChat, runInteractiveTurn, bindTeamNotificationTargetFromSession };

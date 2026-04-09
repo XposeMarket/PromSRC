@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-04-09T17:04:35.510Z",
-  "nodeCount": 1741,
+  "generatedAt": "2026-04-09T20:25:59.651Z",
+  "nodeCount": 1774,
   "edgeCount": 5000,
   "nodes": [
     {
@@ -15024,16 +15024,6 @@
       "durability": 0.72
     },
     {
-      "id": "rec_b0bace5b385431ba",
-      "sourceType": "task_state",
-      "sourcePath": "tasks/state/_index.json",
-      "title": "_index.json",
-      "timestamp": "2026-04-08T19:13:57.443Z",
-      "day": "2026-04-08",
-      "projectId": null,
-      "durability": 0.72
-    },
-    {
       "id": "rec_670e0124bc6c85b2",
       "sourceType": "cron_run",
       "sourcePath": "cron/runs/job_1772482388813_nkaih.jsonl",
@@ -17304,41 +17294,11 @@
       "durability": 0.56
     },
     {
-      "id": "rec_da432a5ce4fb4bb8",
-      "sourceType": "chat_transcript",
-      "sourcePath": "chats/transcripts/telegram_1799053599.jsonl",
-      "title": "telegram_1799053599.jsonl",
-      "timestamp": "2026-04-09T05:58:44.058Z",
-      "day": "2026-04-09",
-      "projectId": null,
-      "durability": 0.56
-    },
-    {
-      "id": "rec_c9314a97ebbd6d27",
-      "sourceType": "chat_transcript",
-      "sourcePath": "chats/transcripts/telegram_1799053599.md",
-      "title": "telegram_1799053599.md",
-      "timestamp": "2026-04-09T05:58:44.058Z",
-      "day": "2026-04-09",
-      "projectId": null,
-      "durability": 0.56
-    },
-    {
       "id": "rec_6f4ab2d5e00bcc2d",
       "sourceType": "chat_session",
       "sourcePath": "chats/sessions/auto_restart_manual_1775714324035.json",
       "title": "auto_restart_manual_1775714324035.json",
       "timestamp": "2026-04-09T05:58:44.056Z",
-      "day": "2026-04-09",
-      "projectId": null,
-      "durability": 0.64
-    },
-    {
-      "id": "rec_8c936c196b76bf21",
-      "sourceType": "chat_session",
-      "sourcePath": "chats/sessions/telegram_1799053599.json",
-      "title": "telegram_1799053599.json",
-      "timestamp": "2026-04-09T05:58:44.059Z",
       "day": "2026-04-09",
       "projectId": null,
       "durability": 0.64
@@ -17388,17 +17348,7 @@
       "sourceType": "memory_root",
       "sourcePath": "memory/root/Memory.md",
       "title": "Memory.md",
-      "timestamp": "2026-04-09T16:33:02.968Z",
-      "day": "2026-04-09",
-      "projectId": null,
-      "durability": 1
-    },
-    {
-      "id": "rec_106e376c0597ab0e",
-      "sourceType": "memory_root",
-      "sourcePath": "memory/root/SOUL.md",
-      "title": "SOUL.md",
-      "timestamp": "2026-04-09T16:33:02.527Z",
+      "timestamp": "2026-04-09T18:04:02.400Z",
       "day": "2026-04-09",
       "projectId": null,
       "durability": 1
@@ -17408,10 +17358,390 @@
       "sourceType": "memory_root",
       "sourcePath": "memory/root/User.md",
       "title": "User.md",
-      "timestamp": "2026-04-09T16:33:02.641Z",
+      "timestamp": "2026-04-09T18:04:02.397Z",
       "day": "2026-04-09",
       "projectId": null,
       "durability": 1
+    },
+    {
+      "id": "rec_7c80154d7257bf44",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/telegram_1799053599_1775757556700.jsonl",
+      "title": "telegram_1799053599_1775757556700.jsonl",
+      "timestamp": "2026-04-09T18:07:38.639Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_b74399d799f946b9",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/telegram_1799053599_1775757556700.md",
+      "title": "telegram_1799053599_1775757556700.md",
+      "timestamp": "2026-04-09T18:07:38.639Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_779e2ec26f1bf3df",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/telegram_1799053599_1775757556700.json",
+      "title": "telegram_1799053599_1775757556700.json",
+      "timestamp": "2026-04-09T18:07:38.639Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_b7f7180286666e19",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/meta_coordinator_mnrslv5j.json",
+      "title": "meta_coordinator_mnrslv5j.json",
+      "timestamp": "2026-04-09T18:10:40.257Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_2f71c66d14f86a73",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/auto_restart_manual_1775758621769.jsonl",
+      "title": "auto_restart_manual_1775758621769.jsonl",
+      "timestamp": "2026-04-09T18:17:01.793Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_852b0aae7ab0ffef",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/auto_restart_manual_1775758621769.md",
+      "title": "auto_restart_manual_1775758621769.md",
+      "timestamp": "2026-04-09T18:17:01.794Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_85e567eede622e4a",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/telegram_1799053599_1775758182985.jsonl",
+      "title": "telegram_1799053599_1775758182985.jsonl",
+      "timestamp": "2026-04-09T18:17:01.795Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_3e8406815d13b226",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/telegram_1799053599_1775758182985.md",
+      "title": "telegram_1799053599_1775758182985.md",
+      "timestamp": "2026-04-09T18:17:01.795Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_e3c4c419d216df2f",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/auto_restart_manual_1775758621769.json",
+      "title": "auto_restart_manual_1775758621769.json",
+      "timestamp": "2026-04-09T18:17:01.793Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_0772686e503951e1",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/telegram_1799053599_1775758182985.json",
+      "title": "telegram_1799053599_1775758182985.json",
+      "timestamp": "2026-04-09T18:17:01.795Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_c3f68736a81727db",
+      "sourceType": "proposal_state",
+      "sourcePath": "proposals/state/pending/prop_1775759744962_a7c1d3.json",
+      "title": "prop_1775759744962_a7c1d3.json",
+      "timestamp": "2026-04-09T18:35:44.963Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.88
+    },
+    {
+      "id": "rec_ed42f6fa2b2eb47c",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/proposal_prop_1775759744962_a7c1d3.json",
+      "title": "proposal_prop_1775759744962_a7c1d3.json",
+      "timestamp": "2026-04-09T18:37:46.739Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_d16ff73f31523b2e",
+      "sourceType": "proposal_state",
+      "sourcePath": "proposals/state/approved/prop_1775759744962_a7c1d3.json",
+      "title": "prop_1775759744962_a7c1d3.json",
+      "timestamp": "2026-04-09T18:37:46.724Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.88
+    },
+    {
+      "id": "rec_c2525f38724726e1",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/task_b540f050-4464-4b7c-8a7d-f2845778edf2.json",
+      "title": "task_b540f050-4464-4b7c-8a7d-f2845778edf2.json",
+      "timestamp": "2026-04-09T18:37:46.739Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_988ba9843e8f2fde",
+      "sourceType": "task_state",
+      "sourcePath": "tasks/state/b540f050-4464-4b7c-8a7d-f2845778edf2.json",
+      "title": "b540f050-4464-4b7c-8a7d-f2845778edf2.json",
+      "timestamp": "2026-04-09T18:45:15.923Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.72
+    },
+    {
+      "id": "rec_c26cae75b59c0e06",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/auto_restart_manual_1775760350263.jsonl",
+      "title": "auto_restart_manual_1775760350263.jsonl",
+      "timestamp": "2026-04-09T18:45:50.277Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_b60776dc56113926",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/auto_restart_manual_1775760350263.md",
+      "title": "auto_restart_manual_1775760350263.md",
+      "timestamp": "2026-04-09T18:45:50.277Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_da46de576c59d6e3",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/auto_restart_manual_1775760350263.json",
+      "title": "auto_restart_manual_1775760350263.json",
+      "timestamp": "2026-04-09T18:45:50.278Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_ae5d3635ad798958",
+      "sourceType": "chat_compaction",
+      "sourcePath": "chats/compactions/telegram_1799053599.jsonl",
+      "title": "telegram_1799053599.jsonl",
+      "timestamp": "2026-04-09T19:37:08.206Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.76
+    },
+    {
+      "id": "rec_5044d48cccb505a3",
+      "sourceType": "chat_compaction",
+      "sourcePath": "chats/compactions/telegram_1799053599.md",
+      "title": "telegram_1799053599.md",
+      "timestamp": "2026-04-09T19:37:08.217Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.76
+    },
+    {
+      "id": "rec_da432a5ce4fb4bb8",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/telegram_1799053599.jsonl",
+      "title": "telegram_1799053599.jsonl",
+      "timestamp": "2026-04-09T19:38:44.759Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_c9314a97ebbd6d27",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/telegram_1799053599.md",
+      "title": "telegram_1799053599.md",
+      "timestamp": "2026-04-09T19:38:44.760Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_b0bace5b385431ba",
+      "sourceType": "task_state",
+      "sourcePath": "tasks/state/_index.json",
+      "title": "_index.json",
+      "timestamp": "2026-04-09T19:38:46.668Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.72
+    },
+    {
+      "id": "rec_74a78dd77fe25481",
+      "sourceType": "proposal_state",
+      "sourcePath": "proposals/state/approved/prop_1774488185640_a65bec.json",
+      "title": "prop_1774488185640_a65bec.json",
+      "timestamp": "2026-04-09T19:38:46.674Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.88
+    },
+    {
+      "id": "rec_8c936c196b76bf21",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/telegram_1799053599.json",
+      "title": "telegram_1799053599.json",
+      "timestamp": "2026-04-09T19:38:44.760Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_106e376c0597ab0e",
+      "sourceType": "memory_root",
+      "sourcePath": "memory/root/SOUL.md",
+      "title": "SOUL.md",
+      "timestamp": "2026-04-09T19:41:43.503Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 1
+    },
+    {
+      "id": "rec_bf1b4cd9c958864f",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/task_1e754ab2-4295-4140-96a7-728fb22eadfe.jsonl",
+      "title": "task_1e754ab2-4295-4140-96a7-728fb22eadfe.jsonl",
+      "timestamp": "2026-04-09T20:10:57.895Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_7cf18f9cffef0323",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/task_1e754ab2-4295-4140-96a7-728fb22eadfe.md",
+      "title": "task_1e754ab2-4295-4140-96a7-728fb22eadfe.md",
+      "timestamp": "2026-04-09T20:10:57.897Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_0d254b62a767c7d4",
+      "sourceType": "memory_note",
+      "sourcePath": "memory/files/2026-04-09-intraday-notes.md",
+      "title": "2026-04-09-intraday-notes.md",
+      "timestamp": "2026-04-09T00:00:00.000Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.45
+    },
+    {
+      "id": "rec_65940962b5e82976",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/proposal_prop_1774488185640_a65bec.jsonl",
+      "title": "proposal_prop_1774488185640_a65bec.jsonl",
+      "timestamp": "2026-04-09T20:12:00.109Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_5965930d73058959",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/proposal_prop_1774488185640_a65bec.md",
+      "title": "proposal_prop_1774488185640_a65bec.md",
+      "timestamp": "2026-04-09T20:12:00.109Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_6c88ca566939075c",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/proposal_prop_1774488185640_a65bec.json",
+      "title": "proposal_prop_1774488185640_a65bec.json",
+      "timestamp": "2026-04-09T20:12:00.108Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_b25ef90ea073a888",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/task_1e754ab2-4295-4140-96a7-728fb22eadfe.json",
+      "title": "task_1e754ab2-4295-4140-96a7-728fb22eadfe.json",
+      "timestamp": "2026-04-09T20:10:57.897Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_2666488d2012cb3b",
+      "sourceType": "task_state",
+      "sourcePath": "tasks/state/1e754ab2-4295-4140-96a7-728fb22eadfe.json",
+      "title": "1e754ab2-4295-4140-96a7-728fb22eadfe.json",
+      "timestamp": "2026-04-09T20:12:00.089Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.72
+    },
+    {
+      "id": "rec_e685e3836ed4a9e8",
+      "sourceType": "proposal_state",
+      "sourcePath": "proposals/state/archive/prop_1774488185640_a65bec.json",
+      "title": "prop_1774488185640_a65bec.json",
+      "timestamp": "2026-04-09T20:12:00.094Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.88
+    },
+    {
+      "id": "rec_ef185bfe64526a18",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-09_07-58.jsonl",
+      "title": "brain_thought_2026-04-09_07-58.jsonl",
+      "timestamp": "2026-04-09T00:00:00.000Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_f3e5ebd05a6fa90d",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-09_07-58.md",
+      "title": "brain_thought_2026-04-09_07-58.md",
+      "timestamp": "2026-04-09T00:00:00.000Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_ce5f9941467e0c03",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/brain_thought_2026-04-09_07-58.json",
+      "title": "brain_thought_2026-04-09_07-58.json",
+      "timestamp": "2026-04-09T20:21:45.838Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
     }
   ],
   "edges": [
@@ -21847,6 +22177,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_f0681ff46f10b569",
+      "from": "rec_5edd3ba0f1b13605",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_9c7d2ae3c260dbb3",
+      "from": "rec_5edd3ba0f1b13605",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_4f6deb62c868f84a",
       "from": "rec_5edd3ba0f1b13605",
       "to": "rec_da432a5ce4fb4bb8",
@@ -21854,9 +22198,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_f0681ff46f10b569",
+      "id": "rel_5539730d5d94daac",
       "from": "rec_5edd3ba0f1b13605",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_49ea71923810350e",
+      "from": "rec_5edd3ba0f1b13605",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -21875,6 +22226,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_d61516cb4b6c9b45",
+      "from": "rec_1455c903c98aa790",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_38641d13e886843d",
+      "from": "rec_1455c903c98aa790",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_03da42a05e8ad5a3",
       "from": "rec_1455c903c98aa790",
       "to": "rec_da432a5ce4fb4bb8",
@@ -21882,9 +22247,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_d61516cb4b6c9b45",
+      "id": "rel_65c689baaec3d3bf",
       "from": "rec_1455c903c98aa790",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_f0509a7b9c7ee33f",
+      "from": "rec_1455c903c98aa790",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -21910,6 +22282,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_d2ac34434abd0ada",
+      "from": "rec_41583fe025ea7a34",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_a42b8823de0dc29d",
+      "from": "rec_41583fe025ea7a34",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_fab4816ada0fc2d0",
       "from": "rec_41583fe025ea7a34",
       "to": "rec_da432a5ce4fb4bb8",
@@ -21917,9 +22303,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_d2ac34434abd0ada",
+      "id": "rel_b3e0d10f4c59b5f5",
       "from": "rec_41583fe025ea7a34",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_2e4fa46302766913",
+      "from": "rec_41583fe025ea7a34",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -21938,6 +22331,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_ac63e4e62707ebf5",
+      "from": "rec_e1c515aeffa25e7e",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_654671bd0744029c",
+      "from": "rec_e1c515aeffa25e7e",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_5575a1e523477ce9",
       "from": "rec_e1c515aeffa25e7e",
       "to": "rec_da432a5ce4fb4bb8",
@@ -21945,9 +22352,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_ac63e4e62707ebf5",
+      "id": "rel_3bae3bff4e18d33a",
       "from": "rec_e1c515aeffa25e7e",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_23e5c3f3c5c2a62e",
+      "from": "rec_e1c515aeffa25e7e",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -21966,6 +22380,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_5ffb3753c19c9b93",
+      "from": "rec_62d63e1e8c1b3e7b",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_577635e85ed9c2ce",
+      "from": "rec_62d63e1e8c1b3e7b",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_2fa6244414f87b5b",
       "from": "rec_62d63e1e8c1b3e7b",
       "to": "rec_da432a5ce4fb4bb8",
@@ -21973,9 +22401,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_5ffb3753c19c9b93",
+      "id": "rel_733db1468cdf0e8d",
       "from": "rec_62d63e1e8c1b3e7b",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.8414
+    },
+    {
+      "id": "rel_34e8bb633de961b5",
+      "from": "rec_62d63e1e8c1b3e7b",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -21994,6 +22429,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_55ce8c978007d1d7",
+      "from": "rec_48fe7b87689fdace",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_e9eec753a14a4653",
+      "from": "rec_48fe7b87689fdace",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_de932439059cd541",
       "from": "rec_48fe7b87689fdace",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22001,9 +22450,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_55ce8c978007d1d7",
+      "id": "rel_d49dc9be2eb7bbdf",
       "from": "rec_48fe7b87689fdace",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_7f40318b41707c8a",
+      "from": "rec_48fe7b87689fdace",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22029,6 +22485,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_04ee0e6c42b15990",
+      "from": "rec_583f7915a6e6b23c",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_0a95722347467fbf",
+      "from": "rec_583f7915a6e6b23c",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_f7affec9aa536d9b",
       "from": "rec_583f7915a6e6b23c",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22036,11 +22506,18 @@
       "score": 0.86
     },
     {
-      "id": "rel_04ee0e6c42b15990",
+      "id": "rel_3fa0ef745942b0da",
       "from": "rec_583f7915a6e6b23c",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
       "type": "shared_terms",
-      "score": 0.86
+      "score": 0.8414
+    },
+    {
+      "id": "rel_aa3ed615cbd0dff6",
+      "from": "rec_583f7915a6e6b23c",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.8414
     },
     {
       "id": "rel_544aa75b59c83ad4",
@@ -22057,6 +22534,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_6e309470dc73ca9e",
+      "from": "rec_1a17a1d4f20a86ef",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_130a7d2c5af9b731",
+      "from": "rec_1a17a1d4f20a86ef",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_37b30b1cb764b5a9",
       "from": "rec_1a17a1d4f20a86ef",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22064,11 +22555,18 @@
       "score": 0.86
     },
     {
-      "id": "rel_6e309470dc73ca9e",
+      "id": "rel_f067edc86ef78065",
       "from": "rec_1a17a1d4f20a86ef",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
       "type": "shared_terms",
-      "score": 0.86
+      "score": 0.8414
+    },
+    {
+      "id": "rel_7c3d1d505f0f4a66",
+      "from": "rec_1a17a1d4f20a86ef",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.8414
     },
     {
       "id": "rel_1b383ba09a01434b",
@@ -22085,6 +22583,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_1df5d2e5867d54d0",
+      "from": "rec_55bcea73247f76c2",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_a660bda220ec004c",
+      "from": "rec_55bcea73247f76c2",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_d9cfbf3dabfa3ebb",
       "from": "rec_55bcea73247f76c2",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22092,9 +22604,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_1df5d2e5867d54d0",
+      "id": "rel_cf9ec446cc3f409e",
       "from": "rec_55bcea73247f76c2",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_3e099ab090a24d41",
+      "from": "rec_55bcea73247f76c2",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22113,6 +22632,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_5ff778da2fc97d8e",
+      "from": "rec_9a29fa13b8c8d097",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_e3db4febb6db9873",
+      "from": "rec_9a29fa13b8c8d097",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_0ccebb6e80a3716c",
       "from": "rec_9a29fa13b8c8d097",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22120,9 +22653,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_5ff778da2fc97d8e",
+      "id": "rel_d2a996588ec50d61",
       "from": "rec_9a29fa13b8c8d097",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_2c40f581913c7294",
+      "from": "rec_9a29fa13b8c8d097",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22141,6 +22681,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_2c7052f2ae680ae5",
+      "from": "rec_ee9cec6ca049cc07",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_a3c5f72e6315836e",
+      "from": "rec_ee9cec6ca049cc07",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_51854e0e66861287",
       "from": "rec_ee9cec6ca049cc07",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22148,9 +22702,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_2c7052f2ae680ae5",
+      "id": "rel_f616879203dca2a2",
       "from": "rec_ee9cec6ca049cc07",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_780ba520ed813787",
+      "from": "rec_ee9cec6ca049cc07",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22169,6 +22730,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_7c8dc601ca82c51d",
+      "from": "rec_32245a87bd59a9b6",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_d3483ef4c62268cd",
+      "from": "rec_32245a87bd59a9b6",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_b568b42cc0bda087",
       "from": "rec_32245a87bd59a9b6",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22176,9 +22751,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_7c8dc601ca82c51d",
+      "id": "rel_992b086390713100",
       "from": "rec_32245a87bd59a9b6",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_2e6281ef625c75ab",
+      "from": "rec_32245a87bd59a9b6",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22190,13 +22772,6 @@
       "score": 0.86
     },
     {
-      "id": "rel_b6e10eb69a911dd2",
-      "from": "rec_92955ec521c9265f",
-      "to": "rec_da432a5ce4fb4bb8",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
       "id": "rel_8421db4db44aa943",
       "from": "rec_92955ec521c9265f",
       "to": "rec_1766b633c6a5882b",
@@ -22204,9 +22779,30 @@
       "score": 0.86
     },
     {
-      "id": "rel_822bf9067d2a0047",
-      "from": "rec_edbdd94a90e30c72",
+      "id": "rel_a7ba5d086fc8c3be",
+      "from": "rec_92955ec521c9265f",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_b6e10eb69a911dd2",
+      "from": "rec_92955ec521c9265f",
       "to": "rec_da432a5ce4fb4bb8",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_3212c780c80416af",
+      "from": "rec_92955ec521c9265f",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_4849a72ccd8e7f40",
+      "from": "rec_92955ec521c9265f",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22218,9 +22814,100 @@
       "score": 0.86
     },
     {
-      "id": "rel_f76fd5eee97a2de5",
+      "id": "rel_73ee5dc3332f4954",
+      "from": "rec_edbdd94a90e30c72",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_822bf9067d2a0047",
+      "from": "rec_edbdd94a90e30c72",
+      "to": "rec_da432a5ce4fb4bb8",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_9d97b1616331d168",
+      "from": "rec_edbdd94a90e30c72",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_a1d06ff3ed561398",
+      "from": "rec_edbdd94a90e30c72",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_8f5bfc1a0ce9c43d",
+      "from": "rec_1766b633c6a5882b",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_f2adb37f9a6c6807",
+      "from": "rec_1766b633c6a5882b",
+      "to": "rec_da432a5ce4fb4bb8",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_83c8ef688c45bb64",
+      "from": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_6fa74386901a7ee3",
+      "from": "rec_1766b633c6a5882b",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_3644b6aa98d23a9d",
+      "from": "rec_7c80154d7257bf44",
+      "to": "rec_da432a5ce4fb4bb8",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_96c84e9620abddef",
+      "from": "rec_7c80154d7257bf44",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_da7a3d75a0d24b73",
+      "from": "rec_7c80154d7257bf44",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_b4a3689a129b2c71",
       "from": "rec_da432a5ce4fb4bb8",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_a4a97aa91232dacd",
+      "from": "rec_da432a5ce4fb4bb8",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_7d6633940dd78d85",
+      "from": "rec_65940962b5e82976",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -31507,13 +32194,6 @@
       "score": 0.77
     },
     {
-      "id": "rel_2fea7fcb1ae9709d",
-      "from": "rec_f3231a938ecc0fd1",
-      "to": "rec_106e376c0597ab0e",
-      "type": "shared_terms",
-      "score": 0.7283
-    },
-    {
       "id": "rel_fb52079b779e7af1",
       "from": "rec_7252fcd6dc28a5e0",
       "to": "rec_125d7686d7240393",
@@ -31528,13 +32208,6 @@
       "score": 0.77
     },
     {
-      "id": "rel_53e9b169bb8df9a7",
-      "from": "rec_7252fcd6dc28a5e0",
-      "to": "rec_106e376c0597ab0e",
-      "type": "shared_terms",
-      "score": 0.8057
-    },
-    {
       "id": "rel_45eef3c643c136f1",
       "from": "rec_125d7686d7240393",
       "to": "rec_bf824404f79e6e58",
@@ -31542,39 +32215,11 @@
       "score": 0.77
     },
     {
-      "id": "rel_8b85090ed54caa65",
-      "from": "rec_125d7686d7240393",
-      "to": "rec_106e376c0597ab0e",
-      "type": "shared_terms",
-      "score": 0.7283
-    },
-    {
       "id": "rel_a0429d1c20b4d14c",
       "from": "rec_210f33e065f2e88c",
       "to": "rec_bf824404f79e6e58",
       "type": "shared_terms",
       "score": 0.86
-    },
-    {
-      "id": "rel_bb84a03b59d04a37",
-      "from": "rec_210f33e065f2e88c",
-      "to": "rec_106e376c0597ab0e",
-      "type": "shared_terms",
-      "score": 0.77
-    },
-    {
-      "id": "rel_fcfecddb8c2ecffa",
-      "from": "rec_bf824404f79e6e58",
-      "to": "rec_106e376c0597ab0e",
-      "type": "shared_terms",
-      "score": 0.7283
-    },
-    {
-      "id": "rel_dcef94798493a473",
-      "from": "rec_62d226a662b4de57",
-      "to": "rec_106e376c0597ab0e",
-      "type": "shared_terms",
-      "score": 0.7343
     },
     {
       "id": "rel_2eab059ab6b37264",
@@ -33306,6 +33951,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_da6f4dbc6a32db45",
+      "from": "rec_7fd76d1ed1caa481",
+      "to": "rec_1766b633c6a5882b",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_09afe0d3dbba6aa0",
+      "from": "rec_7fd76d1ed1caa481",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_bd03c3e3f1cfabe6",
       "from": "rec_7fd76d1ed1caa481",
       "to": "rec_da432a5ce4fb4bb8",
@@ -33313,9 +33972,16 @@
       "score": 0.86
     },
     {
-      "id": "rel_da6f4dbc6a32db45",
+      "id": "rel_732551cd63aac2c4",
       "from": "rec_7fd76d1ed1caa481",
-      "to": "rec_1766b633c6a5882b",
+      "to": "rec_65940962b5e82976",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_3d616420569d948c",
+      "from": "rec_7fd76d1ed1caa481",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -34769,6 +35435,27 @@
       "score": 0.86
     },
     {
+      "id": "rel_2ecb4a22403f90d4",
+      "from": "rec_01cb04e2d346e2de",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.77
+    },
+    {
+      "id": "rel_92593335f19a6952",
+      "from": "rec_01cb04e2d346e2de",
+      "to": "rec_f3e5ebd05a6fa90d",
+      "type": "shared_terms",
+      "score": 0.77
+    },
+    {
+      "id": "rel_cbfc94de38f375c7",
+      "from": "rec_01cb04e2d346e2de",
+      "to": "rec_ce5f9941467e0c03",
+      "type": "shared_terms",
+      "score": 0.7283
+    },
+    {
       "id": "rel_52139f3643064390",
       "from": "rec_6f8b10da1a8e3dde",
       "to": "rec_856a2ee9abf6eadd",
@@ -34825,9 +35512,93 @@
       "score": 0.86
     },
     {
+      "id": "rel_f770b1ed719d9e2f",
+      "from": "rec_856a2ee9abf6eadd",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_1a2b1c5b87113355",
+      "from": "rec_856a2ee9abf6eadd",
+      "to": "rec_f3e5ebd05a6fa90d",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_d0eb6084199d0deb",
+      "from": "rec_856a2ee9abf6eadd",
+      "to": "rec_ce5f9941467e0c03",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_6d1941ef66670126",
       "from": "rec_4b4ff031e4ac4068",
       "to": "rec_de1bf905b4fb880c",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_4d61fb9afd87e4f8",
+      "from": "rec_4b4ff031e4ac4068",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_8ce3781cd1e556ad",
+      "from": "rec_4b4ff031e4ac4068",
+      "to": "rec_f3e5ebd05a6fa90d",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_5060eaa2c66183fd",
+      "from": "rec_4b4ff031e4ac4068",
+      "to": "rec_ce5f9941467e0c03",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_1b163f69f12c88ad",
+      "from": "rec_de1bf905b4fb880c",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_9ea472d6ad8526d5",
+      "from": "rec_de1bf905b4fb880c",
+      "to": "rec_f3e5ebd05a6fa90d",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_709407f3f8673d04",
+      "from": "rec_de1bf905b4fb880c",
+      "to": "rec_ce5f9941467e0c03",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_2dafa738ea79f3a0",
+      "from": "rec_ef185bfe64526a18",
+      "to": "rec_f3e5ebd05a6fa90d",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_a6adf92fb179fcfc",
+      "from": "rec_ef185bfe64526a18",
+      "to": "rec_ce5f9941467e0c03",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_7014779c99942021",
+      "from": "rec_f3e5ebd05a6fa90d",
+      "to": "rec_ce5f9941467e0c03",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -35738,6 +36509,13 @@
       "id": "rel_8a7642928a61c0bd",
       "from": "rec_4b186366a318f0f1",
       "to": "rec_de1bf905b4fb880c",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_63b8a5c66c95f58d",
+      "from": "rec_4b186366a318f0f1",
+      "to": "rec_ce5f9941467e0c03",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -37126,6 +37904,13 @@
       "to": "rec_142c93feeb1c94e1",
       "type": "shared_terms",
       "score": 0.8117
+    },
+    {
+      "id": "rel_e1d6225f81eed530",
+      "from": "rec_5081a05e3cd81347",
+      "to": "rec_74a78dd77fe25481",
+      "type": "shared_terms",
+      "score": 0.86
     },
     {
       "id": "rel_daa01fab948c756a",
@@ -38857,6 +39642,13 @@
       "score": 0.7343
     },
     {
+      "id": "rel_1be2b0edd5064c24",
+      "from": "rec_7c2955049f202aea",
+      "to": "rec_7c80154d7257bf44",
+      "type": "shared_terms",
+      "score": 0.7343
+    },
+    {
       "id": "rel_0846e9f9ef56d5b4",
       "from": "rec_b8e97eb63196e667",
       "to": "rec_cc408a9f1f612fd4",
@@ -38924,7 +39716,7 @@
       "from": "rec_4971067bbd95eabe",
       "to": "rec_da432a5ce4fb4bb8",
       "type": "shared_terms",
-      "score": 0.8414
+      "score": 0.86
     },
     {
       "id": "rel_46516e8701e5f28e",
@@ -38965,13 +39757,6 @@
       "id": "rel_d85c184dbe58e5c6",
       "from": "rec_5accbf8e3b127b26",
       "to": "rec_98cf3fdc095d7ac8",
-      "type": "shared_terms",
-      "score": 0.7283
-    },
-    {
-      "id": "rel_f038c6f7609523a1",
-      "from": "rec_5accbf8e3b127b26",
-      "to": "rec_da432a5ce4fb4bb8",
       "type": "shared_terms",
       "score": 0.7283
     },
@@ -39018,13 +39803,6 @@
       "score": 0.8117
     },
     {
-      "id": "rel_7f590307f8eb1861",
-      "from": "rec_5829eab5fd6c7dc4",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
       "id": "rel_0937526e4cbbdc5b",
       "from": "rec_41583fe025ea7a34",
       "to": "rec_a4f1b48ca274ffff",
@@ -39046,25 +39824,11 @@
       "score": 0.8533
     },
     {
-      "id": "rel_597a4d10b25f167e",
-      "from": "rec_41583fe025ea7a34",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.8057
-    },
-    {
       "id": "rel_5be5deb7fd0641e9",
       "from": "rec_2a692d5e0e944d7e",
       "to": "rec_ee9cec6ca049cc07",
       "type": "shared_terms",
       "score": 0.8533
-    },
-    {
-      "id": "rel_46b027563ccd3686",
-      "from": "rec_2a692d5e0e944d7e",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
     },
     {
       "id": "rel_bd42655b3a1295cf",
@@ -39079,13 +39843,6 @@
       "to": "rec_101c1f2909cc14f2",
       "type": "shared_terms",
       "score": 0.86
-    },
-    {
-      "id": "rel_65c82506ba2509de",
-      "from": "rec_e1c515aeffa25e7e",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.8117
     },
     {
       "id": "rel_3c600cafa0002518",
@@ -39105,13 +39862,6 @@
       "id": "rel_0ff251951009d612",
       "from": "rec_b0cc0162cbff6f70",
       "to": "rec_9d05974f69be4fec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_c40fd84118924444",
-      "from": "rec_b0cc0162cbff6f70",
-      "to": "rec_c9314a97ebbd6d27",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -39151,13 +39901,6 @@
       "score": 0.77
     },
     {
-      "id": "rel_cb532eb2e2b3150c",
-      "from": "rec_767356196a45dec8",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.8117
-    },
-    {
       "id": "rel_23fda0b78922334e",
       "from": "rec_a4f1b48ca274ffff",
       "to": "rec_7984ea8fed92d876",
@@ -39182,13 +39925,6 @@
       "id": "rel_ee504130852fd6f3",
       "from": "rec_a4f1b48ca274ffff",
       "to": "rec_9d05974f69be4fec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_0079865f0f2d2558",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_c9314a97ebbd6d27",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -39221,13 +39957,6 @@
       "score": 0.77
     },
     {
-      "id": "rel_b04966b39e470f9e",
-      "from": "rec_7984ea8fed92d876",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.8117
-    },
-    {
       "id": "rel_b9b9d8737f27e3da",
       "from": "rec_87d447eb24d68fe2",
       "to": "rec_1672655764f0c5bc",
@@ -39249,13 +39978,6 @@
       "score": 0.8533
     },
     {
-      "id": "rel_5b0507ff2267bda8",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
       "id": "rel_d9aef6f4bd2fa0ba",
       "from": "rec_1672655764f0c5bc",
       "to": "rec_dced7f0ee6075ce2",
@@ -39268,13 +39990,6 @@
       "to": "rec_101c1f2909cc14f2",
       "type": "shared_terms",
       "score": 0.77
-    },
-    {
-      "id": "rel_1a7cf31d2b8a7845",
-      "from": "rec_1672655764f0c5bc",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
     },
     {
       "id": "rel_3e250c7d7c7ad584",
@@ -39291,13 +40006,6 @@
       "score": 0.8533
     },
     {
-      "id": "rel_7ab761f9ee01fa96",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
       "id": "rel_9dc9b8240c1bb274",
       "from": "rec_a68f7c3b1a345ae2",
       "to": "rec_dced7f0ee6075ce2",
@@ -39312,25 +40020,11 @@
       "score": 0.77
     },
     {
-      "id": "rel_bcd51d2463f47b30",
-      "from": "rec_a68f7c3b1a345ae2",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.8117
-    },
-    {
       "id": "rel_dcf5f4cb828770f7",
       "from": "rec_dced7f0ee6075ce2",
       "to": "rec_9d05974f69be4fec",
       "type": "shared_terms",
       "score": 0.8533
-    },
-    {
-      "id": "rel_d915df27917ad9c2",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
     },
     {
       "id": "rel_254a33dc51d34398",
@@ -39347,39 +40041,11 @@
       "score": 0.8117
     },
     {
-      "id": "rel_9e7fa5d38e2bf850",
-      "from": "rec_ee9cec6ca049cc07",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.8117
-    },
-    {
       "id": "rel_ba0129396750a222",
       "from": "rec_e36393a067f7d379",
       "to": "rec_9d05974f69be4fec",
       "type": "shared_terms",
       "score": 0.7283
-    },
-    {
-      "id": "rel_f181f09751d3fd9c",
-      "from": "rec_e36393a067f7d379",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.8533
-    },
-    {
-      "id": "rel_0a6b5fde77dce5a0",
-      "from": "rec_9d05974f69be4fec",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_3c29bd0b1d7e8bde",
-      "from": "rec_101c1f2909cc14f2",
-      "to": "rec_c9314a97ebbd6d27",
-      "type": "shared_terms",
-      "score": 0.86
     },
     {
       "id": "rel_65d04c5d7209d440",
@@ -46123,6 +46789,13 @@
       "score": 0.8117
     },
     {
+      "id": "rel_6255d7472182de6a",
+      "from": "rec_89db0b60cb831395",
+      "to": "rec_779e2ec26f1bf3df",
+      "type": "shared_terms",
+      "score": 0.7343
+    },
+    {
       "id": "rel_238b1b930ec49b1d",
       "from": "rec_59cb8cc2b482e507",
       "to": "rec_6d6eeb89d8a41da9",
@@ -46172,6 +46845,13 @@
       "score": 0.72
     },
     {
+      "id": "rel_e43df60b52c142b4",
+      "from": "rec_59cb8cc2b482e507",
+      "to": "rec_779e2ec26f1bf3df",
+      "type": "shared_terms",
+      "score": 0.82
+    },
+    {
       "id": "rel_0ba386a775e8c033",
       "from": "rec_6d6eeb89d8a41da9",
       "to": "rec_be16a7c471bf29d4",
@@ -46189,6 +46869,13 @@
       "id": "rel_043dcd9278222c41",
       "from": "rec_6d6eeb89d8a41da9",
       "to": "rec_8878692be8cbc380",
+      "type": "shared_terms",
+      "score": 0.77
+    },
+    {
+      "id": "rel_48708db5eb8c5c68",
+      "from": "rec_6d6eeb89d8a41da9",
+      "to": "rec_779e2ec26f1bf3df",
       "type": "shared_terms",
       "score": 0.77
     },
@@ -46228,11 +46915,25 @@
       "score": 0.7283
     },
     {
+      "id": "rel_6bda03ac406dc3e8",
+      "from": "rec_1b36f052bffcb78b",
+      "to": "rec_779e2ec26f1bf3df",
+      "type": "shared_terms",
+      "score": 0.8117
+    },
+    {
       "id": "rel_d799f884018f2301",
       "from": "rec_d874be603561b4cf",
       "to": "rec_6c0ec4320e34a98d",
       "type": "shared_terms",
       "score": 0.7927
+    },
+    {
+      "id": "rel_a8c9769455ce043a",
+      "from": "rec_d874be603561b4cf",
+      "to": "rec_779e2ec26f1bf3df",
+      "type": "shared_terms",
+      "score": 0.77
     },
     {
       "id": "rel_cf3f9681d27362c7",
@@ -46249,6 +46950,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_a47976d530da1700",
+      "from": "rec_be16a7c471bf29d4",
+      "to": "rec_779e2ec26f1bf3df",
+      "type": "shared_terms",
+      "score": 0.7283
+    },
+    {
       "id": "rel_49aff660eea7326d",
       "from": "rec_0b2e8f8b10e48a0e",
       "to": "rec_8878692be8cbc380",
@@ -46261,6 +46969,20 @@
       "to": "rec_8878692be8cbc380",
       "type": "shared_terms",
       "score": 0.7473
+    },
+    {
+      "id": "rel_80b0a5ac53bb9e1e",
+      "from": "rec_6c0ec4320e34a98d",
+      "to": "rec_779e2ec26f1bf3df",
+      "type": "shared_terms",
+      "score": 0.7927
+    },
+    {
+      "id": "rel_5a5cda63be31ac53",
+      "from": "rec_8878692be8cbc380",
+      "to": "rec_779e2ec26f1bf3df",
+      "type": "shared_terms",
+      "score": 0.8057
     },
     {
       "id": "rel_e4fce98003052dbf",
@@ -52022,398 +52744,6 @@
       "to": "rec_ff4450d8a3c065da",
       "type": "shared_terms",
       "score": 0.86
-    },
-    {
-      "id": "rel_6ce6e449b8ac2224",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_1e81983029c46d19",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_10abd8041a3486e9",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_37eaf92f60f2e579",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_9ba3f70c2a0ac67d",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_e0c65eec443f34d7",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_a47301b8352ce9b8",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_03580a497f3cd9ab",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_96147a14c3a96ec5",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_a06c94464315b0d4",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_d67dc8660341015c",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_d1d3ef60cb6c1cb6",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_3e1247eac772cce6",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_39136fa509ea206d",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_60a1116d5131d33a",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_0ef243b3d303a3b0",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_0c57465dbdc1c8c0",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_76019e1f9acf6862",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_9b8928018436a081",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_6d3b66555e97f4ec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_e54ca7d4611b8f5d",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_6e2b28cabb5dd944",
-      "type": "shared_terms",
-      "score": 0.77
-    },
-    {
-      "id": "rel_16292138c8df9566",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_692d350e705513f9",
-      "type": "shared_terms",
-      "score": 0.8117
-    },
-    {
-      "id": "rel_91660a886587bf4f",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_ff4450d8a3c065da",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_007bd1d4dc7ac1bf",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_1e81983029c46d19",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_3457f6bc3d264120",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_37eaf92f60f2e579",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_ab9d8be5ad649ab4",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_e0c65eec443f34d7",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_dc89c43643c112b6",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_03580a497f3cd9ab",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_e8c51e21441a2eb5",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_a06c94464315b0d4",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_68b0e7d20e15a63c",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_d1d3ef60cb6c1cb6",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_0d909f1f69b3ea19",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_39136fa509ea206d",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_12b1ca39b2dbc2db",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_0ef243b3d303a3b0",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_39733d930e08f5be",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_76019e1f9acf6862",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_f68b701ef705b311",
-      "from": "rec_7a8d1665346e4975",
-      "to": "rec_6d3b66555e97f4ec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_218a45964bbf0e4b",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_6e2b28cabb5dd944",
-      "type": "shared_terms",
-      "score": 0.77
-    },
-    {
-      "id": "rel_32704f63e051cf10",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_692d350e705513f9",
-      "type": "shared_terms",
-      "score": 0.8117
-    },
-    {
-      "id": "rel_85983ffec5cdd53c",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_ff4450d8a3c065da",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_906d97ab972c5424",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_1e81983029c46d19",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_48f6de3b1220b45e",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_37eaf92f60f2e579",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_65fb82dd6963f7ee",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_e0c65eec443f34d7",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_418c14c9baf3f8c9",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_03580a497f3cd9ab",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_278c97024e6e39af",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_a06c94464315b0d4",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_65b5d66c1f4aa89e",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_d1d3ef60cb6c1cb6",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_18852dd13871e1c5",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_39136fa509ea206d",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_2781a4c3884ef348",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_0ef243b3d303a3b0",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_b4130bbab0e03028",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_76019e1f9acf6862",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_db8e460ff956c703",
-      "from": "rec_dced7f0ee6075ce2",
-      "to": "rec_6d3b66555e97f4ec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_8a657eb4cf1f59d0",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_6e2b28cabb5dd944",
-      "type": "shared_terms",
-      "score": 0.77
-    },
-    {
-      "id": "rel_a6192a1667aecdfb",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_692d350e705513f9",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_27cb753e0be0c700",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_ff4450d8a3c065da",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_a43a80f745e8321c",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_1e81983029c46d19",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_d66e0938d4346d9e",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_37eaf92f60f2e579",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_b12b84645216d3f6",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_e0c65eec443f34d7",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_330cefe1e7738926",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_03580a497f3cd9ab",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_90c87ff398ad73bf",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_a06c94464315b0d4",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_dc09fa42202d12a1",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_d1d3ef60cb6c1cb6",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_34001b8db903413a",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_39136fa509ea206d",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_2580b3983cf3682d",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_0ef243b3d303a3b0",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_2fb7006ba49f174a",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_76019e1f9acf6862",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_159d5508ff613bff",
-      "from": "rec_9a25fa86fffdc6a3",
-      "to": "rec_6d3b66555e97f4ec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_d880c0b89764d864",
-      "from": "rec_f8e820a011000cf6",
-      "to": "rec_6e2b28cabb5dd944",
-      "type": "shared_terms",
-      "score": 0.77
-    },
-    {
-      "id": "rel_287714a4c26a5ba8",
-      "from": "rec_f8e820a011000cf6",
-      "to": "rec_692d350e705513f9",
-      "type": "shared_terms",
-      "score": 0.77
-    },
-    {
-      "id": "rel_34fd56e047e775ed",
-      "from": "rec_f8e820a011000cf6",
-      "to": "rec_ff4450d8a3c065da",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_9066883d2033445d",
-      "from": "rec_f8e820a011000cf6",
-      "to": "rec_1e81983029c46d19",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_1451fee754625f39",
-      "from": "rec_f8e820a011000cf6",
-      "to": "rec_37eaf92f60f2e579",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_7711ab6029056754",
-      "from": "rec_f8e820a011000cf6",
-      "to": "rec_e0c65eec443f34d7",
-      "type": "shared_terms",
-      "score": 0.8533
-    },
-    {
-      "id": "rel_883cb23e1ba0397a",
-      "from": "rec_f8e820a011000cf6",
-      "to": "rec_03580a497f3cd9ab",
-      "type": "shared_terms",
-      "score": 0.8533
     }
   ]
 }

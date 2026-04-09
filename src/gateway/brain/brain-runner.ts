@@ -670,9 +670,13 @@ export class BrainRunner {
     const wsStart = fmtUtc(windowStart);
     const wsEnd   = fmtUtc(windowEnd);
     const nowStr  = fmtLocal(new Date());
-    const thoughtsDir = path.join(getBrainDir(), 'thoughts', dateStr);
-    const memNotesFile = path.join(this.deps.workspacePath, 'memory', `${dateStr}-intraday-notes.md`);
-    const auditDir     = path.join(this.deps.workspacePath, 'audit');
+    // Workspace-relative paths (relative to workspacePath) so the file tools resolve them correctly.
+    // Do NOT use absolute Windows paths here — the agent strips the drive prefix and creates doubled dirs.
+    const thoughtsDirRel  = path.join('Brain', 'thoughts', dateStr);
+    const memNotesFileRel = path.join('memory', `${dateStr}-intraday-notes.md`);
+    const auditDirRel     = 'audit';
+    // outFile received here is already absolute — derive the workspace-relative version for the prompt
+    const outFileRel = path.relative(this.deps.workspacePath, outFile);
 
     return `You are Prometheus, running an automated Brain Thought analysis.
 
@@ -680,8 +684,13 @@ export class BrainRunner {
 BRAIN THOUGHT ${thoughtNumber} — Observation Only
 Window:  ${wsStart} → ${wsEnd}
 Date:    ${dateStr}
-Output:  ${outFile}
+Output:  ${outFileRel}   ← path is RELATIVE to workspace root (use as-is with file tools)
 ════════════════════════════════════════════════════════════
+
+IMPORTANT — FILE PATH CONVENTION:
+All paths in this prompt are RELATIVE to the workspace root.
+Pass them directly to file tools (read_file, create_file, mkdir, list_directory) without modification.
+Do NOT prepend "workspace/" or any drive letter — the tools resolve relative paths automatically.
 
 STRICT RULES — do not violate under any circumstances:
 • DO NOT write to USER.md, SOUL.md, or any memory files
@@ -694,15 +703,15 @@ STEP 1 — SCAN AUDIT WINDOW
 ════════════════════════════════════════════════════════════
 
 Scan the audit directory for activity between ${wsStart} and ${wsEnd}.
-Audit root: ${auditDir}
+Audit root: ${auditDirRel}
 
 Priority scan order (read in this order, respect the caps):
-  1. ${auditDir}/chats/sessions/     — chat session snapshots (max 8 most recent)
-  2. ${auditDir}/tasks/              — task state snapshots (max 15 files)
-  3. ${auditDir}/cron/runs/          — JSONL run history files (filter by timestamp)
-  4. ${auditDir}/teams/              — team activity logs (if present)
-  5. ${auditDir}/proposals/          — proposal state changes (if present)
-  6. ${memNotesFile}  — today's intraday notes (if file exists)
+  1. ${auditDirRel}/chats/sessions/     — chat session snapshots (max 8 most recent)
+  2. ${auditDirRel}/tasks/              — task state snapshots (max 15 files)
+  3. ${auditDirRel}/cron/runs/          — JSONL run history files (filter by timestamp)
+  4. ${auditDirRel}/teams/              — team activity logs (if present)
+  5. ${auditDirRel}/proposals/          — proposal state changes (if present)
+  6. ${memNotesFileRel}  — today's intraday notes (if file exists)
 
 Selective reading strategy:
   • List each directory first, identify files by modification time if available
@@ -753,8 +762,8 @@ E. WINDOW VERDICT
 STEP 3 — WRITE THE THOUGHT FILE
 ════════════════════════════════════════════════════════════
 
-Create the output directory if needed: ${thoughtsDir}
-Write the thought file to: ${outFile}
+Create the output directory if needed: ${thoughtsDirRel}
+Write the thought file to: ${outFileRel}
 
 Use EXACTLY this structure:
 
@@ -812,15 +821,17 @@ After the file is written: confirm the write succeeded and stop. Do not do anyth
   }): string {
     const { dateStr, dreamLabel, thoughtCount, outFile } = opts;
     const nowStr      = fmtLocal(new Date());
-    const brainDir    = getBrainDir();
-    const thoughtsDir = path.join(brainDir, 'thoughts', dateStr);
-    const dreamsDir   = path.join(brainDir, 'dreams', dateStr);
-    const proposalsFile  = path.join(brainDir, 'proposals.md');
-    const userMdFile     = path.join(this.deps.workspacePath, 'USER.md');
-    const soulMdFile     = path.join(this.deps.workspacePath, 'SOUL.md');
-    const memoryMdFile   = path.join(this.deps.workspacePath, 'MEMORY.md');
-    const pendingPropsDir = path.join(this.deps.workspacePath, 'proposals', 'pending');
-    const auditDir        = path.join(this.deps.workspacePath, 'audit');
+    // Workspace-relative paths — do NOT use absolute Windows paths in prompts.
+    // The agent strips the drive prefix and creates doubled dirs (workspace/workspace/...).
+    const thoughtsDirRel  = path.join('Brain', 'thoughts', dateStr);
+    const dreamsDirRel    = path.join('Brain', 'dreams', dateStr);
+    const proposalsFileRel = path.join('Brain', 'proposals.md');
+    const userMdFileRel    = 'USER.md';
+    const soulMdFileRel    = 'SOUL.md';
+    const memoryMdFileRel  = 'MEMORY.md';
+    const pendingPropsDirRel = path.join('proposals', 'pending');
+    const auditDirRel      = 'audit';
+    const outFileRel = path.relative(this.deps.workspacePath, outFile);
 
     return `You are Prometheus, running an automated Brain Dream — the nightly synthesis and execution run.
 
@@ -829,9 +840,14 @@ BRAIN DREAM — Nightly Synthesis + Execution
 Date:    ${dateStr}
 Time:    ${nowStr}
 Thoughts available: ${thoughtCount}
-Output:  ${outFile}
-         ${proposalsFile} (REWRITE)
+Output:  ${outFileRel}
+         ${proposalsFileRel} (REWRITE)
 ════════════════════════════════════════════════════════════
+
+IMPORTANT — FILE PATH CONVENTION:
+All paths in this prompt are RELATIVE to the workspace root.
+Pass them directly to file tools (read_file, create_file, mkdir, list_directory) without modification.
+Do NOT prepend "workspace/" or any drive letter — the tools resolve relative paths automatically.
 
 You have 5 phases tonight. Execute them in order.
 
@@ -839,19 +855,19 @@ You have 5 phases tonight. Execute them in order.
 PHASE 1 — LOAD TODAY'S THOUGHTS
 ════════════════════════════════════════════════════════════
 
-List directory: ${thoughtsDir}
+List directory: ${thoughtsDirRel}
 Read ALL *-thought.md files found there.
 
 Also load for context:
-  - ${userMdFile}     — current USER.md (needed for memory dedup)
-  - ${soulMdFile}     — current SOUL.md (needed for memory dedup)
-  - ${memoryMdFile}   — current MEMORY.md (needed for long-term memory dedup)
-  - ${proposalsFile}  — current proposals.md (to see what's already pending/recent)
+  - ${userMdFileRel}     — current USER.md (needed for memory dedup)
+  - ${soulMdFileRel}     — current SOUL.md (needed for memory dedup)
+  - ${memoryMdFileRel}   — current MEMORY.md (needed for long-term memory dedup)
+  - ${proposalsFileRel}  — current proposals.md (to see what's already pending/recent)
 
-List ${pendingPropsDir} to see what formal proposals are currently pending approval.
+List ${pendingPropsDirRel} to see what formal proposals are currently pending approval.
 (You need this for dedup in Phase 4.)
 
-If no thought files exist in ${thoughtsDir}:
+If no thought files exist in ${thoughtsDirRel}:
   - Note "no thoughts available" in the dream file
   - Skip Phases 2–4
   - Still write the dream file and proposals.md
@@ -861,7 +877,7 @@ PHASE 2 — CROSS-EXAMINE HIGH-CONFIDENCE ITEMS
 ════════════════════════════════════════════════════════════
 
 For any item marked confidence: HIGH in sections C or D of ANY thought:
-  - Read the cited evidence file/session from ${auditDir}
+  - Read the cited evidence file/session from ${auditDirRel}
   - Verify the finding is real and accurately described
   - If evidence does NOT support the claim: downgrade to medium or discard
   - Only items surviving verification proceed to Phase 3 or 4
@@ -919,8 +935,8 @@ If 0 proposals pass the gate: note this in the dream file. This is normal.
 PHASE 5 — WRITE OUTPUTS
 ════════════════════════════════════════════════════════════
 
-5a. Create directory ${dreamsDir} if needed.
-    Write ${outFile}:
+5a. Create directory ${dreamsDirRel} if needed.
+    Write ${outFileRel}:
 
 ---
 # Dream — ${dateStr}
@@ -953,12 +969,12 @@ _(If none: "None — no items passed the proposal gate tonight.")_
 - [specific things to monitor in the next day's thoughts]
 ---
 
-5b. REWRITE ${proposalsFile} completely (not append):
+5b. REWRITE ${proposalsFileRel} completely (not append):
 
 ---
 # Brain Proposal Ledger
 _Last Updated: ${nowStr}_
-_Dream Source: ${outFile}_
+_Dream Source: ${outFileRel}_
 
 ## Summary
 - Thoughts synthesized: N

@@ -171,7 +171,7 @@ import {
 } from './agents-runtime/agent-builder-integration';
 
 // ─── B6: Chat router (handleChat + /api/chat + /api/status) ─────────────────
-import { router as chatRouter, initChatRouter, handleChat, bindTeamNotificationTargetFromSession } from './routes/chat.router';
+import { router as chatRouter, initChatRouter, handleChat, runInteractiveTurn, bindTeamNotificationTargetFromSession } from './routes/chat.router';
 
 // ─── CIS: Tool dependency injection (A2 + A5) ────────────────────────────────
 import { injectAnalysisTeamDeps } from '../tools/deploy-analysis-team';
@@ -356,6 +356,8 @@ const telegramChannel = new TelegramChannel(
   {
     handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments) =>
       handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments),
+    runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, attachments) =>
+      runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, attachments),
     addMessage,
     getIsModelBusy: isModelBusy,
     broadcast: broadcastWS,

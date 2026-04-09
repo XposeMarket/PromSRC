@@ -279,11 +279,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const filename = args.filename || args.name;
         if (!filename) return { name, args, result: 'filename is required', error: true };
         const _normalizedFn = String(filename || '').replace(/\\/g, '/');
-        // Redirect src/ paths and root-allowlisted files to read_source automatically
+        // Redirect src/ and root-allowlisted files to read_source, web-ui/ to read_webui_source
         const ROOT_READ_ALLOWLIST = ['package.json', 'package-lock.json', 'tsconfig.json', 'README.md', 'CHANGELOG.md'];
         if (_normalizedFn.startsWith('src/') || ROOT_READ_ALLOWLIST.includes(_normalizedFn)) {
           const redirectArgs = { ...args, file: filename };
           return executeTool('read_source', redirectArgs, workspacePath, deps, sessionId);
+        }
+        if (_normalizedFn.startsWith('web-ui/')) {
+          const redirectArgs = { ...args, file: _normalizedFn.slice('web-ui/'.length) };
+          return executeTool('read_webui_source', redirectArgs, workspacePath, deps, sessionId);
         }
         const filePath = path.join(workspacePath, filename);
         if (!fs.existsSync(filePath)) return { name, args, result: `File "${filename}" not found`, error: true };
@@ -369,7 +373,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           last_modified: stat.mtime.toISOString(),
           is_large: lineCount > readCap,
           read_hint: lineCount > readCap
-            ? `File has ${lineCount} lines (cap=${readCap}). Use read_source with head/tail for chunked reads.`
+            ? `File has ${lineCount} lines (cap=${readCap}). Use read_source with start_line+num_lines for chunked reads.`
             : `File fits in one read_source call (${lineCount} lines).`,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
@@ -401,7 +405,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           last_modified: stat.mtime.toISOString(),
           is_large: lineCount > readCap,
           read_hint: lineCount > readCap
-            ? `File has ${lineCount} lines (cap=${readCap}). Use read_webui_source with head/tail for chunked reads.`
+            ? `File has ${lineCount} lines (cap=${readCap}). Use read_webui_source with start_line+num_lines for chunked reads.`
             : `File fits in one read_webui_source call (${lineCount} lines).`,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
@@ -422,7 +426,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch {
           return { name, args, result: `Invalid regex pattern: ${pattern}`, error: true };
         }
-        const contextLines = Math.max(0, Math.min(10, Math.floor(Number(args.context_lines) || 0)));
+        const contextLines = Math.max(0, Math.min(10, Math.floor(Number(args.context ?? args.context_lines) || 0)));
         const maxResults = Math.max(1, Math.min(200, Math.floor(Number(args.max_results) || 100)));
         const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
         const matches: Array<{
@@ -511,7 +515,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const abs = path.join(dir, entry.name);
             const rel = path.relative(workspacePath, abs).replace(/\\/g, '/');
             if (entry.isDirectory()) {
-              if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+              if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
               walk(abs);
               continue;
             }
@@ -552,114 +556,112 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
       }
 
+      case 'grep_webui_source':
       case 'grep_source': {
-        // Search src/ directory for patterns (read-only)
-        const pattern = String(args.pattern || '');
-        if (!pattern) return { name, args, result: 'pattern is required', error: true };
+        // Unified search across src/ and/or web-ui/ (read-only)
+        // grep_webui_source defaults root to 'web-ui'; grep_source defaults to 'src'
+        const gs_pattern = String(args.pattern || '');
+        if (!gs_pattern) return { name, args, result: 'pattern is required', error: true };
 
-        const projectRoot = path.resolve(workspacePath, '..');
-        const srcRoot = path.join(projectRoot, 'src');
+        const gs_projectRoot = path.resolve(workspacePath, '..');
+        const gs_srcRoot = path.join(gs_projectRoot, 'src');
+        const gs_webUiRoot = path.join(gs_projectRoot, 'web-ui');
 
-        // Build glob filter from args
-        const rawGlob = String(args.glob || '').trim().toLowerCase();
-        const globs = rawGlob ? rawGlob.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
+        // Determine which roots to search
+        const gs_defaultRoot = name === 'grep_webui_source' ? 'web-ui' : 'src';
+        const gs_rootParam = String(args.root || gs_defaultRoot).toLowerCase();
+        const gs_searchBoth = gs_rootParam === 'both';
+        const gs_useSrc = gs_searchBoth || gs_rootParam === 'src';
+        const gs_useWebUi = gs_searchBoth || gs_rootParam === 'web-ui';
 
-        // Parse search path
-        const rawPath = String(args.path || '').trim();
-        const searchSubdir = rawPath ? path.resolve(srcRoot, rawPath) : srcRoot;
-
-        // Validate path is inside src/
-        if (!searchSubdir.startsWith(srcRoot)) {
-          return { name, args, result: 'ERROR: grep_source only allows access to src/ directory.', error: true };
-        }
-        if (!fs.existsSync(searchSubdir)) {
-          return { name, args, result: `Directory not found: src/${rawPath}`, error: true };
-        }
+        // Build glob filter
+        const gs_rawGlob = String(args.glob || '').trim().toLowerCase();
+        const gs_globs = gs_rawGlob ? gs_rawGlob.split(',').map((g: string) => g.trim()).filter(Boolean) : [];
 
         // Parse options
-        let grepRegex: RegExp;
+        let gs_regex: RegExp;
         try {
-          grepRegex = new RegExp(pattern, args.case_insensitive ? 'gi' : 'g');
+          gs_regex = new RegExp(gs_pattern, args.case_insensitive ? 'gi' : 'g');
         } catch {
-          return { name, args, result: `Invalid regex pattern: ${pattern}`, error: true };
+          return { name, args, result: `Invalid regex pattern: ${gs_pattern}`, error: true };
         }
+        const gs_contextLines = Math.max(0, Math.min(10, Math.floor(Number(args.context || 0))));
+        const gs_maxResults = Math.max(1, Math.min(500, Math.floor(Number(args.max_results) || 100)));
 
-        const contextLines = Math.max(0, Math.min(10, Math.floor(Number(args.context || 0))));
-        const maxResults = Math.max(1, Math.min(500, Math.floor(Number(args.max_results) || 100)));
-
-        // Helper to check if filename matches globs
-        const matchesGrepGlob = (filename: string): boolean => {
-          if (!globs.length) return true;
+        const gs_matchesGlob = (filename: string): boolean => {
+          if (!gs_globs.length) return true;
           const lower = filename.toLowerCase();
-          return globs.some((g: string) => {
+          return gs_globs.some((g: string) => {
             if (g.startsWith('*.')) return lower.endsWith(g.slice(1));
             return lower.includes(g.replace(/\*/g, ''));
           });
         };
 
-        // Collect matches across src/ subdirectory
-        const grepMatches: Array<{
-          file: string;
-          line_number: number;
-          line: string;
-          context_before?: string[];
-          context_after?: string[];
-        }> = [];
+        type GrepMatch = { file: string; line_number: number; line: string; context_before?: string[]; context_after?: string[] };
+        const gs_matches: GrepMatch[] = [];
 
-        const walkSrc = (dir: string): void => {
-          if (grepMatches.length >= maxResults) return;
+        const gs_walkDir = (dir: string, rootDir: string, label: string): void => {
+          if (gs_matches.length >= gs_maxResults) return;
           let entries: fs.Dirent[] = [];
           try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
           for (const entry of entries) {
-            if (grepMatches.length >= maxResults) break;
+            if (gs_matches.length >= gs_maxResults) break;
             const abs = path.join(dir, entry.name);
-            const rel = path.relative(srcRoot, abs).replace(/\\/g, '/');
-
             if (entry.isDirectory()) {
-              if (entry.name.startsWith('.')) continue;
-              walkSrc(abs);
+              if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist') continue;
+              gs_walkDir(abs, rootDir, label);
               continue;
             }
             if (!entry.isFile()) continue;
-            if (!matchesGrepGlob(entry.name)) continue;
-
+            if (!gs_matchesGlob(entry.name)) continue;
             let content = '';
             try { content = fs.readFileSync(abs, 'utf-8'); } catch { continue; }
             const lines = content.split('\n');
-
-            for (let i = 0; i < lines.length && grepMatches.length < maxResults; i++) {
-              grepRegex.lastIndex = 0;
-              if (!grepRegex.test(lines[i])) continue;
-
-              const item: {
-                file: string;
-                line_number: number;
-                line: string;
-                context_before?: string[];
-                context_after?: string[];
-              } = {
-                file: 'src/' + rel,
-                line_number: i + 1,
-                line: lines[i],
-              };
-
-              if (contextLines > 0) {
-                item.context_before = lines.slice(Math.max(0, i - contextLines), i);
-                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + contextLines));
+            const relPath = label + '/' + path.relative(rootDir, abs).replace(/\\/g, '/');
+            for (let i = 0; i < lines.length && gs_matches.length < gs_maxResults; i++) {
+              gs_regex.lastIndex = 0;
+              if (!gs_regex.test(lines[i])) continue;
+              const item: GrepMatch = { file: relPath, line_number: i + 1, line: lines[i] };
+              if (gs_contextLines > 0) {
+                item.context_before = lines.slice(Math.max(0, i - gs_contextLines), i);
+                item.context_after = lines.slice(i + 1, Math.min(lines.length, i + 1 + gs_contextLines));
               }
-              grepMatches.push(item);
+              gs_matches.push(item);
             }
           }
         };
 
-        walkSrc(searchSubdir);
-        const grepPayload = {
-          directory: 'src/' + (rawPath ? path.relative(srcRoot, searchSubdir).replace(/\\/g, '/') : ''),
-          pattern,
-          match_count: grepMatches.length,
-          matches: grepMatches,
+        // Build search directories (path param applies only when searching a single root)
+        const gs_rawPath = gs_searchBoth ? '' : String(args.path || '').trim();
+        if (gs_useSrc) {
+          const gs_srcSubdir = gs_rawPath ? path.resolve(gs_srcRoot, gs_rawPath) : gs_srcRoot;
+          if (!gs_srcSubdir.startsWith(gs_srcRoot)) {
+            return { name, args, result: `ERROR: path "${gs_rawPath}" is outside src/`, error: true };
+          }
+          if (!fs.existsSync(gs_srcSubdir)) {
+            return { name, args, result: `Directory not found: src/${gs_rawPath}`, error: true };
+          }
+          gs_walkDir(gs_srcSubdir, gs_srcRoot, 'src');
+        }
+        if (gs_useWebUi) {
+          const gs_webUiSubdir = gs_rawPath ? path.resolve(gs_webUiRoot, gs_rawPath) : gs_webUiRoot;
+          if (!gs_webUiSubdir.startsWith(gs_webUiRoot)) {
+            return { name, args, result: `ERROR: path "${gs_rawPath}" is outside web-ui/`, error: true };
+          }
+          if (!fs.existsSync(gs_webUiSubdir)) {
+            return { name, args, result: `Directory not found: web-ui/${gs_rawPath}`, error: true };
+          }
+          gs_walkDir(gs_webUiSubdir, gs_webUiRoot, 'web-ui');
+        }
+
+        const gs_searchedLabel = gs_searchBoth ? 'src/ + web-ui/' : (gs_useSrc ? 'src/' + (gs_rawPath ? gs_rawPath : '') : 'web-ui/' + (gs_rawPath ? gs_rawPath : ''));
+        const gs_payload = {
+          searched: gs_searchedLabel,
+          pattern: gs_pattern,
+          match_count: gs_matches.length,
+          matches: gs_matches,
         };
-        return { name, args, result: JSON.stringify(grepPayload, null, 2), error: false };
+        return { name, args, result: JSON.stringify(gs_payload, null, 2), error: false };
       }
 
       case 'create_file': {
@@ -721,8 +723,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!fs.existsSync(filePath)) return { name, args, result: `"${filename}" not found`, error: true };
         const content = fs.readFileSync(filePath, 'utf-8');
         if (!content.includes(find)) return { name, args, result: `Text not found. Use read_file to check exact content.`, error: true };
-        fs.writeFileSync(filePath, content.replace(find, replace), 'utf-8');
-        return { name, args, result: `${filename} updated`, error: false };
+        const doReplaceAll = args.replace_all === true;
+        const updated = doReplaceAll ? content.split(find).join(replace) : content.replace(find, replace);
+        const count = doReplaceAll ? content.split(find).length - 1 : 1;
+        fs.writeFileSync(filePath, updated, 'utf-8');
+        return { name, args, result: `${filename} updated (${count} occurrence${count !== 1 ? 's' : ''} replaced)`, error: false };
       }
 
       case 'delete_file': {
@@ -731,6 +736,30 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!fs.existsSync(filePath)) return { name, args, result: `"${filename}" not found`, error: true };
         fs.unlinkSync(filePath);
         return { name, args, result: `${filename} deleted`, error: false };
+      }
+
+      case 'write_file': {
+        const filename = String(args.filename || args.name || '');
+        if (!filename) return { name, args, result: 'filename is required', error: true };
+        const filePath = resolveFilePath(filename);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, String(args.content || ''), 'utf-8');
+        const lineCount = String(args.content || '').split('\n').length;
+        return { name, args, result: `${filename} written (${lineCount} lines)`, error: false };
+      }
+
+      case 'rename_file': {
+        const oldRel = String(args.old_path || args.old_filename || '');
+        const newRel = String(args.new_path || args.new_filename || '');
+        if (!oldRel) return { name, args, result: 'old_path is required', error: true };
+        if (!newRel) return { name, args, result: 'new_path is required', error: true };
+        const oldAbs = resolveFilePath(oldRel);
+        const newAbs = resolveFilePath(newRel);
+        if (!fs.existsSync(oldAbs)) return { name, args, result: `"${oldRel}" not found`, error: true };
+        if (fs.existsSync(newAbs)) return { name, args, result: `"${newRel}" already exists`, error: true };
+        fs.mkdirSync(path.dirname(newAbs), { recursive: true });
+        fs.renameSync(oldAbs, newAbs);
+        return { name, args, result: `Renamed ${oldRel} → ${newRel}`, error: false };
       }
 
       case 'mkdir': {
@@ -784,14 +813,29 @@ export async function executeTool(name: string, args: any, workspacePath: string
             return { name, args, result: `File not found: ${normalizedRel}`, error: true };
           }
           const content = fs.readFileSync(rootFile, 'utf-8');
+          const allLines = content.split('\n');
           const head = args.head ? Number(args.head) : 0;
           const tail = args.tail ? Number(args.tail) : 0;
-          const allLines = content.split('\n');
-          const sliced = head > 0 ? allLines.slice(0, head) : tail > 0 ? allLines.slice(-tail) : allLines;
-          const numbered = sliced.map((line, i) => {
-            const lineNum = head > 0 ? i + 1 : tail > 0 ? allLines.length - sliced.length + i + 1 : i + 1;
-            return `${lineNum}: ${line}`;
-          }).join('\n');
+          const startLine = args.start_line ? Math.max(1, Math.floor(Number(args.start_line))) : 0;
+          const numLines = args.num_lines ? Math.max(1, Math.floor(Number(args.num_lines))) : 0;
+          let sliced: string[];
+          let firstLineNum: number;
+          if (startLine > 0) {
+            const from = startLine - 1;
+            const to = numLines > 0 ? from + numLines : allLines.length;
+            sliced = allLines.slice(from, to);
+            firstLineNum = startLine;
+          } else if (head > 0) {
+            sliced = allLines.slice(0, head);
+            firstLineNum = 1;
+          } else if (tail > 0) {
+            sliced = allLines.slice(-tail);
+            firstLineNum = allLines.length - sliced.length + 1;
+          } else {
+            sliced = allLines;
+            firstLineNum = 1;
+          }
+          const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${line}`).join('\n');
           return { name, args, result: `${normalizedRel} (${allLines.length} lines):\n${numbered}`, error: false };
         }
 
@@ -813,14 +857,29 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const content = fs.readFileSync(absPath, 'utf-8');
         const relDisplay = 'src/' + absPath.slice(srcRoot.length + 1).replace(/\\/g, '/');
+        const allLines = content.split('\n');
         const head = args.head ? Number(args.head) : 0;
         const tail = args.tail ? Number(args.tail) : 0;
-        const allLines = content.split('\n');
-        const sliced = head > 0 ? allLines.slice(0, head) : tail > 0 ? allLines.slice(-tail) : allLines;
-        const numbered = sliced.map((line, i) => {
-          const lineNum = head > 0 ? i + 1 : tail > 0 ? allLines.length - sliced.length + i + 1 : i + 1;
-          return `${lineNum}: ${line}`;
-        }).join('\n');
+        const startLine = args.start_line ? Math.max(1, Math.floor(Number(args.start_line))) : 0;
+        const numLines = args.num_lines ? Math.max(1, Math.floor(Number(args.num_lines))) : 0;
+        let sliced: string[];
+        let firstLineNum: number;
+        if (startLine > 0) {
+          const from = startLine - 1;
+          const to = numLines > 0 ? from + numLines : allLines.length;
+          sliced = allLines.slice(from, to);
+          firstLineNum = startLine;
+        } else if (head > 0) {
+          sliced = allLines.slice(0, head);
+          firstLineNum = 1;
+        } else if (tail > 0) {
+          sliced = allLines.slice(-tail);
+          firstLineNum = allLines.length - sliced.length + 1;
+        } else {
+          sliced = allLines;
+          firstLineNum = 1;
+        }
+        const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${line}`).join('\n');
         return { name, args, result: `${relDisplay} (${allLines.length} lines):\n${numbered}`, error: false };
       }
 
@@ -848,11 +907,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!frs_content.includes(frs_find)) {
           return { name, args, result: `Text not found in src/${frs_rel.replace(/^\.?\/?src\//, '')}. Use read_source to confirm exact text including whitespace.`, error: true };
         }
-        const frs_updated = frs_content.replace(frs_find, frs_replace);
+        const frs_replaceAll = args.replace_all === true;
+        const frs_updated = frs_replaceAll
+          ? frs_content.split(frs_find).join(frs_replace)
+          : frs_content.replace(frs_find, frs_replace);
+        const frs_occurrences = frs_replaceAll ? (frs_content.split(frs_find).length - 1) : 1;
         fs.writeFileSync(frs_absPath, frs_updated, 'utf-8');
         const frs_display = 'src/' + frs_absPath.slice(frs_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] find_replace_source: ${frs_display} (session: ${frs_sid})`);
-        return { name, args, result: `✅ ${frs_display} updated. Call run_command({command:"npm run build", shell:true}) to compile and verify.`, error: false };
+        return { name, args, result: `✅ ${frs_display} updated (${frs_occurrences} occurrence${frs_occurrences !== 1 ? 's' : ''} replaced). Call run_command({command:"npm run build", shell:true}) to compile and verify.`, error: false };
       }
 
       // ── replace_lines_source: line-based edit in src/ (proposal sessions only) ──
@@ -887,6 +950,92 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result: `✅ ${rls_display}: replaced lines ${rls_start}-${rls_endClamped} (now ${rls_lines.length} lines). Call run_command({command:"npm run build", shell:true}) to compile and verify.`, error: false };
       }
 
+      // ── insert_after_source: insert lines after a given line in src/ ─────────
+      case 'insert_after_source': {
+        const ias_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(ias_sid)) {
+          return { name, args, result: 'ERROR: insert_after_source is only available in proposal execution sessions.', error: true };
+        }
+        const ias_rel = String(args.file || args.filename || '').replace(/\\/g, '/');
+        const ias_afterLine = Math.max(0, Math.floor(Number(args.after_line) || 0));
+        const ias_content = String(args.content || '');
+        if (!ias_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        const ias_projectRoot = path.resolve(workspacePath, '..');
+        const ias_srcRoot = path.join(ias_projectRoot, 'src');
+        const ias_absPath = path.resolve(ias_srcRoot, ias_rel.replace(/^\.?\/?src\//, ''));
+        if (!ias_absPath.startsWith(ias_srcRoot)) {
+          return { name, args, result: 'ERROR: insert_after_source only allows access to src/ directory.', error: true };
+        }
+        if (!fs.existsSync(ias_absPath)) {
+          return { name, args, result: `File not found: src/${ias_rel.replace(/^\.?\/?src\//, '')}. Use list_source to verify path.`, error: true };
+        }
+        const ias_lines = fs.readFileSync(ias_absPath, 'utf-8').split('\n');
+        const ias_insertAt = Math.min(ias_afterLine, ias_lines.length);
+        ias_lines.splice(ias_insertAt, 0, ...ias_content.split('\n'));
+        fs.writeFileSync(ias_absPath, ias_lines.join('\n'), 'utf-8');
+        const ias_display = 'src/' + ias_absPath.slice(ias_srcRoot.length + 1).replace(/\\/g, '/');
+        console.log(`[edit_source] insert_after_source: ${ias_display} after line ${ias_afterLine} (session: ${ias_sid})`);
+        return { name, args, result: `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_lines.length} lines). Call run_command({command:"npm run build", shell:true}) to compile and verify.`, error: false };
+      }
+
+      // ── delete_lines_source: delete a range of lines from a src/ file ─────────
+      case 'delete_lines_source': {
+        const dls_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(dls_sid)) {
+          return { name, args, result: 'ERROR: delete_lines_source is only available in proposal execution sessions.', error: true };
+        }
+        const dls_rel = String(args.file || args.filename || '').replace(/\\/g, '/');
+        const dls_start = Math.max(1, Math.floor(Number(args.start_line) || 1));
+        const dls_end = Math.max(dls_start, Math.floor(Number(args.end_line) || dls_start));
+        if (!dls_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        const dls_projectRoot = path.resolve(workspacePath, '..');
+        const dls_srcRoot = path.join(dls_projectRoot, 'src');
+        const dls_absPath = path.resolve(dls_srcRoot, dls_rel.replace(/^\.?\/?src\//, ''));
+        if (!dls_absPath.startsWith(dls_srcRoot)) {
+          return { name, args, result: 'ERROR: delete_lines_source only allows access to src/ directory.', error: true };
+        }
+        if (!fs.existsSync(dls_absPath)) {
+          return { name, args, result: `File not found: src/${dls_rel.replace(/^\.?\/?src\//, '')}. Use list_source to verify path.`, error: true };
+        }
+        const dls_lines = fs.readFileSync(dls_absPath, 'utf-8').split('\n');
+        if (dls_start > dls_lines.length) {
+          return { name, args, result: `Line ${dls_start} past end of file (${dls_lines.length} lines). Use read_source to check line numbers.`, error: true };
+        }
+        const dls_endClamped = Math.min(dls_end, dls_lines.length);
+        dls_lines.splice(dls_start - 1, dls_endClamped - dls_start + 1);
+        fs.writeFileSync(dls_absPath, dls_lines.join('\n'), 'utf-8');
+        const dls_display = 'src/' + dls_absPath.slice(dls_srcRoot.length + 1).replace(/\\/g, '/');
+        console.log(`[edit_source] delete_lines_source: ${dls_display} lines ${dls_start}-${dls_endClamped} (session: ${dls_sid})`);
+        return { name, args, result: `✅ ${dls_display}: deleted lines ${dls_start}-${dls_endClamped} (now ${dls_lines.length} lines). Call run_command({command:"npm run build", shell:true}) to compile and verify.`, error: false };
+      }
+
+      // ── write_source: create or overwrite a file in src/ ─────────────────────
+      case 'write_source': {
+        const ws_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(ws_sid)) {
+          return { name, args, result: 'ERROR: write_source is only available in proposal execution sessions.', error: true };
+        }
+        const ws_rel = String(args.file || args.filename || '').replace(/\\/g, '/');
+        const ws_content = String(args.content || '');
+        const ws_overwrite = args.overwrite !== false;
+        if (!ws_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        const ws_projectRoot = path.resolve(workspacePath, '..');
+        const ws_srcRoot = path.join(ws_projectRoot, 'src');
+        const ws_absPath = path.resolve(ws_srcRoot, ws_rel.replace(/^\.?\/?src\//, ''));
+        if (!ws_absPath.startsWith(ws_srcRoot)) {
+          return { name, args, result: 'ERROR: write_source only allows access to src/ directory.', error: true };
+        }
+        if (!ws_overwrite && fs.existsSync(ws_absPath)) {
+          return { name, args, result: `File already exists: src/${ws_rel.replace(/^\.?\/?src\//, '')}. Set overwrite:true to replace it.`, error: true };
+        }
+        fs.mkdirSync(path.dirname(ws_absPath), { recursive: true });
+        fs.writeFileSync(ws_absPath, ws_content, 'utf-8');
+        const ws_display = 'src/' + ws_absPath.slice(ws_srcRoot.length + 1).replace(/\\/g, '/');
+        const ws_lineCount = ws_content.split('\n').length;
+        console.log(`[edit_source] write_source: ${ws_display} (${ws_lineCount} lines, session: ${ws_sid})`);
+        return { name, args, result: `✅ ${ws_display} written (${ws_lineCount} lines). Call run_command({command:"npm run build", shell:true}) to compile and verify.`, error: false };
+      }
+
       // ── list_source: list files/dirs inside src/ ──────────────────────────────
       case 'list_source': {
         const rel = String(args.path || args.dir || '').replace(/\\/g, '/').replace(/^\.?\/?src\/?/, '') || '';
@@ -907,6 +1056,232 @@ export async function executeTool(name: string, args: any, workspacePath: string
         });
         const displayPath = rel ? `src/${rel}` : 'src';
         return { name, args, result: `${displayPath}/:\n${entries.join('\n') || '(empty)'}`, error: false };
+      }
+
+      // ── list_webui_source: list files/dirs inside web-ui/ ────────────────────
+      case 'list_webui_source': {
+        const lwu_rel = String(args.path || args.dir || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\/?/, '') || '';
+        const lwu_projectRoot = path.resolve(workspacePath, '..');
+        const lwu_webUiRoot = path.join(lwu_projectRoot, 'web-ui');
+        const lwu_absPath = lwu_rel ? path.resolve(lwu_webUiRoot, lwu_rel) : lwu_webUiRoot;
+        if (!lwu_absPath.startsWith(lwu_webUiRoot)) {
+          return { name, args, result: 'ERROR: list_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!fs.existsSync(lwu_absPath)) {
+          return { name, args, result: `Directory not found: web-ui/${lwu_rel}`, error: true };
+        }
+        const lwu_entries = fs.readdirSync(lwu_absPath).map(e => {
+          try {
+            const s = fs.statSync(path.join(lwu_absPath, e));
+            return s.isDirectory() ? `[DIR]  ${e}/` : `[FILE] ${e}`;
+          } catch { return `[??]   ${e}`; }
+        });
+        const lwu_displayPath = lwu_rel ? `web-ui/${lwu_rel}` : 'web-ui';
+        return { name, args, result: `${lwu_displayPath}/:\n${lwu_entries.join('\n') || '(empty)'}`, error: false };
+      }
+
+      // ── read_webui_source: read a file from web-ui/ ───────────────────────────
+      case 'read_webui_source': {
+        const rwu_rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\//, '');
+        if (!rwu_rel) return { name, args, result: 'ERROR: file path required.', error: true };
+        const rwu_projectRoot = path.resolve(workspacePath, '..');
+        const rwu_webUiRoot = path.join(rwu_projectRoot, 'web-ui');
+        const rwu_absPath = path.resolve(rwu_webUiRoot, rwu_rel);
+        if (!rwu_absPath.startsWith(rwu_webUiRoot)) {
+          return { name, args, result: 'ERROR: read_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!fs.existsSync(rwu_absPath)) {
+          return { name, args, result: `File not found: web-ui/${rwu_rel}. Use list_webui_source to browse available files.`, error: true };
+        }
+        const rwu_stat = fs.statSync(rwu_absPath);
+        if (rwu_stat.isDirectory()) {
+          const rwu_entries = fs.readdirSync(rwu_absPath).map(e => {
+            const s = fs.statSync(path.join(rwu_absPath, e));
+            return s.isDirectory() ? `[DIR]  ${e}/` : `[FILE] ${e}`;
+          });
+          return { name, args, result: rwu_entries.join('\n') || '(empty directory)', error: false };
+        }
+        const rwu_content = fs.readFileSync(rwu_absPath, 'utf-8');
+        const rwu_display = 'web-ui/' + rwu_absPath.slice(rwu_webUiRoot.length + 1).replace(/\\/g, '/');
+        const rwu_allLines = rwu_content.split('\n');
+        const rwu_head = args.head ? Number(args.head) : 0;
+        const rwu_tail = args.tail ? Number(args.tail) : 0;
+        const rwu_startLine = args.start_line ? Math.max(1, Math.floor(Number(args.start_line))) : 0;
+        const rwu_numLines = args.num_lines ? Math.max(1, Math.floor(Number(args.num_lines))) : 0;
+        let rwu_sliced: string[];
+        let rwu_firstLineNum: number;
+        if (rwu_startLine > 0) {
+          const from = rwu_startLine - 1;
+          const to = rwu_numLines > 0 ? from + rwu_numLines : rwu_allLines.length;
+          rwu_sliced = rwu_allLines.slice(from, to);
+          rwu_firstLineNum = rwu_startLine;
+        } else if (rwu_head > 0) {
+          rwu_sliced = rwu_allLines.slice(0, rwu_head);
+          rwu_firstLineNum = 1;
+        } else if (rwu_tail > 0) {
+          rwu_sliced = rwu_allLines.slice(-rwu_tail);
+          rwu_firstLineNum = rwu_allLines.length - rwu_sliced.length + 1;
+        } else {
+          rwu_sliced = rwu_allLines;
+          rwu_firstLineNum = 1;
+        }
+        const rwu_numbered = rwu_sliced.map((line, i) => `${rwu_firstLineNum + i}: ${line}`).join('\n');
+        return { name, args, result: `${rwu_display} (${rwu_allLines.length} lines):\n${rwu_numbered}`, error: false };
+      }
+
+      // ── web-ui/ write tools (proposal sessions only) ─────────────────────────
+
+      // ── find_replace_webui_source ─────────────────────────────────────────────
+      case 'find_replace_webui_source': {
+        const frwu_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(frwu_sid)) {
+          return { name, args, result: 'ERROR: find_replace_webui_source is only available in proposal execution sessions. Use write_proposal to request web-ui/ changes from regular sessions.', error: true };
+        }
+        const frwu_rel = String(args.file || args.filename || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\//, '');
+        const frwu_find = String(args.find || '');
+        const frwu_replace = String(args.replace ?? '');
+        if (!frwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        if (!frwu_find) return { name, args, result: 'ERROR: find text required', error: true };
+        const frwu_projectRoot = path.resolve(workspacePath, '..');
+        const frwu_webUiRoot = path.join(frwu_projectRoot, 'web-ui');
+        const frwu_absPath = path.resolve(frwu_webUiRoot, frwu_rel);
+        if (!frwu_absPath.startsWith(frwu_webUiRoot)) {
+          return { name, args, result: 'ERROR: find_replace_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!fs.existsSync(frwu_absPath)) {
+          return { name, args, result: `File not found: web-ui/${frwu_rel}. Use list_webui_source to verify path.`, error: true };
+        }
+        const frwu_content = fs.readFileSync(frwu_absPath, 'utf-8');
+        if (!frwu_content.includes(frwu_find)) {
+          return { name, args, result: `Text not found in web-ui/${frwu_rel}. Use read_webui_source to confirm exact text including whitespace.`, error: true };
+        }
+        const frwu_replaceAll = args.replace_all === true;
+        const frwu_occurrences = frwu_replaceAll ? (frwu_content.split(frwu_find).length - 1) : 1;
+        const frwu_updated = frwu_replaceAll
+          ? frwu_content.split(frwu_find).join(frwu_replace)
+          : frwu_content.replace(frwu_find, frwu_replace);
+        fs.writeFileSync(frwu_absPath, frwu_updated, 'utf-8');
+        const frwu_display = 'web-ui/' + frwu_absPath.slice(frwu_webUiRoot.length + 1).replace(/\\/g, '/');
+        console.log(`[edit_webui] find_replace_webui_source: ${frwu_display} (session: ${frwu_sid})`);
+        return { name, args, result: `✅ ${frwu_display} updated (${frwu_occurrences} occurrence${frwu_occurrences !== 1 ? 's' : ''} replaced). No build step needed for web-ui changes.`, error: false };
+      }
+
+      // ── replace_lines_webui_source ────────────────────────────────────────────
+      case 'replace_lines_webui_source': {
+        const rlwu_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(rlwu_sid)) {
+          return { name, args, result: 'ERROR: replace_lines_webui_source is only available in proposal execution sessions.', error: true };
+        }
+        const rlwu_rel = String(args.file || args.filename || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\//, '');
+        const rlwu_start = Math.max(1, Math.floor(Number(args.start_line) || 1));
+        const rlwu_end = Math.max(rlwu_start, Math.floor(Number(args.end_line) || rlwu_start));
+        const rlwu_newContent = String(args.new_content || '');
+        if (!rlwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        const rlwu_projectRoot = path.resolve(workspacePath, '..');
+        const rlwu_webUiRoot = path.join(rlwu_projectRoot, 'web-ui');
+        const rlwu_absPath = path.resolve(rlwu_webUiRoot, rlwu_rel);
+        if (!rlwu_absPath.startsWith(rlwu_webUiRoot)) {
+          return { name, args, result: 'ERROR: replace_lines_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!fs.existsSync(rlwu_absPath)) {
+          return { name, args, result: `File not found: web-ui/${rlwu_rel}. Use list_webui_source to verify path.`, error: true };
+        }
+        const rlwu_lines = fs.readFileSync(rlwu_absPath, 'utf-8').split('\n');
+        if (rlwu_start > rlwu_lines.length) {
+          return { name, args, result: `Line ${rlwu_start} past end of file (${rlwu_lines.length} lines). Use read_webui_source to check line numbers.`, error: true };
+        }
+        const rlwu_endClamped = Math.min(rlwu_end, rlwu_lines.length);
+        rlwu_lines.splice(rlwu_start - 1, rlwu_endClamped - rlwu_start + 1, ...rlwu_newContent.split('\n'));
+        fs.writeFileSync(rlwu_absPath, rlwu_lines.join('\n'), 'utf-8');
+        const rlwu_display = 'web-ui/' + rlwu_absPath.slice(rlwu_webUiRoot.length + 1).replace(/\\/g, '/');
+        console.log(`[edit_webui] replace_lines_webui_source: ${rlwu_display} lines ${rlwu_start}-${rlwu_endClamped} (session: ${rlwu_sid})`);
+        return { name, args, result: `✅ ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines). No build step needed for web-ui changes.`, error: false };
+      }
+
+      // ── insert_after_webui_source ─────────────────────────────────────────────
+      case 'insert_after_webui_source': {
+        const iawu_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(iawu_sid)) {
+          return { name, args, result: 'ERROR: insert_after_webui_source is only available in proposal execution sessions.', error: true };
+        }
+        const iawu_rel = String(args.file || args.filename || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\//, '');
+        const iawu_afterLine = Math.max(0, Math.floor(Number(args.after_line) || 0));
+        const iawu_content = String(args.content || '');
+        if (!iawu_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        const iawu_projectRoot = path.resolve(workspacePath, '..');
+        const iawu_webUiRoot = path.join(iawu_projectRoot, 'web-ui');
+        const iawu_absPath = path.resolve(iawu_webUiRoot, iawu_rel);
+        if (!iawu_absPath.startsWith(iawu_webUiRoot)) {
+          return { name, args, result: 'ERROR: insert_after_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!fs.existsSync(iawu_absPath)) {
+          return { name, args, result: `File not found: web-ui/${iawu_rel}. Use list_webui_source to verify path.`, error: true };
+        }
+        const iawu_lines = fs.readFileSync(iawu_absPath, 'utf-8').split('\n');
+        const iawu_insertAt = Math.min(iawu_afterLine, iawu_lines.length);
+        iawu_lines.splice(iawu_insertAt, 0, ...iawu_content.split('\n'));
+        fs.writeFileSync(iawu_absPath, iawu_lines.join('\n'), 'utf-8');
+        const iawu_display = 'web-ui/' + iawu_absPath.slice(iawu_webUiRoot.length + 1).replace(/\\/g, '/');
+        console.log(`[edit_webui] insert_after_webui_source: ${iawu_display} after line ${iawu_afterLine} (session: ${iawu_sid})`);
+        return { name, args, result: `✅ ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines). No build step needed for web-ui changes.`, error: false };
+      }
+
+      // ── delete_lines_webui_source ─────────────────────────────────────────────
+      case 'delete_lines_webui_source': {
+        const dlwu_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(dlwu_sid)) {
+          return { name, args, result: 'ERROR: delete_lines_webui_source is only available in proposal execution sessions.', error: true };
+        }
+        const dlwu_rel = String(args.file || args.filename || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\//, '');
+        const dlwu_start = Math.max(1, Math.floor(Number(args.start_line) || 1));
+        const dlwu_end = Math.max(dlwu_start, Math.floor(Number(args.end_line) || dlwu_start));
+        if (!dlwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        const dlwu_projectRoot = path.resolve(workspacePath, '..');
+        const dlwu_webUiRoot = path.join(dlwu_projectRoot, 'web-ui');
+        const dlwu_absPath = path.resolve(dlwu_webUiRoot, dlwu_rel);
+        if (!dlwu_absPath.startsWith(dlwu_webUiRoot)) {
+          return { name, args, result: 'ERROR: delete_lines_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!fs.existsSync(dlwu_absPath)) {
+          return { name, args, result: `File not found: web-ui/${dlwu_rel}. Use list_webui_source to verify path.`, error: true };
+        }
+        const dlwu_lines = fs.readFileSync(dlwu_absPath, 'utf-8').split('\n');
+        if (dlwu_start > dlwu_lines.length) {
+          return { name, args, result: `Line ${dlwu_start} past end of file (${dlwu_lines.length} lines). Use read_webui_source to check line numbers.`, error: true };
+        }
+        const dlwu_endClamped = Math.min(dlwu_end, dlwu_lines.length);
+        dlwu_lines.splice(dlwu_start - 1, dlwu_endClamped - dlwu_start + 1);
+        fs.writeFileSync(dlwu_absPath, dlwu_lines.join('\n'), 'utf-8');
+        const dlwu_display = 'web-ui/' + dlwu_absPath.slice(dlwu_webUiRoot.length + 1).replace(/\\/g, '/');
+        console.log(`[edit_webui] delete_lines_webui_source: ${dlwu_display} lines ${dlwu_start}-${dlwu_endClamped} (session: ${dlwu_sid})`);
+        return { name, args, result: `✅ ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines). No build step needed for web-ui changes.`, error: false };
+      }
+
+      // ── write_webui_source: create or overwrite a file in web-ui/ ────────────
+      case 'write_webui_source': {
+        const wwu_sid = String(sessionId || '');
+        if (!isProposalExecutionSession(wwu_sid)) {
+          return { name, args, result: 'ERROR: write_webui_source is only available in proposal execution sessions.', error: true };
+        }
+        const wwu_rel = String(args.file || args.filename || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\//, '');
+        const wwu_content = String(args.content || '');
+        const wwu_overwrite = args.overwrite !== false;
+        if (!wwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
+        const wwu_projectRoot = path.resolve(workspacePath, '..');
+        const wwu_webUiRoot = path.join(wwu_projectRoot, 'web-ui');
+        const wwu_absPath = path.resolve(wwu_webUiRoot, wwu_rel);
+        if (!wwu_absPath.startsWith(wwu_webUiRoot)) {
+          return { name, args, result: 'ERROR: write_webui_source only allows access to web-ui/ directory.', error: true };
+        }
+        if (!wwu_overwrite && fs.existsSync(wwu_absPath)) {
+          return { name, args, result: `File already exists: web-ui/${wwu_rel}. Set overwrite:true to replace it.`, error: true };
+        }
+        fs.mkdirSync(path.dirname(wwu_absPath), { recursive: true });
+        fs.writeFileSync(wwu_absPath, wwu_content, 'utf-8');
+        const wwu_display = 'web-ui/' + wwu_absPath.slice(wwu_webUiRoot.length + 1).replace(/\\/g, '/');
+        const wwu_lineCount = wwu_content.split('\n').length;
+        console.log(`[edit_webui] write_webui_source: ${wwu_display} (${wwu_lineCount} lines, session: ${wwu_sid})`);
+        return { name, args, result: `✅ ${wwu_display} written (${wwu_lineCount} lines). No build step needed for web-ui changes.`, error: false };
       }
 
       // ── send_telegram: proactively push text or screenshot to Telegram ────────

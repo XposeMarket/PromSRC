@@ -43,6 +43,7 @@ import {
   getKnowledgeFileContent,
   getProjectKnowledgeDir,
 } from '../projects/project-store.js';
+import { refreshProjectContextFromLatestPriorSession } from '../projects/project-learning.js';
 
 const router = Router();
 
@@ -92,6 +93,9 @@ router.post('/api/projects/:id/sessions', (req: Request, res: Response) => {
     const sessionId = crypto.randomUUID();
     const isOnboarding = req.body?.isOnboarding === true;
     addSessionToProject(req.params.id, sessionId, isOnboarding ? 'Getting started' : 'New chat');
+    void refreshProjectContextFromLatestPriorSession(req.params.id, sessionId).catch((err: any) => {
+      console.warn(`[Projects] Prior-session project context refresh failed for ${req.params.id}:`, err?.message || err);
+    });
     res.status(201).json({ sessionId, projectId: req.params.id });
   } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to create session' }); }
 });

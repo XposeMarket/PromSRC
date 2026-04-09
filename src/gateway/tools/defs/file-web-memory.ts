@@ -49,7 +49,8 @@ export function getFileWebMemoryTools(): any[] {
           properties: {
             filename: { type: 'string', description: 'Name of the file to search' },
             pattern: { type: 'string', description: 'Regex or literal pattern to search for' },
-            context_lines: { type: 'number', description: 'Lines of context around each match (default 0, max 10)' },
+            context: { type: 'number', description: 'Lines of context around each match (default 0, max 10)' },
+            context_lines: { type: 'number', description: 'Alias for context.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match (default false)' },
             max_results: { type: 'number', description: 'Max matches to return (default 100)' },
           },
@@ -138,13 +139,14 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'find_replace',
-        description: 'Find exact text in a file and replace it. Good for small text changes.',
+        description: 'Find exact text in a file and replace it. Good for surgical text changes.',
         parameters: {
           type: 'object', required: ['filename', 'find', 'replace'],
           properties: {
             filename: { type: 'string' },
             find: { type: 'string', description: 'Exact text to find' },
             replace: { type: 'string', description: 'Text to replace with' },
+            replace_all: { type: 'boolean', description: 'If true, replace all occurrences. Default: false (first occurrence only).' },
           },
         },
       },
@@ -157,6 +159,34 @@ export function getFileWebMemoryTools(): any[] {
         parameters: {
           type: 'object', required: ['filename'],
           properties: { filename: { type: 'string' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'write_file',
+        description: 'Write full content to a workspace file, creating it if it does not exist or overwriting it if it does. Use this for full-file rewrites. For surgical edits to existing files use find_replace or replace_lines instead.',
+        parameters: {
+          type: 'object', required: ['filename', 'content'],
+          properties: {
+            filename: { type: 'string', description: 'Path relative to workspace root' },
+            content: { type: 'string', description: 'Full file content to write' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'rename_file',
+        description: 'Rename or move a workspace file. Both old and new paths are relative to the workspace root. Creates any missing parent directories for the new path.',
+        parameters: {
+          type: 'object', required: ['old_path', 'new_path'],
+          properties: {
+            old_path: { type: 'string', description: 'Current file path relative to workspace root' },
+            new_path: { type: 'string', description: 'New file path relative to workspace root' },
+          },
         },
       },
     },
@@ -196,12 +226,14 @@ export function getFileWebMemoryTools(): any[] {
           'Use this to understand the codebase before writing a proposal or making edits. ' +
           'Pass the path relative to src/, e.g. "gateway/server-v2.ts" or "gateway/tool-builder.ts". ' +
           'Also supports root-level files: package.json, tsconfig.json, README.md, CHANGELOG.md. ' +
-          'Supports head/tail line limiting for large files.',
+          'Supports windowed reads for large files: use start_line+num_lines for arbitrary ranges, or head/tail for first/last N lines.',
         parameters: {
           type: 'object', required: ['file'],
           properties: {
             file: { type: 'string', description: 'Path relative to src/, e.g. "gateway/server-v2.ts". Or a root file: package.json, tsconfig.json.' },
-            head: { type: 'number', description: 'Return only first N lines' },
+            start_line: { type: 'number', description: '1-based line to start reading from (default: 1). Use with num_lines for a specific range.' },
+            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
+            head: { type: 'number', description: 'Return only first N lines (shorthand for start_line:1, num_lines:N)' },
             tail: { type: 'number', description: 'Return only last N lines' },
           },
         },
@@ -305,11 +337,13 @@ export function getFileWebMemoryTools(): any[] {
           'Read a file from the Prometheus web-ui/ directory (frontend source code). READ-ONLY — never modifies files. ' +
           'Use this for deterministic frontend inspection before proposing edits. ' +
           'Pass the path relative to web-ui/, e.g. "src/pages/TeamsPage.js" or "package.json". ' +
-          'Supports head/tail line limiting for large files.',
+          'Supports windowed reads: use start_line+num_lines for arbitrary ranges, or head/tail for first/last N lines.',
         parameters: {
           type: 'object', required: ['file'],
           properties: {
             file: { type: 'string', description: 'Path relative to web-ui/, e.g. "src/pages/TeamsPage.js".' },
+            start_line: { type: 'number', description: '1-based line to start reading from (default: 1). Use with num_lines for a specific range.' },
+            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
             head: { type: 'number', description: 'Return only first N lines' },
             tail: { type: 'number', description: 'Return only last N lines' },
           },
@@ -322,16 +356,18 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'grep_source',
         description:
-          'Search file contents inside the Prometheus src/ directory using a regex or literal pattern. ' +
+          'Search file contents across Prometheus source code using a regex or literal pattern. ' +
           'Returns matching lines with file paths and line numbers (like rg -n). ' +
+          'Searches src/ by default; set root:"web-ui" to search frontend, or root:"both" to search everywhere. ' +
           'Use this to find function definitions, variable usages, imports, or any text across the codebase. ' +
-          'Example: grep_source({pattern:"previousSessionId"}) or grep_source({pattern:"case \'step_complete\'", path:"gateway/routes"}).',
+          'Example: grep_source({pattern:"previousSessionId"}) or grep_source({pattern:"handleChat", root:"both"}).',
         parameters: {
           type: 'object', required: ['pattern'],
           properties: {
             pattern: { type: 'string', description: 'Regex or literal string to search for.' },
-            path: { type: 'string', description: 'Subdirectory of src/ to limit search, e.g. "gateway" or "gateway/routes". Default: all of src/.' },
-            glob: { type: 'string', description: 'Comma-separated file name patterns to include, e.g. "*.ts" or "*.ts,*.json". Default: all files.' },
+            root: { type: 'string', description: 'Which source tree to search: "src" (default), "web-ui", or "both".' },
+            path: { type: 'string', description: 'Subdirectory to limit search within the chosen root, e.g. "gateway/routes". Ignored when root is "both".' },
+            glob: { type: 'string', description: 'Comma-separated file name patterns to include, e.g. "*.ts" or "*.js,*.jsx". Default: all files.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match. Default: false.' },
             context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0.' },
             max_results: { type: 'number', description: 'Max matching lines to return. Default: 100.' },
@@ -344,9 +380,9 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'grep_webui_source',
         description:
-          'Search file contents inside the Prometheus web-ui/ directory using a regex or literal pattern. ' +
-          'Returns matching lines with file paths and line numbers (like rg -n). ' +
-          'Use this to find React components, styles, imports, handlers, or any text across frontend code.',
+          'Alias for grep_source with root:"web-ui". Search file contents inside the Prometheus web-ui/ directory. ' +
+          'Returns matching lines with file paths and line numbers. ' +
+          'Prefer grep_source({..., root:"web-ui"}) or grep_source({..., root:"both"}) to search across both src and web-ui in one call.',
         parameters: {
           type: 'object', required: ['pattern'],
           properties: {
@@ -397,6 +433,7 @@ export function getFileWebMemoryTools(): any[] {
             file: { type: 'string', description: 'Path relative to src/, e.g. "gateway/terminal-ui.ts"' },
             find: { type: 'string', description: 'Exact text to find (must match the file exactly, including whitespace and newlines)' },
             replace: { type: 'string', description: 'Replacement text' },
+            replace_all: { type: 'boolean', description: 'If true, replace all occurrences. Default: false (first occurrence only).' },
           },
         },
       },
@@ -489,6 +526,7 @@ export function getFileWebMemoryTools(): any[] {
             file: { type: 'string', description: 'Path relative to web-ui/, e.g. "src/pages/TeamsPage.js"' },
             find: { type: 'string', description: 'Exact text to find (must match the file exactly, including whitespace and newlines)' },
             replace: { type: 'string', description: 'Replacement text' },
+            replace_all: { type: 'boolean', description: 'If true, replace all occurrences. Default: false (first occurrence only).' },
           },
         },
       },

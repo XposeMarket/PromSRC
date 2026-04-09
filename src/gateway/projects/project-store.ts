@@ -148,6 +148,10 @@ export function createProject(name: string): Project {
       '',
       '## Key People & Entities',
       '',
+      '## Tech Stack & Tools',
+      '',
+      '## Timeline & Milestones',
+      '',
       '## Notes',
       '',
     ].join('\n'), 'utf-8');

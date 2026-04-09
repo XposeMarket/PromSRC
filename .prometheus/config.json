@@ -155,6 +155,46 @@
       "subagentType": "dynamic",
       "createdAt": 1775091709961,
       "createdBy": "ai"
+    },
+    {
+      "id": "researcher_skill_inventory_v1",
+      "name": "Researcher",
+      "description": "Finds and synthesizes information, returns structured evidence bundles the team can act on",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\researcher_skill_inventory_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775758246029,
+      "createdBy": "ai"
+    },
+    {
+      "id": "operator_browser_tester_v1",
+      "name": "Operator",
+      "description": "Executes actions in external systems — browser automation, file operations, API calls, system commands",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\operator_browser_tester_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775758246233,
+      "createdBy": "ai"
+    },
+    {
+      "id": "operator_desktop_tester_v1",
+      "name": "Operator",
+      "description": "Executes actions in external systems — browser automation, file operations, API calls, system commands",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\operator_desktop_tester_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775758246414,
+      "createdBy": "ai"
+    },
+    {
+      "id": "analyst_audit_reporter_v1",
+      "name": "Analyst",
+      "description": "Turns raw information into decisions — evaluates tradeoffs, produces concrete recommendations",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\analyst_audit_reporter_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775758246616,
+      "createdBy": "ai"
     }
   ],
   "session": {

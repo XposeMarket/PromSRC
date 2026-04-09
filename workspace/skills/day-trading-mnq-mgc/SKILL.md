@@ -1,9 +1,16 @@
 ---
 name: Day Trading — MNQ & MGC
-description: Professional intraday trading strategies for Micro E-mini Nasdaq-100 (MNQ) and Micro Gold (MGC) futures. Use this skill whenever any agent needs to analyze charts, generate trade signals, manage risk, execute trades, monitor news catalysts, or journal trade results. ALWAYS use this skill for anything involving MNQ, MGC, TopstepX, TradingView chart analysis, entry/exit decisions, P&L tracking, or risk management.
+description: Optional-pack skill for professional intraday trading strategies for Micro E-mini Nasdaq-100 (MNQ) and Micro Gold (MGC) futures. Keep this skill discoverable for teams that still need it, but prefer non-core usage unless explicitly required. Use whenever an agent needs to analyze charts, generate trade signals, manage risk, execute trades, monitor news catalysts, or journal trade results.
 emoji: "📈"
-version: 1.0.0
+version: 1.0.1
+status: optional-pack
+deprecation: "Marked optional-pack / deprecated from core catalog. Do not hard-delete. Final removal requires telemetry review over one full quarterly cycle with confirmed low or zero usage."
 ---
+
+> **Optional Pack Notice**
+> This skill has been conservatively deprecated from the core catalog and is now treated as an optional pack. It remains fully intact for compatibility and discoverability.
+> 
+> **Removal gate:** any future hard removal must wait until usage telemetry has been reviewed across one full quarterly cycle and shows sustained minimal usage.
 
 # Day Trading Skill — MNQ & MGC Futures
 

@@ -1,0 +1,29 @@
+{
+  "id": "brain_thought_2026-04-09_07-58",
+  "history": [
+    {
+      "role": "user",
+      "content": "[Brain Thought 3] Window: 2026-04-09 11:58 UTC → 2026-04-09 20:19 UTC",
+      "timestamp": 1775765941308
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Anthropic API error 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 213472 tokens > 200000 maximum\"},\"request_id\":\"req_011CZtpRRUneaz27wDvt1bEB\"}",
+      "timestamp": 1775766105835
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775758352013,
+  "lastActiveAt": 1775766105838,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 88,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}
