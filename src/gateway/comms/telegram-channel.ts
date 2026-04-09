@@ -2490,8 +2490,8 @@ export class TelegramChannel {
       const provider = data.slice('md:prov:'.length);
       const modelsByProvider: Record<string, string[]> = {
         anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        openai: ['gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3'],
-        openai_codex: ['gpt-4o', 'gpt-4o-mini'],
+        openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+        openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
         ollama: [],
         llama_cpp: [],
         lm_studio: [],

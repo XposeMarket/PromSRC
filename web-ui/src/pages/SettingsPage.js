@@ -670,7 +670,7 @@ function buildProviderPayload() {
   providers.llama_cpp = { endpoint: document.getElementById('settings-llamacpp-endpoint')?.value || 'http://localhost:8080',  model: document.getElementById('settings-llamacpp-model')?.value  || '' };
   providers.lm_studio = { endpoint: document.getElementById('settings-lmstudio-endpoint')?.value || 'http://localhost:1234',  model: document.getElementById('settings-lmstudio-model')?.value   || '' };
   providers.openai    = { api_key:  document.getElementById('settings-openai-key')?.value         || '',                       model: document.getElementById('settings-openai-model')?.value      || 'gpt-4o' };
-  providers.openai_codex = { model: document.getElementById('settings-codex-model')?.value         || 'gpt-5.3-codex' };
+  providers.openai_codex = { model: document.getElementById('settings-codex-model')?.value         || 'gpt-5.4' };
   const anthropicExtThinking = document.getElementById('settings-anthropic-extended-thinking')?.checked || false;
   const anthropicBudget = parseInt(document.getElementById('settings-anthropic-thinking-budget')?.value || '10000', 10);
   providers.anthropic = {
@@ -1330,9 +1330,9 @@ async function loadAgentModelOptions(preserveSelected = false) {
 
   // Static fallback model lists per provider (used when live fetch returns nothing)
   const STATIC_MODEL_FALLBACKS = {
-    openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'],
-    openai_codex: ['gpt-5.3-codex', 'gpt-4o'],
-    anthropic: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+    openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+    openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
+    anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   };
 
   try {
@@ -1911,6 +1911,10 @@ async function sendChannelTest(channel) {
 }
 
 async function saveSettings() {
+  const btn = document.getElementById('settings-save-btn');
+  if (btn?.disabled) return; // prevent double-submit
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
   const workspace_path = document.getElementById('settings-workspace-path').value.trim();
   const allowed_paths = document.getElementById('settings-allowed-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
   const blocked_paths = document.getElementById('settings-blocked-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
@@ -1947,20 +1951,28 @@ async function saveSettings() {
     rollingCompactionSummaryMaxWords: Number(document.getElementById('settings-rolling-compaction-words')?.value || 220),
     rollingCompactionModel: (document.getElementById('settings-rolling-compaction-model')?.value || '').trim(),
   };
+  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save'; } };
+  // Safety valve — re-enable button after 15s no matter what
+  const safetyTimer = setTimeout(resetBtn, 15000);
   try {
-    await api('/api/settings/paths', { method: 'POST', body: JSON.stringify({ workspace_path, allowed_paths, blocked_paths }) });
-    await api('/api/settings/search', { method: 'POST', body: JSON.stringify(payload) });
-    await api('/api/settings/agent', { method: 'POST', body: JSON.stringify(policyPayload) });
-    await api('/api/settings/model', { method: 'POST', body: JSON.stringify(modelPayload) });
-    await api('/api/settings/provider', { method: 'POST', body: JSON.stringify({ llm: providerPayload }) });
-    await api('/api/settings/session', { method: 'POST', body: JSON.stringify(sessionPayload) });
-    await loadSearchSettingsSummary();
+    await Promise.all([
+      api('/api/settings/paths',    { method: 'POST', body: JSON.stringify({ workspace_path, allowed_paths, blocked_paths }) }),
+      api('/api/settings/search',   { method: 'POST', body: JSON.stringify(payload) }),
+      api('/api/settings/agent',    { method: 'POST', body: JSON.stringify(policyPayload) }),
+      api('/api/settings/model',    { method: 'POST', body: JSON.stringify(modelPayload) }),
+      api('/api/settings/provider', { method: 'POST', body: JSON.stringify({ llm: providerPayload }) }),
+      api('/api/settings/session',  { method: 'POST', body: JSON.stringify(sessionPayload) }),
+    ]);
+    loadSearchSettingsSummary().catch(() => {});
     quickSearchRigor = payload.search_rigor || quickSearchRigor;
     updateQuickModeUI();
     addProcessEntry('final', 'Settings saved.');
     closeSettings();
   } catch (err) {
     addProcessEntry('error', `Failed to save settings: ${err.message}`);
+    resetBtn();
+  } finally {
+    clearTimeout(safetyTimer);
   }
 }
 
@@ -2417,9 +2429,9 @@ const AMD_SLOTS = {
 };
 
 const AMD_STATIC_MODELS = {
-  openai:       ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-  openai_codex: ['gpt-5.3-codex', 'gpt-5.1-codex-mini', 'gpt-4o'],
-  anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+  openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
+  anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
 };
 
 async function amdProviderChange(slotId) {
@@ -2493,10 +2505,21 @@ async function saveAgentModelDefaults() {
     if (prov && model) payload[field] = prov + '/' + model;
   }
   const status = document.getElementById('amd-status');
+  const btn = document.querySelector('[onclick="saveAgentModelDefaults()"]');
+  if (btn?.disabled) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save Agent Model Defaults'; } };
+  const safetyTimer = setTimeout(resetBtn, 15000);
   try {
     await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify(payload) });
     if (status) { status.style.color='var(--ok)'; status.textContent='✓ Saved'; setTimeout(()=>{status.textContent='';},2500); }
-  } catch(e) { if(status){status.style.color='var(--err)';status.textContent='✗ '+e.message;} }
+    resetBtn();
+  } catch(e) {
+    if (status) { status.style.color='var(--err)'; status.textContent='✗ '+e.message; }
+    resetBtn();
+  } finally {
+    clearTimeout(safetyTimer);
+  }
 }
 
 // --- Brain System Model Config --------------------------------------------
@@ -2516,7 +2539,7 @@ async function brainProviderChange(type) {
       models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
       if (!models.length) models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
     } else if (prov === 'openai_codex') {
-      models = ['gpt-5.3-codex', 'gpt-5.1-codex-mini', 'gpt-4o'];
+      models = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'];
     } else {
       const llm = typeof buildProviderPayload === 'function' ? buildProviderPayload() : {};
       llm.provider = prov;
@@ -2561,11 +2584,20 @@ async function saveBrainModelConfig() {
     else payload.dreamModel = prov && model ? `${prov}/${model}` : '';
   }
   const status = document.getElementById('brain-model-status');
+  const btn = document.querySelector('[onclick="saveBrainModelConfig()"]');
+  if (btn?.disabled) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save Brain Models'; } };
+  const safetyTimer = setTimeout(resetBtn, 15000);
   try {
     await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(payload) });
     if (status) { status.style.color = 'var(--ok)'; status.textContent = '✓ Saved'; setTimeout(() => { status.textContent = ''; }, 2500); }
+    resetBtn();
   } catch (e) {
     if (status) { status.style.color = 'var(--err)'; status.textContent = '✗ ' + e.message; }
+    resetBtn();
+  } finally {
+    clearTimeout(safetyTimer);
   }
 }
 

@@ -1134,13 +1134,13 @@
             <input id="settings-openai-key" type="password" placeholder="sk-..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
             <select id="settings-openai-model" class="settings-input" style="font-size:13px">
-              <option value="gpt-5.4">gpt-5.4 (flagship)</option>
-              <option value="gpt-5.2">gpt-5.2</option>
-              <option value="gpt-5-mini-2025-08-07">gpt-5-mini</option>
+              <option value="gpt-4.1">gpt-4.1 (latest)</option>
+              <option value="gpt-4.1-mini">gpt-4.1-mini</option>
               <option value="gpt-4o">gpt-4o</option>
               <option value="gpt-4o-mini">gpt-4o-mini</option>
               <option value="o4-mini">o4-mini</option>
               <option value="o3">o3</option>
+              <option value="o1">o1</option>
             </select>
             <div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn btn-sm" onclick="refreshOpenAIModels()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>
@@ -1165,13 +1165,10 @@
               <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
               <select id="settings-codex-model" class="settings-input" style="font-size:13px">
                 <option value="gpt-5.4">gpt-5.4 (flagship)</option>
+                <option value="gpt-5.4-mini">gpt-5.4-mini</option>
                 <option value="gpt-5.3-codex">gpt-5.3-codex</option>
-                <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
                 <option value="gpt-5.2-codex">gpt-5.2-codex</option>
-                <option value="gpt-5.1-codex-max">gpt-5.1-codex-max</option>
-                <option value="gpt-5.1-codex-mini">gpt-5.1-codex-mini (faster)</option>
-                <option value="gpt-5.2">gpt-5.2</option>
-                <option value="gpt-5.1">gpt-5.1</option>
+                <option value="gpt-5.1-codex">gpt-5.1-codex</option>
               </select>
               <button class="btn btn-sm" onclick="disconnectCodex()" style="margin-top:10px;background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect Account</button>
             </div>
@@ -1978,7 +1975,7 @@
 
     <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);position:sticky;bottom:0;background:#fff;z-index:2">
       <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line)" onclick="closeSettings()">Cancel</button>
-      <button class="btn btn-sm" style="background:var(--brand);color:#fff;border:none" onclick="saveSettings()">Save</button>
+      <button id="settings-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;min-width:80px" onclick="saveSettings()">Save</button>
     </div>
   </div>
 </div>
@@ -2793,9 +2790,9 @@ const AMD_SLOTS = {
 
 // Static model fallbacks (mirrors what loadAgentModelOptions uses)
 const AMD_STATIC_MODELS = {
-  openai:       ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-  openai_codex: ['gpt-5.3-codex', 'gpt-5.1-codex-mini', 'gpt-4o'],
-  anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+  openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
+  anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
 };
 
 async function amdProviderChange(slotId) {

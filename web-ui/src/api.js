@@ -16,12 +16,21 @@ import { API } from './state.js';
  * Returns parsed JSON response.
  */
 export async function api(path, opts = {}) {
-  const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  if (!r.ok) {
-    const body = await r.text().catch(() => '');
-    throw new Error(`API ${r.status}: ${body}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, signal: controller.signal, ...opts });
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      throw new Error(`API ${r.status}: ${body}`);
+    }
+    return r.json();
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Request timed out');
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-  return r.json();
 }
 
 // Expose on window
