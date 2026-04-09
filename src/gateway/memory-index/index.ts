@@ -555,9 +555,18 @@ export function searchMemoryTimeline(workspacePath: string, query: string, dateF
 }
 
 export function getMemoryGraphSnapshot(workspacePath: string): { generatedAt: string; nodeCount: number; edgeCount: number; nodes: any[]; edges: any[] } {
-  refreshMemoryIndexFromAudit(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
   const { root, store: storePath } = idxPaths(workspacePath);
   const graphPath = path.join(root, 'graph.json');
+
+  // If a cached graph already exists, return it immediately and kick off a background refresh.
+  // This prevents the first page-load from timing out on large workspaces.
+  if (fs.existsSync(graphPath)) {
+    setImmediate(() => { try { refreshMemoryIndexFromAudit(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 }); } catch {} });
+    return readJson(graphPath, { generatedAt: new Date(0).toISOString(), nodeCount: 0, edgeCount: 0, nodes: [], edges: [] } as any);
+  }
+
+  // No cache yet — run the first-ever refresh synchronously so we have something to return.
+  refreshMemoryIndexFromAudit(workspacePath, { minIntervalMs: 0, maxChangedFiles: 120 });
   if (fs.existsSync(graphPath)) {
     return readJson(graphPath, { generatedAt: new Date(0).toISOString(), nodeCount: 0, edgeCount: 0, nodes: [], edges: [] } as any);
   }

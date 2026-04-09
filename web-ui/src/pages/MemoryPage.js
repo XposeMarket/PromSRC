@@ -69,6 +69,7 @@ const state = {
   dragOverDropzone: false,
   imagePoints: null,
   shuffleTimer: 0,
+  shuffleKindIndex: -1,
   simulationHeat: 1,
   raf: 0,
   resizeObserver: null,
@@ -76,6 +77,14 @@ const state = {
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function hashString(input) { let hash = 5381; for (let i = 0; i < input.length; i += 1) hash = ((hash << 5) + hash) ^ input.charCodeAt(i); return Math.abs(hash); }
+function flameNodePath(ctx, cx, cy, r) {
+  // Flame shape centered at (cx, cy), tip pointing up. r is the effective radius.
+  const s = r * 1.25;
+  ctx.moveTo(cx, cy - s * 1.05);
+  ctx.bezierCurveTo(cx + s * 0.58, cy - s * 0.55, cx + s * 0.82, cy + s * 0.12, cx + s * 0.42, cy + s * 0.58);
+  ctx.bezierCurveTo(cx + s * 0.22, cy + s * 0.88, cx - s * 0.22, cy + s * 0.88, cx - s * 0.42, cy + s * 0.58);
+  ctx.bezierCurveTo(cx - s * 0.82, cy + s * 0.12, cx - s * 0.58, cy - s * 0.55, cx, cy - s * 1.05);
+}
 function sourceColor(type) { return TYPE_COLORS[type] || TYPE_COLORS.unknown; }
 function alpha(color, opacity) {
   const hex = String(color || '#ffffff').replace('#', '');
@@ -340,6 +349,48 @@ function layoutByRandomShape(nodes, kind = 'constellation') {
       const radius = 12 + index * 2.4;
       x = Math.cos(angle) * radius;
       y = Math.sin(angle) * radius;
+    } else if (kind === 'helix') {
+      const t = index / count;
+      const angle = t * Math.PI * 10;
+      const strand = index % 2 === 0 ? 1 : -1;
+      x = strand * (60 + Math.sin(angle) * 20);
+      y = t * height - height / 2;
+    } else if (kind === 'grid') {
+      const cols = Math.ceil(Math.sqrt(count * 1.4));
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const totalRows = Math.ceil(count / cols);
+      x = (col - cols / 2) * 36;
+      y = (row - totalRows / 2) * 36;
+    } else if (kind === 'vortex') {
+      const t = 1 - index / count;
+      const angle = index * 0.52;
+      const radius = 30 + t * 300;
+      x = Math.cos(angle) * radius;
+      y = Math.sin(angle) * radius * 0.7;
+    } else if (kind === 'hexgrid') {
+      const cols = Math.ceil(Math.sqrt(count * 1.2));
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const totalRows = Math.ceil(count / cols);
+      const xOff = row % 2 === 0 ? 0 : 20;
+      x = (col - cols / 2) * 40 + xOff;
+      y = (row - totalRows / 2) * 34;
+    } else if (kind === 'cross') {
+      const arm = index % 4;
+      const pos = Math.floor(index / 4);
+      const armLen = Math.ceil(count / 4);
+      const t = pos / Math.max(1, armLen - 1);
+      const r = 40 + t * 280;
+      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      x = dirs[arm][0] * r;
+      y = dirs[arm][1] * r;
+    } else if (kind === 'pyramid') {
+      let row = 0; let rowStart = 0; let rowSize = 1;
+      while (rowStart + rowSize <= index) { rowStart += rowSize; row += 1; rowSize += 1; }
+      const posInRow = index - rowStart;
+      x = (posInRow - (rowSize - 1) / 2) * 38;
+      y = row * 38 - (Math.sqrt(count * 2) / 3) * 38;
     } else {
       x = ((hashString(`${node.id}:shuffle:x`) % width) - width / 2) * 0.9;
       y = ((hashString(`${node.id}:shuffle:y`) % height) - height / 2) * 0.9;
@@ -583,8 +634,9 @@ function rebuildRenderGraph(relayout = true) {
     state.renderEdges = [...filteredEdges];
   } else if (state.shapeMode === 'shuffle') {
     if (relayout) {
-      const kinds = ['constellation', 'ring', 'wave', 'spiral', 'diamond', 'flower', 'shell', 'bands'];
-      layoutByRandomShape(visibleNodes, kinds[hashString(String(Date.now())) % kinds.length]);
+      const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation'];
+      state.shuffleKindIndex = (state.shuffleKindIndex + 1) % kinds.length;
+      layoutByRandomShape(visibleNodes, kinds[state.shuffleKindIndex]);
     }
     state.renderNodes = [...visibleNodes];
     state.renderEdges = [...filteredEdges];
@@ -708,7 +760,7 @@ function getNodeAtPoint(clientX, clientY) {
   for (const node of state.renderNodes) {
     if (!node.visible) continue;
     const dist = Math.hypot(world.x - node.x, world.y - node.y);
-    if (dist <= (node.radius + 7) / state.transform.scale && dist < bestDist) {
+    if (dist <= (node.radius * 1.3 + 9) / state.transform.scale && dist < bestDist) {
       best = node;
       bestDist = dist;
     }
@@ -760,14 +812,25 @@ function draw() {
     const isSelected = node.id === state.selectedNodeId;
     const isHovered = node.id === state.hoverNodeId;
     const opacity = node.highlighted ? 0.98 : state.controls.search && !node.matched ? 0.24 : 0.84;
+    const nodeR = node.radius + (isSelected ? 2.4 : isHovered ? 1.2 : 0);
     state.ctx.beginPath();
     state.ctx.fillStyle = node.isHub ? alpha(node.color, 0.94) : alpha(node.color, opacity);
-    state.ctx.arc(node.x, node.y, node.radius + (isSelected ? 2.4 : isHovered ? 1.2 : 0), 0, Math.PI * 2);
+    flameNodePath(state.ctx, node.x, node.y, nodeR);
     state.ctx.fill();
     if (isSelected || isHovered || node.isHub) {
       state.ctx.lineWidth = node.isHub ? 2.2 : isSelected ? 2.2 : 1.2;
       state.ctx.strokeStyle = node.isHub ? alpha('#ffffff', 0.92) : isSelected ? '#ffffff' : alpha('#ffffff', 0.76);
       state.ctx.stroke();
+    }
+    if (isSelected) {
+      state.ctx.save();
+      state.ctx.shadowBlur = 14;
+      state.ctx.shadowColor = node.color;
+      state.ctx.beginPath();
+      flameNodePath(state.ctx, node.x, node.y, nodeR * 0.55);
+      state.ctx.fillStyle = alpha(node.color, 0.45);
+      state.ctx.fill();
+      state.ctx.restore();
     }
   });
 
@@ -1206,8 +1269,12 @@ function shuffleMemoryGraph() {
   explodeNodes(5.8);
   clearTimeout(state.shuffleTimer);
   state.shuffleTimer = setTimeout(() => {
+    // Zero velocities so explosion momentum doesn't overpower the spring toward new positions
+    state.recordNodes.forEach((n) => { n.vx = 0; n.vy = 0; });
     commitLayoutMode('shuffle', true);
-    showToast('Nodes shuffled', 'The graph exploded outward and settled into a new shape.', 'success', 2200);
+    const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation'];
+    const kindName = kinds[state.shuffleKindIndex] || 'shape';
+    showToast('Nodes shuffled', `Settled into ${kindName} layout.`, 'success', 2200);
   }, 220);
 }
 
