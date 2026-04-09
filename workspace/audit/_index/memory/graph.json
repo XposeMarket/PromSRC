@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-04-09T20:25:59.651Z",
-  "nodeCount": 1774,
+  "generatedAt": "2026-04-09T23:34:11.271Z",
+  "nodeCount": 1777,
   "edgeCount": 5000,
   "nodes": [
     {
@@ -17738,7 +17738,37 @@
       "sourceType": "chat_session",
       "sourcePath": "chats/sessions/brain_thought_2026-04-09_07-58.json",
       "title": "brain_thought_2026-04-09_07-58.json",
-      "timestamp": "2026-04-09T20:21:45.838Z",
+      "timestamp": "2026-04-09T20:53:06.406Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_8590070701a2a036",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/018b5444-c23f-4f75-a71a-dce70795a3e4.jsonl",
+      "title": "018b5444-c23f-4f75-a71a-dce70795a3e4.jsonl",
+      "timestamp": "2026-04-09T21:40:05.060Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_225bb06704b1e437",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/018b5444-c23f-4f75-a71a-dce70795a3e4.md",
+      "title": "018b5444-c23f-4f75-a71a-dce70795a3e4.md",
+      "timestamp": "2026-04-09T21:40:05.060Z",
+      "day": "2026-04-09",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_175b6f4a68dff882",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/018b5444-c23f-4f75-a71a-dce70795a3e4.json",
+      "title": "018b5444-c23f-4f75-a71a-dce70795a3e4.json",
+      "timestamp": "2026-04-09T21:40:05.060Z",
       "day": "2026-04-09",
       "projectId": null,
       "durability": 0.64
@@ -22212,6 +22242,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_e751f85ef877c2b6",
+      "from": "rec_5edd3ba0f1b13605",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_457852feb4efcf2a",
       "from": "rec_1455c903c98aa790",
       "to": "rec_92955ec521c9265f",
@@ -22257,6 +22294,13 @@
       "id": "rel_f0509a7b9c7ee33f",
       "from": "rec_1455c903c98aa790",
       "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_f5ab0f671a8be768",
+      "from": "rec_1455c903c98aa790",
+      "to": "rec_8590070701a2a036",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22317,6 +22361,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_11be33486da20948",
+      "from": "rec_41583fe025ea7a34",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_d2a1b039b79065f9",
       "from": "rec_e1c515aeffa25e7e",
       "to": "rec_92955ec521c9265f",
@@ -22362,6 +22413,13 @@
       "id": "rel_23e5c3f3c5c2a62e",
       "from": "rec_e1c515aeffa25e7e",
       "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_73f34fba9f32af08",
+      "from": "rec_e1c515aeffa25e7e",
+      "to": "rec_8590070701a2a036",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22415,6 +22473,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_ceffa0e9eb764418",
+      "from": "rec_62d63e1e8c1b3e7b",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_1f062209e297de02",
       "from": "rec_48fe7b87689fdace",
       "to": "rec_92955ec521c9265f",
@@ -22460,6 +22525,13 @@
       "id": "rel_7f40318b41707c8a",
       "from": "rec_48fe7b87689fdace",
       "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_76b72a1c937267e5",
+      "from": "rec_48fe7b87689fdace",
+      "to": "rec_8590070701a2a036",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22520,6 +22592,13 @@
       "score": 0.8414
     },
     {
+      "id": "rel_7e738c0581a85777",
+      "from": "rec_583f7915a6e6b23c",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_544aa75b59c83ad4",
       "from": "rec_1a17a1d4f20a86ef",
       "to": "rec_92955ec521c9265f",
@@ -22569,6 +22648,13 @@
       "score": 0.8414
     },
     {
+      "id": "rel_49485db9f262a9ad",
+      "from": "rec_1a17a1d4f20a86ef",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_1b383ba09a01434b",
       "from": "rec_55bcea73247f76c2",
       "to": "rec_92955ec521c9265f",
@@ -22614,6 +22700,13 @@
       "id": "rel_3e099ab090a24d41",
       "from": "rec_55bcea73247f76c2",
       "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_41357982545b361f",
+      "from": "rec_55bcea73247f76c2",
+      "to": "rec_8590070701a2a036",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22667,6 +22760,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_35701ee0ca64b51f",
+      "from": "rec_9a29fa13b8c8d097",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_ac560aab29ba2bbc",
       "from": "rec_ee9cec6ca049cc07",
       "to": "rec_92955ec521c9265f",
@@ -22712,6 +22812,13 @@
       "id": "rel_780ba520ed813787",
       "from": "rec_ee9cec6ca049cc07",
       "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_5ac639d83c424e63",
+      "from": "rec_ee9cec6ca049cc07",
+      "to": "rec_8590070701a2a036",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -22765,6 +22872,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_84b9a7a089e357d4",
+      "from": "rec_32245a87bd59a9b6",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_31a8e643d943742f",
       "from": "rec_92955ec521c9265f",
       "to": "rec_edbdd94a90e30c72",
@@ -22807,6 +22921,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_28ad15f9a76b120f",
+      "from": "rec_92955ec521c9265f",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_dccff43d7985e228",
       "from": "rec_edbdd94a90e30c72",
       "to": "rec_1766b633c6a5882b",
@@ -22842,6 +22963,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_6fe4a1d56a2e9a62",
+      "from": "rec_edbdd94a90e30c72",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_8f5bfc1a0ce9c43d",
       "from": "rec_1766b633c6a5882b",
       "to": "rec_7c80154d7257bf44",
@@ -22870,6 +22998,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_9e691a1cce5d8b7d",
+      "from": "rec_1766b633c6a5882b",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_3644b6aa98d23a9d",
       "from": "rec_7c80154d7257bf44",
       "to": "rec_da432a5ce4fb4bb8",
@@ -22891,6 +23026,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_a9e09b682582018e",
+      "from": "rec_7c80154d7257bf44",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_b4a3689a129b2c71",
       "from": "rec_da432a5ce4fb4bb8",
       "to": "rec_65940962b5e82976",
@@ -22905,9 +23047,30 @@
       "score": 0.86
     },
     {
+      "id": "rel_ba1e8efc9b6756c6",
+      "from": "rec_da432a5ce4fb4bb8",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
       "id": "rel_7d6633940dd78d85",
       "from": "rec_65940962b5e82976",
       "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_f55b0e1b768b9ef2",
+      "from": "rec_65940962b5e82976",
+      "to": "rec_8590070701a2a036",
+      "type": "shared_terms",
+      "score": 0.86
+    },
+    {
+      "id": "rel_8777abe45895bb86",
+      "from": "rec_ef185bfe64526a18",
+      "to": "rec_8590070701a2a036",
       "type": "shared_terms",
       "score": 0.86
     },
@@ -35439,7 +35602,7 @@
       "from": "rec_01cb04e2d346e2de",
       "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
-      "score": 0.77
+      "score": 0.8057
     },
     {
       "id": "rel_92593335f19a6952",
@@ -35453,7 +35616,7 @@
       "from": "rec_01cb04e2d346e2de",
       "to": "rec_ce5f9941467e0c03",
       "type": "shared_terms",
-      "score": 0.7283
+      "score": 0.86
     },
     {
       "id": "rel_52139f3643064390",
@@ -35477,6 +35640,20 @@
       "score": 0.86
     },
     {
+      "id": "rel_3c3212f8301b34bc",
+      "from": "rec_6f8b10da1a8e3dde",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.7343
+    },
+    {
+      "id": "rel_037aed39c1891544",
+      "from": "rec_6f8b10da1a8e3dde",
+      "to": "rec_ce5f9941467e0c03",
+      "type": "shared_terms",
+      "score": 0.8533
+    },
+    {
       "id": "rel_0f70996644b35e25",
       "from": "rec_13a7a3a7ad067550",
       "to": "rec_856a2ee9abf6eadd",
@@ -35496,6 +35673,20 @@
       "to": "rec_de1bf905b4fb880c",
       "type": "shared_terms",
       "score": 0.86
+    },
+    {
+      "id": "rel_2fff0f9ca5a0d801",
+      "from": "rec_13a7a3a7ad067550",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.7343
+    },
+    {
+      "id": "rel_da9e894018c42b21",
+      "from": "rec_13a7a3a7ad067550",
+      "to": "rec_ce5f9941467e0c03",
+      "type": "shared_terms",
+      "score": 0.8533
     },
     {
       "id": "rel_d18684aafa649baa",
@@ -35600,7 +35791,7 @@
       "from": "rec_f3e5ebd05a6fa90d",
       "to": "rec_ce5f9941467e0c03",
       "type": "shared_terms",
-      "score": 0.86
+      "score": 0.8533
     },
     {
       "id": "rel_1bd5b5abf6866930",
@@ -39712,6 +39903,13 @@
       "score": 0.8117
     },
     {
+      "id": "rel_44d5a23548b6fe5b",
+      "from": "rec_cc408a9f1f612fd4",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.7283
+    },
+    {
       "id": "rel_50e3dc5c2c023dc1",
       "from": "rec_4971067bbd95eabe",
       "to": "rec_da432a5ce4fb4bb8",
@@ -39747,6 +39945,13 @@
       "score": 0.86
     },
     {
+      "id": "rel_c76dd89811efa07e",
+      "from": "rec_117b0530f5be22ec",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.7283
+    },
+    {
       "id": "rel_125076a38c55f415",
       "from": "rec_5accbf8e3b127b26",
       "to": "rec_c0674032836a09e4",
@@ -39757,6 +39962,13 @@
       "id": "rel_d85c184dbe58e5c6",
       "from": "rec_5accbf8e3b127b26",
       "to": "rec_98cf3fdc095d7ac8",
+      "type": "shared_terms",
+      "score": 0.7283
+    },
+    {
+      "id": "rel_b0a6e29556ee759a",
+      "from": "rec_5accbf8e3b127b26",
+      "to": "rec_ef185bfe64526a18",
       "type": "shared_terms",
       "score": 0.7283
     },
@@ -39787,6 +39999,13 @@
       "to": "rec_98cf3fdc095d7ac8",
       "type": "shared_terms",
       "score": 0.77
+    },
+    {
+      "id": "rel_fce9efa8e0b708fa",
+      "from": "rec_98cf3fdc095d7ac8",
+      "to": "rec_ef185bfe64526a18",
+      "type": "shared_terms",
+      "score": 0.7343
     },
     {
       "id": "rel_1dd855d2268390fa",
@@ -52552,195 +52771,6 @@
     {
       "id": "rel_96504902119fd4d6",
       "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_ff4450d8a3c065da",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_ffd332e8207acc34",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_1e81983029c46d19",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_79fd5ba6644666de",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_37eaf92f60f2e579",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_45c4b96586c43491",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_e0c65eec443f34d7",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_cac4a2402570d3c2",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_03580a497f3cd9ab",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_783376e47e1e8e84",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_a06c94464315b0d4",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_88b4f81228b9aa77",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_d1d3ef60cb6c1cb6",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_d1d5a6c691b6ed47",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_39136fa509ea206d",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_4c5695db05f985d9",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_0ef243b3d303a3b0",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_772aaab08bf79846",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_76019e1f9acf6862",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_054d3259c794ecd5",
-      "from": "rec_da71dc1d1d642e1c",
-      "to": "rec_6d3b66555e97f4ec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_9816b8ffdc06c397",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_77fc339b4a1cba4f",
-      "type": "shared_terms",
-      "score": 0.7283
-    },
-    {
-      "id": "rel_d231e575542d1bc6",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_6e2b28cabb5dd944",
-      "type": "shared_terms",
-      "score": 0.7283
-    },
-    {
-      "id": "rel_ee3deda78cff5c59",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_692d350e705513f9",
-      "type": "shared_terms",
-      "score": 0.77
-    },
-    {
-      "id": "rel_75ad80a2fbcde9cc",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_ff4450d8a3c065da",
-      "type": "shared_terms",
-      "score": 0.8533
-    },
-    {
-      "id": "rel_e2e5aaa478ecd00c",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_1e81983029c46d19",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_97feb2fc64e490b0",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_37eaf92f60f2e579",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_2e688fae97495aa3",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_e0c65eec443f34d7",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_034dc0b5ca7bc438",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_03580a497f3cd9ab",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_bba5c36e5596d522",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_a06c94464315b0d4",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_6db33196d6ab9776",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_d1d3ef60cb6c1cb6",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_d05ffa57feb1ca74",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_39136fa509ea206d",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_b6e3e14368d787bf",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_0ef243b3d303a3b0",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_b44379230afbf1e5",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_76019e1f9acf6862",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_4bba8cbde15a5329",
-      "from": "rec_a4f1b48ca274ffff",
-      "to": "rec_6d3b66555e97f4ec",
-      "type": "shared_terms",
-      "score": 0.86
-    },
-    {
-      "id": "rel_11ec5c1372d1e0d9",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_6e2b28cabb5dd944",
-      "type": "shared_terms",
-      "score": 0.7283
-    },
-    {
-      "id": "rel_8ede5c0d6c6e972a",
-      "from": "rec_87d447eb24d68fe2",
-      "to": "rec_692d350e705513f9",
-      "type": "shared_terms",
-      "score": 0.8533
-    },
-    {
-      "id": "rel_0577d845447ebd96",
-      "from": "rec_87d447eb24d68fe2",
       "to": "rec_ff4450d8a3c065da",
       "type": "shared_terms",
       "score": 0.86

@@ -28,9 +28,11 @@ interface AuthSession {
   expiresAt: number;    // unix seconds
   isAdmin: boolean;
   subscriptionActive: boolean;
+  subscriptionCheckedAt?: number;
 }
 
 let _session: AuthSession | null = null;
+const SUBSCRIPTION_REFRESH_TTL_MS = 5 * 60 * 1000;
 
 function sessionFilePath(): string {
   const dataDir = (getConfig() as any).getDataDir?.() ||
@@ -125,6 +127,27 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   }
 }
 
+async function refreshSubscriptionIfNeeded(force: boolean = false): Promise<void> {
+  if (!_session) return;
+  if (_session.isAdmin) {
+    _session.subscriptionActive = true;
+    _session.subscriptionCheckedAt = Date.now();
+    persistSession();
+    return;
+  }
+
+  const lastCheckedAt = Number(_session.subscriptionCheckedAt || 0);
+  if (!force && Date.now() - lastCheckedAt < SUBSCRIPTION_REFRESH_TTL_MS) return;
+
+  _session.subscriptionActive = await checkSubscription(
+    _session.userId,
+    _session.accessToken,
+    _session.isAdmin,
+  );
+  _session.subscriptionCheckedAt = Date.now();
+  persistSession();
+}
+
 // ─── Startup refresh ──────────────────────────────────────────────────────────
 // Called at gateway start to silently refresh an expired persisted session.
 export async function refreshPersistedSession(): Promise<void> {
@@ -137,11 +160,7 @@ export async function refreshPersistedSession(): Promise<void> {
     const refreshed = await refreshAccessToken(_session.refreshToken);
     if (refreshed) {
       _session = { ..._session, ...refreshed };
-      // Re-check subscription in case it changed
-      _session.subscriptionActive = await checkSubscription(
-        _session.userId, _session.accessToken, _session.isAdmin
-      );
-      persistSession();
+      await refreshSubscriptionIfNeeded(true);
     } else {
       // Refresh failed — clear session, user must log in again
       _session = null;
@@ -166,8 +185,7 @@ router.get('/api/account/status', async (_req, res) => {
       const refreshed = await refreshAccessToken(_session.refreshToken);
       if (refreshed) {
         _session = { ..._session, ...refreshed };
-        _session.subscriptionActive = await checkSubscription(_session.userId, _session.accessToken, _session.isAdmin);
-        persistSession();
+        await refreshSubscriptionIfNeeded(true);
       } else {
         _session = null;
         persistSession();
@@ -179,6 +197,8 @@ router.get('/api/account/status', async (_req, res) => {
       return res.json({ authenticated: false });
     }
   }
+
+  await refreshSubscriptionIfNeeded();
 
   res.json({
     authenticated: true,
@@ -220,7 +240,16 @@ router.post('/api/account/login', async (req, res) => {
     const subscriptionActive = await checkSubscription(userId, accessToken, isAdmin);
 
     // 4. Store session
-    _session = { userId, email, accessToken, refreshToken, expiresAt, isAdmin, subscriptionActive };
+    _session = {
+      userId,
+      email,
+      accessToken,
+      refreshToken,
+      expiresAt,
+      isAdmin,
+      subscriptionActive,
+      subscriptionCheckedAt: Date.now(),
+    };
     persistSession();
 
     res.json({
@@ -256,10 +285,7 @@ router.post('/api/account/refresh', async (_req, res) => {
   }
 
   _session = { ..._session, ...refreshed };
-  _session.subscriptionActive = await checkSubscription(
-    _session.userId, _session.accessToken, _session.isAdmin
-  );
-  persistSession();
+  await refreshSubscriptionIfNeeded(true);
 
   res.json({
     authenticated: true,

@@ -2,18 +2,34 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 
+function missingEnv(names: string[]) {
+  return names.filter((name) => !process.env[name]);
+}
+
 export async function POST(request: Request) {
-  if (!process.env.STRIPE_SECRET_KEY) {
+  const missingStripeEnv = missingEnv(["STRIPE_SECRET_KEY"]);
+  if (missingStripeEnv.length > 0) {
     return NextResponse.json(
-      { error: "Stripe is not configured" },
+      { error: `Missing server env: ${missingStripeEnv.join(", ")}` },
+      { status: 500 }
+    );
+  }
+  const missingSupabaseEnv = missingEnv(["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]);
+  if (missingSupabaseEnv.length > 0) {
+    return NextResponse.json(
+      { error: `Missing server env: ${missingSupabaseEnv.join(", ")}` },
       { status: 500 }
     );
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY as string;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY as string;
+
+  const stripe = new Stripe(stripeSecretKey);
   const supabaseAdmin = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
+    supabaseUrl,
+    supabaseServiceRoleKey
   );
 
   const body = await request.text();

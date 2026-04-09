@@ -1,11 +1,13 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { useUser } from "@/lib/auth/useUser";
 import { useSubscription } from "@/lib/auth/useSubscription";
+import { createCheckoutSession, PLANS } from "@/lib/stripe";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 12 },
@@ -79,9 +81,44 @@ function formatDate(iso: string | null) {
 
 export default function DashboardPage() {
   const { user, profile } = useUser();
-  const { subscription, isActive, loading: subLoading } = useSubscription(user?.id);
+  const [checkoutSuccess, setCheckoutSuccess] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const { subscription, isActive, loading: subLoading } = useSubscription(user?.id, refreshKey);
 
   const displayName = profile?.display_name ?? user?.email?.split("@")[0] ?? "there";
+  const renewalLabel = subscription?.cancel_at_period_end ? "Access ends" : "Renews";
+
+  useEffect(() => {
+    setCheckoutSuccess(new URLSearchParams(window.location.search).get("checkout") === "success");
+  }, []);
+
+  useEffect(() => {
+    if (!checkoutSuccess || isActive || !user?.id) return;
+
+    let attempts = 0;
+    const interval = window.setInterval(() => {
+      attempts += 1;
+      setRefreshKey((value) => value + 1);
+      if (attempts >= 8) {
+        window.clearInterval(interval);
+      }
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [checkoutSuccess, isActive, user?.id]);
+
+  async function handleActivatePlan() {
+    setActionError(null);
+    setActionLoading(true);
+    try {
+      await createCheckoutSession(PLANS.pro.priceId, { returnPath: "/dashboard" });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Checkout could not be started.");
+      setActionLoading(false);
+    }
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-8">
@@ -105,6 +142,11 @@ export default function DashboardPage() {
       {/* Subscription status */}
       <motion.div initial="hidden" animate="visible" custom={1} variants={fadeUp}>
         <Card>
+          {actionError && (
+            <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400" role="alert">
+              {actionError}
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className="w-10 h-10 rounded-lg bg-ember/10 flex items-center justify-center">
@@ -127,15 +169,19 @@ export default function DashboardPage() {
                   {subLoading
                     ? "Loading…"
                     : isActive && subscription?.current_period_end
-                      ? `$8 / month · Renews ${formatDate(subscription.current_period_end)}`
-                      : "No active subscription"}
+                      ? `$8 / month · ${renewalLabel} ${formatDate(subscription.current_period_end)}`
+                      : subscription
+                        ? `Subscription status: ${subscription.status}`
+                        : "No active subscription"}
                 </p>
               </div>
             </div>
             {!subLoading && (
               isActive
                 ? <Button variant="secondary" size="sm" href="/billing">Manage plan</Button>
-                : <Button variant="primary" size="sm" href="/pricing">Activate plan</Button>
+                : <Button variant="primary" size="sm" onClick={handleActivatePlan} disabled={actionLoading}>
+                    {actionLoading ? "Redirecting…" : "Activate plan"}
+                  </Button>
             )}
           </div>
         </Card>

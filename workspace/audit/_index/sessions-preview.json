@@ -1,8 +1,15 @@
 [
   {
+    "id": "018b5444-c23f-4f75-a71a-dce70795a3e4",
+    "mtimeMs": 1775770805577.5466,
+    "lastActiveAt": 1775770805060,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
     "id": "brain_thought_2026-04-09_07-58",
-    "mtimeMs": 1775766108180.988,
-    "lastActiveAt": 1775766105838,
+    "mtimeMs": 1775767986918.127,
+    "lastActiveAt": 1775767986406,
     "historyLength": 2,
     "hasSummary": false
   },
@@ -549,13 +556,6 @@
     "id": "cron_job_1773505907481_giaeb_1775452575437",
     "mtimeMs": 1775452580835.9722,
     "lastActiveAt": 1775452578013,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775438172612",
-    "mtimeMs": 1775438174101.367,
-    "lastActiveAt": 1775438173585,
     "historyLength": 0,
     "hasSummary": false
   }

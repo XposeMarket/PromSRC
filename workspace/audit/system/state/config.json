@@ -35,7 +35,7 @@
         "model": "gpt-4o"
       },
       "openai_codex": {
-        "model": "gpt-5.4"
+        "model": "gpt-5.4-mini"
       },
       "anthropic": {
         "model": "claude-haiku-4-5-20251001",
@@ -319,7 +319,7 @@
     "streamMode": "full"
   },
   "agent_model_defaults": {
-    "proposal_executor_high_risk": "openai_codex/gpt-5.3-codex",
+    "proposal_executor_high_risk": "openai_codex/gpt-5.4",
     "proposal_executor_low_risk": "anthropic/claude-haiku-4-5-20251001",
     "manager": "anthropic/claude-haiku-4-5-20251001",
     "background_task": "openai_codex/gpt-5.4-mini",
@@ -327,7 +327,7 @@
     "subagent_orchestrator": "anthropic/claude-haiku-4-5-20251001",
     "subagent_researcher": "anthropic/claude-haiku-4-5-20251001",
     "subagent_analyst": "anthropic/claude-haiku-4-5-20251001",
-    "subagent_builder": "openai_codex/gpt-5.4",
+    "subagent_builder": "openai_codex/gpt-5.3-codex",
     "subagent_operator": "openai_codex/gpt-5.4",
     "subagent_verifier": "openai_codex/gpt-5.4",
     "switch_model_low": "anthropic/claude-haiku-4-5-20251001",

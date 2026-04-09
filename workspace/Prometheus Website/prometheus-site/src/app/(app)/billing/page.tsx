@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -7,7 +8,6 @@ import { Button } from "@/components/ui/Button";
 import { PLANS, createPortalSession, createCheckoutSession } from "@/lib/stripe";
 import { useUser } from "@/lib/auth/useUser";
 import { useSubscription } from "@/lib/auth/useSubscription";
-import { useState } from "react";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 12 },
@@ -25,26 +25,53 @@ function formatDate(iso: string | null) {
 
 export default function BillingPage() {
   const { user, profile, loading: userLoading } = useUser();
-  const { subscription, isActive, loading: subLoading } = useSubscription(user?.id);
+  const [checkoutSuccess, setCheckoutSuccess] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const { subscription, isActive, isVerified, loading: subLoading } = useSubscription(user?.id, refreshKey);
   const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const plan = PLANS.pro;
 
   const loading = userLoading || subLoading;
+  const billingLabel = subscription?.cancel_at_period_end ? "Access ends" : "Next billing date";
+
+  useEffect(() => {
+    setCheckoutSuccess(new URLSearchParams(window.location.search).get("checkout") === "success");
+  }, []);
+
+  useEffect(() => {
+    if (!checkoutSuccess || isActive || !user?.id) return;
+
+    let attempts = 0;
+    const interval = window.setInterval(() => {
+      attempts += 1;
+      setRefreshKey((value) => value + 1);
+      if (attempts >= 8) {
+        window.clearInterval(interval);
+      }
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [checkoutSuccess, isActive, user?.id]);
 
   async function handleManage() {
+    setActionError(null);
     setActionLoading(true);
     try {
       await createPortalSession(profile?.stripe_customer_id ?? undefined);
-    } catch {
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Billing portal could not be opened.");
       setActionLoading(false);
     }
   }
 
   async function handleSubscribe() {
+    setActionError(null);
     setActionLoading(true);
     try {
-      await createCheckoutSession(plan.priceId);
-    } catch {
+      await createCheckoutSession(plan.priceId, { returnPath: "/billing" });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Checkout could not be started.");
       setActionLoading(false);
     }
   }
@@ -59,6 +86,11 @@ export default function BillingPage() {
       {/* Current plan */}
       <motion.div initial="hidden" animate="visible" custom={1} variants={fadeUp}>
         <Card>
+          {actionError && (
+            <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400" role="alert">
+              {actionError}
+            </div>
+          )}
           {loading ? (
             <p className="text-sm text-muted">Loading subscription…</p>
           ) : isActive ? (
@@ -70,13 +102,19 @@ export default function BillingPage() {
                     <Badge variant="green">
                       {subscription?.status === "trialing" ? "Trial" : "Active"}
                     </Badge>
+                    {isVerified && <Badge variant="ember">Verified</Badge>}
                     {subscription?.cancel_at_period_end && (
                       <Badge variant="default">Cancels at period end</Badge>
                     )}
                   </div>
                   <p className="text-sm text-muted">
-                    ${plan.price}/{plan.interval} · Next billing date: {formatDate(subscription?.current_period_end ?? null)}
+                    ${plan.price}/{plan.interval} · {billingLabel}: {formatDate(subscription?.current_period_end ?? null)}
                   </p>
+                  {checkoutSuccess && (
+                    <p className="text-xs text-muted mt-2">
+                      Checkout completed. Verifying subscription with Stripe and Supabase…
+                    </p>
+                  )}
                 </div>
                 <div>
                   <h3 className="text-sm font-medium text-foreground mb-2">Included features</h3>
@@ -109,6 +147,11 @@ export default function BillingPage() {
                 <p className="text-sm text-muted">
                   Subscribe to Prometheus Pro to unlock the full system for ${plan.price}/month.
                 </p>
+                {subscription && (
+                  <p className="text-xs text-muted mt-2">
+                    Latest verified status: {subscription.status}
+                  </p>
+                )}
               </div>
               <Button variant="primary" size="sm" onClick={handleSubscribe} disabled={actionLoading}>
                 {actionLoading ? "Redirecting…" : "Subscribe — $8/mo"}

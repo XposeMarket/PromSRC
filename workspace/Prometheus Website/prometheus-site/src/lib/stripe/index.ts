@@ -30,7 +30,11 @@ export const PLANS = {
   },
 } as const;
 
-export async function createCheckoutSession(priceId: string) {
+type CheckoutOptions = {
+  returnPath?: string;
+};
+
+export async function createCheckoutSession(priceId: string, options: CheckoutOptions = {}) {
   const { data: { session } } = await supabase.auth.getSession();
   const response = await fetch("/api/stripe/checkout", {
     method: "POST",
@@ -38,24 +42,45 @@ export async function createCheckoutSession(priceId: string) {
       "Content-Type": "application/json",
       ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
     },
-    body: JSON.stringify({ priceId }),
+    body: JSON.stringify({
+      priceId,
+      returnPath: options.returnPath || "/dashboard",
+    }),
   });
-  const { url, error } = await response.json();
+
+  const payload = await response.json().catch(() => ({}));
+  const error = typeof payload?.error === "string"
+    ? payload.error
+    : (!response.ok ? "Checkout could not be started." : null);
+
   if (error) throw new Error(error);
-  if (url) window.location.href = url;
+
+  const url = typeof payload?.url === "string" ? payload.url : null;
+  if (!url) throw new Error("Stripe did not return a checkout URL.");
+
+  window.location.href = url;
 }
 
 export async function createPortalSession(customerId?: string) {
   if (!customerId) {
-    // No subscription yet — send to checkout
     return createCheckoutSession(PLANS.pro.priceId);
   }
+
   const response = await fetch("/api/stripe/portal", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ customerId }),
   });
-  const { url, error } = await response.json();
+
+  const payload = await response.json().catch(() => ({}));
+  const error = typeof payload?.error === "string"
+    ? payload.error
+    : (!response.ok ? "Billing portal could not be opened." : null);
+
   if (error) throw new Error(error);
-  if (url) window.location.href = url;
+
+  const url = typeof payload?.url === "string" ? payload.url : null;
+  if (!url) throw new Error("Stripe did not return a billing portal URL.");
+
+  window.location.href = url;
 }
