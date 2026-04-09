@@ -856,30 +856,35 @@
 .memory-page-body {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  position: relative;
+  overflow: hidden;
 }
 
 .memory-graph-panel {
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 16px;
-  gap: 12px;
+  position: relative;
+  height: 100%;
 }
 
 .memory-graph-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
   flex-wrap: wrap;
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  right: 20px;
+  z-index: 6;
+  pointer-events: none;
 }
 
 .memory-search-input {
-  flex: 1;
+  flex: 1 1 520px;
   min-width: 220px;
+  max-width: 720px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.82);
@@ -888,6 +893,7 @@
   font-size: 12px;
   outline: none;
   font-family: 'Manrope', sans-serif;
+  pointer-events: auto;
 }
 
 .memory-search-input:focus {
@@ -902,14 +908,15 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.76);
+  pointer-events: auto;
 }
 
 .memory-graph-stage {
   position: relative;
-  flex: 1;
-  min-height: 420px;
-  border: 1px solid rgba(110, 131, 165, 0.18);
-  border-radius: 20px;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
   background:
     radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.18), transparent 30%),
@@ -974,7 +981,14 @@
 }
 
 .memory-side-panel {
-  border-left: 1px solid var(--line);
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  top: 116px;
+  width: min(340px, calc(100% - 40px));
+  z-index: 7;
+  border: 1px solid var(--line);
+  border-radius: 24px;
   background: rgba(255, 255, 255, 0.52);
   backdrop-filter: blur(10px);
   padding: 16px;
@@ -982,6 +996,9 @@
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-shadow: 0 16px 36px rgba(10, 24, 43, 0.2);
 }
 
 .memory-panel-card {
@@ -993,8 +1010,7 @@
 }
 
 .memory-detail-card {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
 }
@@ -1237,15 +1253,25 @@
   #main-content { padding: 14px; }
   .mission-bar { padding: 10px; }
   .chat-input-area { bottom: 12px; width: calc(100% - 24px); border-radius: 14px; }
-  .memory-page-body {
-    grid-template-columns: 1fr;
-  }
   .memory-side-panel {
-    border-left: 0;
-    border-top: 1px solid var(--line);
+    top: auto;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: auto;
+    max-height: 52%;
+    padding: 12px;
+    border-radius: 18px;
   }
-  .memory-graph-stage {
-    min-height: 360px;
+  .memory-graph-toolbar {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    gap: 8px;
+  }
+  .memory-search-input {
+    flex-basis: 100%;
+    max-width: none;
   }
 }
 /* Automated session indicator in sidebar */
