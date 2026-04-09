@@ -1,18 +1,23 @@
 # Chats Index
 
-Generated: 2026-04-08T22:40:57.231Z
+Generated: 2026-04-09T00:25:48.471Z
 
-- Sessions mirrored: 1303
-- Transcript files: 50
+- Sessions mirrored: 1308
+- Transcript files: 58
 - Compaction artifacts: 2
 
 ## Recent Sessions
+- telegram_1799053599_1775692013579 | messages=5 | lastActive=2026-04-08T23:47:13.812Z | summary=no
+- telegram_1799053599 | messages=64 | lastActive=2026-04-08T23:45:41.498Z | summary=no
+- 49cdb10a-eefa-4501-a486-1f3635d58d0b | messages=3 | lastActive=2026-04-08T23:40:29.711Z | summary=no
+- auto_restart_manual_1775691625198 | messages=1 | lastActive=2026-04-08T23:40:29.679Z | summary=no
+- brain_thought_2026-04-08_13-40 | messages=0 | lastActive=2026-04-08T23:40:22.795Z | summary=no
+- d6ea22ba-265e-4688-a1f8-94353cb8ae18 | messages=1 | lastActive=2026-04-08T23:11:54.322Z | summary=no
 - 03991351-a31f-4f92-9ff8-3bcc515c240c | messages=6 | lastActive=2026-04-08T22:33:35.242Z | summary=no
 - f2df74a9-f1c5-454e-ba43-6a4149c6aa0d | messages=1 | lastActive=2026-04-08T22:29:38.015Z | summary=no
 - 6283415c-b2ca-446c-8e7d-954c46aa7c71 | messages=11 | lastActive=2026-04-08T22:27:27.907Z | summary=no
 - auto_restart_manual_1775687201087 | messages=1 | lastActive=2026-04-08T22:27:27.855Z | summary=no
 - 6d1c1af3-956a-495c-9cf8-63b37e32e23a | messages=18 | lastActive=2026-04-08T21:44:29.710Z | summary=no
-- telegram_1799053599 | messages=60 | lastActive=2026-04-08T21:38:43.203Z | summary=no
 - auto_restart_manual_1775684088755 | messages=1 | lastActive=2026-04-08T21:34:54.248Z | summary=no
 - auto_restart_manual_1775683472592 | messages=1 | lastActive=2026-04-08T21:24:36.116Z | summary=no
 - auto_restart_manual_1775683217412 | messages=1 | lastActive=2026-04-08T21:20:20.760Z | summary=no
@@ -82,8 +87,3 @@ Generated: 2026-04-08T22:40:57.231Z
 - auto_restart_manual_1775365303820 | messages=1 | lastActive=2026-04-05T05:01:45.765Z | summary=no
 - auto_boot_1775362592707 | messages=1 | lastActive=2026-04-05T04:16:35.943Z | summary=no
 - auto_boot_1775362571430 | messages=0 | lastActive=2026-04-05T04:16:11.460Z | summary=no
-- telegram_1799053599_1775341194278 | messages=9 | lastActive=2026-04-05T00:00:37.941Z | summary=no
-- task_180b95f3-0126-42dc-a013-3d3c92fcb981 | messages=0 | lastActive=2026-04-04T23:52:38.115Z | summary=no
-- proposal_prop_1775337325204_2f4730 | messages=4 | lastActive=2026-04-04T23:57:46.393Z | summary=no
-- telegram_1799053599_1775336619713 | messages=23 | lastActive=2026-04-04T22:17:08.230Z | summary=no
-- telegram_1799053599_1775336269051 | messages=2 | lastActive=2026-04-04T20:58:17.248Z | summary=no

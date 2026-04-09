@@ -56,6 +56,7 @@ import {
 } from './desktop-tools';
 import { CronScheduler } from './scheduling/cron-scheduler';
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
+import { BrainRunner, setBrainRunnerInstance } from './brain/brain-runner';
 import {
   getAgentRunHistory, getAgentLastRun, recordAgentRun,
   stopAgentSchedules,
@@ -398,6 +399,14 @@ const heartbeatRunner = new HeartbeatRunner({
 });
 
 setHeartbeatRunnerInstance(heartbeatRunner);
+
+const brainRunner = new BrainRunner({
+  handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter) =>
+    handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter),
+  broadcast: broadcastWS,
+  workspacePath: getConfig().getWorkspacePath(),
+});
+setBrainRunnerInstance(brainRunner);
 {
   const mainWorkspace = getConfig().getWorkspacePath();
   const mainHeartbeatPath = path.join(mainWorkspace, 'HEARTBEAT.md');
@@ -510,6 +519,7 @@ setShutdownHooks({
   stopTelegram: () => telegramChannel.stop(),
   stopCron: () => { cronScheduler.stop(); stopAgentSchedules(); },
   stopHeartbeat: () => heartbeatRunner.stop(),
+  stopBrain: () => brainRunner.stop(),
   closeWebSocket: () => { try { wss.close(); } catch {} },
   closeHttpServer: () => new Promise<void>((resolve) => {
     try {
@@ -543,7 +553,7 @@ server.listen(PORT, HOST, () => {
   // Silently refresh persisted Supabase session so users stay logged in
   refreshPersistedSession().catch(() => {});
   runStartup({
-    HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, telegramChannel,
+    HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
     handleChat, buildTools, runTeamAgentViaChat,
   }).catch((err: any) => console.error('[Gateway] Startup error:', err?.message || err));
 });
@@ -562,6 +572,7 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   try { cronScheduler.stop(); } catch {}
   try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
+  try { brainRunner.stop(); } catch {}
   try { if (wss) wss.close(); } catch {}
   try {
     server.close(() => process.exit(0));

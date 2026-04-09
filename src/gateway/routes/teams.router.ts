@@ -1,6 +1,7 @@
 // src/gateway/routes/teams.router.ts
 // Teams, Schedules, Team Workspace routes
 import { Router } from 'express';
+import { getBrainRunnerInstance } from '../brain/brain-runner';
 import { getConfig, getAgentById } from '../../config/config';
 import { broadcastTeamEvent, addTeamSseClient, removeTeamSseClient } from '../comms/broadcaster';
 import {
@@ -913,18 +914,26 @@ router.get('/api/schedules', (_req, res) => {
   const jobs = _cronScheduler.getJobs();
   res.json({
     success: true,
-    schedules: jobs.map((job: any) => ({
-      id: job.id,
-      name: job.name,
-      prompt: job.prompt,
-      cron: job.cron,
-      run_at: job.run_at,
-      timezone: job.timezone,
-      status: job.status || 'active',
-      next_run: job.nextRun,
-      last_run: job.lastRun,
-      delivery_channel: job.deliveryChannel || 'web',
-    })),
+    schedules: jobs.map((job: any) => {
+      const isEnabled = job.enabled !== false;
+      const isPaused  = job.status === 'paused';
+      return {
+        id: job.id,
+        name: job.name,
+        prompt: job.prompt,
+        cron: job.schedule,
+        run_at: job.runAt,
+        timezone: job.tz,
+        enabled: isEnabled,
+        status: !isEnabled ? 'disabled' : isPaused ? 'paused' : (job.status || 'scheduled'),
+        next_run: job.nextRun,
+        last_run: job.lastRun,
+        last_result: (job.lastResult || '').slice(0, 200),
+        last_duration: job.lastDuration,
+        delivery_channel: job.delivery || 'web',
+        subagent_id: job.subagent_id || '',
+      };
+    }),
   });
 });
 
@@ -1023,10 +1032,16 @@ router.delete('/api/schedules/:id', (req: any, res: any) => {
 });
 
 router.patch('/api/schedules/:id', (req: any, res: any) => {
-  const { status } = req.body;
-  
+  const { status, enabled } = req.body;
   try {
-    const job = _cronScheduler.updateJob(req.params.id, { status });
+    const updates: Record<string, any> = {};
+    if (status   !== undefined) updates.status  = status;
+    if (enabled  !== undefined) {
+      updates.enabled = !!enabled;
+      // When re-enabling, reset status to scheduled so it fires again
+      if (enabled && status === undefined) updates.status = 'scheduled';
+    }
+    const job = _cronScheduler.updateJob(req.params.id, updates);
     res.json({ success: true, job });
   } catch (err: any) {
     res.json({ success: false, error: err.message });
@@ -1041,6 +1056,34 @@ router.post('/api/schedules/:id/run', (req: any, res: any) => {
     res.json({ success: false, error: err.message });
   }
 });
+
+// ─── Brain API ─────────────────────────────────────────────────────────────────
+
+router.get('/api/brain/status', (_req: any, res: any) => {
+  const runner = getBrainRunnerInstance();
+  if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
+  res.json({ success: true, ...runner.getBrainStatus() });
+});
+
+router.patch('/api/brain/config', (req: any, res: any) => {
+  const runner = getBrainRunnerInstance();
+  if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
+  const { thoughtEnabled, dreamEnabled, thoughtModel, dreamModel } = req.body;
+  runner.setConfig({ thoughtEnabled, dreamEnabled, thoughtModel, dreamModel });
+  res.json({ success: true });
+});
+
+router.post('/api/brain/run', (req: any, res: any) => {
+  const runner = getBrainRunnerInstance();
+  if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
+  const type = req.body?.type === 'dream' ? 'dream' : 'thought';
+  runner.runNow(type).catch((err: any) =>
+    console.error(`[BrainRunner] Manual ${type} run error:`, err?.message)
+  );
+  res.json({ success: true, message: `Brain ${type} triggered` });
+});
+
+// ─── Schedule pattern parser ────────────────────────────────────────────────────
 
 router.post('/api/schedules/parse', (req: any, res: any) => {
   const { text, timezone } = req.body;

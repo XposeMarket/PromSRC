@@ -1,0 +1,187 @@
+/**
+ * brain/brain-state.ts
+ *
+ * Persistent state for the Brain system.
+ * Manages two state files in workspace/Brain/state/:
+ *   - latest.json  — cross-session state (last thought time, last dream date, etc.)
+ *   - daily-status.json — resets each day: which thoughts ran, dream status
+ */
+
+import fs from 'fs';
+import path from 'path';
+import { getConfig } from '../../config/config';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface BrainLatestState {
+  /** ISO timestamp of the last thought run */
+  lastThoughtAt: string | null;
+  /** HH-mm label of the last thought window (e.g. "06-00") */
+  lastThoughtWindow: string | null;
+  /** YYYY-MM-DD local date of the last dream run */
+  lastDreamDate: string | null;
+  /** ISO timestamp when the current gateway session started */
+  gatewayStartedAt: string;
+  /** Proposal IDs submitted in the most recent dream (for dedup) */
+  proposalDedupeIds: string[];
+  /** Whether thought runs are enabled (default: true) */
+  thoughtEnabled: boolean;
+  /** Whether dream runs are enabled (default: true) */
+  dreamEnabled: boolean;
+  /** Model override for thought runs — plain model name e.g. "claude-sonnet-4-6" (empty = use primary) */
+  thoughtModel: string;
+  /** Model override for dream runs (empty = use primary) */
+  dreamModel: string;
+}
+
+export interface BrainThoughtEntry {
+  /** HH-mm label of the window start (e.g. "06-00") */
+  window: string;
+  /** Relative path from workspace/Brain/ (e.g. "thoughts/2026-04-08/06-00-thought.md") */
+  file: string;
+  /** ISO timestamp when this thought completed */
+  completedAt: string;
+  /** Unique run ID for this thought */
+  runId: string;
+}
+
+export interface BrainDailyStatus {
+  /** YYYY-MM-DD local date this status covers */
+  date: string;
+  /** All thought runs completed today */
+  thoughts: BrainThoughtEntry[];
+  /** Whether the dream has run today */
+  dreamRan: boolean;
+  /** Relative path of today's dream file, or null */
+  dreamFile: string | null;
+  /** ISO timestamp when today's dream completed, or null */
+  dreamCompletedAt: string | null;
+}
+
+// ─── Paths ────────────────────────────────────────────────────────────────────
+
+export function getBrainDir(): string {
+  return path.join(getConfig().getWorkspacePath(), 'Brain');
+}
+
+export function ensureBrainDirs(): void {
+  const base = getBrainDir();
+  for (const sub of ['thoughts', 'dreams', 'state']) {
+    fs.mkdirSync(path.join(base, sub), { recursive: true });
+  }
+}
+
+// ─── Atomic write helper ──────────────────────────────────────────────────────
+
+function safeWrite(filePath: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmp, filePath);
+}
+
+// ─── Latest state ─────────────────────────────────────────────────────────────
+
+function getLatestStatePath(): string {
+  return path.join(getBrainDir(), 'state', 'latest.json');
+}
+
+function defaultLatestState(): BrainLatestState {
+  return {
+    lastThoughtAt: null,
+    lastThoughtWindow: null,
+    lastDreamDate: null,
+    gatewayStartedAt: new Date().toISOString(),
+    proposalDedupeIds: [],
+    thoughtEnabled: true,
+    dreamEnabled: true,
+    thoughtModel: '',
+    dreamModel: '',
+  };
+}
+
+export function loadLatestState(): BrainLatestState {
+  try {
+    const p = getLatestStatePath();
+    if (!fs.existsSync(p)) return defaultLatestState();
+    const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return { ...defaultLatestState(), ...raw };
+  } catch {
+    return defaultLatestState();
+  }
+}
+
+export function saveLatestState(state: BrainLatestState): void {
+  safeWrite(getLatestStatePath(), state);
+}
+
+export function markGatewayStarted(): void {
+  const state = loadLatestState();
+  state.gatewayStartedAt = new Date().toISOString();
+  saveLatestState(state);
+}
+
+// ─── Daily status ─────────────────────────────────────────────────────────────
+
+function getDailyStatusPath(): string {
+  return path.join(getBrainDir(), 'state', 'daily-status.json');
+}
+
+function defaultDailyStatus(date: string): BrainDailyStatus {
+  return {
+    date,
+    thoughts: [],
+    dreamRan: false,
+    dreamFile: null,
+    dreamCompletedAt: null,
+  };
+}
+
+export function loadDailyStatus(date: string): BrainDailyStatus {
+  try {
+    const p = getDailyStatusPath();
+    if (!fs.existsSync(p)) return defaultDailyStatus(date);
+    const stored = JSON.parse(fs.readFileSync(p, 'utf-8')) as BrainDailyStatus;
+    // Reset automatically on a new calendar day
+    if (stored.date !== date) return defaultDailyStatus(date);
+    return stored;
+  } catch {
+    return defaultDailyStatus(date);
+  }
+}
+
+export function saveDailyStatus(status: BrainDailyStatus): void {
+  safeWrite(getDailyStatusPath(), status);
+}
+
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+/** Returns local date as YYYY-MM-DD */
+export function getLocalDateStr(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Returns HH-mm label for a window start time */
+export function getWindowLabel(d: Date): string {
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}-${m}`;
+}
+
+/** Format a Date as "YYYY-MM-DD HH:MM UTC" */
+export function fmtUtc(d: Date): string {
+  return d.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+}
+
+/** Format a Date as "YYYY-MM-DD HH:MM local" */
+export function fmtLocal(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${y}-${mo}-${day} ${h}:${mi} local`;
+}

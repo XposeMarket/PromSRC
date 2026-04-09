@@ -1323,6 +1323,44 @@
             </select>
           </div>
 
+          <!-- Brain System Models -->
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Brain System</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Models used for autonomous Thought and Dream runs. Leave blank to use the primary model.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F4AD; Brain Thought</div>
+              <select id="brain-thought-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="brainProviderChange('thought')">
+                <option value="">— use primary —</option>
+                <option value="ollama">Ollama (local)</option>
+                <option value="llama_cpp">llama.cpp (local)</option>
+                <option value="lm_studio">LM Studio (local)</option>
+                <option value="openai">OpenAI</option>
+                <option value="openai_codex">OpenAI Codex / ChatGPT</option>
+                <option value="anthropic">Anthropic Claude</option>
+              </select>
+              <select id="brain-thought-model" class="settings-input" style="width:100%">
+                <option value="">— select provider first —</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F319; Brain Dream</div>
+              <select id="brain-dream-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="brainProviderChange('dream')">
+                <option value="">— use primary —</option>
+                <option value="ollama">Ollama (local)</option>
+                <option value="llama_cpp">llama.cpp (local)</option>
+                <option value="lm_studio">LM Studio (local)</option>
+                <option value="openai">OpenAI</option>
+                <option value="openai_codex">OpenAI Codex / ChatGPT</option>
+                <option value="anthropic">Anthropic Claude</option>
+              </select>
+              <select id="brain-dream-model" class="settings-input" style="width:100%">
+                <option value="">— select provider first —</option>
+              </select>
+            </div>
+          </div>
+          <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
+          <button onclick="saveBrainModelConfig()" class="btn" style="width:100%;margin-bottom:12px">Save Brain Models</button>
+
           <div id="amd-status" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
 	          <button onclick="saveAgentModelDefaults()" class="btn" style="width:100%">Save Agent Model Defaults</button>
 	          <div style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>

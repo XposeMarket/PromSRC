@@ -201,6 +201,7 @@ interface ShutdownHooks {
   stopTelegram?: () => void;
   stopCron?: () => void;
   stopHeartbeat?: () => void;
+  stopBrain?: () => void;
   closeHttpServer?: () => Promise<void>;
   closeWebSocket?: () => void;
   flushSessions?: () => void;
@@ -314,6 +315,9 @@ async function shutdownGateway(): Promise<void> {
   }
   try { _shutdownHooks.stopHeartbeat?.(); } catch (e: any) {
     console.warn('[lifecycle] Heartbeat stop error:', e.message);
+  }
+  try { _shutdownHooks.stopBrain?.(); } catch (e: any) {
+    console.warn('[lifecycle] Brain stop error:', e.message);
   }
   try { _shutdownHooks.stopTelegram?.(); } catch (e: any) {
     console.warn('[lifecycle] Telegram stop error:', e.message);

@@ -553,6 +553,7 @@ async function loadModelSettings() {
     // Auto-load model list for list-capable providers
     if (['ollama', 'lm_studio', 'llama_cpp'].includes(prov)) await refreshProviderModels();
     await loadAgentModelDefaults();
+    await loadBrainModelConfig();
     await loadSessionCompactionSettings();
   } catch (e) {
     console.warn('loadModelSettings error:', e);
@@ -2498,8 +2499,81 @@ async function saveAgentModelDefaults() {
   } catch(e) { if(status){status.style.color='var(--err)';status.textContent='✗ '+e.message;} }
 }
 
+// --- Brain System Model Config --------------------------------------------
+
+async function brainProviderChange(type) {
+  const provSel  = document.getElementById(`brain-${type}-prov`);
+  const modelSel = document.getElementById(`brain-${type}-model`);
+  if (!provSel || !modelSel) return;
+  const prov = provSel.value;
+  if (!prov) { modelSel.innerHTML = '<option value="">— use primary model —</option>'; return; }
+  modelSel.innerHTML = '<option value="">Loading…</option>';
+  try {
+    let models = [];
+    if (prov === 'anthropic') {
+      models = ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'];
+    } else if (prov === 'openai') {
+      models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
+      if (!models.length) models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
+    } else if (prov === 'openai_codex') {
+      models = ['gpt-5.3-codex', 'gpt-5.1-codex-mini', 'gpt-4o'];
+    } else {
+      const llm = typeof buildProviderPayload === 'function' ? buildProviderPayload() : {};
+      llm.provider = prov;
+      const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
+      models = (data?.models || []).map(m => typeof m === 'string' ? m : (m.name || String(m)));
+    }
+    if (!models.length) { modelSel.innerHTML = '<option value="">— no models found —</option>'; return; }
+    modelSel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+  } catch (e) {
+    modelSel.innerHTML = '<option value="">— fetch failed —</option>';
+  }
+}
+
+async function loadBrainModelConfig() {
+  try {
+    const data = await api('/api/brain/status');
+    for (const type of ['thought', 'dream']) {
+      const raw = type === 'thought' ? (data?.thoughtModel || '') : (data?.dreamModel || '');
+      const slashIdx = raw.indexOf('/');
+      const prov  = slashIdx > 0 ? raw.slice(0, slashIdx) : '';
+      const model = slashIdx > 0 ? raw.slice(slashIdx + 1) : raw;
+      const provSel  = document.getElementById(`brain-${type}-prov`);
+      const modelSel = document.getElementById(`brain-${type}-model`);
+      if (provSel) provSel.value = prov;
+      if (prov && modelSel) await brainProviderChange(type);
+      if (modelSel && model) {
+        if (!Array.from(modelSel.options).find(o => o.value === model)) {
+          modelSel.innerHTML += `<option value="${model}">${model}</option>`;
+        }
+        modelSel.value = model;
+      }
+    }
+  } catch (e) { console.warn('loadBrainModelConfig error:', e); }
+}
+
+async function saveBrainModelConfig() {
+  const payload = {};
+  for (const type of ['thought', 'dream']) {
+    const prov  = document.getElementById(`brain-${type}-prov`)?.value?.trim()  || '';
+    const model = document.getElementById(`brain-${type}-model`)?.value?.trim() || '';
+    if (type === 'thought') payload.thoughtModel = prov && model ? `${prov}/${model}` : '';
+    else payload.dreamModel = prov && model ? `${prov}/${model}` : '';
+  }
+  const status = document.getElementById('brain-model-status');
+  try {
+    await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(payload) });
+    if (status) { status.style.color = 'var(--ok)'; status.textContent = '✓ Saved'; setTimeout(() => { status.textContent = ''; }, 2500); }
+  } catch (e) {
+    if (status) { status.style.color = 'var(--err)'; status.textContent = '✗ ' + e.message; }
+  }
+}
+
 window.amdProviderChange = amdProviderChange;
 window.loadAgentModelDefaults = loadAgentModelDefaults;
+window.brainProviderChange = brainProviderChange;
+window.loadBrainModelConfig = loadBrainModelConfig;
+window.saveBrainModelConfig = saveBrainModelConfig;
 window.loadAgentHeartbeat = loadAgentHeartbeat;
 window.loadAgentModelOptions = loadAgentModelOptions;
 window.loadAgentRunHistory = loadAgentRunHistory;

@@ -11,3 +11,6 @@ Ran live X posting test on x.com/home and successfully posted: "Test post from P
 
 ### [TASK] 2026-04-08T22:32:55.432Z
 Ran composite x_post_text live on x.com/home with post text: "I love X". Composite succeeded end-to-end: open home, click inline composer textbox @39, fill text, and post submitted successfully.
+
+### [GENERAL] 2026-04-08T23:47:11.592Z
+User sent a saved snippet showing main chat agent plan progress entries 1–25 (file stats, skill list/read, search files, grep source, source stats, read source) and explicitly said not to do anything else — preserve as reference only.

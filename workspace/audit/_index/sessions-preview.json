@@ -1,5 +1,47 @@
 [
   {
+    "id": "telegram_1799053599_1775692013579",
+    "mtimeMs": 1775692034315.6682,
+    "lastActiveAt": 1775692033812,
+    "historyLength": 5,
+    "hasSummary": false
+  },
+  {
+    "id": "telegram_1799053599",
+    "mtimeMs": 1775691942017.7722,
+    "lastActiveAt": 1775691941498,
+    "historyLength": 64,
+    "hasSummary": false
+  },
+  {
+    "id": "49cdb10a-eefa-4501-a486-1f3635d58d0b",
+    "mtimeMs": 1775691630251.6243,
+    "lastActiveAt": 1775691629711,
+    "historyLength": 3,
+    "hasSummary": false
+  },
+  {
+    "id": "auto_restart_manual_1775691625198",
+    "mtimeMs": 1775691630249.6223,
+    "lastActiveAt": 1775691629679,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "brain_thought_2026-04-08_13-40",
+    "mtimeMs": 1775691626047.077,
+    "lastActiveAt": 1775691622795,
+    "historyLength": 0,
+    "hasSummary": false
+  },
+  {
+    "id": "d6ea22ba-265e-4688-a1f8-94353cb8ae18",
+    "mtimeMs": 1775689915370.1436,
+    "lastActiveAt": 1775689914322,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
     "id": "03991351-a31f-4f92-9ff8-3bcc515c240c",
     "mtimeMs": 1775687615747.2942,
     "lastActiveAt": 1775687615242,
@@ -32,13 +74,6 @@
     "mtimeMs": 1775684670340.8652,
     "lastActiveAt": 1775684669710,
     "historyLength": 18,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599",
-    "mtimeMs": 1775684323820.5693,
-    "lastActiveAt": 1775684323203,
-    "historyLength": 60,
     "hasSummary": false
   },
   {
@@ -522,41 +557,6 @@
     "mtimeMs": 1775362572255.609,
     "lastActiveAt": 1775362571460,
     "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599_1775341194278",
-    "mtimeMs": 1775347238449.729,
-    "lastActiveAt": 1775347237941,
-    "historyLength": 9,
-    "hasSummary": false
-  },
-  {
-    "id": "task_180b95f3-0126-42dc-a013-3d3c92fcb981",
-    "mtimeMs": 1775347070957.8533,
-    "lastActiveAt": 1775346758115,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "proposal_prop_1775337325204_2f4730",
-    "mtimeMs": 1775347066900.9944,
-    "lastActiveAt": 1775347066393,
-    "historyLength": 4,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599_1775336619713",
-    "mtimeMs": 1775341028748.5652,
-    "lastActiveAt": 1775341028230,
-    "historyLength": 23,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599_1775336269051",
-    "mtimeMs": 1775336297756.5867,
-    "lastActiveAt": 1775336297248,
-    "historyLength": 2,
     "hasSummary": false
   }
 ]

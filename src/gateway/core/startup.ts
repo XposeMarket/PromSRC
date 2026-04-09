@@ -33,7 +33,7 @@ import {
   getTeamRunHistory,
 } from '../teams/managed-teams';
 import { handleManagerConversation } from '../teams/team-manager-runner';
-import { getWeeklyReviewJobDefinition } from '../scheduling/self-improvement-engine';
+import type { BrainRunner } from '../brain/brain-runner';
 import { setTeamRunAgentFn } from '../teams/team-manager-runner';
 import {
   createTask,
@@ -61,6 +61,7 @@ export interface StartupDeps {
   skillsManager: any;
   cronScheduler: any;
   heartbeatRunner: any;
+  brainRunner: BrainRunner;
   telegramChannel: any;
   handleChat: any;
   buildTools: () => any;
@@ -72,7 +73,7 @@ export interface StartupDeps {
 export async function runStartup(deps: StartupDeps): Promise<void> {
   const {
     HOST, PORT, config, skillsManager,
-    cronScheduler, heartbeatRunner, telegramChannel,
+    cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
     handleChat, buildTools, runTeamAgentViaChat,
   } = deps;
 
@@ -447,24 +448,17 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     console.warn('[TeamCoordinator] Could not wire coordinator deps:', e.message);
   }
 
-  // Auto-register weekly performance review job (idempotent — won't duplicate)
-  try {
-    const weeklyJobDef = getWeeklyReviewJobDefinition();
-    const existingJobs = cronScheduler.getJobs();
-    const weeklyExists = existingJobs.some((j: any) => j.name === weeklyJobDef.name);
-    if (!weeklyExists) {
-      cronScheduler.createJob(weeklyJobDef);
-      console.log('[WeeklyReview] Registered weekly performance review job (fires Sundays at 9am).');
-    } else {
-      console.log('[WeeklyReview] Weekly performance review job already exists — skipping.');
-    }
-  } catch (weeklyErr: any) {
-    console.warn('[WeeklyReview] Could not register weekly review job:', weeklyErr.message);
-  }
-
   // Intelligence pipeline jobs are managed via cron/jobs.json — not hardcoded here.
 
   heartbeatRunner.start();
+
+  // Brain system — continuous self-reflection (thoughts every 6h, dream nightly)
+  try {
+    brainRunner.start();
+    console.log('[BrainRunner] Brain system started.');
+  } catch (brainErr: any) {
+    console.warn('[BrainRunner] Could not start brain runner:', brainErr.message);
+  }
   console.log('[HeartbeatRunner] Started — interval:', heartbeatRunner.getConfig().intervalMinutes, 'min');
 
   telegramChannel.start().then(() => {

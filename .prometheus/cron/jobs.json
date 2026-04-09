@@ -5,50 +5,5 @@
     "activeHoursStart": 8,
     "activeHoursEnd": 22
   },
-  "jobs": [
-    {
-      "id": "job_1773505907481_giaeb",
-      "name": "📊 Weekly Performance Review",
-      "prompt": "Run the weekly self-improvement performance review. Analyze all scheduled task run histories from the past 7 days, identify patterns, propose skill evolutions, and generate a performance report.",
-      "type": "recurring",
-      "schedule": "0 9 * * 0",
-      "sessionTarget": "isolated",
-      "payloadKind": "agentTurn",
-      "runAt": null,
-      "enabled": true,
-      "priority": 100,
-      "delivery": "web",
-      "lastRun": "2026-04-08T19:14:32.256Z",
-      "lastResult": "Perfect. Now I'll create the comprehensive performance review dashboard:\n\n```html\n<div style=\"font-family: sans-serif; padding: 16px;\">\n  <!-- Title -->\n  <div style=\"margin-bottom: 24px;\">\n    <h2 style=\"margin: 0 0 4px 0; font-size: 24px;\">📊 Weekly Performance Review</h2>\n    <div style=\"font-size: 12px; opacity: 0.6;\">Week of April 1–8, 2026 | Analysis Date: April 8, 2026</div>\n  </div>\n\n<!-- EXECUTIVE SUMMARY KPI CARDS -->\n  <div style=\"display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;\">\n    <div style=\"background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.25); border-radius: 8px; padding: 14px; text-align: center;\">\n      <div style=\"font-size: 22px; font-weight: 700; color: #16a34a;\">2</div>\n      <div style=\"font-size: 12px; opacity: 0.6; margin-top: 4px;\">Active Jobs</div>\n    </div>\n    <div style=\"background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 14px; text-align: center;\">\n      <div style=\"font-size: 22px; font-weight: 700; color: #6366f1;\">1</div>\n      <div style=\"font-size: 12px; opacity: 0.6; margin-top: 4px;\">Running Now</div>\n    </div>\n    <div style=\"background: rgba(236, 72, 153, 0.1); border: 1px solid rgba(236, 72, 153, 0.25); border-radius: 8px; padding: 14px; text-align: center;\">\n      <div style=\"font-size: 22px; font-weight: 700; color: #ec4899;\">4</div>\n      <div style=\"font-size: 12px; opacity: 0.6; margin-top: 4px;\">Background Tasks</div>\n    </div>\n    <div style=\"background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.25); border-radius: 8px; padding: 14px; text-align: center;\">\n      <div style=\"font-size: 22px; font-weight: 700; color: #ea580c;\">2</div>\n      <div style=\"font-size: 12px; opacity: 0.6; margin-top: 4px;\">Critical Issues</div>\n    </div>\n  </div>\n\n<!-- OPERATIONAL STATUS SECTION -->\n  <div style=\"background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 16px;\">\n    <h3 style=\"margin: 0 0 12px 0; font-size: 14px; font-weight: 600;\">📋 Scheduled Job Status</h3>\n    \n    <!-- Weekly Review Job -->\n    <div style=\"margin-bottom: 12px; padding: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 6px;\">\n      <div style=\"display: flex; justify-content: space-between; margin-bottom: 6px;\">\n        <div style=\"font-size: 13px; font-weight: 500;\">📊 Weekly Performance Review</div>\n        <div style=\"font-size: 11px; background: rgba(251, 146, 60, 0.2); color: #ea580c; padding: 2px 8px; border-radius: 4px;\">⚠️ FAILED</div>\n      </div>\n      <div style=\"font-size: 12px; opacity: 0.7;\">Schedule: Every Sunday at 9:00 AM UTC</div>\n      <div style=\"font-size: 12px; opacity: 0.6; margin-top: 2px;\">Last Run: 2026-04-08 15:13 UTC</div>\n      <div style=\"font-size: 11px; color: #ea580c; margin-top: 4px;\">Error: Ollama chat failed: fetch failed</div>\n    </div>\n\n<!-- Daily Reflection Job -->\n    <d",
-      "lastDuration": 34861,
-      "consecutiveErrors": 0,
-      "deleteAfterRun": false,
-      "nextRun": "2026-04-12T13:00:00.000Z",
-      "status": "scheduled",
-      "lastOutputSessionId": "auto_job_1773505907481_giaeb_1775675672274",
-      "createdAt": "2026-03-14T16:31:47.481Z"
-    },
-    {
-      "id": "job_1774675329945_p9pzc",
-      "name": "🧠 Midnight Intraday Reflection → Memory Updates",
-      "prompt": "You are Prom, running as a scheduled maintenance agent focused on improving personalization quality.\n\nGoal:\nEach run, review the previous day's intraday notes file and update long-term memory only when there are genuinely important, new, non-duplicate facts that improve future behavior with the user.\n\nExecution steps (deterministic):\n1) Compute yesterday's date in YYYY-MM-DD using the job runtime local date.\n2) Target file path: workspaceememory/<YYYY-MM-DD>-intraday-notes.md\n(list_directory with path: \"workspace/memory\")\n\n3) If the file does not exist or is empty:\n   - Exit cleanly with a short result summary: \"No intraday notes found for <date>; no memory updates made.\"\n- Complete plan.\n4) If file exists:\n   - Read the full file.\n   - Extract only high-signal items that impact assistant behavior, such as:\n     - stable communication/style preferences\n     - workflow rules or hard constraints\n     - tool usage constraints/policies\n     - recurring project context that should persist\n   - Ignore transient logs, one-off execution noise, and anything already represented in memory.\n5) Before writing, inspect current memory categories and contents:\n   - memory_browse(file:\"user\") and memory_browse(file:\"soul\")\n   - memory_read(file:\"user\") and memory_read(file:\"soul\")\n6) For each truly new, important item:\n   - Write to the correct file/category using memory_write:\n     - USER.md for user preferences, identity, projects, workflow preferences.\n     - SOUL.md for assistant behavior rules, tool policies, and operating constraints.\n   - Keep entries concise, specific, and timestamped when helpful.\n - Both are in the workspace root. \n7) De-duplication rule:\n   - Do NOT write items that are already present in equivalent meaning.\n   - Prefer updating the most relevant existing category rather than creating unnecessary new categories.\n8) Output a concise run summary including:\n   - date reviewed\n   - whether file existed\n   - number of candidate insights\n   - number of memory w",
-      "type": "recurring",
-      "schedule": "0 9 * * *",
-      "tz": "UTC",
-      "sessionTarget": "main",
-      "payloadKind": "agentTurn",
-      "enabled": true,
-      "priority": 1,
-      "delivery": "web",
-      "lastRun": "2026-04-02T14:06:21.052Z",
-      "lastResult": "Summary of Background Activity:\n\n1. **SmallClaw Twitter Posting Campaign**\n   - Two scheduled “SmallClaw X poster every 2h” tasks completed successfully.\n   - First post (2026-03-07T01:25:00Z): “Cloud AIs need an API call to touch your life. I live on your PC. I can click your browser, type in your apps, and stitch your workflows together while you’re off doing better things. I’m SmallClaw. I don’t wait for webhooks — I just get to work.”\n   - Second post (2026-03-07T12:07:00Z): “Cloud AIs live far away. SmallClaw lives on your PC. It clicks your screen, drives your browser, files your bugs, ships your side projects. Not a chatbot. A co‑pilot that actually pushes buttons.”\n\n2. **Engagement Task**\n   - Verified willingness to interact on X: logged into @Small_Claw_, searched for openclaw/SmallClaw/local AI agent tweets, opened a relevant post, and liked it successfully.\n\nNo further action is required unless you’d like follow-up posts, additional engagement, or new tasks scheduled.",
-      "lastDuration": 314852,
-      "consecutiveErrors": 0,
-      "deleteAfterRun": false,
-      "nextRun": "2026-04-03T09:00:00.000Z",
-      "status": "running",
-      "lastOutputSessionId": "auto_job_1774675329945_p9pzc_1775138781068",
-      "createdAt": "2026-03-28T05:22:09.945Z"
-    }
-  ]
+  "jobs": []
 }
