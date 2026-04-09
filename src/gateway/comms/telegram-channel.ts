@@ -3531,15 +3531,20 @@ export class TelegramChannel {
         ].filter(Boolean);
         this.enqueueProgressMessage(chatId, lines.join('\n\n'));
       } else if (type === 'progress_state') {
-        const progressMsg = formatTelegramProgressState({
-          actor: 'main_chat',
-          items: Array.isArray(data?.items) ? data.items : [],
-        });
-        if (progressMsg) {
-          const sig = `${data?.source || 'none'}|${JSON.stringify(data?.items || [])}`;
-          if (sig !== lastProgressSignature) {
-            lastProgressSignature = sig;
-            this.enqueueProgressMessage(chatId, progressMsg);
+        // Only stream plan progress when a plan was explicitly declared (source='declared')
+        // or preflight-seeded. Skip auto-inferred tool_sequence plans to avoid noise.
+        const progressSource = String(data?.source || 'none');
+        if (progressSource !== 'tool_sequence') {
+          const progressMsg = formatTelegramProgressState({
+            actor: 'main_chat',
+            items: Array.isArray(data?.items) ? data.items : [],
+          });
+          if (progressMsg) {
+            const sig = `${progressSource}|${JSON.stringify(data?.items || [])}`;
+            if (sig !== lastProgressSignature) {
+              lastProgressSignature = sig;
+              this.enqueueProgressMessage(chatId, progressMsg);
+            }
           }
         }
       }

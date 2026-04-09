@@ -34,7 +34,16 @@
     <button class="mode-btn" id="btn-schedule" onclick="setMode('schedule')">Schedule</button>
     <button class="mode-btn" id="btn-teams" onclick="setMode('teams')" style="position:relative">Teams<span id="teams-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:8px;height:8px;border-radius:50%;background:#e05c5c"></span></button>
     <button class="mode-btn" id="btn-proposals" onclick="setMode('proposals')" style="position:relative">Proposals<span id="proposals-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#e05c5c;color:#fff;font-size:9px;font-weight:700;line-height:16px;text-align:center;padding:0 3px"></span></button>
-    <button class="mode-btn" id="btn-audit" onclick="setMode('audit')">Audit</button>
+    <div class="more-menu" id="more-menu">
+      <button class="mode-btn" id="btn-more" type="button" onclick="toggleMoreMenu(event)" aria-haspopup="true" aria-expanded="false">
+        More
+        <svg class="more-menu-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
+      <div class="more-menu-dropdown" id="more-menu-dropdown">
+        <button class="more-menu-item" type="button" id="btn-audit" onclick="setMode('audit')">Audit</button>
+        <button class="more-menu-item" type="button" id="btn-memory" onclick="setMode('memory')">Memory</button>
+      </div>
+    </div>
   </div>
 
   <div class="status-bar">
@@ -355,6 +364,78 @@
   </div>
   <!-- Pagination -->
   <div id="audit-pagination" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 0;flex-shrink:0;font-size:11px;color:var(--muted)"></div>
+</div>
+
+<div id="memory-view" style="display:none;flex-direction:column;gap:0;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);padding:0;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5;">
+  <div class="memory-page-shell">
+    <div class="memory-page-header">
+      <div>
+        <div class="memory-page-title">Memory Graph</div>
+        <div class="memory-page-subtitle">Audit-indexed knowledge web across sessions, tasks, schedules, teams, projects, and durable memory.</div>
+      </div>
+      <div class="memory-page-actions">
+        <button class="memory-action-btn" type="button" onclick="refreshMemoryGraph(true)">Refresh Index</button>
+      </div>
+    </div>
+    <div class="memory-page-body">
+      <div class="memory-graph-panel">
+        <div class="memory-graph-toolbar">
+          <input id="memory-search-input" class="memory-search-input" type="text" placeholder="Search nodes, summaries, paths..." />
+          <div id="memory-graph-stats" class="memory-graph-stats">Loading graph...</div>
+        </div>
+        <div id="memory-graph-stage" class="memory-graph-stage">
+          <canvas id="memory-graph-canvas"></canvas>
+          <div id="memory-graph-tooltip" class="memory-graph-tooltip" style="display:none"></div>
+          <div id="memory-graph-empty" class="memory-graph-empty">Loading memory graph...</div>
+        </div>
+      </div>
+      <aside class="memory-side-panel">
+        <section class="memory-panel-card">
+          <div class="memory-panel-title">Filters</div>
+          <div class="memory-control-stack">
+            <label class="memory-control">
+              <span>Source Type</span>
+              <select id="memory-type-filter">
+                <option value="">All records</option>
+              </select>
+            </label>
+            <label class="memory-control">
+              <span>Minimum edge weight</span>
+              <input id="memory-edge-weight" type="range" min="0" max="100" step="1" value="12" />
+              <div id="memory-edge-weight-value" class="memory-control-hint">0.12+</div>
+            </label>
+            <label class="memory-control memory-check">
+              <input id="memory-show-labels" type="checkbox" checked />
+              <span>Show labels for important nodes</span>
+            </label>
+          </div>
+        </section>
+        <section class="memory-panel-card">
+          <div class="memory-panel-title">Forces</div>
+          <div class="memory-control-stack">
+            <label class="memory-control">
+              <span>Repulsion</span>
+              <input id="memory-force-repulsion" type="range" min="20" max="220" step="1" value="90" />
+            </label>
+            <label class="memory-control">
+              <span>Link stiffness</span>
+              <input id="memory-force-link" type="range" min="1" max="100" step="1" value="26" />
+            </label>
+            <label class="memory-control">
+              <span>Collision</span>
+              <input id="memory-force-collision" type="range" min="0" max="100" step="1" value="24" />
+            </label>
+          </div>
+        </section>
+        <section class="memory-panel-card memory-detail-card">
+          <div class="memory-panel-title">Node Detail</div>
+          <div id="memory-detail-panel" class="memory-detail-panel">
+            <div class="memory-detail-empty">Select a node to inspect its summary, source, and related records.</div>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
 </div>
 
 <div id="bgtasks-view" style="display:none;flex-direction:column;gap:0;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);padding:16px;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5;">
@@ -3213,6 +3294,7 @@ let _errBackdrop = null;
 <script type="module" src="src/app.js?v=2"></script>
 <script type="module" src="src/pages/ChatPage.js"></script>
 <script type="module" src="src/pages/AuditPage.js"></script>
+<script type="module" src="src/pages/MemoryPage.js"></script>
 <script type="module" src="src/pages/ProposalsPage.js"></script>
 <script type="module" src="src/pages/SchedulePage.js"></script>
 <script type="module" src="src/pages/TasksPage.js"></script>

@@ -137,6 +137,7 @@ import { router as auditLogRouter } from './routes/audit-log.router';
 import { router as connectionsRouter } from './routes/connections.router';
 import { router as canvasRouter, initCanvasRouter } from './routes/canvas.router';
 import { router as projectsRouter } from './routes/projects.router';
+import { router as memoryRouter } from './routes/memory.router';
 import { addCanvasFile, getCanvasContextBlock } from './routes/canvas-state';
 import { getMCPManager } from './mcp-manager';
 import {
@@ -505,6 +506,7 @@ app.use('/', auditLogRouter);
 app.use('/', connectionsRouter);
 app.use('/', canvasRouter);
 app.use('/', projectsRouter);
+app.use('/', memoryRouter);
 app.use('/', accountRouter);
 app.use('/', chatRouter);
 

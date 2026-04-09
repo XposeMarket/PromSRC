@@ -2343,6 +2343,14 @@
     "mtimeMs": 1775691630249.6223,
     "size": 820
   },
+  "D:\\Prometheus\\.prometheus\\sessions\\auto_restart_manual_1775695941818.json": {
+    "mtimeMs": 1775695942408.4768,
+    "size": 635
+  },
+  "D:\\Prometheus\\.prometheus\\sessions\\auto_restart_manual_1775700272643.json": {
+    "mtimeMs": 1775700273622.095,
+    "size": 635
+  },
   "D:\\Prometheus\\.prometheus\\sessions\\b053baa1-69d4-4246-af0a-fe152341babd.json": {
     "mtimeMs": 1774484637474.0127,
     "size": 1214
@@ -5156,8 +5164,8 @@
     "size": 263
   },
   "D:\\Prometheus\\.prometheus\\sessions\\telegram_1799053599.json": {
-    "mtimeMs": 1775691942017.7722,
-    "size": 24413
+    "mtimeMs": 1775700273626.1016,
+    "size": 25057
   },
   "D:\\Prometheus\\.prometheus\\sessions\\telegram_1799053599_1775085466781.json": {
     "mtimeMs": 1775100669187.022,
@@ -6524,7 +6532,7 @@
     "size": 28
   },
   "D:\\Prometheus\\.prometheus\\startup-notifications.json": {
-    "mtimeMs": 1775693530018.0276,
+    "mtimeMs": 1775700274486.2808,
     "size": 25
   },
   "D:\\Prometheus\\workspace\\.prometheus\\boot-md-state.json": {
@@ -6630,6 +6638,18 @@
   "D:\\Prometheus\\workspace\\memory\\2026-04-08-intraday-notes.md": {
     "mtimeMs": 1775692031593.1829,
     "size": 2109
+  },
+  "D:\\Prometheus\\workspace\\USER.md": {
+    "mtimeMs": 1775679747307.6348,
+    "size": 1417
+  },
+  "D:\\Prometheus\\workspace\\SOUL.md": {
+    "mtimeMs": 1775685674108.394,
+    "size": 11230
+  },
+  "D:\\Prometheus\\workspace\\MEMORY.md": {
+    "mtimeMs": 1775695428772.3628,
+    "size": 295
   },
   "D:\\Prometheus\\.prometheus\\audit-log.jsonl": {
     "mtimeMs": 1775692031592.1843,

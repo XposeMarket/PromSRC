@@ -8,6 +8,7 @@ import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
 import { getConfig } from '../config/config';
 import { getActivatedToolCategories } from './session';
+import { searchMemoryIndex } from './memory-index/index';
 
 // ─── Intraday notes processor ────────────────────────────────────────────────────
 // Parses raw intraday file content into capped-length entries for context injection.
@@ -148,12 +149,18 @@ function stripMemoryToolHints(content: string): string {
   return filtered.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function loadFullMemoryProfile(workspacePath: string, filename: 'USER.md' | 'SOUL.md'): string {
+function loadFullMemoryProfile(
+  workspacePath: string,
+  filename: 'USER.md' | 'SOUL.md' | 'MEMORY.md',
+  maxChars?: number,
+): string {
   try {
     const filePath = path.join(workspacePath, filename);
     if (!fs.existsSync(filePath)) return '';
     const content = fs.readFileSync(filePath, 'utf-8').trim();
-    return stripMemoryToolHints(content);
+    const cleaned = stripMemoryToolHints(content);
+    if (typeof maxChars !== 'number' || maxChars <= 0 || cleaned.length <= maxChars) return cleaned;
+    return `${cleaned.slice(0, Math.max(0, maxChars - 16)).trimEnd()}\n...[truncated]`;
   } catch {
     return '';
   }
@@ -185,6 +192,74 @@ export function readDailyMemoryContext(workspacePath: string, maxTokens: number 
     return `\n\n## Recent Memory Notes\n${combined}`;
   } catch {
     return '';
+  }
+}
+
+type MemorySearchRouting = {
+  mode: 'no_search' | 'light_search' | 'deep_search';
+  reason: string;
+};
+
+function routeMemorySearchMode(messageText: string): MemorySearchRouting {
+  const text = String(messageText || '').toLowerCase();
+  if (!text.trim()) return { mode: 'no_search', reason: 'empty_message' };
+
+  const deepCues = [
+    'everything we discussed',
+    'all history',
+    'across sessions',
+    'over time',
+    'timeline',
+    'full context',
+    'what changed',
+    'comprehensive history',
+    'all previous',
+  ];
+  if (deepCues.some((k) => text.includes(k))) return { mode: 'deep_search', reason: 'deep_cue' };
+
+  const lightCues = [
+    'previous',
+    'earlier',
+    'last time',
+    'we talked about',
+    'we decided',
+    'decision',
+    'history',
+    'remember when',
+    'past discussion',
+    'what did we decide',
+    'context from before',
+  ];
+  if (lightCues.some((k) => text.includes(k))) return { mode: 'light_search', reason: 'history_cue' };
+
+  return { mode: 'no_search', reason: 'not_needed' };
+}
+
+function buildRetrievedMemoryContext(workspacePath: string, messageText: string, routing: MemorySearchRouting): string {
+  if (routing.mode === 'no_search') return '';
+  try {
+    const searchMode = routing.mode === 'deep_search' ? 'deep' : 'quick';
+    const limit = routing.mode === 'deep_search' ? 8 : 4;
+    const result = searchMemoryIndex(workspacePath, {
+      query: messageText,
+      mode: searchMode as any,
+      limit,
+    });
+    if (!Array.isArray(result.hits) || result.hits.length === 0) {
+      return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=${routing.reason}\nresults=none`;
+    }
+    const lines = [
+      `[MEMORY_SEARCH_ROUTING]`,
+      `mode=${routing.mode}`,
+      `reason=${routing.reason}`,
+      `results=${result.hits.length}`,
+      `[MEMORY_RETRIEVED]`,
+      ...result.hits.map((h) => `- score=${h.score} | record=${h.recordId} | source=${h.sourceType} | path=${h.sourcePath} | ${h.preview}`),
+      `For deeper evidence, call memory_read_record(record_id).`,
+    ];
+    return lines.join('\n');
+  } catch (err: any) {
+    return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=search_error\nerror=${String(err?.message || err)}`;
   }
 }
 
@@ -231,8 +306,10 @@ export function detectToolCategories(text: string): Set<string> {
 }
 
 // ─── readMemoryCategories ─────────────────────────────────────────────────────────
-export function readMemoryCategories(workspacePath: string, file: 'user' | 'soul'): string[] {
-  const filename = file === 'user' ? 'USER.md' : 'SOUL.md';
+export function readMemoryCategories(workspacePath: string, file: 'user' | 'soul' | 'memory'): string[] {
+  const filename = file === 'user'
+    ? 'USER.md'
+    : (file === 'soul' ? 'SOUL.md' : 'MEMORY.md');
   const filePath = path.join(workspacePath, filename);
   if (!fs.existsSync(filePath)) return [];
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -244,7 +321,7 @@ export function readMemoryCategories(workspacePath: string, file: 'user' | 'soul
 export function readMemorySnippets(workspacePath: string, categories: string[]): string {
   if (categories.length === 0) return '';
   const snippets: string[] = [];
-  for (const file of ['USER.md', 'SOUL.md']) {
+  for (const file of ['USER.md', 'SOUL.md', 'MEMORY.md']) {
     const filePath = path.join(workspacePath, file);
     if (!fs.existsSync(filePath)) continue;
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -300,7 +377,11 @@ instruction_prompt must be FULLY SELF-CONTAINED — write as if briefing a fresh
 
   shell: `SHELL: run_command(command)→stdout/stderr/exit. For terminal tasks (git/npm/python/curl). Use browser_* for websites, desktop_* for UI interaction.`,
 
-  memory: `MEMORY: memory_browse(file)→categories. memory_write(file,category,content)→add/update fact. memory_read(file)→full contents. file="user"|"soul". Browse first to find the right category. Write immediately when you learn something.`,
+  memory: `MEMORY: memory_browse(file)→categories. memory_write(file,category,content)→add/update fact. memory_read(file)→full contents. file="user"|"soul"|"memory". Use user for user profile facts, soul for operating rules, memory for durable long-term context and decisions.
+LONG-TERM RETRIEVAL: memory_search(query, mode?, ...filters)→ranked hits from indexed audit history. memory_read_record(record_id)→full source record. memory_search_project(project_id, query) and memory_search_timeline(query, date_from?, date_to?) for scoped retrieval. memory_get_related(record_id) expands to connected context.
+TRIGGERS: use retrieval when user asks about previous discussions, older decisions, historical project context, what changed over time, or "what did we decide" questions.
+GRAPH/DIAGNOSTICS: memory_graph_snapshot() returns relation graph nodes/edges; memory_index_refresh() forces reindex from workspace/audit.
+SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=project-scoped; timeline=chronological history.`,
 
   integrations: `INTEGRATIONS: mcp_server_manage(action,...)→MCP lifecycle (list/upsert/import/connect/disconnect/delete/list_tools). webhook_manage(action,...)→webhook settings (enabled/token/path). integration_quick_setup(action,...)→one-shot presets (supabase/github/windows/brave/postgres/sqlite/filesystem/memory).`,
 
@@ -441,9 +522,18 @@ export async function buildPersonalityContext(
     return buildLocalModelPersonalityCtx(timeString, userMemory);
   }
 
+  const allowLongTermSearch = executionMode === 'interactive' || executionMode === 'background_agent';
+  const memorySearchRouting = allowLongTermSearch
+    ? routeMemorySearchMode(messageText)
+    : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
+  const retrievedMemoryCtx = allowLongTermSearch
+    ? buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
+    : '';
+
   if (profile === 'switch_model') {
     const user = loadFullMemoryProfile(workspacePath, 'USER.md');
     const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
+    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
     const activatedCatsSwitch = getActivatedToolCategories(sessionId);
     if (extraCats) {
       for (const ec of extraCats) {
@@ -454,6 +544,8 @@ export async function buildPersonalityContext(
     const parts = [
       user ? `[USER]\n${user}` : '',
       soul ? `[SOUL]\n${soul}` : '',
+      memory ? `[MEMORY]\n${memory}` : '',
+      retrievedMemoryCtx,
       buildToolsContext(activatedCatsSwitch),
     ].filter(Boolean);
     const skillCtx = skillsManager.buildTurnContext(messageText);
@@ -467,6 +559,7 @@ export async function buildPersonalityContext(
   if (isAutonomous) {
     const isProposalExecution = executionMode === 'proposal_execution';
     const soul = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'SOUL.md');
+    const memory = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
     // USER.md intentionally excluded from background tasks — user preferences are
     // not relevant to focused task execution and waste token budget.
     // AGENTS.md intentionally excluded from autonomous path — background tasks,
@@ -500,6 +593,7 @@ export async function buildPersonalityContext(
     const toolsBlockAuto = buildToolsContext(activatedCatsAuto);
     const parts = [
       soul ? `[SOUL]\n${soul}` : '',
+      memory ? `[MEMORY]\n${memory}` : '',
       projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
       toolsBlockAuto,
       intradayNotes ? `[TODAY_NOTES]\n${intradayNotes}` : '',
@@ -513,6 +607,7 @@ export async function buildPersonalityContext(
 
   // ── Path A: interactive chat — tiered ─────────────────────────────────────
   const user = loadFullMemoryProfile(workspacePath, 'USER.md');
+  const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
   const today = new Date().toISOString().split('T')[0];
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
   const _skipIntradayInteractive = sessionId.startsWith('proposal_') || executionMode === 'background_agent';
@@ -540,6 +635,8 @@ export async function buildPersonalityContext(
     const parts = [
       user ? `[USER]\n${user}` : '',
       soulT1 ? `[SOUL]\n${soulT1}` : '',
+      memory ? `[MEMORY]\n${memory}` : '',
+      retrievedMemoryCtx,
       projectContextBlockT1 ? `[PROJECT_CONTEXT]\n${projectContextBlockT1}` : '',
       intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
       buildToolsContext(activatedCatsT1),
@@ -582,6 +679,8 @@ export async function buildPersonalityContext(
   const parts = [
     user ? `[USER]\n${user}` : '',
     soul ? `[SOUL]\n${soul}` : '',
+    memory ? `[MEMORY]\n${memory}` : '',
+    retrievedMemoryCtx,
     projectContextBlockT2 ? `[PROJECT_CONTEXT]\n${projectContextBlockT2}` : '',
     intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
     toolsBlock,

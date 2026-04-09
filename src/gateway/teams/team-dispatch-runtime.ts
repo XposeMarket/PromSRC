@@ -535,6 +535,8 @@ export function buildTeamDispatchTask(input: TeamDispatchBuildInput): TeamDispat
     if (fs.existsSync(userFile)) focusedPaths.push(`  - User profile:      ${userFile}`);
     const soulFile = path.join(workspace, 'SOUL.md');
     if (fs.existsSync(soulFile)) focusedPaths.push(`  - Core identity:     ${soulFile}`);
+    const memoryFile = path.join(workspace, 'MEMORY.md');
+    if (fs.existsSync(memoryFile)) focusedPaths.push(`  - Long-term memory:  ${memoryFile}`);
   }
 
   sections.push(

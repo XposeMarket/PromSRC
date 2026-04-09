@@ -112,38 +112,49 @@ function readTodayIntradayNotes(workspacePath: string): string {
   return content.slice(-1500);
 }
 
-function buildHotRestartPrompt(ctx: RestartContext, workspacePath: string): string {
-  const latestMemory = readLatestMemory(workspacePath);
-  const intraday = readTodayIntradayNotes(workspacePath);
-  const affected = (ctx.affectedFiles || []).slice(0, 12).map(f => `- ${f}`).join('\n') || '(none)';
+function buildDeterministicRestartMessage(ctx: RestartContext): string {
+  const lines: string[] = [];
+  const didBuild = ctx.buildOutput !== undefined;
 
-  return [
-    'HOT RESTART CONTEXT:',
-    'Prometheus was just restarted after an internal change.',
-    'Do not call any tools. Write a concise follow-up update to the previous user session.',
-    '',
-    `Reason: ${ctx.reason}`,
-    `Title: ${ctx.title || '(none)'}`,
-    `Summary: ${ctx.summary || '(none)'}`,
-    `Proposal ID: ${ctx.proposalId || '(n/a)'}`,
-    `Repair ID: ${ctx.repairId || '(n/a)'}`,
-    '',
-    'Changed files:',
-    affected,
-    '',
-    `Verification request: ${ctx.testInstructions || '(none provided)'}`,
-    '',
-    `Latest memory (${latestMemory?.filename || 'none'}):`,
-    latestMemory?.content || '(none)',
-    '',
-    'Today intraday notes:',
-    intraday,
-    '',
-    'Reply format:',
-    '1) Confirm restart/build completion status',
-    '2) Mention what changed (high-level)',
-    '3) Ask user what they want verified next',
-  ].join('\n').trim();
+  // Header
+  if (ctx.reason === 'proposal') {
+    lines.push('✅ Proposal deployed — gateway restarted.');
+  } else if (ctx.reason === 'repair') {
+    lines.push('✅ Self-repair applied — gateway restarted.');
+  } else if (ctx.reason === 'self_update') {
+    lines.push('✅ Self-update complete — gateway restarted.');
+  } else if (didBuild) {
+    lines.push('✅ Restart complete (build + restart).');
+  } else {
+    lines.push('✅ Quick restart complete.');
+  }
+
+  if (ctx.title) lines.push(`Action: ${ctx.title}`);
+  if (ctx.summary) lines.push(`Summary: ${ctx.summary}`);
+  if (ctx.proposalId) lines.push(`Proposal ID: ${ctx.proposalId}`);
+  if (ctx.repairId) lines.push(`Repair ID: ${ctx.repairId}`);
+
+  if (didBuild) {
+    lines.push('Build: succeeded');
+  } else {
+    lines.push('Build: not run');
+  }
+
+  const files = ctx.affectedFiles || [];
+  if (files.length > 0) {
+    lines.push(`Files changed (${files.length}):`);
+    for (const f of files.slice(0, 10)) lines.push(`  • ${f}`);
+    if (files.length > 10) lines.push(`  … and ${files.length - 10} more`);
+  } else {
+    lines.push('Files changed: none');
+  }
+
+  if (ctx.testInstructions) {
+    lines.push('');
+    lines.push(`Verify: ${ctx.testInstructions}`);
+  }
+
+  return lines.join('\n').trim();
 }
 
 function buildBootPrompt(taskData: string, memoryData: string, scheduleData: string, intradayNotes: string): string {
@@ -206,117 +217,56 @@ export async function runBootMd(
   if (restartCtx) {
     console.log(`[boot-md] Hot restart detected: ${restartCtx.reason} (${restartCtx.title || 'no title'})`);
     clearRestartContext();
+    const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
+    const finalText = buildDeterministicRestartMessage(restartCtx);
+    console.log(`[boot-md] Hot restart complete: ${finalText.slice(0, 120)}`);
     try {
-      const prompt = buildHotRestartPrompt(restartCtx, workspacePath);
-      const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
-      const result = await handleChat(
-        prompt,
-        sessionMeta.id,
-        (evt, data) => {
-          if (evt === 'tool_call') console.log(`[boot-md] -> ${String(data?.action || 'unknown')}`);
-        },
-      );
-      const finalText = String(result.text || '');
-      console.log(`[boot-md] Hot restart complete: ${finalText.slice(0, 120)}`);
-      try {
-        addMessage(sessionMeta.id, {
+      addMessage(sessionMeta.id, {
+        role: 'assistant',
+        content: finalText,
+        timestamp: Date.now(),
+      });
+      if (restartCtx.previousSessionId && restartCtx.previousSessionId !== sessionMeta.id) {
+        addMessage(restartCtx.previousSessionId, {
           role: 'assistant',
           content: finalText,
           timestamp: Date.now(),
         });
-        if (restartCtx.previousSessionId && restartCtx.previousSessionId !== sessionMeta.id) {
-          addMessage(restartCtx.previousSessionId, {
-            role: 'assistant',
-            content: finalText,
-            timestamp: Date.now(),
-          });
-        }
-      } catch (e: any) {
-        console.warn(`[boot-md] Failed to persist hot restart message: ${e?.message}`);
       }
-      const automatedSession: BootAutomatedSession = {
-        id: sessionMeta.id,
-        title: sessionMeta.title,
-        history: [{ role: 'assistant', content: finalText }],
-        automated: true,
-        unread: true,
-        createdAt: sessionMeta.createdAt,
-        source: sessionMeta.source,
-        previousSessionId: restartCtx.previousSessionId,
-      };
-      queueStartupNotification({
-        sessionId: sessionMeta.id,
-        title: sessionMeta.title,
-        text: finalText,
-        source: sessionMeta.source,
-        automatedSession,
-        previousSessionId: restartCtx.previousSessionId,
-        telegram: {
-          enabled: !!restartCtx.respondToTelegram,
-          chatId: Number(restartCtx.previousTelegramChatId || 0) > 0 ? Number(restartCtx.previousTelegramChatId) : undefined,
-          userId: Number.isFinite(Number(restartCtx.previousTelegramUserId)) ? Number(restartCtx.previousTelegramUserId) : undefined,
-        },
-      });
-      return {
-        status: 'ran',
-        reply: finalText,
-        sessionId: sessionMeta.id,
-        title: sessionMeta.title,
-        source: sessionMeta.source,
-        automatedSession,
-      };
-    } catch (err: any) {
-      const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
-      const finalText = `✅ Hot restart complete — gateway is back online.\n\nI could not generate the enriched restart summary (${String(err?.message || 'unknown error')}).`;
-      console.warn(`[boot-md] Hot restart briefing failed: ${err?.message}. Sending fallback restart confirmation only.`);
-      try {
-        addMessage(sessionMeta.id, {
-          role: 'assistant',
-          content: finalText,
-          timestamp: Date.now(),
-        });
-        if (restartCtx.previousSessionId && restartCtx.previousSessionId !== sessionMeta.id) {
-          addMessage(restartCtx.previousSessionId, {
-            role: 'assistant',
-            content: finalText,
-            timestamp: Date.now(),
-          });
-        }
-      } catch (e: any) {
-        console.warn(`[boot-md] Failed to persist hot restart fallback message: ${e?.message}`);
-      }
-      const automatedSession: BootAutomatedSession = {
-        id: sessionMeta.id,
-        title: sessionMeta.title,
-        history: [{ role: 'assistant', content: finalText }],
-        automated: true,
-        unread: true,
-        createdAt: sessionMeta.createdAt,
-        source: sessionMeta.source,
-        previousSessionId: restartCtx.previousSessionId,
-      };
-      queueStartupNotification({
-        sessionId: sessionMeta.id,
-        title: sessionMeta.title,
-        text: finalText,
-        source: sessionMeta.source,
-        automatedSession,
-        previousSessionId: restartCtx.previousSessionId,
-        telegram: {
-          enabled: !!restartCtx.respondToTelegram,
-          chatId: Number(restartCtx.previousTelegramChatId || 0) > 0 ? Number(restartCtx.previousTelegramChatId) : undefined,
-          userId: Number.isFinite(Number(restartCtx.previousTelegramUserId)) ? Number(restartCtx.previousTelegramUserId) : undefined,
-        },
-      });
-      return {
-        status: 'ran',
-        reply: finalText,
-        sessionId: sessionMeta.id,
-        title: sessionMeta.title,
-        source: sessionMeta.source,
-        automatedSession,
-      };
+    } catch (e: any) {
+      console.warn(`[boot-md] Failed to persist hot restart message: ${e?.message}`);
     }
+    const automatedSession: BootAutomatedSession = {
+      id: sessionMeta.id,
+      title: sessionMeta.title,
+      history: [{ role: 'assistant', content: finalText }],
+      automated: true,
+      unread: true,
+      createdAt: sessionMeta.createdAt,
+      source: sessionMeta.source,
+      previousSessionId: restartCtx.previousSessionId,
+    };
+    queueStartupNotification({
+      sessionId: sessionMeta.id,
+      title: sessionMeta.title,
+      text: finalText,
+      source: sessionMeta.source,
+      automatedSession,
+      previousSessionId: restartCtx.previousSessionId,
+      telegram: {
+        enabled: !!restartCtx.respondToTelegram,
+        chatId: Number(restartCtx.previousTelegramChatId || 0) > 0 ? Number(restartCtx.previousTelegramChatId) : undefined,
+        userId: Number.isFinite(Number(restartCtx.previousTelegramUserId)) ? Number(restartCtx.previousTelegramUserId) : undefined,
+      },
+    });
+    return {
+      status: 'ran',
+      reply: finalText,
+      sessionId: sessionMeta.id,
+      title: sessionMeta.title,
+      source: sessionMeta.source,
+      automatedSession,
+    };
   }
 
   const bootPath = path.join(workspacePath, 'BOOT.md');

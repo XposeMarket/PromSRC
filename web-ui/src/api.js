@@ -66,6 +66,9 @@ export const ENDPOINTS = {
 
   // Audit
   AUDIT_LOG: '/api/audit-log',
+  MEMORY_GRAPH: '/api/memory/graph',
+  memoryRecord: (id) => `/api/memory/record/${encodeURIComponent(id)}`,
+  MEMORY_REFRESH: '/api/memory/refresh',
 
   // Settings
   SETTINGS_PROVIDER: '/api/settings/provider',

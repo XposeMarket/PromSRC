@@ -53,36 +53,36 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
   file_editor: [
     'read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines',
     'find_replace', 'delete_file', 'list_files', 'list_directory', 'mkdir',
-    'run_command', 'write_note', 'memory_browse', 'memory_write', 'memory_read',
+    'run_command', 'write_note', 'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot',
     'task_control', 'grep_files', 'grep_file', 'search_files', 'file_stats', 'source_stats', 'webui_source_stats',
   ],
   // Research worker: web search + read-only file access. No mutations, no browser UI.
   researcher: [
     'web_search', 'web_fetch', 'read_file', 'list_files', 'list_directory',
-    'write_note', 'memory_browse', 'memory_write', 'memory_read', 'task_control',
+    'write_note', 'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'task_control',
   ],
   // Shell-only worker: run commands and read/write files.
   shell_runner: [
     'run_command', 'read_file', 'create_file', 'replace_lines', 'insert_after',
     'delete_lines', 'find_replace', 'delete_file', 'list_files', 'list_directory',
-    'mkdir', 'write_note', 'memory_browse', 'memory_write', 'task_control',
+    'mkdir', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_index_refresh', 'task_control',
   ],
   // Read-only auditor: inspect files and memory, no writes.
   reader_only: [
     'read_file', 'list_files', 'list_directory', 'web_search', 'web_fetch',
-    'memory_browse', 'memory_read', 'task_control', 'source_stats', 'webui_source_stats',
+    'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'task_control', 'source_stats', 'webui_source_stats',
   ],
   // Code writer: full file + shell access, no browser/desktop.
   code_writer: [
     'read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines',
     'find_replace', 'delete_file', 'list_files', 'list_directory', 'mkdir',
     'run_command', 'web_search', 'web_fetch', 'write_note',
-    'memory_browse', 'memory_write', 'memory_read', 'task_control', 'grep_files', 'grep_file', 'search_files', 'file_stats', 'source_stats', 'webui_source_stats',
+    'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'memory_index_refresh', 'task_control', 'grep_files', 'grep_file', 'search_files', 'file_stats', 'source_stats', 'webui_source_stats',
   ],
   // Data analyst: read files + web, no writes or shell mutations.
   analyst: [
     'read_file', 'list_files', 'list_directory', 'web_search', 'web_fetch',
-    'memory_browse', 'memory_write', 'memory_read', 'write_note', 'task_control',
+    'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'write_note', 'task_control',
   ],
   // Browser automation agent: full browser + file access, no desktop.
   web_agent: [
@@ -92,7 +92,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_vision_screenshot', 'browser_vision_click', 'browser_vision_type',
     'browser_send_to_telegram',
     'web_search', 'web_fetch', 'read_file', 'create_file', 'list_files',
-    'list_directory', 'write_note', 'memory_browse', 'memory_write', 'task_control',
+    'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
   // Scraper: browser + write output files.
   scraper: [
@@ -100,7 +100,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_press_key', 'browser_wait', 'browser_scroll', 'browser_close',
     'browser_get_focused_item', 'browser_get_page_text', 'browser_send_to_telegram',
     'web_search', 'web_fetch', 'create_file', 'read_file', 'list_files',
-    'list_directory', 'write_note', 'memory_browse', 'memory_write', 'task_control',
+    'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
 };
 
@@ -226,7 +226,7 @@ class ToolRegistry {
     this.registerSafe(webSearchTool);
     this.registerSafe(webFetchTool);
     // Memory tools are provided by the subagent runtime executor
-    // (memory_browse, memory_write, memory_read over USER.md/SOUL.md).
+    // (memory_browse, memory_write, memory_read over USER.md/SOUL.md/MEMORY.md).
     // Time tool (system clock — no network)
     this.registerSafe(timeNowTool);
     // Skills tools (list/enable/disable/create — executed via subagent-executor, not registry)

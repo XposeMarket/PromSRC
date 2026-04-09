@@ -19,5 +19,5 @@ This directory is a one-way materialized mirror for observability.
 - `connections/` connector state and activity logs
 - `restarts/` restart context snapshots
 - `startup/` startup-notification and boot state snapshots
-- `memory/` memory markdown snapshots
+- `memory/` memory markdown snapshots (intraday + USER.md/SOUL.md/MEMORY.md root snapshots)
 - `system/` selected system config, audit, and logs

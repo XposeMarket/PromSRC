@@ -1,16 +1,30 @@
 [
   {
+    "id": "telegram_1799053599",
+    "mtimeMs": 1775700273626.1016,
+    "lastActiveAt": 1775700272830,
+    "historyLength": 66,
+    "hasSummary": false
+  },
+  {
+    "id": "auto_restart_manual_1775700272643",
+    "mtimeMs": 1775700273622.095,
+    "lastActiveAt": 1775700272785,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "auto_restart_manual_1775695941818",
+    "mtimeMs": 1775695942408.4768,
+    "lastActiveAt": 1775695941894,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
     "id": "telegram_1799053599_1775692013579",
     "mtimeMs": 1775692034315.6682,
     "lastActiveAt": 1775692033812,
     "historyLength": 5,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599",
-    "mtimeMs": 1775691942017.7722,
-    "lastActiveAt": 1775691941498,
-    "historyLength": 64,
     "hasSummary": false
   },
   {
@@ -543,20 +557,6 @@
     "mtimeMs": 1775365306274.88,
     "lastActiveAt": 1775365305765,
     "historyLength": 1,
-    "hasSummary": false
-  },
-  {
-    "id": "auto_boot_1775362592707",
-    "mtimeMs": 1775362596451.3047,
-    "lastActiveAt": 1775362595943,
-    "historyLength": 1,
-    "hasSummary": false
-  },
-  {
-    "id": "auto_boot_1775362571430",
-    "mtimeMs": 1775362572255.609,
-    "lastActiveAt": 1775362571460,
-    "historyLength": 0,
     "hasSummary": false
   }
 ]

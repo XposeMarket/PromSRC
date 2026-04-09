@@ -215,14 +215,15 @@ export function loadWorkspaceBootstrap(
 
   // Full mode: inject all bootstrap files
   const fullFiles = [
-    { label: 'SOUL.md', filename: 'SOUL.md' },
-    { label: 'USER.md', filename: 'USER.md' },
-    { label: 'HEARTBEAT.md', filename: 'HEARTBEAT.md' },
+    { label: 'SOUL.md', filename: 'SOUL.md', maxChars: 3000 },
+    { label: 'USER.md', filename: 'USER.md', maxChars: 3000 },
+    { label: 'MEMORY.md', filename: 'MEMORY.md', maxChars: 1600 },
+    { label: 'HEARTBEAT.md', filename: 'HEARTBEAT.md', maxChars: 3000 },
   ];
 
   for (const f of fullFiles) {
     const content = read(f.filename);
-    if (content) sections.push({ label: f.label, content: clampText(content, 3000) });
+    if (content) sections.push({ label: f.label, content: clampText(content, f.maxChars) });
   }
 
   // Daily memory file

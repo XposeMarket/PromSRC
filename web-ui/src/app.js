@@ -1,5 +1,5 @@
 /**
- * app.js — F1 Scaffold
+ * app.js - F1 Scaffold
  *
  * Application init: theme, boot sequence, setMode page switching.
  *
@@ -16,8 +16,6 @@
  */
 
 import { state, THEME_KEY } from './state.js';
-
-// ─── Theme ─────────────────────────────────────────────────────
 
 export function getInitialTheme() {
   try {
@@ -45,21 +43,41 @@ export function toggleTheme() {
   applyTheme(current === 'dark' ? 'light' : 'dark');
 }
 
-// ─── Page Switching ────────────────────────────────────────────
+const VALID_MODES = ['chat', 'bgtasks', 'schedule', 'teams', 'proposals', 'audit', 'memory'];
 
-const VALID_MODES = ['chat', 'bgtasks', 'schedule', 'teams', 'proposals', 'audit'];
+function setMoreMenuOpen(open) {
+  const menu = document.getElementById('more-menu');
+  const btn = document.getElementById('btn-more');
+  if (!menu || !btn) return;
+  const next = !!open;
+  menu.classList.toggle('open', next);
+  btn.classList.toggle('active', next || state.currentMode === 'audit' || state.currentMode === 'memory');
+  btn.setAttribute('aria-expanded', next ? 'true' : 'false');
+}
+
+export function toggleMoreMenu(event) {
+  if (event) event.stopPropagation();
+  const menu = document.getElementById('more-menu');
+  setMoreMenuOpen(!(menu && menu.classList.contains('open')));
+}
 
 export function setMode(mode) {
   if (!VALID_MODES.includes(mode)) mode = 'chat';
   state.currentMode = mode;
+  window.currentMode = mode;
 
-  // Toggle nav buttons
-  VALID_MODES.forEach(m => {
+  VALID_MODES.forEach((m) => {
     const btn = document.getElementById(`btn-${m}`);
     if (btn) btn.classList.toggle('active', m === mode);
   });
+  const moreBtn = document.getElementById('btn-more');
+  if (moreBtn) moreBtn.classList.toggle('active', mode === 'audit' || mode === 'memory');
+  const auditItem = document.getElementById('btn-audit');
+  if (auditItem) auditItem.classList.toggle('active', mode === 'audit');
+  const memoryItem = document.getElementById('btn-memory');
+  if (memoryItem) memoryItem.classList.toggle('active', mode === 'memory');
+  setMoreMenuOpen(false);
 
-  // Toggle view panels
   const viewMap = {
     chat: 'chat-view',
     bgtasks: 'bgtasks-view',
@@ -67,13 +85,13 @@ export function setMode(mode) {
     teams: 'teams-view',
     proposals: 'proposals-view',
     audit: 'audit-view',
+    memory: 'memory-view',
   };
   Object.entries(viewMap).forEach(([m, viewId]) => {
     const el = document.getElementById(viewId);
     if (el) el.style.display = m === mode ? 'flex' : 'none';
   });
 
-  // Sidebar, main, and right panel only visible in chat mode
   const aside = document.querySelector('aside');
   const mainEl = document.querySelector('main');
   const rightPanel = document.getElementById('right-panel');
@@ -81,9 +99,6 @@ export function setMode(mode) {
   if (mainEl) mainEl.style.display = mode === 'chat' ? '' : 'none';
   if (rightPanel) rightPanel.style.display = mode === 'chat' ? '' : 'none';
 
-  // Load data for the target page
-  // These function references will be available on window.* during migration.
-  // After full extraction, they'll be imported from page modules.
   if (mode === 'bgtasks' && typeof window.refreshBgTasks === 'function') window.refreshBgTasks();
   if (mode === 'schedule' && typeof window.refreshSchedules === 'function') window.refreshSchedules();
   if (mode === 'teams') {
@@ -97,13 +112,22 @@ export function setMode(mode) {
     const badge = document.getElementById('proposals-badge');
     if (badge) badge.style.display = 'none';
   }
-  if (mode === 'audit') {
-    if (typeof window.loadAuditLog === 'function') window.loadAuditLog();
-  }
+  if (mode === 'audit' && typeof window.loadAuditLog === 'function') window.loadAuditLog();
+  if (mode === 'memory' && typeof window.memoryPageActivate === 'function') window.memoryPageActivate();
 }
 
-// ─── Expose on window for HTML onclick handlers ────────────────
 window.setMode = setMode;
 window.toggleTheme = toggleTheme;
 window.applyTheme = applyTheme;
 window.getInitialTheme = getInitialTheme;
+window.toggleMoreMenu = toggleMoreMenu;
+
+document.addEventListener('click', (event) => {
+  const menu = document.getElementById('more-menu');
+  if (!menu) return;
+  if (!menu.contains(event.target)) setMoreMenuOpen(false);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') setMoreMenuOpen(false);
+});

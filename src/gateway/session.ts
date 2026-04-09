@@ -38,7 +38,7 @@ export interface Session {
 const sessions = new Map<string, Session>();
 export const PRE_COMPACTION_MEMORY_FLUSH_PROMPT = [
   'SYSTEM: Context is getting long. Before we continue, do this NOW (be quick):',
-  '1. memory_write — save any new facts, preferences, or decisions from this session',
+  '1. memory_write — save new facts/preferences/rules to the correct file: user, soul, or memory',
   '2. persona_update USER.md — update anything new you learned about your human (name, preferences, quirks, projects)',
   '3. persona_update SOUL.md — if you developed any new operating principles or learned how to work better with this human, add them',
   '4. write_note — log a 1-2 line session note via the write_note tool (intraday notes)',

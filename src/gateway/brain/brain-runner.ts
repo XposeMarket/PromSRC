@@ -536,7 +536,7 @@ B. BEHAVIOR QUALITY
    - Misunderstandings that required clarification
 
 C. MEMORY CANDIDATES
-   Items that might be worthy of USER.md or SOUL.md — the Dream will evaluate before any writes.
+   Items that might be worthy of USER.md, SOUL.md, or MEMORY.md — the Dream will evaluate before any writes.
    Only flag if durable (not one-off noise) and not clearly already captured.
    Format each as a table row with: Item | Target file | Confidence | Evidence
 
@@ -582,7 +582,7 @@ _Generated: ${nowStr}_
 ## C. Memory Candidates
 | Item | Target | Confidence | Evidence |
 |------|--------|-----------|---------|
-| ...  | USER.md or SOUL.md | high/medium/low | [file ref] |
+| ...  | USER.md or SOUL.md or MEMORY.md | high/medium/low | [file ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
@@ -619,6 +619,7 @@ After the file is written: confirm the write succeeded and stop. Do not do anyth
     const proposalsFile  = path.join(brainDir, 'proposals.md');
     const userMdFile     = path.join(this.deps.workspacePath, 'USER.md');
     const soulMdFile     = path.join(this.deps.workspacePath, 'SOUL.md');
+    const memoryMdFile   = path.join(this.deps.workspacePath, 'MEMORY.md');
     const pendingPropsDir = path.join(this.deps.workspacePath, 'proposals', 'pending');
     const auditDir        = path.join(this.deps.workspacePath, 'audit');
 
@@ -645,6 +646,7 @@ Read ALL *-thought.md files found there.
 Also load for context:
   - ${userMdFile}     — current USER.md (needed for memory dedup)
   - ${soulMdFile}     — current SOUL.md (needed for memory dedup)
+  - ${memoryMdFile}   — current MEMORY.md (needed for long-term memory dedup)
   - ${proposalsFile}  — current proposals.md (to see what's already pending/recent)
 
 List ${pendingPropsDir} to see what formal proposals are currently pending approval.
@@ -674,7 +676,7 @@ PHASE 3 — MEMORY UPDATES (direct writes — no proposals)
 
 Memory write gate — ALL 4 conditions must be true before writing:
   1. DURABLE — will this fact still matter weeks from now? (not today's ephemeral detail)
-  2. NEW — not already present in equivalent meaning in USER.md or SOUL.md
+  2. NEW — not already present in equivalent meaning in USER.md, SOUL.md, or MEMORY.md
   3. EVIDENCED — either repeated signal (2+ thoughts) OR single verified strong signal
   4. ACTIONABLE — changes specific future behavior in a concrete way
 
@@ -683,6 +685,8 @@ If 0 items pass all 4 gates: write nothing to memory. This is normal.
 For items that pass:
   - Edit USER.md for: user identity, preferences, projects, communication style, workflow rules
   - Edit SOUL.md for: Prometheus behavior rules, tool policies, operating constraints
+  - Edit MEMORY.md for: durable long-term context, decisions, and historical through-lines
+  - MEMORY.md gate is stricter: only cross-session durable facts/decisions; exclude intraday, ephemeral, and quickly-changing details
   - Be surgical: add or update specific entries; do not rewrite large sections
   - Record each write in the dream output under "Memory Updates Applied"
 
@@ -702,7 +706,7 @@ Available proposal types:
   src_edit           — source code change (cite specific file + describe change precisely)
   config_change      — cron schedule, settings.json, or config file change
   feature_addition   — new capability (include full design in executorPrompt)
-  memory_update      — workspace file change (not USER.md/SOUL.md — those are Phase 3)
+  memory_update      — workspace file change (not USER.md/SOUL.md/MEMORY.md — those are Phase 3)
   task_trigger       — schedule a one-shot investigation task
   general            — anything that doesn't fit above
 
@@ -730,7 +734,7 @@ _Thoughts synthesized: N_
 ## Memory Updates Applied
 | Item | File | Change Made | Evidence |
 |------|------|------------|---------|
-| [item] | USER.md | [what was added/updated] | [thought ref] |
+| [item] | USER.md / SOUL.md / MEMORY.md | [what was added/updated] | [thought ref] |
 
 _(If none: "None — no items passed the memory gate tonight.")_
 

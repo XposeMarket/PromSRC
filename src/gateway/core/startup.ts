@@ -107,7 +107,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       skillsTotal: skillsManager.getAll().length,
       skillsEnabled: skillsManager.getEnabledSkills().length,
       searchStatus: hasSearch,
-      memoryFiles: 'SOUL.md + USER.md',
+      memoryFiles: 'SOUL.md + USER.md + MEMORY.md',
       gpuInfo: gpuDisplay,
       cronJobCount: cronScheduler.getJobs().length,
     });

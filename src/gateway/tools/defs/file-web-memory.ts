@@ -593,12 +593,12 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_write',
-        description: 'Write a fact or update to USER.md or SOUL.md under a specific category section. Creates the category if it does not exist. Use memory_browse first to pick the right category.',
+        description: 'Write a fact or update to USER.md, SOUL.md, or MEMORY.md under a specific category section. Creates the category if it does not exist. Use memory_browse first to pick the right category.',
         parameters: {
           type: 'object',
           required: ['file', 'category', 'content'],
           properties: {
-            file: { type: 'string', description: '"user" for USER.md or "soul" for SOUL.md' },
+            file: { type: 'string', description: '"user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md' },
             category: { type: 'string', description: 'Category section name (e.g. "coding", "communication_style", "projects"). Use existing categories when possible.' },
             content: { type: 'string', description: 'The fact or update to write. Be specific and concise. Example: "Prefers vanilla JS over frameworks"' },
           },
@@ -609,12 +609,12 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_read',
-        description: 'Read the full contents of USER.md or SOUL.md. Use when you need complete context before making changes.',
+        description: 'Read the full contents of USER.md, SOUL.md, or MEMORY.md. Use when you need complete context before making changes.',
         parameters: {
           type: 'object',
           required: ['file'],
           properties: {
-            file: { type: 'string', description: '"user" for USER.md or "soul" for SOUL.md' },
+            file: { type: 'string', description: '"user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md' },
           },
         },
       },
@@ -623,13 +623,120 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_browse',
-        description: 'List the category sections currently in USER.md or SOUL.md. Call this before memory_write to find the right category or decide to create a new one.',
+        description: 'List the category sections currently in USER.md, SOUL.md, or MEMORY.md. Call this before memory_write to find the right category or decide to create a new one.',
         parameters: {
           type: 'object',
           required: ['file'],
           properties: {
-            file: { type: 'string', description: '"user" for USER.md or "soul" for SOUL.md' },
+            file: { type: 'string', description: '"user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md' },
           },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_search',
+        description: 'Search long-term memory indexed from workspace/audit using hybrid ranking (keyword + semantic-lite + recency + durability). Use this when historical context from older sessions/tasks/notes is needed.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'Search query, e.g. "oauth decision history" or "what did we decide about indexing".' },
+            mode: { type: 'string', description: 'Optional search mode: quick, deep, project, or timeline. Default: quick.' },
+            limit: { type: 'number', description: 'Maximum hits to return (default 8, max 50).' },
+            project_id: { type: 'string', description: 'Optional project filter.' },
+            date_from: { type: 'string', description: 'Optional lower date bound, YYYY-MM-DD or ISO timestamp.' },
+            date_to: { type: 'string', description: 'Optional upper date bound, YYYY-MM-DD or ISO timestamp.' },
+            source_types: { type: 'array', items: { type: 'string' }, description: 'Optional source type filters.' },
+            min_durability: { type: 'number', description: 'Optional durability floor from 0..1.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_read_record',
+        description: 'Read a full indexed memory record and its chunks by record_id (retrieved from memory_search). Use this for evidence-grounded follow-up reads.',
+        parameters: {
+          type: 'object',
+          required: ['record_id'],
+          properties: {
+            record_id: { type: 'string', description: 'Record id from memory_search hit.recordId.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_search_project',
+        description: 'Search long-term memory constrained to a project id.',
+        parameters: {
+          type: 'object',
+          required: ['project_id', 'query'],
+          properties: {
+            project_id: { type: 'string', description: 'Project id to search within.' },
+            query: { type: 'string', description: 'Project memory query.' },
+            limit: { type: 'number', description: 'Maximum hits to return (default 10, max 50).' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_search_timeline',
+        description: 'Search long-term memory and return results in chronological order.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'Timeline query.' },
+            date_from: { type: 'string', description: 'Optional lower date bound, YYYY-MM-DD or ISO timestamp.' },
+            date_to: { type: 'string', description: 'Optional upper date bound, YYYY-MM-DD or ISO timestamp.' },
+            limit: { type: 'number', description: 'Maximum hits to return (default 20, max 50).' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_get_related',
+        description: 'Expand from one memory record to related records by project/day/source and lexical similarity.',
+        parameters: {
+          type: 'object',
+          required: ['record_id'],
+          properties: {
+            record_id: { type: 'string', description: 'Record id from memory_search hit.recordId.' },
+            limit: { type: 'number', description: 'Maximum related hits (default 8, max 50).' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_graph_snapshot',
+        description: 'Return graph-ready memory nodes/edges projected from the indexed memory relation layer.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {},
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_index_refresh',
+        description: 'Force-refresh the memory index from workspace/audit immediately. Use for diagnostics or after major archive changes.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {},
         },
       },
     },

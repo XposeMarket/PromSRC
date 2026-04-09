@@ -1,14 +1,16 @@
 # Chats Index
 
-Generated: 2026-04-09T00:25:48.471Z
+Generated: 2026-04-09T02:08:41.242Z
 
-- Sessions mirrored: 1308
-- Transcript files: 58
+- Sessions mirrored: 1310
+- Transcript files: 62
 - Compaction artifacts: 2
 
 ## Recent Sessions
+- telegram_1799053599 | messages=66 | lastActive=2026-04-09T02:04:32.830Z | summary=no
+- auto_restart_manual_1775700272643 | messages=1 | lastActive=2026-04-09T02:04:32.785Z | summary=no
+- auto_restart_manual_1775695941818 | messages=1 | lastActive=2026-04-09T00:52:21.894Z | summary=no
 - telegram_1799053599_1775692013579 | messages=5 | lastActive=2026-04-08T23:47:13.812Z | summary=no
-- telegram_1799053599 | messages=64 | lastActive=2026-04-08T23:45:41.498Z | summary=no
 - 49cdb10a-eefa-4501-a486-1f3635d58d0b | messages=3 | lastActive=2026-04-08T23:40:29.711Z | summary=no
 - auto_restart_manual_1775691625198 | messages=1 | lastActive=2026-04-08T23:40:29.679Z | summary=no
 - brain_thought_2026-04-08_13-40 | messages=0 | lastActive=2026-04-08T23:40:22.795Z | summary=no
@@ -85,5 +87,3 @@ Generated: 2026-04-09T00:25:48.471Z
 - auto_restart_manual_1775367408037 | messages=1 | lastActive=2026-04-05T05:37:02.836Z | summary=no
 - 58eea2df-99fa-4697-b29c-949b0f09ed80 | messages=4 | lastActive=2026-04-05T05:01:45.779Z | summary=no
 - auto_restart_manual_1775365303820 | messages=1 | lastActive=2026-04-05T05:01:45.765Z | summary=no
-- auto_boot_1775362592707 | messages=1 | lastActive=2026-04-05T04:16:35.943Z | summary=no
-- auto_boot_1775362571430 | messages=0 | lastActive=2026-04-05T04:16:11.460Z | summary=no

@@ -693,6 +693,7 @@ async function handleChat(
     'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
     'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
     'write_note',
+    'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
     'task_control',
     'declare_plan', 'complete_plan_step', 'step_complete',
     'request_tool_category',
@@ -720,7 +721,7 @@ async function handleChat(
   const orchestrationSkillEnabled = isOrchestrationSkillEnabled();
   const greetingLikeTurn = isGreetingLikeMessage(message);
   const progressState: {
-    source: 'none' | 'preflight' | 'tool_sequence';
+    source: 'none' | 'preflight' | 'tool_sequence' | 'declared';
     items: RuntimeProgressItem[];
     toolsSeen: string[];
     activeIndex: number;
@@ -851,7 +852,7 @@ async function handleChat(
 
   const seedProgressFromLines = (
     lines: string[],
-    source: 'preflight' | 'tool_sequence',
+    source: 'preflight' | 'tool_sequence' | 'declared',
     opts?: { manualStepAdvance?: boolean },
   ): boolean => {
     const items = buildProgressItems(lines);
@@ -884,7 +885,8 @@ async function handleChat(
   const READ_ONLY_PROGRESS_TOOLS = new Set([
     'list_files', 'list_directory', 'read_file', 'web_search', 'web_fetch',
     'browser_snapshot', 'browser_get_page_text', 'browser_get_focused_item',
-    'memory_browse', 'memory_read', 'skill_list',
+    'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
+    'skill_list',
   ]);
 
   // Keep legacy round-stats for the checklist-guard and continuation-nudge logic
@@ -4137,7 +4139,7 @@ RULES:
         const steps = rawSteps.map((s: any) => String(s || '').trim()).filter(Boolean);
         const plannedSteps = steps.slice(0, 6);
         if (plannedSteps.length >= 2) {
-          seedProgressFromLines(plannedSteps, 'tool_sequence', { manualStepAdvance: true });
+          seedProgressFromLines(plannedSteps, 'declared', { manualStepAdvance: true });
           stepCursor = 0; // reset cursor whenever a fresh plan is declared
           manualPlanSkillScoutRequired = true;
           manualPlanSkillListDone = false;

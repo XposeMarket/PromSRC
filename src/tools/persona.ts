@@ -264,7 +264,7 @@ export function buildMemoryFlushPrompt(): string {
   const today = new Date().toISOString().slice(0, 10);
   return [
     '[SYSTEM: Context window is getting long. Before this session compacts, do the following NOW:]',
-    '1. Use memory_write to persist any new facts, preferences, or decisions learned this session',
+    '1. Use memory_write to persist new facts/preferences/rules to file="user"|"soul"|"memory" as appropriate',
     '2. Use persona_update to update USER.md with anything new you learned about your human',
     '3. Write a brief session note to memory/' + today + '.md using the write tool',
     '4. If you updated SOUL.md, note what changed',

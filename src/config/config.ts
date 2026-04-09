@@ -667,7 +667,7 @@ export function ensureAgentWorkspace(agent: AgentDefinition): string {
       '## Example Tasks',
       '- Check for new trends in [topic] and write a brief to workspace/reports/',
       '- Post a draft to workspace/drafts/ for human review',
-      '- Update USER.md or SOUL.md with anything new learned',
+      '- Update USER.md, SOUL.md, or MEMORY.md with anything new learned',
       '',
       '## Rules',
       '- Always write outputs to files, never just respond in chat',

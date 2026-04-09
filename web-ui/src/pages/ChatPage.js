@@ -405,7 +405,7 @@ function upsertAutomatedSession(as, opts = {}) {
 
 // ---- Mode switching ----
 function setMode(mode) {
-  const validModes = ['chat', 'bgtasks', 'schedule', 'teams', 'proposals', 'audit'];
+  const validModes = ['chat', 'bgtasks', 'schedule', 'teams', 'proposals', 'audit', 'memory'];
   if (!validModes.includes(mode)) mode = 'chat';
   window.currentMode = mode;
 
@@ -414,6 +414,17 @@ function setMode(mode) {
     const btn = document.getElementById(`btn-${m}`);
     if (btn) btn.classList.toggle('active', m === mode);
   });
+  const moreMenu = document.getElementById('more-menu');
+  if (moreMenu) moreMenu.classList.remove('open');
+  const moreBtn = document.getElementById('btn-more');
+  if (moreBtn) {
+    moreBtn.classList.toggle('active', mode === 'audit' || mode === 'memory');
+    moreBtn.setAttribute('aria-expanded', 'false');
+  }
+  const auditItem = document.getElementById('btn-audit');
+  if (auditItem) auditItem.classList.toggle('active', mode === 'audit');
+  const memoryItem = document.getElementById('btn-memory');
+  if (memoryItem) memoryItem.classList.toggle('active', mode === 'memory');
 
   // Toggle view panels
   const viewMap = {
@@ -423,6 +434,7 @@ function setMode(mode) {
     teams: 'teams-view',
     proposals: 'proposals-view',
     audit: 'audit-view',
+    memory: 'memory-view',
   };
   Object.entries(viewMap).forEach(([m, viewId]) => {
     const el = document.getElementById(viewId);
@@ -452,6 +464,7 @@ function setMode(mode) {
     if (badge) badge.style.display = 'none';
   }
   if (mode === 'audit' && typeof window.loadAuditLog === 'function') window.loadAuditLog();
+  if (mode === 'memory' && typeof window.memoryPageActivate === 'function') window.memoryPageActivate();
 }
 
 // ---- Proposals — EXTRACTED to src/pages/ProposalsPage.js (F3b) ----

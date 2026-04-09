@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { refreshMemoryIndexFromAudit } from '../memory-index/index';
 
 type StartAuditMaterializerOpts = {
   workspacePath: string;
@@ -141,6 +142,9 @@ function collectMirrorFiles(configDir: string, workspacePath: string): MirrorFil
   pushFile(path.join(workspacePath, '.prometheus', 'boot-md-state.json'), 'startup/state/boot-md-state.json', 'startup');
 
   pushDir(path.join(workspacePath, 'memory'), 'memory/files', 'memory');
+  pushFile(path.join(workspacePath, 'USER.md'), 'memory/root/USER.md', 'memory');
+  pushFile(path.join(workspacePath, 'SOUL.md'), 'memory/root/SOUL.md', 'memory');
+  pushFile(path.join(workspacePath, 'MEMORY.md'), 'memory/root/MEMORY.md', 'memory');
 
   pushFile(path.join(configDir, 'audit-log.jsonl'), 'system/audit/audit-log.jsonl', 'system');
   pushDir(path.join(configDir, 'logs'), 'system/logs', 'system');
@@ -221,6 +225,7 @@ function buildDirectoryScaffold(auditRoot: string): void {
     'restarts/state',
     'startup/state',
     'memory/files',
+    'memory/root',
     'system/state',
     'system/audit',
     'system/logs',
@@ -251,7 +256,7 @@ function buildAuditReadme(auditRoot: string): void {
     '- `connections/` connector state and activity logs',
     '- `restarts/` restart context snapshots',
     '- `startup/` startup-notification and boot state snapshots',
-    '- `memory/` memory markdown snapshots',
+    '- `memory/` memory markdown snapshots (intraday + USER.md/SOUL.md/MEMORY.md root snapshots)',
     '- `system/` selected system config, audit, and logs',
   ];
   writeText(path.join(auditRoot, 'README.md'), `${lines.join('\n')}\n`);
@@ -471,6 +476,13 @@ function runMaterialization(configDir: string, workspacePath: string): void {
   const mirrorStats = copyMirrors(auditRoot, mirrors, manifestPath);
   _lastRunAt = Date.now();
   writeIndexes(auditRoot, configDir, workspacePath, mirrors, mirrorStats);
+  try {
+    // Keep long-term memory indexing bound to the audit mirror surface.
+    // Process a bounded number of changed files per cycle to avoid long stalls.
+    refreshMemoryIndexFromAudit(workspacePath, { maxChangedFiles: 140, minIntervalMs: 20_000 });
+  } catch (err: any) {
+    console.warn('[AuditMaterializer] Memory index refresh failed:', String(err?.message || err));
+  }
 }
 
 export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {

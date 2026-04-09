@@ -72,6 +72,15 @@ import {
   desktopScroll,
   desktopSendToTelegram,
 } from '../desktop-tools';
+import {
+  refreshMemoryIndexFromAudit,
+  searchMemoryIndex,
+  readMemoryRecord,
+  searchProjectMemory,
+  searchMemoryTimeline,
+  getMemoryGraphSnapshot,
+  getRelatedMemory,
+} from '../memory-index/index';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
 import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress } from '../tasks/task-runner';
 import { saveSiteShortcut } from '../site-shortcuts';
@@ -2360,8 +2369,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       case 'memory_browse': {
-        const mbFile = String(args.file || 'user').toLowerCase().trim();
-        const mbFilename = mbFile === 'soul' ? 'SOUL.md' : 'USER.md';
+        const mbFileRaw = String(args.file || 'user').toLowerCase().trim();
+        const mbFile = mbFileRaw === 'memory' ? 'memory' : (mbFileRaw === 'soul' ? 'soul' : 'user');
+        const mbFilename = mbFile === 'soul' ? 'SOUL.md' : (mbFile === 'memory' ? 'MEMORY.md' : 'USER.md');
         const mbPath = path.join(workspacePath, mbFilename);
         console.log(`[memory_browse] workspacePath: ${workspacePath}`);
         console.log(`[memory_browse] mbPath: ${mbPath}`);
@@ -2395,12 +2405,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       case 'memory_write': {
-        const mwFile = String(args.file || 'user').toLowerCase().trim();
+        const mwFileRaw = String(args.file || 'user').toLowerCase().trim();
+        const mwFile = mwFileRaw === 'memory' ? 'memory' : (mwFileRaw === 'soul' ? 'soul' : 'user');
         const mwCategory = String(args.category || '').trim().toLowerCase().replace(/\s+/g, '_');
         const mwContent = String(args.content || '').trim();
         if (!mwCategory) return { name, args, result: 'memory_write: category is required', error: true };
         if (!mwContent) return { name, args, result: 'memory_write: content is required', error: true };
-        const mwFilename = mwFile === 'soul' ? 'SOUL.md' : 'USER.md';
+        const mwFilename = mwFile === 'soul' ? 'SOUL.md' : (mwFile === 'memory' ? 'MEMORY.md' : 'USER.md');
         let mwPath = path.join(workspacePath, mwFilename);
         if (!fs.existsSync(mwPath)) {
           // Try config workspace as fallback
@@ -2408,7 +2419,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           mwPath = path.join(configWorkspace, mwFilename);
           console.log(`[memory_write] fallback workspace: ${configWorkspace}, path: ${mwPath}`);
         }
-        if (!fs.existsSync(mwPath)) return { name, args, result: `${mwFilename} not found at ${mwPath}`, error: true };
+        if (!fs.existsSync(mwPath)) {
+          const initial = `# ${mwFilename}\n\n---\n`;
+          fs.mkdirSync(path.dirname(mwPath), { recursive: true });
+          fs.writeFileSync(mwPath, initial, 'utf-8');
+        }
         let mwFileContent = fs.readFileSync(mwPath, 'utf-8');
         const mwDate = new Date().toISOString().split('T')[0];
         const mwEntry = `- ${mwContent} [${mwDate}]`;
@@ -2431,8 +2446,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       case 'memory_read': {
-        const mrFile = String(args.file || 'user').toLowerCase().trim();
-        const mrFilename = mrFile === 'soul' ? 'SOUL.md' : 'USER.md';
+        const mrFileRaw = String(args.file || 'user').toLowerCase().trim();
+        const mrFile = mrFileRaw === 'memory' ? 'memory' : (mrFileRaw === 'soul' ? 'soul' : 'user');
+        const mrFilename = mrFile === 'soul' ? 'SOUL.md' : (mrFile === 'memory' ? 'MEMORY.md' : 'USER.md');
         let mrPath = path.join(workspacePath, mrFilename);
         if (!fs.existsSync(mrPath)) {
           // Try config workspace as fallback
@@ -2443,6 +2459,104 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!fs.existsSync(mrPath)) return { name, args, result: `${mrFilename} not found at ${mrPath}`, error: true };
         const mrContent = fs.readFileSync(mrPath, 'utf-8');
         return { name, args, result: mrContent, error: false };
+      }
+
+      case 'memory_search': {
+        try {
+          const query = String(args.query || '').trim();
+          if (!query) return { name, args, result: 'memory_search: query is required', error: true };
+          const modeRaw = String(args.mode || 'quick').trim().toLowerCase();
+          const mode = (modeRaw === 'deep' || modeRaw === 'project' || modeRaw === 'timeline')
+            ? modeRaw
+            : 'quick';
+          const sourceTypes = Array.isArray(args.source_types)
+            ? args.source_types.map((v: any) => String(v || '').trim()).filter(Boolean)
+            : undefined;
+          const out = searchMemoryIndex(workspacePath, {
+            query,
+            mode: mode as any,
+            limit: Number(args.limit || 8),
+            projectId: args.project_id ? String(args.project_id) : undefined,
+            dateFrom: args.date_from ? String(args.date_from) : undefined,
+            dateTo: args.date_to ? String(args.date_to) : undefined,
+            sourceTypes: sourceTypes as any,
+            minDurability: args.min_durability !== undefined ? Number(args.min_durability) : undefined,
+          });
+          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory_search failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'memory_read_record': {
+        try {
+          const recordId = String(args.record_id || '').trim();
+          if (!recordId) return { name, args, result: 'memory_read_record: record_id is required', error: true };
+          const out = readMemoryRecord(workspacePath, recordId);
+          if (!out.record) return { name, args, result: `Record not found: ${recordId}`, error: true };
+          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory_read_record failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'memory_search_project': {
+        try {
+          const projectId = String(args.project_id || '').trim();
+          const query = String(args.query || '').trim();
+          if (!projectId) return { name, args, result: 'memory_search_project: project_id is required', error: true };
+          if (!query) return { name, args, result: 'memory_search_project: query is required', error: true };
+          const out = searchProjectMemory(workspacePath, projectId, query, Number(args.limit || 10));
+          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory_search_project failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'memory_search_timeline': {
+        try {
+          const query = String(args.query || '').trim();
+          if (!query) return { name, args, result: 'memory_search_timeline: query is required', error: true };
+          const out = searchMemoryTimeline(
+            workspacePath,
+            query,
+            args.date_from ? String(args.date_from) : undefined,
+            args.date_to ? String(args.date_to) : undefined,
+            Number(args.limit || 20),
+          );
+          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory_search_timeline failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'memory_get_related': {
+        try {
+          const recordId = String(args.record_id || '').trim();
+          if (!recordId) return { name, args, result: 'memory_get_related: record_id is required', error: true };
+          const related = getRelatedMemory(workspacePath, recordId, Number(args.limit || 8));
+          return { name, args, result: JSON.stringify({ record_id: recordId, hits: related }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory_get_related failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'memory_graph_snapshot': {
+        try {
+          const graph = getMemoryGraphSnapshot(workspacePath);
+          return { name, args, result: JSON.stringify(graph, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory_graph_snapshot failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'memory_index_refresh': {
+        try {
+          const out = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0 });
+          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory_index_refresh failed: ${String(err?.message || err)}`, error: true };
+        }
       }
 
       case 'write_note': {
