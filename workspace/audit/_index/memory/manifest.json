@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-09T05:35:52.046Z",
-  "lastRunAtMs": 1775712952046,
+  "updatedAt": "2026-04-09T16:43:46.739Z",
+  "lastRunAtMs": 1775753026739,
   "files": {
     "chats/transcripts/03991351-a31f-4f92-9ff8-3bcc515c240c.jsonl": {
       "mtimeMs": 1775687615242.2898,
@@ -529,8 +529,8 @@
       ]
     },
     "chats/transcripts/telegram_1799053599.jsonl": {
-      "mtimeMs": 1775700272808.1023,
-      "size": 13100,
+      "mtimeMs": 1775714324058.596,
+      "size": 14028,
       "recordId": "rec_da432a5ce4fb4bb8",
       "chunkIds": [
         "chk_7704377d902a2856",
@@ -545,12 +545,13 @@
         "chk_62343177c977572d",
         "chk_8c66b4596b043d7f",
         "chk_82c57e8f903830f9",
-        "chk_d7ca3cd53b6d777a"
+        "chk_d7ca3cd53b6d777a",
+        "chk_67dd87501a16cf1b"
       ]
     },
     "chats/transcripts/telegram_1799053599.md": {
-      "mtimeMs": 1775700272831.1006,
-      "size": 9293,
+      "mtimeMs": 1775714324058.596,
+      "size": 9864,
       "recordId": "rec_c9314a97ebbd6d27",
       "chunkIds": [
         "chk_d384bcf718fdef7c",
@@ -561,7 +562,8 @@
         "chk_69957cd09a7f2189",
         "chk_2989536f6df9ee7a",
         "chk_48b4c6e65ae96d79",
-        "chk_2c9ce2be374f0caa"
+        "chk_2c9ce2be374f0caa",
+        "chk_8d001a7cf766bb1e"
       ]
     },
     "chats/transcripts/telegram_1799053599_1775681701296.jsonl": {
@@ -11720,8 +11722,8 @@
       ]
     },
     "chats/sessions/telegram_1799053599.json": {
-      "mtimeMs": 1775700273626.1016,
-      "size": 25057,
+      "mtimeMs": 1775714340063.611,
+      "size": 25805,
       "recordId": "rec_8c936c196b76bf21",
       "chunkIds": [
         "chk_3952b0dbd89617aa",
@@ -14814,39 +14816,22 @@
         "chk_001b6af076db9df3"
       ]
     },
-    "memory/root/MEMORY.md": {
-      "mtimeMs": 1775695428772.3628,
-      "size": 295,
-      "recordId": "rec_e88431ad0a1d0036",
-      "chunkIds": [
-        "chk_f340c191431a04db"
-      ]
-    },
     "memory/root/SOUL.md": {
-      "mtimeMs": 1775685674108.394,
-      "size": 11230,
+      "mtimeMs": 1775752382527.7217,
+      "size": 11084,
       "recordId": "rec_106e376c0597ab0e",
       "chunkIds": [
         "chk_18f588759315c225",
         "chk_9c01cb1d250fe58f",
         "chk_4c5595272e41f618",
         "chk_630a008881bbb56f",
-        "chk_1412baf7cbc4c12d",
-        "chk_b6caab643cdeaab1",
-        "chk_1b0856b41bd817e7",
-        "chk_55901153a33e318e",
-        "chk_ff7e000a5a96aa46",
-        "chk_c4c9a3fdde3eab1a",
-        "chk_23d3f33c687ccbcc"
-      ]
-    },
-    "memory/root/USER.md": {
-      "mtimeMs": 1775679747307.6348,
-      "size": 1417,
-      "recordId": "rec_c2efd911653bf659",
-      "chunkIds": [
-        "chk_3ea075be430873b3",
-        "chk_87f2f27eee5dc56a"
+        "chk_6b49b160bd78eb2c",
+        "chk_62ecdddb34d73bff",
+        "chk_ec98ddeacd5d5815",
+        "chk_73e0251ea27ab6b8",
+        "chk_bef5709e5c2f0499",
+        "chk_32ed94bc5bcb2e58",
+        "chk_b4a7257e8e076afa"
       ]
     },
     "memory/files/2026-03-17.md": {
@@ -16349,6 +16334,87 @@
       "recordId": "rec_db46dd94aedaf6d9",
       "chunkIds": [
         "chk_41b8ced871c5c063"
+      ]
+    },
+    "chats/sessions/brain_thought_2026-04-09_19-40.json": {
+      "mtimeMs": 1775713970352.6018,
+      "size": 403,
+      "recordId": "rec_4b4ff031e4ac4068",
+      "chunkIds": [
+        "chk_165a07db462c70db"
+      ]
+    },
+    "chats/transcripts/auto_restart_manual_1775714324035.jsonl": {
+      "mtimeMs": 1775714324055.5972,
+      "size": 396,
+      "recordId": "rec_4810b0cee7cdd3bd",
+      "chunkIds": [
+        "chk_986c53569cea25e6"
+      ]
+    },
+    "chats/transcripts/auto_restart_manual_1775714324035.md": {
+      "mtimeMs": 1775714324055.5972,
+      "size": 265,
+      "recordId": "rec_b863684f8c7ff1ff",
+      "chunkIds": [
+        "chk_93ae4e271a61b71e"
+      ]
+    },
+    "chats/sessions/auto_restart_manual_1775714324035.json": {
+      "mtimeMs": 1775714340061.609,
+      "size": 635,
+      "recordId": "rec_6f4ab2d5e00bcc2d",
+      "chunkIds": [
+        "chk_79f32ea1bfe411fe"
+      ]
+    },
+    "chats/sessions/brain_thought_2026-04-09_01-52.json": {
+      "mtimeMs": 1775735919032.1433,
+      "size": 403,
+      "recordId": "rec_de1bf905b4fb880c",
+      "chunkIds": [
+        "chk_fe5f43713387f5b7"
+      ]
+    },
+    "chats/transcripts/3e44f40b-97cb-452f-b1f7-203da17bead6.jsonl": {
+      "mtimeMs": 1775751331147.5105,
+      "size": 373,
+      "recordId": "rec_1766b633c6a5882b",
+      "chunkIds": [
+        "chk_5950bcc7ca11f38d"
+      ]
+    },
+    "chats/transcripts/3e44f40b-97cb-452f-b1f7-203da17bead6.md": {
+      "mtimeMs": 1775751331148.5125,
+      "size": 117,
+      "recordId": "rec_3cceddc270d383ba",
+      "chunkIds": [
+        "chk_525dc8e791d26ac9"
+      ]
+    },
+    "chats/sessions/3e44f40b-97cb-452f-b1f7-203da17bead6.json": {
+      "mtimeMs": 1775751331663.5137,
+      "size": 532,
+      "recordId": "rec_c18bbc79b3de1afa",
+      "chunkIds": [
+        "chk_20ce9b2ab283fe5c"
+      ]
+    },
+    "memory/root/Memory.md": {
+      "mtimeMs": 1775752382968.7246,
+      "size": 766,
+      "recordId": "rec_549ebf2c67efefdb",
+      "chunkIds": [
+        "chk_c833e68a8bb1e649"
+      ]
+    },
+    "memory/root/User.md": {
+      "mtimeMs": 1775752382641.7222,
+      "size": 1371,
+      "recordId": "rec_8268dd6e67ee7f84",
+      "chunkIds": [
+        "chk_d2bfd8fc0ba98236",
+        "chk_edf13fe274f70809"
       ]
     }
   }

@@ -1073,14 +1073,17 @@ router.patch('/api/brain/config', (req: any, res: any) => {
   res.json({ success: true });
 });
 
-router.post('/api/brain/run', (req: any, res: any) => {
+router.post('/api/brain/run', async (req: any, res: any) => {
   const runner = getBrainRunnerInstance();
   if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
   const type = req.body?.type === 'dream' ? 'dream' : 'thought';
-  runner.runNow(type).catch((err: any) =>
-    console.error(`[BrainRunner] Manual ${type} run error:`, err?.message)
-  );
-  res.json({ success: true, message: `Brain ${type} triggered` });
+  try {
+    await runner.runNow(type);
+    res.json({ success: true, message: `Brain ${type} completed` });
+  } catch (err: any) {
+    console.error(`[BrainRunner] Manual ${type} run error:`, err?.message);
+    res.json({ success: false, error: err?.message || `Brain ${type} failed` });
+  }
 });
 
 // ─── Schedule pattern parser ────────────────────────────────────────────────────

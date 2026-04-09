@@ -16,10 +16,24 @@ import { getConfig } from '../../config/config';
 export interface BrainLatestState {
   /** ISO timestamp of the last thought run */
   lastThoughtAt: string | null;
+  /** ISO timestamp of the last thought attempt (success or fail) */
+  lastThoughtAttemptAt: string | null;
+  /** Last known thought outcome */
+  lastThoughtStatus: 'idle' | 'success' | 'failed';
+  /** Last thought failure error, if any */
+  lastThoughtError: string | null;
   /** HH-mm label of the last thought window (e.g. "06-00") */
   lastThoughtWindow: string | null;
   /** YYYY-MM-DD local date of the last dream run */
   lastDreamDate: string | null;
+  /** ISO timestamp of the last successful dream completion */
+  lastDreamCompletedAt: string | null;
+  /** ISO timestamp of the last dream attempt (success or fail) */
+  lastDreamAttemptAt: string | null;
+  /** Last known dream outcome */
+  lastDreamStatus: 'idle' | 'success' | 'failed';
+  /** Last dream failure error, if any */
+  lastDreamError: string | null;
   /** ISO timestamp when the current gateway session started */
   gatewayStartedAt: string;
   /** Proposal IDs submitted in the most recent dream (for dedup) */
@@ -89,8 +103,15 @@ function getLatestStatePath(): string {
 function defaultLatestState(): BrainLatestState {
   return {
     lastThoughtAt: null,
+    lastThoughtAttemptAt: null,
+    lastThoughtStatus: 'idle',
+    lastThoughtError: null,
     lastThoughtWindow: null,
     lastDreamDate: null,
+    lastDreamCompletedAt: null,
+    lastDreamAttemptAt: null,
+    lastDreamStatus: 'idle',
+    lastDreamError: null,
     gatewayStartedAt: new Date().toISOString(),
     proposalDedupeIds: [],
     thoughtEnabled: true,

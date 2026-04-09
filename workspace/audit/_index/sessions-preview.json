@@ -1,5 +1,40 @@
 [
   {
+    "id": "3e44f40b-97cb-452f-b1f7-203da17bead6",
+    "mtimeMs": 1775751331663.5137,
+    "lastActiveAt": 1775751331147,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "brain_thought_2026-04-09_01-52",
+    "mtimeMs": 1775735919032.1433,
+    "lastActiveAt": 1775735918256,
+    "historyLength": 0,
+    "hasSummary": false
+  },
+  {
+    "id": "telegram_1799053599",
+    "mtimeMs": 1775714340063.611,
+    "lastActiveAt": 1775714324059,
+    "historyLength": 69,
+    "hasSummary": false
+  },
+  {
+    "id": "auto_restart_manual_1775714324035",
+    "mtimeMs": 1775714340061.609,
+    "lastActiveAt": 1775714324056,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "brain_thought_2026-04-09_19-40",
+    "mtimeMs": 1775713970352.6018,
+    "lastActiveAt": 1775713969432,
+    "historyLength": 0,
+    "hasSummary": false
+  },
+  {
     "id": "fc58e992-66e8-4386-ab57-6c80019e58bb",
     "mtimeMs": 1775709552171.5178,
     "lastActiveAt": 1775709551660,
@@ -25,13 +60,6 @@
     "mtimeMs": 1775705708377.4219,
     "lastActiveAt": 1775705682246,
     "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "telegram_1799053599",
-    "mtimeMs": 1775700273626.1016,
-    "lastActiveAt": 1775700272830,
-    "historyLength": 66,
     "hasSummary": false
   },
   {
@@ -528,34 +556,6 @@
     "id": "cron_job_1773505907481_giaeb_1775394205238",
     "mtimeMs": 1775394206645.3938,
     "lastActiveAt": 1775394206130,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775394075132",
-    "mtimeMs": 1775394076320.4187,
-    "lastActiveAt": 1775394075807,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1773505907481_giaeb_1775394005199",
-    "mtimeMs": 1775394006645.7695,
-    "lastActiveAt": 1775394006143,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "proposal_prop_1775368084843_2d8974",
-    "mtimeMs": 1775368199406.985,
-    "lastActiveAt": 1775368198890,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "task_c9ecd394-5341-4bbe-b7ce-d31aee00c462",
-    "mtimeMs": 1775368179713.4485,
-    "lastActiveAt": 1775368106750,
     "historyLength": 0,
     "hasSummary": false
   }

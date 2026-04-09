@@ -795,7 +795,6 @@ function stepSimulation() {
   const draggingNode = state.dragState?.type === 'node';
   const organizeMode = state.controls.organizeByType;
   const heat = draggingNode ? 1 : state.simulationHeat;
-  const draggedFollowers = draggingNode ? (state.dragState.followers || new Map()) : null;
 
   if (!draggingNode && heat < 0.018) {
     let changed = false;
@@ -857,7 +856,6 @@ function stepSimulation() {
   const repulsionBase = Number(state.controls.repulsion || 90) * (organizeMode ? 0.62 : 1) * (0.56 + heat * 0.44);
   const collisionStrength = Number(state.controls.collision || 24) / 100;
   visibleNodes.forEach((node) => {
-    if (draggingNode && draggedFollowers?.has(node.id)) return;
     if (node.sleeping && !draggingNode) return;
     const gx = Math.floor(node.x / cellSize);
     const gy = Math.floor(node.y / cellSize);
@@ -867,7 +865,6 @@ function stepSimulation() {
         if (!list) continue;
         list.forEach((other) => {
           if (other.id === node.id || other.id < node.id) return;
-          if (draggingNode && (draggedFollowers?.has(node.id) || draggedFollowers?.has(other.id))) return;
           const dx = other.x - node.x;
           const dy = other.y - node.y;
           const distSq = dx * dx + dy * dy + 0.01;
@@ -898,7 +895,6 @@ function stepSimulation() {
     const source = state.nodeById.get(edge.source);
     const target = state.nodeById.get(edge.target);
     if (!source || !target) return;
-    if (draggingNode && (draggedFollowers?.has(source.id) || draggedFollowers?.has(target.id))) return;
     const dx = target.x - source.x;
     const dy = target.y - source.y;
     const dist = Math.hypot(dx, dy) || 1;
@@ -918,9 +914,9 @@ function stepSimulation() {
       if (!node || !node.visible) return;
       const desiredX = state.dragState.worldX + offset.x;
       const desiredY = state.dragState.worldY + offset.y;
-      node.x += (desiredX - node.x) * 0.28;
-      node.y += (desiredY - node.y) * 0.28;
-      stopNode(node);
+      node.vx += (desiredX - node.x) * 0.055;
+      node.vy += (desiredY - node.y) * 0.055;
+      node.sleeping = false;
     });
 
     visibleNodes.forEach((node) => {
@@ -1171,7 +1167,6 @@ function handlePointerUp() {
       node.baseY = node.y;
       stopNode(node);
     });
-    resolveClusterOverlap(followers.keys());
     followers.forEach((offset, nodeId) => {
       const node = state.recordNodeById.get(nodeId);
       if (!node) return;

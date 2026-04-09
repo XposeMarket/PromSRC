@@ -16,7 +16,7 @@
     }
   },
   "llm": {
-    "provider": "anthropic",
+    "provider": "openai_codex",
     "providers": {
       "ollama": {
         "endpoint": "http://localhost:11434",
@@ -32,7 +32,7 @@
       },
       "openai": {
         "api_key": "",
-        "model": "gpt-5.4"
+        "model": "gpt-4o"
       },
       "openai_codex": {
         "model": "gpt-5.4"
@@ -281,17 +281,17 @@
   "agent_model_defaults": {
     "proposal_executor_high_risk": "openai_codex/gpt-5.3-codex",
     "proposal_executor_low_risk": "anthropic/claude-haiku-4-5-20251001",
-    "manager": "anthropic/claude-sonnet-4-6",
-    "background_task": "anthropic/claude-haiku-4-5-20251001",
-    "subagent_planner": "anthropic/claude-haiku-4-5-20251001",
+    "manager": "anthropic/claude-haiku-4-5-20251001",
+    "background_task": "openai_codex/gpt-5.4-mini",
+    "subagent_planner": "openai_codex/gpt-5.4-mini",
     "subagent_orchestrator": "anthropic/claude-haiku-4-5-20251001",
     "subagent_researcher": "anthropic/claude-haiku-4-5-20251001",
     "subagent_analyst": "anthropic/claude-haiku-4-5-20251001",
-    "subagent_builder": "anthropic/claude-sonnet-4-5-20250514",
-    "subagent_operator": "anthropic/claude-opus-4-6",
-    "subagent_verifier": "anthropic/claude-opus-4-6",
+    "subagent_builder": "openai_codex/gpt-5.4",
+    "subagent_operator": "openai_codex/gpt-5.4",
+    "subagent_verifier": "openai_codex/gpt-5.4",
     "switch_model_low": "anthropic/claude-haiku-4-5-20251001",
-    "switch_model_medium": "anthropic/claude-haiku-4-5-20251001",
+    "switch_model_medium": "openai_codex/gpt-5.4-mini",
     "coordinator": "anthropic/claude-haiku-4-5-20251001",
     "background_agent": "anthropic/claude-haiku-4-5-20251001"
   }

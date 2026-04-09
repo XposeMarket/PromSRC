@@ -1,14 +1,20 @@
 {
-  "date": "2026-04-08",
+  "date": "2026-04-09",
   "thoughts": [
     {
-      "window": "13-40",
-      "file": "thoughts/2026-04-08/13-40-thought.md",
-      "completedAt": "2026-04-08T23:43:38.455Z",
-      "runId": "95149ab7-b839-40c4-999c-347df9dfcb4a"
+      "window": "19-40",
+      "file": "thoughts/2026-04-09/19-40-thought.md",
+      "completedAt": "2026-04-09T05:53:18.399Z",
+      "runId": "77703204-362e-4ea4-91ce-a5440ca7c630"
+    },
+    {
+      "window": "01-52",
+      "file": "thoughts/2026-04-09/01-52-thought.md",
+      "completedAt": "2026-04-09T12:00:15.264Z",
+      "runId": "94e7b99a-21c2-40cf-b1a9-bbbe9ba54a2a"
     }
   ],
-  "dreamRan": true,
-  "dreamFile": "dreams/2026-04-08/23-34-dream.md",
-  "dreamCompletedAt": "2026-04-09T03:35:08.869Z"
+  "dreamRan": false,
+  "dreamFile": null,
+  "dreamCompletedAt": null
 }

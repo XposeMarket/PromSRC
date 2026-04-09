@@ -330,15 +330,30 @@
       "role": "assistant",
       "content": "✅ Quick restart complete.\nAction: Telegram quick restart\nSummary: Quick restart requested from Telegram by user 1799053599.\nBuild: not run\nFiles changed: none\n\nVerify: Confirm gateway booted and Telegram polling resumed.",
       "timestamp": 1775700272785
+    },
+    {
+      "role": "user",
+      "content": "Hey prom",
+      "timestamp": 1775714241357
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Anthropic API error 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"},\"request_id\":\"req_011CZsgaPLd34exCsWtk8XsK\"}",
+      "timestamp": 1775714241357
+    },
+    {
+      "role": "assistant",
+      "content": "✅ Quick restart complete.\nAction: Telegram quick restart\nSummary: Quick restart requested from Telegram by user 1799053599.\nBuild: not run\nFiles changed: none\n\nVerify: Confirm gateway booted and Telegram polling resumed.",
+      "timestamp": 1775714324056
     }
   ],
   "workspace": "D:\\Prometheus\\workspace",
   "channel": "telegram",
   "createdAt": 1773605404065,
-  "lastActiveAt": 1775700272830,
+  "lastActiveAt": 1775714324059,
   "pendingMemoryFlush": false,
   "pendingCompaction": false,
-  "contextTokenEstimate": 5574,
+  "contextTokenEstimate": 5720,
   "activatedToolCategories": [
     "desktop",
     "browser",

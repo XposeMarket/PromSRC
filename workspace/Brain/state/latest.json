@@ -1,11 +1,18 @@
 {
-  "lastThoughtAt": "2026-04-08T23:40:22.792Z",
-  "lastThoughtWindow": "13-40",
+  "lastThoughtAt": "2026-04-09T11:58:38.254Z",
+  "lastThoughtAttemptAt": null,
+  "lastThoughtStatus": "idle",
+  "lastThoughtError": null,
+  "lastThoughtWindow": "01-52",
   "lastDreamDate": "2026-04-08",
-  "gatewayStartedAt": "2026-04-09T05:20:01.242Z",
+  "lastDreamCompletedAt": null,
+  "lastDreamAttemptAt": null,
+  "lastDreamStatus": "idle",
+  "lastDreamError": null,
+  "gatewayStartedAt": "2026-04-09T16:36:26.975Z",
   "proposalDedupeIds": [],
   "thoughtEnabled": true,
   "dreamEnabled": true,
-  "thoughtModel": "",
-  "dreamModel": ""
+  "thoughtModel": "anthropic/claude-haiku-4-5-20251001",
+  "dreamModel": "openai_codex/gpt-5.4"
 }

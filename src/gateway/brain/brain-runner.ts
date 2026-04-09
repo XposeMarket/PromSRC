@@ -24,7 +24,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { clearHistory } from '../session';
+import { addMessage, clearHistory, persistToolLog } from '../session';
 import {
   getBrainDir,
   ensureBrainDirs,
@@ -48,6 +48,8 @@ const CHECK_INTERVAL_MS    = 15 * 60 * 1000;        // 15-minute ticker
 const DREAM_HOUR           = 23;                    // local hour for dream eligibility
 const DREAM_MIN            = 30;                    // local minute for dream eligibility
 const DREAM_BUFFER_MIN     = 90;                    // don't start thought if dream is ≤90 min away
+const THOUGHT_RETRY_BACKOFF_MS = 30 * 60 * 1000;    // wait 30m after a failed attempt
+const DREAM_RETRY_BACKOFF_MS   = 60 * 60 * 1000;    // wait 60m after a failed attempt
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +63,12 @@ type HandleChatFn = (
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
   toolFilter?: string[],
-) => Promise<{ type: string; text: string; thinking?: string }>;
+) => Promise<{
+  type: string;
+  text: string;
+  thinking?: string;
+  toolResults?: Array<{ name: string; args: any; result: string; error: boolean }>;
+}>;
 
 export interface BrainRunnerDeps {
   handleChat: HandleChatFn;
@@ -84,6 +91,9 @@ export interface BrainJobStatus {
   ranToday?: boolean;
   thoughtModel?: string;
   dreamModel?: string;
+  lastAttempt?: string | null;
+  lastOutcome?: 'idle' | 'success' | 'failed';
+  lastError?: string | null;
 }
 
 export class BrainRunner {
@@ -130,6 +140,9 @@ export class BrainRunner {
         todayCount: daily.thoughts.length,
         thoughtModel: state.thoughtModel || '',
         dreamModel:   state.dreamModel  || '',
+        lastAttempt: state.lastThoughtAttemptAt,
+        lastOutcome: state.lastThoughtStatus,
+        lastError: state.lastThoughtError,
       },
       dream: {
         id: 'brain_dream',
@@ -137,10 +150,13 @@ export class BrainRunner {
         description: 'Nightly synthesis: updates memory and generates proposals',
         enabled: state.dreamEnabled !== false,
         running: this.dreamRunning,
-        lastRun: daily.dreamCompletedAt,
+        lastRun: state.lastDreamCompletedAt || daily.dreamCompletedAt,
         nextRun: dreamTime.toISOString(),
         schedule: `Nightly at ${String(DREAM_HOUR).padStart(2,'0')}:${String(DREAM_MIN).padStart(2,'0')} local`,
         ranToday: daily.dreamRan,
+        lastAttempt: state.lastDreamAttemptAt,
+        lastOutcome: state.lastDreamStatus,
+        lastError: state.lastDreamError,
       },
     };
   }
@@ -166,10 +182,12 @@ export class BrainRunner {
       const now = new Date();
       const windowStart = new Date(now.getTime() - THOUGHT_INTERVAL_MS);
       const daily = loadDailyStatus(today);
-      await this._runThought(windowStart, now, today, daily.thoughts.length + 1);
+      const ok = await this._runThought(windowStart, now, today, daily.thoughts.length + 1);
+      if (!ok) throw new Error('Brain thought run did not produce verified artifacts');
     } else {
       const daily = loadDailyStatus(today);
-      await this._runDream(today, daily.thoughts.length);
+      const ok = await this._runDream(today, daily.thoughts.length);
+      if (!ok) throw new Error('Brain dream run did not produce verified artifacts');
     }
   }
 
@@ -210,14 +228,24 @@ export class BrainRunner {
     const latest   = loadLatestState();
 
     // Dream check first — takes priority if eligible
-    if (!this.dreamRunning && !daily.dreamRan && latest.dreamEnabled !== false && this._isDreamEligible(now)) {
+    if (
+      !this.dreamRunning
+      && !daily.dreamRan
+      && latest.dreamEnabled !== false
+      && this._isDreamEligible(now)
+      && this._isDreamRetryReady(now, latest)
+    ) {
       if (this.thoughtRunning) {
         console.log('[BrainRunner] Dream eligible but waiting for thought to finish');
         return;
       }
-      this._runDream(today, daily.thoughts.length).catch(err =>
-        console.error('[BrainRunner] Dream run error:', err?.message)
-      );
+      this._runDream(today, daily.thoughts.length)
+        .then((ok) => {
+          if (!ok) console.warn('[BrainRunner] Dream run finished with failure status');
+        })
+        .catch(err =>
+          console.error('[BrainRunner] Dream run error:', err?.message)
+        );
       return;
     }
 
@@ -225,9 +253,13 @@ export class BrainRunner {
     if (!this.thoughtRunning && !daily.dreamRan && latest.thoughtEnabled !== false) {
       const thoughtCheck = this._isThoughtEligible(now, latest);
       if (thoughtCheck) {
-        this._runThought(thoughtCheck.windowStart, thoughtCheck.windowEnd, today, daily.thoughts.length + 1).catch(err =>
-          console.error('[BrainRunner] Thought run error:', err?.message)
-        );
+        this._runThought(thoughtCheck.windowStart, thoughtCheck.windowEnd, today, daily.thoughts.length + 1)
+          .then((ok) => {
+            if (!ok) console.warn('[BrainRunner] Thought run finished with failure status');
+          })
+          .catch(err =>
+            console.error('[BrainRunner] Thought run error:', err?.message)
+          );
       }
     }
   }
@@ -256,6 +288,10 @@ export class BrainRunner {
   ): { windowStart: Date; windowEnd: Date } | null {
     // Don't run thoughts if dream is imminent or already ran today
     if (this._isDreamSoon(now) || this._isDreamEligible(now)) return null;
+    if (state.lastThoughtStatus === 'failed' && state.lastThoughtAttemptAt) {
+      const elapsedSinceAttempt = now.getTime() - new Date(state.lastThoughtAttemptAt).getTime();
+      if (elapsedSinceAttempt < THOUGHT_RETRY_BACKOFF_MS) return null;
+    }
 
     const windowEnd = now;
 
@@ -278,6 +314,12 @@ export class BrainRunner {
     return { windowStart, windowEnd };
   }
 
+  private _isDreamRetryReady(now: Date, state: BrainLatestState): boolean {
+    if (state.lastDreamStatus !== 'failed' || !state.lastDreamAttemptAt) return true;
+    const elapsedSinceAttempt = now.getTime() - new Date(state.lastDreamAttemptAt).getTime();
+    return elapsedSinceAttempt >= DREAM_RETRY_BACKOFF_MS;
+  }
+
   // ─── Thought run ──────────────────────────────────────────────────────────
 
   private async _runThought(
@@ -285,9 +327,10 @@ export class BrainRunner {
     windowEnd: Date,
     dateStr: string,
     thoughtNumber: number,
-  ): Promise<void> {
-    if (this.thoughtRunning) return;
+  ): Promise<boolean> {
+    if (this.thoughtRunning) return false;
     this.thoughtRunning = true;
+    const runStartedAt = Date.now();
 
     const windowLabel = getWindowLabel(windowStart);
     const runId       = crypto.randomUUID();
@@ -295,13 +338,19 @@ export class BrainRunner {
 
     console.log(`[BrainRunner] Starting Thought ${thoughtNumber} — window ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`);
 
-    // Persist attempt immediately so crashes don't cause retry storms
+    // Persist attempt immediately (separate from success state)
     const state = loadLatestState();
-    state.lastThoughtAt     = new Date().toISOString();
-    state.lastThoughtWindow = windowLabel;
+    state.lastThoughtAttemptAt = new Date().toISOString();
+    state.lastThoughtStatus = 'idle';
+    state.lastThoughtError = null;
     saveLatestState(state);
 
     clearHistory(sessionId);
+    addMessage(
+      sessionId,
+      { role: 'user', content: `[Brain Thought ${thoughtNumber}] Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`, timestamp: Date.now() },
+      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
+    );
 
     const outFile = `thoughts/${dateStr}/${windowLabel}-thought.md`;
     const absOutFile = path.join(getBrainDir(), outFile);
@@ -318,6 +367,7 @@ export class BrainRunner {
 
     const thoughtModelOverride = loadLatestState().thoughtModel?.trim() || undefined;
     let resultText = '';
+    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
     try {
       const result = await this.deps.handleChat(
         prompt,
@@ -328,8 +378,24 @@ export class BrainRunner {
         `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe only — no memory writes, no proposals.`,
         thoughtModelOverride,
         'cron',
+        [
+          'list_directory',
+          'list_files',
+          'read_file',
+          'file_stats',
+          'grep_file',
+          'grep_files',
+          'search_files',
+          'mkdir',
+          'create_file',
+          'replace_lines',
+          'find_replace',
+          'insert_after',
+          'delete_lines',
+        ],
       );
       resultText = result?.text || '';
+      toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
     } catch (err: any) {
       resultText = `Error: ${err?.message || String(err)}`;
       console.error(`[BrainRunner] Thought ${thoughtNumber} failed:`, err?.message);
@@ -337,10 +403,48 @@ export class BrainRunner {
       this.thoughtRunning = false;
     }
 
-    // Update daily status
-    const daily = loadDailyStatus(dateStr);
-    daily.thoughts.push({ window: windowLabel, file: outFile, completedAt: new Date().toISOString(), runId });
-    saveDailyStatus(daily);
+    addMessage(
+      sessionId,
+      { role: 'assistant', content: resultText.slice(0, 6000), timestamp: Date.now() },
+      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
+    );
+    if (toolResults.length > 0) {
+      const toolLogLines = toolResults.slice(-8).map((r) => {
+        const ok = r.error ? '✗' : '✓';
+        const args = r.args ? JSON.stringify(r.args).slice(0, 80) : '';
+        const preview = String(r.result || '').slice(0, 120).replace(/\n/g, ' ');
+        return `${ok} ${r.name}(${args}): ${preview}`;
+      });
+      persistToolLog(sessionId, toolLogLines.join('\n'));
+    }
+
+    const fileExists = fs.existsSync(absOutFile);
+    const fileStats = fileExists ? fs.statSync(absOutFile) : null;
+    const fileLooksFresh = !!fileStats && fileStats.size > 0 && fileStats.mtimeMs >= (runStartedAt - 5000);
+    const runFailed = /^error:/i.test(String(resultText || '').trim());
+    const success = fileLooksFresh && !runFailed;
+
+    const latestAfter = loadLatestState();
+    if (success) {
+      latestAfter.lastThoughtAt = new Date().toISOString();
+      latestAfter.lastThoughtWindow = windowLabel;
+      latestAfter.lastThoughtStatus = 'success';
+      latestAfter.lastThoughtError = null;
+      saveLatestState(latestAfter);
+    } else {
+      latestAfter.lastThoughtStatus = 'failed';
+      latestAfter.lastThoughtError = runFailed
+        ? String(resultText).slice(0, 500)
+        : `Expected thought artifact missing or stale: ${outFile}`;
+      saveLatestState(latestAfter);
+    }
+
+    if (success) {
+      // Update daily status on verified success only
+      const daily = loadDailyStatus(dateStr);
+      daily.thoughts.push({ window: windowLabel, file: outFile, completedAt: new Date().toISOString(), runId });
+      saveDailyStatus(daily);
+    }
 
     // Broadcast completion
     this.deps.broadcast({
@@ -350,6 +454,8 @@ export class BrainRunner {
       window: windowLabel,
       file: outFile,
       summary: resultText.slice(0, 400),
+      success,
+      error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
     });
 
     // Create automated session for UI visibility
@@ -368,24 +474,41 @@ export class BrainRunner {
         ],
       },
     });
-
-    console.log(`[BrainRunner] Thought ${thoughtNumber} complete — wrote to ${outFile}`);
+    if (success) {
+      console.log(`[BrainRunner] Thought ${thoughtNumber} complete — wrote to ${outFile}`);
+    } else {
+      console.warn(`[BrainRunner] Thought ${thoughtNumber} failed integrity checks — state not marked successful`);
+      this.deps.broadcast({
+        type: 'brain_thought_failed',
+        thoughtNumber,
+        date: dateStr,
+        window: windowLabel,
+        file: outFile,
+        error: loadLatestState().lastThoughtError || 'Unknown thought run failure',
+      });
+    }
+    return success;
   }
 
   // ─── Dream run ────────────────────────────────────────────────────────────
 
-  private async _runDream(dateStr: string, thoughtCount: number): Promise<void> {
-    if (this.dreamRunning) return;
+  private async _runDream(dateStr: string, thoughtCount: number): Promise<boolean> {
+    if (this.dreamRunning) return false;
     this.dreamRunning = true;
+    const runStartedAt = Date.now();
 
     const now         = new Date();
     const dreamLabel  = getWindowLabel(now);
-    const runId       = crypto.randomUUID();
     const sessionId   = `brain_dream_${dateStr}`;
 
     console.log(`[BrainRunner] Starting Dream for ${dateStr} (${thoughtCount} thoughts available)`);
 
     clearHistory(sessionId);
+    addMessage(
+      sessionId,
+      { role: 'user', content: `[Brain Dream] Nightly synthesis for ${dateStr} — ${thoughtCount} thought(s)`, timestamp: Date.now() },
+      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
+    );
 
     const outFile    = `dreams/${dateStr}/${dreamLabel}-dream.md`;
     const absOutFile = path.join(getBrainDir(), outFile);
@@ -397,8 +520,15 @@ export class BrainRunner {
       }
     };
 
+    const dreamState = loadLatestState();
+    dreamState.lastDreamAttemptAt = new Date().toISOString();
+    dreamState.lastDreamStatus = 'idle';
+    dreamState.lastDreamError = null;
+    saveLatestState(dreamState);
+
     const dreamModelOverride = loadLatestState().dreamModel?.trim() || undefined;
     let resultText = '';
+    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
     try {
       const result = await this.deps.handleChat(
         prompt,
@@ -409,8 +539,27 @@ export class BrainRunner {
         `CONTEXT: Automated Brain Dream run for ${dateStr}. Synthesize today's thoughts, write durable memory updates, create proposals. This is the nightly execution run.`,
         dreamModelOverride,
         'cron',
+        [
+          'list_directory',
+          'list_files',
+          'read_file',
+          'file_stats',
+          'grep_file',
+          'grep_files',
+          'search_files',
+          'mkdir',
+          'create_file',
+          'replace_lines',
+          'find_replace',
+          'insert_after',
+          'delete_lines',
+          'memory_browse',
+          'memory_write',
+          'write_proposal',
+        ],
       );
       resultText = result?.text || '';
+      toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
     } catch (err: any) {
       resultText = `Error: ${err?.message || String(err)}`;
       console.error(`[BrainRunner] Dream for ${dateStr} failed:`, err?.message);
@@ -418,16 +567,54 @@ export class BrainRunner {
       this.dreamRunning = false;
     }
 
-    // Update state
-    const state = loadLatestState();
-    state.lastDreamDate = dateStr;
-    saveLatestState(state);
+    addMessage(
+      sessionId,
+      { role: 'assistant', content: resultText.slice(0, 6000), timestamp: Date.now() },
+      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
+    );
+    if (toolResults.length > 0) {
+      const toolLogLines = toolResults.slice(-8).map((r) => {
+        const ok = r.error ? '✗' : '✓';
+        const args = r.args ? JSON.stringify(r.args).slice(0, 80) : '';
+        const preview = String(r.result || '').slice(0, 120).replace(/\n/g, ' ');
+        return `${ok} ${r.name}(${args}): ${preview}`;
+      });
+      persistToolLog(sessionId, toolLogLines.join('\n'));
+    }
 
-    const daily = loadDailyStatus(dateStr);
-    daily.dreamRan         = true;
-    daily.dreamFile        = outFile;
-    daily.dreamCompletedAt = new Date().toISOString();
-    saveDailyStatus(daily);
+    const proposalsFilePath = path.join(getBrainDir(), 'proposals.md');
+    const dreamExists = fs.existsSync(absOutFile);
+    const proposalsExists = fs.existsSync(proposalsFilePath);
+    const dreamStats = dreamExists ? fs.statSync(absOutFile) : null;
+    const proposalStats = proposalsExists ? fs.statSync(proposalsFilePath) : null;
+    const artifactsFresh = !!dreamStats && !!proposalStats
+      && dreamStats.size > 0
+      && proposalStats.size > 0
+      && dreamStats.mtimeMs >= (runStartedAt - 5000)
+      && proposalStats.mtimeMs >= (runStartedAt - 5000);
+    const runFailed = /^error:/i.test(String(resultText || '').trim());
+    const success = artifactsFresh && !runFailed;
+
+    const state = loadLatestState();
+    if (success) {
+      state.lastDreamDate = dateStr;
+      state.lastDreamCompletedAt = new Date().toISOString();
+      state.lastDreamStatus = 'success';
+      state.lastDreamError = null;
+      saveLatestState(state);
+
+      const daily = loadDailyStatus(dateStr);
+      daily.dreamRan         = true;
+      daily.dreamFile        = outFile;
+      daily.dreamCompletedAt = new Date().toISOString();
+      saveDailyStatus(daily);
+    } else {
+      state.lastDreamStatus = 'failed';
+      state.lastDreamError = runFailed
+        ? String(resultText).slice(0, 500)
+        : `Expected dream artifacts missing/stale: ${outFile}, proposals.md`;
+      saveLatestState(state);
+    }
 
     // Broadcast completion
     this.deps.broadcast({
@@ -435,6 +622,8 @@ export class BrainRunner {
       date: dateStr,
       file: outFile,
       summary: resultText.slice(0, 600),
+      success,
+      error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
     });
 
     // Automated session for UI
@@ -453,8 +642,18 @@ export class BrainRunner {
         ],
       },
     });
-
-    console.log(`[BrainRunner] Dream complete for ${dateStr} — wrote to ${outFile}`);
+    if (success) {
+      console.log(`[BrainRunner] Dream complete for ${dateStr} — wrote to ${outFile}`);
+    } else {
+      console.warn(`[BrainRunner] Dream for ${dateStr} failed integrity checks — state not marked successful`);
+      this.deps.broadcast({
+        type: 'brain_dream_failed',
+        date: dateStr,
+        file: outFile,
+        error: loadLatestState().lastDreamError || 'Unknown dream run failure',
+      });
+    }
+    return success;
   }
 
   // ─── Thought prompt ───────────────────────────────────────────────────────

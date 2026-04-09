@@ -22,8 +22,7 @@
 - Proposal quality requirement (March 2026): proposals must be fully concrete and execution-ready; user rejects conceptual/pseudocode wording (e.g., 'conceptual' snippets) and wants absolute, word-for-word specificity. [2026-03-22]
 - For desktop-reading tasks, user prefers strict desktop-mode execution: use desktop_screenshot + desktop_click/scroll/focus to read on-screen content directly, and avoid clipboard unless explicitly requested as fallback. [2026-03-22]
 - Reconfirmed strongly on 2026-03-27: user wants conversational turns to avoid unnecessary tool calls and gets frustrated when tools are called for casual chat; respond directly unless explicit execution is requested. [2026-03-27]
-## projects
 ---
 
-*No other categories yet — Prom will add them as it learns more.*
+*Prom will add more as it learns.*
 
