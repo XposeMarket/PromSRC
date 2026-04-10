@@ -1,0 +1,36 @@
+{
+  "id": "3ecfbdf0-72ce-4051-9c18-50396c57e686",
+  "title": "Inspect Xpose Market website and identify smallest high-impact conversion change",
+  "prompt": "You are working in the local Prometheus workspace on the user's Xpose Market website project. First, inspect the workspace to identify the current website files and relevant entry points. Before editing any source file, read the exact target files and check for any existing proposal or task state that could conflict. Determine the smallest high-impact change that moves the site toward a conversion-focused agency site, with emphasis on local-business targeting without explicitly naming Frederick, Maryland in public-facing positioning.\n\nConstraints:\n- If a safe, tightly scoped non-src workspace-file change (e.g. BUSINESS.md, entity file, content file) is the right first improvement, update it directly, but keep it tightly aligned to revenue/conversion.\n- If the change requires src edits, do NOT edit source files directly; instead, create a precise proposal using write_proposal with exact file paths and line references in the required sections.\n- Use write_note for meaningful discoveries and decisions.\n- Return a concise summary of what you found, what you changed or proposed, and the next recommended step.\n\nWorkflow:\n1) Activate source_write tool category if needed for file operations.\n2) Inspect workspace root and locate website app entry points and content files.\n3) Check for existing proposals/tasks that might conflict using task_control and/or proposal-related memory if useful.\n4) Read exact target files before any edit or proposal.\n5) Decide the smallest high-impact change. If non-src and safe, update directly. If src, create a proposal only.\n6) Record meaningful discoveries with write_note.\n7) Provide concise final summary.\n\nPrioritize getting concrete and avoiding broad plans. If blocked, state the blocker and the best next action.",
+  "sessionId": "run_once_7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc_1775840955118",
+  "channel": "web",
+  "status": "running",
+  "pendingSubagentIds": [],
+  "taskKind": "run_once",
+  "originatingSessionId": "run_once_7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc_1775840955118",
+  "verificationStatus": "pending",
+  "plan": [
+    {
+      "index": 0,
+      "description": "You are working in the local Prometheus workspace on the user's Xpose Market website project. First, inspect the workspace to identify the current website files and relevant entry points. Before editi",
+      "status": "running"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1775840982922,
+      "type": "status_push",
+      "content": "Task created: Inspect Xpose Market website and identify smallest high-impact conversion change"
+    }
+  ],
+  "lastProgressAt": 1775840983465,
+  "startedAt": 1775840982922,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  }
+}

@@ -1,9 +1,9 @@
 # Proposals Index
 
-Generated: 2026-04-10T14:45:51.324Z
+Generated: 2026-04-10T17:10:12.072Z
 
 - Total proposals: 99
-- pending: 5
+- pending: 4
 - approved: 52
-- denied: 30
+- denied: 31
 - archive: 12

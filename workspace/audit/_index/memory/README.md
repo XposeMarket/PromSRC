@@ -2,9 +2,9 @@
 
 Generated from workspace/audit.
 
-Updated: 2026-04-10T14:45:21.745Z
-Records: 1827
-Chunks: 4612
-Tokens: 16322
+Updated: 2026-04-10T17:09:52.999Z
+Records: 1838
+Chunks: 4710
+Tokens: 16493
 Relations: 5000
 Graph: graph.json

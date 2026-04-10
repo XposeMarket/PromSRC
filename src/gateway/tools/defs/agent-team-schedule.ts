@@ -583,5 +583,40 @@ export function getAgentTeamScheduleTools(): any[] {
         },
       },
     },
+    // ── run_task_now: one-off background task with silent verification ─────────
+    {
+      type: 'function',
+      function: {
+        name: 'run_task_now',
+        description:
+          'Run a task immediately in the background — silently, with no logs or tool calls shown. ' +
+          'Both the task execution and a verification pass run fully in the background while you continue chatting. ' +
+          'Once the task is verified complete, a single final response is delivered directly into this chat session. ' +
+          'Use this for work that may take a while and that you want to confirm was done correctly before reporting back. ' +
+          'Unlike background_spawn (ephemeral, 15s cap), this is fully persisted, survives restart, and visible in the Tasks panel.',
+        parameters: {
+          type: 'object',
+          required: ['title', 'prompt'],
+          properties: {
+            title: {
+              type: 'string',
+              description: 'Short display name shown in the Tasks panel (e.g. "Research competitor pricing")',
+            },
+            prompt: {
+              type: 'string',
+              description: 'Fully self-contained instructions for the task agent. Include all context, file paths, and specific steps — the agent has no session history.',
+            },
+            subagent_id: {
+              type: 'string',
+              description: 'Optional: ID of a configured subagent to inherit system instructions from. If provided, the subagent\'s system_prompt.md is injected as context for the task.',
+            },
+            timeout_ms: {
+              type: 'number',
+              description: 'Optional max milliseconds for the task phase (default 300000 = 5 min). Verification runs separately after task completes.',
+            },
+          },
+        },
+      },
+    },
   ];
 }

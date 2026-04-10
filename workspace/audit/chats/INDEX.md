@@ -1,13 +1,18 @@
 # Chats Index
 
-Generated: 2026-04-10T14:45:51.324Z
+Generated: 2026-04-10T17:10:12.072Z
 
-- Sessions mirrored: 1343
-- Transcript files: 120
-- Compaction artifacts: 4
+- Sessions mirrored: 1348
+- Transcript files: 124
+- Compaction artifacts: 6
 
 ## Recent Sessions
-- 0485a1f7-c52d-4c9b-8cd1-540e490964a0 | messages=14 | lastActive=2026-04-10T14:45:20.730Z | summary=no
+- run_once_3ecfbdf0-72ce-4051-9c18-50396c57e686_1775840983464 | messages=0 | lastActive=2026-04-10T17:09:43.466Z | summary=no
+- run_once_verify_7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc_1775840988051 | messages=0 | lastActive=2026-04-10T17:09:48.051Z | summary=no
+- run_once_7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc_1775840955118 | messages=0 | lastActive=2026-04-10T17:09:48.048Z | summary=no
+- 0485a1f7-c52d-4c9b-8cd1-540e490964a0 | messages=29 | lastActive=2026-04-10T17:09:22.005Z | summary=yes
+- brain_thought_2026-04-10_06-20 | messages=2 | lastActive=2026-04-10T16:27:45.393Z | summary=no
+- f1f52bb8-240c-41d0-82c9-3bb2aab7ec04 | messages=4 | lastActive=2026-04-10T16:08:52.756Z | summary=no
 - telegram_1799053599_1775829404662 | messages=3 | lastActive=2026-04-10T13:56:52.349Z | summary=no
 - brain_thought_2026-04-10_00-07 | messages=2 | lastActive=2026-04-10T10:20:39.636Z | summary=no
 - telegram_1799053599_1775804911570 | messages=15 | lastActive=2026-04-10T07:41:08.794Z | summary=no
@@ -82,8 +87,3 @@ Generated: 2026-04-10T14:45:51.324Z
 - d40840c6-d55a-4450-b2c1-98fb12d6bd77 | messages=1 | lastActive=2026-04-07T17:22:17.482Z | summary=no
 - cron_job_1773505907481_giaeb_1775660933792 | messages=0 | lastActive=2026-04-08T15:13:57.286Z | summary=no
 - cron_job_1773505907481_giaeb_1775526573401 | messages=0 | lastActive=2026-04-07T01:49:34.344Z | summary=no
-- cron_job_1773505907481_giaeb_1775580759527 | messages=0 | lastActive=2026-04-07T16:57:42.108Z | summary=no
-- cron_job_1773505907481_giaeb_1774929366341 | messages=0 | lastActive=2026-03-31T03:56:07.551Z | summary=no
-- cron_job_1773505907481_giaeb_1774969367321 | messages=0 | lastActive=2026-03-31T15:02:48.676Z | summary=no
-- cron_job_1773505907481_giaeb_1774914956717 | messages=0 | lastActive=2026-03-30T23:55:57.878Z | summary=no
-- c6120949-3453-4e94-a1f7-9ea1fbfae22a | messages=1 | lastActive=2026-04-07T01:51:22.005Z | summary=no

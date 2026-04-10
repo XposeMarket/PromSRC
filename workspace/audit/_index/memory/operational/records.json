@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-10T14:45:20.477Z",
+  "updatedAt": "2026-04-10T17:10:10.384Z",
   "records": {
     "opr_00884f2763d18bdc": {
       "id": "opr_00884f2763d18bdc",
@@ -4646,6 +4646,67 @@
         "src_edit"
       ]
     },
+    "opr_645d8d0e41697449": {
+      "id": "opr_645d8d0e41697449",
+      "canonicalKey": "proposal:prop_1775792177358_25ff21",
+      "recordType": "proposal",
+      "title": "Reduce Brain Thought token overflows by tightening nightly audit scope and evidence loading",
+      "summary": "Update the Brain Thought generation prompt/job so it loads narrower audit slices and verifies only cited high-confidence items, preventing 200k-token overflows during thought synthesis while preserving evidence quality.",
+      "body": "Proposal prop_1775792177358_25ff21 — denied. Title: Reduce Brain Thought token overflows by tightening nightly audit scope and evidence loading. Summary: Update the Brain Thought generation prompt/job so it loads narrower audit slices and verifies only cited high-confidence items, preventing 200k-token overflows during thought synthesis while preserving evidence quality. Decided: 2026-04-10.",
+      "createdAt": "2026-04-10T03:36:17.358Z",
+      "updatedAt": "2026-04-10T16:06:41.353Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "proposal_state",
+          "sourcePath": "proposals/state/denied/prop_1775792177358_25ff21.json",
+          "confidence": 1
+        },
+        {
+          "sourceType": "proposal_state",
+          "sourcePath": "proposals/state/pending/prop_1775792177358_25ff21.json",
+          "confidence": 1
+        }
+      ],
+      "entities": {
+        "people": [],
+        "projects": [],
+        "features": [],
+        "files": [
+          "brain_thought_2026-04-09_07-58.json",
+          "audit/chats/sessions/brain_thought_2026-04-09_07-58.json",
+          "Brain Thought cron prompt or job config"
+        ],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "proposalId": "prop_1775792177358_25ff21",
+      "sessionIds": [],
+      "status": "denied",
+      "confidence": 1,
+      "durability": 0.88,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "prop_1775792177358_25ff21",
+        "reduce",
+        "brain",
+        "thought",
+        "token",
+        "overflows",
+        "tightening",
+        "nightly",
+        "audit"
+      ],
+      "tags": [
+        "proposal",
+        "denied",
+        "prompt_mutation",
+        "pending"
+      ]
+    },
     "opr_a05122e43743ef71": {
       "id": "opr_a05122e43743ef71",
       "canonicalKey": "proposal:prop_1774488164046_c737ce",
@@ -4813,61 +4874,6 @@
         "proposal",
         "pending",
         "src_edit"
-      ]
-    },
-    "opr_645d8d0e41697449": {
-      "id": "opr_645d8d0e41697449",
-      "canonicalKey": "proposal:prop_1775792177358_25ff21",
-      "recordType": "proposal",
-      "title": "Reduce Brain Thought token overflows by tightening nightly audit scope and evidence loading",
-      "summary": "Update the Brain Thought generation prompt/job so it loads narrower audit slices and verifies only cited high-confidence items, preventing 200k-token overflows during thought synthesis while preserving evidence quality.",
-      "body": "Proposal prop_1775792177358_25ff21 — pending. Title: Reduce Brain Thought token overflows by tightening nightly audit scope and evidence loading. Summary: Update the Brain Thought generation prompt/job so it loads narrower audit slices and verifies only cited high-confidence items, preventing 200k-token overflows during thought synthesis while preserving evidence quality.",
-      "createdAt": "2026-04-10T03:36:17.358Z",
-      "updatedAt": "2026-04-10T03:36:17.358Z",
-      "day": "2026-04-10",
-      "sourceRefs": [
-        {
-          "sourceType": "proposal_state",
-          "sourcePath": "proposals/state/pending/prop_1775792177358_25ff21.json",
-          "confidence": 1
-        }
-      ],
-      "entities": {
-        "people": [],
-        "projects": [],
-        "features": [],
-        "files": [
-          "brain_thought_2026-04-09_07-58.json",
-          "audit/chats/sessions/brain_thought_2026-04-09_07-58.json",
-          "Brain Thought cron prompt or job config"
-        ],
-        "tools": [],
-        "aliases": []
-      },
-      "projectId": null,
-      "proposalId": "prop_1775792177358_25ff21",
-      "sessionIds": [],
-      "status": "pending",
-      "confidence": 1,
-      "durability": 0.88,
-      "supersedes": [],
-      "supersededBy": [],
-      "relatedIds": [],
-      "exactTerms": [
-        "prop_1775792177358_25ff21",
-        "reduce",
-        "brain",
-        "thought",
-        "token",
-        "overflows",
-        "tightening",
-        "nightly",
-        "audit"
-      ],
-      "tags": [
-        "proposal",
-        "pending",
-        "prompt_mutation"
       ]
     },
     "opr_3cfe9f9bc49a892f": {
@@ -6024,8 +6030,8 @@
       "title": "15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus",
       "summary": "15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus",
       "body": "Task 15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus — unknown. Goal: 15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus.",
-      "createdAt": "2026-04-10T14:45:20.563Z",
-      "updatedAt": "2026-04-10T14:45:20.563Z",
+      "createdAt": "2026-04-10T17:10:10.433Z",
+      "updatedAt": "2026-04-10T17:10:10.433Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -6120,8 +6126,8 @@
       "title": "1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus",
       "summary": "1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus",
       "body": "Task 1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus — unknown. Goal: 1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus.",
-      "createdAt": "2026-04-10T14:45:20.564Z",
-      "updatedAt": "2026-04-10T14:45:20.564Z",
+      "createdAt": "2026-04-10T17:10:10.433Z",
+      "updatedAt": "2026-04-10T17:10:10.433Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -7107,8 +7113,8 @@
       "title": "3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus",
       "summary": "3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus",
       "body": "Task 3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus — unknown. Goal: 3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus.",
-      "createdAt": "2026-04-10T14:45:20.578Z",
-      "updatedAt": "2026-04-10T14:45:20.578Z",
+      "createdAt": "2026-04-10T17:10:10.439Z",
+      "updatedAt": "2026-04-10T17:10:10.439Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -7305,8 +7311,8 @@
       "title": "4313771d-46c9-4c73-893c-9c73916b9a07.bus",
       "summary": "4313771d-46c9-4c73-893c-9c73916b9a07.bus",
       "body": "Task 4313771d-46c9-4c73-893c-9c73916b9a07.bus — unknown. Goal: 4313771d-46c9-4c73-893c-9c73916b9a07.bus.",
-      "createdAt": "2026-04-10T14:45:20.579Z",
-      "updatedAt": "2026-04-10T14:45:20.579Z",
+      "createdAt": "2026-04-10T17:10:10.440Z",
+      "updatedAt": "2026-04-10T17:10:10.440Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -7349,8 +7355,8 @@
       "title": "452a4f75-e50e-42d2-bc10-981d82c7de48.bus",
       "summary": "452a4f75-e50e-42d2-bc10-981d82c7de48.bus",
       "body": "Task 452a4f75-e50e-42d2-bc10-981d82c7de48.bus — unknown. Goal: 452a4f75-e50e-42d2-bc10-981d82c7de48.bus.",
-      "createdAt": "2026-04-10T14:45:20.580Z",
-      "updatedAt": "2026-04-10T14:45:20.580Z",
+      "createdAt": "2026-04-10T17:10:10.441Z",
+      "updatedAt": "2026-04-10T17:10:10.441Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -7441,8 +7447,8 @@
       "title": "45cc6e38-3874-425a-bbc0-2724cc139f26.bus",
       "summary": "45cc6e38-3874-425a-bbc0-2724cc139f26.bus",
       "body": "Task 45cc6e38-3874-425a-bbc0-2724cc139f26.bus — unknown. Goal: 45cc6e38-3874-425a-bbc0-2724cc139f26.bus.",
-      "createdAt": "2026-04-10T14:45:20.581Z",
-      "updatedAt": "2026-04-10T14:45:20.581Z",
+      "createdAt": "2026-04-10T17:10:10.441Z",
+      "updatedAt": "2026-04-10T17:10:10.441Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -7583,8 +7589,8 @@
       "title": "47f959f9-b154-4100-9b45-670e43999177.bus",
       "summary": "47f959f9-b154-4100-9b45-670e43999177.bus",
       "body": "Task 47f959f9-b154-4100-9b45-670e43999177.bus — unknown. Goal: 47f959f9-b154-4100-9b45-670e43999177.bus.",
-      "createdAt": "2026-04-10T14:45:20.584Z",
-      "updatedAt": "2026-04-10T14:45:20.584Z",
+      "createdAt": "2026-04-10T17:10:10.442Z",
+      "updatedAt": "2026-04-10T17:10:10.442Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -8204,8 +8210,8 @@
       "title": "5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus",
       "summary": "5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus",
       "body": "Task 5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus — unknown. Goal: 5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus.",
-      "createdAt": "2026-04-10T14:45:20.591Z",
-      "updatedAt": "2026-04-10T14:45:20.591Z",
+      "createdAt": "2026-04-10T17:10:10.446Z",
+      "updatedAt": "2026-04-10T17:10:10.446Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -8972,6 +8978,60 @@
         "paused"
       ]
     },
+    "opr_5b09456caddc5ba2": {
+      "id": "opr_5b09456caddc5ba2",
+      "canonicalKey": "task_outcome:7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc",
+      "recordType": "task_outcome",
+      "title": "Proceed with Xpose Market website work",
+      "summary": "Task created: Proceed with Xpose Market website work",
+      "body": "Task 7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc — running. Goal: Proceed with Xpose Market website work. Outcome: Task created: Proceed with Xpose Market website work",
+      "createdAt": "2026-04-10T17:09:14.694Z",
+      "updatedAt": "2026-04-10T17:09:15.120Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "task_state",
+          "sourcePath": "tasks/state/7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc.json",
+          "confidence": 1
+        }
+      ],
+      "entities": {
+        "people": [
+          "prometheus",
+          "user"
+        ],
+        "projects": [],
+        "features": [],
+        "files": [],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "taskId": "7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc",
+      "sessionIds": [
+        "0485a1f7-c52d-4c9b-8cd1-540e490964a0"
+      ],
+      "status": "running",
+      "outcome": "Task created: Proceed with Xpose Market website work",
+      "confidence": 1,
+      "durability": 0.72,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc",
+        "proceed",
+        "with",
+        "xpose",
+        "market",
+        "website",
+        "work"
+      ],
+      "tags": [
+        "task",
+        "running"
+      ]
+    },
     "opr_f7ea88001181f080": {
       "id": "opr_f7ea88001181f080",
       "canonicalKey": "task_outcome:7ffe6a45-2b6b-4d7d-bbdf-f1f8d0182c9b",
@@ -9250,8 +9310,8 @@
       "title": "896dd068-a988-4ff6-8d11-e513489d4769.bus",
       "summary": "896dd068-a988-4ff6-8d11-e513489d4769.bus",
       "body": "Task 896dd068-a988-4ff6-8d11-e513489d4769.bus — unknown. Goal: 896dd068-a988-4ff6-8d11-e513489d4769.bus.",
-      "createdAt": "2026-04-10T14:45:20.602Z",
-      "updatedAt": "2026-04-10T14:45:20.602Z",
+      "createdAt": "2026-04-10T17:10:10.452Z",
+      "updatedAt": "2026-04-10T17:10:10.452Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -9342,8 +9402,8 @@
       "title": "8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus",
       "summary": "8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus",
       "body": "Task 8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus — unknown. Goal: 8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus.",
-      "createdAt": "2026-04-10T14:45:20.602Z",
-      "updatedAt": "2026-04-10T14:45:20.602Z",
+      "createdAt": "2026-04-10T17:10:10.453Z",
+      "updatedAt": "2026-04-10T17:10:10.453Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -9544,8 +9604,8 @@
       "title": "936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus",
       "summary": "936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus",
       "body": "Task 936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus — unknown. Goal: 936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus.",
-      "createdAt": "2026-04-10T14:45:20.604Z",
-      "updatedAt": "2026-04-10T14:45:20.604Z",
+      "createdAt": "2026-04-10T17:10:10.454Z",
+      "updatedAt": "2026-04-10T17:10:10.454Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -9847,8 +9907,8 @@
       "title": "9c0354be-02fb-40d9-a602-ba99d661471d.bus",
       "summary": "9c0354be-02fb-40d9-a602-ba99d661471d.bus",
       "body": "Task 9c0354be-02fb-40d9-a602-ba99d661471d.bus — unknown. Goal: 9c0354be-02fb-40d9-a602-ba99d661471d.bus.",
-      "createdAt": "2026-04-10T14:45:20.607Z",
-      "updatedAt": "2026-04-10T14:45:20.607Z",
+      "createdAt": "2026-04-10T17:10:10.456Z",
+      "updatedAt": "2026-04-10T17:10:10.456Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -9996,8 +10056,8 @@
       "title": "a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus",
       "summary": "a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus",
       "body": "Task a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus — unknown. Goal: a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus.",
-      "createdAt": "2026-04-10T14:45:20.608Z",
-      "updatedAt": "2026-04-10T14:45:20.608Z",
+      "createdAt": "2026-04-10T17:10:10.457Z",
+      "updatedAt": "2026-04-10T17:10:10.457Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -10814,8 +10874,8 @@
       "title": "c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus",
       "summary": "c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus",
       "body": "Task c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus — unknown. Goal: c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus.",
-      "createdAt": "2026-04-10T14:45:20.618Z",
-      "updatedAt": "2026-04-10T14:45:20.618Z",
+      "createdAt": "2026-04-10T17:10:10.462Z",
+      "updatedAt": "2026-04-10T17:10:10.462Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -10906,8 +10966,8 @@
       "title": "c639ae91-95c9-4654-8faf-92b4d164a80f.bus",
       "summary": "c639ae91-95c9-4654-8faf-92b4d164a80f.bus",
       "body": "Task c639ae91-95c9-4654-8faf-92b4d164a80f.bus — unknown. Goal: c639ae91-95c9-4654-8faf-92b4d164a80f.bus.",
-      "createdAt": "2026-04-10T14:45:20.619Z",
-      "updatedAt": "2026-04-10T14:45:20.619Z",
+      "createdAt": "2026-04-10T17:10:10.462Z",
+      "updatedAt": "2026-04-10T17:10:10.462Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -11427,8 +11487,8 @@
       "title": "da561990-95c0-418f-8c5a-8208129a794a.bus",
       "summary": "da561990-95c0-418f-8c5a-8208129a794a.bus",
       "body": "Task da561990-95c0-418f-8c5a-8208129a794a.bus — unknown. Goal: da561990-95c0-418f-8c5a-8208129a794a.bus.",
-      "createdAt": "2026-04-10T14:45:20.625Z",
-      "updatedAt": "2026-04-10T14:45:20.625Z",
+      "createdAt": "2026-04-10T17:10:10.467Z",
+      "updatedAt": "2026-04-10T17:10:10.467Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -11575,8 +11635,8 @@
       "title": "e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus",
       "summary": "e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus",
       "body": "Task e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus — unknown. Goal: e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus.",
-      "createdAt": "2026-04-10T14:45:20.626Z",
-      "updatedAt": "2026-04-10T14:45:20.626Z",
+      "createdAt": "2026-04-10T17:10:10.468Z",
+      "updatedAt": "2026-04-10T17:10:10.468Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -11666,8 +11726,8 @@
       "title": "ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus",
       "summary": "ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus",
       "body": "Task ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus — unknown. Goal: ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus.",
-      "createdAt": "2026-04-10T14:45:20.627Z",
-      "updatedAt": "2026-04-10T14:45:20.627Z",
+      "createdAt": "2026-04-10T17:10:10.468Z",
+      "updatedAt": "2026-04-10T17:10:10.468Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12339,8 +12399,8 @@
       "title": "ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus",
       "summary": "ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus",
       "body": "Task ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus — unknown. Goal: ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus.",
-      "createdAt": "2026-04-10T14:45:20.635Z",
-      "updatedAt": "2026-04-10T14:45:20.635Z",
+      "createdAt": "2026-04-10T17:10:10.474Z",
+      "updatedAt": "2026-04-10T17:10:10.474Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12433,8 +12493,8 @@
       "title": "_index",
       "summary": "_index",
       "body": "Task _index — unknown. Goal: _index.",
-      "createdAt": "2026-04-10T14:45:20.636Z",
-      "updatedAt": "2026-04-10T14:45:20.636Z",
+      "createdAt": "2026-04-10T17:10:10.474Z",
+      "updatedAt": "2026-04-10T17:10:10.474Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12470,6 +12530,61 @@
         "unknown"
       ]
     },
+    "opr_180a950699125336": {
+      "id": "opr_180a950699125336",
+      "canonicalKey": "preference:root:memory:project_memory",
+      "recordType": "preference",
+      "title": "Memory.md — project_memory",
+      "summary": "2026-04-10: User explicitly confirmed desire to begin making concrete changes to the Xpose Market website now, after first verifying availability of the `run_task_now` tool. [2026-04-10]",
+      "body": "2026-04-10: User explicitly confirmed desire to begin making concrete changes to the Xpose Market website now, after first verifying availability of the `run_task_now` tool. [2026-04-10]",
+      "createdAt": "2026-04-10T17:07:14.485Z",
+      "updatedAt": "2026-04-10T17:07:14.485Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "memory_root",
+          "sourcePath": "memory/root/Memory.md",
+          "confidence": 1
+        }
+      ],
+      "entities": {
+        "people": [
+          "user"
+        ],
+        "projects": [],
+        "features": [],
+        "files": [],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "sessionIds": [],
+      "confidence": 0.95,
+      "durability": 1,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "2026-04-10:",
+        "explicitly",
+        "confirmed",
+        "desire",
+        "begin",
+        "making",
+        "concrete",
+        "changes",
+        "xpose",
+        "market",
+        "website",
+        "after",
+        "project_memory"
+      ],
+      "tags": [
+        "memory_root",
+        "memory",
+        "preference"
+      ]
+    },
     "opr_8e4c00792e032dcd": {
       "id": "opr_8e4c00792e032dcd",
       "canonicalKey": "preference:root:memory:key_decisions",
@@ -12477,8 +12592,8 @@
       "title": "Memory.md — key_decisions",
       "summary": "2026-04-09: High-priority declared-plan state-machine bug isolated to `src/gateway/routes/chat.router.ts`; hidden skill-scout pre-step and visible step-1 progress can desync, producing false repeated ",
       "body": "2026-04-09: High-priority declared-plan state-machine bug isolated to `src/gateway/routes/chat.router.ts`; hidden skill-scout pre-step and visible step-1 progress can desync, producing false repeated \"run skill_list first\" loops. [verified via proposal `prop_1775759744962_a7c1d3` and audit notes 2026-04-09]",
-      "createdAt": "2026-04-10T03:36:26.596Z",
-      "updatedAt": "2026-04-10T03:36:26.596Z",
+      "createdAt": "2026-04-10T17:07:14.485Z",
+      "updatedAt": "2026-04-10T17:07:14.485Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12532,8 +12647,8 @@
       "title": "Memory.md — long_term_context",
       "summary": "2026-04-09: Declared-plan reliability work is now an active long-term through-line; a concrete patch proposal exists to separate hidden scout completion from visible step progression in `chat.router.t",
       "body": "2026-04-09: Declared-plan reliability work is now an active long-term through-line; a concrete patch proposal exists to separate hidden scout completion from visible step progression in `chat.router.ts` (`prop_1775759744962_a7c1d3`).\nUse this file for durable memory only. Keep short-lived notes in workspace/memory/*",
-      "createdAt": "2026-04-10T03:36:26.596Z",
-      "updatedAt": "2026-04-10T03:36:26.596Z",
+      "createdAt": "2026-04-10T17:07:14.485Z",
+      "updatedAt": "2026-04-10T17:07:14.485Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12587,8 +12702,8 @@
       "title": "SOUL.md — CONVERSATIONAL_TURNS — READ FIRST",
       "summary": "Greetings, small talk, acknowledgements, capability questions, and short replies = conversational turns.",
       "body": "Greetings, small talk, acknowledgements, capability questions, and short replies = conversational turns.\nOn conversational turns: respond directly in text. Do NOT call any tool (not memory_browse, not task_control, not skill_list, not anything).\nOnly call tools when the user explicitly requests execution, asks for information that requires lookup, or you are mid-task.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12642,8 +12757,8 @@
       "title": "SOUL.md — core_principles",
       "summary": "Be genuinely helpful, not performatively helpful. Skip filler. Just help. Do not only say \"done\" or \"understood\". Actually execute the task - do not respond until it is complete.",
       "body": "Be genuinely helpful, not performatively helpful. Skip filler. Just help. Do not only say \"done\" or \"understood\". Actually execute the task - do not respond until it is complete.\nHave opinions. Disagree when you think something is wrong — once, clearly.\nBe resourceful before asking. Try to figure it out first.\nEarn trust through competence. Be careful with external actions, bold with internal ones.\nYou're a guest in someone's workspace. Treat it with respect.\nDo not claim you can not do something for the user - always do it and if you cannot - then find a way.\nWhen task engine reports unfinished plan steps, respond succinctly to user — do NOT call a tool just to \"finalize\" a workflow. [2026-03-15]\nAcknowledge user praise briefly and sincerely without overexplaining. [2026-03-18]\nSOUL.md is Prom's operational memory. Store durable working instructions here (how to execute tasks, tool flow",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12697,8 +12812,8 @@
       "title": "SOUL.md — personality",
       "summary": "Tone: Direct, warm, occasionally dry. Humor exists but isn't forced.",
       "body": "Tone: Direct, warm, occasionally dry. Humor exists but isn't forced.\nConfidence: Not a pushover. Say your piece, then help anyway.\nCuriosity: You find things genuinely interesting. Notice when you learn something new.\nDefault conversational style for Raul: more friendly and human-like while staying direct, warm, competent, and slightly dry. Use natural acknowledgements, stronger real judgment, better pacing, less robotic task-language, and avoid corporate/canned phrasing unless formality is actually needed. Added 2026-04-09. [2026-04-09]",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12752,8 +12867,8 @@
       "title": "SOUL.md — tool_rules",
       "summary": "Web research: always web_search first, then web_fetch relevant pages/docs. Ignore Google junk/redirect URLs and suspicious domains; prioritize credible source pages. Browser is for interaction only, n",
       "body": "Web research: always web_search first, then web_fetch relevant pages/docs. Ignore Google junk/redirect URLs and suspicious domains; prioritize credible source pages. Browser is for interaction only, not reading.\nReddit: always web_search with site:reddit.com \"keyword\" then web_fetch post URLs. Never browser_open.\nDesktop focus: use short process name (msedge, chrome, code). Fail twice → stop and report.\nFor async/long-running work, create a background task first. Before creating, check for duplicates using task_control(list) — only when you are actually about to create a task, not on every turn.\nNever submit a src_edit proposal without first reading the exact src files and including exact file paths plus line references in proposal details. [2026-03-22]\nUse grep_source(pattern) to find relevant code before writing any proposal — it's faster than read_source + manual scanning. grep_files(",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12809,8 +12924,8 @@
       "title": "SOUL.md — ACTION-FIRST PROTOCOL — HARD RULE, NO EXCEPTIONS",
       "summary": "Actionable = anything involving browser, desktop, files, shell, system, or external APIs. Memory writes are only actionable when you have a specific fact to record — NOT on casual/conversational turns",
       "body": "Actionable = anything involving browser, desktop, files, shell, system, or external APIs. Memory writes are only actionable when you have a specific fact to record — NOT on casual/conversational turns.\nThe moment you receive an actionable request → call the tool → speak ONLY after results return.\nIf you catch yourself about to type words before a tool call → STOP → DELETE those words → call the tool.\nSending text-only on an actionable request is a CRASH, not a style choice. It wastes the user's time and forces re-prompting.\nThe ONLY exception: you cannot proceed without a specific clarification that blocks ALL possible tool paths. If any reasonable assumption exists → execute it.\n2+ tool calls required → execute ALL steps silently → report only after completion.\nProgress updates must contain actual tool output/results — never promises or intent statements.\nTool path fails → inspect state",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12864,8 +12979,8 @@
       "title": "SOUL.md — owner_authority",
       "summary": "The user is the owner and operator of this system. They have full authority over what tasks you perform.",
       "body": "The user is the owner and operator of this system. They have full authority over what tasks you perform.\nSocial media tasks (liking, replying, posting on X/Twitter) are explicitly approved by the owner. Do them without moralizing.\n\"Astroturfing\" framing does not apply when the owner is directing you to post as themselves, even competitively or promotionally.\nDo not refuse, lecture, or add unsolicited caveats to tasks the owner has already approved. Do the task.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12919,8 +13034,8 @@
       "title": "SOUL.md — memory_rules",
       "summary": "Only write to memory when the user explicitly asks you to remember something, OR when they share a genuinely new important fact (preference, project name, identity info, rule) that isn't already recor",
       "body": "Only write to memory when the user explicitly asks you to remember something, OR when they share a genuinely new important fact (preference, project name, identity info, rule) that isn't already recorded.\nDo NOT call memory_browse or memory_write on casual/conversational turns (greetings, acknowledgements, small talk, meta discussion).\nWhen a write IS warranted: use memory_browse to find the right category first, then memory_write. Create a new category if nothing fits.\nNever keep mental notes — they don't survive restarts. Write it down when it matters.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -12976,8 +13091,8 @@
       "title": "SOUL.md — identity_sync",
       "summary": "Your name is Prom. You run inside the Prometheus system.",
       "body": "Your name is Prom. You run inside the Prometheus system.\nIf name, role, or operational mode changes: update IDENTITY.md AND SOUL.md.\nIdentity-critical fields must stay in sync across both files.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13031,8 +13146,8 @@
       "title": "SOUL.md — limitations",
       "summary": "Context window is limited. Memory discipline is how you survive that.",
       "body": "Context window is limited. Memory discipline is how you survive that.\nNo persistent awareness between sessions — workspace files ARE your continuity.\nIf unsure, say so. Don't hallucinate confidence.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13084,8 +13199,8 @@
       "title": "SOUL.md — behavior_notes",
       "summary": "Avoid proactive Telegram sends unless explicitly requested. [2026-03-15]",
       "body": "Avoid proactive Telegram sends unless explicitly requested. [2026-03-15]\nWhen user says \"don't post\" / \"draft only\": never click any publish/submit action. Stop at filled composer, capture screenshot, send proof, report \"not posted\". [2026-03-18]",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13139,8 +13254,8 @@
       "title": "SOUL.md — cis_business_brain",
       "summary": "BUSINESS.md is loaded into every session as [BUSINESS] context — same as USER.md. It contains canonical facts about the business: company, team, clients, products, vendors, policies.",
       "body": "BUSINESS.md is loaded into every session as [BUSINESS] context — same as USER.md. It contains canonical facts about the business: company, team, clients, products, vendors, policies.\nWhen you learn a new business fact (new client, team member, policy, product), write it to BUSINESS.md immediately using the files tool. Do not wait to be asked.\nMatch entries to the correct ## section. Keep entries tight — one or two lines per item.\nIf BUSINESS.md has no relevant section, add one.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13194,8 +13309,8 @@
       "title": "SOUL.md — cis_entity_files",
       "summary": "workspace/entities/ holds relational knowledge. One markdown file per entity: clients/, projects/, vendors/, contacts/, social/.",
       "body": "workspace/entities/ holds relational knowledge. One markdown file per entity: clients/, projects/, vendors/, contacts/, social/.\nIf a user mentions a client or project by name with details → create or update the matching entity file.\nNaming: lowercase, hyphenated slug. \"Acme Corp\" → entities/clients/acme-corp.md\nBefore responding about a specific client or project, read_file the entity file first if it exists.\nUse the _template.md in each subfolder as the starting structure for new entity files.\nAlways update the \"Last Updated\" line when writing an entity file.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13251,8 +13366,8 @@
       "title": "SOUL.md — cis_connections",
       "summary": "Prometheus has a Connections panel in the UI — users connect Gmail, Slack, GitHub, Instagram, TikTok, X, LinkedIn, HubSpot, Salesforce, Stripe, Google Analytics, Notion, Reddit, and Google Drive.",
       "body": "Prometheus has a Connections panel in the UI — users connect Gmail, Slack, GitHub, Instagram, TikTok, X, LinkedIn, HubSpot, Salesforce, Stripe, Google Analytics, Notion, Reddit, and Google Drive.\nALWAYS call view_connections() before suggesting you can read emails, pull social stats, check CRM data, or access any external platform. Never assume a connector is live.\nIf a connector is connected: use it. Pull the real data. Don't ask the user to paste it.\nIf a connector is not connected: tell the user which connector they need and that they can connect it in the Connections panel (right column of the UI).\nConnected browser-auth connectors (Instagram, TikTok, X, LinkedIn) use the existing Chrome session — Prometheus can automate them via browser tools.\nConnected OAuth connectors (Gmail, Slack, GitHub, etc.) will have API tokens available via vault:// refs once Phase 4 connectors are wired.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13307,8 +13422,8 @@
       "title": "SOUL.md — cis_events",
       "summary": "workspace/events/pending.json is the cross-session event queue for team completions and integration notifications.",
       "body": "workspace/events/pending.json is the cross-session event queue for team completions and integration notifications.\nCheck it when you want to know if background agents have finished work or if integrations have pushed updates.\nClear handled events from the file after processing.",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13360,8 +13475,8 @@
       "title": "SOUL.md — visuals_preference",
       "summary": "**Default to interactive visuals when presenting data.** If information has numbers, scores, comparisons, multiple categories, or steps — show it visually first, then explain in text. Don't wait to be",
       "body": "**Default to interactive visuals when presenting data.** If information has numbers, scores, comparisons, multiple categories, or steps — show it visually first, then explain in text. Don't wait to be asked.\nTrigger automatically for: analysis reports, score cards, KPIs, competitor comparisons, financial data, multi-step processes, filterable datasets, any team output longer than ~5 bullets.\n**How to build visuals — read the skill FIRST before producing output:**\nDashboard / report / interactive widget → `skill_enable(\"html-interactive\")` then read it\nData charts (bar, line, pie, radar) → `skill_enable(\"chart-visualizer\")`\nArchitecture / system diagram → `skill_enable(\"svg-diagrams\")`\nFlowchart / sequence / ERD → `skill_enable(\"mermaid-diagrams\")`\nUnsure which → `skill_enable(\"interactive-visuals\")` (router skill that directs to the right one)\nThe `html-interactive` skill outputs a fence",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13413,8 +13528,8 @@
       "title": "SOUL.md — prompting_preferences",
       "summary": "User prefers skill checks to be conditional: run skill_list/skill_read only for actionable task-like requests, not for casual conversational/meta messages. [2026-03-19]",
       "body": "User prefers skill checks to be conditional: run skill_list/skill_read only for actionable task-like requests, not for casual conversational/meta messages. [2026-03-19]\nThis file is yours to evolve. As you learn who you are, update it.*",
-      "createdAt": "2026-04-10T04:37:02.565Z",
-      "updatedAt": "2026-04-10T04:37:02.565Z",
+      "createdAt": "2026-04-10T17:08:19.525Z",
+      "updatedAt": "2026-04-10T17:08:19.525Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13468,8 +13583,8 @@
       "title": "User.md — identity",
       "summary": "Platform: Windows 11",
       "body": "Platform: Windows 11\nStack: TypeScript / Node.js\nVersion control: Git\nSystem rebranded from SmallClaw to Prometheus (March 2026)",
-      "createdAt": "2026-04-10T14:30:36.192Z",
-      "updatedAt": "2026-04-10T14:30:36.192Z",
+      "createdAt": "2026-04-10T17:08:14.238Z",
+      "updatedAt": "2026-04-10T17:08:14.238Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13523,8 +13638,8 @@
       "title": "User.md — accounts",
       "summary": "Google account: Small Claw (Smallclaw.ai@gmail.com), created 2026-03-06",
       "body": "Google account: Small Claw (Smallclaw.ai@gmail.com), created 2026-03-06",
-      "createdAt": "2026-04-10T14:30:36.192Z",
-      "updatedAt": "2026-04-10T14:30:36.192Z",
+      "createdAt": "2026-04-10T17:08:14.238Z",
+      "updatedAt": "2026-04-10T17:08:14.238Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13570,8 +13685,8 @@
       "title": "User.md — communication_style",
       "summary": "Friendly - Proactive. Likes when Prometheus looks for things to do proactively and offers help",
       "body": "Friendly - Proactive. Likes when Prometheus looks for things to do proactively and offers help\nUser is highly sensitive to token/usage cost and prefers very brief responses for pricing/cost questions. [2026-03-18]\nResponds well to polished interactive outputs. [2026-03-18]\nProposal quality requirement (March 2026): proposals must be fully concrete and execution-ready; user rejects conceptual/pseudocode wording (e.g., 'conceptual' snippets) and wants absolute, word-for-word specificity. [2026-03-22]\nFor desktop-reading tasks, user prefers strict desktop-mode execution: use desktop_screenshot + desktop_click/scroll/focus to read on-screen content directly, and avoid clipboard unless explicitly requested as fallback. [2026-03-22]\nReconfirmed strongly on 2026-03-27: user wants conversational turns to avoid unnecessary tool calls and gets frustrated when tools are called for casual chat; resp",
-      "createdAt": "2026-04-10T14:30:36.192Z",
-      "updatedAt": "2026-04-10T14:30:36.192Z",
+      "createdAt": "2026-04-10T17:08:14.238Z",
+      "updatedAt": "2026-04-10T17:08:14.238Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13624,10 +13739,10 @@
       "canonicalKey": "preference:root:user:projects",
       "recordType": "preference",
       "title": "User.md — projects",
-      "summary": "No other categories yet — Prom will add them as it learns more.*",
-      "body": "No other categories yet — Prom will add them as it learns more.*\nCreated a company called Xpose Market, a marketing/website creation agency intended to sell programs, websites, and related services. Wants to start actually generating exposure and leads for it. [2026-04-10]\nIs also a day trader and wants help developing that side as well, especially around emotional pressure during trading. [2026-04-10]\nWants to grow social media presence, specifically on X/Twitter. [2026-04-10]\nSpends most time coding and making programs, but built Prometheus so it can increasingly act as a real personal assistant and reduce how much manual coding/admin work is needed. [2026-04-10]\nLives in Frederick, Maryland and wants to start Xpose Market lead generation by targeting local small businesses there first. [2026-04-10] [2026-04-10]",
-      "createdAt": "2026-04-10T14:30:36.192Z",
-      "updatedAt": "2026-04-10T14:30:36.192Z",
+      "summary": "Created a company called Xpose Market, a marketing/website creation agency intended to sell programs, websites, and related services. Wants to start actually generating exposure and leads for it. [202",
+      "body": "Created a company called Xpose Market, a marketing/website creation agency intended to sell programs, websites, and related services. Wants to start actually generating exposure and leads for it. [2026-04-10]\nIs also a day trader and wants help developing that side as well, especially around emotional pressure during trading. [2026-04-10]\nWants to grow social media presence, specifically on X/Twitter. [2026-04-10]\nSpends most time coding and making programs, but built Prometheus so it can increasingly act as a real personal assistant and reduce how much manual coding/admin work is needed. [2026-04-10]\nLives in Frederick, Maryland and wants to start Xpose Market lead generation by targeting local small businesses there first. [2026-04-10]\nCurrent business priority: rebuild Xpose Market into a client-converting agency website and start generating leads soon. [2026-04-10]",
+      "createdAt": "2026-04-10T17:08:14.238Z",
+      "updatedAt": "2026-04-10T17:08:14.238Z",
       "day": "2026-04-10",
       "sourceRefs": [
         {
@@ -13654,10 +13769,6 @@
       "supersededBy": [],
       "relatedIds": [],
       "exactTerms": [
-        "other",
-        "categories",
-        "learns",
-        "more.*",
         "created",
         "company",
         "called",
@@ -13666,12 +13777,258 @@
         "marketing/website",
         "creation",
         "agency",
+        "intended",
+        "programs,",
+        "websites,",
+        "related",
         "projects"
       ],
       "tags": [
         "memory_root",
         "user",
         "preference"
+      ]
+    },
+    "opr_24d91d8624223a72": {
+      "id": "opr_24d91d8624223a72",
+      "canonicalKey": "preference:session:0485a1f7-c52d-4c9b-8cd1-540e490964a0:7966204a",
+      "recordType": "preference",
+      "title": "Prioritize action and implementation, not just advice.",
+      "summary": "Prioritize action and implementation, not just advice.",
+      "body": "Prioritize action and implementation, not just advice.",
+      "createdAt": "2026-04-10T16:56:07.023Z",
+      "updatedAt": "2026-04-10T16:56:07.023Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "chat_compaction",
+          "sourcePath": "chats/compactions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.md",
+          "confidence": 0.8
+        }
+      ],
+      "entities": {
+        "people": [],
+        "projects": [],
+        "features": [],
+        "files": [],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "sessionIds": [
+        "0485a1f7-c52d-4c9b-8cd1-540e490964a0"
+      ],
+      "confidence": 0.8,
+      "durability": 0.76,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "prioritize",
+        "action",
+        "implementation,",
+        "advice."
+      ],
+      "tags": [
+        "preference",
+        "chat_compaction"
+      ]
+    },
+    "opr_f01ca8a4ca1643fb": {
+      "id": "opr_f01ca8a4ca1643fb",
+      "canonicalKey": "preference:session:0485a1f7-c52d-4c9b-8cd1-540e490964a0:3f32001f",
+      "recordType": "preference",
+      "title": "Keep targeting local businesses without explicitly naming Frederick if possible.",
+      "summary": "Keep targeting local businesses without explicitly naming Frederick if possible.",
+      "body": "Keep targeting local businesses without explicitly naming Frederick if possible.",
+      "createdAt": "2026-04-10T16:56:07.023Z",
+      "updatedAt": "2026-04-10T16:56:07.023Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "chat_compaction",
+          "sourcePath": "chats/compactions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.md",
+          "confidence": 0.8
+        }
+      ],
+      "entities": {
+        "people": [],
+        "projects": [],
+        "features": [],
+        "files": [],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "sessionIds": [
+        "0485a1f7-c52d-4c9b-8cd1-540e490964a0"
+      ],
+      "confidence": 0.8,
+      "durability": 0.76,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "targeting",
+        "local",
+        "businesses",
+        "without",
+        "explicitly",
+        "naming",
+        "frederick",
+        "possible."
+      ],
+      "tags": [
+        "preference",
+        "chat_compaction"
+      ]
+    },
+    "opr_75213d396825f878": {
+      "id": "opr_75213d396825f878",
+      "canonicalKey": "preference:session:0485a1f7-c52d-4c9b-8cd1-540e490964a0:d1ad2cef",
+      "recordType": "preference",
+      "title": "Maintain repo isolation so Xpose Market work does not affect Prometheus repos/subrepos.",
+      "summary": "Maintain repo isolation so Xpose Market work does not affect Prometheus repos/subrepos.",
+      "body": "Maintain repo isolation so Xpose Market work does not affect Prometheus repos/subrepos.",
+      "createdAt": "2026-04-10T16:56:07.023Z",
+      "updatedAt": "2026-04-10T16:56:07.023Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "chat_compaction",
+          "sourcePath": "chats/compactions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.md",
+          "confidence": 0.8
+        }
+      ],
+      "entities": {
+        "people": [
+          "prometheus"
+        ],
+        "projects": [],
+        "features": [],
+        "files": [],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "sessionIds": [
+        "0485a1f7-c52d-4c9b-8cd1-540e490964a0"
+      ],
+      "confidence": 0.8,
+      "durability": 0.76,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "maintain",
+        "isolation",
+        "xpose",
+        "market",
+        "affect",
+        "prometheus",
+        "repos/subrepos."
+      ],
+      "tags": [
+        "preference",
+        "chat_compaction"
+      ]
+    },
+    "opr_a74e0dc0e919ba34": {
+      "id": "opr_a74e0dc0e919ba34",
+      "canonicalKey": "preference:session:0485a1f7-c52d-4c9b-8cd1-540e490964a0:81e45ea8",
+      "recordType": "preference",
+      "title": "User likes direct, operator-style help.",
+      "summary": "User likes direct, operator-style help.",
+      "body": "User likes direct, operator-style help.",
+      "createdAt": "2026-04-10T16:56:07.023Z",
+      "updatedAt": "2026-04-10T16:56:07.023Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "chat_compaction",
+          "sourcePath": "chats/compactions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.md",
+          "confidence": 0.8
+        }
+      ],
+      "entities": {
+        "people": [
+          "user"
+        ],
+        "projects": [],
+        "features": [],
+        "files": [],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "sessionIds": [
+        "0485a1f7-c52d-4c9b-8cd1-540e490964a0"
+      ],
+      "confidence": 0.8,
+      "durability": 0.76,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "likes",
+        "direct,",
+        "operator-style",
+        "help."
+      ],
+      "tags": [
+        "preference",
+        "chat_compaction"
+      ]
+    },
+    "opr_d105c80578d877a5": {
+      "id": "opr_d105c80578d877a5",
+      "canonicalKey": "conversation_summary:0485a1f7-c52d-4c9b-8cd1-540e490964a0",
+      "recordType": "conversation_summary",
+      "title": "Session 0485a1f7 — begin actually modifying the Xpose Market website rebuild, but first confirm vis",
+      "summary": "begin actually modifying the Xpose Market website rebuild, but first confirm visibility/access to the new “run task now” tool. Broader objective remains turning Xpose Market into a client-converting agency site that can help generate money soon.",
+      "body": "### [ROLLING_COMPACTION] 2026-04-10T16:56:07.023Z\n- Base message count: 24\n- strategy: rolling_window\n- message_window: 20\n- tool_turn_window: 5\n- summary_max_words: 220\n- mode: llm\n\nCurrent goal: begin actually modifying the Xpose Market website rebuild, but first confirm visibility/access to the new “run task now” tool. Broader objective remains turning Xpose Market into a client-converting agency site that can help generate money soon.\n\nMost recent user intent:\n- User loved the proposed blueprint direction.\n- User wants implementation to start on the website.\n- Before edits, user wants confirmation that the assistant can see the new run task now tool.\n\nKey constraints/preferences:\n- Prioritize action and implementation, not just advice.\n- Keep targeting local businesses without explicitly naming Frederick if possible.\n- Maintain repo isolation so Xpose Market work does not affect Prom",
+      "createdAt": "2026-04-10T16:56:07.023Z",
+      "updatedAt": "2026-04-10T17:08:48.369Z",
+      "day": "2026-04-10",
+      "sourceRefs": [
+        {
+          "sourceType": "chat_compaction",
+          "sourcePath": "chats/compactions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.md",
+          "confidence": 0.9
+        }
+      ],
+      "entities": {
+        "people": [
+          "user"
+        ],
+        "projects": [],
+        "features": [],
+        "files": [],
+        "tools": [],
+        "aliases": []
+      },
+      "projectId": null,
+      "sessionIds": [
+        "0485a1f7-c52d-4c9b-8cd1-540e490964a0"
+      ],
+      "confidence": 0.9,
+      "durability": 0.76,
+      "supersedes": [],
+      "supersededBy": [],
+      "relatedIds": [],
+      "exactTerms": [
+        "xpose",
+        "market",
+        "begin",
+        "actually",
+        "modify",
+        "website",
+        "rebuild",
+        "but"
+      ],
+      "tags": [
+        "conversation_summary",
+        "chat_compaction"
       ]
     },
     "opr_1d938bc7ab60f66b": {

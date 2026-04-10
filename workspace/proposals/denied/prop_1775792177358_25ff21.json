@@ -1,0 +1,56 @@
+{
+  "type": "prompt_mutation",
+  "priority": "high",
+  "title": "Reduce Brain Thought token overflows by tightening nightly audit scope and evidence loading",
+  "summary": "Update the Brain Thought generation prompt/job so it loads narrower audit slices and verifies only cited high-confidence items, preventing 200k-token overflows during thought synthesis while preserving evidence quality.",
+  "details": "Why this proposal:\n- Thought 3 explicitly recorded a failed first pass because the Brain Thought analysis exceeded the 200k token limit (`brain_thought_2026-04-09_07-58.json`; cited in `Brain\\thoughts\\2026-04-09\\07-58-thought.md`, Improvement Candidates row).\n- The failure is concrete, repeatable, and affects the nightly thinking pipeline itself.\n- No semantically equivalent pending proposal was found in `proposals\\pending` or the current Brain proposal ledger.\n\nExact change requested:\n- Update the Brain Thought cron prompt/job so each thought synthesis:\n  1. reads only the target audit window and directly relevant artifacts first,\n  2. caps broad audit/session scans unless a candidate in sections C/D cites that artifact,\n  3. verifies high-confidence items by loading cited evidence files only after candidate extraction,\n  4. records a bounded fallback path when audit scope is too large (e.g. summarize by sub-window instead of one giant pass).\n- If the Brain Thought prompt exists as a workspace file, patch that file directly; otherwise patch the cron job/config entry that stores the prompt text and execution instructions.\n- Preserve current output structure for thought files.\n\nEvidence:\n- `Brain\\thoughts\\2026-04-09\\07-58-thought.md` lines 100-101 flag the issue at high confidence.\n- `audit/chats/sessions/brain_thought_2026-04-09_07-58.json` records the run context for the overflowing thought session.\n\nAcceptance target:\n- Future Brain Thought runs should avoid single-pass prompt construction that can exceed the 200k token budget on active days.\n- Output format and evidence standards remain unchanged; only audit-loading strategy becomes narrower and staged.",
+  "sourceAgentId": "brain_dream_2026-04-09",
+  "sourceSessionId": "brain_dream_2026-04-09",
+  "affectedFiles": [
+    {
+      "path": "Brain Thought cron prompt or job config",
+      "action": "edit",
+      "description": "Tighten audit-loading instructions and staged evidence verification to avoid token-limit overflows during thought generation."
+    }
+  ],
+  "diffPreview": "- Load broad audit context for the whole window up front\n+ Extract candidates from the narrow time window first, then load only cited evidence for high-confidence claims; fall back to sub-window synthesis when context grows too large",
+  "estimatedImpact": "Makes nightly Brain Thought generation more reliable on active days by preventing self-overflow while preserving evidence-based output quality.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor_synthesizer_v1",
+  "executorPrompt": "Find the prompt or config that drives the Brain Thought cron job. Update it so the job stages context loading: first narrow audit-window extraction, then selective evidence reads only for cited high-confidence C/D items, with an explicit bounded fallback if the audit window is too large. Preserve current thought file structure and verification expectations. After editing, report the exact file changed and the new staged loading rules.",
+  "riskTier": "low",
+  "id": "prop_1775792177358_25ff21",
+  "status": "denied",
+  "version": 1,
+  "revisionHistory": [
+    {
+      "version": 1,
+      "editedAt": 1775792177358,
+      "editedBy": "brain_dream_2026-04-09",
+      "note": "Initial proposal content",
+      "snapshot": {
+        "type": "prompt_mutation",
+        "priority": "high",
+        "title": "Reduce Brain Thought token overflows by tightening nightly audit scope and evidence loading",
+        "summary": "Update the Brain Thought generation prompt/job so it loads narrower audit slices and verifies only cited high-confidence items, preventing 200k-token overflows during thought synthesis while preserving evidence quality.",
+        "details": "Why this proposal:\n- Thought 3 explicitly recorded a failed first pass because the Brain Thought analysis exceeded the 200k token limit (`brain_thought_2026-04-09_07-58.json`; cited in `Brain\\thoughts\\2026-04-09\\07-58-thought.md`, Improvement Candidates row).\n- The failure is concrete, repeatable, and affects the nightly thinking pipeline itself.\n- No semantically equivalent pending proposal was found in `proposals\\pending` or the current Brain proposal ledger.\n\nExact change requested:\n- Update the Brain Thought cron prompt/job so each thought synthesis:\n  1. reads only the target audit window and directly relevant artifacts first,\n  2. caps broad audit/session scans unless a candidate in sections C/D cites that artifact,\n  3. verifies high-confidence items by loading cited evidence files only after candidate extraction,\n  4. records a bounded fallback path when audit scope is too large (e.g. summarize by sub-window instead of one giant pass).\n- If the Brain Thought prompt exists as a workspace file, patch that file directly; otherwise patch the cron job/config entry that stores the prompt text and execution instructions.\n- Preserve current output structure for thought files.\n\nEvidence:\n- `Brain\\thoughts\\2026-04-09\\07-58-thought.md` lines 100-101 flag the issue at high confidence.\n- `audit/chats/sessions/brain_thought_2026-04-09_07-58.json` records the run context for the overflowing thought session.\n\nAcceptance target:\n- Future Brain Thought runs should avoid single-pass prompt construction that can exceed the 200k token budget on active days.\n- Output format and evidence standards remain unchanged; only audit-loading strategy becomes narrower and staged.",
+        "affectedFiles": [
+          {
+            "path": "Brain Thought cron prompt or job config",
+            "action": "edit",
+            "description": "Tighten audit-loading instructions and staged evidence verification to avoid token-limit overflows during thought generation."
+          }
+        ],
+        "diffPreview": "- Load broad audit context for the whole window up front\n+ Extract candidates from the narrow time window first, then load only cited evidence for high-confidence claims; fall back to sub-window synthesis when context grows too large",
+        "estimatedImpact": "Makes nightly Brain Thought generation more reliable on active days by preventing self-overflow while preserving evidence-based output quality.",
+        "requiresBuild": false,
+        "executorAgentId": "code_executor_synthesizer_v1",
+        "executorPrompt": "Find the prompt or config that drives the Brain Thought cron job. Update it so the job stages context loading: first narrow audit-window extraction, then selective evidence reads only for cited high-confidence C/D items, with an explicit bounded fallback if the audit window is too large. Preserve current thought file structure and verification expectations. After editing, report the exact file changed and the new staged loading rules.",
+        "riskTier": "low"
+      }
+    }
+  ],
+  "createdAt": 1775792177358,
+  "updatedAt": 1775837201353,
+  "decidedAt": 1775837201353
+}

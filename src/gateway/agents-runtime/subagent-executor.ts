@@ -84,6 +84,7 @@ import {
 } from '../memory-index/index';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
 import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress } from '../tasks/task-runner';
+import { runOnceTask } from '../tasks/background-task-runner';
 import { saveSiteShortcut } from '../site-shortcuts';
 import { deployAnalysisTeamTool } from '../../tools/deploy-analysis-team.js';
 import { socialIntelTool } from '../../tools/social-scraper.js';
@@ -3153,6 +3154,41 @@ export async function executeTool(name: string, args: any, workspacePath: string
             return { name, args, result: JSON.stringify(dispatchResult), error: false };
           } catch (err: any) {
             return { name, args, result: `dispatch_to_agent error: ${err.message}`, error: true };
+          }
+        }
+
+        // ── run_task_now ──────────────────────────────────────
+        if (name === 'run_task_now') {
+          const title = String(args.title || '').trim();
+          const prompt = String(args.prompt || '').trim();
+          if (!title) return { name, args, result: 'run_task_now requires title', error: true };
+          if (!prompt) return { name, args, result: 'run_task_now requires prompt', error: true };
+
+          const subagentId = args.subagent_id ? String(args.subagent_id).trim() : undefined;
+          const timeoutMs = args.timeout_ms ? Number(args.timeout_ms) : undefined;
+
+          try {
+            const { task_id } = runOnceTask({
+              title,
+              prompt,
+              subagentId,
+              timeoutMs,
+              originatingSessionId: sessionId,
+              handleChat: deps.handleChat,
+              broadcastWS: deps.broadcastWS,
+            });
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                task_id,
+                status: 'running',
+                message: `Background task "${title}" started (${task_id}). I'll report back in this chat when verification is complete.`,
+              }),
+              error: false,
+            };
+          } catch (err: any) {
+            return { name, args, result: `run_task_now error: ${err?.message || err}`, error: true };
           }
         }
 

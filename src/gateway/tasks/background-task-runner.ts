@@ -9,9 +9,13 @@
  * Stall counter resets automatically when any write/mutate tool fires (real progress).
  */
 
+import * as path from 'path';
+import * as fs from 'fs';
+import { getConfig } from '../../config/config';
 import {
   loadTask,
   saveTask,
+  createTask,
   updateTaskStatus,
   setTaskStepRunning,
   appendJournal,
@@ -20,6 +24,7 @@ import {
   updateTaskRuntimeProgress,
   resolveSubagentCompletion,
   writeToEvidenceBus,
+  loadEvidenceBus,
   type TaskRecord,
 } from './task-store';
 import { clearHistory, addMessage, getHistory, flushSession } from '../session';
@@ -1140,4 +1145,194 @@ export class BackgroundTaskRunner {
 
     this._broadcast('task_notification', { taskId: task.id, sessionId: task.sessionId, channel: task.channel, message });
   }
+}
+
+// ─── run_task_now: one-off silent background task with verification ────────────
+// Fully silent: both phases use a no-op sendSSE so no logs/tool calls surface.
+// Only the final verified response is delivered to the originating session.
+
+export interface RunOnceOpts {
+  title: string;
+  prompt: string;
+  subagentId?: string;
+  timeoutMs?: number;
+  originatingSessionId: string;
+  handleChat: (
+    message: string,
+    sessionId: string,
+    sendSSE: (event: string, data: any) => void,
+    pinnedMessages?: any,
+    abortSignal?: any,
+    callerContext?: string,
+    modelOverride?: string,
+    executionMode?: string,
+    toolFilter?: string[],
+    attachments?: any,
+    reasoningOptions?: any,
+    providerOverride?: string,
+  ) => Promise<{ text: string; [k: string]: any }>;
+  broadcastWS: (data: object) => void;
+}
+
+function _resolveRunOnceModel(): { modelOverride?: string; providerOverride?: string } {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const ref = String(cfg?.agent_model_defaults?.background_task || '').trim();
+    if (!ref) return {};
+    const slash = ref.indexOf('/');
+    if (slash > 0) return { providerOverride: ref.slice(0, slash), modelOverride: ref.slice(slash + 1) };
+    return { modelOverride: ref };
+  } catch {
+    return {};
+  }
+}
+
+function _loadSubagentContext(subagentId: string): string | undefined {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const ws = String(cfg?.workspace?.path || process.cwd());
+    const p = path.join(ws, '.prometheus', 'subagents', subagentId, 'system_prompt.md');
+    if (fs.existsSync(p)) return `[YOUR ROLE]\n${fs.readFileSync(p, 'utf-8').trim()}`;
+  } catch {}
+  return undefined;
+}
+
+function _buildVerifyPrompt(title: string, taskResult: string, notes: string): string {
+  const lines = [
+    `A background task you dispatched has completed. Please review the results, verify the work was done correctly, and provide a clear summary for the user.`,
+    '',
+    `**Task:** ${title}`,
+    '',
+    '**Results from the task:**',
+    taskResult || '*(no output)*',
+  ];
+  if (notes) lines.push('', '**Notes recorded during execution:**', notes);
+  lines.push(
+    '',
+    'Please:',
+    '1. Confirm the task was completed successfully (or identify any issues)',
+    '2. Highlight the key outcomes',
+    '3. Note anything that needs follow-up',
+    '',
+    'Keep your response concise and actionable.',
+  );
+  return lines.join('\n');
+}
+
+async function _executeRunOnceTask(task: TaskRecord, opts: RunOnceOpts): Promise<void> {
+  const noOp = () => {};
+  const { modelOverride, providerOverride } = _resolveRunOnceModel();
+  const callerContext = opts.subagentId ? _loadSubagentContext(opts.subagentId) : undefined;
+
+  // ── Phase 1: Task Execution (isolated session, fully silent) ──────────────
+  const taskSessionId = `run_once_${task.id}_${Date.now()}`;
+  updateTaskStatus(task.id, 'running');
+  setTaskStepRunning(task.id, 0);
+
+  let taskResult = '';
+  try {
+    const result = await opts.handleChat(
+      opts.prompt, taskSessionId, noOp,
+      undefined, undefined, callerContext,
+      modelOverride, 'background_task',
+      undefined, undefined, undefined, providerOverride,
+    );
+    taskResult = (result?.text || '').trim();
+  } catch (err: any) {
+    taskResult = `Task execution error: ${err?.message || String(err)}`;
+    console.error(`[RunOnce] Phase 1 error for task ${task.id}:`, err?.message || err);
+  } finally {
+    try { clearHistory(taskSessionId); } catch {}
+  }
+
+  // Collect notes from evidence bus
+  const bus = loadEvidenceBus(task.id);
+  const notes = (bus?.entries || [])
+    .filter((e: any) => e.category === 'finding' || e.category === 'artifact')
+    .map((e: any) => `• ${String(e.value || '').slice(0, 300)}`)
+    .join('\n');
+
+  updateTaskStatus(task.id, 'complete', { finalSummary: taskResult });
+
+  // ── Phase 2: Silent Verification ─────────────────────────────────────────
+  const liveTask = loadTask(task.id);
+  if (liveTask) { liveTask.verificationStatus = 'running'; saveTask(liveTask); }
+
+  const verifySessionId = `run_once_verify_${task.id}_${Date.now()}`;
+  const verifyPrompt = _buildVerifyPrompt(task.title, taskResult, notes);
+
+  let verificationText = taskResult;
+  try {
+    const verifyResult = await opts.handleChat(
+      verifyPrompt, verifySessionId, noOp,
+      undefined, undefined, undefined,
+      modelOverride, 'background_task',
+      undefined, undefined, undefined, providerOverride,
+    );
+    verificationText = (verifyResult?.text || '').trim() || taskResult;
+  } catch (err: any) {
+    console.warn(`[RunOnce] Phase 2 (verify) error for task ${task.id}:`, err?.message);
+  } finally {
+    try { clearHistory(verifySessionId); } catch {}
+  }
+
+  // Persist verification result
+  const finalTask = loadTask(task.id);
+  if (finalTask) {
+    finalTask.verificationStatus = 'complete';
+    finalTask.finalSummary = verificationText;
+    saveTask(finalTask);
+  }
+
+  // ── Phase 3: Deliver to originating session ───────────────────────────────
+  const originId = opts.originatingSessionId;
+  if (originId) {
+    try {
+      addMessage(originId, {
+        role: 'assistant',
+        content: verificationText,
+        timestamp: Date.now(),
+      } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+    } catch (e) {
+      console.warn('[RunOnce] addMessage to originating session failed:', e);
+    }
+    opts.broadcastWS({
+      type: 'task_notification',
+      sessionId: originId,
+      taskId: task.id,
+      taskTitle: task.title,
+      message: verificationText,
+    });
+    console.log(`[RunOnce] Task "${task.title}" (${task.id}) delivered to session ${originId}`);
+  }
+}
+
+/**
+ * Spawn a one-off background task that runs silently through two phases:
+ *   1. Task execution (isolated session, no-op SSE)
+ *   2. Verification (isolated session, no-op SSE)
+ * Then delivers the final verified response as a message into the originating session.
+ * Returns immediately with task_id — execution is fully detached.
+ */
+export function runOnceTask(opts: RunOnceOpts): { task_id: string } {
+  const task = createTask({
+    title: opts.title,
+    prompt: opts.prompt,
+    sessionId: opts.originatingSessionId,
+    channel: 'web',
+    plan: [{ index: 0, description: opts.prompt.slice(0, 200), status: 'pending' }],
+    taskKind: 'run_once',
+    originatingSessionId: opts.originatingSessionId,
+  });
+
+  setImmediate(() =>
+    _executeRunOnceTask(task, opts).catch((err: any) => {
+      console.error(`[RunOnce] Fatal error for task ${task.id}:`, err?.message || err);
+      try {
+        updateTaskStatus(task.id, 'failed', { finalSummary: `Task failed: ${err?.message || 'Unknown error'}` });
+      } catch {}
+    })
+  );
+
+  return { task_id: task.id };
 }

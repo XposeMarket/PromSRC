@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-10T14:45:21.745Z",
-  "lastRunAtMs": 1775832321745,
+  "updatedAt": "2026-04-10T17:09:52.999Z",
+  "lastRunAtMs": 1775840992999,
   "files": {
     "chats/transcripts/03991351-a31f-4f92-9ff8-3bcc515c240c.jsonl": {
       "mtimeMs": 1775687615242.2898,
@@ -13435,8 +13435,8 @@
       ]
     },
     "tasks/state/_index.json": {
-      "mtimeMs": 1775763526670.595,
-      "size": 19275,
+      "mtimeMs": 1775840954700.6304,
+      "size": 19319,
       "recordId": "rec_b0bace5b385431ba",
       "chunkIds": [
         "chk_bb69a80dc678fa19"
@@ -14848,22 +14848,23 @@
       ]
     },
     "memory/root/SOUL.md": {
-      "mtimeMs": 1775795822565.3325,
-      "size": 12025,
+      "mtimeMs": 1775840899525.5095,
+      "size": 12686,
       "recordId": "rec_106e376c0597ab0e",
       "chunkIds": [
         "chk_18f588759315c225",
         "chk_9c01cb1d250fe58f",
         "chk_857f49037f8c49ad",
-        "chk_469e88795df0455f",
-        "chk_2e490c3f1905dd31",
-        "chk_bb0930de23a25e57",
-        "chk_d91a27dfe7bf365f",
-        "chk_686d40003f9d91c6",
-        "chk_4874825253b73f5e",
-        "chk_30e6d1090fb7925c",
-        "chk_afeeac75d348458e",
-        "chk_f563437f3e12adee"
+        "chk_a900c12da25914d8",
+        "chk_30c3a68f24ade79b",
+        "chk_0a454862e07654c2",
+        "chk_80e1fb543e0e4498",
+        "chk_5a7a1a7ac96cdd98",
+        "chk_23b4e3cb77ae903a",
+        "chk_d6f558d3c35617d2",
+        "chk_6a7fd519ff1979c8",
+        "chk_d8fc9fa93ddce114",
+        "chk_d41e876e3d0bad4c"
       ]
     },
     "memory/files/2026-03-17.md": {
@@ -16433,20 +16434,21 @@
       ]
     },
     "memory/root/Memory.md": {
-      "mtimeMs": 1775792186596.1206,
-      "size": 842,
+      "mtimeMs": 1775840834485.2385,
+      "size": 1031,
       "recordId": "rec_549ebf2c67efefdb",
       "chunkIds": [
         "chk_c833e68a8bb1e649"
       ]
     },
     "memory/root/User.md": {
-      "mtimeMs": 1775831436192.402,
-      "size": 2213,
+      "mtimeMs": 1775840894238.7222,
+      "size": 2595,
       "recordId": "rec_8268dd6e67ee7f84",
       "chunkIds": [
         "chk_d2bfd8fc0ba98236",
-        "chk_a1784e8e93c1c573"
+        "chk_241427624a7cd195",
+        "chk_695b3ab2468b0d9e"
       ]
     },
     "chats/compactions/telegram_1799053599.jsonl": {
@@ -16990,13 +16992,15 @@
       ]
     },
     "memory/files/2026-04-10-intraday-notes.md": {
-      "mtimeMs": 1775806809480.1008,
-      "size": 2637,
+      "mtimeMs": 1775840928370.95,
+      "size": 4838,
       "recordId": "rec_f5516b7b648c5cd5",
       "chunkIds": [
         "chk_5274c4aabd1f22c8",
         "chk_ce12df2168435ef6",
-        "chk_6a813c28efd1704d"
+        "chk_6a813c28efd1704d",
+        "chk_9805bf35db01f68f",
+        "chk_6492d3872533d479"
       ]
     },
     "chats/transcripts/brain_dream_2026-04-09.jsonl": {
@@ -17323,8 +17327,8 @@
       ]
     },
     "chats/transcripts/0485a1f7-c52d-4c9b-8cd1-540e490964a0.jsonl": {
-      "mtimeMs": 1775832320729.5017,
-      "size": 22278,
+      "mtimeMs": 1775840962005.59,
+      "size": 48408,
       "recordId": "rec_f29e7b0a5d6bbedd",
       "chunkIds": [
         "chk_90269d39819bd3b6",
@@ -17348,12 +17352,37 @@
         "chk_08f8b5850cdc5309",
         "chk_dd3ffc978334e4fb",
         "chk_bbd355aba32a3a5f",
-        "chk_7df52fa7330cdac2"
+        "chk_7df52fa7330cdac2",
+        "chk_3fc25746ea2f10ce",
+        "chk_2caeb357adc520cc",
+        "chk_052a700b48037248",
+        "chk_b4e22dc8de8eedcd",
+        "chk_ae8d6678f6abe443",
+        "chk_3411038bd648d880",
+        "chk_bc4662084505f086",
+        "chk_3ae49e6b81d46797",
+        "chk_cd6269cc93c6b0fc",
+        "chk_edf1df19105d8042",
+        "chk_31c5c9cba5fd3acb",
+        "chk_f0c6db5ad32c6417",
+        "chk_0b5609eea08bd007",
+        "chk_26e42891acd7fa03",
+        "chk_4f09abeaa57b95eb",
+        "chk_a2ba77ac2d054028",
+        "chk_a93b48f972ddf572",
+        "chk_2c8b9f6d9908bd5f",
+        "chk_d785e7f71c30118a",
+        "chk_6d14f884509c922a",
+        "chk_af63409739628689",
+        "chk_78ccc9be73d18891",
+        "chk_d48ae5bd6646da57",
+        "chk_455de9d000161131",
+        "chk_63e6501933fd7cca"
       ]
     },
     "chats/transcripts/0485a1f7-c52d-4c9b-8cd1-540e490964a0.md": {
-      "mtimeMs": 1775832320730.5051,
-      "size": 19992,
+      "mtimeMs": 1775840962006.5896,
+      "size": 43046,
       "recordId": "rec_1034277018df119e",
       "chunkIds": [
         "chk_6826e305b2f8012f",
@@ -17375,33 +17404,179 @@
         "chk_f3888f2bf0925224",
         "chk_9cee10f3056034de",
         "chk_b9036ca7ad3ebba6",
-        "chk_ead98bdd8888225a"
+        "chk_ead98bdd8888225a",
+        "chk_26f44a288656e8f1",
+        "chk_f1384ad092608645",
+        "chk_cfeb6202c6d60330",
+        "chk_4ec379ae21824672",
+        "chk_15da55b0f26dc5ea",
+        "chk_e07b1875af6f3a3d",
+        "chk_c39d69a9eb21b389",
+        "chk_6dcffca84090cd97",
+        "chk_757bbe7f9e00f985",
+        "chk_954307334f0182d0",
+        "chk_25a035cd0abe6f67",
+        "chk_5ef5815915849f3c",
+        "chk_84b5842cd25d1d18",
+        "chk_4c004a8a03652128",
+        "chk_2bc6fdc7b7ab08fc",
+        "chk_8c74769ea670fcc6",
+        "chk_6121c72f97d575f5",
+        "chk_adef08bc50fb0e50",
+        "chk_7617c92cbf20cb4f",
+        "chk_1af23759e0619a77",
+        "chk_085d5868c6ebec07",
+        "chk_2d50dd75e8d87bb3"
       ]
     },
     "chats/sessions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.json": {
-      "mtimeMs": 1775832285814.369,
-      "size": 24630,
+      "mtimeMs": 1775840962520.913,
+      "size": 50622,
       "recordId": "rec_5bf5933cdc4850e7",
       "chunkIds": [
-        "chk_fbace39d3a6a5d99",
-        "chk_065db7b970592ff9",
-        "chk_408043e89e1cf921",
-        "chk_93c478b49b095bae",
-        "chk_be1ccb1ff5d8bf07",
-        "chk_f995c2c4719ca317",
-        "chk_34c45b713e2dd35e",
-        "chk_c520b7028e3bf979",
-        "chk_3fa65214bf813556",
-        "chk_c41d36724e3551a8",
-        "chk_c6b55d321ef2bf95",
-        "chk_0523133f89f86b9e",
-        "chk_1a32611907190c0d",
-        "chk_5cca3a4616cec745",
-        "chk_8891b579fd2bc699",
-        "chk_8f025c7455c5e2c1",
-        "chk_8c784ae8402a2b63",
-        "chk_c98a4aa29c564617",
-        "chk_c932dc949866e22a"
+        "chk_55604167355c716e",
+        "chk_0de06135028b923e",
+        "chk_2db71d815b3f4ed3",
+        "chk_7cb9ad8a9910d1ba",
+        "chk_b847cf477edb10f8",
+        "chk_654a17b7a7df5a3c",
+        "chk_2686370dff50c1ba",
+        "chk_9df700bef0b636b8",
+        "chk_f1653043a1f97289",
+        "chk_41935abbd0598bbc",
+        "chk_e5f555ca7c418cc5",
+        "chk_782398e524015e5a",
+        "chk_a97966507675fe9b",
+        "chk_be8cc8cf7e7fe1e9",
+        "chk_7ed383d5f3ff6437",
+        "chk_2484083d9a7ff8a1",
+        "chk_6bf388597db650f1",
+        "chk_7ed031ecc94eacae",
+        "chk_d581608c4c72cded",
+        "chk_50fd8e394109903b",
+        "chk_d3cb317ea1b60a10",
+        "chk_b99d3efd20effdb1",
+        "chk_24f51a17add8fb23",
+        "chk_df9c33b234d63799",
+        "chk_8f3fe9e446aa70a8",
+        "chk_f0538bc197f878bb",
+        "chk_ed306e66f4dd9180",
+        "chk_887c95fae7382deb",
+        "chk_f87ecee148ced205",
+        "chk_59471d37559f8473",
+        "chk_ce19f679a1e0f3d5",
+        "chk_79d17a62d6d5ae95",
+        "chk_97f4c5ca35a0618a",
+        "chk_91722810f2060332",
+        "chk_7e733b2a376698d0",
+        "chk_6fe396d7072da78b",
+        "chk_80bf8e7c9a7af651",
+        "chk_6902d40d1d32b6bb",
+        "chk_800d639bb6b44629"
+      ]
+    },
+    "chats/compactions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.jsonl": {
+      "mtimeMs": 1775840928344.8755,
+      "size": 5747,
+      "recordId": "rec_176c0fe52e49585f",
+      "chunkIds": [
+        "chk_6de348c3dbd94be9",
+        "chk_db6dd2694af70807",
+        "chk_c7d9aad9f66e101e",
+        "chk_0b0ef9c10dc225ba",
+        "chk_26ae27a68dd28721",
+        "chk_a0d78f57449bc0bd"
+      ]
+    },
+    "chats/compactions/0485a1f7-c52d-4c9b-8cd1-540e490964a0.md": {
+      "mtimeMs": 1775840928369.9507,
+      "size": 5422,
+      "recordId": "rec_daea503dbe091448",
+      "chunkIds": [
+        "chk_6d59f882d2dee491",
+        "chk_a038be8b217fa742",
+        "chk_90b0dc63a55f8e52",
+        "chk_4578ceb21f687db0",
+        "chk_3f1de22b00c9bcb8",
+        "chk_937a11327ac08140"
+      ]
+    },
+    "proposals/state/denied/prop_1775792177358_25ff21.json": {
+      "mtimeMs": 1775837201365.6033,
+      "size": 7321,
+      "recordId": "rec_e8a169d1f973ea36",
+      "chunkIds": [
+        "chk_f94b0be4fc42b733",
+        "chk_cd8e52b1ed1a0cd8"
+      ]
+    },
+    "chats/transcripts/f1f52bb8-240c-41d0-82c9-3bb2aab7ec04.jsonl": {
+      "mtimeMs": 1775837332767.5078,
+      "size": 2617,
+      "recordId": "rec_ac0721d0090d5a7a",
+      "chunkIds": [
+        "chk_0615b38cec630908",
+        "chk_159673d01a678b8e",
+        "chk_7afd249f88016e5b"
+      ]
+    },
+    "chats/transcripts/f1f52bb8-240c-41d0-82c9-3bb2aab7ec04.md": {
+      "mtimeMs": 1775837332767.5078,
+      "size": 2074,
+      "recordId": "rec_463731f69fb16518",
+      "chunkIds": [
+        "chk_8d18fca33b75ddd1",
+        "chk_9d4782096cf854d7"
+      ]
+    },
+    "chats/sessions/f1f52bb8-240c-41d0-82c9-3bb2aab7ec04.json": {
+      "mtimeMs": 1775837333278.9746,
+      "size": 2623,
+      "recordId": "rec_4d9876cdab9fb0c8",
+      "chunkIds": [
+        "chk_20674bb1a231a493",
+        "chk_45ca9a82e6fe7c6e"
+      ]
+    },
+    "chats/transcripts/brain_thought_2026-04-10_06-20.jsonl": {
+      "mtimeMs": 1775838465400.1353,
+      "size": 457,
+      "recordId": "rec_63385ecd7970affe",
+      "chunkIds": [
+        "chk_add8107983fd1dac"
+      ]
+    },
+    "chats/transcripts/brain_thought_2026-04-10_06-20.md": {
+      "mtimeMs": 1775838465401.1348,
+      "size": 213,
+      "recordId": "rec_b763b4a75e26da91",
+      "chunkIds": [
+        "chk_aeaa93eea0a1d4c1"
+      ]
+    },
+    "chats/sessions/brain_thought_2026-04-10_06-20.json": {
+      "mtimeMs": 1775838465907.4524,
+      "size": 2440,
+      "recordId": "rec_26c108e78fd64235",
+      "chunkIds": [
+        "chk_749912bf0c43830a"
+      ]
+    },
+    "chats/sessions/run_once_7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc_1775840955118.json": {
+      "mtimeMs": 1775840955649.2202,
+      "size": 398,
+      "recordId": "rec_b20757a7e514d917",
+      "chunkIds": [
+        "chk_0dfd2a9ee4871d1c"
+      ]
+    },
+    "tasks/state/7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc.json": {
+      "mtimeMs": 1775840955124.473,
+      "size": 2450,
+      "recordId": "rec_ba7ebeb21e533cf8",
+      "chunkIds": [
+        "chk_8f2b8cd3fa35691c",
+        "chk_1e95ee3814f2d374"
       ]
     }
   }

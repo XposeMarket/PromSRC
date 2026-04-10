@@ -177,6 +177,14 @@ export interface TaskRecord {
   /** Run log ID for tracking this execution in schedule-memory run-log.json */
   scheduleRunId?: string;
 
+  // ── run_task_now fields ────────────────────────────────────────────────────
+  /** 'run_once' = spawned via run_task_now tool; 'scheduled' = cron/scheduled job */
+  taskKind?: 'scheduled' | 'run_once';
+  /** Session that called run_task_now — verification result is delivered here */
+  originatingSessionId?: string;
+  /** Tracks the silent verification phase for run_once tasks */
+  verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
+
   // Ã¢â€â‚¬Ã¢â€â‚¬ Multi-agent architecture fields Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   /** true = use manager/worker split; false or undefined = legacy handleChat() mode */
   managerEnabled?: boolean;
@@ -291,6 +299,9 @@ export function createTask(params: {
   scheduleId?: string;
   /** Executor model assignment: "providerId/model", e.g. "anthropic/claude-haiku-4-5-20251001". Set by proposal dispatch for risk_tier-aware execution. */
   executorProvider?: string;
+  // run_task_now fields
+  taskKind?: 'scheduled' | 'run_once';
+  originatingSessionId?: string;
 }): TaskRecord {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -314,6 +325,10 @@ export function createTask(params: {
     scheduleId: params.scheduleId,
     // Executor model override
     executorProvider: params.executorProvider,
+    // run_task_now linkage
+    taskKind: params.taskKind,
+    originatingSessionId: params.originatingSessionId,
+    verificationStatus: params.taskKind === 'run_once' ? 'pending' : undefined,
 
     plan: params.plan,
     currentStepIndex: 0,

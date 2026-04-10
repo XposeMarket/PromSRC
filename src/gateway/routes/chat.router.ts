@@ -505,6 +505,24 @@ function formatCompactionToolLogs(messages: Array<any>, toolTurns: number): stri
   return lines.join('\n');
 }
 
+function getRollingCompactionProgress(
+  session: any,
+  incomingUserMsg?: { role: 'user'; content: string; timestamp: number },
+): { nonSummarySinceCheckpoint: number; candidateNonSummaryMessages: Array<any> } {
+  const history = Array.isArray(session?.history) ? session.history : [];
+  const candidateHistory = incomingUserMsg ? [...history, incomingUserMsg] : [...history];
+  const checkpointRaw = Number((session as any)?.contextStartIndex);
+  const checkpoint = Number.isFinite(checkpointRaw)
+    ? Math.max(0, Math.min(Math.floor(checkpointRaw), candidateHistory.length))
+    : 0;
+  const candidateSinceCheckpoint = candidateHistory.slice(checkpoint);
+  const candidateNonSummaryMessages = candidateSinceCheckpoint.filter((msg: any) => !isCompactionSummaryMessage(msg));
+  return {
+    nonSummarySinceCheckpoint: candidateNonSummaryMessages.length,
+    candidateNonSummaryMessages,
+  };
+}
+
 function buildFallbackCompactionSummary(previousSummary: string, recentWindow: Array<any>, maxWords: number): string {
   const lines: string[] = [];
   if (previousSummary) {
@@ -529,11 +547,10 @@ async function maybeRunRollingCompaction(
   const policy = resolveRollingCompactionPolicy();
   if (!policy.enabled) return { compacted: false };
   const session = getSession(sessionId);
-  const candidateHistory = [...(Array.isArray(session.history) ? session.history : []), incomingUserMsg];
-  const nonSummaryMessages = candidateHistory.filter((msg: any) => !isCompactionSummaryMessage(msg));
-  if (nonSummaryMessages.length < policy.messageCount) return { compacted: false };
+  const { nonSummarySinceCheckpoint, candidateNonSummaryMessages } = getRollingCompactionProgress(session, incomingUserMsg);
+  if (nonSummarySinceCheckpoint < policy.messageCount) return { compacted: false };
 
-  const recentWindow = nonSummaryMessages.slice(-policy.messageCount);
+  const recentWindow = candidateNonSummaryMessages.slice(-policy.messageCount);
   const previousSummary = String((session as any).latestContextSummary || '').trim()
     || extractLastCompactionSummary(session.history || []);
   const recentMessagesBlock = formatCompactionMessages(recentWindow);
@@ -4796,15 +4813,16 @@ async function runInteractiveTurn(
   let rollingCompactionApplied = false;
 
   if (rollingCompactionPolicy.enabled) {
-    const currentNonSummaryCount = getSession(sessionId).history.filter((msg) => !isCompactionSummaryMessage(msg)).length + 1;
-    const shouldAttemptRollingCompaction = currentNonSummaryCount >= rollingCompactionPolicy.messageCount;
+    const currentSession = getSession(sessionId);
+    const { nonSummarySinceCheckpoint } = getRollingCompactionProgress(currentSession, userMsg);
+    const shouldAttemptRollingCompaction = nonSummarySinceCheckpoint >= rollingCompactionPolicy.messageCount;
     if (shouldAttemptRollingCompaction) {
       sendSSE('tool_call', {
         action: CONTEXT_COMPACTION_TOOL_NAME,
         args: {
           phase: 'start',
           threshold_messages: rollingCompactionPolicy.messageCount,
-          candidate_messages: currentNonSummaryCount,
+          candidate_messages: nonSummarySinceCheckpoint,
           tool_turn_window: rollingCompactionPolicy.toolTurns,
           summary_max_words: rollingCompactionPolicy.summaryMaxWords,
         },
