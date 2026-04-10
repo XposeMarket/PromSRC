@@ -1,0 +1,56 @@
+{
+  "id": "0414b121-9b20-49c4-90f7-6f642b571cf3",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw - every day at 9:57pm EST- Can you send me a message giving me a summary of news events that happened today?",
+      "timestamp": 1772506459577
+    },
+    {
+      "role": "assistant",
+      "content": "You’d like a new recurring job? Just to confirm: should I create a job titled “Daily 9:57 PM ET news summary” that runs every day at 9:57 PM EST and sends you the summary?",
+      "timestamp": 1772506472353
+    },
+    {
+      "role": "user",
+      "content": "yea give melike a bullet point list of the top 5 biggest stories",
+      "timestamp": 1772506634161
+    },
+    {
+      "role": "user",
+      "content": "Yea and give me a bullet point list of the top 5 stories, and change the time to 9:59pm actually",
+      "timestamp": 1772506674632
+    },
+    {
+      "role": "assistant",
+      "content": "Just to confirm: should I create (or update) a recurring “Daily 9:59 PM ET news summary” job that sends you a bullet list of the top five stories every night at 9:59 PM EST?",
+      "timestamp": 1772506685038
+    },
+    {
+      "role": "user",
+      "content": "yes",
+      "timestamp": 1772506688397
+    },
+    {
+      "role": "assistant",
+      "content": "Scheduled “Daily 9:59 PM ET news summary” to deliver a bullet list of the top five stories every night in EST. Let me know if you want to tweak anything else.",
+      "timestamp": 1772506705746
+    },
+    {
+      "role": "user",
+      "content": "thanks!",
+      "timestamp": 1772506715229
+    },
+    {
+      "role": "assistant",
+      "content": "🦞 You’re welcome!",
+      "timestamp": 1772506722654
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772506435468,
+  "lastActiveAt": 1772506722654,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 289
+}

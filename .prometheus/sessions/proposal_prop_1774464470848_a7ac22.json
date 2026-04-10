@@ -1,0 +1,21 @@
+{
+  "id": "proposal_prop_1774464470848_a7ac22",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774465828734
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Deterministic Telegram-origin routing for post-restart completion\nReason: Task stopped after 3 failed attempts.\nDetails: Round timeout (120s)\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: a7d10872-aa7e-4aab-8e01-832cb8f4da79",
+      "timestamp": 1774465828737
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774464830475,
+  "lastActiveAt": 1774465828738,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 121
+}

@@ -1,0 +1,68 @@
+{
+  "scheduleId": "job_1773959512849_ib6yr",
+  "runs": [
+    {
+      "runId": "7b12f8cb-d027-46ae-846c-d52e52b7c8aa",
+      "scheduledAt": 1773959516662,
+      "startedAt": 1773959516662,
+      "status": "complete",
+      "taskId": "7d9d07aa-bca6-4fa1-8b2e-3caad5692ed3",
+      "evidenceWritten": 0,
+      "completedAt": 1773959598141,
+      "summary": "Done — I’ve now completed the required final step and saved the run insight note.\n\nIf you want, next I can create the **actual hourly scheduled job in EST** using this exact prompt and trigger a **run_now** immediately so you can see it live end-to-end.",
+      "attempts": 1
+    },
+    {
+      "runId": "f5301893-66bf-415a-9631-7c8506f01332",
+      "scheduledAt": 1773961370333,
+      "startedAt": 1773961370334,
+      "status": "running",
+      "taskId": "fa2a646c-62aa-4b95-abfc-6c98a10f6fbe",
+      "evidenceWritten": 0
+    },
+    {
+      "runId": "76c36020-d067-4acd-8fc7-e9a3132ba668",
+      "scheduledAt": 1773961561557,
+      "startedAt": 1773961561558,
+      "status": "complete",
+      "taskId": "b5baee4d-5463-4288-b696-32e6f30c8306",
+      "evidenceWritten": 0,
+      "completedAt": 1773961688846,
+      "summary": "Done — I’ve executed the required next tool call (`write_note`) for step 4 reflection.\n\nGiven the scheduler’s plan-state mismatch, remaining operational step is step 2 data-fetch continuation if you want stricter completion tracking; I can continue with additional `web_fetch` pulls from accessible direct pages (e.g., Fed releases/BLS/Treasury/CNBC live markets) in the next run cycle.",
+      "attempts": 1
+    },
+    {
+      "runId": "63b50b79-d128-4c42-b089-9b9c3be14ca4",
+      "scheduledAt": 1773964036272,
+      "startedAt": 1773964036272,
+      "status": "complete",
+      "taskId": "5506916f-17f0-4030-a7fd-7ed5f037c84e",
+      "evidenceWritten": 0,
+      "completedAt": 1773964212613,
+      "summary": "Done.",
+      "attempts": 1
+    },
+    {
+      "runId": "3b7fdd00-dd85-4b49-97a0-48bd3d101ace",
+      "scheduledAt": 1773965601973,
+      "startedAt": 1773965601973,
+      "status": "complete",
+      "taskId": "ecc41ea4-c72c-4a9e-b3bd-60952337e24b",
+      "evidenceWritten": 0,
+      "completedAt": 1773965880813,
+      "summary": "# MNQ/MES Market-Impact Report (Last 60–90 Min Synthesis)\n\n## A) Executive Summary\nThe dominant near-term driver remains **geopolitics feeding energy risk, then rates repricing**, which is creating a fragile, headline-sensitive equity futures environment. In this setup, **MNQ is more reactive than MES** to any move in yields and inflation expectations, so directional trades require tighter confirm",
+      "attempts": 1
+    },
+    {
+      "runId": "32426694-87e0-483a-bad6-63e9fb441369",
+      "scheduledAt": 1773967471214,
+      "startedAt": 1773967471214,
+      "status": "complete",
+      "taskId": "1e4621d8-1a43-4a55-a350-b1eeb661a256",
+      "evidenceWritten": 0,
+      "completedAt": 1773967576103,
+      "summary": "## Final Market Intelligence Report (MNQ / MES Focus)\n\n### 1) Executive Summary\nToday’s dominant chain was **geopolitics → crude oil strength → inflation/rates repricing → pressure on growth/tech beta**, with **MNQ showing higher directional sensitivity than MES**. Risk stayed headline-driven, and intraday reactions were sharper around energy and rate signals than around single-company news.\n\n### ",
+      "attempts": 1
+    }
+  ]
+}

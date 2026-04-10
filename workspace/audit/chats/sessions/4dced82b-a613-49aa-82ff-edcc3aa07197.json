@@ -1,0 +1,18 @@
+{
+  "id": "4dced82b-a613-49aa-82ff-edcc3aa07197",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hi",
+      "timestamp": 1772083903173
+    },
+    {
+      "role": "assistant",
+      "content": "Ready to help with your workspace tasks?",
+      "timestamp": 1772083941829
+    }
+  ],
+  "workspace": "d:\\SmallClaw\\workspace",
+  "createdAt": 1772083901652,
+  "lastActiveAt": 1772083941829
+}

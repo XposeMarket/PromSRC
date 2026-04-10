@@ -1,0 +1,21 @@
+{
+  "id": "0a037dab-195d-4fb6-b7bc-2be22d7ef9a5",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw",
+      "timestamp": 1773019055958
+    },
+    {
+      "role": "assistant",
+      "content": "Hey! 👋 What can I help you with?",
+      "timestamp": 1773019068070
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1773019056077,
+  "lastActiveAt": 1773019068070,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 25
+}

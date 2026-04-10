@@ -1,0 +1,23 @@
+{
+  "id": "auto_restart_manual_1775687201087",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Restart complete — Prometheus is back up, and Telegram polling should be resumed after the quick manual restart request. No files changed in this restart; this looks like a straight gateway/process reboot rather than a code update.\n\nWhat do you want me to verify next: Telegram message intake, outbound replies, or the broader gateway health?",
+      "timestamp": 1775687247851
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775687201167,
+  "lastActiveAt": 1775687247855,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 104,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "scheduling"
+  ]
+}

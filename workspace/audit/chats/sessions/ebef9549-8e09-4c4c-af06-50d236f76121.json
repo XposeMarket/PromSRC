@@ -1,0 +1,18 @@
+{
+  "id": "ebef9549-8e09-4c4c-af06-50d236f76121",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw can you give me the latest price on bitcoin",
+      "timestamp": 1771963706427
+    },
+    {
+      "role": "assistant",
+      "content": "Latest Bitcoin price: $64,427.55 (USD).",
+      "timestamp": 1771963844717
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771956470753,
+  "lastActiveAt": 1771963844717
+}

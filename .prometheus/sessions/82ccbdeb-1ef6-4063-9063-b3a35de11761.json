@@ -1,0 +1,25 @@
+{
+  "id": "82ccbdeb-1ef6-4063-9063-b3a35de11761",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom can you go ahead and confirm that the tavily and google api keys are working for web searches",
+      "timestamp": 1775194817010
+    },
+    {
+      "role": "assistant",
+      "content": "Both Tavily and Google API keys are working — the search ran with `[Multi-engine: tavily+google]` and returned results from both providers without errors. ✓",
+      "timestamp": 1775194822511
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775194817010,
+  "lastActiveAt": 1775194822511,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 87,
+  "activatedToolCategories": [
+    "scheduling"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774647570244",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "✅ **Manual gateway restart is complete** and Prometheus is back up.  \nFor this restart, there were **no file/code changes** and **no new build run**; latest known build status remains successful from earlier today (`npm run build`, `tsc` exit code 0).\n\nHigh-level, today’s shipped changes are still in effect: boot/hot-restart outputs now route to **fresh unread automated sessions**, session notifications surface reliably even when another chat is active, and the duplicate TasksPage auto-session fallback race was removed (with backward-compatible payload fields preserved).\n\nWhat do you want me to verify next: a simple responsiveness check, tool availability check, or both?",
+      "timestamp": 1774647582179
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774647570343,
+  "lastActiveAt": 1774647582180,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 200,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

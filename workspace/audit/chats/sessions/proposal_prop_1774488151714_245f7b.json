@@ -1,0 +1,21 @@
+{
+  "id": "proposal_prop_1774488151714_245f7b",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774540777510
+    },
+    {
+      "role": "assistant",
+      "content": "Implemented successfully. ### What changed 1. **Created** `[REDACTED-HE].md` - Added full frontmatter with: - `name: MCP Ops Troubleshooting` - `description` focused on transport-aware MCP diagnostics - `emoji: 🧰` - `version: 1.0.0` - comprehensive `triggers` list for common MCP debugging language - Added actionable sections for: - ordered MCP triage flow - config validation - env sanitization + secret redaction rules - **transport-specific diagnostics** for `stdio`, `sse`, and `http` - namespace/tool-discovery troubleshooting - deterministic recovery/rollback flow - post-fix verification and incident summary template 2. **Edited** `skills/_state.json` - Registered the new skill entry: ```json \"mcp-ops-troubleshooting\": false ``` ### Section outline (new skill) - When to Use This - Core Principles - Fast Triage Sequence - Transport-Specific Diagnostic Flow - stdio - sse - http - Namespace & Tool Discovery Troubleshooting - Config & Env Sanitization Rules - Recovery and Rollback Playbook - Minimal Incident Report Template - Hard Safety Rules - Completion Checklist ### Trigger list `mcp troubleshooting, mcp server failed, mcp connect error, tool discovery failed, namespace missing, stdio transport error, sse transport error, http transport error, mcp config validation, sanitize env vars, mcp rollback, mcp diagnostics, mcp tools not showing, reconnect mcp server, mcp server manage` No issues encountered.",
+      "timestamp": 1774540777511
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774540777511,
+  "lastActiveAt": 1774540777511,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 446
+}

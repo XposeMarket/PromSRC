@@ -1,0 +1,15 @@
+{
+  "taskId": "e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f",
+  "createdAt": 1773480621160,
+  "updatedAt": 1773480621162,
+  "entries": [
+    {
+      "id": "dc048e73-bc9e-4984-bc4e-046f1cd23424",
+      "t": 1773480621162,
+      "stepIndex": 0,
+      "category": "finding",
+      "key": "last_run_insight",
+      "value": "Tried multiple paths to hit the local execute-approved endpoint; direct HTTP tools failed in this environment, so fallback app-opening did not return dispatch data. Pattern: prefer a command-capable HTTP client pathway first when available to capture JSON response reliably."
+    }
+  ]
+}

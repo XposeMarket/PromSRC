@@ -1,0 +1,51 @@
+{
+  "id": "9ef294d4-1014-422c-909d-53a0e9afd922",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw",
+      "timestamp": 1773434879474
+    },
+    {
+      "role": "assistant",
+      "content": "Hey! I’m here—what do you want to work on?",
+      "timestamp": 1773434893611
+    },
+    {
+      "role": "user",
+      "content": "Nothing much - hows it going?",
+      "timestamp": 1773434915789
+    },
+    {
+      "role": "assistant",
+      "content": "Going good—running smooth and ready whenever you are. 😄",
+      "timestamp": 1773434924884
+    },
+    {
+      "role": "user",
+      "content": "Dont use the write_note tool every time lol - good job in knowing how to use it - but you dont need it every turn, only when its actually something worth noting or remembering - write THAT in the note and thats it",
+      "timestamp": 1773434958417
+    },
+    {
+      "role": "assistant",
+      "content": "Perfect call — agreed. I’ll only use `write_note` for genuinely important, lasting things, not routine chat turns.",
+      "timestamp": 1773434965342
+    },
+    {
+      "role": "user",
+      "content": "Great, so tell me about yourself claw :)",
+      "timestamp": 1773434976113
+    },
+    {
+      "role": "assistant",
+      "content": "I’m Claw — your local AI sidekick on this machine.  \nI can help you research, code, edit files, automate browser/desktop tasks, and handle repetitive workflows fast and clean.\n\nStyle-wise: I’m direct, practical, and built to *do* things, not just talk about them.  \nIf you want, I can also be your “second brain” for projects—planning steps, tracking progress, and keeping you moving.",
+      "timestamp": 1773434984245
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1773434879474,
+  "lastActiveAt": 1773434984245,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 304
+}

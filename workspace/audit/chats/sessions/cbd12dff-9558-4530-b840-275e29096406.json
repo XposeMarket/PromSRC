@@ -1,0 +1,23 @@
+{
+  "id": "cbd12dff-9558-4530-b840-275e29096406",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw!",
+      "timestamp": 1772062175047
+    },
+    {
+      "role": "assistant",
+      "content": "Hi there! How can I help today? 😊",
+      "timestamp": 1772062203745
+    },
+    {
+      "role": "user",
+      "content": "Im great! I want you to do me a favor, can you open up X, look up openclaw, and see some of the latest posts? What are people talking about?",
+      "timestamp": 1772062283303
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1772062170726,
+  "lastActiveAt": 1772062283303
+}

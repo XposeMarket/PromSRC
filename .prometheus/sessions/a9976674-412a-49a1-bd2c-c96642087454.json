@@ -1,0 +1,18 @@
+{
+  "id": "a9976674-412a-49a1-bd2c-c96642087454",
+  "history": [
+    {
+      "role": "user",
+      "content": "can you go ahead and open up youtube and look up videos about openclaw",
+      "timestamp": 1771828564823
+    },
+    {
+      "role": "assistant",
+      "content": "Keep it short: 1-2 sentences. Mention the trending status, the channels, and note the possible typo.\n\nHere's what I found for \"openclaw\" videos (2026): Top results show OpenClaw is trending as a viral AI agent (Fireship, KashiDHQ channels), with videos about its \"wild rise\" and enterprise use cases. Note: This likely refers to *LocalClaw* (my name) but spelled differently in searches.",
+      "timestamp": 1771828798123
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771828565170,
+  "lastActiveAt": 1771828798123
+}

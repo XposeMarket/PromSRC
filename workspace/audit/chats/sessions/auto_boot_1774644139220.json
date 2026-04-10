@@ -1,0 +1,22 @@
+{
+  "id": "auto_boot_1774644139220",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "No active task or schedule data is currently available (`task_control` and `schedule` are unavailable), so there’s nothing queued that needs immediate action from those systems. Today’s key completed work was the boot/hot-restart routing fix: automated outputs now reliably go to a brand-new unread automated chat session, frontend notifications surface correctly even when another chat is open, duplicate fallback race logic was removed, and backward compatibility was preserved. We left off in a meta-runtime discussion where you were verifying exactly which injected prompt layers/rules I’m following (especially around no-tool casual chat and action-first behavior).",
+      "timestamp": 1774644149508
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774644139313,
+  "lastActiveAt": 1774644149508,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 198,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

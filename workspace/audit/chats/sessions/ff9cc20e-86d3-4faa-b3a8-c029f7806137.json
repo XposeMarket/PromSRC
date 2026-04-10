@@ -1,0 +1,18 @@
+{
+  "id": "ff9cc20e-86d3-4faa-b3a8-c029f7806137",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw, can you give me the latest info on the epstein case? and also on pam bondis hearing a few days ago, what happened with that?",
+      "timestamp": 1771902359519
+    },
+    {
+      "role": "assistant",
+      "content": "So the response should have two tool_call blocks.",
+      "timestamp": 1771902710958
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771902359519,
+  "lastActiveAt": 1771902710958
+}

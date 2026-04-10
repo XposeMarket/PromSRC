@@ -1,0 +1,17 @@
+{
+  "id": "auto_boot_1775068196277",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Startup snapshot is partially limited right now since both `task_control` and `schedule` are unavailable, so I can’t confirm current active tasks or upcoming scheduled runs from live systems. The key carry-forward note is that last run’s weekly review method worked best by combining `schedule_job` and `task_control` telemetry, with a known issue around inconsistent running vs. paused metadata that should be explicitly flagged next time. Where things left off: continue the weekly self-improvement review workflow using that combined-signal approach, while treating status mismatches as a first-class reporting item.",
+      "timestamp": 1775068200368
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775068196287,
+  "lastActiveAt": 1775068200369,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 183
+}

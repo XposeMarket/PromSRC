@@ -1,0 +1,23 @@
+{
+  "id": "auto_restart_manual_1774649376372",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "1) ✅ **Manual restart test completed** — gateway restart finished successfully with **no file/code changes** in this run. Build lifecycle is healthy (latest known `npm run build` / `tsc` status remains passing), and this restart was executed to validate notification sequencing.\n\n2) **High-level:** behavior remains unchanged functionally; this run was purely a runtime restart to verify Telegram delivery order for lifecycle events (**build start → build success → hot restart**). Recent routing/notification improvements remain in place for fresh unread automated-session visibility.\n\n3) Can you confirm what you received in Telegram (and in what order)? If you want, I can format a quick pass/fail checklist against the expected 3-message sequence next.",
+      "timestamp": 1774649383245
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774649376405,
+  "lastActiveAt": 1774649383245,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 222,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling",
+    "integrations"
+  ]
+}

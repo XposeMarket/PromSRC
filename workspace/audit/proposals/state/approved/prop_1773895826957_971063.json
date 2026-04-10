@@ -1,0 +1,27 @@
+{
+  "type": "general",
+  "priority": "low",
+  "title": "Test proposal: create second blank file in src/",
+  "summary": "Creates another blank test file in src/ to validate proposal approval flow.",
+  "details": "This is a second test proposal requested by the user to validate the proposal workflow. If approved, it will create an empty file at `src/test-proposal-blank-file-2.txt`.",
+  "sourceAgentId": "code_executor",
+  "sourceSessionId": "681da8b0-534e-46c9-bf40-8a6332e7cb78",
+  "affectedFiles": [
+    {
+      "path": "src/test-proposal-blank-file-2.txt",
+      "action": "create",
+      "description": "Blank test file for proposal flow validation"
+    }
+  ],
+  "diffPreview": "+++ src/test-proposal-blank-file-2.txt\n+(empty file)",
+  "estimatedImpact": "No runtime impact; adds one empty test file only after approval.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Create a new empty file at src/test-proposal-blank-file-2.txt and do not modify any other files.",
+  "id": "prop_1773895826957_971063",
+  "status": "executing",
+  "createdAt": 1773895826957,
+  "updatedAt": 1773895832425,
+  "decidedAt": 1773895832409,
+  "executorTaskId": "proposal_prop_1773895826957_971063"
+}

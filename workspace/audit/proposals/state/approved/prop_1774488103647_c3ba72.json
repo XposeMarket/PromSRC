@@ -1,0 +1,32 @@
+{
+  "type": "skill_evolution",
+  "priority": "medium",
+  "title": "Canonicalize PDF skills: merge routing and deprecate pdf-extractor via redirect",
+  "summary": "Resolve overlap between pdf-reader and pdf-extractor by defining a single canonical workflow and turning pdf-extractor into a deprecation redirect.",
+  "details": "Implement a conservative merge without hard deletion.\n\nScope:\n1. Update `skills/pdf-reader/SKILL.md` as canonical PDF workflow (Node-first, with explicit fallback branch where needed).\n2. Convert `skills/pdf-extractor/SKILL.md` into a deprecation shim pointing to `pdf-reader`.\n3. Clarify trigger precedence so PDF requests route predictably.\n4. Preserve backward compatibility for one release cycle by keeping deprecated skill file present.\n\nAcceptance:\n- One canonical PDF skill is clearly documented.\n- Deprecated skill has explicit redirect and non-ambiguous messaging.\n- No hard removal in this pass.",
+  "sourceAgentId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "sourceSessionId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "affectedFiles": [
+    {
+      "path": "skills/pdf-reader/SKILL.md",
+      "action": "edit",
+      "description": "Set canonical PDF workflow and precedence guidance."
+    },
+    {
+      "path": "skills/pdf-extractor/SKILL.md",
+      "action": "edit",
+      "description": "Replace overlapping content with deprecation/redirect shim."
+    }
+  ],
+  "diffPreview": "~ `pdf-reader` becomes canonical, with explicit branching guidance.\n~ `pdf-extractor` converted into deprecation redirect (kept for compatibility).",
+  "estimatedImpact": "Eliminates routing ambiguity and cuts maintenance overhead while avoiding abrupt breakage.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Edit `skills/pdf-reader/SKILL.md` to be the single canonical PDF workflow and document clear trigger precedence. Convert `skills/pdf-extractor/SKILL.md` into a deprecation/redirect shim to `pdf-reader` (no hard delete). Keep compatibility wording for one release cycle. Return final trigger/routing notes included in both skills.",
+  "id": "prop_1774488103647_c3ba72",
+  "status": "executing",
+  "createdAt": 1774488103648,
+  "updatedAt": 1774498087951,
+  "decidedAt": 1774498087944,
+  "executorTaskId": "proposal_prop_1774488103647_c3ba72"
+}

@@ -1,0 +1,17 @@
+{
+  "id": "telegram_1799053599_1775085466781",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "✅ Started a new Telegram chat session. This thread is now linked to the new channel session.",
+      "timestamp": 1775085466781
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "telegram",
+  "createdAt": 1775085466781,
+  "lastActiveAt": 1775085466781,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 33
+}

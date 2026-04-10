@@ -1,0 +1,34 @@
+{
+  "id": "d5809570-2f91-4277-9db4-c1ccd7d60cbf",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey prom just confirming you still have access to your composite tools rihgt",
+      "timestamp": 1775802999005
+    },
+    {
+      "role": "assistant",
+      "content": "Yep — I still have access to composite tools. I can list them, inspect one, create new ones, edit existing ones, or delete them.",
+      "timestamp": 1775803005087,
+      "toolLog": "✓ list_composites({}): • x_post_text (3 steps) — Post text to X by using the inline home composer on x.com/home. This verif"
+    },
+    {
+      "role": "user",
+      "content": "which ones do we currently have",
+      "timestamp": 1775803024232
+    },
+    {
+      "role": "assistant",
+      "content": "Currently just one:\n\n- `x_post_text` — posts text to X using the inline home composer on x.com/home.",
+      "timestamp": 1775803033692
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775802999006,
+  "lastActiveAt": 1775803033693,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 121,
+  "contextStartIndex": 0
+}

@@ -1,0 +1,21 @@
+{
+  "id": "7029d386-4259-4bd9-b62b-8c45753ef277",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw",
+      "timestamp": 1773453033990
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Ollama chat failed: fetch failed",
+      "timestamp": 1773453035039
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1773453033990,
+  "lastActiveAt": 1773453035039,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 27
+}

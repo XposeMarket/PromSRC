@@ -1,0 +1,16 @@
+{
+  "id": "9dadbdff-0c90-42c8-b537-31dd5fb25e4d",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw, what sub agents do we have",
+      "timestamp": 1772762378689
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772762368477,
+  "lastActiveAt": 1772762378689,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 17
+}

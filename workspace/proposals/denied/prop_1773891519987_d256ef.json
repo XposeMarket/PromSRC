@@ -1,0 +1,46 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Improve proposal execution UX: run-in-chat default, visibility, and command reliability",
+  "summary": "Make approved proposals execute in the active chat by default, add explicit proposal↔task linkage/status visibility, and harden command execution so detached shells cannot produce false success.",
+  "details": "This change improves trust and debuggability in the proposal workflow by fixing three failure modes observed during proposal execution.\n\n## Scope\n\n1) **Execution routing default**\n- When a proposal is approved from an active chat, route execution to that same chat/session by default.\n- Keep isolated/background execution as an explicit opt-in.\n- Persist and display the chosen routing mode in proposal metadata for auditability.\n\n2) **Proposal ↔ task visibility**\n- On approval, create and persist a deterministic mapping between `proposal_id` and `task_id`.\n- Surface this mapping in:\n  - proposal list/detail views,\n  - task detail view,\n  - runtime logs/events.\n- Add clear states and reasons for `queued`, `paused`, `awaiting_user_input`, and `needs_assistance`.\n- Provide one-click actions where relevant: resume, rerun, cancel.\n\n3) **Command runner reliability**\n- Disallow detached validation/execution patterns (`cmd /k`, `start`, or equivalent fire-and-forget) in proposal execution pipelines.\n- Require blocking execution with exit-code verification (`cmd /c` or direct process spawn with await).\n- Mark proposal step successful only if command exits with code 0 and expected artifact/check passes.\n- On non-zero exit or timeout, emit structured error with actionable message and keep task in recoverable state.\n\n## Implementation notes\n- Update approval handler to carry current chat/session context and set it as execution target unless explicitly overridden.\n- Introduce/extend schema fields such as:\n  - `proposal.execution_target` (e.g., `current_session|isolated`)\n  - `proposal.linked_task_id`\n  - `task.linked_proposal_id`\n  - `task.pause_reason` / `task.block_reason`\n- Ensure UI/API serializers include the new linkage fields.\n- Add guardrails in command utility to reject known detached patterns during proposal execution context.\n- Add telemetry events:\n  - `proposal.approved`\n  - `proposal.execution.started`\n  - `proposal.execution.failed`\n  - `proposal.execution.completed`\n  each containing proposal/task linkage IDs.\n\n## Acceptance criteria\n- Approving a proposal in-chat starts execution in that same chat by default.\n- User can always see the exact task created for a proposal and its current blocking reason.\n- Validation commands cannot silently pass via detached shells.\n- No proposal marked complete unless command/process checks actually succeeded.\n",
+  "sourceAgentId": "code_executor",
+  "sourceSessionId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/proposals/*",
+      "action": "edit",
+      "description": "Approval flow, proposal metadata, and routing defaults"
+    },
+    {
+      "path": "src/gateway/tasks/*",
+      "action": "edit",
+      "description": "Task linkage fields, status reason handling, and task controls"
+    },
+    {
+      "path": "src/gateway/terminal-ui.ts",
+      "action": "edit",
+      "description": "Surface proposal-task linkage and blocked/paused reasons in UI"
+    },
+    {
+      "path": "src/utils/command-runner*",
+      "action": "edit",
+      "description": "Reject detached shells and enforce exit-code-gated completion"
+    },
+    {
+      "path": "src/types/*",
+      "action": "edit",
+      "description": "Shared types for proposal/task linkage and execution target"
+    }
+  ],
+  "diffPreview": "// proposal approval pseudo-diff\n- const target = options?.sessionTarget ?? 'isolated';\n+ const target = options?.sessionTarget ?? 'current_session';\n\n+ const task = await taskService.create({ ... , linked_proposal_id: proposal.id });\n+ await proposalStore.update(proposal.id, { linked_task_id: task.id, execution_target: target });\n\n// command runner guard\n- spawn('cmd', ['/k', cmd]);\n+ if (isDetachedPattern(cmdArgs)) throw new Error('Detached execution is not allowed in proposal runs');\n+ const result = await spawnAndWait(process, args, { timeoutMs });\n+ if (result.exitCode !== 0) throw new Error(`Command failed with exit code ${result.exitCode}`);",
+  "estimatedImpact": "Higher operator trust, fewer false-positive completions, faster debugging via direct proposal↔task traceability, and reduced stuck/opaque execution states.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved proposal exactly as specified: set in-chat execution as default for approved proposals, add explicit proposal-task linkage and blocking-reason visibility across API/UI, and enforce non-detached command execution with exit-code-gated success. Update tests for approval routing, linkage serialization, paused/queued reason display, and command failure handling. Run build/tests and report changed files + verification output.",
+  "id": "prop_1773891519987_d256ef",
+  "status": "denied",
+  "createdAt": 1773891519988,
+  "updatedAt": 1773894672431,
+  "decidedAt": 1773894672431
+}

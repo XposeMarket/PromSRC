@@ -1,0 +1,14 @@
+{
+  "id": "background_bg_3c5b4acc-5f68-42e0-9e5e-63546930fe87",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774664882463,
+  "lastActiveAt": 1774664882463,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "browser",
+    "scheduling"
+  ]
+}

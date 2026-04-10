@@ -1,0 +1,25 @@
+{
+  "id": "proposal_prop_1775368084843_2d8974",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1775368198889
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Fix Telegram desktop screenshot monitor cache invalidation on /screenshot desktop button\nReason: Task paused — model returned an unrecoverable error at step 1.\nDetails: Error: Anthropic API error 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 210763 tokens > 200000 maximum\"},\"request_id\":\"req_011CZk6n7oafBNoFnBK8uiaJ\"}\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: c9ecd394-5341-4bbe-b7ce-d31aee00c462",
+      "timestamp": 1775368198890
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775368106751,
+  "lastActiveAt": 1775368198890,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 185,
+  "activatedToolCategories": [
+    "source_write"
+  ]
+}

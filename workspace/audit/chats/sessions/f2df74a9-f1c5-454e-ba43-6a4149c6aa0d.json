@@ -1,0 +1,21 @@
+{
+  "id": "f2df74a9-f1c5-454e-ba43-6a4149c6aa0d",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you go ahead and run a test for me - make a post on X for me, then go ahead and modify the x posting composite tool to work properly",
+      "timestamp": 1775687378000
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775687378000,
+  "lastActiveAt": 1775687378015,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 45,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser"
+  ]
+}

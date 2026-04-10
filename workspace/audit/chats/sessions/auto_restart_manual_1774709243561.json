@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774709243561",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "**✅ Prometheus gateway rebooted and Telegram polling resumed.**\n\n**What's live from this morning's work:**\n- Fixed Anthropic adapter tool_use/tool_result pairing (deterministic ID tracking, malformed payloads now downgraded to text)\n- Hardened switch_model fail-open behavior across chat.router, subagent-executor, and dynamic provider wording\n- Updated prompt-context.ts to inject full intraday notes without truncation (Tier-2/3 context now includes TODAY_NOTES)\n\nAll three changes built and verified (tsc exit 0). Gateway is ready. What would you like me to check or continue with?",
+      "timestamp": 1774709247112
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774709243574,
+  "lastActiveAt": 1774709247113,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 173,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

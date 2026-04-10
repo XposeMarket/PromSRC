@@ -283,11 +283,11 @@ function isStaleWindowsPath(p: string): boolean {
 }
 
 // Replace a stale Windows path with a sensible cross-platform fallback.
-// workspace → WORKSPACE_DIR, skills → WORKSPACE_DIR/skills, memory → CONFIG_DIR/memory,
+// workspace → WORKSPACE_DIR, skills → CONFIG_DIR/skills, memory → CONFIG_DIR/memory,
 // everything else → WORKSPACE_DIR (safe catch-all).
 function resolveStaleWindowsPath(p: string): string {
   const lp = String(p || '').toLowerCase().replace(/\\/g, '/');
-  if (lp.includes('skill')) return path.join(WORKSPACE_DIR, 'skills');
+  if (lp.includes('skill')) return path.join(CONFIG_DIR, 'skills');
   if (lp.includes('memory')) return path.join(CONFIG_DIR, 'memory');
   return WORKSPACE_DIR;
 }
@@ -316,7 +316,7 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
   }
 
   if (out?.skills?.directory && isStaleWindowsPath(out.skills.directory)) {
-    const fixed = path.join(WORKSPACE_DIR, 'skills');
+    const fixed = path.join(CONFIG_DIR, 'skills');
     console.log(`[Config] Replacing stale Windows skills path "${out.skills.directory}" → "${fixed}"`);
     out.skills = { ...(out.skills || {}), directory: fixed };
   }
@@ -680,3 +680,4 @@ export function ensureAgentWorkspace(agent: AgentDefinition): string {
   }
   return ws;
 }
+

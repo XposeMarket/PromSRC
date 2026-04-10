@@ -1,0 +1,21 @@
+{
+  "id": "7edf0f8e-819d-4d87-ac3d-084f11114ca2",
+  "history": [
+    {
+      "role": "user",
+      "content": "what tools do you have related to src files",
+      "timestamp": 1774474726773
+    },
+    {
+      "role": "assistant",
+      "content": "For **src/ files** specifically, I have these tools:\n\n- `list_source(path?)` — list files/folders under `src/`\n- `read_source(file, head?, tail?)` — read source files (read-only)\n- `grep_source(pattern, path?, glob?, ...)` — search across `src/` contents\n\nFor **editing `src/` files** (only in proposal execution sessions):\n\n- `find_replace_source(file, find, replace)` — exact text replace\n- `replace_lines_source(file, start_line, end_line, new_content)` — line-range replacement\n\nAnd for `src/` edits, I’m expected to use `write_proposal(...)` first for approval before changes.",
+      "timestamp": 1774474745033
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774474726867,
+  "lastActiveAt": 1774474745033,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 191
+}

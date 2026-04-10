@@ -1,0 +1,51 @@
+{
+  "type": "feature_addition",
+  "priority": "high",
+  "title": "Improve proposal execution UX: run-in-chat default, visibility, and command reliability",
+  "summary": "Make approved proposals execute in the approving chat by default, add first-class proposal-to-task visibility, and enforce reliable validation command execution with real exit-code checks.",
+  "details": "## Problem\nUsers are seeing approved proposals execute in the background without clear in-chat visibility, and validation commands appear to complete even when launched detached (`cmd /k`), which can produce misleading success states.\n\n## Goals\n1. Approved proposals should execute in the same chat/session that approved them by default.\n2. If execution is backgrounded, users must get a visible, clickable task linkage and status trail.\n3. Validation/build/test steps must not use detached shells; completion must be tied to real process exit codes.\n\n## Implementation Plan\n\n### A) Proposal execution routing (default: same chat)\n- Update proposal approval handling to capture `approvingSessionId` / `approvingChannel` and prefer it as execution target.\n- Add explicit fallback order:\n  1. approving chat/session\n  2. proposal origin chat/session\n  3. default agent session\n- Add a user-facing execution mode field in proposal metadata:\n  - `execution_mode: \"in_chat\" | \"background\"`\n  - default `in_chat` when approved from chat UI.\n\n### B) Proposal ↔ task observability\n- Persist `task_id` on proposal record immediately when execution starts.\n- In chat approval response, always post:\n  - task id\n  - current status\n  - quick actions hints (view/get/resume)\n- In proposals panel, add status badge and direct link to running task logs.\n- Ensure terminal/log stream includes both proposal id and task id in each run header.\n\n### C) Command execution reliability (no detached cmd)\n- Replace detached patterns like:\n  - `start cmd /k \"npm run build\"`\n  - `start cmd /k \"npm test\"`\n- Enforce direct foreground command invocation through the command runner so completion depends on process exit.\n- Add guardrail in runner:\n  - if command string matches detached shell patterns (`start cmd`, `cmd /k`, similar), mark as invalid for validation steps and return actionable error.\n- Ensure run report includes:\n  - exit code\n  - stdout/stderr capture summary\n  - pass/fail per validation step\n\n### D) Completion semantics\n- Do not mark step/task complete until validation commands return successful exits.\n- If command is still running or detached, status must remain `running` or `failed` with reason.\n\n## Acceptance Criteria\n- Approving a proposal in a chat shows execution progress in that same chat by default.\n- Every approved proposal has a visible linked `task_id` and can be inspected from both chat and proposals panel.\n- Validation commands use non-detached execution only; task completion is blocked on real exit codes.\n- Logs clearly explain why any command was rejected (e.g., detached shell pattern).\n\n## Risk/Compatibility\n- Low-to-medium risk; mostly routing/UX and command policy hardening.\n- Background execution still supported when explicitly selected.\n\n## Validation Plan\n- Approve test proposal in-chat and confirm in-chat step streaming.\n- Approve test proposal from panel and verify chosen execution mode behavior.\n- Run build/test with both valid and detached commands; confirm detached is rejected and valid commands report real exits.",
+  "sourceAgentId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "sourceSessionId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "affectedFiles": [
+    {
+      "path": "src/proposals/approval-handler.ts",
+      "action": "edit",
+      "description": "Route execution to approving chat/session by default and set execution mode metadata"
+    },
+    {
+      "path": "src/proposals/proposal-store.ts",
+      "action": "edit",
+      "description": "Persist task_id linkage and execution metadata"
+    },
+    {
+      "path": "src/ui/proposals-panel.tsx",
+      "action": "edit",
+      "description": "Show linked task status and quick navigation to logs"
+    },
+    {
+      "path": "src/runtime/task-dispatcher.ts",
+      "action": "edit",
+      "description": "Ensure proposal/task correlation IDs are present in run headers and status events"
+    },
+    {
+      "path": "src/tools/run-command.ts",
+      "action": "edit",
+      "description": "Block detached shell patterns for validation and enforce exit-code-gated completion"
+    },
+    {
+      "path": "src/runtime/step-completion.ts",
+      "action": "edit",
+      "description": "Prevent step completion until validation command exits successfully"
+    }
+  ],
+  "diffPreview": "// Example guardrail\nif (isValidationStep && /(^|\\s)(start\\s+cmd|cmd\\s*\\/k)\\b/i.test(command)) {\n  throw new Error('Detached shell commands are not allowed for validation. Run command directly so exit code can be verified.');\n}\n\n// Proposal linkage\nproposal.execution = {\n  mode: approvedFromChat ? 'in_chat' : 'background',\n  approvingSessionId,\n  taskId,\n};",
+  "estimatedImpact": "Higher trust in proposal execution, immediate user visibility of running work, and elimination of false-positive validation completions from detached command launches.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement proposal execution UX and reliability improvements exactly as specified in this proposal: (1) default approved proposals to execute in approving chat/session, (2) persist and surface proposal↔task linkage in chat and proposals UI, (3) block detached cmd patterns for validation and gate completion on real exit codes, and (4) ensure step/task completion semantics reflect true process status. After edits, run build/tests with non-detached commands only and report changed files plus validation results.",
+  "id": "prop_1773890022666_f51eef",
+  "status": "denied",
+  "createdAt": 1773890022666,
+  "updatedAt": 1773890229667,
+  "decidedAt": 1773890229667
+}

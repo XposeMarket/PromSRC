@@ -1,0 +1,31 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Persist restart origin/channel and Telegram completion notification on hot restart",
+  "summary": "Update gateway restart context and boot recovery so restart completion routes to the right session with deterministic fallback and optionally sends Telegram confirmation when restart originated from Telegram.",
+  "details": "## Why this change\nCurrent hot-restart recovery can lose channel intent and uses an incomplete session fallback chain. This can cause restart confirmations to appear in the wrong session and miss Telegram completion notifications for Telegram-originated restarts.\n\n## Exact source edits\n### 1) `src/gateway/lifecycle.ts`\n- Extend `RestartContext` to include persisted channel metadata fields (if not already present):\n  - `originChannel?: 'web' | 'telegram' | 'discord' | 'whatsapp' | 'unknown'`\n  - `respondToTelegram?: boolean`\n- Ensure restart context writing path used by restart invocations includes:\n  - `originChannel: args?.channel`\n  - `respondToTelegram: args?.channel === \"telegram\"`\n- Keep existing behavior unchanged for non-Telegram channels.\n\n### 2) `src/gateway/boot.ts`\n- In hot-restart flow (`runBootMd`), resolve target session using deterministic fallback:\n  1. `restartCtx.previousSessionId` (or equivalent persisted initiating session)\n  2. `process.env.SMALLCLAW_UI_SESSION_ID`\n  3. `process.env.SMALLCLAW_SESSION_ID`\n  4. `'boot-startup'`\n- After successful hot-restart completion handling, add Telegram completion branch guarded by persisted flag:\n\n```ts\nif (restartCtx?.respondToTelegram) {\n  try {\n    await notifyBridge.sendTelegram(\n      [\n        `✅ Restart complete: ${restartCtx.title}`,\n        restartCtx.summary,\n        restartCtx.testInstructions ? `Verification: ${restartCtx.testInstructions}` : null,\n      ]\n        .filter(Boolean)\n        .join(\"\\n\")\n    );\n  } catch (telegramError) {\n    console.warn(\"[boot-md] Failed to send Telegram restart completion:\",\n      telegramError instanceof Error ? telegramError.message : String(telegramError));\n  }\n}\n```\n\n- Import `notifyBridge` from `./notify-bridge` in `boot.ts`.\n\n## Deterministic behavior after patch\n- Hot restart completion targets the initiating session when available.\n- If initiating session is missing, fallback deterministically to UI session env, then generic session env, then `boot-startup`.\n- For Telegram-originated restarts (`respondToTelegram === true`), a Telegram completion message is sent exactly once after successful hot-restart handling.\n- For all other origins, no Telegram completion message is sent.\n\n## Acceptance tests\n1. Trigger restart with `previousSessionId` set:\n   - Verify hot-restart message routes to that session.\n2. Trigger restart without `previousSessionId` but with `SMALLCLAW_UI_SESSION_ID` set:\n   - Verify session fallback uses UI session env.\n3. Trigger restart without prior two but with `SMALLCLAW_SESSION_ID` set:\n   - Verify fallback uses this env.\n4. Trigger Telegram-originated restart (`respondToTelegram: true`):\n   - Verify Telegram receives `✅ Restart complete: <title>` with summary and optional verification line.\n5. Trigger non-Telegram restart:\n   - Verify no Telegram completion message is sent.\n6. Ensure boot still falls through to normal boot path on hot-restart failure.\n\n## Risks and compatibility\n- Low risk: additive context fields and fallback enhancement.\n- Minor risk of duplicate notification if upstream logic also sends completion; mitigated by guarding on persisted `respondToTelegram` and only sending on successful hot-restart handling.\n- Backward compatible with older restart contexts missing new fields (checks are optional/guarded).",
+  "sourceAgentId": "59959f91-01fb-45ee-865b-60a7d55689b5",
+  "sourceSessionId": "59959f91-01fb-45ee-865b-60a7d55689b5",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/lifecycle.ts",
+      "action": "edit",
+      "description": "Persist origin channel and Telegram intent in restart context emitted by restart flows."
+    },
+    {
+      "path": "src/gateway/boot.ts",
+      "action": "edit",
+      "description": "Add deterministic session fallback and Telegram completion notification in hot-restart flow."
+    }
+  ],
+  "diffPreview": "- Add `notifyBridge` import to boot.ts\n- Update hot restart target session to include SMALLCLAW_SESSION_ID fallback\n- Add `respondToTelegram` guarded notifyBridge.sendTelegram block\n- Ensure restart context includes origin metadata fields and values",
+  "estimatedImpact": "More reliable restart completion routing; Telegram-originated restarts get explicit completion confirmation; fewer lost/misdirected restart updates.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Apply the approved edits to src/gateway/lifecycle.ts and src/gateway/boot.ts exactly as described, preserving existing behavior. Run npm run build. If build passes, execute gateway_restart with proposal metadata and include verification steps for session fallback chain + Telegram completion branch.",
+  "id": "prop_1774166365553_125e40",
+  "status": "denied",
+  "createdAt": 1774166365554,
+  "updatedAt": 1774168272043,
+  "decidedAt": 1774168272042
+}

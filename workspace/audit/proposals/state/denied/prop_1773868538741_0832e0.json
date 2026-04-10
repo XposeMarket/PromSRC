@@ -1,0 +1,45 @@
+{
+  "type": "feature_addition",
+  "priority": "high",
+  "title": "Improve proposal execution UX: run-in-chat default, visibility, and command reliability",
+  "summary": "Make approved proposals run in the originating chat by default, expose linked execution task/logs clearly, and enforce non-detached command execution with exit-code-gated completion.",
+  "details": "Implement runtime/UI improvements for proposal approvals to match user expectations and prevent silent/detached execution artifacts.\n\n## Problem\n- Approved proposals currently execute in proposal-specific background sessions, often not visibly tied to the approving chat.\n- Users cannot reliably see progress/logs unless inspecting backend/task internals.\n- Executor sometimes uses detached command patterns (e.g., `start cmd /k`) that can mark steps done before command completion.\n\n## Changes\n1. **Approval execution routing**\n   - Add execution mode on approval: `foreground_current_chat` (default) and `background_executor`.\n   - Preserve existing background path as explicit option.\n   - Record origin chat/session metadata for traceability.\n\n2. **Proposal ↔ task linkage in UI/backend model**\n   - On approval, create/attach a first-class task record with `proposal_id`, `origin_session_id`, `executor_session_id`.\n   - Surface linked task status directly in proposal card/panel.\n   - Add quick actions: open execution thread, view logs, resume if paused.\n\n3. **Paused/queued transparency**\n   - Standardize `pause_reason` and `last_issue_detail` population.\n   - Show human-readable reason in proposal and task UI.\n\n4. **Command execution policy for executor agents**\n   - Disallow detached shell launch patterns for validation steps (`start cmd /k`, equivalent detached spawn forms).\n   - Require direct execution and captured exit code/stdout/stderr.\n   - Gate step completion on observed process exit.\n\n5. **Validation and regression tests**\n   - Add tests for routing mode, task linkage, pause reason rendering, and command completion gating.\n   - Add fixture/log assertions that a detached command does not satisfy completion criteria.\n\n## Acceptance Criteria\n- Approving a proposal in chat shows live execution in that chat by default.\n- Proposal card always displays linked task id/status and log access.\n- Paused/queued proposals show explicit reason and resume action.\n- Build/test steps are not marked complete unless command exits with captured status.\n- Background execution remains available via explicit user choice.",
+  "sourceAgentId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/proposals",
+      "action": "edit",
+      "description": "Proposal approval routing and metadata linkage"
+    },
+    {
+      "path": "src/gateway/task-system",
+      "action": "edit",
+      "description": "Task creation/linking and pause reason surface"
+    },
+    {
+      "path": "src/gateway/ui",
+      "action": "edit",
+      "description": "Proposal panel task/log visibility and controls"
+    },
+    {
+      "path": "src/gateway/executor",
+      "action": "edit",
+      "description": "Command policy enforcement and completion gating"
+    },
+    {
+      "path": "src/**/__tests__",
+      "action": "edit",
+      "description": "Regression tests for proposal routing and command execution behavior"
+    }
+  ],
+  "diffPreview": "// Example behavioral shift\n// Before: approval -> background proposal session (implicit)\n// After: approval -> foreground current chat by default\n\napproval.executionMode = userChoice ?? 'foreground_current_chat';\nconst task = createExecutionTask({ proposalId, originSessionId, executionMode });\nlinkProposalToTask(proposalId, task.id);\n\n// Executor guard\nif (isDetachedShellCommand(cmd)) {\n  throw new Error('Detached shell commands are not allowed for validation steps');\n}\nconst result = await runCommandAndCapture(cmd);\nassertStepCanComplete(result.exitCode !== null);",
+  "estimatedImpact": "Higher trust and debuggability for proposal runs; fewer false-positive completions from detached commands; clearer UX continuity between approval and execution.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved proposal UX/runtime changes for proposal execution routing and command reliability. Ensure default approval execution is foreground in originating chat, preserve optional background mode, and link every approved proposal to a visible task with logs/resume controls. Enforce executor command policy: reject detached command forms (e.g., start cmd /k), require captured stdout/stderr/exit code, and gate step completion on process exit. Add tests for routing, linkage, pause reason visibility, and completion gating. Run build/tests and report file-by-file changes with validation output.",
+  "id": "prop_1773868538741_0832e0",
+  "status": "denied",
+  "createdAt": 1773868538742,
+  "updatedAt": 1773868811331,
+  "decidedAt": 1773868811331
+}

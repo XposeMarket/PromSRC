@@ -1,0 +1,22 @@
+{
+  "id": "auto_boot_1774643027024",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "No active task-control or schedule data is currently available, so there are no upcoming scheduled items visible from this snapshot. Today’s key completed work was the boot/hot-restart routing fix: automated outputs now always land in a brand-new unread automated chat, frontend notifications surface those sessions even when another chat is active, and the duplicate TasksPage fallback race was removed while keeping backward-compatible payload fields. Things left off in a stable, verified state (build passed) with related task **052ee635-3870-4989-b35a-f1b8046186eb** completed.",
+      "timestamp": 1774643034120
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774643027174,
+  "lastActiveAt": 1774643034121,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 173,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

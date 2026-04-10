@@ -1,0 +1,25 @@
+{
+  "type": "src_edit",
+  "priority": "low",
+  "title": "Show Prometheus version in gateway startup banner (finalized plan step)",
+  "summary": "Finalize proposal to display current version from package.json in startup status banner, with exact patch and executor steps.",
+  "details": "This follow-up finalizes the plan completion with a concrete src_edit proposal.\n\nImplementation target:\n- `src/gateway/terminal-ui.ts`\n\nExact change:\n1) Add import:\n```ts\nimport pkg from '../../package.json';\n```\n2) In `printStatusBoard`, replace:\n```ts\nconst title = '  Prometheus Gateway  ';\n```\nwith:\n```ts\nconst version = (pkg as { version?: string }).version ?? 'unknown';\nconst title = `  Prometheus Gateway v${version}  `;\n```\n\nRationale:\n- Displays runtime version directly in startup/status banner for quick verification.\n- Low risk, UI text only.\n",
+  "sourceAgentId": "74ddf0ce-fa02-4af2-a5c7-eeb807637fe0",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/terminal-ui.ts",
+      "action": "edit",
+      "description": "Inject package version into status board title text."
+    }
+  ],
+  "diffPreview": "diff --git a/src/gateway/terminal-ui.ts b/src/gateway/terminal-ui.ts\n@@\n import readline from 'readline';\n+import pkg from '../../package.json';\n@@\n-  const title = '  Prometheus Gateway  ';\n+  const version = (pkg as { version?: string }).version ?? 'unknown';\n+  const title = `  Prometheus Gateway v${version}  `;\n",
+  "estimatedImpact": "Improves operational visibility at startup with negligible overhead.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "You are code_executor. Implement and verify this low-risk src edit.\n\nGoal:\nAdd the running Prometheus version (from root package.json) to the gateway startup status board title.\n\nSteps:\n1. Open `src/gateway/terminal-ui.ts`.\n2. Add import near top imports:\n   `import pkg from '../../package.json';`\n3. In `printStatusBoard(opts: StatusBoardOptions)`, find:\n   `const title = '  Prometheus Gateway  ';`\n   Replace with:\n   ```ts\n   const version = (pkg as { version?: string }).version ?? 'unknown';\n   const title = `  Prometheus Gateway v${version}  `;\n   ```\n4. Keep all other logic unchanged.\n5. Run `npm run build` from repository root.\n6. If build fails specifically due to JSON import compiler settings, apply the smallest config-compatible fix following existing project conventions (e.g., resolveJsonModule if already conventional), then rerun build.\n7. Report:\n   - files changed\n   - concise diff summary\n   - build result and key output\n\nSuccess criteria:\n- Startup status board title includes `v<version>`.\n- Build passes.\n- Only necessary files are changed.",
+  "id": "prop_1773544414413_982f0b",
+  "status": "approved",
+  "createdAt": 1773544414413,
+  "updatedAt": 1773545169397,
+  "decidedAt": 1773545169397
+}

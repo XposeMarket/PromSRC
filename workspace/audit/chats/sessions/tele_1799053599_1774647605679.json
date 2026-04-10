@@ -1,0 +1,32 @@
+{
+  "id": "tele_1799053599_1774647605679",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "New Telegram thread started.",
+      "timestamp": 1774647605680
+    },
+    {
+      "role": "user",
+      "content": "Hey prom",
+      "timestamp": 1774647615689
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul 👋  \nI’m here—what do you want to tackle?",
+      "timestamp": 1774647615690
+    },
+    {
+      "role": "assistant",
+      "content": "✅ **Manual gateway restart completed successfully.** This was a runtime refresh on request with **no code/file changes** in this restart, and latest known build remains good (`npm run build` / `tsc` previously passing).\n\nHigh-level, the current shipped behavior is unchanged: restart/boot outputs route into fresh unread automated sessions, session notifications surface correctly, and duplicate auto-session fallback behavior remains removed.\n\nI’m responsive post-restart (this reply confirms assistant response path is working) — what do you want me to verify next: a quick live tool smoke test, automated-session flow, or a specific command path?",
+      "timestamp": 1774647771820
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774647605682,
+  "lastActiveAt": 1774647771822,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 236,
+  "activatedToolCategories": []
+}

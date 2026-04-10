@@ -108,9 +108,7 @@ export class SkillsManager {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
 
-      const skillMd = fs.existsSync(path.join(this.skillsDir, entry.name, 'SKILL.md'))
-        ? path.join(this.skillsDir, entry.name, 'SKILL.md')
-        : path.join(this.skillsDir, entry.name, 'skill.md');
+      const skillMd = path.join(this.skillsDir, entry.name, 'SKILL.md');
       if (!fs.existsSync(skillMd)) continue;
 
       try {

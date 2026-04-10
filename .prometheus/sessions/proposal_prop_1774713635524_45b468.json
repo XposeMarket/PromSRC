@@ -1,0 +1,34 @@
+{
+  "id": "proposal_prop_1774713635524_45b468",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774713713175
+    },
+    {
+      "role": "assistant",
+      "content": "Task paused and needs input: [Proposal] Telegram Tool Feed Enhancement: step_complete ✅ + Edit Payload Preview\nReason: Task paused — model returned an unrecoverable error at step 1.\nDetails: Error: Anthropic API error 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"},\"request_id\":\"req_011CZVkyAppMjo1VD6s2XWb5\"}\nReply in this chat with any adjustment or confirmation, and I will resume the task.\nTask ID: 6dde897a-8d2d-4968-a4b9-567c77255e1d",
+      "timestamp": 1774713713177
+    },
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774723797458
+    },
+    {
+      "role": "assistant",
+      "content": "Implemented and validated. ### ✅ What I changed - **Edited:** `src/gateway/comms/telegram-channel.ts` - Added/enhanced `extractToolAfterPreview(args, toolName)` to: - normalize args safely - map tool names to preview fields for edit/write/delete tools - show deterministic delete previews: - `Delete file: ...` - `Delete lines start-end` - escape HTML and clip long payload previews to 800 chars - Kept/confirmed `step_complete` display as: - `🔧 Tool - Step Complete ✅` - Kept/confirmed edit/write tool preview injection in: - `buildTelegramToolCallMessage(...)` via `<code>...</code>` - **Verified:** `src/gateway/tasks/background-task-runner.ts` - No change required. - Confirmed it already passes full args into Telegram notification formatting: - `formatTaskToolNotification(..., data?.args)` ### ✅ Build result - Ran: `npm run build` - Result: **success** (`tsc` exit code 0) ### ✅ Completion logging - Wrote final `write_note` task completion summary with tag `task_complete` for task: - `6dde897a-8d2d-4968-a4b9-567c77255e1d`",
+      "timestamp": 1774723797459
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774713667182,
+  "lastActiveAt": 1774723797459,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 505,
+  "activatedToolCategories": [
+    "source_write"
+  ]
+}

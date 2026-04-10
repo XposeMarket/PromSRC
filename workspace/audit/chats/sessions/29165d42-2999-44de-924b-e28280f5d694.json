@@ -1,0 +1,23 @@
+{
+  "id": "29165d42-2999-44de-924b-e28280f5d694",
+  "history": [
+    {
+      "role": "user",
+      "content": "can you go ahead and open up youtube and look up videos about openclaw",
+      "timestamp": 1771828965773
+    },
+    {
+      "role": "assistant",
+      "content": "😊",
+      "timestamp": 1771829253860
+    },
+    {
+      "role": "user",
+      "content": "nonono go ahead and use my browser to do it",
+      "timestamp": 1771829253908
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771828965803,
+  "lastActiveAt": 1771829253908
+}

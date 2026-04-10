@@ -1,0 +1,94 @@
+{
+  "type": "skill_evolution",
+  "priority": "low",
+  "title": "Mark twitter-thread and marketing-cluster skills as keep-under-review with telemetry gate",
+  "summary": "Apply explicit keep-under-review labels to selected domain/marketing skills and require telemetry before any removal decision.",
+  "details": "Implement conservative governance for domain-specific marketing/content skills.\n\nScope:\n1. Add keep-under-review note to `skills/twitter-thread/SKILL.md`.\n2. Add matching review-gate note to marketing-cluster skills currently treated as candidates for future pruning (at minimum `skills/competitor-profile/SKILL.md`, `skills/website-intelligence/SKILL.md`, `skills/landing-page-blueprint/SKILL.md`, and `skills/email-composer/SKILL.md`).\n3. State that deprecation/removal requires usage telemetry evidence rather than static audit alone.\n\nAcceptance:\n- Each targeted skill includes a concise review-gate note.\n- No deprecations/removals performed in this pass.",
+  "sourceAgentId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "sourceSessionId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "affectedFiles": [
+    {
+      "path": "skills/twitter-thread/SKILL.md",
+      "action": "edit",
+      "description": "Add keep-under-review label and telemetry gate for future removal decisions."
+    },
+    {
+      "path": "skills/competitor-profile/SKILL.md",
+      "action": "edit",
+      "description": "Add review-gate note for future pruning decisions."
+    },
+    {
+      "path": "skills/website-intelligence/SKILL.md",
+      "action": "edit",
+      "description": "Add review-gate note for future pruning decisions."
+    },
+    {
+      "path": "skills/landing-page-blueprint/SKILL.md",
+      "action": "edit",
+      "description": "Add review-gate note for future pruning decisions."
+    },
+    {
+      "path": "skills/email-composer/SKILL.md",
+      "action": "edit",
+      "description": "Add review-gate note for future pruning decisions."
+    }
+  ],
+  "diffPreview": "+ Add governance note: keep under review, require telemetry before any deprecation/removal.\n~ No functional skill behavior removed.",
+  "estimatedImpact": "Prevents premature removal of potentially valuable user-facing skills while documenting governance policy.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Edit `skills/twitter-thread/SKILL.md`, `skills/competitor-profile/SKILL.md`, `skills/website-intelligence/SKILL.md`, `skills/landing-page-blueprint/SKILL.md`, and `skills/email-composer/SKILL.md` to add a concise keep-under-review note that future deprecation/removal requires usage telemetry evidence. Do not alter core skill instructions beyond this governance note. Return the exact note text used.",
+  "id": "prop_1774488204420_3aebc5",
+  "status": "denied",
+  "createdAt": 1774488204420,
+  "updatedAt": 1774635776514,
+  "version": 1,
+  "revisionHistory": [
+    {
+      "version": 1,
+      "editedAt": 1774488204420,
+      "editedBy": "69d7949d-758a-42d8-b95b-368c9deedde8",
+      "note": "Initial proposal content",
+      "snapshot": {
+        "type": "skill_evolution",
+        "priority": "low",
+        "title": "Mark twitter-thread and marketing-cluster skills as keep-under-review with telemetry gate",
+        "summary": "Apply explicit keep-under-review labels to selected domain/marketing skills and require telemetry before any removal decision.",
+        "details": "Implement conservative governance for domain-specific marketing/content skills.\n\nScope:\n1. Add keep-under-review note to `skills/twitter-thread/SKILL.md`.\n2. Add matching review-gate note to marketing-cluster skills currently treated as candidates for future pruning (at minimum `skills/competitor-profile/SKILL.md`, `skills/website-intelligence/SKILL.md`, `skills/landing-page-blueprint/SKILL.md`, and `skills/email-composer/SKILL.md`).\n3. State that deprecation/removal requires usage telemetry evidence rather than static audit alone.\n\nAcceptance:\n- Each targeted skill includes a concise review-gate note.\n- No deprecations/removals performed in this pass.",
+        "affectedFiles": [
+          {
+            "path": "skills/twitter-thread/SKILL.md",
+            "action": "edit",
+            "description": "Add keep-under-review label and telemetry gate for future removal decisions."
+          },
+          {
+            "path": "skills/competitor-profile/SKILL.md",
+            "action": "edit",
+            "description": "Add review-gate note for future pruning decisions."
+          },
+          {
+            "path": "skills/website-intelligence/SKILL.md",
+            "action": "edit",
+            "description": "Add review-gate note for future pruning decisions."
+          },
+          {
+            "path": "skills/landing-page-blueprint/SKILL.md",
+            "action": "edit",
+            "description": "Add review-gate note for future pruning decisions."
+          },
+          {
+            "path": "skills/email-composer/SKILL.md",
+            "action": "edit",
+            "description": "Add review-gate note for future pruning decisions."
+          }
+        ],
+        "diffPreview": "+ Add governance note: keep under review, require telemetry before any deprecation/removal.\n~ No functional skill behavior removed.",
+        "estimatedImpact": "Prevents premature removal of potentially valuable user-facing skills while documenting governance policy.",
+        "requiresBuild": false,
+        "executorAgentId": "code_executor",
+        "executorPrompt": "Edit `skills/twitter-thread/SKILL.md`, `skills/competitor-profile/SKILL.md`, `skills/website-intelligence/SKILL.md`, `skills/landing-page-blueprint/SKILL.md`, and `skills/email-composer/SKILL.md` to add a concise keep-under-review note that future deprecation/removal requires usage telemetry evidence. Do not alter core skill instructions beyond this governance note. Return the exact note text used."
+      }
+    }
+  ],
+  "decidedAt": 1774635776513
+}

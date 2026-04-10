@@ -1,0 +1,15 @@
+{
+  "id": "meta_coordinator_mnj477e7",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775233516023,
+  "lastActiveAt": 1775233516023,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "team_ops",
+    "browser"
+  ]
+}

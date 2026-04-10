@@ -1,0 +1,21 @@
+{
+  "id": "93baf9d4-8942-475a-af86-f39022703226",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom can you restart that proposal task",
+      "timestamp": 1774484255331
+    },
+    {
+      "role": "assistant",
+      "content": "Done — I restarted it.\n\nThe proposal task **“[Proposal] Deterministic Telegram-origin restart routing for post-boot completion”** is now **running** again at **step 2/5**.",
+      "timestamp": 1774484302590
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774484255332,
+  "lastActiveAt": 1774484302590,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 74
+}

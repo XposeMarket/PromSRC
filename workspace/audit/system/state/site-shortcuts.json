@@ -1,0 +1,114 @@
+{
+  "x.com": {
+    "description": "X (formerly Twitter)",
+    "shortcuts": [
+      { "key": "n", "action": "Open new tweet composer modal", "context": "any page", "preferred_for_compose": true },
+      { "key": "f", "action": "Focus search bar" },
+      { "key": ".", "action": "Load new tweets at top of feed" },
+      { "key": "j", "action": "Move to next tweet in feed" },
+      { "key": "k", "action": "Move to previous tweet in feed" },
+      { "key": "Space", "action": "Page down through feed" },
+      { "key": "l", "action": "Like the focused tweet" },
+      { "key": "r", "action": "Reply to focused tweet" },
+      { "key": "t", "action": "Retweet focused tweet" },
+      { "key": "m", "action": "Send a Direct Message" },
+      { "key": "Escape", "action": "Close modal or dialog" }
+    ],
+    "notes": "IMPORTANT: To compose a tweet, press 'n' from any page — a modal composer opens immediately. Then call browser_fill on the contenteditable textbox that appears. Do NOT scroll or look for the composer in the feed. After filling, the Post button will be clicked automatically."
+  },
+  "twitter.com": {
+    "description": "Twitter (redirects to X)",
+    "shortcuts": [
+      { "key": "n", "action": "Open new tweet composer modal", "context": "any page", "preferred_for_compose": true },
+      { "key": "f", "action": "Focus search bar" },
+      { "key": "j", "action": "Move to next tweet" },
+      { "key": "k", "action": "Move to previous tweet" },
+      { "key": "l", "action": "Like focused tweet" },
+      { "key": "r", "action": "Reply to focused tweet" },
+      { "key": "Escape", "action": "Close modal or dialog" }
+    ],
+    "notes": "Same shortcuts as x.com. Use 'n' to open composer."
+  },
+  "github.com": {
+    "description": "GitHub",
+    "shortcuts": [
+      { "key": "s", "action": "Focus search bar" },
+      { "key": "/", "action": "Focus search bar (alternative)" },
+      { "key": "g i", "action": "Go to Issues tab (press g then i)", "context": "repository page" },
+      { "key": "g p", "action": "Go to Pull Requests tab", "context": "repository page" },
+      { "key": "g c", "action": "Go to Code tab", "context": "repository page" },
+      { "key": "g a", "action": "Go to Actions tab", "context": "repository page" },
+      { "key": "t", "action": "Open file finder / fuzzy search files", "context": "repository page" },
+      { "key": "l", "action": "Jump to line in file viewer", "context": "file view" },
+      { "key": "Escape", "action": "Close modal or dialog" }
+    ],
+    "notes": "Two-key shortcuts like 'g i' require pressing keys in sequence."
+  },
+  "gmail.com": {
+    "description": "Gmail",
+    "shortcuts": [
+      { "key": "c", "action": "Compose new email", "preferred_for_compose": true },
+      { "key": "r", "action": "Reply to current email" },
+      { "key": "a", "action": "Reply all" },
+      { "key": "f", "action": "Forward email" },
+      { "key": "/", "action": "Focus search bar" },
+      { "key": "j", "action": "Move to older email" },
+      { "key": "k", "action": "Move to newer email" },
+      { "key": "e", "action": "Archive email" },
+      { "key": "#", "action": "Delete email" },
+      { "key": "Escape", "action": "Close compose window or dialog" }
+    ],
+    "notes": "Gmail keyboard shortcuts must be enabled in Gmail Settings. If shortcuts don't work, they may be disabled."
+  },
+  "reddit.com": {
+    "description": "Reddit",
+    "shortcuts": [
+      { "key": "/", "action": "Focus search bar" },
+      { "key": "j", "action": "Next post" },
+      { "key": "k", "action": "Previous post" },
+      { "key": "h", "action": "Go back" },
+      { "key": "l", "action": "Open selected post" },
+      { "key": "Escape", "action": "Close modal" }
+    ],
+    "notes": "Reddit shortcuts work on the new Reddit design. Old Reddit uses different shortcuts."
+  },
+  "youtube.com": {
+    "description": "YouTube",
+    "shortcuts": [
+      { "key": "k", "action": "Pause/play video" },
+      { "key": "j", "action": "Rewind 10 seconds" },
+      { "key": "l", "action": "Fast forward 10 seconds" },
+      { "key": "f", "action": "Toggle fullscreen" },
+      { "key": "m", "action": "Toggle mute" },
+      { "key": "/", "action": "Focus search bar" },
+      { "key": "c", "action": "Toggle captions/subtitles" },
+      { "key": "ArrowUp", "action": "Volume up" },
+      { "key": "ArrowDown", "action": "Volume down" },
+      { "key": "0-9", "action": "Jump to percentage of video (0=start, 5=50%, 9=90%)" }
+    ],
+    "notes": "Video controls only work when the video player is focused. Press Tab or click the video first if shortcuts aren't working."
+  },
+  "notion.so": {
+    "description": "Notion",
+    "shortcuts": [
+      { "key": "Control+n", "action": "Create new page" },
+      { "key": "Control+p", "action": "Quick search / open page" },
+      { "key": "Control+/", "action": "Open block type menu (turn block into heading, list, etc.)" },
+      { "key": "Control+Enter", "action": "Submit / confirm action" },
+      { "key": "Escape", "action": "Close dialog or deselect" },
+      { "key": "Control+Shift+l", "action": "Toggle dark mode" }
+    ],
+    "notes": "Notion uses Ctrl shortcuts on Windows. Most editing happens inline in contenteditable blocks."
+  },
+  "linear.app": {
+    "description": "Linear (project management)",
+    "shortcuts": [
+      { "key": "c", "action": "Create new issue", "preferred_for_compose": true },
+      { "key": "/", "action": "Focus search" },
+      { "key": "g i", "action": "Go to My Issues" },
+      { "key": "g a", "action": "Go to All Issues" },
+      { "key": "Escape", "action": "Close modal or cancel" }
+    ],
+    "notes": "Linear uses single-key shortcuts. Press 'c' to create an issue from anywhere."
+  }
+}

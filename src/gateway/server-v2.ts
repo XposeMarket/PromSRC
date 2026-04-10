@@ -192,18 +192,13 @@ const HOST = config.gateway.host || process.env.GATEWAY_HOST || (process.env.DOC
   }
 }
 
-// Seed bundled skills into workspace before SkillsManager scans. In desktop
-// builds the env var is set; in source installs fall back to the repo bundle.
-const installRoot = path.resolve(__dirname, '..', '..');
-const bundledSkillsDir = process.env.PROMETHEUS_BUNDLED_SKILLS_DIR
-  || (fs.existsSync(path.join(installRoot, 'generated', 'bundled-skills'))
-    ? path.join(installRoot, 'generated', 'bundled-skills')
-    : '');
-if (bundledSkillsDir) {
+// Seed bundled skills into workspace before SkillsManager scans — only runs if
+// PROMETHEUS_BUNDLED_SKILLS_DIR is set (Electron desktop builds).
+if (process.env.PROMETHEUS_BUNDLED_SKILLS_DIR) {
   try {
     const { seedBundledSkills } = require('../config/public-workspace.js') as typeof import('../config/public-workspace');
     const wp = getConfig().getWorkspacePath();
-    if (wp) seedBundledSkills(wp, bundledSkillsDir);
+    if (wp) seedBundledSkills(wp, process.env.PROMETHEUS_BUNDLED_SKILLS_DIR);
   } catch (e: any) {
     console.warn('[Skills] Could not seed bundled skills:', e?.message);
   }

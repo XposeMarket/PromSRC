@@ -1,0 +1,18 @@
+{
+  "id": "team_dispatch_src_reader_staleness_v1_1775098804760",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775098804801,
+  "lastActiveAt": 1775098804801,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling",
+    "integrations"
+  ]
+}

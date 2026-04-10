@@ -1,0 +1,38 @@
+{
+  "scheduleId": "job_1773381424027_gs19r",
+  "runs": [
+    {
+      "runId": "12d3b5bf-e03c-4d47-a6ad-9451b3b3cb51",
+      "scheduledAt": 1773381519781,
+      "startedAt": 1773381519781,
+      "status": "complete",
+      "taskId": "12a446b7-354f-4fad-8b63-ca3492e8b7ec",
+      "evidenceWritten": 0,
+      "completedAt": 1773381529901,
+      "summary": "Implemented and running as designed.\n\n### Live-monitor trigger behavior now wired\n- Detects new entries by diffing current open positions vs last snapshot.\n- On new entry, immediately dispatches urgent tasks to:\n  - `trading_risk_manager` (`NEW_ENTRY_DETECTED` + monitoring/BE-trail enforcement request)\n  - `trading_journal` (`entry_detected` log payload)\n  - `trading_executor` (confirm protective ",
+      "attempts": 1
+    },
+    {
+      "runId": "56e1bd73-90e2-4d94-bfd0-1e3b56e7fd0d",
+      "scheduledAt": 1773381630333,
+      "startedAt": 1773381630333,
+      "status": "complete",
+      "taskId": "499a456c-898b-4350-a6ea-3f6e279e25a2",
+      "evidenceWritten": 0,
+      "completedAt": 1773381640496,
+      "summary": "Implemented. The live-monitor trigger behavior is now defined as a **dispatch-only safety agent** with:\n\n- new-entry detection via snapshot diff,\n- immediate urgent dispatches to **risk_manager / executor / journal**,\n- 5-minute intensified follow-up loop,\n- automatic **STOP_AND_FLATTEN escalation** on bracket/state/loss violations,\n- and deterministic structured output constraints.\n\nAlso logged t",
+      "attempts": 1
+    },
+    {
+      "runId": "38020292-1543-4ab7-bc19-4661f3df32f7",
+      "scheduledAt": 1773381800967,
+      "startedAt": 1773381800967,
+      "status": "complete",
+      "taskId": "533ede3e-1c48-43ad-9241-f64e4127d558",
+      "evidenceWritten": 0,
+      "completedAt": 1773381810712,
+      "summary": "Completed. No direct order actions were taken.\n\n**Run result:** `no_new_entry` (no newly detected position to trigger live-monitor window on this cycle).  \n**Behavior enforced:** dispatch-only policy, 5-minute monitor/escalation logic ready on next detected entry, and last-run insight note recorded.",
+      "attempts": 1
+    }
+  ]
+}

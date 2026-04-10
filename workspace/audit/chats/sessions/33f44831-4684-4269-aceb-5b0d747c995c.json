@@ -1,0 +1,31 @@
+{
+  "id": "33f44831-4684-4269-aceb-5b0d747c995c",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw",
+      "timestamp": 1773446510592
+    },
+    {
+      "role": "assistant",
+      "content": "Hey! I’m here—what do you want to work on?",
+      "timestamp": 1773446518610
+    },
+    {
+      "role": "user",
+      "content": "Nothing yet - just testing, can you create a webpage for me - a new landing page, name it landing.html",
+      "timestamp": 1773446551864
+    },
+    {
+      "role": "assistant",
+      "content": "Done — I created `landing.html` with a clean, modern responsive landing page template.",
+      "timestamp": 1773446582643
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1773446510593,
+  "lastActiveAt": 1773446582643,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 94
+}

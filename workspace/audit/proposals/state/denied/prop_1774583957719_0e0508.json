@@ -1,0 +1,84 @@
+{
+  "type": "feature_addition",
+  "priority": "high",
+  "title": "Add first-class Web UI source access surface (list/read/search + proposal-gated edits)",
+  "summary": "Create a dedicated Web UI source tool surface, analogous to src/ access, so Prom can inspect and propose/edit frontend code with the same deterministic and approval-gated workflow used for backend source.",
+  "details": "## Why this change\nYou want Prom to access the web-ui frontend with the same confidence and governance as backend `src/` edits.\n\nSource evidence:\n- Current source tools are backend-centric: `read_source/list_source/grep_source` only target `src/` plus a tiny root allowlist (`subagent-executor.ts` read_source implementation around ~385-441).\n- There is no dedicated frontend-path tool family in current tool execution definitions (`subagent-executor.ts` switch cases, `tool-builder` defs).\n- Proposal/session gating already exists and is robust for protected source edits (`find_replace_source/replace_lines_source/...` gated to proposal sessions around ~443+ in `subagent-executor.ts`).\n\n## Exact source edits\n- `src/gateway/tools/defs/file-web-memory.ts`\n  - Add new tool definitions for frontend/web-ui source surface:\n    - `list_webui_source(path?)`\n    - `read_webui_source(file, head?, tail?)`\n    - `grep_webui_source(pattern, path?, glob?, case_insensitive?, context?, max_results?)`\n  - Add proposal-exec-only edit tools:\n    - `find_replace_webui_source`\n    - `replace_lines_webui_source`\n    - `insert_after_webui_source`\n    - `delete_lines_webui_source`\n    - `write_webui_source`\n- `src/gateway/agents-runtime/subagent-executor.ts`\n  - Implement resolver/gate logic for `webui` root path (deterministic, no traversal).\n  - Mirror src-edit session gate behavior for web-ui edit tools (`proposal_` / `code_exec` sessions only).\n  - Return consistent, line-numbered output and deterministic error messages (path not found, outside root, missing file).\n- `src/gateway/prompt-context.ts`\n  - Extend tool hint block so model knows when to use web-ui source tools vs backend src tools.\n- `src/gateway/routes/proposals.router.ts`\n  - Update proposal executor briefing text so approved proposals may include web-ui tool operations under same deterministic constraints.\n\n## Deterministic behavior after patch\n- Prom can inspect frontend code without shell hacks using deterministic tools analogous to backend source tools.\n- Frontend code edits remain guarded behind proposal execution sessions only.\n- Path traversal remains blocked; tools can only operate inside configured web-ui source root.\n- Existing backend src tool behavior remains unchanged.\n\n## Acceptance tests\n1. Build/typecheck:\n   - `npm run build` passes.\n2. Read/list/search coverage:\n   - `list_webui_source({path:\"\"})` returns frontend tree root.\n   - `read_webui_source({file:\"...\"})` returns line-numbered content.\n   - `grep_webui_source(...)` returns file:line matches with limits/context.\n3. Security/gating:\n   - Edit tools fail in normal interactive sessions with explicit proposal-only error.\n   - Edit tools succeed in proposal execution sessions.\n   - Attempted `../` traversal fails with deterministic boundary error.\n4. Regression:\n   - Existing `read_source/list_source/grep_source` and src edit tools continue functioning unchanged.\n\n## Risks and compatibility\n- Risk: web-ui root path discovery may vary by deployment layout.\n  - Mitigation: implement explicit resolver fallback order and clear error when root missing.\n- Risk: additional tools enlarge tool list and may increase model choice entropy.\n  - Mitigation: clear prompt-context guidance and naming symmetry with existing src tools.\n- Compatibility: additive only; no removal or behavioral change to existing source tools.",
+  "sourceAgentId": "071dc337-086a-4576-8a45-781f3ba5614e",
+  "sourceSessionId": "071dc337-086a-4576-8a45-781f3ba5614e",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/tools/defs/file-web-memory.ts",
+      "action": "edit",
+      "description": "Add web-ui source read/search/edit tool definitions"
+    },
+    {
+      "path": "src/gateway/agents-runtime/subagent-executor.ts",
+      "action": "edit",
+      "description": "Implement web-ui source tool handlers with proposal-session edit gates"
+    },
+    {
+      "path": "src/gateway/prompt-context.ts",
+      "action": "edit",
+      "description": "Teach tool-selection policy for backend src vs web-ui source tools"
+    },
+    {
+      "path": "src/gateway/routes/proposals.router.ts",
+      "action": "edit",
+      "description": "Include web-ui source execution guidance in approved proposal executor prompt"
+    }
+  ],
+  "diffPreview": "// new tool family (concept)\nlist_webui_source / read_webui_source / grep_webui_source\nfind_replace_webui_source / replace_lines_webui_source / insert_after_webui_source / delete_lines_webui_source / write_webui_source\n\n// executor gate mirrors src-edit gate\nif (!session.startsWith('proposal_') && !session.startsWith('code_exec')) {\n  return ERROR('...only available in proposal execution sessions...');\n}\n\n// resolver boundary check\nconst abs = path.resolve(webUiRoot, relPath);\nif (!abs.startsWith(webUiRoot)) return ERROR('outside web-ui root');",
+  "estimatedImpact": "Enables deterministic frontend engineering workflows with the same governance model as backend src changes; reduces friction for UI feature/debug cycles.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor_synthesizer_v1",
+  "executorPrompt": "Apply the approved web-ui source surface feature exactly: add list/read/grep + proposal-gated edit tools for frontend source, with strict root-boundary checks and deterministic errors. Keep existing src tools unchanged. Run npm run build and report exact modified files and validation results.",
+  "id": "prop_1774583957719_0e0508",
+  "status": "denied",
+  "version": 1,
+  "revisionHistory": [
+    {
+      "version": 1,
+      "editedAt": 1774583957719,
+      "editedBy": "071dc337-086a-4576-8a45-781f3ba5614e",
+      "note": "Initial proposal content",
+      "snapshot": {
+        "type": "feature_addition",
+        "priority": "high",
+        "title": "Add first-class Web UI source access surface (list/read/search + proposal-gated edits)",
+        "summary": "Create a dedicated Web UI source tool surface, analogous to src/ access, so Prom can inspect and propose/edit frontend code with the same deterministic and approval-gated workflow used for backend source.",
+        "details": "## Why this change\nYou want Prom to access the web-ui frontend with the same confidence and governance as backend `src/` edits.\n\nSource evidence:\n- Current source tools are backend-centric: `read_source/list_source/grep_source` only target `src/` plus a tiny root allowlist (`subagent-executor.ts` read_source implementation around ~385-441).\n- There is no dedicated frontend-path tool family in current tool execution definitions (`subagent-executor.ts` switch cases, `tool-builder` defs).\n- Proposal/session gating already exists and is robust for protected source edits (`find_replace_source/replace_lines_source/...` gated to proposal sessions around ~443+ in `subagent-executor.ts`).\n\n## Exact source edits\n- `src/gateway/tools/defs/file-web-memory.ts`\n  - Add new tool definitions for frontend/web-ui source surface:\n    - `list_webui_source(path?)`\n    - `read_webui_source(file, head?, tail?)`\n    - `grep_webui_source(pattern, path?, glob?, case_insensitive?, context?, max_results?)`\n  - Add proposal-exec-only edit tools:\n    - `find_replace_webui_source`\n    - `replace_lines_webui_source`\n    - `insert_after_webui_source`\n    - `delete_lines_webui_source`\n    - `write_webui_source`\n- `src/gateway/agents-runtime/subagent-executor.ts`\n  - Implement resolver/gate logic for `webui` root path (deterministic, no traversal).\n  - Mirror src-edit session gate behavior for web-ui edit tools (`proposal_` / `code_exec` sessions only).\n  - Return consistent, line-numbered output and deterministic error messages (path not found, outside root, missing file).\n- `src/gateway/prompt-context.ts`\n  - Extend tool hint block so model knows when to use web-ui source tools vs backend src tools.\n- `src/gateway/routes/proposals.router.ts`\n  - Update proposal executor briefing text so approved proposals may include web-ui tool operations under same deterministic constraints.\n\n## Deterministic behavior after patch\n- Prom can inspect frontend code without shell hacks using deterministic tools analogous to backend source tools.\n- Frontend code edits remain guarded behind proposal execution sessions only.\n- Path traversal remains blocked; tools can only operate inside configured web-ui source root.\n- Existing backend src tool behavior remains unchanged.\n\n## Acceptance tests\n1. Build/typecheck:\n   - `npm run build` passes.\n2. Read/list/search coverage:\n   - `list_webui_source({path:\"\"})` returns frontend tree root.\n   - `read_webui_source({file:\"...\"})` returns line-numbered content.\n   - `grep_webui_source(...)` returns file:line matches with limits/context.\n3. Security/gating:\n   - Edit tools fail in normal interactive sessions with explicit proposal-only error.\n   - Edit tools succeed in proposal execution sessions.\n   - Attempted `../` traversal fails with deterministic boundary error.\n4. Regression:\n   - Existing `read_source/list_source/grep_source` and src edit tools continue functioning unchanged.\n\n## Risks and compatibility\n- Risk: web-ui root path discovery may vary by deployment layout.\n  - Mitigation: implement explicit resolver fallback order and clear error when root missing.\n- Risk: additional tools enlarge tool list and may increase model choice entropy.\n  - Mitigation: clear prompt-context guidance and naming symmetry with existing src tools.\n- Compatibility: additive only; no removal or behavioral change to existing source tools.",
+        "affectedFiles": [
+          {
+            "path": "src/gateway/tools/defs/file-web-memory.ts",
+            "action": "edit",
+            "description": "Add web-ui source read/search/edit tool definitions"
+          },
+          {
+            "path": "src/gateway/agents-runtime/subagent-executor.ts",
+            "action": "edit",
+            "description": "Implement web-ui source tool handlers with proposal-session edit gates"
+          },
+          {
+            "path": "src/gateway/prompt-context.ts",
+            "action": "edit",
+            "description": "Teach tool-selection policy for backend src vs web-ui source tools"
+          },
+          {
+            "path": "src/gateway/routes/proposals.router.ts",
+            "action": "edit",
+            "description": "Include web-ui source execution guidance in approved proposal executor prompt"
+          }
+        ],
+        "diffPreview": "// new tool family (concept)\nlist_webui_source / read_webui_source / grep_webui_source\nfind_replace_webui_source / replace_lines_webui_source / insert_after_webui_source / delete_lines_webui_source / write_webui_source\n\n// executor gate mirrors src-edit gate\nif (!session.startsWith('proposal_') && !session.startsWith('code_exec')) {\n  return ERROR('...only available in proposal execution sessions...');\n}\n\n// resolver boundary check\nconst abs = path.resolve(webUiRoot, relPath);\nif (!abs.startsWith(webUiRoot)) return ERROR('outside web-ui root');",
+        "estimatedImpact": "Enables deterministic frontend engineering workflows with the same governance model as backend src changes; reduces friction for UI feature/debug cycles.",
+        "requiresBuild": true,
+        "executorAgentId": "code_executor_synthesizer_v1",
+        "executorPrompt": "Apply the approved web-ui source surface feature exactly: add list/read/grep + proposal-gated edit tools for frontend source, with strict root-boundary checks and deterministic errors. Keep existing src tools unchanged. Run npm run build and report exact modified files and validation results."
+      }
+    }
+  ],
+  "createdAt": 1774583957719,
+  "updatedAt": 1774584469960,
+  "decidedAt": 1774584469959
+}

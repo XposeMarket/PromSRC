@@ -1,0 +1,18 @@
+{
+  "id": "89837341-bc57-415d-9fe4-a90f219841ae",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw, can you give me the latest info on the epstein case?",
+      "timestamp": 1771903460012
+    },
+    {
+      "role": "assistant",
+      "content": "Latest update: January 30, 2026.",
+      "timestamp": 1771903551786
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771903460031,
+  "lastActiveAt": 1771903551786
+}

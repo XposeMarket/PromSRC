@@ -1,0 +1,28 @@
+{
+  "id": "a3888b2e-ca99-40f9-92d2-6d8c062e4e9b",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw",
+      "timestamp": 1771872154368
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul! How can I help today? 😊",
+      "timestamp": 1771872182663
+    },
+    {
+      "role": "user",
+      "content": "I want you to go ahead and do some research on the web on Openclaw, tell me about it - No need to keep it short, give me a full summary/explanation on your findings. You can either use my browser to automate and search articles, or use the websearch tool, whichever works best to give you the best info",
+      "timestamp": 1771872262478
+    },
+    {
+      "role": "assistant",
+      "content": "😊",
+      "timestamp": 1771872557464
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771872154369,
+  "lastActiveAt": 1771872557464
+}

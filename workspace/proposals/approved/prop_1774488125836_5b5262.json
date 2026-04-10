@@ -1,0 +1,27 @@
+{
+  "type": "skill_evolution",
+  "priority": "medium",
+  "title": "Enhance web-researcher triggers, boundaries, and minimum workflow standards",
+  "summary": "Upgrade web-researcher from terse guidance to explicit triggers, fit boundaries, and required multi-query process details.",
+  "details": "Improve `skills/web-researcher/SKILL.md` for routing precision and execution quality.\n\nScope:\n1. Expand trigger list and description with realistic user phrasing.\n2. Define clear boundaries (when to use this skill vs adjacent research/scraping skills).\n3. Require minimum workflow steps (multi-query pattern, source validation, synthesis quality).\n4. Add concise anti-patterns to prevent shallow single-query outputs.\n\nAcceptance:\n- Trigger coverage is explicit and practical.\n- Minimum workflow standards are deterministic.\n- Boundaries reduce overlap confusion.",
+  "sourceAgentId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "sourceSessionId": "69d7949d-758a-42d8-b95b-368c9deedde8",
+  "affectedFiles": [
+    {
+      "path": "skills/web-researcher/SKILL.md",
+      "action": "edit",
+      "description": "Expand triggers, boundaries, and required process guidance."
+    }
+  ],
+  "diffPreview": "- Very short, sparse research guidance.\n+ Explicit triggers, boundaries, and deterministic multi-query research workflow.",
+  "estimatedImpact": "Increases research consistency and improves correct skill routing for web inquiry tasks.",
+  "requiresBuild": false,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Edit `skills/web-researcher/SKILL.md` to add explicit trigger metadata, clear boundaries vs related skills, and deterministic minimum workflow requirements (including multi-query expectations and source synthesis quality). Keep the skill concise but materially stronger. Return the updated trigger list and boundary section.",
+  "id": "prop_1774488125836_5b5262",
+  "status": "executing",
+  "createdAt": 1774488125836,
+  "updatedAt": 1774506267944,
+  "decidedAt": 1774506267935,
+  "executorTaskId": "proposal_prop_1774488125836_5b5262"
+}

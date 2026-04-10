@@ -1,0 +1,37 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Fix hot-restart follow-up delivery via WS reconnect (correct executor)",
+  "summary": "Re-submit the approved hot-restart delivery fix using a src-capable executor so execution no longer fails in read-only context.",
+  "details": "## Why this change\nThe prior approved proposal (`prop_1774501181649_d14bc0`) failed at execution time because it was assigned to `code_executor_synthesizer_v1`, which does not have source-edit tools. As a result, no patch was applied even though the design was correct. This resubmits the same functional fix but routes execution to a src-capable executor.\n\n## Exact source edits\n1. **`src/gateway/boot.ts`**\n   - Remove hot-restart-specific imports and branch:\n     - Delete `readRestartContext`, `clearRestartContext`, and `RestartContext` import usage.\n     - Delete `buildHotRestartPrompt(...)` helper.\n     - Delete the hot-restart detection block in `runBootMd(...)` that reads restart context, runs `handleChat(...)` with restart prompt, and persists result via `addMessage(...)`.\n   - Keep BOOT.md normal startup behavior unchanged.\n\n2. **`src/gateway/lifecycle.ts`**\n   - Add deterministic formatter `buildRestartCompletionMessage(ctx: RestartContext): string` (no LLM).\n   - Add exported `consumePendingRestartNotification()` that:\n     - Reads `restart-context.json` via existing `readRestartContext()`.\n     - If present, returns payload including:\n       - `sessionId` from `ctx.previousSessionId || 'default'`\n       - deterministic `text`\n     - Clears context via `clearRestartContext()` after consume.\n   - Keep existing restart/build behavior unchanged.\n\n3. **`src/gateway/core/server.ts`**\n   - Import `consumePendingRestartNotification`.\n   - In WebSocket connection handler, check for pending restart notification.\n   - If found, send:\n     - `{ type: 'session_notification', sessionId, text, source: 'hot_restart' }`\n   - Delivery happens after reconnect, eliminating startup race.\n\n4. **Optional logging**\n   - Add concise log when pending restart notification is delivered.\n\n## Deterministic behavior after patch\n- `gateway_restart` build/restart flow remains unchanged.\n- No BOOT.md-coupled hot-restart LLM turn.\n- On first reconnect after restart, one `session_notification` is emitted to the original session.\n- Notification is one-time (context consumed/cleared), no repeated reinjection.\n\n## Acceptance tests\n1. Trigger `gateway_restart` from active session `S`.\n2. Observe disconnect/reconnect.\n3. Verify WS event `type=session_notification` with `sessionId=S` appears and injects into same thread.\n4. Verify no `Hot restart detected/complete` BOOT hot-restart log path.\n5. Refresh and confirm no duplicate reinjection.\n6. Confirm build-failure path remains unchanged.\n\n## Risks and compatibility\n- If frontend does not render `session_notification` by `sessionId`, event may be sent but not shown.\n- Mitigation: use existing UI event contract and minimal payload.\n- Behavior shifts from LLM-generated restart text to deterministic system text.\n- No schema/data migration required.",
+  "sourceAgentId": "ea468424-2931-44b3-861f-650e377c35b9",
+  "sourceSessionId": "ea468424-2931-44b3-861f-650e377c35b9",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/boot.ts",
+      "action": "edit",
+      "description": "Remove boot-coupled hot-restart LLM flow"
+    },
+    {
+      "path": "src/gateway/lifecycle.ts",
+      "action": "edit",
+      "description": "Add deterministic pending restart notification consume helper"
+    },
+    {
+      "path": "src/gateway/core/server.ts",
+      "action": "edit",
+      "description": "Emit pending restart session_notification on WS reconnect"
+    }
+  ],
+  "diffPreview": "Same functional patch as prop_1774501181649_d14bc0, but execution routed to a src-capable executor.",
+  "estimatedImpact": "Unblocks execution and fixes missed restart follow-up injection race in active thread.",
+  "requiresBuild": true,
+  "executorAgentId": "main",
+  "executorPrompt": "Apply the approved patch exactly:\n1) Edit src/gateway/boot.ts to remove hot-restart handling (imports, buildHotRestartPrompt, and runBootMd hot-restart branch). Keep normal BOOT.md flow intact.\n2) Edit src/gateway/lifecycle.ts to add deterministic restart-completion message formatter and export consumePendingRestartNotification() that reads restart context, returns {sessionId,text,...}, and clears context once consumed.\n3) Edit src/gateway/core/server.ts to call consumePendingRestartNotification() inside WS connection handler and send JSON event {type:'session_notification',sessionId,text,source:'hot_restart'} to the connecting socket.\n4) Run npm run build.\n5) Report modified files and exact behavior change.\nDo not add BOOT.md hot-restart LLM execution back in any form.",
+  "id": "prop_1774501700171_4a09ee",
+  "status": "executing",
+  "createdAt": 1774501700171,
+  "updatedAt": 1774501721289,
+  "decidedAt": 1774501721279,
+  "executorTaskId": "proposal_prop_1774501700171_4a09ee"
+}

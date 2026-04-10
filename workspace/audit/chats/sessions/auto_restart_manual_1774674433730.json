@@ -1,0 +1,22 @@
+{
+  "id": "auto_restart_manual_1774674433730",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "1) **Restart status:** Hot restart completed after the manual Telegram `/restart` request. Gateway is back up, and Telegram polling is resumed on this session.\n\n2) **What changed (high-level):** No new code/files were changed in this restart itself—this was a runtime restart only. The previously applied `prompt-context.ts` fix (full, non-truncated `[TODAY_NOTES]` injection across interactive/autonomous paths) remains in place from the prior completed proposal/build.\n\n3) **What should I verify next?**  \nWhat do you want me to validate first: runtime note visibility behavior in-chat, Telegram command responsiveness, or a specific end-to-end flow?",
+      "timestamp": 1774674441588
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774674433799,
+  "lastActiveAt": 1774674441589,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 193,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "auto_restart_manual_1774649725908",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "1) ✅ **Manual restart requested by user completed** — Prometheus gateway is back up and responding; **no source/file changes** were made in this restart. Latest known build status is still healthy (`npm run build` / `tsc` passing from today’s completed task run).\n\n2) **What changed (high-level):** this was an immediate gateway restart only. The previously deployed notification/session routing improvements remain in effect (hot-restart + boot updates should route into fresh unread automated chats with duplicate fallback removed).\n\n3) What do you want me to verify next:  \n   - **A)** Telegram received the hot-restart notification,  \n   - **B)** assistant reply flow in Telegram, or  \n   - **C)** exact notification order/content (build → build success → hot restart)?",
+      "timestamp": 1774649733163
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774649725925,
+  "lastActiveAt": 1774649733164,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 227,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling",
+    "integrations"
+  ]
+}

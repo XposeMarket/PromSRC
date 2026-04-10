@@ -1,0 +1,51 @@
+{
+  "id": "bdd2e8a7-0fcc-4b4b-b3e2-1b8400d69f19",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you give me a visual of all the runtime prompts youre currently getting",
+      "timestamp": 1774639888353
+    },
+    {
+      "role": "assistant",
+      "content": "Absolutely — here’s a **visual map** of the runtime instruction stack I’m operating under right now (highest priority at top):\n\n```text\n┌──────────────────────────────────────────────────────────────┐\n│ 1) SYSTEM LAYER (highest authority)                         │\n│ - You are an AI assistant via API                           │\n│ - Follow channel rules (analysis/commentary/final/summary)  │\n│ - Respect tool schemas and safety constraints               │\n└──────────────────────────────────────────────────────────────┘\n                           ↓\n┌──────────────────────────────────────────────────────────────┐\n│ 2) DEVELOPER LAYER (Prometheus runtime rules)               │\n│ - Identity: “Prom” in Prometheus                            │\n│ - Date/context + environment assumptions                     │\n│ - Must declare_plan for 2+ tool calls (with exceptions)     │\n│ - Tool usage policy + proposal/restart workflows            │\n│ - Skill policy (skill_list for explicit execution requests) │\n└──────────────────────────────────────────────────────────────┘\n                           ↓\n┌──────────────────────────────────────────────────────────────┐\n│ 3) SESSION-INJECTED MEMORY: USER.md                         │\n│ - Your identity/preferences (Raul, Windows, TS/Node, Git)   │\n│ - Communication preferences (direct, concise on cost)       │\n│ - Proposal quality requirements                              │\n│ - “Avoid unnecessary tool calls on casual chat” preference  │\n└──────────────────────────────────────────────────────────────┘\n                           ↓\n┌──────────────────────────────────────────────────────────────┐\n│ 4) SESSION-INJECTED MEMORY: SOUL.md                         │\n│ - Conversational-turn hard rule: no tools for casual chat   │\n│ - Action-first protocol for actionable requests              │\n│ - Memory writing discipline                                  │\n│ - Identity sync + behavior and ops guardrails               │\n└──────────────────────────────────────────────────────────────┘\n                           ↓\n┌──────────────────────────────────────────────────────────────┐\n│ 5) TOOLING CONTEXT                                            │\n│ - Core tools loaded (files/web/memory/shell/skills/etc.)    │\n│ - Optional categories activatable (browser/desktop/etc.)     │\n│ - MCP integrations available (Supabase, Vercel, etc.)        │\n└──────────────────────────────────────────────────────────────┘\n                           ↓\n┌──────────────────────────────────────────────────────────────┐\n│ 6) LIVE USER MESSAGE (current task intent)                  │\n│ - “Can you give me a visual of all the runtime prompts...”  │\n└──────────────────────────────────────────────────────────────┘\n```\n\nIf you want, I can also give you a **raw, expanded dump-style view** next (grouped as: system/dev/user-memory/tooling), but this first one is the clean hierarchy view.",
+      "timestamp": 1774639908199
+    },
+    {
+      "role": "user",
+      "content": "oh thats pretty good huh - anything to improve or change to get you to act better? youre doing really good honestly",
+      "timestamp": 1774639969783
+    },
+    {
+      "role": "assistant",
+      "content": "Thank you — genuinely appreciate that, Raul. 🙏\n\nYeah, a few **small tweaks** would make me even sharper:\n\n1. **Add a “default response length” rule** in USER.md  \n   (e.g., “default 3–6 lines unless I ask for depth”).  \n   → Prevents me from ever over-explaining.\n\n2. **Define a “when to ask vs assume” policy**  \n   Example: “If confidence >80%, act; otherwise ask 1 clarifying question.”  \n   → Reduces stalls.\n\n3. **Create a strict execution mode toggle**  \n   - `FAST_MODE`: minimal text, immediate action  \n   - `DEEP_MODE`: rationale + options  \n   → Lets you control verbosity per task instantly.\n\n4. **Add a reusable “done format”**  \n   Example:  \n   - Result  \n   - Files changed  \n   - What to test  \n   - Next command (optional)  \n   → Makes outputs consistently scannable.\n\n5. **Tighten proposal gate even more**  \n   Require: exact diffs, exact test commands, exact rollback.  \n   → Fewer back-and-forth approvals.\n\nIf you want, I can draft a **copy-paste USER.md/SOUL.md patch** for these in your preferred tone.",
+      "timestamp": 1774639980254
+    },
+    {
+      "role": "user",
+      "content": "what are all the source related tools you have?",
+      "timestamp": 1774640063674
+    },
+    {
+      "role": "assistant",
+      "content": "Great question. In this session, the **source/code-related tools I can directly use right now** are:\n\n### Read-only source inspection (Prometheus `src/`)\n- `list_source`\n- `read_source`\n- `grep_source`\n\n### Read-only frontend inspection (`web-ui/`)\n- `list_webui_source`\n- `read_webui_source`\n- `grep_webui_source`\n\n### Workspace file editing (general files)\n- `read_file`\n- `create_file`\n- `replace_lines`\n- `insert_after`\n- `delete_lines`\n- `find_replace`\n- `delete_file`\n- `mkdir`\n- `list_files`\n- `list_directory`\n- `grep_files`\n\n### Source-write category (activatable)\n- I can activate `source_write` via `request_tool_category(\"source_write\")`, which unlocks additional source editing helpers in that category.\n\nIf you want, I can give you a **clean split of “safe to use without proposal” vs “requires proposal first”** based on your current rules.",
+      "timestamp": 1774640073749
+    },
+    {
+      "role": "user",
+      "content": "Hmmm - okay, you should have a gate that blocks you from doing anything in the src directory without a proposal - do you have that? - or is that implemented?",
+      "timestamp": 1774640221990
+    },
+    {
+      "role": "assistant",
+      "content": "Short answer: **partially, yes — but not as a hard filesystem lock yet**.\n\nWhat exists now:\n- I’m under a **policy requirement** that `src/` edits must go through `write_proposal` first.\n- Proposal format is enforced (those required section headings), and `src_edit` proposals have strict expectations.\n\nWhat likely does **not** exist yet:\n- A true **technical gate** that physically blocks direct file-edit tools from touching `src/` unless an approved proposal ID is present.\n\nSo it’s currently a **behavior/policy gate**, not a guaranteed **kernel-level guard**.\n\nIf you want, I can help you define the exact hard gate spec (deny all `src/**` write ops unless `approved_proposal_id` is attached) so it becomes impossible for any agent to bypass.",
+      "timestamp": 1774640235303
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774639888355,
+  "lastActiveAt": 1774640235303,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 1745
+}

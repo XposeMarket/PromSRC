@@ -1,0 +1,18 @@
+{
+  "scheduleId": "job_1773381482575_ycc0i",
+  "createdAt": 1773381669239,
+  "updatedAt": 1773381669240,
+  "dedup": {},
+  "learnedContext": [],
+  "runSummaries": [
+    {
+      "runId": "8b10bb42-7161-4823-a1a7-ec1b7d2c1f83",
+      "scheduledAt": 1773381650503,
+      "completedAt": 1773381669235,
+      "success": true,
+      "summary": "Done — I wired this properly as a recurring cron job:\n\n- **Job:** TopstepAI Position Reconciler  \n- **ID:** `job_1773381663038_jnvmg`  \n- **Schedule:** `*/1 8-15 * * 1-5` (every minute, Mon–Fri market window)  \n- **Timezone:** `America/Chicago`  \n- **Status:** Scheduled/enabled\n\nIt now runs the exact reconciliation/escalation workflow you provided (including bracket checks, journaling dispatch, da",
+      "stepCount": 1
+    }
+  ],
+  "notes": {}
+}

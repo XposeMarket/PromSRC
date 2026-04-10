@@ -1,0 +1,21 @@
+{
+  "id": "8614a773-f485-4e12-a43a-9150483d1449",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey prom",
+      "timestamp": 1774288674900
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Cannot convert argument to a ByteString because the character at index 7 has a value of 8226 which is greater than 255.",
+      "timestamp": 1774288675971
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774288674901,
+  "lastActiveAt": 1774288675971,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 51
+}

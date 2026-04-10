@@ -1,0 +1,41 @@
+{
+  "type": "general",
+  "priority": "medium",
+  "title": "Improve proposal execution UX: run-in-chat default, visibility, and command reliability",
+  "summary": "Implement proposal workflow fixes so approved proposals execute in-chat by default, surface clear task linkage/status, and use reliable non-detached command execution with proper exit-code handling.",
+  "details": "Recreate the previously discussed proposal to improve proposal execution behavior and observability.\n\nScope:\n1) Default approved proposals to execute in the current chat/session unless explicitly routed elsewhere.\n2) Add clear linkage between proposal and background task IDs in UI/logs, including direct open/resume controls.\n3) Improve queued/paused/stalled reason visibility so users can diagnose why execution is not progressing.\n4) Replace detached validation command execution (e.g., `start cmd /k ...`) with attached, exit-code-aware execution for build/test validation.\n5) Ensure completion is reported only after validation process exits successfully, otherwise surface failure details.\n\nAcceptance criteria:\n- Approving in-chat visibly runs in-chat by default (or clearly indicates reroute target).\n- Users can locate the exact task from the proposal view in one click.\n- Validation commands report deterministic pass/fail status and logs.",
+  "sourceAgentId": "code_executor",
+  "sourceSessionId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/proposals/*",
+      "action": "edit",
+      "description": "Proposal approval routing and execution target defaults; metadata for linking."
+    },
+    {
+      "path": "src/gateway/tasks/*",
+      "action": "edit",
+      "description": "Task linkage, status reasons, and visibility updates."
+    },
+    {
+      "path": "src/gateway/tool-runner/*",
+      "action": "edit",
+      "description": "Command execution policy: attached mode + exit-code handling for validation."
+    },
+    {
+      "path": "src/gateway/terminal-ui/*",
+      "action": "edit",
+      "description": "UI surfacing of proposal-task mapping and execution progress."
+    }
+  ],
+  "diffPreview": "- Default executor dispatch from generic/background to current session when approval originates in active chat.\n+ Persist `proposal_id -> task_id` mapping and display in proposal details.\n- Use `start cmd /k \"npm run build\"` for validation.\n+ Use direct process execution (`npm run build`, `npm test`) with awaited exit code and captured logs.\n+ Fail proposal execution step when non-zero exit code encountered; show reason and next action.",
+  "estimatedImpact": "Higher trust in proposal workflow, better debuggability, and fewer false-positive completions from detached command windows.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved proposal end-to-end: (1) make approved proposals execute in current chat/session by default, (2) add explicit proposal↔task linkage with clear UI/log surfaces and open/resume controls, (3) improve paused/queued/stalled reason visibility, and (4) enforce attached, exit-code-gated build/test command execution (no detached cmd /k) so completion only occurs after successful process exit. Update relevant gateway/task/tool-runner/terminal-ui sources, run build/tests, and report changed files with validation output.",
+  "id": "prop_1773891294002_ef7979",
+  "status": "denied",
+  "createdAt": 1773891294002,
+  "updatedAt": 1773894673617,
+  "decidedAt": 1773894673617
+}

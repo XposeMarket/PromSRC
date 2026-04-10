@@ -1,0 +1,41 @@
+{
+  "id": "4d007558-6479-4663-974b-ce9a32f8f72f",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey prom what MCP connections do we have setup?",
+      "timestamp": 1773561207943
+    },
+    {
+      "role": "assistant",
+      "content": "Hey — we currently have **3 MCP connections set up**, and all are connected:\n\n1. **supabase** (Supabase) — connected  \n2. **github** (GitHub, node transport) — connected  \n3. **vercel** (Vercel) — connected\n\nSo status is **3/3 connected**.",
+      "timestamp": 1773561215672
+    },
+    {
+      "role": "user",
+      "content": "Great! By the way, my names Raul",
+      "timestamp": 1773561265384
+    },
+    {
+      "role": "assistant",
+      "content": "Done — all steps are now complete, Raul.",
+      "timestamp": 1773561287763
+    },
+    {
+      "role": "user",
+      "content": "great thanks!",
+      "timestamp": 1773561366873
+    },
+    {
+      "role": "assistant",
+      "content": "You got it, Raul 👍",
+      "timestamp": 1773561385221
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1773561207943,
+  "lastActiveAt": 1773561385222,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 151
+}

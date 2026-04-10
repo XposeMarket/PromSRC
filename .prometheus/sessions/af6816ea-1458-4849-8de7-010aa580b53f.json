@@ -1,0 +1,26 @@
+{
+  "id": "af6816ea-1458-4849-8de7-010aa580b53f",
+  "history": [
+    {
+      "role": "user",
+      "content": "Show me a bar chart of monthly revenue for the first 6 months of the year. Use made-up but realistic numbers.",
+      "timestamp": 1773473770454
+    },
+    {
+      "role": "assistant",
+      "content": "```text\nMonthly Revenue (USD) — Jan to Jun\n\nJan | ████████████████████            $42,000\nFeb | ██████████████████████          $46,000\nMar | █████████████████████████       $51,000\nApr | ███████████████████████         $48,000\nMay | ███████████████████████████     $56,000\nJun | █████████████████████████████   $61,000\n```",
+      "timestamp": 1773473817049
+    },
+    {
+      "role": "user",
+      "content": "Plot a line chart comparing two products' sales over 4 quarters. Make up the data.",
+      "timestamp": 1773473829126
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1773473770590,
+  "lastActiveAt": 1773473829127,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 167
+}

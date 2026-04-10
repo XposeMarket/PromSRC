@@ -1,0 +1,72 @@
+[
+  {
+    "id": "read-files",
+    "description": "File read operations are always allowed",
+    "toolPattern": "read|list|stat|memory_read|memory_browse|memory_search",
+    "tier": "read",
+    "riskScore": 0
+  },
+  {
+    "id": "web-reads",
+    "description": "Web search and fetch are always allowed",
+    "toolPattern": "web_search|web_fetch",
+    "tier": "read",
+    "riskScore": 1
+  },
+  {
+    "id": "shell-exec",
+    "description": "Shell command execution requires approval",
+    "toolPattern": "shell|run_command",
+    "tier": "commit",
+    "riskScore": 8
+  },
+  {
+    "id": "file-writes",
+    "description": "File write/delete/rename operations need proposal review",
+    "toolPattern": "write|create_file|edit|delete|rename|copy|mkdir|append|apply_patch",
+    "tier": "propose",
+    "riskScore": 5
+  },
+  {
+    "id": "memory-writes",
+    "description": "Memory write operations are proposed for review",
+    "toolPattern": "memory_write",
+    "tier": "propose",
+    "riskScore": 3
+  },
+  {
+    "id": "desktop-control",
+    "description": "Desktop automation requires explicit approval",
+    "toolPattern": "desktop_click|desktop_type|desktop_press|desktop_drag|desktop_launch|desktop_close",
+    "tier": "commit",
+    "riskScore": 9
+  },
+  {
+    "id": "browser-actions",
+    "description": "Browser interaction steps are proposed before execution",
+    "toolPattern": "browser_click|browser_fill|browser_press|browser_submit",
+    "tier": "propose",
+    "riskScore": 6
+  },
+  {
+    "id": "integrations-write",
+    "description": "Outbound integration writes require approval",
+    "toolPattern": "gmail_send|slack_post|github_create|notion_update|hubspot_write|salesforce_write|stripe_write",
+    "tier": "commit",
+    "riskScore": 9
+  },
+  {
+    "id": "deploy-ops",
+    "description": "Deployment operations require approval",
+    "toolPattern": "vercel_deploy|vercel_env",
+    "tier": "commit",
+    "riskScore": 10
+  },
+  {
+    "id": "self-update",
+    "description": "Self-update operations require approval",
+    "toolPattern": "self_update|propose_repair",
+    "tier": "commit",
+    "riskScore": 9
+  }
+]

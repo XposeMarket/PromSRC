@@ -1,0 +1,28 @@
+{
+  "id": "8fadbd6b-acf3-4a3d-a763-15a89e34346c",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw, use my browser and go on youtube and look up videos about openclaw",
+      "timestamp": 1771832192354
+    },
+    {
+      "role": "assistant",
+      "content": "YouTube is open! Now searching for \"openclaw\" videos... 🔍",
+      "timestamp": 1771832359609
+    },
+    {
+      "role": "user",
+      "content": "search for openclaw videos for me!",
+      "timestamp": 1771832400541
+    },
+    {
+      "role": "assistant",
+      "content": "Here are the latest OpenClaw videos (2026):  \n1. *This AI Agent Runs Your Entire Dev Workflow* (Jan 28, 2026) - 1.6M views  \n2. *Why Clawdbot (OpenClaw) Is Trending Everywhere* (Feb 4, 2026)\n\nBoth are trending on YouTube right now. 🦞",
+      "timestamp": 1771832757096
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771832192355,
+  "lastActiveAt": 1771832757096
+}

@@ -1,0 +1,17 @@
+{
+  "id": "auto_boot_1775067695390",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Startup status: task and schedule systems are currently unavailable, and there are no notes recorded yet today. The main item needing attention is a blocked proposal task (`cdb4a7b0-3ac9-4cf0-9ade-3ad423fa8795`) for updating the Windows shell playbook branding/path/fallback guidance (stuck at step 4/4, needs assistance). Last activity centered on repeated boot-summary tests and a pending request to run the weekly self-improvement performance review once schedule/task history access is available.",
+      "timestamp": 1775067700876
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775067695401,
+  "lastActiveAt": 1775067700876,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 149
+}

@@ -1,0 +1,23 @@
+{
+  "id": "018b5444-c23f-4f75-a71a-dce70795a3e4",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you go ahead and tell me and create a visual of every time we've talked about features I want to add to you",
+      "timestamp": 1775770800767
+    },
+    {
+      "role": "assistant",
+      "content": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775771627,\"eligible_promo\":null,\"resets_in_seconds\":823}}",
+      "timestamp": 1775770805059
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775770800768,
+  "lastActiveAt": 1775770805060,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 104,
+  "contextStartIndex": 0
+}

@@ -1,0 +1,29 @@
+{
+  "id": "ad24ca29-1845-4c8f-ba59-af30ef0de2c9",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom, how are you",
+      "timestamp": 1774632171284
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul — doing great, thanks. Ready when you are.",
+      "timestamp": 1774632180791
+    },
+    {
+      "role": "user",
+      "content": "im trying to test out the background agents feature again still  - can you do me a favor, maybe have the background agetn write a note with the write_note tool, while you go and open up X and like a few posts",
+      "timestamp": 1774632209087
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774632171285,
+  "lastActiveAt": 1774632209088,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 99,
+  "activatedToolCategories": [
+    "browser"
+  ]
+}

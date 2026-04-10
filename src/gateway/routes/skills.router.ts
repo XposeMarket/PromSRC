@@ -13,13 +13,7 @@ export function setSkillsRouterManager(sm: InstanceType<typeof SkillsManager>): 
 export function setSkillsRouterDeps(_deps: { getOrchestrationSessionStats: (s: string) => any }): void {}
 
 router.get('/api/skills', async (_req, res) => {
-  if (!_sm) {
-    res.status(503).json({ success: false, error: 'Skills manager not initialized' });
-    return;
-  }
-  if (_sm.getAll().length === 0) {
-    recoverSkillsIfEmpty();
-  }
+  recoverSkillsIfEmpty();
 
   const skills = _sm.getAll().map(s => ({
     id: s.id,

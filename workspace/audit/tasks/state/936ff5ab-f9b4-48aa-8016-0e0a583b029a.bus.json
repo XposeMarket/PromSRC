@@ -1,0 +1,23 @@
+{
+  "taskId": "936ff5ab-f9b4-48aa-8016-0e0a583b029a",
+  "createdAt": 1773446658771,
+  "updatedAt": 1773446690565,
+  "entries": [
+    {
+      "id": "169ae9dc-c7cf-4e62-829d-4b88bf748305",
+      "t": 1773446658772,
+      "stepIndex": 0,
+      "category": "finding",
+      "key": "task",
+      "value": "Starting scheduled x_poster run: drafting and posting one time-aware, on-brand tweet for @Small_Claw_."
+    },
+    {
+      "id": "2a82c446-4a23-47f8-a05e-38ab5a57f39d",
+      "t": 1773446690565,
+      "stepIndex": 0,
+      "category": "finding",
+      "key": "last_run_insight",
+      "value": "Tweet posted from home composer with Friday-night tone emphasizing resilience, local control, and accountability; post appeared at top of timeline immediately."
+    }
+  ]
+}

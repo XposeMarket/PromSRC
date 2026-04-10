@@ -1,0 +1,21 @@
+{
+  "id": "3b00dbab-8df0-4e4e-8956-d657b5dd93ce",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw - what subagents do we have",
+      "timestamp": 1772810490430
+    },
+    {
+      "role": "assistant",
+      "content": "Right now there’s just one configured agent: `main` (the default assistant).",
+      "timestamp": 1772810500761
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772810486155,
+  "lastActiveAt": 1772810500761,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 45
+}

@@ -1,0 +1,26 @@
+{
+  "id": "35d1bcff-947d-4d67-940a-4e3ffaf2cbef",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey",
+      "timestamp": 1774017451052
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul 👋",
+      "timestamp": 1774017459717
+    },
+    {
+      "role": "user",
+      "content": "can you see the image i put in he canvas",
+      "timestamp": 1774017511699
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774017451052,
+  "lastActiveAt": 1774017511700,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 35
+}

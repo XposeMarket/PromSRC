@@ -1,0 +1,17 @@
+{
+  "id": "cli_b42d8e8d-8fe8-4934-814d-d32e784dcb87",
+  "history": [
+    {
+      "role": "user",
+      "content": "prom",
+      "timestamp": 1775195701386
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "terminal",
+  "createdAt": 1775195701387,
+  "lastActiveAt": 1775195701387,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 8
+}

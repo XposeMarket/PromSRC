@@ -1,0 +1,24 @@
+{
+  "id": "proposal_prop_1774650211590_457de4",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774650541080
+    },
+    {
+      "role": "assistant",
+      "content": "Completed — proposal execution is fully finished and logged. ### What I changed I applied the approved complexity-based declare_plan gating across all requested surfaces: 1. **`src/gateway/routes/chat.router.ts`** - Updated the `handleChat` system prompt instruction. - Replaced the old **“2+ tool calls => declare_plan”** rule with the new **complexity-based** trigger that excludes quick linear chains. 2. **`src/gateway/tools/defs/agent-team-schedule.ts`** - Updated the **`declare_plan` tool description** to the provided replacement policy text. - Included explicit exclusions for fast multi-tool linear flows so docs and runtime behavior match. 3. **`src/gateway/comms/telegram-channel.ts`** - Appended Telegram guidance sentence: - **“For quick linear Telegram actions, do not declare a plan; reserve declare_plan for complex multi-phase tasks.”** ### Verification - Ran **`npm run build`**. - Build passed (**TypeScript compile success, exit code 0**). ### Outcome - Planning-trigger policy is now consistent across: - interactive runtime prompt behavior, - declare_plan tool definition, - Telegram execution context. - No new files created, no deletions, and no API/tool signature changes.",
+      "timestamp": 1774650541081
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774650396045,
+  "lastActiveAt": 1774650541081,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 375,
+  "activatedToolCategories": [
+    "source_write"
+  ]
+}

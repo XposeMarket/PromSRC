@@ -1,0 +1,46 @@
+{
+  "id": "ba3ff981-3d37-493b-b383-8285ab95ae47",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw",
+      "timestamp": 1772827607438
+    },
+    {
+      "role": "assistant",
+      "content": "Hey — good to see you. What are we working on today?",
+      "timestamp": 1772827614492
+    },
+    {
+      "role": "user",
+      "content": "can you go ahead and open up X, its logged into the SmallClaw account already, I want you to make a post about SmallClaw,  just a little hype post",
+      "timestamp": 1772827639435
+    },
+    {
+      "role": "assistant",
+      "content": "I'll get X open and craft a short hype post for SmallClaw. Hang tight and I'll let you know once it's live!",
+      "timestamp": 1772827646057
+    },
+    {
+      "role": "assistant",
+      "content": "I'll get X open and craft a short hype post for SmallClaw. Hang tight and I'll let you know once it's live!",
+      "timestamp": 1772827646058
+    },
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1772827823168
+    },
+    {
+      "role": "assistant",
+      "content": "Done!",
+      "timestamp": 1772827823171
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772827603371,
+  "lastActiveAt": 1772827823171,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 186
+}

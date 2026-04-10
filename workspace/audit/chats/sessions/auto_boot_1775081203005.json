@@ -1,0 +1,23 @@
+{
+  "id": "auto_boot_1775081203005",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Startup status is mostly constrained right now: task and schedule backends are unavailable, so there are no live current-task or upcoming-schedule signals to act on from this snapshot. Today’s notes highlight two key operational lessons—graceful no-file handling for intermittent intraday logs, and a prior X→Telegram hang caused by using an unknown tool (`browser_send_to_telegram`) without immediate fallback, which left a declared-plan step stuck. Where things left off: you had just requested the weekly self-improvement performance review run, with emphasis on using prior schedule-context patterns.",
+      "timestamp": 1775081207961
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775081203017,
+  "lastActiveAt": 1775081207962,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 179,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

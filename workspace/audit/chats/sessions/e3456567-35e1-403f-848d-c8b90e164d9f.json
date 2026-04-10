@@ -1,0 +1,16 @@
+{
+  "id": "e3456567-35e1-403f-848d-c8b90e164d9f",
+  "history": [
+    {
+      "role": "user",
+      "content": "are you able to see your new tools to access web ui",
+      "timestamp": 1774585551782
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774585551782,
+  "lastActiveAt": 1774585551783,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 21
+}

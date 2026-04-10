@@ -1,0 +1,65 @@
+{
+  "id": "90b26ff0-dc08-4107-bbc1-90dcfd863b12",
+  "title": "SRC Improvement Suggester: Based on these completed analyses: (1) SmallClaw reference scan found 246 matche",
+  "prompt": "Based on these completed analyses: (1) SmallClaw reference scan found 246 matches across 164 files with notable user-visible and compatibility-sensitive hotspots; (2) Bug scout found high-severity route-level dynamic require path issues in goals.router.ts and connections.router.ts; (3) Plan architect produced Phase 0/1/2 remediation strategy. Now produce a prioritized improvement backlog (P1/P2/P3) with file targets, concrete changes, expected benefit, effort (S/M/L), and recommended execution order.",
+  "sessionId": "team_dispatch_src_improvement_suggester_v1_1774472775686",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "Based on these completed analyses: (1) SmallClaw reference scan found 246 matches across 164 files with notable user-vis",
+      "status": "done",
+      "completedAt": 1774472905490,
+      "notes": "## Prioritized Improvement Backlog\n\n### P1 — Reliability / breakage prevention (do first)\n\n1) **Fix route-level dynamic import path bugs (runtime failures)**\n- **Files:**  \n  - `src/gateway/routes/goa"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774472775688,
+      "type": "status_push",
+      "content": "Task created: SRC Improvement Suggester: Based on these completed analyses: (1) SmallClaw reference scan found 246 matche"
+    },
+    {
+      "t": 1774472905490,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"## Prioritized Improvement Backlog\\n\\n### P1 — Reliability / breakage prevention (do first)\\n\\n1) **Fix route-level dynamic import path bugs (runtime failures)**\\n- **Files:**  \\n  - `src/gateway/routes/goa\"}]"
+    },
+    {
+      "t": 1774472905494,
+      "type": "status_push",
+      "content": "Done: ## Prioritized Improvement Backlog\n\n### P1 — Reliability / breakage prevention (do first)\n\n1) **Fix route-level dynamic import path bugs (runtime failures)**\n- **Files:**  \n  - `src/gateway/routes/goa"
+    }
+  ],
+  "lastProgressAt": 1774472905494,
+  "startedAt": 1774472775688,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Run Read Source",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Run Read Source",
+        "status": "done"
+      }
+    ],
+    "updatedAt": 1774472905481
+  },
+  "finalSummary": "## Prioritized Improvement Backlog\n\n### P1 — Reliability / breakage prevention (do first)\n\n1) **Fix route-level dynamic import path bugs (runtime failures)**\n- **Files:**  \n  - `src/gateway/routes/goals.router.ts` (e.g., `require('./goal-decomposer')` at line ~79, `require('./prompt-mutation')` at ~168)  \n  - `src/gateway/routes/connections.router.ts` (e.g., `require('./browser-tools.js')` at ~139/~153, `require('../integrations/connector-registry.js')` at ~93/~117)\n- **Change summary:** Replace",
+  "completedAt": 1774472905492
+}

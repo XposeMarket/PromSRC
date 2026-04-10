@@ -1,0 +1,21 @@
+{
+  "id": "auto_boot_1774723449873",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Error: Anthropic API error 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"},\"request_id\":\"req_011CZVyLy4u9XeBMWV3vgcKc\"}",
+      "timestamp": 1774723451245
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774723449941,
+  "lastActiveAt": 1774723451246,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 68,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "scheduling"
+  ]
+}

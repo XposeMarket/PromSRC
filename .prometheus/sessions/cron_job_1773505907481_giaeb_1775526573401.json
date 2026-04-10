@@ -1,0 +1,15 @@
+{
+  "id": "cron_job_1773505907481_giaeb_1775526573401",
+  "history": [],
+  "workspace": "/Applications/PromSRC-main/workspace",
+  "channel": "system",
+  "createdAt": 1775526573402,
+  "lastActiveAt": 1775526574344,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "browser",
+    "scheduling"
+  ]
+}

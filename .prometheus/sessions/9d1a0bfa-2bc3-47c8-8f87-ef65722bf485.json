@@ -1,0 +1,48 @@
+{
+  "id": "9d1a0bfa-2bc3-47c8-8f87-ef65722bf485",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey claw",
+      "timestamp": 1771721179176
+    },
+    {
+      "role": "assistant",
+      "content": "Hey there! 😊 How can I help you today?",
+      "timestamp": 1771721188656
+    },
+    {
+      "role": "user",
+      "content": "Whats going on?",
+      "timestamp": 1771721195283
+    },
+    {
+      "role": "assistant",
+      "content": "Yes, the answer should be a friendly sentence without any code blocks. Let me phrase it as the assistant would normally respond.\nNot much! Just here and ready to help with anything you need. 😊 What's on your mind?",
+      "timestamp": 1771721205838
+    },
+    {
+      "role": "user",
+      "content": "can you tell me how many files are in the workspace that start with golden",
+      "timestamp": 1771721219130
+    },
+    {
+      "role": "assistant",
+      "content": "Okay, let's see. The user is asking how many files in the workspace start with \"golden\". The tool result shows [1] 10 an",
+      "timestamp": 1771721269878
+    },
+    {
+      "role": "user",
+      "content": "okay can you remove them?",
+      "timestamp": 1771721296693
+    },
+    {
+      "role": "assistant",
+      "content": "I wasn't able to fix the error after retries and reset. Last error: ERROR: SyntaxError in node_call code: missing ) after argument list. Fix the syntax and try again.",
+      "timestamp": 1771721567142
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771721179177,
+  "lastActiveAt": 1771721567142
+}

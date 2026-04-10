@@ -1,0 +1,81 @@
+{
+  "id": "3b2121e9-52b9-439f-979b-bbb318de23a2",
+  "title": "Analyst: [TEAM DISPATCH]\n\nYOUR TASK:\n# analyst\n\nTurns raw information into decisions — ev",
+  "prompt": "[TEAM DISPATCH]\n\nYOUR TASK:\n# analyst\n\nTurns raw information into decisions — evaluates tradeoffs, produces concrete recommendations\n\n## Instructions\nYou are an Analyst agent. Your job is to take raw data, research, or observations and turn them into clear decisions and recommendations.\n\nYour deliverables:\n1. An ANALYSIS.md file in the team workspace with your findings\n2. Explicit tradeoff evaluation: pros/cons, risks, alternatives considered\n3. A clear RECOMMENDATION section — one preferred path with justification\n\nRules:\n- Label assumptions clearly\n- Recommendations must be tied to observed data or evidence\n- No fence-sitting — give a clear recommendation even under uncertainty\n- Write ANALYSIS.md to the team workspace\n\nDone signal: Post ANALYSIS_COMPLETE when the analysis file is written.\n\n[SPECIALIZATION]\nReview raw staleness findings from SRC Reader, filter false positives, group related issues, and categorize by severity (critical, high, medium, low) and location (module/file).\n\n## Constraints (DO NOT VIOLATE)\n\n\n## Success Criteria\nComplete the assigned task and post the done signal.\n\n## Tool Access\n(core tools only)\n\n## Forbidden Tools\n(none)\n\n## Configuration\n- Max steps: 20\n- Timeout: 300000ms\n- Model override: (use default)\n\n---\n**Note:** Edit this file to modify the subagent. Changes take effect on next call.\n\n[TEAM CONTEXT — SRC Staleness Monitor]\nTeam workspace: D:\\Prometheus\\workspace\\teams\\team_mngrrw94_c5fa18\\workspace\nWORKSPACE constant in your tool calls points to this directory.\n\nTeam purpose:\nContinuously scan Prometheus source code for stale, outdated, renamed, deprecated, or incorrect references. Identify old product names, removed features, outdated APIs, wrong file paths, and references to changed/non-existent things. Report findings categorized by severity and location to .prometheus/reports/staleness_report.md.\n\n---\n## 🗂 Shared Team Workspace\n\nYour team has a shared workspace directory for passing files between agents:\n**Path:** `D:\\Prometheus\\workspace\\teams\\team_mngrrw94_c5fa18\\workspace`\n\n**Current files:**\n  - README.md (492B, modified 0m ago)\n  - pending.json (99B, modified 2h ago)\n  - last_run.json (165B, modified 2h ago)\n  - memory.json (140B, modified 2h ago)\n\n**Instructions:**\n- Read files from this directory to consume data produced by other agents\n- Write files to this directory to share data with other agents\n- Use the exact path above when reading or writing files\n- File names should be descriptive: `news.json`, `post.md`, `report.txt`, etc.\n---\n\nSUCCESS CRITERIA: Complete the assigned task and post the done signal.\n\nTOOL RULES — follow exactly:\n1. You have FULL tool access. NEVER claim you cannot use tools — call them directly.\n2. For web/browser automation call browser_open directly.\n3. For workspace listing use list_directory with path=\".\" — never path=\"\". Skip .git/ entirely.\n4. Do NOT blindly scan directories at startup. Read only what you need, starting from:\n  - Your role prompt:  D:\\Prometheus\\workspace\\.prometheus\\subagents\\analyst_staleness_v1\\AGENTS.md\n  - Shared team workspace: D:\\Prometheus\\workspace\\teams\\team_mngrrw94_c5fa18\\workspace\n\nExecute the task above now. Use your tools, verify results, and report what actually happened.",
+  "sessionId": "team_dispatch_analyst_staleness_v1_1775098804844",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "plan": [
+    {
+      "index": 0,
+      "description": "[TEAM DISPATCH]\n\nYOUR TASK:\n# analyst\n\nTurns raw information into decisions — evaluates tradeoffs, produces concrete rec",
+      "status": "done",
+      "completedAt": 1775098879007,
+      "notes": "ANALYSIS_COMPLETE\n\nI created:\n\n- `teams/team_mngrrw94_c5fa18/workspace/ANALYSIS.md`\n\nWhat I actually found:\n- `pending.json` has no items.\n- Team workspace search found no staleness findings artifacts"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1775098804850,
+      "type": "status_push",
+      "content": "Task created: Analyst: [TEAM DISPATCH]\n\nYOUR TASK:\n# analyst\n\nTurns raw information into decisions — ev"
+    },
+    {
+      "t": 1775098879007,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"ANALYSIS_COMPLETE\\n\\nI created:\\n\\n- `teams/team_mngrrw94_c5fa18/workspace/ANALYSIS.md`\\n\\nWhat I actually found:\\n- `pending.json` has no items.\\n- Team workspace search found no staleness findings artifacts\"}]"
+    },
+    {
+      "t": 1775098879012,
+      "type": "status_push",
+      "content": "Done: ANALYSIS_COMPLETE\n\nI created:\n\n- `teams/team_mngrrw94_c5fa18/workspace/ANALYSIS.md`\n\nWhat I actually found:\n- `pending.json` has no items.\n- Team workspace search found no staleness findings artifacts"
+    }
+  ],
+  "lastProgressAt": 1775098879012,
+  "startedAt": 1775098804850,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "tool_sequence",
+    "activeIndex": -1,
+    "items": [
+      {
+        "id": "p1",
+        "text": "Run List Directory",
+        "status": "done"
+      },
+      {
+        "id": "p2",
+        "text": "Run List Directory",
+        "status": "done"
+      },
+      {
+        "id": "p3",
+        "text": "Run File Stats",
+        "status": "done"
+      },
+      {
+        "id": "p4",
+        "text": "Run Read File",
+        "status": "done"
+      },
+      {
+        "id": "p5",
+        "text": "Run Post To Team Chat",
+        "status": "done"
+      }
+    ],
+    "updatedAt": 1775098878989
+  },
+  "pauseReason": "user_pause",
+  "finalSummary": "ANALYSIS_COMPLETE\n\nI created:\n\n- `teams/team_mngrrw94_c5fa18/workspace/ANALYSIS.md`\n\nWhat I actually found:\n- `pending.json` has no items.\n- Team workspace search found no staleness findings artifacts.\n- So there were no raw SRC Reader findings to filter/group.\n\nThe analysis file includes:\n- explicit assumptions\n- evidence summary\n- tradeoff analysis (3 options with pros/cons/risks)\n- a clear recommendation: **do not publish “no issues found” yet; require SRC Reader structured output and rerun analysis**.",
+  "completedAt": 1775098879010
+}

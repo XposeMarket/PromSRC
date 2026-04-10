@@ -1,0 +1,46 @@
+{
+  "type": "feature_addition",
+  "priority": "high",
+  "title": "Improve proposal execution UX: run-in-chat default, visibility, and command reliability",
+  "summary": "Make approved proposals execute in the same chat by default, expose clear proposal↔task visibility, and enforce reliable validation command execution with real exit-code checks.",
+  "details": "This proposal improves trust and debuggability around approved proposal execution.\n\nScope:\n1) Default execution routing:\n- When a proposal is approved from an active chat, execution should default to that same session/thread unless explicitly overridden.\n- Preserve backward-compatible options for isolated/background execution.\n\n2) Proposal-task observability:\n- Persist and display a first-class link between proposal ID and task ID.\n- Surface execution state in both proposal panel and chat timeline (queued/running/paused/failed/complete).\n- Add quick actions: open task, view logs, resume, rerun.\n\n3) Better status messaging:\n- Show explicit reason text when waiting/paused (e.g., awaiting tool, awaiting approval, tool timeout, validation failed).\n- Remove ambiguity where users see terminal logs but no navigable task object.\n\n4) Command reliability hardening:\n- Disallow detached command patterns for validations (e.g., `start cmd /k ...`) in proposal executors.\n- Run build/test in a blocking process and gate completion on exit code.\n- Mark step complete only after command exits successfully; otherwise fail with actionable error output.\n\nAcceptance criteria:\n- Approve-in-chat runs in-chat by default.\n- Every approved proposal has a visible task record with a stable cross-link.\n- Build/test steps cannot falsely report success while still running detached.\n- Failed validation clearly blocks final completion and reports stderr/stdout context.",
+  "sourceAgentId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "sourceSessionId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/proposals/approval-handler.ts",
+      "action": "edit",
+      "description": "Route approved proposals to current chat session by default; preserve explicit override paths."
+    },
+    {
+      "path": "src/gateway/proposals/proposal-store.ts",
+      "action": "edit",
+      "description": "Persist proposal-to-task linkage metadata and expose retrieval helpers."
+    },
+    {
+      "path": "src/gateway/terminal-ui.ts",
+      "action": "edit",
+      "description": "Render proposal execution state, reasons, and quick navigation to linked task/logs."
+    },
+    {
+      "path": "src/gateway/task-runner.ts",
+      "action": "edit",
+      "description": "Enforce blocking command execution and exit-code-gated step completion for validation commands."
+    },
+    {
+      "path": "src/gateway/tools/run-command.ts",
+      "action": "edit",
+      "description": "Add guardrails/warnings for detached shell launches in validation contexts."
+    }
+  ],
+  "diffPreview": "// approval-handler.ts\n- const targetSession = options.sessionTarget ?? 'isolated';\n+ const targetSession = options.sessionTarget ?? inferCurrentChatSessionOr('isolated');\n\n// proposal-store.ts\n+ proposal.execution = { taskId, sessionId, status, lastReason };\n\n// task-runner.ts\n- await run_command(`start cmd /k \"npm test\"`)\n+ const result = await runBlockingCommand(\"npm test\");\n+ if (result.exitCode !== 0) throw new Error(formatValidationFailure(result));\n\n// terminal-ui.ts\n+ showProposalStatus({ proposalId, taskId, status, reason, actions: ['open task','view logs','resume'] })",
+  "estimatedImpact": "Higher user trust and debuggability; eliminates false-positive completion from detached commands; reduces confusion around where approved work runs.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved proposal exactly as specified: default approved proposals to run in the originating chat session unless overridden, add durable proposal↔task linkage and status reason visibility in UI, and harden validation command execution to blocking/exit-code-gated behavior (no detached cmd /k patterns). Update the listed files, run build/tests, and report final diffs and validation output.",
+  "id": "prop_1773890308311_5400a3",
+  "status": "denied",
+  "createdAt": 1773890308311,
+  "updatedAt": 1773890577845,
+  "decidedAt": 1773890577844
+}

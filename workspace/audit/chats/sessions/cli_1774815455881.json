@@ -1,0 +1,21 @@
+{
+  "id": "cli_1774815455881",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey",
+      "timestamp": 1774815458303
+    },
+    {
+      "role": "assistant",
+      "content": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187546,\"eligible_promo\":null,\"resets_in_seconds\":372087}}",
+      "timestamp": 1774815459260
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774815458303,
+  "lastActiveAt": 1774815459261,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 74
+}

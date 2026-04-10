@@ -1,0 +1,22 @@
+{
+  "id": "2f267492-7ba1-4007-a8cd-c6ddcfe63678",
+  "history": [
+    {
+      "role": "user",
+      "content": "hey",
+      "timestamp": 1775582754787
+    },
+    {
+      "role": "assistant",
+      "content": "Error: Ollama chat failed: fetch failed",
+      "timestamp": 1775583056123
+    }
+  ],
+  "workspace": "/Applications/PromSRC-main/workspace",
+  "channel": "web",
+  "createdAt": 1775582754788,
+  "lastActiveAt": 1775583056123,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 25
+}

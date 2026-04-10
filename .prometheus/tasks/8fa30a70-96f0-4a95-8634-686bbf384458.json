@@ -1,0 +1,55 @@
+{
+  "id": "8fa30a70-96f0-4a95-8634-686bbf384458",
+  "title": "📊 Weekly Performance Review",
+  "prompt": "Run the weekly self-improvement performance review. Analyze all scheduled task run histories from the past 7 days, identify patterns, propose skill evolutions, and generate a performance report.",
+  "sessionId": "cron_job_1773505907481_giaeb_1774969367321",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "scheduleId": "job_1773505907481_giaeb",
+  "plan": [
+    {
+      "index": 0,
+      "description": "Run the weekly self-improvement performance review. Analyze all scheduled task run histories from the past 7 days, ident",
+      "status": "done",
+      "completedAt": 1774969368644,
+      "notes": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187546,\"eligible_promo\":null,\"resets_in_second"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1774969367520,
+      "type": "status_push",
+      "content": "Task created: 📊 Weekly Performance Review"
+    },
+    {
+      "t": 1774969368644,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"Error: openai_codex API error 429: {\\\"error\\\":{\\\"type\\\":\\\"usage_limit_reached\\\",\\\"message\\\":\\\"The usage limit has been reached\\\",\\\"plan_type\\\":\\\"plus\\\",\\\"resets_at\\\":1775187546,\\\"eligible_promo\\\":null,\\\"resets_in_second\"}]"
+    },
+    {
+      "t": 1774969368647,
+      "type": "status_push",
+      "content": "Done: Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187546,\"eligible_promo\":null,\"resets_in_second"
+    }
+  ],
+  "lastProgressAt": 1774969368647,
+  "startedAt": 1774969367520,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1774969367544
+  },
+  "finalSummary": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187546,\"eligible_promo\":null,\"resets_in_seconds\":218178}}",
+  "completedAt": 1774969368646
+}

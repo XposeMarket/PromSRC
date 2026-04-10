@@ -1,0 +1,17 @@
+{
+  "id": "auto_boot_1775069052836",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Startup is clear but partially degraded: task and schedule systems are currently unavailable in this snapshot, so there are no live current-task or upcoming-schedule details to act on right now. Today’s key note says the last weekly review succeeded by combining `schedule_job` and `task_control` telemetry, with the main issue being inconsistent status signals (running vs paused) that should be explicitly flagged in future reports. Where things left off: you were repeatedly testing boot-summary flow and preparing/running the weekly self-improvement performance review workflow.",
+      "timestamp": 1775069071858
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775069052848,
+  "lastActiveAt": 1775069071859,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 173
+}

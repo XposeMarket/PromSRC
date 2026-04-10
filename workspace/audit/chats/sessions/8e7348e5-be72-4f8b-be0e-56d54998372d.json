@@ -1,0 +1,26 @@
+{
+  "id": "8e7348e5-be72-4f8b-be0e-56d54998372d",
+  "history": [
+    {
+      "role": "user",
+      "content": "what tells you when and how and why to declare a plan when working",
+      "timestamp": 1775678331747
+    },
+    {
+      "role": "assistant",
+      "content": "Great question.\n\nThree things tell me to declare a plan:\n\n1. **System/developer instructions (highest priority)**  \n   In this session, I’m explicitly instructed to call `declare_plan` for multi-step actionable work, and **always before browser/desktop automation**.\n\n2. **Task shape (complexity + number of phases)**  \n   If work has **2+ meaningful phases** (not just one quick action), I should plan first so execution is structured and trackable.\n\n3. **Execution context and safety**  \n   Planning clarifies:\n   - **when** to use tools,\n   - **how** steps are sequenced,\n   - **why** each phase exists (e.g., reduce mistakes, especially on sensitive actions like posting/deleting/paying).\n\nSo in short: **policy tells me the rule, task complexity triggers it, and reliability/safety justify it.**",
+      "timestamp": 1775678339801
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775678331748,
+  "lastActiveAt": 1775678339805,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 260,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "scheduling"
+  ]
+}

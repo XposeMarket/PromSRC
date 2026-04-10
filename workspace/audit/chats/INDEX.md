@@ -1,0 +1,89 @@
+# Chats Index
+
+Generated: 2026-04-10T17:18:17.668Z
+
+- Sessions mirrored: 1348
+- Transcript files: 124
+- Compaction artifacts: 6
+
+## Recent Sessions
+- run_once_3ecfbdf0-72ce-4051-9c18-50396c57e686_1775840983464 | messages=0 | lastActive=2026-04-10T17:09:43.466Z | summary=no
+- run_once_verify_7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc_1775840988051 | messages=0 | lastActive=2026-04-10T17:09:48.051Z | summary=no
+- run_once_7fdf9c23-e724-4d33-a759-ec5bf0a0b7cc_1775840955118 | messages=0 | lastActive=2026-04-10T17:09:48.048Z | summary=no
+- 0485a1f7-c52d-4c9b-8cd1-540e490964a0 | messages=29 | lastActive=2026-04-10T17:09:22.005Z | summary=yes
+- brain_thought_2026-04-10_06-20 | messages=2 | lastActive=2026-04-10T16:27:45.393Z | summary=no
+- f1f52bb8-240c-41d0-82c9-3bb2aab7ec04 | messages=4 | lastActive=2026-04-10T16:08:52.756Z | summary=no
+- telegram_1799053599_1775829404662 | messages=3 | lastActive=2026-04-10T13:56:52.349Z | summary=no
+- brain_thought_2026-04-10_00-07 | messages=2 | lastActive=2026-04-10T10:20:39.636Z | summary=no
+- telegram_1799053599_1775804911570 | messages=15 | lastActive=2026-04-10T07:41:08.794Z | summary=no
+- telegram_1799053599_1775804734556 | messages=11 | lastActive=2026-04-10T07:08:05.471Z | summary=no
+- telegram_1799053599_1775804570778 | messages=2 | lastActive=2026-04-10T07:05:18.592Z | summary=no
+- auto_restart_manual_1775804718566 | messages=1 | lastActive=2026-04-10T07:05:18.590Z | summary=no
+- d5809570-2f91-4277-9db4-c1ccd7d60cbf | messages=4 | lastActive=2026-04-10T06:37:13.693Z | summary=no
+- 372fd1f8-0806-4897-9729-440c557ba99d | messages=20 | lastActive=2026-04-10T05:49:57.860Z | summary=no
+- auto_boot_1775799322754 | messages=1 | lastActive=2026-04-10T05:35:51.173Z | summary=no
+- telegram_1799053599_1775792248385 | messages=9 | lastActive=2026-04-10T04:11:14.498Z | summary=no
+- brain_thought_2026-04-10_16-53 | messages=2 | lastActive=2026-04-10T04:07:10.424Z | summary=no
+- brain_dream_2026-04-09 | messages=2 | lastActive=2026-04-10T03:37:26.347Z | summary=no
+- 27785a94-37be-4e62-8c8a-3619971a8056 | messages=2 | lastActive=2026-04-10T03:06:05.452Z | summary=no
+- a873da88-3e56-4867-b08e-6f4734103f55 | messages=18 | lastActive=2026-04-10T02:49:43.624Z | summary=no
+- c190d782-5934-48f1-82af-7b38fee2d9cd | messages=1 | lastActive=2026-04-09T23:42:11.893Z | summary=no
+- 018b5444-c23f-4f75-a71a-dce70795a3e4 | messages=2 | lastActive=2026-04-09T21:40:05.060Z | summary=no
+- brain_thought_2026-04-09_07-58 | messages=2 | lastActive=2026-04-09T20:53:06.406Z | summary=no
+- proposal_prop_1774488185640_a65bec | messages=6 | lastActive=2026-04-09T20:12:00.108Z | summary=no
+- task_1e754ab2-4295-4140-96a7-728fb22eadfe | messages=1 | lastActive=2026-04-09T20:10:57.897Z | summary=no
+- telegram_1799053599 | messages=80 | lastActive=2026-04-09T19:38:44.760Z | summary=yes
+- auto_restart_manual_1775760350263 | messages=1 | lastActive=2026-04-09T18:45:50.278Z | summary=no
+- task_b540f050-4464-4b7c-8a7d-f2845778edf2 | messages=0 | lastActive=2026-04-09T18:37:46.739Z | summary=no
+- proposal_prop_1775759744962_a7c1d3 | messages=0 | lastActive=2026-04-09T18:37:46.739Z | summary=no
+- telegram_1799053599_1775758182985 | messages=4 | lastActive=2026-04-09T18:17:01.795Z | summary=no
+- auto_restart_manual_1775758621769 | messages=1 | lastActive=2026-04-09T18:17:01.793Z | summary=no
+- meta_coordinator_mnrslv5j | messages=0 | lastActive=2026-04-09T18:10:40.257Z | summary=no
+- telegram_1799053599_1775757556700 | messages=21 | lastActive=2026-04-09T18:07:38.639Z | summary=no
+- 3e44f40b-97cb-452f-b1f7-203da17bead6 | messages=2 | lastActive=2026-04-09T16:15:31.147Z | summary=no
+- brain_thought_2026-04-09_01-52 | messages=0 | lastActive=2026-04-09T11:58:38.256Z | summary=no
+- auto_restart_manual_1775714324035 | messages=1 | lastActive=2026-04-09T05:58:44.056Z | summary=no
+- brain_thought_2026-04-09_19-40 | messages=0 | lastActive=2026-04-09T05:52:49.432Z | summary=no
+- fc58e992-66e8-4386-ab57-6c80019e58bb | messages=2 | lastActive=2026-04-09T04:39:11.660Z | summary=no
+- 27efbc12-23cd-4a35-8622-25ab0254fb60 | messages=1 | lastActive=2026-04-09T04:39:02.200Z | summary=no
+- auto_boot_1775707736106 | messages=1 | lastActive=2026-04-09T04:08:56.983Z | summary=no
+- brain_dream_2026-04-08 | messages=0 | lastActive=2026-04-09T03:34:42.246Z | summary=no
+- auto_restart_manual_1775700272643 | messages=1 | lastActive=2026-04-09T02:04:32.785Z | summary=no
+- auto_restart_manual_1775695941818 | messages=1 | lastActive=2026-04-09T00:52:21.894Z | summary=no
+- telegram_1799053599_1775692013579 | messages=5 | lastActive=2026-04-08T23:47:13.812Z | summary=no
+- 49cdb10a-eefa-4501-a486-1f3635d58d0b | messages=3 | lastActive=2026-04-08T23:40:29.711Z | summary=no
+- auto_restart_manual_1775691625198 | messages=1 | lastActive=2026-04-08T23:40:29.679Z | summary=no
+- brain_thought_2026-04-08_13-40 | messages=0 | lastActive=2026-04-08T23:40:22.795Z | summary=no
+- d6ea22ba-265e-4688-a1f8-94353cb8ae18 | messages=1 | lastActive=2026-04-08T23:11:54.322Z | summary=no
+- 03991351-a31f-4f92-9ff8-3bcc515c240c | messages=6 | lastActive=2026-04-08T22:33:35.242Z | summary=no
+- f2df74a9-f1c5-454e-ba43-6a4149c6aa0d | messages=1 | lastActive=2026-04-08T22:29:38.015Z | summary=no
+- 6283415c-b2ca-446c-8e7d-954c46aa7c71 | messages=11 | lastActive=2026-04-08T22:27:27.907Z | summary=no
+- auto_restart_manual_1775687201087 | messages=1 | lastActive=2026-04-08T22:27:27.855Z | summary=no
+- 6d1c1af3-956a-495c-9cf8-63b37e32e23a | messages=18 | lastActive=2026-04-08T21:44:29.710Z | summary=no
+- auto_restart_manual_1775684088755 | messages=1 | lastActive=2026-04-08T21:34:54.248Z | summary=no
+- auto_restart_manual_1775683472592 | messages=1 | lastActive=2026-04-08T21:24:36.116Z | summary=no
+- auto_restart_manual_1775683217412 | messages=1 | lastActive=2026-04-08T21:20:20.760Z | summary=no
+- f526cdae-0525-4f13-82a0-daee9b320ddc | messages=4 | lastActive=2026-04-08T21:18:31.687Z | summary=no
+- auto_restart_manual_1775683108176 | messages=1 | lastActive=2026-04-08T21:18:31.602Z | summary=no
+- e33ee31a-31e6-4270-a7c1-cee86161a70f | messages=5 | lastActive=2026-04-08T21:03:33.815Z | summary=no
+- 711144d7-8ac9-40e9-84e3-cef7e762f603 | messages=2 | lastActive=2026-04-08T21:02:01.929Z | summary=no
+- telegram_1799053599_1775681701296 | messages=33 | lastActive=2026-04-08T21:00:17.908Z | summary=no
+- c15b70e3-f335-4c6b-8dfa-6a792a68843e | messages=12 | lastActive=2026-04-08T20:54:55.103Z | summary=no
+- auto_restart_manual_1775681651195 | messages=1 | lastActive=2026-04-08T20:54:55.071Z | summary=no
+- 83a00128-10a3-446a-a8c2-c7c1205d0687 | messages=11 | lastActive=2026-04-08T20:46:23.420Z | summary=yes
+- 8e7348e5-be72-4f8b-be0e-56d54998372d | messages=2 | lastActive=2026-04-08T19:58:59.805Z | summary=no
+- 43384110-bc8b-4dfe-8881-d6d9feb417d2 | messages=3 | lastActive=2026-04-08T19:57:45.570Z | summary=no
+- b9d268bd-3a66-4606-8112-21a5d12bb698 | messages=6 | lastActive=2026-04-08T19:51:19.251Z | summary=no
+- aa155f1b-f685-4da7-9260-183abd4871eb | messages=3 | lastActive=2026-04-08T19:33:17.289Z | summary=no
+- 80d2e2b7-3231-470d-b9bc-7353b50c78f2 | messages=4 | lastActive=2026-04-08T19:30:14.913Z | summary=no
+- cron_job_1773505907481_giaeb_1775675637401 | messages=0 | lastActive=2026-04-08T19:14:32.305Z | summary=no
+- 44e4c1bc-5f09-4ba9-92a8-f45b62255aa1 | messages=9 | lastActive=2026-04-08T19:10:25.755Z | summary=no
+- d9ba51e8-f95b-4580-aefa-a8d8dc7fc6ec | messages=17 | lastActive=2026-04-08T19:08:52.217Z | summary=no
+- 2e77e3e2-0e99-46b2-8ce0-3e6a5e7bd7cf | messages=6 | lastActive=2026-04-08T19:02:58.850Z | summary=no
+- 761f6c8a-c2da-45b2-ae93-c615782e91f5 | messages=2 | lastActive=2026-04-08T18:55:46.198Z | summary=no
+- 6b179c74-8980-4eeb-a1a6-83f04abee17e | messages=2 | lastActive=2026-04-08T18:55:33.995Z | summary=no
+- ffae3887-fa4b-45d5-8594-5cc6ee944fb4 | messages=1 | lastActive=2026-04-07T02:30:51.941Z | summary=no
+- dafb4c34-e289-4e32-abb8-b4259ae510c6 | messages=1 | lastActive=2026-04-07T02:30:15.052Z | summary=no
+- d40840c6-d55a-4450-b2c1-98fb12d6bd77 | messages=1 | lastActive=2026-04-07T17:22:17.482Z | summary=no
+- cron_job_1773505907481_giaeb_1775660933792 | messages=0 | lastActive=2026-04-08T15:13:57.286Z | summary=no
+- cron_job_1773505907481_giaeb_1775526573401 | messages=0 | lastActive=2026-04-07T01:49:34.344Z | summary=no

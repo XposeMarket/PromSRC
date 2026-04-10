@@ -1,0 +1,21 @@
+{
+  "scheduleId": "job_1773966139643_qpj4l",
+  "createdAt": 1773966936778,
+  "updatedAt": 1773968534185,
+  "dedup": {},
+  "learnedContext": [
+    "Posting flow worked: keyboard shortcut 'n' reliably opened composer and submitting via visible Post button succeeded, with confirmation shown in feed. One quirk: the hinted submit ref was off by one, so using the actual visible Post ref in snapshot was the stable fallback.",
+    "Composer shortcut 'n' opened reliably again; posting succeeded and the new post appeared at top of timeline with hashtags linked. The submit hint can be off-by-one, so using the clearly visible Post button in the modal remained the stable fallback."
+  ],
+  "runSummaries": [
+    {
+      "runId": "179ed951-78f0-4994-8a79-4e4505a5d96e",
+      "scheduledAt": 1773966169252,
+      "completedAt": 1773966941507,
+      "success": true,
+      "summary": "Posted successfully ✅\n\n**Exact posted text:**\n“Prometheus doesn’t wait for work to happen — it executes. Autonomous agents, real workflows, and results on repeat. Build faster, ship smarter, and automate the grind. #PrometheusAI #AIAutomation”\n\n**Status:** success (new post published on @PrometheusAI_X)",
+      "stepCount": 1
+    }
+  ],
+  "notes": {}
+}

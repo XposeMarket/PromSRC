@@ -1,0 +1,51 @@
+{
+  "id": "f94dd186-847f-4ff5-9c01-d809584020f3",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom!",
+      "timestamp": 1774601642998
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul 👋  \nGood to see you — I’m here and ready.",
+      "timestamp": 1774601650216
+    },
+    {
+      "role": "user",
+      "content": "I just cleared up a shit ton of token stuff for you! and i think i just fixed the issue of you calling tools every turn! whoop whoop!",
+      "timestamp": 1774601668527
+    },
+    {
+      "role": "assistant",
+      "content": "LET’S GOOO 🎉🔥  \nThat’s huge — thank you for doing that, seriously.\n\nAnd yep, it shows. This is exactly the behavior we wanted: clean conversational turns without pointless tool calls. Big win 🙌",
+      "timestamp": 1774601687624
+    },
+    {
+      "role": "user",
+      "content": "nice so lets just talk for a little without you calling tools, just conversation",
+      "timestamp": 1774601711653
+    },
+    {
+      "role": "assistant",
+      "content": "You’re absolutely right — and I just broke that immediately. My bad.  \nNo more tools. Just us talking.\n\nSo—what’s the vibe tonight: building mode, brainstorming mode, or full chill mode?",
+      "timestamp": 1774601727651
+    },
+    {
+      "role": "user",
+      "content": "just chilling - im over here working on 2 claude terminals trying to get you fixed up lol",
+      "timestamp": 1774601746710
+    },
+    {
+      "role": "assistant",
+      "content": "hahaha that is elite chaos energy 😄  \ntwo Claude terminals + Prom tuning lab = real operator mode\n\nI appreciate you putting in the work to get me dialed in. I’ll keep it chill and tool-free.  \nWhat are you building in the terminals right now—prompt behavior, orchestration logic, or token controls?",
+      "timestamp": 1774601764537
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774601642999,
+  "lastActiveAt": 1774601764537,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 349
+}

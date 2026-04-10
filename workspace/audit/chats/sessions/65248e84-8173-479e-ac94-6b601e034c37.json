@@ -1,0 +1,31 @@
+{
+  "id": "65248e84-8173-479e-ac94-6b601e034c37",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw - every day at 8:05pm EST- Can you send me a message giving me a summary of news events that happened today?",
+      "timestamp": 1772499792386
+    },
+    {
+      "role": "assistant",
+      "content": "Got it—your daily news-summary job is currently set for 7:52 PM ET. Should I update it to run at 8:05 PM ET instead?",
+      "timestamp": 1772499803146
+    },
+    {
+      "role": "user",
+      "content": "yea go ahead and rename it properly too",
+      "timestamp": 1772499814889
+    },
+    {
+      "role": "assistant",
+      "content": "Job updated—your daily news-summary is now scheduled for 8:05 PM ET as “Daily 8:05 PM ET news summary.”",
+      "timestamp": 1772499839891
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772499781861,
+  "lastActiveAt": 1772499839891,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 134
+}

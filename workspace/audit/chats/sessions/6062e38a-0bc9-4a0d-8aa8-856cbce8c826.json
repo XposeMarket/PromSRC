@@ -1,0 +1,31 @@
+{
+  "id": "6062e38a-0bc9-4a0d-8aa8-856cbce8c826",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey Claw how are you",
+      "timestamp": 1772589947027
+    },
+    {
+      "role": "assistant",
+      "content": "Hey — I’m here and ready to dive into whatever you need.",
+      "timestamp": 1772589957154
+    },
+    {
+      "role": "user",
+      "content": "OKay - SO Im going to give you your own X/twitter account for you to start posting on. In order to begin promoting Smallclaw. Use the agent builder to create a scheduled post at 9:15PM Every day",
+      "timestamp": 1772590194902
+    },
+    {
+      "role": "assistant",
+      "content": "Workflow “Daily SmallClaw Promotion on X/Twitter” is architected to post every day at 9:15 PM local time, but it still needs the X API [REDACTED] credential and an authoring subagent configured before it can actually run—let me know when you’re ready to provide those (and confirm you still want me to activate the schedule).",
+      "timestamp": 1772590220458
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1772512463368,
+  "lastActiveAt": 1772590220458,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 196
+}

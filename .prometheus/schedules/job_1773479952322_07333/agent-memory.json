@@ -1,0 +1,20 @@
+{
+  "scheduleId": "job_1773479952322_07333",
+  "createdAt": 1773480621165,
+  "updatedAt": 1773480623542,
+  "dedup": {},
+  "learnedContext": [
+    "Tried multiple paths to hit the local execute-approved endpoint; direct HTTP tools failed in this environment, so fallback app-opening did not return dispatch data. Pattern: prefer a command-capable HTTP client pathway first when available to capture JSON response reliably."
+  ],
+  "runSummaries": [
+    {
+      "runId": "f1eefc7b-ebfd-451a-8113-55ab42101aa4",
+      "scheduledAt": 1773480603981,
+      "completedAt": 1773480623527,
+      "success": true,
+      "summary": "Done — self-reflection note logged.",
+      "stepCount": 1
+    }
+  ],
+  "notes": {}
+}

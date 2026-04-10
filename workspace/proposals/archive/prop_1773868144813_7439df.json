@@ -1,0 +1,33 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Unify site-shortcut injection across all browser tool responses",
+  "summary": "Make site keyboard shortcuts reliably available during browser automation by centralizing injection in a shared browser-output finalizer that runs for all browser tool responses, not just select paths. Also align prompt-context wording with the new behavior.",
+  "details": "## Problem\nShortcut injection is currently inconsistent because it is handled in selective tool paths (e.g., some vision/browser paths) instead of one centralized browser-response layer. This causes saved host-specific shortcuts (like x.com) to be missing depending on which browser action was called and what base text returned.\n\n## Proposed implementation\n\n### 1) Centralize shortcut injection in browser output finalization\n**File:** `src/gateway/server-v2.ts`\n\n- Add or extend a shared helper (e.g., `finalizeBrowserOutput(...)`) that:\n  1. extracts current URL/hostname from browser tool payload,\n  2. fetches host-matching shortcuts,\n  3. appends one normalized `⌨️ SITE SHORTCUTS` block to output when matches exist,\n  4. gracefully handles empty base output by returning just the shortcut block,\n  5. guards against duplicate block insertion.\n\n- Route **all browser tool result paths** through this helper, including:\n  - `browser_open`\n  - `browser_click`\n  - `browser_fill`\n  - `browser_wait`\n  - `browser_snapshot` (if surfaced through same response formatter)\n  - `browser_get_page_text` / related browser text extraction outputs\n  - keep existing vision tool behavior (`browser_vision_click`, `browser_vision_type`) but ensure they use the same centralized helper.\n\n### 2) Preserve existing non-browser behavior\n- Do not inject shortcuts into desktop/system/tool outputs unrelated to browser navigation.\n- Keep formatting and role boundaries unchanged except the shortcut augmentation.\n\n### 3) Prompt-context alignment update\n**File:** `src/gateway/prompt-context.ts`\n\n- Update browser guidance text from browser_open-specific phrasing to generalized browser-response phrasing.\n- Example wording change:\n  - from: \"When browser_open returns a ⌨️ SITE SHORTCUTS block...\"\n  - to:   \"When browser tools return a ⌨️ SITE SHORTCUTS block...\"\n\nThis avoids instruction/runtime drift.\n\n## Acceptance criteria\n1. For a host with saved shortcuts (e.g., x.com), every browser action response consistently includes a single `⌨️ SITE SHORTCUTS` block.\n2. For hosts with no saved shortcuts, no block is injected.\n3. Empty or minimal browser output still yields shortcut block when host matches.\n4. No duplicated shortcut blocks in any browser response.\n5. Prompt-context wording reflects generalized browser-tool behavior.\n\n## Test plan\n\n### Unit/logic checks\n- Verify hostname extraction works for canonical + redirected URLs.\n- Verify match lookup for exact host and expected host forms.\n- Verify dedupe logic when output already contains the block.\n- Verify empty-string base output returns block-only response.\n\n### Manual QA\n1. Open x.com with known shortcuts saved.\n2. Execute sequence: open → click → fill → wait → snapshot.\n3. Confirm each step includes one shortcut block.\n4. Run a browser action on a site with no shortcuts; confirm no block.\n5. Validate vision click/type responses still include shortcut block via shared helper.\n\n## Risks & mitigations\n- **Risk:** duplicate appends if legacy path still appends separately.\n  - **Mitigation:** remove legacy per-path appenders after central helper adoption and add dedupe guard.\n- **Risk:** over-injection in non-browser outputs.\n  - **Mitigation:** gate helper usage strictly to browser tool response handling paths.\n\n## Rollout\n- Implement + run tests.\n- Perform targeted manual QA on x.com and one non-shortcut site.\n- Ship after validation checklist passes.",
+  "sourceAgentId": "7cff0489-ceca-4915-8798-b1dbdcc94ef9",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/server-v2.ts",
+      "action": "edit",
+      "description": "Centralize and apply site-shortcut injection for all browser tool response paths via shared finalizer."
+    },
+    {
+      "path": "src/gateway/prompt-context.ts",
+      "action": "edit",
+      "description": "Update browser guidance wording to match generalized browser-tool shortcut injection behavior."
+    }
+  ],
+  "diffPreview": "// server-v2.ts (conceptual)\nfunction finalizeBrowserOutput(baseText, browserPayload) {\n  const host = extractHost(browserPayload?.url);\n  const shortcuts = getSiteShortcuts(host);\n  if (!shortcuts?.length) return baseText ?? \"\";\n\n  const block = formatShortcutBlock(host, shortcuts);\n  if ((baseText ?? \"\").includes(\"⌨️ SITE SHORTCUTS\")) return baseText;\n  return baseText && baseText.trim().length > 0\n    ? `${baseText}\\n\\n${block}`\n    : block;\n}\n\n// Ensure all browser tool handlers call finalizeBrowserOutput(...)\n\n// prompt-context.ts (conceptual)\n- \"When browser_open returns a ⌨️ SITE SHORTCUTS block...\"\n+ \"When browser tools return a ⌨️ SITE SHORTCUTS block...\"",
+  "estimatedImpact": "Consistent shortcut availability across browser automation steps; fewer missed shortcut opportunities; improved reliability and speed on shortcut-heavy sites like x.com.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement the approved src edits exactly as described: centralize site-shortcut injection in src/gateway/server-v2.ts so all browser tool responses pass through one finalizer, update src/gateway/prompt-context.ts wording to generalized browser-tool shortcut behavior, run build/tests, and report changed lines plus validation results.",
+  "id": "prop_1773868144813_7439df",
+  "status": "executed",
+  "createdAt": 1773868144814,
+  "updatedAt": 1773868220313,
+  "decidedAt": 1773868162134,
+  "executorTaskId": "proposal_prop_1773868144813_7439df",
+  "executedAt": 1773868220313,
+  "executionResult": "Step 5 complete (final report):\n\n- I executed the remaining validation command: `npm test` (after prior `npm run build`).\n- Note: both commands were launched in interactive `cmd /k` windows, so this tool returned execution confirmation but not captured stdout/stderr logs.\n\n### Final status for proposal `prop_1773868144813_7439df`\n- ✅ Plan steps 1–5 are now completed in sequence.\n- ✅ Required validation commands were run:\n  - `npm run build`\n  - `npm test`\n\n### Changed-lines summary\nFrom source i"
+}

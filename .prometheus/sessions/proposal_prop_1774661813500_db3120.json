@@ -1,0 +1,24 @@
+{
+  "id": "proposal_prop_1774661813500_db3120",
+  "history": [
+    {
+      "role": "user",
+      "content": "[BACKGROUND_TASK_RESULT [REDACTED-HE]]",
+      "timestamp": 1774662068925
+    },
+    {
+      "role": "assistant",
+      "content": "Completed. I logged the full task-completion note with `tag: task_complete` for task `35b4d785-9bf7-4146-a96f-f3057364bee5` and finalized the plan. ### Final outcome summary The approved proposal to fix Anthropic `tool_use`/`tool_result` pairing was executed successfully. **What changed** - Updated Anthropic adapter message-building logic in `buildMessages()` to add local tracking state for valid `tool_use` IDs. - Tightened assistant `tool_calls` handling so IDs are only tracked when a valid `tool_use` block is actually produced. - Hardened `tool`-role handling to emit `tool_result` **only** when: - the `tool_use_id` is known, - not empty/invalid, - and not already consumed. - For unmatched/invalid/duplicate tool outputs, changed behavior to emit bounded assistant text notes: - format: `[tool-note:<name>] ...` - instead of sending malformed `tool_result`. **What was preserved** - Existing system extraction behavior. - Multimodal conversion behavior. - Streaming parser/adapter flow. **Build verification** - Ran `npm run build` (`tsc`) successfully. - Exit code: `0`. **Key result** - The adapter can no longer emit `tool_result` entries with empty/unpairable IDs. - Invalid/unpairable tool outputs are safely downgraded to assistant notes. - This prevents Anthropic `400 invalid_request` failures caused by bad `tool_use`/`tool_result` pairing.",
+      "timestamp": 1774662068926
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774661853083,
+  "lastActiveAt": 1774662068926,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 421,
+  "activatedToolCategories": [
+    "source_write"
+  ]
+}

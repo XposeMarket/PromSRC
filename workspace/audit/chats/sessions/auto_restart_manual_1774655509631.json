@@ -1,0 +1,23 @@
+{
+  "id": "auto_restart_manual_1774655509631",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "1) **Restart/build status:** ✅ Manual restart for **“Telegram /restart”** is complete — the gateway booted successfully and **Telegram polling is resumed**. No build was needed this time because **no files were changed**.\n\n2) **What changed (high-level):** This restart was a **runtime/session refresh only** (no code or config edits during the restart itself).\n\n3) **What should I verify next?** I can now check either (a) incoming Telegram image delivery/attachment handling, or (b) current Prometheus terminal logs — your pick.",
+      "timestamp": 1774655519825
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774655509653,
+  "lastActiveAt": 1774655519826,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 158,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling",
+    "integrations"
+  ]
+}

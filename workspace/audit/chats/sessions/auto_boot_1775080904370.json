@@ -1,0 +1,23 @@
+{
+  "id": "auto_boot_1775080904370",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Quick startup status: task and schedule services are currently unavailable, so there’s no live task queue or upcoming-job view in this snapshot. Today’s key notes say memory sync correctly no-op’d when data was low-signal/missing, and that intermittent intraday logs should be handled gracefully. Where things left off: an X→Telegram flow stalled because `browser_send_to_telegram` was an unknown tool, no fallback was executed, and that left a declared plan step unfinished while the watchdog kept reporting it.",
+      "timestamp": 1775080908793
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775080904443,
+  "lastActiveAt": 1775080908794,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 153,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops",
+    "scheduling"
+  ]
+}

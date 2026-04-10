@@ -1,0 +1,4 @@
+Build needed — run: npm run build (or start-prometheus.bat)
+Changes made:
+1. src/gateway/agents-runtime/subagent-executor.ts — read_file now auto-redirects src/ paths to read_source
+2. src/gateway/routes/tasks.router.ts — proposal execution now broadcasts background_task_started/completed and posts start+finish messages back into the originating chat session

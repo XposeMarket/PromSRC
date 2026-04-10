@@ -1,0 +1,31 @@
+{
+  "id": "26be2ad8-805c-4cb3-b19e-c0542eb3f7e1",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey claw",
+      "timestamp": 1773446055963
+    },
+    {
+      "role": "assistant",
+      "content": "Hey! 👋 I’m here—what do you want to work on?",
+      "timestamp": 1773446062851
+    },
+    {
+      "role": "user",
+      "content": "What is telling you to use the write note tool?",
+      "timestamp": 1773446069937
+    },
+    {
+      "role": "assistant",
+      "content": "Good catch.  \nIt’s coming from your system/developer context in this environment, which includes a persistent **TODAY_NOTES** section and explicit support for `write_note` to store session findings/decisions. I just used it because your question was about that behavior itself.",
+      "timestamp": 1773446079448
+    }
+  ],
+  "workspace": "D:\\SmallClaw\\workspace",
+  "createdAt": 1773446055963,
+  "lastActiveAt": 1773446079448,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 134
+}

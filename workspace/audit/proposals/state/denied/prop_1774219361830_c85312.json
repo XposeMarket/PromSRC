@@ -1,0 +1,51 @@
+{
+  "type": "src_edit",
+  "priority": "high",
+  "title": "Guarantee hot-restart acknowledgment delivery to originating web session or Telegram chat",
+  "summary": "Ensure post-restart acknowledgments are deterministically routed to the exact originating channel/session, with idempotent delivery and no silent drop during early boot.",
+  "details": "## Why this change\nSELF.md defines the gateway lifecycle expectation that after hot restart the AI notifies the user what changed and what to test, and it documents Telegram↔session bridging semantics. Current behavior can miss or misroute this acknowledgment when restart context is consumed before channel/session routing is fully available. This change makes delivery deterministic to the exact origin (same web session or same Telegram chat) and auditable.\n\n## Exact source edits\n1. **`src/gateway/lifecycle.ts`**\n   - Extend restart context payload written before shutdown to include:\n     - `restartId` (uuid)\n     - `origin`: `{ channel: 'web' | 'telegram', sessionId?: string, telegramUserId?: string, telegramChatId?: string }`\n     - `ack`: `{ title, summary, affectedFiles, testInstructions }`\n     - `createdAt`\n   - Populate origin from current execution/session metadata when `gateway_restart` is invoked.\n   - Persist atomically to existing restart context file path used by boot flow.\n\n2. **`src/gateway/boot.ts`**\n   - On startup, read pending restart context and enqueue an internal `pendingRestartAck` item rather than immediately attempting delivery.\n   - Add deterministic single-delivery flow:\n     - If `origin.channel === 'web'` and `origin.sessionId` exists, emit system message into that exact session via existing session/broadcast path.\n     - If `origin.channel === 'telegram'`, send via telegram channel using `telegramChatId` (fallback `telegramUserId` mapping if needed).\n   - Add readiness-aware retry loop for early-boot dependencies (telegram channel init, WS broadcaster/session registry).\n   - Mark context as delivered with `deliveredAt` + `deliveryTarget` and guard against re-send on subsequent restarts.\n\n3. **`src/gateway/comms/broadcaster.ts`**\n   - Add/extend helper to push a server-originated system message to a specific session id (no model turn required).\n   - Return structured result for boot delivery logging (`delivered: boolean`, reason on failure).\n\n4. **`src/gateway/comms/telegram-channel.ts`**\n   - Add/extend helper to send restart-ack text to explicit chat/user target from boot path.\n   - Return structured success/failure for retry logic.\n\n5. **`src/gateway/chat/chat-state.ts` or shared state module (if needed)**\n   - Add ephemeral in-memory guard map keyed by `restartId` to avoid duplicate delivery within same process lifetime while file state is updated.\n\n6. **`src/gateway/routes/chat.router.ts` (only if required by existing event plumbing)**\n   - Ensure web-session system message path used by boot acks reaches active chat stream/history consistently.\n   - No model invocation; pure server event insertion.\n\n7. **Logging / observability**\n   - Add structured log lines in lifecycle + boot + delivery helpers:\n     - `restart_ack.pending`, `restart_ack.attempt`, `restart_ack.delivered`, `restart_ack.failed`\n     - Include `restartId`, `origin.channel`, destination identifier, attempt count, latency ms.\n\n## Deterministic behavior after patch\n- Every successful `gateway_restart` writes one restart context containing explicit origin metadata.\n- On next boot, exactly one acknowledgment is attempted to that origin.\n- If dependencies are not ready, retries occur until timeout; no silent drop.\n- On success, context is marked delivered and will not resend.\n- If final failure occurs, error is explicitly logged with restartId and reason.\n- Web-origin restarts notify the same web session; Telegram-origin restarts notify the same Telegram chat/user.\n\n## Acceptance tests\n1. **Web origin happy path**\n   - Trigger `gateway_restart` from a web session `S1`.\n   - After boot, verify ack appears in session `S1` (not other sessions).\n   - Verify logs show `restart_ack.delivered` with `origin.channel=web` and `sessionId=S1`.\n\n2. **Telegram origin happy path**\n   - Trigger `gateway_restart` from Telegram chat/user `T1`.\n   - After boot, verify ack arrives in `T1`.\n   - Verify logs show `origin.channel=telegram` and matching target id.\n\n3. **Early boot dependency delay**\n   - Simulate delayed Telegram/WebSocket readiness.\n   - Verify retry attempts logged; eventual single delivery when ready.\n\n4. **Idempotency**\n   - Restart process again without new context.\n   - Verify no duplicate ack for already delivered `restartId`.\n\n5. **Failure visibility**\n   - Force delivery failure (invalid chat/session target).\n   - Verify explicit `restart_ack.failed` log with reason and no crash.\n\n## Risks and compatibility\n- **Risk:** Incorrect origin capture for legacy restart invocations lacking session metadata.\n  - **Mitigation:** Backward-compatible fallback route (existing generic notification behavior) with warning log.\n- **Risk:** Duplicate sends if both in-memory and file mark race.\n  - **Mitigation:** Write-through delivered state + restartId guard checks before each attempt.\n- **Compatibility:** Non-breaking; only augments restart context schema and boot delivery workflow. Existing restart command contract remains unchanged.\n",
+  "sourceAgentId": "8b30a9b8-ebbd-47a2-9278-e7fac9c6084c",
+  "sourceSessionId": "8b30a9b8-ebbd-47a2-9278-e7fac9c6084c",
+  "affectedFiles": [
+    {
+      "path": "src/gateway/lifecycle.ts",
+      "action": "edit",
+      "description": "Persist restart origin metadata and ack payload in restart context"
+    },
+    {
+      "path": "src/gateway/boot.ts",
+      "action": "edit",
+      "description": "Consume pending restart ack with deterministic channel routing, retries, and idempotency"
+    },
+    {
+      "path": "src/gateway/comms/broadcaster.ts",
+      "action": "edit",
+      "description": "Add helper for direct system-message delivery to specific web session"
+    },
+    {
+      "path": "src/gateway/comms/telegram-channel.ts",
+      "action": "edit",
+      "description": "Add helper for explicit restart acknowledgment delivery to Telegram chat/user"
+    },
+    {
+      "path": "src/gateway/chat/chat-state.ts",
+      "action": "edit",
+      "description": "Optional ephemeral delivery guard keyed by restartId"
+    },
+    {
+      "path": "src/gateway/routes/chat.router.ts",
+      "action": "edit",
+      "description": "Only if needed to ensure boot-inserted system messages propagate consistently"
+    }
+  ],
+  "diffPreview": "// lifecycle.ts\nrestartContext = {\n  restartId,\n  origin: { channel, sessionId, telegramUserId, telegramChatId },\n  ack: { title, summary, affectedFiles, testInstructions },\n  createdAt: new Date().toISOString()\n}\n\n// boot.ts\nif (ctx && !ctx.deliveredAt) {\n  queuePendingRestartAck(ctx)\n  await deliverWithRetry(ctx)\n  markDelivered(ctx.restartId, target)\n}\n",
+  "estimatedImpact": "Eliminates lost/misrouted post-restart notifications; improves operator trust and debugging with deterministic, auditable ack delivery.",
+  "requiresBuild": true,
+  "executorAgentId": "code_executor",
+  "executorPrompt": "Implement proposal exactly as specified. Read current source first (boot.ts, lifecycle.ts, broadcaster.ts, telegram-channel.ts, chat-state.ts, chat.router.ts) and adapt to existing interfaces. Preserve backward compatibility with old restart context format. Add structured logs and retry-safe idempotent delivery. Run npm run build, fix any TS errors, and report changed files with a concise verification summary.",
+  "id": "prop_1774219361830_c85312",
+  "status": "denied",
+  "createdAt": 1774219361832,
+  "updatedAt": 1774219441446,
+  "decidedAt": 1774219441445
+}

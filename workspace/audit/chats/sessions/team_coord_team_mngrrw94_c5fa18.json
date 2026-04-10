@@ -1,0 +1,16 @@
+{
+  "id": "team_coord_team_mngrrw94_c5fa18",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775098879025,
+  "lastActiveAt": 1775098879025,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "activatedToolCategories": [
+    "team_ops",
+    "desktop",
+    "scheduling"
+  ]
+}

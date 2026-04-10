@@ -1,0 +1,18 @@
+{
+  "id": "8d6db50b-7c09-4835-af1c-876e660f5c91",
+  "history": [
+    {
+      "role": "user",
+      "content": "tell me the latest on the epstein case",
+      "timestamp": 1771808176485
+    },
+    {
+      "role": "assistant",
+      "content": "I couldn't find recent updates on the Epstein case. The case is mostly closed following his 2019 death, with ongoing legal matters related to his estate.",
+      "timestamp": 1771808225599
+    }
+  ],
+  "workspace": "d:\\localclaw\\workspace",
+  "createdAt": 1771808176485,
+  "lastActiveAt": 1771808225599
+}

@@ -1,0 +1,21 @@
+{
+  "id": "auto_restart_manual_1774723837495",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1775187547,\"eligible_promo\":null,\"resets_in_seconds\":463708}}",
+      "timestamp": 1774723839325
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "createdAt": 1774723837514,
+  "lastActiveAt": 1774723839326,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 67,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "scheduling"
+  ]
+}
