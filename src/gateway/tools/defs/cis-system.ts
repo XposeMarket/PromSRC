@@ -1,8 +1,33 @@
 // src/gateway/tools/defs/cis-system.ts
 // Tool definitions for CIS (Competitive Intelligence System), self-improvement, and system management.
 
+import { filterPublicBuildToolDefs, getPublicBuildAllowedCategories } from '../../../runtime/distribution.js';
+
 export function getCisSystemTools(): any[] {
-  return [
+  const categoryDocs: Array<[string, string]> = [
+    ['browser', 'browser — 20 web automation tools (browser_open, browser_click, browser_fill, etc.)'],
+    ['desktop', 'desktop — 26 OS/desktop automation tools (desktop_screenshot, desktop_click, etc.)'],
+    ['team_ops', 'team_ops — 19 agent/team coordination tools (spawn_subagent, team_manage, dispatch_team_agent, etc.)'],
+    ['source_write', 'source_write — 10 code editing tools (find_replace_source, write_source, etc.)'],
+    ['integrations', 'integrations — 5 MCP/webhook/CIS tools (mcp_server_manage, webhook_manage, social_intel, etc.)'],
+  ];
+  const categoryEnum = getPublicBuildAllowedCategories([
+    'browser',
+    'desktop',
+    'team_ops',
+    'source_write',
+    'integrations',
+  ] as const);
+  const requestToolCategoryDescription =
+    'Activate a tool category for this session, unlocking those tool schemas for use. ' +
+    'Once activated, the category stays active for the entire session. ' +
+    'Available categories:\n' +
+    categoryDocs
+      .filter(([category]) => categoryEnum.includes(category as any))
+      .map(([, line]) => `  ${line}`)
+      .join('\n');
+
+  const tools = [
     // ── ask_team_coordinator: delegate team creation/queries to the meta-coordinator ──
     {
       type: 'function',
@@ -475,23 +500,14 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'request_tool_category',
-        description:
-          'Activate a tool category for this session, unlocking those tool schemas for use. ' +
-          'Once activated, the category stays active for the entire session. ' +
-          'Available categories:\n' +
-          '  browser — 20 web automation tools (browser_open, browser_click, browser_fill, etc.)\n' +
-          '  desktop — 26 OS/desktop automation tools (desktop_screenshot, desktop_click, etc.)\n' +
-          '  team_ops — 19 agent/team coordination tools (spawn_subagent, team_manage, dispatch_team_agent, etc.)\n' +
-          '  scheduling — 9 cron/background job tools (schedule_job, background_spawn, parse_schedule_pattern, etc.)\n' +
-          '  source_write — 10 code editing tools (find_replace_source, write_source, etc.)\n' +
-          '  integrations — 5 MCP/webhook/CIS tools (mcp_server_manage, webhook_manage, social_intel, etc.)',
+        description: requestToolCategoryDescription,
         parameters: {
           type: 'object',
           required: ['category'],
           properties: {
             category: {
               type: 'string',
-              enum: ['browser', 'desktop', 'team_ops', 'scheduling', 'source_write', 'integrations'],
+              enum: categoryEnum,
               description: 'Category to activate for this session',
             },
           },
@@ -545,4 +561,5 @@ export function getCisSystemTools(): any[] {
       },
     },
   ];
+  return filterPublicBuildToolDefs(tools);
 }

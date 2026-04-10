@@ -171,6 +171,12 @@ export async function refreshPersistedSession(): Promise<void> {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
+// GET /api/account/config — expose public Supabase config for browser-side auth
+// The anon key is a public key (designed to be embedded in client apps).
+router.get('/api/account/config', (_req, res) => {
+  res.json({ supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY });
+});
+
 // GET /api/account/status — return current auth + subscription state
 // If token is expired but refresh token exists, attempt inline refresh so the
 // web UI doesn't briefly show the login screen on the first request after restart.
@@ -210,58 +216,36 @@ router.get('/api/account/status', async (_req, res) => {
   });
 });
 
-// POST /api/account/login — { email, password }
-router.post('/api/account/login', async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password required' });
+// POST /api/account/login — accepts pre-verified session from the browser.
+// The browser calls Supabase directly (bypassing gateway firewall restrictions),
+// then passes the verified session here for server-side storage.
+// Body: { accessToken, refreshToken, email, userId, isAdmin, subscriptionActive, expiresAt }
+router.post('/api/account/login', (req, res) => {
+  const { accessToken, refreshToken, email, userId, isAdmin, subscriptionActive, expiresAt } = req.body || {};
+
+  if (!accessToken || !email || !userId) {
+    return res.status(400).json({ error: 'accessToken, email, and userId are required' });
   }
 
-  try {
-    // 1. Authenticate with Supabase
-    const auth = await sbFetch('/auth/v1/token?grant_type=password', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
+  _session = {
+    userId: String(userId),
+    email: String(email),
+    accessToken: String(accessToken),
+    refreshToken: String(refreshToken || ''),
+    expiresAt: Number(expiresAt) || Math.floor(Date.now() / 1000) + 3600,
+    isAdmin: Boolean(isAdmin),
+    subscriptionActive: Boolean(subscriptionActive),
+    subscriptionCheckedAt: Date.now(),
+  };
+  persistSession();
 
-    const userId = auth.user?.id;
-    const accessToken = auth.access_token;
-    const refreshToken = auth.refresh_token;
-    const expiresAt = Math.floor(Date.now() / 1000) + (auth.expires_in || 3600);
-
-    if (!userId || !accessToken) {
-      return res.status(401).json({ error: 'Authentication failed' });
-    }
-
-    // 2. Check admin status
-    const isAdmin = await checkIsAdmin(userId, accessToken);
-
-    // 3. Check subscription
-    const subscriptionActive = await checkSubscription(userId, accessToken, isAdmin);
-
-    // 4. Store session
-    _session = {
-      userId,
-      email,
-      accessToken,
-      refreshToken,
-      expiresAt,
-      isAdmin,
-      subscriptionActive,
-      subscriptionCheckedAt: Date.now(),
-    };
-    persistSession();
-
-    res.json({
-      authenticated: true,
-      email,
-      userId,
-      isAdmin,
-      subscriptionActive,
-    });
-  } catch (err: any) {
-    res.status(401).json({ error: err.message || 'Login failed' });
-  }
+  res.json({
+    authenticated: true,
+    email: _session.email,
+    userId: _session.userId,
+    isAdmin: _session.isAdmin,
+    subscriptionActive: _session.subscriptionActive,
+  });
 });
 
 // POST /api/account/logout

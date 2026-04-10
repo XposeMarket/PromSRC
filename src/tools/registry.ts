@@ -4,9 +4,6 @@ import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTo
 import { webSearchTool, webFetchTool } from './web.js';
 // skill tools are handled in subagent-executor.ts, not the registry
 import { timeNowTool } from './time.js';
-import { selfUpdateTool } from './self-update.js';
-import { readSourceTool, listSourceTool, sourceStatsTool, webUiSourceStatsTool } from './source-access.js';
-import { proposeRepairTool } from './self-repair.js';
 import { personaReadTool, personaUpdateTool } from './persona.js';
 import { agentListTool, agentInfoTool } from './agent-control.js';
 import { allDesktopTools } from './desktop.js';
@@ -17,6 +14,7 @@ import { vercelDeployTool, vercelEnvTool } from './vercel-tools.js';
 import { writeNoteTool } from './write-note.js';
 import { deployAnalysisTeamTool, injectAnalysisTeamDeps } from './deploy-analysis-team.js';
 import { viewConnectionsTool } from './view-connections.js';
+import { isPublicDistributionBuild } from '../runtime/distribution.js';
 
 // ── Phase 5: Policy engine + audit log ──────────────────────────────────────
 import { getPolicyEngine } from '../gateway/policy.js';
@@ -230,14 +228,19 @@ class ToolRegistry {
     // Time tool (system clock — no network)
     this.registerSafe(timeNowTool);
     // Skills tools (list/enable/disable/create — executed via subagent-executor, not registry)
-    // Self-update tool
-    this.registerSafe(selfUpdateTool);
-    // Self-repair tools (source read + repair proposal)
-    this.registerSafe(readSourceTool);
-    this.registerSafe(listSourceTool);
-    this.registerSafe(sourceStatsTool);
-    this.registerSafe(webUiSourceStatsTool);
-    this.registerSafe(proposeRepairTool);
+    if (!isPublicDistributionBuild()) {
+      const { selfUpdateTool } = require('./self-update.js');
+      const { readSourceTool, listSourceTool, sourceStatsTool, webUiSourceStatsTool } = require('./source-access.js');
+      const { proposeRepairTool } = require('./self-repair.js');
+      // Self-update tool
+      this.registerSafe(selfUpdateTool);
+      // Self-repair tools (source read + repair proposal)
+      this.registerSafe(readSourceTool);
+      this.registerSafe(listSourceTool);
+      this.registerSafe(sourceStatsTool);
+      this.registerSafe(webUiSourceStatsTool);
+      this.registerSafe(proposeRepairTool);
+    }
     // Persona / memory growth tools
     this.registerSafe(personaReadTool);
     this.registerSafe(personaUpdateTool);

@@ -17,39 +17,49 @@
 import { Router } from 'express';
 import path from 'path';
 import fs from 'fs';
+import { getConfig } from '../../config/config.js';
 
 export const router = Router();
 
 // ─── File paths ───────────────────────────────────────────────────────────────
 
-const CONNECTIONS_FILE = path.join(process.cwd(), '.prometheus', 'connections.json');
-const CONNECTIONS_ACTIVITY_FILE = path.join(process.cwd(), '.prometheus', 'connections-activity.jsonl');
+function getConnectionsFile(): string {
+  return path.join(getConfig().getConfigDir(), 'connections.json');
+}
+
+function getConnectionsActivityFile(): string {
+  return path.join(getConfig().getConfigDir(), 'connections-activity.jsonl');
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function loadConnections(): Record<string, any> {
   try {
-    if (!fs.existsSync(CONNECTIONS_FILE)) return {};
-    return JSON.parse(fs.readFileSync(CONNECTIONS_FILE, 'utf-8'));
+    const connectionsFile = getConnectionsFile();
+    if (!fs.existsSync(connectionsFile)) return {};
+    return JSON.parse(fs.readFileSync(connectionsFile, 'utf-8'));
   } catch { return {}; }
 }
 
 function saveConnections(data: Record<string, any>): void {
-  fs.mkdirSync(path.dirname(CONNECTIONS_FILE), { recursive: true });
-  fs.writeFileSync(CONNECTIONS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  const connectionsFile = getConnectionsFile();
+  fs.mkdirSync(path.dirname(connectionsFile), { recursive: true });
+  fs.writeFileSync(connectionsFile, JSON.stringify(data, null, 2), 'utf-8');
 }
 
 function appendConnectionActivity(id: string, entry: any): void {
   try {
-    fs.mkdirSync(path.dirname(CONNECTIONS_ACTIVITY_FILE), { recursive: true });
-    fs.appendFileSync(CONNECTIONS_ACTIVITY_FILE, JSON.stringify({ ...entry, connectorId: id }) + '\n', 'utf-8');
+    const activityFile = getConnectionsActivityFile();
+    fs.mkdirSync(path.dirname(activityFile), { recursive: true });
+    fs.appendFileSync(activityFile, JSON.stringify({ ...entry, connectorId: id }) + '\n', 'utf-8');
   } catch {}
 }
 
 function readConnectionActivity(id: string, limit = 50): any[] {
   try {
-    if (!fs.existsSync(CONNECTIONS_ACTIVITY_FILE)) return [];
-    const lines = fs.readFileSync(CONNECTIONS_ACTIVITY_FILE, 'utf-8').trim().split('\n').filter(Boolean);
+    const activityFile = getConnectionsActivityFile();
+    if (!fs.existsSync(activityFile)) return [];
+    const lines = fs.readFileSync(activityFile, 'utf-8').trim().split('\n').filter(Boolean);
     return lines
       .map(l => { try { return JSON.parse(l); } catch { return null; } })
       .filter(e => e && e.connectorId === id)
@@ -100,7 +110,7 @@ router.post('/api/connections/oauth/start', async (req: any, res: any) => {
     // result.authUrl is the Google/Slack/GitHub auth URL — send it to the UI
     // Check if clientId is blank (env vars not set)
     if (!result.authUrl || result.authUrl.includes('client_id=&')) {
-      res.json({ url: null, needsSetup: true, message: `${id} OAuth credentials not configured. See SELF.md → CIS → Connections setup instructions.` });
+      res.json({ url: null, needsSetup: true, message: `${id} OAuth credentials are not configured yet. Add the connector credentials in Settings before starting OAuth.` });
       return;
     }
     res.json({ url: result.authUrl });

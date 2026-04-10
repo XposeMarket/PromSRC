@@ -80,6 +80,7 @@ import {
   searchMemoryTimeline,
   getMemoryGraphSnapshot,
   getRelatedMemory,
+  getOperationalRecord,
 } from '../memory-index/index';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
 import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress } from '../tasks/task-runner';
@@ -88,18 +89,21 @@ import { deployAnalysisTeamTool } from '../../tools/deploy-analysis-team.js';
 import { socialIntelTool } from '../../tools/social-scraper.js';
 import {
   ALL_TOOL_CATEGORIES,
+  getRuntimeToolCategories,
   normalizeScheduleJobAction,
   summarizeCronJob,
   normalizeDeliveryChannel,
   parseJsonLike,
   parseLooseMap,
   toStringRecord,
+  type ToolCategory,
   type ToolResult,
   type TaskControlResponse,
 } from '../tool-builder';
 import { activateToolCategory } from '../session';
 import { loadTask } from '../tasks/task-store';
 import type { SkillWindow } from '../prompt-context';
+import { isToolHiddenInPublicBuild } from '../../runtime/distribution.js';
 
 export interface ExecuteToolDeps {
   cronScheduler: any;
@@ -188,6 +192,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
       args.filename = lastFilenameUsed.get(sessionId);
       console.log(`[v2] AUTO-FIX: Injected missing filename "${args.filename}" for ${name}`);
     }
+  }
+
+  if (isToolHiddenInPublicBuild(name)) {
+    return {
+      name,
+      args,
+      result: `ERROR: ${name} is not available in the public distribution build.`,
+      error: true,
+    };
   }
 
   // ── Helper: resolve file paths for proposal sessions ──────────────────────
@@ -2867,9 +2880,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           const recordId = String(args.record_id || '').trim();
           if (!recordId) return { name, args, result: 'memory_read_record: record_id is required', error: true };
+          // Try evidence index first; fall back to operational layer for opr_* IDs
           const out = readMemoryRecord(workspacePath, recordId);
-          if (!out.record) return { name, args, result: `Record not found: ${recordId}`, error: true };
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+          if (out.record) return { name, args, result: JSON.stringify(out, null, 2), error: false };
+          const opRec = getOperationalRecord(workspacePath, recordId);
+          if (opRec) return { name, args, result: JSON.stringify({ record: opRec, layer: 'operational', chunks: [] }, null, 2), error: false };
+          return { name, args, result: `Record not found: ${recordId}`, error: true };
         } catch (err: any) {
           return { name, args, result: `memory_read_record failed: ${String(err?.message || err)}`, error: true };
         }
@@ -3784,11 +3800,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
         if (name === 'request_tool_category') {
           const rawCategory = String(args?.category || '').trim().toLowerCase();
+          const runtimeCategories = getRuntimeToolCategories();
           if (!rawCategory) {
-            return { name, args, result: `request_tool_category requires category. Valid: ${ALL_TOOL_CATEGORIES.join(', ')}`, error: true };
+            return { name, args, result: `request_tool_category requires category. Valid: ${runtimeCategories.join(', ')}`, error: true };
           }
-          if (!ALL_TOOL_CATEGORIES.includes(rawCategory as any)) {
-            return { name, args, result: `Invalid category "${rawCategory}". Valid: ${ALL_TOOL_CATEGORIES.join(', ')}`, error: true };
+          if (!runtimeCategories.includes(rawCategory as ToolCategory)) {
+            return { name, args, result: `Invalid category "${rawCategory}". Valid: ${runtimeCategories.join(', ')}`, error: true };
           }
           activateToolCategory(sessionId, rawCategory);
           return { name, args, result: `Tool category "${rawCategory}" activated for session ${sessionId}.`, error: false };

@@ -123,7 +123,7 @@ function updateStatsText(extra = '') {
   if (!state.statsEl) return;
   const modeLabel = state.controls.organizeByType ? 'organized' : 'relation graph';
   const suffix = extra ? ` | ${extra}` : '';
-  state.statsEl.textContent = `${getVisibleRecordCount()}/${state.rawNodes.length} nodes | ${state.realEdges.filter((edge) => edge.visible).length} related edges | ${getMatchedNodeCount()} matched | ${modeLabel}${suffix}`;
+  state.statsEl.textContent = `${getVisibleRecordCount()} nodes${suffix}`;
 }
 
 function buildAdjacency(edges) {
@@ -765,11 +765,11 @@ function draw() {
     const linkedToHover = state.hoverNodeId && (a.id === state.hoverNodeId || b.id === state.hoverNodeId);
     const linkedToSelected = state.selectedNodeId && (a.id === state.selectedNodeId || b.id === state.selectedNodeId);
     if (isOrganized && state.transform.scale < 0.3 && !linkedToHover && !linkedToSelected) continue;
-    const opacity = edge.virtual ? 0.12 : linkedToSelected ? 0.26 : linkedToHover ? 0.18 : 0.08;
+    const opacity = edge.virtual ? 0.12 : linkedToSelected ? 0.88 : linkedToHover ? 0.55 : 0.08;
     state.ctx.save();
     if (edge.virtual) state.ctx.setLineDash([4, 6]);
-    state.ctx.strokeStyle = edge.virtual ? alpha('#ffffff', opacity) : alpha('#91b8ff', opacity);
-    state.ctx.lineWidth = edge.virtual ? 1.1 : linkedToSelected ? 1.6 : 1;
+    state.ctx.strokeStyle = edge.virtual ? alpha('#ffffff', opacity) : linkedToSelected ? alpha('#ffffff', opacity) : linkedToHover ? alpha('#a8d4ff', opacity) : alpha('#91b8ff', opacity);
+    state.ctx.lineWidth = edge.virtual ? 1.1 : linkedToSelected ? 2.4 : linkedToHover ? 1.8 : 1;
     state.ctx.beginPath();
     state.ctx.moveTo(a.x, a.y);
     state.ctx.lineTo(b.x, b.y);
@@ -1030,6 +1030,12 @@ function renderDetail(payload) {
   }
   const chunks = Array.isArray(payload?.chunks) ? payload.chunks.slice(0, 2) : [];
   const related = Array.isArray(payload?.related) ? payload.related.slice(0, 6) : [];
+  function renderParagraphs(text) {
+    if (!text) return '<em>No content available.</em>';
+    return escHtml(text).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+  }
+  const summaryText = chunks[0]?.text || '';
+  const extraChunks = chunks.slice(1);
   state.detailEl.innerHTML = `
     <div class="memory-detail-heading"><div><h3>${escHtml(record.title || 'Untitled record')}</h3></div><div class="memory-detail-chip">${escHtml(record.sourceType || 'record')}</div></div>
     <div class="memory-detail-meta">
@@ -1039,11 +1045,8 @@ function renderDetail(payload) {
       <div><strong>Source</strong>${escHtml(record.sourcePath || '')}</div>
     </div>
     <div class="memory-detail-section-title">Summary</div>
-    <div class="memory-detail-summary">${escHtml(chunks[0]?.text || 'No indexed summary available for this record yet.')}</div>
-    <div class="memory-detail-section-title">Preview</div>
-    <div class="memory-detail-chunk">${escHtml(record.sourcePath || 'No source path available.')}</div>
-    <div class="memory-detail-section-title">Indexed Chunks</div>
-    ${chunks.map((chunk) => `<div class="memory-detail-chunk">${escHtml(String(chunk.text || '').slice(0, 420))}</div>`).join('') || '<div class="memory-detail-empty">No indexed chunks available.</div>'}
+    <div class="memory-detail-summary">${summaryText ? renderParagraphs(summaryText) : '<em class="memory-detail-empty-inline">No indexed summary available for this record yet.</em>'}</div>
+    ${extraChunks.length ? `<div class="memory-detail-section-title">Additional Chunks</div>${extraChunks.map((chunk) => `<div class="memory-detail-chunk">${renderParagraphs(String(chunk.text || '').slice(0, 520))}</div>`).join('')}` : ''}
     <div class="memory-detail-section-title">Related Records</div>
     <div class="memory-related-list">
       ${related.map((item) => `<button type="button" class="memory-related-item" data-record-id="${escHtml(item.recordId)}"><strong>${escHtml(item.title || item.recordId)}</strong><div class="meta">${escHtml(item.sourceType || 'record')} | ${escHtml(formatTime(item.timestamp || ''))}</div><div class="body">${escHtml(item.preview || '')}</div></button>`).join('') || '<div class="memory-detail-empty">No related records returned for this node.</div>'}

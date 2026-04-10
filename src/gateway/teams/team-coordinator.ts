@@ -150,6 +150,11 @@ function buildTeamCallerContext(teamId: string): string {
     `13. Use manage_team_goal to update focus, log completed work, and manage milestones throughout the run.`,
     `14. Use manage_team_goal with pause_agent/unpause_agent to control which agents are active.`,
     `15. dispatch_team_agent is available in this coordinator session. Do NOT claim tooling limitations or say the tool is unavailable unless you actually called it and received an explicit tool error in this turn.`,
+    `16. PROPOSALS: You have write_proposal and full source_write tools available. Use them selectively:`,
+    `    - Use write_proposal for changes that require human approval: src/ code edits, new features, major config changes, risky operations.`,
+    `    - Use source_write tools (find_replace_source, etc.) directly ONLY for low-risk changes like comments, docs, or minor fixes clearly within your team mandate.`,
+    `    - Workspace files (team JSON, markdown, outputs) can always be edited directly — no proposal needed.`,
+    `    - NOT everything needs a proposal. Only gate actions where a human should verify before execution.`,
   ].filter(Boolean).join('\n');
 }
 
@@ -198,11 +203,12 @@ export async function runCoordinatorConversation(
     // Rebuild caller context each turn (picks up latest team chat, goal state, thread)
     const callerContext = buildTeamCallerContext(teamId);
 
-    // Ensure team_ops tools are available in the coordinator session every turn
+    // Ensure team_ops + source_write tools are available in the coordinator session every turn
     // (category activation is per-session but must be re-applied after restarts)
     try {
       const { activateToolCategory } = require('../session');
       activateToolCategory(sessionId, 'team_ops');
+      activateToolCategory(sessionId, 'source_write');
     } catch { /* non-fatal */ }
 
     let responseText = '';
@@ -373,10 +379,11 @@ export async function runCoordinatorReview(
   const nullSse = (_e: string, _d: any) => {};
   const bfn = broadcastFn || _deps.broadcastTeamEvent;
 
-  // Ensure team_ops tools are available in the coordinator session
+  // Ensure team_ops + source_write tools are available in the coordinator session
   try {
     const { activateToolCategory } = require('../session');
     activateToolCategory(sessionId, 'team_ops');
+    activateToolCategory(sessionId, 'source_write');
   } catch { /* non-fatal */ }
 
   const reviewPrompt = [

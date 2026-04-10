@@ -12,6 +12,7 @@ import { getFileWebMemoryTools } from './tools/defs/file-web-memory';
 import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
 import { getCisSystemTools } from './tools/defs/cis-system';
 import { getCompositeDefs, getCompositeManagementTools } from './tools/composite-tools';
+import { getPublicBuildAllowedCategories } from '../runtime/distribution.js';
 
 export interface BuildToolsDeps {
   getMCPManager: () => any;
@@ -21,25 +22,28 @@ export interface BuildToolsDeps {
 // Tools split into: core (always injected) + 6 on-demand categories.
 // Categories are activated per-session via request_tool_category tool.
 
-export const ALL_TOOL_CATEGORIES = ['browser', 'desktop', 'team_ops', 'scheduling', 'source_write', 'integrations'] as const;
+export const ALL_TOOL_CATEGORIES = ['browser', 'desktop', 'team_ops', 'source_write', 'integrations'] as const;
 export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
+
+export function getRuntimeToolCategories(): ToolCategory[] {
+  return getPublicBuildAllowedCategories(ALL_TOOL_CATEGORIES) as ToolCategory[];
+}
 
 // Explicit name lists for non-prefix categories
 const TEAM_OPS_TOOL_NAMES = new Set([
   'spawn_subagent', 'delegate_to_specialist',
   'agent_list', 'agent_info', 'delete_agent',
   'talk_to_subagent', 'talk_to_manager', 'talk_to_teammate',
-  'update_my_status', 'update_team_goal', 'team_manage', 'update_heartbeat',
+  'update_my_status', 'update_team_goal', 'team_manage',
   'dispatch_to_agent', 'dispatch_team_agent', 'get_agent_result',
   'post_to_team_chat', 'message_main_agent', 'reply_to_team',
   'manage_team_goal', 'deploy_analysis_team',
   // ask_team_coordinator intentionally excluded — it's a core tool (always available)
 ]);
 
-const SCHEDULING_TOOL_NAMES = new Set([
-  'schedule_job', 'parse_schedule_pattern',
-]);
-// background_spawn/status/progress/join are CORE — always injected, no category activation needed.
+// schedule_job + parse_schedule_pattern are CORE — always injected so cron/heartbeat/subagent
+// sessions can reschedule and manage jobs without needing category activation.
+// background_spawn/status/progress/join are also CORE — always injected.
 
 const SOURCE_WRITE_TOOL_NAMES = new Set([
   'find_replace_source', 'replace_lines_source', 'insert_after_source',
@@ -59,7 +63,6 @@ export function getToolCategory(name: string): ToolCategory | null {
   if (name.startsWith('browser_')) return 'browser';
   if (name.startsWith('desktop_')) return 'desktop';
   if (TEAM_OPS_TOOL_NAMES.has(name)) return 'team_ops';
-  if (SCHEDULING_TOOL_NAMES.has(name)) return 'scheduling';
   if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'source_write';
   if (INTEGRATIONS_TOOL_NAMES.has(name)) return 'integrations';
   return null; // null = core tool, always included

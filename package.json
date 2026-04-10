@@ -8,13 +8,16 @@
   },
   "scripts": {
     "build": "tsc",
+    "patch:electron-native": "node scripts/patch-electron-native-deps.js",
+    "prepare:public": "node scripts/prepare-public-build.js",
     "dev": "tsx src/cli/index.ts",
     "start": "tsx src/cli/index.ts",
     "gateway": "tsx src/gateway/server-v2.ts",
     "lint": "eslint src --ext .ts",
     "start:compiled": "node dist/cli/index.js",
     "electron": "electron .",
-    "build:win": "electron-builder --win --config electron-builder.yml",
+    "build:win": "npm run patch:electron-native && electron-builder --win --config electron-builder.yml",
+    "build:public": "npm run build && npm run prepare:public && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
@@ -28,7 +31,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^11.4.0",
     "chalk": "^4.1.2",
     "commander": "^12.0.0",
     "cors": "^2.8.6",

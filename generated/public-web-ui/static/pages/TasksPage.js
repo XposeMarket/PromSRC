@@ -1,0 +1,961 @@
+/**
+ * TasksPage.js — F3d Extract
+ *
+ * Background Tasks (Kanban) page + Error Response Panel.
+ *
+ * BGT Functions: bgtNormalizeStatus, refreshBgTasks, renderBgTasks,
+ *   bgtCardHTML, openBgtPanel, closeBgtPanel, bgtRefreshOpenPanel,
+ *   bgtPauseResume, bgtSendReply, bgtChatSend, bgtDeleteTask,
+ *   toggleEvidenceBus, loadEvidenceBusEntries, appendEvidenceBusEntry,
+ *   updateManagerStatusBar
+ *
+ * Error Response Functions: _getOrCreateErrorBackdrop, showErrorResponsePanel,
+ *   selectErrorOption, closeErrorResponse, submitErrorResponse,
+ *   handleErrorResponseWsEvent (+ patchWebSocketForErrorResponse IIFE)
+ *
+ * Dependencies: api() from api.js, escHtml/showToast/showConfirm/bgtToast from utils.js
+ */
+
+import { api } from '../api.js';
+import { escHtml, showToast, showConfirm, bgtToast, renderMd } from '../utils.js';
+import { wsEventBus } from '../ws.js';
+
+
+// ─── Shared helpers (moved from ChatPage.js — used by bgtCardHTML) ──────────
+
+function normalizeProgressStatus(rawStatus) {
+  const status = String(rawStatus || 'pending');
+  if (status === 'done' || status === 'failed' || status === 'in_progress' || status === 'skipped') return status;
+  return 'pending';
+}
+
+function getTaskProgressItems(task) {
+  // Priority 1: task.plan[] — the authoritative persisted plan (set by declare_plan + mutated by step_complete).
+  // This is stable and only changes via explicit step_complete calls, so the UI never flickers.
+  const plan = Array.isArray(task?.plan) ? task.plan : [];
+  if (plan.length > 0) {
+    const currentIndex = Number.isFinite(Number(task?.currentStepIndex)) ? Number(task.currentStepIndex) : -1;
+    const taskStatus = String(task?.status || '').toLowerCase();
+    return plan.map((step, idx) => {
+      const raw = String(step?.status || 'pending').toLowerCase();
+      let status = 'pending';
+      if (raw === 'done' || raw === 'skipped') status = 'done';
+      else if (raw === 'failed') status = 'failed';
+      else if (taskStatus === 'running' && idx === currentIndex) status = 'in_progress';
+      else if (raw === 'running' && (taskStatus === 'running' || taskStatus === 'queued')) status = 'in_progress';
+      else if ((taskStatus === 'failed' || taskStatus === 'stalled' || taskStatus === 'needs_assistance') && idx === currentIndex) status = 'failed';
+      const suffix = raw === 'skipped' ? ' (skipped)' : '';
+      return {
+        id: `task_${String(task?.id || 'x')}_${idx + 1}`,
+        text: `${String(step?.description || `Step ${idx + 1}`)}${suffix}`,
+        status,
+      };
+    });
+  }
+
+  // Priority 2: runtimeProgress — for interactive sessions that called declare_plan
+  // but have no persistent task.plan[] (e.g. direct chat sessions).
+  const runtimeItems = Array.isArray(task?.runtimeProgress?.items) ? task.runtimeProgress.items : [];
+  if (runtimeItems.length > 0) {
+    return runtimeItems.map((item, idx) => ({
+      id: String(item?.id || `runtime_${idx + 1}`),
+      text: String(item?.text || `Step ${idx + 1}`),
+      status: normalizeProgressStatus(item?.status),
+    }));
+  }
+
+  return [];
+}
+
+window.getTaskProgressItems = getTaskProgressItems;
+window.normalizeProgressStatus = normalizeProgressStatus;
+
+// ---------------------------------------------------------------------------
+// BACKGROUND TASKS KANBAN SYSTEM
+// ---------------------------------------------------------------------------
+
+let bgtTasks = [];           // all task records from server
+let bgtOpenTaskId = null;    // currently open panel task id
+
+// --- Columns config ---------------------------------------------------------
+const BGT_COLUMNS = [
+  { key: 'running',          label: '● In Progress', color: '#0d4faf', bg: '#eaf2ff' },
+  { key: 'queued',           label: '◷ Queued',      color: '#7c4d00', bg: '#fff8e1' },
+  { key: 'paused',           label: '‖ Paused',      color: '#555',    bg: '#f5f5f5' },
+  { key: 'stalled',          label: '▲ Stalled',     color: '#9c1a1a', bg: '#fff0f0' },
+  { key: 'needs_assistance', label: '⚠️ Needs You',  color: '#6d2d9e', bg: '#f5eeff' },
+  { key: 'complete',         label: '✓ Complete',    color: '#1a6e35', bg: '#efffea' },
+  { key: 'failed',           label: '✕ Failed',      color: '#9c1a1a', bg: '#fff0f0' },
+];
+
+const STATUS_ICON = {
+  running: '●',
+  queued: '◷',
+  paused: '‖',
+  stalled: '▲',
+  needs_assistance: '⚠️',
+  awaiting_user_input: '⚠️',
+  waiting_subagent: '◷',
+  complete: '✓',
+  completed: '✓',
+  done: '✓',
+  failed: '✕',
+};
+
+function bgtNormalizeStatus(rawStatus) {
+  const status = String(rawStatus || '').trim().toLowerCase();
+  if (status === 'awaiting_user_input') return 'needs_assistance';
+  if (status === 'waiting_subagent' || status === 'in_progress') return 'running';
+  if (status === 'completed' || status === 'done') return 'complete';
+  return status;
+}
+
+// --- Fetch & Render ----------------------------------------------------------
+async function refreshBgTasks() {
+  try {
+    const data = await api('/api/bg-tasks');
+    if (data.success) {
+      bgtTasks = data.tasks || [];
+    }
+  } catch (err) {
+    console.error('[BGT] refreshBgTasks error:', err);
+  }
+  if (typeof window.refreshHeartbeatSummary === 'function') window.refreshHeartbeatSummary().catch(() => {});
+  renderBgTasks();
+}
+
+function renderBgTasks() {
+  const board = document.getElementById('bgt-board');
+  if (!board) return;
+
+  // Update count badge
+  const countEl = document.getElementById('bgt-count');
+  if (countEl) {
+    const active = bgtTasks.filter(t => {
+      const status = bgtNormalizeStatus(t.status);
+      return status !== 'complete' && status !== 'failed';
+    }).length;
+    countEl.textContent = `${active} active`;
+  }
+
+  updateBgtHeartbeatLabel();
+
+  // Only render non-empty columns
+  const byStatus = {};
+  for (const col of BGT_COLUMNS) byStatus[col.key] = [];
+  for (const t of bgtTasks) {
+    const normalizedStatus = bgtNormalizeStatus(t.status);
+    if (byStatus[normalizedStatus]) byStatus[normalizedStatus].push(t);
+    else if (byStatus['stalled']) byStatus['stalled'].push(t);
+  }
+
+  board.innerHTML = '';
+  for (const col of BGT_COLUMNS) {
+    const tasks = byStatus[col.key];
+    if (tasks.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance')) continue;
+    const colEl = document.createElement('div');
+    colEl.style.cssText = 'min-width:240px;max-width:280px;flex:0 0 auto;display:flex;flex-direction:column;gap:0;';
+    colEl.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${col.color}">${col.label}</span>
+        <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${tasks.length}</span>
+      </div>
+      <div class="bgt-col-cards" style="display:flex;flex-direction:column;gap:8px;min-height:60px">
+        ${tasks.slice(0,5).map(t => bgtCardHTML(t, col)).join('')}
+        ${tasks.length > 5 ? `
+        <div id="bgt-more-${col.key}" style="display:none;">${tasks.slice(5).map(t => bgtCardHTML(t, col)).join('')}</div>
+        <button onclick="event.stopPropagation();const m=document.getElementById('bgt-more-${col.key}');const show=m.style.display==='none';m.style.display=show?'flex':'none';m.style.flexDirection='column';m.style.gap='8px';this.textContent=show?'▲ show less':'▼ +${tasks.length - 5} more'" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">▼ +${tasks.length - 5} more</button>` : ''}
+      </div>
+    `;
+    board.appendChild(colEl);
+    if (tasks.length === 0) {
+      // Empty placeholder
+      colEl.querySelector('.bgt-col-cards').innerHTML = `<div style="text-align:center;padding:20px 8px;color:var(--muted);font-size:11px;border:1.5px dashed var(--line);border-radius:10px">No ${col.label.split(' ').slice(1).join(' ').toLowerCase()} tasks</div>`;
+    }
+  }
+
+  // If no tasks at all
+  if (bgtTasks.length === 0) {
+    board.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--muted);font-size:13px;flex:1">
+      <div style="font-size:36px;margin-bottom:12px">Tasks</div>
+      <div style="font-weight:700;margin-bottom:4px">No background tasks yet</div>
+      <div style="font-size:12px">Ask Prom to do something in the background and it'll appear here.</div>
+    </div>`;
+  }
+}
+
+function bgtCardHTML(t, col) {
+  const displayStatus = bgtNormalizeStatus(t.status);
+  const mins = Math.round((Date.now() - (t.lastProgressAt || t.startedAt)) / 60000);
+  const timeAgo = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.round(mins/60)}h ago`;
+  const progressItems = getTaskProgressItems(t);
+  const stepsDone = progressItems.filter(s => s.status === 'done' || s.status === 'skipped').length;
+  const totalSteps = progressItems.length > 0 ? progressItems.length : (t.plan || []).length;
+  const pct = totalSteps > 0 ? Math.round(stepsDone / totalSteps * 100) : 0;
+  let currentStepIndex = progressItems.findIndex(s => s.status === 'in_progress');
+  if (currentStepIndex < 0) currentStepIndex = progressItems.findIndex(s => s.status === 'pending');
+  if (currentStepIndex < 0 && totalSteps > 0) currentStepIndex = Math.max(0, Math.min(totalSteps - 1, Number(t.currentStepIndex || 0)));
+  const currentStep = currentStepIndex >= 0 ? progressItems[currentStepIndex] : null;
+  const channel = t.channel === 'telegram' ? 'Telegram' : 'Web UI';
+
+  return `
+  <div onclick="openBgtPanel('${escHtml(t.id)}')" data-bgt-id="${escHtml(t.id)}" style="
+    background:var(--panel);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px;
+    cursor:pointer;transition:border-color 0.15s,box-shadow 0.15s;
+    ${bgtOpenTaskId === t.id ? 'border-color:var(--brand);box-shadow:0 0 0 2px rgba(90,145,255,0.15);' : ''}
+  " onmouseover="this.style.borderColor='var(--brand)'" onmouseout="this.style.borderColor='${bgtOpenTaskId===t.id?'var(--brand)':'var(--line)'}'">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+      <span style="font-size:13px;font-weight:700;line-height:1.3;flex:1;min-width:0">${escHtml(t.title || 'Untitled Task')}</span>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <button
+          onclick="event.stopPropagation(); bgtDeleteTask('${escHtml(t.id)}', '${escHtml(displayStatus)}')"
+          title="Remove task"
+          style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:7px;padding:1px 6px;font-size:11px;font-weight:700;cursor:pointer"
+        >✕</button>
+        <span style="font-size:14px;flex-shrink:0">${STATUS_ICON[displayStatus] || '●'}</span>
+      </div>
+    </div>
+    ${currentStep ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.4">Step ${currentStepIndex + 1}/${totalSteps}: ${escHtml(String(currentStep.text || '').slice(0,60))}${String(currentStep.text || '').length>60?'…':''}</div>` : ''}
+    ${totalSteps > 0 ? `
+    <div style="background:var(--line);border-radius:999px;height:3px;margin-bottom:8px;overflow:hidden">
+      <div style="background:${col.color};width:${pct}%;height:100%;border-radius:999px;transition:width 0.4s"></div>
+    </div>` : ''}
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:10px;color:var(--muted)">${channel} ${timeAgo}</span>
+      ${displayStatus === 'needs_assistance' ? `<span style="font-size:10px;background:#f5eeff;color:#6d2d9e;border-radius:999px;padding:1px 8px;font-weight:700">Needs you</span>` : ''}
+      ${displayStatus === 'paused' ? `<span style="font-size:10px;background:#f5f5f5;color:#555;border-radius:999px;padding:1px 8px;font-weight:700">${t.pauseReason || 'paused'}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+// --- Side Panel --------------------------------------------------------------
+async function openBgtPanel(taskId) {
+  bgtOpenTaskId = taskId;
+  const panel = document.getElementById('bgt-panel');
+  if (panel) panel.style.display = 'flex';
+  // Clear chat input when switching tasks
+  const chatInput = document.getElementById('bgt-chat-input');
+  if (chatInput) { chatInput.value = ''; chatInput.disabled = false; chatInput.style.opacity = ''; }
+  await bgtRefreshOpenPanel();
+  // Highlight the card
+  renderBgTasks();
+}
+
+function closeBgtPanel() {
+  bgtOpenTaskId = null;
+  const panel = document.getElementById('bgt-panel');
+  if (panel) panel.style.display = 'none';
+  renderBgTasks();
+}
+
+async function bgtRefreshOpenPanel() {
+  if (!bgtOpenTaskId) return;
+  let task;
+  try {
+    const data = await api(`/api/bg-tasks/${bgtOpenTaskId}`);
+    if (data.success) task = data.task;
+  } catch {}
+  if (!task) { task = bgtTasks.find(t => t.id === bgtOpenTaskId); }
+  if (!task) return;
+
+  const titleEl = document.getElementById('bgt-panel-title');
+  if (titleEl) titleEl.textContent = task.title || 'Task Details';
+
+  const pauseBtn = document.getElementById('bgt-panel-pause');
+  if (pauseBtn) {
+    if (task.status === 'running') {
+      pauseBtn.textContent = 'Pause';
+      pauseBtn.style.display = '';
+    } else if (task.status === 'paused' || task.status === 'queued') {
+      pauseBtn.textContent = 'Resume';
+      pauseBtn.style.display = '';
+    } else {
+      pauseBtn.style.display = 'none';
+    }
+  }
+
+  const body = document.getElementById('bgt-panel-body');
+  if (!body) return;
+
+  const plan = task.plan || [];
+  const journal = task.journal || [];
+  const progressItems = getTaskProgressItems(task);
+  const stepsDone = progressItems.filter(s => s.status === 'done' || s.status === 'skipped').length;
+  const totalSteps = progressItems.length > 0 ? progressItems.length : plan.length;
+  const lastTool = task.lastToolCall || '—';
+  const lastToolAt = task.lastToolCallAt ? new Date(task.lastToolCallAt).toLocaleTimeString() : '—';
+  const channel = task.channel === 'telegram' ? 'Telegram' : 'Web UI';
+  const startedAt = task.startedAt ? new Date(task.startedAt).toLocaleString() : '—';
+  const displayStatus = bgtNormalizeStatus(task.status);
+  const statusColor = { running:'#0d4faf', queued:'#7c4d00', paused:'#555', stalled:'#9c1a1a', needs_assistance:'#6d2d9e', complete:'#1a6e35', failed:'#9c1a1a' };
+  const sc = statusColor[displayStatus] || '#555';
+
+  const stepsHTML = renderChecklistItemsHTML(progressItems, { maxText: 200 });
+
+  // Build journal HTML (last 30 entries)
+  const recentJournal = journal.slice(-30).reverse();
+  const journalHTML = recentJournal.map(entry => {
+    const time = new Date(entry.t).toLocaleTimeString();
+    const typeColor = { tool_call:'#0d4faf', tool_result:'#1a6e35', error:'#9c1a1a', plan_mutation:'#6d2d9e', status_push:'#555', pause:'#7c4d00', resume:'#7c4d00', advisor_decision:'#555', heartbeat:'var(--brand)' };
+    const tc = typeColor[entry.type] || '#888';
+    return `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px">
+      <span style="color:var(--muted);flex-shrink:0;min-width:52px">${time}</span>
+      <span style="color:${tc};flex-shrink:0;font-weight:700;min-width:60px">${entry.type}</span>
+      <span style="color:var(--text);flex:1;min-width:0;word-break:break-word">${escHtml(entry.content)}</span>
+    </div>`;
+  }).join('');
+
+  // Build assistance block outside template literal to avoid backtick nesting issues
+  let assistanceHTML = '';
+  const taskStatusNorm = String(task.status || '').trim().toLowerCase();
+  console.log('[BGT panel] task.status =', JSON.stringify(task.status), 'norm =', taskStatusNorm);
+  if (taskStatusNorm === 'needs_assistance' || taskStatusNorm === 'paused' || taskStatusNorm === 'stalled' || taskStatusNorm === 'failed') {
+    const lastPause = [...journal].reverse().find(e => e.type === 'pause' || e.type === 'error');
+    const lastStatusPush = [...journal].reverse().find(e => e.type === 'status_push' && e.content);
+    const pauseMsg = escHtml((lastPause?.content || lastStatusPush?.content || 'Task paused and waiting for input.').replace(/^Task paused for assistance:\s*/i, ''));
+    const pauseDetail = lastPause?.detail ? escHtml(lastPause.detail.slice(0, 300)) : '';
+    const tid = escHtml(task.id);
+    assistanceHTML = '<div style="background:#f5eeff;border:1px solid #cba8f5;border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#6d2d9e">'
+      + '<div style="font-weight:800;margin-bottom:6px">⚠️ Task needs your input</div>'
+      + '<div style="color:#3d1a6e;margin-bottom:' + (pauseDetail ? '6px' : '0') + '">' + pauseMsg + '</div>'
+      + (pauseDetail ? '<div style="font-size:11px;color:#6d2d9e;opacity:0.8;margin-bottom:4px">' + pauseDetail + '</div>' : '')
+      + '</div>'
+      + '<div style="border:1px solid #cba8f5;border-radius:10px;overflow:hidden;background:#faf5ff;margin-top:8px">'
+      + '<div style="padding:8px 12px;font-size:11px;font-weight:700;color:#6d2d9e;border-bottom:1px solid #e9d8ff">💬 Reply to agent</div>'
+      + '<div style="display:flex;gap:8px;padding:8px">'
+      + '<textarea id="task-reply-input" rows="2" placeholder="Type your reply — the agent will see this and continue..." style="flex:1;resize:none;border:1px solid #cba8f5;border-radius:8px;padding:8px;font-size:12px;font-family:inherit;background:#fff;color:var(--text)"></textarea>'
+      + '<button id="task-reply-send" data-taskid="' + tid + '" style="background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;align-self:flex-end">Send</button>'
+      + '</div></div>';
+  }
+
+  body.innerHTML = `
+    <!-- Status row -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:11px;background:var(--line);border-radius:999px;padding:2px 10px;font-weight:700;color:${sc}">${STATUS_ICON[displayStatus] || '●'} ${displayStatus.replace(/_/g,' ')}</span>
+      <span style="font-size:11px;color:var(--muted)">${channel}</span>
+      <span style="font-size:11px;color:var(--muted)">Started ${startedAt}</span>
+    </div>
+
+    <!-- Summary if complete -->
+    ${task.finalSummary ? `<div style="background:#efffea;border:1px solid #b2dfb2;border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#1a6e35">
+      <div style="font-weight:800;margin-bottom:4px">📝 Summary</div>
+      ${renderMd(task.finalSummary)}
+    </div>` : ''}
+
+    <!-- Needs assistance -->
+    ${assistanceHTML}
+
+    <!-- Stats row -->
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:100px;background:var(--panel-2);border-radius:10px;padding:10px 12px">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:700;margin-bottom:2px">Progress</div>
+        <div style="font-size:18px;font-weight:800">${stepsDone}<span style="font-size:12px;color:var(--muted)">/${totalSteps}</span></div>
+        <div style="font-size:10px;color:var(--muted)">steps done</div>
+      </div>
+      <div style="flex:1;min-width:100px;background:var(--panel-2);border-radius:10px;padding:10px 12px">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:700;margin-bottom:2px">Last Tool</div>
+        <div style="font-size:12px;font-weight:700;word-break:break-all">${escHtml(lastTool.slice(0,30))}</div>
+        <div style="font-size:10px;color:var(--muted)">${lastToolAt}</div>
+      </div>
+    </div>
+
+    <!-- Progress checklist -->
+    <div>
+      <div class="progress-card">
+        <div class="progress-card-header" style="cursor:default;padding-bottom:6px">
+          <span>Progress</span>
+        </div>
+        <div class="progress-list-wrap">
+          ${progressItems.length > 0
+            ? `<div class="progress-list">${stepsHTML}</div>`
+            : `<div class="progress-empty">Progress - This panel will be used to make a short to-do list</div>`}
+        </div>
+      </div>
+    </div>
+
+    <!-- Manager/Worker status indicator (only shown when manager is active) -->
+    ${task.managerEnabled ? `<div id="manager-status-bar" style="background:#f0f5ff;border:1px solid #c7d8f5;border-radius:10px;padding:8px 12px;font-size:11px;font-weight:700;color:#0d4faf;display:flex;align-items:center;gap:8px">
+      <span id="manager-status-icon">⚙️</span>
+      <span id="manager-status-text">Manager/Worker mode active</span>
+      ${task.executorProvider ? `<span style="font-weight:400;color:#555;margin-left:auto">Worker: ${escHtml(task.executorProvider)}</span>` : ''}
+    </div>` : ''}
+
+    <!-- Evidence Bus panel (collapsible) -->
+    <div id="evidence-bus-section">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleEvidenceBus()">
+        <span>Evidence Bus</span>
+        <span id="evidence-bus-count" style="font-weight:400;opacity:0.6"></span>
+        <span id="evidence-bus-toggle" style="margin-left:auto;font-size:10px">▼ show</span>
+      </div>
+      <div id="evidence-bus-body" style="display:none"></div>
+    </div>
+
+    <!-- Process journal -->
+    <div>
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Process Log <span style="font-weight:400;opacity:0.6">(latest first)</span></div>
+      <div style="font-family:monospace;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;max-height:300px;overflow-y:auto">
+        ${journalHTML || '<div style="color:var(--muted);padding:8px">No entries yet.</div>'}
+      </div>
+    </div>
+
+    <!-- Delete button -->
+    ${(displayStatus === 'complete' || displayStatus === 'failed') ? `
+    <button onclick="bgtDeleteTask('${escHtml(task.id)}')" style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;align-self:flex-start">Remove</button>` : ''}
+  `;
+
+  // Auto-expand evidence bus for cron tasks (they always write notes) or if entries already exist
+  if (task.scheduleId) {
+    const busBody = document.getElementById('evidence-bus-body');
+    const busToggle = document.getElementById('evidence-bus-toggle');
+    if (busBody && busBody.style.display === 'none') {
+      busBody.style.display = 'block';
+      if (busToggle) busToggle.textContent = '▲ hide';
+      loadEvidenceBusEntries(task.id);
+    }
+  }
+
+  // Wire up the reply send button via JS (avoids inline onclick escaping issues)
+  const sendBtn = document.getElementById('task-reply-send');
+  if (sendBtn) {
+    sendBtn.addEventListener('click', () => bgtSendReply(sendBtn.dataset.taskid));
+  }
+  // Also allow Enter (without Shift) in the textarea to send
+  const replyInput = document.getElementById('task-reply-input');
+  if (replyInput) {
+    replyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        bgtSendReply(sendBtn ? sendBtn.dataset.taskid : bgtOpenTaskId);
+      }
+    });
+  }
+}
+
+// --- Actions -----------------------------------------------------------------
+async function bgtPauseResume() {
+  if (!bgtOpenTaskId) return;
+  const task = bgtTasks.find(t => t.id === bgtOpenTaskId);
+  if (!task) return;
+  if (task.status === 'running') {
+    // Pause
+    try { await api(`/api/bg-tasks/${bgtOpenTaskId}/pause`, { method: 'POST' }); } catch {}
+  } else if (task.status === 'paused' || task.status === 'queued') {
+    // Resume
+    try { await api(`/api/bg-tasks/${bgtOpenTaskId}/resume`, { method: 'POST' }); } catch {}
+  }
+  await refreshBgTasks();
+  await bgtRefreshOpenPanel();
+}
+
+async function bgtSendReply(taskId) {
+  const input = document.getElementById('task-reply-input');
+  if (!input) return;
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  input.disabled = true;
+  try {
+    const result = await api(`/api/bg-tasks/${taskId}/message`, { method: 'POST', body: JSON.stringify({ message }) });
+    if (result.success) {
+      // Refresh the panel after a short delay to show the journal update
+      setTimeout(() => bgtRefreshOpenPanel(), 800);
+    } else {
+      alert('Failed to send: ' + (result.error || 'unknown error'));
+    }
+  } catch (e) {
+    alert('Error sending message: ' + e.message);
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+async function bgtChatSend() {
+  const input = document.getElementById('bgt-chat-input');
+  if (!input || !bgtOpenTaskId) return;
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  input.disabled = true;
+  input.style.opacity = '0.5';
+  try {
+    const result = await api(`/api/bg-tasks/${bgtOpenTaskId}/message`, { method: 'POST', body: JSON.stringify({ message }) });
+    if (result.success) {
+      // Show optimistic sent indicator in journal area
+      const body = document.getElementById('bgt-panel-body');
+      if (body) {
+        const sentDiv = document.createElement('div');
+        sentDiv.style.cssText = 'background:var(--brand);color:#fff;border-radius:8px;padding:6px 10px;font-size:12px;align-self:flex-end;max-width:80%;word-break:break-word;opacity:0.85';
+        sentDiv.textContent = '\u2192 ' + message;
+        body.appendChild(sentDiv);
+        body.scrollTop = body.scrollHeight;
+      }
+      // Refresh panel after short delay to show journal update
+      setTimeout(() => bgtRefreshOpenPanel(), 1000);
+    } else {
+      alert('Failed to send: ' + (result.error || 'unknown error'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  } finally {
+    input.disabled = false;
+    input.style.opacity = '';
+    input.focus();
+  }
+}
+
+async function bgtDeleteTask(taskId, status) {
+  const isActive = status && status !== 'complete' && status !== 'failed';
+  const msg = isActive
+    ? 'This task is still active. Remove it from the board anyway?'
+    : 'Remove this task from the board?';
+  const confirmed = await new Promise(r => showConfirm(msg, () => r(true), () => r(false), {
+    title: 'Remove Task',
+    confirmText: 'Remove',
+    danger: isActive,
+  }));
+  if (!confirmed) return;
+  try { await api(`/api/bg-tasks/${taskId}`, { method: 'DELETE' }); } catch {}
+  if (bgtOpenTaskId === taskId) closeBgtPanel();
+  await refreshBgTasks();
+}
+
+// --- Toast notification -------------------------------------------------------
+// -- Evidence Bus UI helpers ------------------------------------------------------------------
+
+function toggleEvidenceBus() {
+  const body = document.getElementById('evidence-bus-body');
+  const toggle = document.getElementById('evidence-bus-toggle');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  if (toggle) toggle.textContent = isHidden ? '\u25b2 hide' : '\u25bc show';
+  // Load entries when first opened
+  if (isHidden && bgtOpenTaskId) loadEvidenceBusEntries(bgtOpenTaskId);
+}
+
+async function loadEvidenceBusEntries(taskId) {
+  try {
+    const data = await fetch(`/api/bg-tasks/${taskId}/evidence`).then(r => r.json());
+    const entries = data.entries || [];
+    const count = document.getElementById('evidence-bus-count');
+    if (count) count.textContent = `(${entries.length} entries)`;
+    const body = document.getElementById('evidence-bus-body');
+    if (!body) return;
+    if (entries.length === 0) {
+      body.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:6px">No evidence yet.</div>';
+      return;
+    }
+    const catColors = { finding:'#0d4faf', decision:'#7c4d00', artifact:'#1a6e35', error:'#9c1a1a', dedup_key:'#6d2d9e' };
+    // Group by category
+    const grouped = {};
+    for (const e of entries) {
+      if (!grouped[e.category]) grouped[e.category] = [];
+      grouped[e.category].push(e);
+    }
+    let html = '<div style="font-family:monospace;font-size:11px;border:1px solid var(--line);border-radius:10px;padding:6px 8px;max-height:250px;overflow-y:auto">';
+    for (const [cat, catEntries] of Object.entries(grouped)) {
+      const col = catColors[cat] || '#555';
+      html += `<div style="font-size:10px;font-weight:800;color:${col};text-transform:uppercase;padding:4px 0 2px">${escHtml(cat)} (${catEntries.length})</div>`;
+      for (const e of catEntries.slice(-10)) {
+        const keyPart = e.key ? ` <span style="color:#888;font-weight:700">[${escHtml(e.key)}]</span>` : '';
+        const stepPart = `<span style="color:var(--muted)">step ${e.stepIndex}</span>`;
+        const agentPart = e.agentId ? ` <span style="color:var(--muted)">by ${escHtml(e.agentId.slice(0,16))}</span>` : '';
+        const valueText = escHtml(e.value); // No truncation — full text
+        html += `<div style="padding:5px 0;border-bottom:1px solid var(--line)">`
+          + `<div style="display:flex;gap:6px;align-items:center;margin-bottom:2px">${stepPart}${agentPart}${keyPart}</div>`
+          + `<div style="color:var(--text);line-height:1.5;word-break:break-word;white-space:pre-wrap">${valueText}</div>`
+          + `</div>`;
+      }
+    }
+    html += '</div>';
+    body.innerHTML = html;
+    // Update entry count
+    if (count) count.textContent = `(${entries.length} entries)`;
+  } catch (err) {
+    console.error('loadEvidenceBusEntries error:', err);
+  }
+}
+
+function appendEvidenceBusEntry(entry) {
+  // Update count
+  const count = document.getElementById('evidence-bus-count');
+  if (count) {
+    const cur = parseInt(count.textContent.replace(/\D/g,'')) || 0;
+    count.textContent = `(${cur + 1} entries)`;
+  }
+  // If bus body is visible, reload
+  const body = document.getElementById('evidence-bus-body');
+  if (body && body.style.display !== 'none' && bgtOpenTaskId) {
+    loadEvidenceBusEntries(bgtOpenTaskId);
+  }
+}
+
+function updateManagerStatusBar(text, color) {
+  const bar = document.getElementById('manager-status-bar');
+  const icon = document.getElementById('manager-status-icon');
+  const textEl = document.getElementById('manager-status-text');
+  if (!bar) return;
+  if (color) bar.style.color = color;
+  if (icon) {
+    // Pick icon based on content
+    if (text.startsWith('🧭')) icon.textContent = '🧭';
+    else if (text.startsWith('⚙')) icon.textContent = '⚙️';
+    else if (text.startsWith('✅') || text.startsWith('\u2713')) icon.textContent = '✅';
+    else if (text.startsWith('🔁') || text.startsWith('\u21ba')) icon.textContent = '🔁';
+    else icon.textContent = '⚙️';
+  }
+  if (textEl) textEl.textContent = text;
+}
+
+// bgtToast — imported from utils.js
+
+
+// ─── Error Response Panel ──────────────────────────────────────
+
+function _getOrCreateErrorBackdrop() {
+  if (_errBackdrop) return _errBackdrop;
+  _errBackdrop = document.createElement('div');
+  _errBackdrop.id = 'error-response-backdrop';
+  _errBackdrop.style.cssText = 'position:fixed;inset:0;background:rgba(10,20,40,0.45);z-index:9997;display:none';
+  _errBackdrop.addEventListener('click', closeErrorResponse);
+  document.body.appendChild(_errBackdrop);
+  return _errBackdrop;
+}
+
+function showErrorResponsePanel(taskId, category, errorMessage, errorDetail, template) {
+  _errTaskId = taskId;
+  _errTemplate = template;
+  _errSelectedAction = null;
+  _errCategory = category;
+
+  // Title & description
+  const titleEl = document.getElementById('error-response-title');
+  const descEl = document.getElementById('error-response-desc');
+  if (titleEl) titleEl.textContent = template?.title || ('\u26a0\ufe0f ' + (category || 'Error').toUpperCase());
+  if (descEl) descEl.textContent = template?.description || errorMessage || 'The task needs your help to continue.';
+
+  // Render options
+  const optionsEl = document.getElementById('error-response-options');
+  if (optionsEl) {
+    optionsEl.innerHTML = '';
+    const options = template?.options || [
+      { id: 'retry_now', label: '\u27f3 Retry Now', icon: '\u27f3' },
+      { id: 'skip', label: '\u229a Skip Step', icon: '\u229a' },
+      { id: 'cancel', label: '\u2715 Cancel Task', icon: '\u2715', danger: true },
+    ];
+    options.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.className = 'error-option-btn' + (opt.danger ? ' danger' : '');
+      btn.dataset.actionId = opt.id;
+      btn.innerHTML = `<strong>${escHtml(opt.icon || '')} ${escHtml(opt.label)}</strong>${opt.description ? `<br><span style="font-weight:400;opacity:0.75">${escHtml(opt.description)}</span>` : ''}`;
+      btn.addEventListener('click', () => selectErrorOption(opt));
+      optionsEl.appendChild(btn);
+    });
+  }
+
+  // Clear inputs
+  const inputsEl = document.getElementById('error-response-inputs');
+  if (inputsEl) {
+    inputsEl.innerHTML = '';
+    inputsEl.classList.remove('visible');
+  }
+
+  // Reset submit button
+  const submitBtn = document.getElementById('error-response-submit-btn');
+  if (submitBtn) submitBtn.disabled = true;
+
+  // Show backdrop + panel
+  const backdrop = _getOrCreateErrorBackdrop();
+  backdrop.style.display = 'block';
+  const panel = document.getElementById('error-response-panel');
+  if (panel) panel.classList.add('visible');
+
+  // Notification toast
+  bgtToast('\u26a0\ufe0f Task needs help', (template?.title || category || 'Error') + ' — see panel');
+}
+
+function selectErrorOption(opt) {
+  _errSelectedAction = opt.id;
+
+  // Highlight selected
+  document.querySelectorAll('.error-option-btn').forEach(b => b.classList.remove('selected'));
+  const btn = document.querySelector(`.error-option-btn[data-action-id="${opt.id}"]`);
+  if (btn) btn.classList.add('selected');
+
+  // Show input fields if this option requires them
+  const inputsEl = document.getElementById('error-response-inputs');
+  if (inputsEl) {
+    inputsEl.innerHTML = '';
+    inputsEl.classList.remove('visible');
+
+    const triggerInputs = opt.triggerInputs || [];
+    const allFields = _errTemplate?.requiredInputs || [];
+    const fieldsToShow = triggerInputs.length > 0
+      ? allFields.filter(f => triggerInputs.includes(f.id))
+      : [];
+
+    if (fieldsToShow.length > 0) {
+      fieldsToShow.forEach(field => {
+        const wrap = document.createElement('div');
+        wrap.className = 'input-field';
+        const label = document.createElement('label');
+        label.textContent = field.label;
+        label.setAttribute('for', 'err-input-' + field.id);
+        const input = document.createElement('input');
+        input.id = 'err-input-' + field.id;
+        input.type = field.type || 'text';
+        input.placeholder = field.placeholder || '';
+        input.dataset.fieldId = field.id;
+        if (field.validation === 'digits_only') {
+          input.inputMode = 'numeric';
+          input.pattern = '[0-9]*';
+          input.maxLength = 8;
+        }
+        wrap.appendChild(label);
+        wrap.appendChild(input);
+        inputsEl.appendChild(wrap);
+      });
+      inputsEl.classList.add('visible');
+      // Focus first input
+      const firstInput = inputsEl.querySelector('input');
+      if (firstInput) setTimeout(() => firstInput.focus(), 80);
+    }
+  }
+
+  // Enable submit unless it's cancel (which submits immediately)
+  const submitBtn = document.getElementById('error-response-submit-btn');
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = opt.danger ? 'Cancel Task' : 'Continue';
+  }
+}
+
+function closeErrorResponse() {
+  _errTaskId = null;
+  _errTemplate = null;
+  _errSelectedAction = null;
+  _errCategory = null;
+
+  const backdrop = document.getElementById('error-response-backdrop');
+  if (backdrop) backdrop.style.display = 'none';
+  const panel = document.getElementById('error-response-panel');
+  if (panel) panel.classList.remove('visible');
+}
+
+async function submitErrorResponse() {
+  if (!_errTaskId || !_errSelectedAction) return;
+
+  const action = _errSelectedAction;
+  const category = _errCategory;
+
+  // Collect input values
+  const inputs = {};
+  document.querySelectorAll('#error-response-inputs input[data-field-id]').forEach(el => {
+    if (el.value.trim()) inputs[el.dataset.fieldId] = el.value.trim();
+  });
+
+  // Validate required fields for credential action
+  if (action === 'credentials') {
+    if (!inputs.email) {
+      const emailEl = document.getElementById('err-input-email');
+      if (emailEl) { emailEl.style.borderColor = 'var(--err)'; emailEl.focus(); }
+      return;
+    }
+    if (!inputs.password) {
+      const pwEl = document.getElementById('err-input-password');
+      if (pwEl) { pwEl.style.borderColor = 'var(--err)'; pwEl.focus(); }
+      return;
+    }
+  }
+
+  if (action === 'verification_code') {
+    if (!inputs.code) {
+      const codeEl = document.getElementById('err-input-code');
+      if (codeEl) { codeEl.style.borderColor = 'var(--err)'; codeEl.focus(); }
+      return;
+    }
+  }
+
+  // Disable submit to prevent double-send
+  const submitBtn = document.getElementById('error-response-submit-btn');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending…'; }
+
+  try {
+    const resp = await fetch(`/api/bg-tasks/${_errTaskId}/error-response`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, category, inputs }),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      closeErrorResponse();
+      if (data.resumed) {
+        bgtToast('\u2705 Task resuming', 'Agent is continuing with your response');
+        // Refresh the kanban board to show updated status
+        if (typeof refreshBgTasks === 'function') setTimeout(refreshBgTasks, 800);
+      } else {
+        bgtToast('Task cancelled', 'Task has been stopped');
+        if (typeof refreshBgTasks === 'function') setTimeout(refreshBgTasks, 400);
+      }
+    } else {
+      bgtToast('\u274c Error', data.error || 'Failed to submit response');
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Continue'; }
+    }
+  } catch (err) {
+    console.error('[ErrorResponse] Submit failed:', err);
+    bgtToast('\u274c Network error', 'Could not submit response');
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Continue'; }
+  }
+}
+
+// Hook into the existing WebSocket message handler
+// We extend the onmessage handler after the page loads
+(function patchWebSocketForErrorResponse() {
+  function applyPatch() {
+    // Find the ws variable — it’s declared in a closure, so we intercept via MutationObserver
+    // Alternative: override addEventListener on WebSocket prototype to intercept messages
+    const _origOnMessage = WebSocket.prototype.__defineGetter__
+      ? null
+      : null; // not needed — use event listener approach below
+
+    // We hook into the document-level custom event that server-v2’s WS handler
+    // already dispatches. If that’s not available, we’ll patch the WS directly.
+    document.addEventListener('ws:message', handleErrorResponseWsEvent);
+
+    // Also directly patch any open WebSocket connections by overriding WebSocket prototype
+    const _OrigWS = window.WebSocket;
+    window.WebSocket = function(...args) {
+      const ws = new _OrigWS(...args);
+      const _origAddEventListener = ws.addEventListener.bind(ws);
+      ws.addEventListener = function(type, listener, ...rest) {
+        if (type === 'message') {
+          const wrappedListener = function(e) {
+            try {
+              const msg = JSON.parse(e.data);
+              if (msg.type === 'task_error_requires_response') {
+                handleErrorResponseWsEvent({ detail: msg });
+              }
+            } catch {}
+            return listener.call(this, e);
+          };
+          return _origAddEventListener('message', wrappedListener, ...rest);
+        }
+        return _origAddEventListener(type, listener, ...rest);
+      };
+      // Also patch onmessage setter
+      let _onmsgHandler = null;
+      Object.defineProperty(ws, 'onmessage', {
+        get: () => _onmsgHandler,
+        set: (fn) => {
+          _onmsgHandler = fn;
+          _origAddEventListener('message', (e) => {
+            try {
+              const msg = JSON.parse(e.data);
+              if (msg.type === 'task_error_requires_response') {
+                handleErrorResponseWsEvent({ detail: msg });
+              }
+            } catch {}
+            if (_onmsgHandler) _onmsgHandler.call(ws, e);
+          });
+        },
+        configurable: true,
+      });
+      return ws;
+    };
+    // Copy static properties
+    Object.assign(window.WebSocket, _OrigWS);
+    window.WebSocket.prototype = _OrigWS.prototype;
+    window.WebSocket.CONNECTING = _OrigWS.CONNECTING;
+    window.WebSocket.OPEN = _OrigWS.OPEN;
+    window.WebSocket.CLOSING = _OrigWS.CLOSING;
+    window.WebSocket.CLOSED = _OrigWS.CLOSED;
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyPatch);
+  } else {
+    applyPatch();
+  }
+})();
+
+function handleErrorResponseWsEvent(e) {
+  const msg = e.detail || e;
+  if (!msg || msg.type !== 'task_error_requires_response') return;
+  showErrorResponsePanel(
+    msg.taskId,
+    msg.errorCategory,
+    msg.errorMessage,
+    msg.errorDetail,
+    msg.template,
+  );
+}
+
+
+
+// ─── Expose on window for HTML onclick handlers ────────────────
+window.refreshBgTasks = refreshBgTasks;
+window.openBgtPanel = openBgtPanel;
+window.closeBgtPanel = closeBgtPanel;
+window.bgtRefreshOpenPanel = bgtRefreshOpenPanel;
+window.bgtPauseResume = bgtPauseResume;
+window.bgtSendReply = bgtSendReply;
+window.bgtChatSend = bgtChatSend;
+window.bgtDeleteTask = bgtDeleteTask;
+window.toggleEvidenceBus = toggleEvidenceBus;
+window.loadEvidenceBusEntries = loadEvidenceBusEntries;
+window.appendEvidenceBusEntry = appendEvidenceBusEntry;
+window.updateManagerStatusBar = updateManagerStatusBar;
+window.bgtNormalizeStatus = bgtNormalizeStatus;
+window.showErrorResponsePanel = showErrorResponsePanel;
+window.selectErrorOption = selectErrorOption;
+window.closeErrorResponse = closeErrorResponse;
+window.submitErrorResponse = submitErrorResponse;
+window.handleErrorResponseWsEvent = handleErrorResponseWsEvent;
+// bgtToast already on window via utils.js import
+
+// ─── WS Event Handlers (F5) ────────────────────────────────────
+const _taskEvents = ['task_running','task_complete','task_paused','task_failed',
+  'task_needs_assistance','task_step_done','task_tool_call','task_heartbeat_resumed'];
+
+_taskEvents.forEach(evt => {
+  wsEventBus.on(evt, (msg) => {
+    if (window.currentMode === 'bgtasks') refreshBgTasks();
+    if (window.bgtOpenTaskId && msg.taskId === window.bgtOpenTaskId) bgtRefreshOpenPanel();
+    if (evt === 'task_complete') {
+      bgtToast('\u2713 Task complete', msg.summary ? msg.summary.slice(0,120) : '');
+      // Backend task_done.automatedSession is the single source of truth for cron/scheduled auto sessions.
+    } else if (evt === 'task_failed') {
+    } else if (evt === 'task_failed') {
+      bgtToast('\u2715 Task failed', msg.error ? msg.error.slice(0,120) : '');
+    } else if (evt === 'task_needs_assistance') {
+      bgtToast('Task paused', msg.reason ? String(msg.reason).slice(0, 120) : 'Needs assistance');
+    }
+  });
+});
+
+wsEventBus.on('task_panel_update', (msg) => {
+  if (window.bgtOpenTaskId && msg.taskId === window.bgtOpenTaskId) bgtRefreshOpenPanel();
+});
+wsEventBus.on('task_manager_briefing', (msg) => {
+  if (window.bgtOpenTaskId === msg.taskId) updateManagerStatusBar(`\uD83E\uDDED Manager briefing step ${(msg.stepIndex||0)+1}...`, '#7c4d00');
+});
+wsEventBus.on('task_worker_start', (msg) => {
+  if (window.bgtOpenTaskId === msg.taskId) {
+    const prov = msg.provider && msg.provider !== 'primary' ? ` (${escHtml(String(msg.provider))})` : '';
+    updateManagerStatusBar(`\u2699\uFE0F Worker executing step ${(msg.stepIndex||0)+1}${prov}...`, '#0d4faf');
+  }
+});
+wsEventBus.on('task_manager_verifying', (msg) => {
+  if (window.bgtOpenTaskId === msg.taskId) updateManagerStatusBar(`\u2705 Manager verifying step ${(msg.stepIndex||0)+1}...`, '#1a6e35');
+});
+wsEventBus.on('task_brief_retry', (msg) => {
+  if (window.bgtOpenTaskId === msg.taskId) updateManagerStatusBar(`\uD83D\uDD01 Manager retrying (attempt ${msg.attempt||1})...`, '#9c1a1a');
+});
+wsEventBus.on('task_evidence_update', (msg) => {
+  if (window.bgtOpenTaskId === msg.taskId && msg.entry) appendEvidenceBusEntry(msg.entry);
+});
+wsEventBus.on('cron_task_spawned', (msg) => {
+  bgtToast('\uD83D\uDD50 Scheduled job running', `"${msg.jobName}" started as background task`);
+  if (window.currentMode === 'bgtasks') refreshBgTasks();
+});

@@ -35,7 +35,7 @@
         "model": "gpt-4o"
       },
       "openai_codex": {
-        "model": "gpt-5.4-mini"
+        "model": "gpt-5.4"
       },
       "anthropic": {
         "model": "claude-haiku-4-5-20251001",

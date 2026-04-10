@@ -103,3 +103,6 @@ desktop.ini
 
 # --- ELECTRON BUILD OUTPUT ---
 release/
+release-public/
+output/
+tmp/

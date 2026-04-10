@@ -1,8 +1,10 @@
 // src/gateway/tools/defs/file-web-memory.ts
 // Tool definitions for file operations, web tools, and memory tools.
 
+import { filterPublicBuildToolDefs } from '../../../runtime/distribution.js';
+
 export function getFileWebMemoryTools(): any[] {
-  return [
+  const tools = [
     {
       type: 'function',
       function: {
@@ -61,7 +63,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'search_files',
-        description: 'Multi-file grep across a workspace directory. Finds all files containing a pattern. Critical for self-repair work — use this to find all callers of a function before changing it, or locate where a config key is used across the workspace.',
+        description: 'Multi-file grep across a workspace directory. Finds all files containing a pattern. Use this to find all callers of a function before changing it, or locate where a config key is used across the workspace.',
         parameters: {
           type: 'object', required: ['pattern'],
           properties: {
@@ -675,19 +677,19 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_search',
-        description: 'Search long-term memory indexed from workspace/audit using hybrid ranking (keyword + semantic-lite + recency + durability). Use this when historical context from older sessions/tasks/notes is needed.',
+        description: 'Search long-term memory with layered retrieval: (1) exact ID/key lookup, (2) operational layer — canonical decisions, preferences, proposals, task_outcomes, project_facts extracted from audit history, (3) evidence fallback — raw indexed session/transcript chunks. Operational records lead results; evidence fills remaining slots. Hits include layer ("operational"|"evidence"), recordType, canonicalKey, and whyMatched fields. Use record_id from hits with memory_read_record to fetch full record.',
         parameters: {
           type: 'object',
           required: ['query'],
           properties: {
-            query: { type: 'string', description: 'Search query, e.g. "oauth decision history" or "what did we decide about indexing".' },
-            mode: { type: 'string', description: 'Optional search mode: quick, deep, project, or timeline. Default: quick.' },
+            query: { type: 'string', description: 'Natural language query or exact ID (proposal ID, task UUID, canonical key like "proposal:prop_xxx" or "preference:root:memory:key_decisions").' },
+            mode: { type: 'string', description: 'Search mode: quick (default), deep (broader, all candidates), project (project-scoped), or timeline (chronological evidence).' },
             limit: { type: 'number', description: 'Maximum hits to return (default 8, max 50).' },
-            project_id: { type: 'string', description: 'Optional project filter.' },
-            date_from: { type: 'string', description: 'Optional lower date bound, YYYY-MM-DD or ISO timestamp.' },
-            date_to: { type: 'string', description: 'Optional upper date bound, YYYY-MM-DD or ISO timestamp.' },
-            source_types: { type: 'array', items: { type: 'string' }, description: 'Optional source type filters.' },
-            min_durability: { type: 'number', description: 'Optional durability floor from 0..1.' },
+            project_id: { type: 'string', description: 'Filter results to a specific project ID.' },
+            date_from: { type: 'string', description: 'Lower date bound YYYY-MM-DD or ISO timestamp (evidence layer only).' },
+            date_to: { type: 'string', description: 'Upper date bound YYYY-MM-DD or ISO timestamp (evidence layer only).' },
+            source_types: { type: 'array', items: { type: 'string' }, description: 'Source type filter (skips operational layer when set). Types: chat_session, chat_transcript, chat_compaction, task_state, proposal_state, memory_root, project_state, etc.' },
+            min_durability: { type: 'number', description: 'Minimum durability 0..1 (evidence layer only).' },
           },
         },
       },
@@ -696,7 +698,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_read_record',
-        description: 'Read a full indexed memory record and its chunks by record_id (retrieved from memory_search). Use this for evidence-grounded follow-up reads.',
+        description: 'Read a full memory record by record_id from memory_search. Resolves both operational records (opr_* IDs — canonical decisions/preferences/proposals/tasks/projects) and raw evidence records. Use this to get full body, sourceRefs, entities, and outcome fields.',
         parameters: {
           type: 'object',
           required: ['record_id'],
@@ -819,4 +821,5 @@ export function getFileWebMemoryTools(): any[] {
       },
     },
   ];
+  return filterPublicBuildToolDefs(tools);
 }

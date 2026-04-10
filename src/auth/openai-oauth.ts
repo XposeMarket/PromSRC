@@ -349,6 +349,126 @@ export async function startOAuthFlow(configDir: string): Promise<OAuthFlowResult
   });
 }
 
+// ─── Non-blocking OAuth (returns authUrl immediately, completes in background) ──
+
+type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string; account_id?: string };
+let _bgResult: BgOAuthResult = { done: false };
+
+export function startOAuthFlowBackground(configDir: string): { authUrl: string } | { error: string } {
+  const existing = getFlow(configDir);
+  if (existing) {
+    _bgResult = { done: false }; // reset so poll works
+    return { authUrl: existing.authUrl };
+  }
+
+  const verifier  = generateVerifier();
+  const challenge = generateChallenge(verifier);
+  const state     = crypto.randomBytes(16).toString('hex');
+
+  const params = new URLSearchParams({
+    response_type:              'code',
+    client_id:                  CLIENT_ID,
+    redirect_uri:               CALLBACK_URL,
+    scope:                      'openid profile email offline_access',
+    code_challenge:             challenge,
+    code_challenge_method:      'S256',
+    state,
+    id_token_add_organizations: 'true',
+    codex_cli_simplified_flow:  'true',
+    originator:                 'codex_cli_rs',
+  });
+
+  const authUrl = `${AUTH_URL}?${params.toString()}`;
+  setFlow(configDir, { verifier, state, authUrl, createdAt: Date.now() });
+  _bgResult = { done: false };
+
+  // Start callback server in background — do NOT await
+  const server = http.createServer(async (req, res) => {
+    if (!req.url?.startsWith(CALLBACK_PATH)) { res.writeHead(404); res.end(); return; }
+
+    const url           = new URL(req.url, `http://${CALLBACK_HOST}:${CALLBACK_PORT}`);
+    const code          = url.searchParams.get('code');
+    const returnedState = url.searchParams.get('state');
+    const error         = url.searchParams.get('error');
+
+    const fail = (msg: string) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<html><body><h2>${msg}</h2><p>You can close this window.</p></body></html>`);
+      server.close(); clearFlow(configDir);
+      _bgResult = { done: true, success: false, error: msg };
+    };
+
+    if (error || !code) return fail(error || 'No code returned');
+    if (returnedState !== state) return fail('State mismatch — possible CSRF');
+
+    try {
+      const tokenRes = await fetch(TOKEN_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body:    new URLSearchParams({
+          grant_type:    'authorization_code',
+          code,
+          redirect_uri:  CALLBACK_URL,
+          client_id:     CLIENT_ID,
+          code_verifier: verifier,
+        }).toString(),
+      });
+
+      if (!tokenRes.ok) {
+        const txt = await tokenRes.text().catch(() => '');
+        throw new Error(`Token exchange failed (${tokenRes.status}): ${txt.slice(0, 200)}`);
+      }
+
+      const td      = await tokenRes.json() as any;
+      const idToken = td.id_token as string | undefined;
+      if (!idToken) throw new Error('OAuth response missing id_token');
+
+      const apiKey    = await tryExchangeForApiKey(idToken);
+      const claims    = decodeJwtClaims(idToken);
+      const accountId = claims.chatgpt_account_id || claims.sub || undefined;
+
+      const tokens: OAuthTokens = {
+        access_token:  td.access_token,
+        api_key:       apiKey ?? undefined,
+        refresh_token: td.refresh_token,
+        expires_at:    Date.now() + (td.expires_in || 3600) * 1000,
+        account_id:    accountId,
+        id_token:      idToken,
+      };
+
+      saveTokens(configDir, tokens);
+      clearFlow(configDir);
+
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body style="font-family:sans-serif;text-align:center;padding:60px"><h2>✅ Connected to Prometheus!</h2><p>You can close this window and return to the app.</p></body></html>');
+      server.close();
+      _bgResult = { done: true, success: true, account_id: accountId };
+    } catch (err: any) {
+      fail(err.message);
+    }
+  });
+
+  server.on('error', (err: any) => {
+    clearFlow(configDir);
+    _bgResult = { done: true, success: false, error: `Callback server error: ${err.message}` };
+  });
+
+  server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
+    setTimeout(() => {
+      if (!(_bgResult as any).done) {
+        server.close(); clearFlow(configDir);
+        _bgResult = { done: true, success: false, error: 'Timed out waiting for OAuth callback (5 min).' };
+      }
+    }, 5 * 60 * 1000);
+  });
+
+  return { authUrl };
+}
+
+export function pollOAuthBackground(): BgOAuthResult {
+  return _bgResult;
+}
+
 // ─── Manual paste fallback ──────────────────────────────────────────────────────
 
 export async function exchangeManualCodeFromPending(

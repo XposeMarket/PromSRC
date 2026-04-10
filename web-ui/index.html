@@ -3340,13 +3340,20 @@ let _errBackdrop = null;
     if (el) el.textContent = account?.email || '';
   }
 
-  // Run auth boot
-  bootWithAuth().catch(console.error);
+  // Run auth boot — always show login on error rather than silently failing
+  bootWithAuth().catch(err => {
+    console.error('[prometheus auth]', err);
+    mountLoginScreen((acc) => updateAccountDisplay(acc));
+  });
 
-  // Expose logout globally for settings button
+  // Expose logout globally for settings button — always reload even if logout fails
   window.prometheusLogout = async function() {
-    const { logout } = await import('./src/auth/account.js');
-    await logout();
+    try {
+      const { logout } = await import('./src/auth/account.js');
+      await logout();
+    } catch (e) {
+      console.warn('[prometheus] logout error:', e);
+    }
     location.reload();
   };
 

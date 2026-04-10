@@ -50,6 +50,7 @@ import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { setBackgroundAgentDeps } from '../tasks/task-runner';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import { startAuditMaterializer } from '../audit/materializer';
+import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 
 // ─── Deps contract ────────────────────────────────────────────────────────────
 // All singletons that live in server-v2.ts and are needed during startup wiring.
@@ -193,7 +194,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   // CIS Phase 4: Init OAuth connector registry
   try {
     const { initConnectorRegistry } = require('../../integrations/connector-registry.js') as any;
-    initConnectorRegistry(path.join(process.cwd(), '.prometheus'));
+    initConnectorRegistry(getConfig().getConfigDir());
   } catch (e: any) {
     console.warn('[Connectors] Could not init connector registry:', e.message);
   }
@@ -298,27 +299,29 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   }
 
   // Wire repair proposal hook so propose_repair sends Telegram buttons automatically
-  try {
-    const { setRepairProposalHook } = require('../../tools/self-repair.js');
-    setRepairProposalHook((repairId: string) => {
-      const telegramCfg = getConfig().getConfig() as any;
-      const tgEnabled =
-        telegramCfg?.channels?.telegram?.enabled ||
-        telegramCfg?.telegram?.enabled;
-      if (!tgEnabled) return;
-      const allowedIds: number[] =
-        telegramCfg?.channels?.telegram?.allowedUserIds ||
-        telegramCfg?.telegram?.allowedUserIds ||
-        [];
-      for (const userId of allowedIds) {
-        telegramChannel.sendRepairWithButtons(userId, repairId).catch((err: any) =>
-          console.warn('[Telegram] Could not send repair buttons:', err?.message)
-        );
-      }
-    });
-    console.log('[SelfRepair] Telegram button hook wired — propose_repair will send ✅/❌ buttons.');
-  } catch (e: any) {
-    console.warn('[SelfRepair] Could not wire repair proposal hook:', e.message);
+  if (!isPublicDistributionBuild()) {
+    try {
+      const { setRepairProposalHook } = require('../../tools/self-repair.js');
+      setRepairProposalHook((repairId: string) => {
+        const telegramCfg = getConfig().getConfig() as any;
+        const tgEnabled =
+          telegramCfg?.channels?.telegram?.enabled ||
+          telegramCfg?.telegram?.enabled;
+        if (!tgEnabled) return;
+        const allowedIds: number[] =
+          telegramCfg?.channels?.telegram?.allowedUserIds ||
+          telegramCfg?.telegram?.allowedUserIds ||
+          [];
+        for (const userId of allowedIds) {
+          telegramChannel.sendRepairWithButtons(userId, repairId).catch((err: any) =>
+            console.warn('[Telegram] Could not send repair buttons:', err?.message)
+          );
+        }
+      });
+      console.log('[SelfRepair] Telegram button hook wired — propose_repair will send ✅/❌ buttons.');
+    } catch (e: any) {
+      console.warn('[SelfRepair] Could not wire repair proposal hook:', e.message);
+    }
   }
 
   // Wire setDispatchDeps so team-dispatch-runtime has all it needs to run agents

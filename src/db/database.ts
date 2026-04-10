@@ -3,14 +3,21 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { Job, Task, Step, Artifact, Approval, TaskState, JobStatus, TaskStatus } from '../types';
+import { getConfig } from '../config/config';
 
-const DB_PATH = path.join(os.homedir(), '.prometheus', 'jobs.db');
+function getDefaultDatabasePath(): string {
+  try {
+    return getConfig().getDatabasePath();
+  } catch {
+    return path.join(os.homedir(), '.prometheus', 'jobs.db');
+  }
+}
 
 export class JobDatabase {
   private db: Database.Database;
 
   constructor(dbPath?: string) {
-    const resolvedPath = dbPath || DB_PATH;
+    const resolvedPath = dbPath || getDefaultDatabasePath();
     fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
     this.db = new Database(resolvedPath);
     this.db.pragma('foreign_keys = ON');

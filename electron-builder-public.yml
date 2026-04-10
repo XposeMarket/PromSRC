@@ -1,0 +1,60 @@
+appId: com.prometheus.desktop
+productName: Prometheus
+copyright: "Prometheus Desktop"
+
+icon: assets/Prometheus.png
+
+files:
+  - electron/**/*
+  - dist/**/*
+  - generated/public-web-ui/**/*
+  - assets/**/*
+  - node_modules/**/*
+  - package.json
+  - "!src/**/*"
+  - "!web-ui/**/*"
+  - "!workspace/**/*"
+  - "!.prometheus/**/*"
+  - "!teams/**/*"
+  - "!scripts/**/*"
+  - "!dist/**/*.map"
+  - "!dist/**/*.d.ts"
+  - "!dist/**/*.d.ts.map"
+  - "!dist/tools/self-repair.js"
+  - "!dist/tools/self-update.js"
+  - "!dist/tools/source-access.js"
+  - "!node_modules/.cache/**/*"
+  - "!.git/**/*"
+  - "!**/*.log"
+
+extraMetadata:
+  prometheusBuild: public
+
+directories:
+  output: release-public
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: assets/Prometheus.png
+  signAndEditExecutable: false
+  verifyUpdateCodeSignature: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Prometheus
+  deleteAppDataOnUninstall: false
+
+asar: true
+
+extraResources:
+  - from: "generated/bundled-skills"
+    to: "bundled-skills"
+    filter:
+      - "**/*"

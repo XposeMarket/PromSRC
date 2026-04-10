@@ -1,9 +1,9 @@
 {
   "reason": "manual",
-  "timestamp": 1775760327793,
+  "timestamp": 1775804697266,
   "title": "Telegram quick restart",
   "summary": "Quick restart requested from Telegram by user 1799053599.",
-  "previousSessionId": "telegram_1799053599",
+  "previousSessionId": "telegram_1799053599_1775804570778",
   "originChannel": "telegram",
   "respondToTelegram": true,
   "previousTelegramChatId": "1799053599",

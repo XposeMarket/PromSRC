@@ -9,6 +9,7 @@ import { SkillsManager } from './skills-runtime/skills-manager';
 import { getConfig } from '../config/config';
 import { getActivatedToolCategories } from './session';
 import { searchMemoryIndex } from './memory-index/index';
+import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 
 // ─── Intraday notes processor ────────────────────────────────────────────────────
 // Parses raw intraday file content into capped-length entries for context injection.
@@ -364,7 +365,10 @@ RULES: visual-first workflow. Vision screenshots are highest-confidence on dynam
 
   desktop: `DESKTOP: desktop_get_monitors()→monitor indices+bounds. desktop_screenshot()→screen+monitors (capture=all|primary|monitor_index=N). desktop_window_screenshot(name|handle|active)→single app window crop. desktop_click(x,y) (supports monitor_relative+monitor_index). desktop_type/press_key. desktop_scroll/drag. desktop_find_window/focus_window. Clipboard get/set. Screenshot/get_monitors first; focus before click/type. After desktop actions, prefer another screenshot before choosing the next action when UI likely changed.`,
 
-  files: `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
+  files: isPublicDistributionBuild()
+    ? `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
+WORKSPACE ONLY: In the public app, file tools operate on the user workspace and generated app data only. Always read before editing.`
+    : `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
 SRC SURFACES (read-only for all): source_stats|src_stats (src/ file metadata), read_source|list_source|grep_source (src/). webui_source_stats|webui_stats (web-ui/ file metadata), read_webui_source|list_webui_source|grep_webui_source (web-ui/). Write (proposal/code_exec only): find_replace_source|replace_lines_source|insert_after_source|delete_lines_source|write_source for src/; *_webui_source for web-ui/.
 EDIT PRIORITY: 1.find_replace_source (targeted, default) 2.replace_lines_source (non-unique text) 3.insert_after_source (add block) 4.delete_lines_source (remove) 5.write_source (new file/full rewrite). Always read before editing.`,
 
@@ -385,7 +389,9 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   integrations: `INTEGRATIONS: mcp_server_manage(action,...)→MCP lifecycle (list/upsert/import/connect/disconnect/delete/list_tools). webhook_manage(action,...)→webhook settings (enabled/token/path). integration_quick_setup(action,...)→one-shot presets (supabase/github/windows/brave/postgres/sqlite/filesystem/memory).`,
 
-  debug: `DEBUG: read_source(file) for src/ errors, read_webui_source(file) for web-ui/. SELF.md has architecture overview. Read before diagnosing.`,
+  debug: isPublicDistributionBuild()
+    ? `DEBUG: Use workspace files, logs, and visible runtime state to diagnose issues in the public app build.`
+    : `DEBUG: read_source(file) for src/ errors, read_webui_source(file) for web-ui/. SELF.md has architecture overview. Read before diagnosing.`,
 
   agents: `AGENTS: agent_list()→all agents. agent_info(id)→details. spawn_subagent(id, task_prompt, create_if_missing?, run_now?)→run or create a standalone agent. delete_agent(id, confirm:true)→remove.
 RULES: Always agent_list() first. Never spawn to list/inspect — use agent_list(). spawn_subagent is for single-agent delegation — one focused task, one agent, done.`,
@@ -421,7 +427,7 @@ export const CATEGORY_POLICIES: Record<string, string> = {
   desktop: TOOL_BLOCKS.desktop,
   team_ops: `${TOOL_BLOCKS.agents}\n\n${TOOL_BLOCKS.teams}`,
   scheduling: TOOL_BLOCKS.schedule,
-  source_write: `${TOOL_BLOCKS.files}`,
+  ...(isPublicDistributionBuild() ? {} : { source_write: `${TOOL_BLOCKS.files}` }),
   integrations: TOOL_BLOCKS.integrations,
 };
 
@@ -447,8 +453,21 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     searchProviders = ps.join(', ');
   } catch { /* use default */ }
 
-  const menu = `[TOOLS] Core tools loaded (file ops, web, memory, shell, skills via skill_list/skill_read/skill_create, tasks, write_proposal, ask_team_coordinator). Activate additional categories as needed:
-  browser (20 tools) | desktop (26 tools) | team_ops (19 tools) | scheduling (9 tools) | source_write (10 tools) | integrations (5 tools)
+  const runtimeCategoryDefs: Array<[string, string]> = [
+    ['browser', 'browser (20 tools)'],
+    ['desktop', 'desktop (26 tools)'],
+    ['team_ops', 'team_ops (19 tools)'],
+    ['source_write', 'source_write (10 tools)'],
+    ['integrations', 'integrations (5 tools)'],
+  ];
+  const allowedCategoryIds = new Set(getPublicBuildAllowedCategories(runtimeCategoryDefs.map(([id]) => id)));
+  const categoryMenu = runtimeCategoryDefs
+    .filter(([id]) => allowedCategoryIds.has(id))
+    .map(([, label]) => label)
+    .join(' | ');
+
+  const menu = `[TOOLS] Core tools loaded (file ops, web, memory, shell, skills via skill_list/skill_read/skill_create, tasks, schedule_job, switch_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
+  ${categoryMenu}
   Use: request_tool_category('browser') — stays active for the whole session. Full reference: read_file('TOOLS.md')
 
 [SEARCH] Providers: ${searchProviders}.
@@ -472,7 +491,7 @@ Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct
 [MODEL ROUTING] Default: primary model (powerful, for complex work). Call switch_model(tier, reason) EARLY when the task is clearly lighter.
   → 'low' (speed): single command, file read/summary, write_note only, quick lookups.
   → 'medium' (careful): multi-step analysis or structured work that doesn't need full primary model power.
-  → Stay on primary: src/ edits, proposals, deep reasoning, auth/security/build, anything expensive if wrong.
+  → Stay on primary: ${isPublicDistributionBuild() ? 'proposal work, deep reasoning, auth/security/build, anything expensive if wrong.' : 'src/ edits, proposals, deep reasoning, auth/security/build, anything expensive if wrong.'}
   → Mixed intent rule: if a turn contains BOTH memory work (memory_write/write_note) and a separate actionable task, prefer background_spawn for the memory sidecar so primary execution continues in parallel.
   → If you choose not to spawn and you used switch_model for a memory side action, continue executing the user's remaining task in the same turn (do not stop after memory).
   Auto-reverts after turn end — never switch back manually.
@@ -674,7 +693,9 @@ export async function buildPersonalityContext(
 
   // Reference hints — Prom reads these files when actually needed rather than
   // injecting partial snippets based on keyword guesses.
-  const referenceHint = `[REFERENCE_FILES] Architecture/debug context: read_source('SELF.md'). Agent workspace context: read_source('AGENTS.md').`;
+  const referenceHint = isPublicDistributionBuild()
+    ? `[REFERENCE_FILES] Agent workspace context: read_file('AGENTS.md').`
+    : `[REFERENCE_FILES] Architecture/debug context: read_source('SELF.md'). Agent workspace context: read_source('AGENTS.md').`;
 
   const parts = [
     user ? `[USER]\n${user}` : '',

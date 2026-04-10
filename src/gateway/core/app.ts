@@ -11,6 +11,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 
 export function createApp(): express.Application {
   const app = express();
@@ -18,12 +19,14 @@ export function createApp(): express.Application {
   app.use(cors());
   app.use(express.json({ limit: '50mb' }));
 
-  // Serve the web UI from web-ui/
-  const webUiPath = path.join(__dirname, '..', '..', '..', 'web-ui');
+  const root = resolvePrometheusRoot();
+  const webUiPath = isPublicDistributionBuild() && hasPublicWebUiBuild()
+    ? getPublicWebUiRoot()
+    : path.join(root, 'web-ui');
   app.use(express.static(webUiPath));
 
   // Serve shared assets (icons, images, etc.)
-  const assetsPath = path.join(__dirname, '..', '..', '..', 'assets');
+  const assetsPath = path.join(root, 'assets');
   app.use('/assets', express.static(assetsPath));
 
   return app;

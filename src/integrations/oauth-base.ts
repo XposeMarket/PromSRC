@@ -92,7 +92,7 @@ export abstract class OAuthConnector {
 
   private updateConnectionsFile(connected: boolean, accountEmail?: string): void {
     try {
-      const connectionsPath = path.join(process.cwd(), '.prometheus', 'connections.json');
+      const connectionsPath = path.join(this.configDir, 'connections.json');
       let data: Record<string, any> = {};
       if (fs.existsSync(connectionsPath)) {
         data = JSON.parse(fs.readFileSync(connectionsPath, 'utf-8'));

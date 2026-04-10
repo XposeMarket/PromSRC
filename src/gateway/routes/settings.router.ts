@@ -15,6 +15,8 @@ const getProvider = (...args: any[]) => require('../../providers/factory').getPr
 const resetProvider = (...args: any[]) => require('../../providers/factory').resetProvider(...args);
 const buildProviderForLLM = (...args: any[]) => require('../../providers/factory').buildProviderForLLM(...args);
 const startOAuthFlow = (...args: any[]) => require('../../auth/openai-oauth').startOAuthFlow(...args);
+const startOAuthFlowBackground = (...args: any[]) => require('../../auth/openai-oauth').startOAuthFlowBackground(...args);
+const pollOAuthBackground = () => require('../../auth/openai-oauth').pollOAuthBackground();
 const isConnected = (...args: any[]) => require('../../auth/openai-oauth').isConnected(...args);
 const clearTokens = (...args: any[]) => require('../../auth/openai-oauth').clearTokens(...args);
 const loadTokens = (...args: any[]) => require('../../auth/openai-oauth').loadTokens(...args);
@@ -782,18 +784,24 @@ router.get('/api/auth/openai/status', (_req, res) => {
   res.json({ connected, account_id: tokens?.account_id || null, expires_at: tokens?.expires_at || null });
 });
 
-// POST /api/auth/openai/start  — kick off OAuth flow (opens browser)
-router.post('/api/auth/openai/start', async (_req, res) => {
+// POST /api/auth/openai/start  — start OAuth flow, return authUrl immediately (non-blocking)
+// UI opens authUrl via window.open, then polls /api/auth/openai/poll for completion
+router.post('/api/auth/openai/start', (_req, res) => {
   const configDir = CONFIG_DIR_PATH;
   try {
-    const result = await startOAuthFlow(configDir);
-    if (result.needsManualPaste) {
-      res.json({ success: false, needsManualPaste: true, authUrl: result.authUrl });
-    } else {
-      res.json(result);
-    }
+    const result = startOAuthFlowBackground(configDir);
+    res.json(result); // { authUrl } or { error }
   } catch (err: any) {
-    res.json({ success: false, error: err.message });
+    res.json({ error: err.message });
+  }
+});
+
+// GET /api/auth/openai/poll  — check background OAuth completion
+router.get('/api/auth/openai/poll', (_req, res) => {
+  try {
+    res.json(pollOAuthBackground());
+  } catch (err: any) {
+    res.json({ done: false, error: err.message });
   }
 });
 

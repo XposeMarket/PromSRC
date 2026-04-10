@@ -380,6 +380,7 @@ import {
 import { createApp } from '../core/app';
 import { createServer } from '../core/server';
 import { runStartup } from '../core/startup';
+import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 
 
 import {
@@ -691,14 +692,16 @@ async function handleChat(
     'run_command',
     'read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace',
     'list_files', 'list_directory', 'mkdir', 'file_stats', 'grep_file', 'grep_files', 'search_files',
-    'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
-    'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
     'write_note',
     'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
     'task_control',
     'declare_plan', 'complete_plan_step', 'step_complete',
     'request_tool_category',
     'switch_model',
+    ...(!isPublicDistributionBuild() ? [
+      'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
+      'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
+    ] : []),
   ]);
   const tools = isProposalExecutionMode
     ? baseTools.filter((t: any) => {

@@ -1,0 +1,18 @@
+{
+  "id": "auto_restart_manual_1775804718566",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "✅ Quick restart complete.\nAction: Telegram quick restart\nSummary: Quick restart requested from Telegram by user 1799053599.\nBuild: not run\nFiles changed: none\n\nVerify: Confirm gateway booted and Telegram polling resumed.",
+      "timestamp": 1775804718587
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775804718588,
+  "lastActiveAt": 1775804718590,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 69,
+  "contextStartIndex": 0
+}

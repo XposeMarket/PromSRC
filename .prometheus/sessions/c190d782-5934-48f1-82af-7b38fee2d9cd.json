@@ -1,0 +1,18 @@
+{
+  "id": "c190d782-5934-48f1-82af-7b38fee2d9cd",
+  "history": [
+    {
+      "role": "user",
+      "content": "Can you go ahead and tell me and create a visual of every time we've talked about features I want to add to you",
+      "timestamp": 1775778131886
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775778131887,
+  "lastActiveAt": 1775778131893,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 38,
+  "contextStartIndex": 0
+}

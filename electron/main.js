@@ -1,7 +1,7 @@
 /**
  * Prometheus Desktop - Electron Main Process
  *
- * Spawns the Prometheus gateway (tsx src/gateway/server-v2.ts)
+ * Spawns the Prometheus gateway
  * then opens a BrowserWindow pointed at http://127.0.0.1:18789
  *
  * User data is stored in %APPDATA%\Prometheus\ (C:\Users\<n>\AppData\Roaming\Prometheus)
@@ -23,9 +23,27 @@ const fs         = require('fs');
 const GATEWAY_URL  = 'http://127.0.0.1:18789';
 const APP_ROOT     = path.join(__dirname, '..');
 const ICON_PATH    = path.join(APP_ROOT, 'assets', 'Prometheus.png');
-const GATEWAY_ARGS = ['src/gateway/server-v2.ts'];
-const MAX_RETRIES  = 40;
-const RETRY_DELAY  = 500;
+const MAX_RETRIES  = 60;   // 60 × 300ms = 18s max wait
+const RETRY_DELAY  = 300;
+const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
+const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JSON.prometheusBuild || '').trim().toLowerCase() === 'public';
+const IS_PACKAGED_RUNTIME = app.isPackaged;
+
+function getPackagedAppRoot() {
+  return path.join(process.resourcesPath, 'app.asar');
+}
+
+function getGatewayEntryPath() {
+  return IS_PACKAGED_RUNTIME
+    ? path.join(getPackagedAppRoot(), 'dist', 'gateway', 'server-v2.js')
+    : path.join(APP_ROOT, 'src', 'gateway', 'server-v2.ts');
+}
+
+function getGatewayWorkingDirectory() {
+  return IS_PACKAGED_RUNTIME
+    ? process.resourcesPath
+    : APP_ROOT;
+}
 
 // ─── User Data Dir ─────────────────────────────────────────────────────────
 const USER_DATA_DIR = path.join(app.getPath('appData'), 'Prometheus');
@@ -41,6 +59,7 @@ const SETUP_STAMP_FILE = path.join(USER_DATA_DIR, '.setup-complete');
 const CURRENT_VERSION  = require('../package.json').version;
 
 function needsDependencySetup() {
+  if (IS_PACKAGED_RUNTIME) return false;
   try {
     const stamp = fs.readFileSync(SETUP_STAMP_FILE, 'utf-8').trim();
     return stamp !== CURRENT_VERSION;
@@ -198,26 +217,82 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// ─── Port cleanup ──────────────────────────────────────────────────────────
+// On Windows, if the previous gateway process didn't exit cleanly it may still
+// hold port 18789. Kill any LISTENING process on that port before spawning.
+function killPortIfInUse(port) {
+  if (process.platform !== 'win32') return;
+  try {
+    const output = execSync(`netstat -ano | findstr LISTENING | findstr :${port}`, {
+      encoding: 'utf-8', stdio: 'pipe',
+    });
+    const lines = output.trim().split('\n');
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      const pid = parts[parts.length - 1];
+      if (pid && /^\d+$/.test(pid) && pid !== '0' && Number(pid) !== process.pid) {
+        try {
+          execSync(`taskkill /PID ${pid} /F`, { stdio: 'pipe' });
+          console.log(`[Prometheus] Killed stale gateway (PID ${pid}) holding port ${port}`);
+        } catch { /* ignore */ }
+      }
+    }
+  } catch { /* port not in use or netstat unavailable */ }
+}
+
 // ─── Gateway ───────────────────────────────────────────────────────────────
 function startGateway() {
   console.log('[Prometheus] Starting gateway...');
   console.log(`[Prometheus] User data: ${USER_DATA_DIR}`);
+  console.log(`[Prometheus] Packaged runtime: ${IS_PACKAGED_RUNTIME ? 'yes' : 'no'}`);
 
-  const isWin = process.platform === 'win32';
+  // Kill any stale gateway process that may still hold the port from a previous run.
+  // This is synchronous — Windows releases the port almost immediately after kill.
+  killPortIfInUse(18789);
+
+  // Bundled skills path — inside extraResources (outside asar, accessible to Node subprocess)
+  const bundledSkillsDir = IS_PACKAGED_RUNTIME
+    ? path.join(process.resourcesPath, 'bundled-skills')
+    : path.join(APP_ROOT, 'workspace', 'skills');
 
   const gatewayEnv = {
     ...process.env,
-    FORCE_COLOR:              '0',
-    PROMETHEUS_DATA_DIR:      USER_DATA_DIR,
-    PROMETHEUS_WORKSPACE_DIR: path.join(USER_DATA_DIR, 'workspace'),
+    FORCE_COLOR:                  '0',
+    PROMETHEUS_DATA_DIR:          USER_DATA_DIR,
+    PROMETHEUS_WORKSPACE_DIR:     path.join(USER_DATA_DIR, 'workspace'),
+    PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
+    ...(IS_PUBLIC_BUILD ? { PROMETHEUS_PUBLIC_BUILD: '1' } : {}),
   };
 
-  gatewayProcess = spawn('npx', ['tsx', ...GATEWAY_ARGS], {
-    cwd:   APP_ROOT,
-    env:   gatewayEnv,
-    shell: isWin,
-    windowsHide: true,
-  });
+  if (IS_PACKAGED_RUNTIME) {
+    const gatewayEntry = getGatewayEntryPath();
+    gatewayProcess = spawn(process.execPath, [gatewayEntry], {
+      cwd: getGatewayWorkingDirectory(),
+      env: {
+        ...gatewayEnv,
+        ELECTRON_RUN_AS_NODE: '1',
+      },
+      windowsHide: true,
+    });
+  } else {
+    // Use the local tsx binary directly — avoids npx PATH lookup overhead and
+    // the reliability issues npx has on Windows when PATH isn't fully inherited.
+    const isWin = process.platform === 'win32';
+    const tsxBin = path.join(
+      APP_ROOT, 'node_modules', '.bin', isWin ? 'tsx.cmd' : 'tsx'
+    );
+    const tsxExists = fs.existsSync(tsxBin);
+    const [cmd, args] = tsxExists
+      ? [tsxBin, [getGatewayEntryPath()]]
+      : ['npx', ['tsx', getGatewayEntryPath()]];  // fallback
+
+    gatewayProcess = spawn(cmd, args, {
+      cwd:   getGatewayWorkingDirectory(),
+      env:   gatewayEnv,
+      shell: isWin,   // .cmd files need shell on Windows
+      windowsHide: true,
+    });
+  }
 
   gatewayProcess.stdout?.on('data', (d) => process.stdout.write(`[gateway] ${d}`));
   gatewayProcess.stderr?.on('data', (d) => process.stderr.write(`[gateway] ${d}`));
@@ -227,7 +302,7 @@ function startGateway() {
     if (!isQuitting) {
       dialog.showErrorBox(
         'Prometheus — Gateway Error',
-        `Failed to start the Prometheus gateway:\n\n${err.message}\n\nMake sure Node.js and npm dependencies are installed.`
+        `Failed to start the Prometheus gateway:\n\n${err.message}\n\n${IS_PACKAGED_RUNTIME ? 'The packaged runtime could not boot correctly.' : 'Make sure Node.js and npm dependencies are installed.'}`
       );
       app.quit();
     }
@@ -242,17 +317,35 @@ function startGateway() {
 
 function waitForGateway(retries = MAX_RETRIES) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (fn) => { if (!settled) { settled = true; fn(); } };
+
+    // Abort immediately if the gateway process dies before becoming ready.
+    const onProcessExit = (code, signal) => {
+      done(() => reject(new Error(
+        `Gateway process exited before becoming ready (code=${code}, signal=${signal}).\n` +
+        `Check that all dependencies are installed (npm install).`
+      )));
+    };
+    if (gatewayProcess) {
+      gatewayProcess.once('exit', onProcessExit);
+    }
+
     const attempt = () => {
+      if (settled) return;
       http.get(GATEWAY_URL, (res) => {
         res.resume();
-        resolve();
+        if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
+        done(resolve);
       }).on('error', () => {
+        if (settled) return;
         if (retries-- > 0) {
           setTimeout(attempt, RETRY_DELAY);
         } else {
-          reject(new Error(
+          if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
+          done(() => reject(new Error(
             `Gateway did not respond at ${GATEWAY_URL} after ${(MAX_RETRIES * RETRY_DELAY) / 1000}s`
-          ));
+          )));
         }
       });
     };
@@ -357,7 +450,7 @@ function createWindow() {
 app.whenReady().then(async () => {
 
   // ── Step 1: First-run / post-update dependency check ──────────────────
-  if (needsDependencySetup() || getMissingPackages().length > 0) {
+  if (!IS_PACKAGED_RUNTIME && (needsDependencySetup() || getMissingPackages().length > 0)) {
     const setupWin = createSetupWindow();
     await runDependencySetup(setupWin);
     setupWin.close();
@@ -389,6 +482,15 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   if (gatewayProcess && !gatewayProcess.killed) {
-    gatewayProcess.kill();
+    try {
+      // On Windows, TerminateProcess immediately — no graceful drain needed.
+      if (process.platform === 'win32' && gatewayProcess.pid) {
+        execSync(`taskkill /PID ${gatewayProcess.pid} /F /T`, { stdio: 'pipe' });
+      } else {
+        gatewayProcess.kill('SIGKILL');
+      }
+    } catch {
+      gatewayProcess.kill();
+    }
   }
 });

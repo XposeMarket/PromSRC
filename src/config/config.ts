@@ -4,6 +4,8 @@ import os from 'os';
 import { AgentDefinition, PrometheusConfig } from '../types.js';
 import { getVault, scrubSecrets } from '../security/vault.js';
 import { getConfigErrors } from './config-schema.js';
+import { ensurePublicWorkspaceScaffold } from './public-workspace.js';
+import { isPublicDistributionBuild } from '../runtime/distribution.js';
 
 function migrateLegacyDir(legacyDir: string, targetDir: string): void {
   try {
@@ -549,6 +551,10 @@ export class ConfigManager {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
+    }
+
+    if (isPublicDistributionBuild()) {
+      ensurePublicWorkspaceScaffold(this.config.workspace.path);
     }
   }
 

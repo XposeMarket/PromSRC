@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { getConfig } from '../../config/config';
-import { loadPendingRepair, listPendingRepairs, applyApprovedRepair, deletePendingRepair, formatRepairProposal, getRepairButtonPayload } from '../../tools/self-repair';
+import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { getLinkedSession, unlinkTelegramSession, getLastMainSessionId, linkTelegramSession, setSessionChannelHint } from './broadcaster';
 import {
   formatTelegramAiTextFromMarkdown,
@@ -73,6 +73,42 @@ interface PendingChatEntry {
   scheduleId?: string;
   agentName?: string;
   teamName?: string;
+}
+
+function getSelfRepairApi(): null | typeof import('../../tools/self-repair') {
+  if (isPublicDistributionBuild()) return null;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require('../../tools/self-repair.js');
+}
+
+function loadPendingRepairSafe(repairId: string): any | null {
+  return getSelfRepairApi()?.loadPendingRepair(repairId) ?? null;
+}
+
+function listPendingRepairsSafe(): any[] {
+  return getSelfRepairApi()?.listPendingRepairs() ?? [];
+}
+
+async function applyApprovedRepairSafe(repairId: string): Promise<{ success: boolean; message: string }> {
+  const api = getSelfRepairApi();
+  if (!api) {
+    return { success: false, message: 'Self-repair is unavailable in the public distribution build.' };
+  }
+  return api.applyApprovedRepair(repairId);
+}
+
+function deletePendingRepairSafe(repairId: string): boolean {
+  return getSelfRepairApi()?.deletePendingRepair(repairId) ?? false;
+}
+
+function formatRepairProposalSafe(repair: any): string {
+  const api = getSelfRepairApi();
+  return api ? api.formatRepairProposal(repair) : 'Self-repair is unavailable in the public distribution build.';
+}
+
+function getRepairButtonPayloadSafe(repair: any): { text: string } | null {
+  const api = getSelfRepairApi();
+  return api ? api.getRepairButtonPayload(repair) : null;
 }
 
 // ─── Telegram callback_data 64-byte limit workaround ─────────────────────────
@@ -810,12 +846,16 @@ export class TelegramChannel {
    * Called from server-v2 after propose_repair tool completes.
    */
   async sendRepairWithButtons(chatId: number, repairId: string): Promise<void> {
-    const repair = loadPendingRepair(repairId);
+    const repair = loadPendingRepairSafe(repairId);
     if (!repair) {
       await this.sendMessage(chatId, `❌ Repair <code>#${repairId}</code> not found in pending store.`);
       return;
     }
-    const payload = getRepairButtonPayload(repair);
+    const payload = getRepairButtonPayloadSafe(repair);
+    if (!payload) {
+      await this.sendMessage(chatId, '❌ Self-repair is unavailable in this build.');
+      return;
+    }
     // Telegram max message length is 4096 — truncate if needed
     const text = payload.text.slice(0, 3800);
     await this.apiCall('sendMessage', {
@@ -1245,7 +1285,7 @@ export class TelegramChannel {
         await this.sendMessage(chatId,
           `🔧 Applying repair <code>#${repairId}</code>... patching, rebuilding, restarting. Takes 30–60s.`
         );
-        applyApprovedRepair(repairId).then(async (result) => {
+        applyApprovedRepairSafe(repairId).then(async (result) => {
           try {
             // Update the original message to show the outcome
             await this.apiCall('editMessageReplyMarkup', {
@@ -1258,8 +1298,8 @@ export class TelegramChannel {
           try { await this.sendMessage(chatId, `❌ Repair error: ${err.message}`); } catch {}
         });
       } else if (action === 'rj') {
-        const repair = loadPendingRepair(repairId);
-        const deleted = repair ? deletePendingRepair(repairId) : false;
+        const repair = loadPendingRepairSafe(repairId);
+        const deleted = repair ? deletePendingRepairSafe(repairId) : false;
         await this.apiCall('editMessageReplyMarkup', {
           chat_id: chatId, message_id: messageId,
           reply_markup: { inline_keyboard: [[{ text: '\u274c Rejected', callback_data: 'noop' }]] },
@@ -2668,7 +2708,7 @@ export class TelegramChannel {
       const primaryModel = latest.llm?.providers?.[activeProvider]?.model || 'unknown';
       let connections: Record<string, any> = {};
       try {
-        const connPath = path.join(process.cwd(), '.prometheus', 'connections.json');
+        const connPath = path.join(getConfig().getConfigDir(), 'connections.json');
         if (fs.existsSync(connPath)) connections = JSON.parse(fs.readFileSync(connPath, 'utf-8')) || {};
       } catch {}
       const providers = [
@@ -3205,7 +3245,7 @@ export class TelegramChannel {
         const primaryModel = cfg.llm?.providers?.[activeProvider]?.model || 'unknown';
         let connections: Record<string, any> = {};
         try {
-          const connPath = path.join(process.cwd(), '.prometheus', 'connections.json');
+          const connPath = path.join(getConfig().getConfigDir(), 'connections.json');
           if (fs.existsSync(connPath)) connections = JSON.parse(fs.readFileSync(connPath, 'utf-8')) || {};
         } catch {}
         const providers = [
@@ -3424,7 +3464,7 @@ export class TelegramChannel {
 
     // ── /repairs — list pending self-repair proposals ───────────────────────────
     if (text === '/repairs') {
-      const pending = listPendingRepairs();
+      const pending = listPendingRepairsSafe();
       if (pending.length === 0) {
         await this.sendMessage(chatId, '🔥 No pending repairs.');
         return;
@@ -3443,7 +3483,7 @@ export class TelegramChannel {
         await this.sendMessage(chatId, '❌ Usage: /approve &lt;repair-id&gt;\n\nUse /repairs to list pending repairs.');
         return;
       }
-      const repair = loadPendingRepair(repairId);
+      const repair = loadPendingRepairSafe(repairId);
       if (!repair) {
         await this.sendMessage(chatId, `❌ No pending repair found with ID: <code>${repairId}</code>\n\nUse /repairs to list pending repairs.`);
         return;
@@ -3456,7 +3496,7 @@ export class TelegramChannel {
       await this.sendMessage(chatId, `🔧 Applying repair <code>#${repairId}</code>...\n\nPatching <code>${repair.affectedFile}</code>, then rebuilding. This may take 30–60 seconds.`);
 
       // Run in background so Telegram doesn't time out
-      applyApprovedRepair(repairId).then(async (result) => {
+      applyApprovedRepairSafe(repairId).then(async (result) => {
         try {
           await this.sendMessage(chatId, result.message);
         } catch {}
@@ -3475,12 +3515,12 @@ export class TelegramChannel {
         await this.sendMessage(chatId, '❌ Usage: /reject &lt;repair-id&gt;');
         return;
       }
-      const repair = loadPendingRepair(repairId);
+      const repair = loadPendingRepairSafe(repairId);
       if (!repair) {
         await this.sendMessage(chatId, `❌ No repair found with ID: <code>${repairId}</code>.`);
         return;
       }
-      const deleted = deletePendingRepair(repairId);
+      const deleted = deletePendingRepairSafe(repairId);
       await this.sendMessage(chatId, deleted
         ? `🗑️ Repair <code>#${repairId}</code> discarded.\n\n<i>Fixed: ${repair.affectedFile}</i>`
         : `❌ Could not delete repair <code>#${repairId}</code>.`
@@ -3665,12 +3705,12 @@ export class TelegramChannel {
     // ── /repair <id> — show full details of a pending repair ────────────────────
     if (text.startsWith('/repair ')) {
       const repairId = text.slice('/repair '.length).trim();
-      const repair = loadPendingRepair(repairId);
+      const repair = loadPendingRepairSafe(repairId);
       if (!repair) {
         await this.sendMessage(chatId, `❌ No repair found with ID: <code>${repairId}</code>. Use /repairs to list all.`);
         return;
       }
-      await this.sendMessage(chatId, formatRepairProposal(repair));
+      await this.sendMessage(chatId, formatRepairProposalSafe(repair));
       return;
     }
 

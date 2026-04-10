@@ -26,7 +26,7 @@ export interface SubagentDefinition {
   
   // Capabilities
   // Preferred: category-based access — pre-activates full tool categories on the session.
-  // Valid values: 'browser' | 'desktop' | 'team_ops' | 'scheduling' | 'source_write' | 'integrations'
+  // Valid values: 'browser' | 'desktop' | 'team_ops' | 'source_write' | 'integrations'
   // Core tools (file ops, web, shell, memory, send_telegram) are always available regardless.
   // request_tool_category is always available as a last-resort escape hatch.
   allowed_categories?: string[];

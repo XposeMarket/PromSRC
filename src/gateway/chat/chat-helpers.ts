@@ -550,9 +550,9 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
     teams: 'team_ops',
     agents: 'team_ops',
     routing: 'team_ops',
-    schedule: 'scheduling',
     integrations: 'integrations',
     // 'files' → not needed; file tools are core
+    // 'schedule' → not needed; schedule_job is now core
     // 'source_write' requires explicit activation (code editing)
   };
   for (const [detectedCat, toolCat] of Object.entries(catMap)) {

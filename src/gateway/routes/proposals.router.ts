@@ -24,8 +24,28 @@ import {
   setProposalStoreBroadcast,
   type ProposalStatus,
 } from '../proposals/proposal-store.js';
+import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 
 const router = Router();
+
+function proposalTouchesInternalCode(proposal: any): boolean {
+  const affectedFiles = Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [];
+  const touchesSrc = affectedFiles.some((f: any) => {
+    const p = String(f?.path || '').replace(/\\/g, '/').trim();
+    return p.startsWith('src/') || p.startsWith('./src/') || p.includes('/src/');
+  });
+  const touchesWebUi = affectedFiles.some((f: any) => {
+    const p = String(f?.path || '').replace(/\\/g, '/').trim();
+    return p.startsWith('web-ui/') || p.startsWith('./web-ui/') || p.includes('/web-ui/');
+  });
+  return Boolean(
+    proposal?.type === 'src_edit'
+    || proposal?.requiresSrcEdit
+    || proposal?.requiresBuild
+    || touchesSrc
+    || touchesWebUi
+  );
+}
 
 // ── GET /api/proposals ────────────────────────────────────────────────────────
 router.get('/api/proposals', (req: Request, res: Response) => {
@@ -118,6 +138,17 @@ router.patch('/api/proposals/:id', (req: Request, res: Response) => {
 // ── POST /api/proposals/:id/approve ──────────────────────────────────────────
 router.post('/api/proposals/:id/approve', async (req: Request, res: Response) => {
   try {
+    const existing = loadProposal(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Proposal not found' });
+    }
+    if (isPublicDistributionBuild() && proposalTouchesInternalCode(existing)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Internal code proposals are not available in the public distribution build.',
+      });
+    }
+
     const notes = String(req.body?.notes || '').trim() || undefined;
     const proposal = approveProposal(req.params.id, notes);
     if (!proposal) {
@@ -155,6 +186,10 @@ export async function dispatchApprovedProposal(
   proposal: any,
   opts?: { channel?: 'web' | 'telegram'; telegramChatId?: number },
 ): Promise<{ taskId: string; sessionId: string }> {
+  if (isPublicDistributionBuild() && proposalTouchesInternalCode(proposal)) {
+    throw new Error('Internal code proposal execution is disabled in the public distribution build.');
+  }
+
   const { launchBackgroundTaskRunner } = await import('../tasks/task-router.js');
   const { createTask } = await import('../tasks/task-store.js');
   const { markProposalExecuting, markProposalFailed, hasSrcAffectedFiles } = await import('../proposals/proposal-store.js');

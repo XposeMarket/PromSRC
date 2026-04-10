@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { refreshOperationalIndex, searchOperationalLayer, getOperationalRecord } from './operational.js';
+export { getOperationalRecord } from './operational.js';
 
 export type MemoryIndexSourceType =
   | 'chat_session'
@@ -39,6 +41,11 @@ export interface MemorySearchHit {
   title: string;
   preview: string;
   projectId?: string;
+  // Operational layer fields (present when layer === 'operational')
+  layer?: 'operational' | 'evidence';
+  recordType?: string;
+  canonicalKey?: string;
+  whyMatched?: { exactTerms: string[]; entities: string[]; lexical: string[]; recordTypeReason?: string };
 }
 
 export interface MemorySearchResult {
@@ -490,6 +497,8 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: { f
     edges,
   });
   fs.writeFileSync(readme, `# Memory Index\n\nGenerated from workspace/audit.\n\nUpdated: ${nowIso}\nRecords: ${Object.keys(store.records).length}\nChunks: ${Object.keys(store.chunks).length}\nTokens: ${Object.keys(store.tokenIndex).length}\nRelations: ${store.relations.length}\nGraph: graph.json\n`, 'utf-8');
+  // Refresh operational layer alongside evidence rebuild (throttled — max once per 60s)
+  try { refreshOperationalIndex(workspacePath, { minIntervalMs: 60000 }); } catch { /* non-fatal */ }
   return { indexedFiles: indexed, skippedFiles: skipped, removedFiles: removed, deferredFiles: deferred, totalRecords: Object.keys(store.records).length, totalChunks: Object.keys(store.chunks).length, updatedAt: nowIso };
 }
 
@@ -525,19 +534,59 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
     scored.push({ c, r, s });
   }
   scored.sort((a,b) => b.s - a.s || b.r.timestampMs - a.r.timestampMs);
-  const hits: MemorySearchHit[] = []; const seenRec = new Set<string>();
+
+  // ── Layer B: evidence hits ──────────────────────────────────────────────
+  const evidenceHits: MemorySearchHit[] = []; const seenRec = new Set<string>();
   for (const { c, r, s } of scored) {
     if ((mode === 'quick' || mode === 'project') && seenRec.has(r.id)) continue;
     seenRec.add(r.id);
-    hits.push({ rank: hits.length + 1, score: Number(s.toFixed(4)), chunkId: c.id, recordId: r.id, sourceType: r.sourceType, sourcePath: r.sourcePath, timestamp: new Date(r.timestampMs).toISOString(), title: r.title, preview: preview(c.text), projectId: r.projectId });
-    if (hits.length >= limit) break;
+    evidenceHits.push({ rank: 0, score: Number(s.toFixed(4)), chunkId: c.id, recordId: r.id, sourceType: r.sourceType, sourcePath: r.sourcePath, timestamp: new Date(r.timestampMs).toISOString(), title: r.title, preview: preview(c.text), projectId: r.projectId, layer: 'evidence' });
+    if (evidenceHits.length >= limit * 2) break;
   }
-  if (mode === 'timeline') { hits.sort((a,b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)); hits.forEach((h, i) => { h.rank = i + 1; }); }
-  return { query: q, mode, totalCandidates: scored.length, hits, stats: { records: Object.keys(store.records).length, chunks: Object.keys(store.chunks).length, indexedAt: store.updatedAt } };
+
+  // ── Layer A: operational hits (lead results) ────────────────────────────
+  const opLimit = mode === 'deep' ? limit : Math.ceil(limit * 0.6);
+  let opHits: MemorySearchHit[] = [];
+  // Skip operational layer for timeline mode (timeline is evidence-centric)
+  if (mode !== 'timeline' && !sourceSet.size) {
+    try {
+      const opResults = searchOperationalLayer(workspacePath, {
+        query: q, limit: opLimit, projectId: projectId || undefined, recencyBias: mode === 'deep',
+      });
+      opHits = opResults.map(oh => ({
+        rank: 0,
+        score: Number((oh.score * 1.1).toFixed(4)), // 10% boost over evidence
+        chunkId: oh.id,
+        recordId: oh.id,
+        sourceType: (oh.sourceRefs[0]?.sourceType || 'audit_misc') as MemoryIndexSourceType,
+        sourcePath: oh.sourceRefs[0]?.sourcePath || '',
+        timestamp: oh.day ? `${oh.day}T00:00:00.000Z` : new Date(0).toISOString(),
+        title: oh.title,
+        preview: oh.summary,
+        projectId: oh.projectId ?? undefined,
+        layer: 'operational' as const,
+        recordType: oh.recordType,
+        canonicalKey: oh.canonicalKey,
+        whyMatched: oh.whyMatched,
+      }));
+    } catch { /* non-fatal: fall back to evidence only */ }
+  }
+
+  // ── Merge: operational first, then evidence to fill remaining slots ─────
+  const hits: MemorySearchHit[] = [];
+  const seenHitIds = new Set<string>();
+  for (const h of opHits) { if (seenHitIds.has(h.recordId)) continue; seenHitIds.add(h.recordId); hits.push(h); }
+  for (const h of evidenceHits) { if (hits.length >= limit) break; if (seenHitIds.has(h.recordId)) continue; seenHitIds.add(h.recordId); hits.push(h); }
+  hits.sort((a, b) => b.score - a.score);
+  if (mode === 'timeline') { hits.sort((a,b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)); }
+  hits.slice(0, limit).forEach((h, i) => { h.rank = i + 1; });
+  const finalHits = hits.slice(0, limit);
+
+  return { query: q, mode, totalCandidates: scored.length, hits: finalHits, stats: { records: Object.keys(store.records).length, chunks: Object.keys(store.chunks).length, indexedAt: store.updatedAt } };
 }
 
 export function readMemoryRecord(workspacePath: string, recordId: string): { record: any | null; chunks: any[] } {
-  refreshMemoryIndexFromAudit(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
+  setImmediate(() => { try { refreshMemoryIndexFromAudit(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 }); } catch {} });
   const { store: storePath } = idxPaths(workspacePath);
   const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
   const rec = store.records[String(recordId || '').trim()] || null;
@@ -586,7 +635,6 @@ export function getMemoryGraphSnapshot(workspacePath: string): { generatedAt: st
 }
 
 export function getRelatedMemory(workspacePath: string, recordId: string, limit = 8): MemorySearchHit[] {
-  refreshMemoryIndexFromAudit(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
   const { store: storePath } = idxPaths(workspacePath);
   const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
   const base = store.records[String(recordId || '').trim()]; if (!base) return [];
@@ -602,11 +650,14 @@ export function getRelatedMemory(workspacePath: string, recordId: string, limit 
     .map(([rid, score]) => ({ rid, score }))
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.max(1, Math.min(50, limit)));
-  return ranked.map((x, i) => {
+  let rank = 0;
+  return ranked.flatMap((x) => {
     const r = store.records[x.rid];
+    if (!r) return [];
+    rank += 1;
     const c = Object.values(store.chunks).find((k) => k.recordId === x.rid);
-    return {
-      rank: i + 1,
+    return [{
+      rank,
       score: Number(x.score.toFixed(4)),
       chunkId: c?.id || '',
       recordId: r.id,
@@ -616,6 +667,6 @@ export function getRelatedMemory(workspacePath: string, recordId: string, limit 
       title: r.title,
       preview: c ? preview(c.text) : '',
       projectId: r.projectId,
-    };
+    }];
   });
 }

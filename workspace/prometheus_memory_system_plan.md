@@ -1,966 +1,921 @@
-# Prometheus Long-Term Memory System Plan
+# Prometheus Memory System - Final Implementation Plan
 
-## Purpose
-
-This document defines the plan for adding a true long-term memory system to Prometheus. The goal is to move beyond same-day context and create a searchable, structured memory layer that helps Prometheus remember past conversations, project decisions, task history, and user preferences across time.
-
-This system is based on the same general ideas that make Obsidian-style knowledge systems and external AI memory layers useful:
-
-- keep raw history available
-- avoid injecting everything into the prompt
-- retrieve only what matters when needed
-- promote important information into cleaner long-term memory
-- connect notes, sessions, tasks, and facts into a searchable knowledge graph
-
-Prometheus already has part of this system today through intraday notes. This plan expands that into a full archive, indexing, retrieval, and memory-promotion pipeline.
+Prepared for: Prometheus / Codex
+Date: 2026-04-10
+Status: Final planning spec for implementation
+Goal: make `memory_search` reliable enough to function as Prometheus's operational memory, not just archive lookup.
 
 ---
 
-## What Prometheus already has
+## 1. Executive Summary
 
-Prometheus already includes a strong short-horizon memory pattern:
+The current memory index is a useful evidence store, but it is not yet a dependable operational memory system.
 
-- an intraday note feature that creates a note for the current date
-- automatic writing to that note by tasks, background tasks, scheduled tasks, and agents
-- injection of truncated current-day notes into the model each turn
-- shared use of the note system as a scratchpad and continuity layer
+Right now Prometheus indexes audit artifacts mainly as:
+- one record per source file
+- raw text chunks
+- token and embedding-like search features
+- lightweight metadata
+- mostly generic record-to-record links
 
-That means Prometheus already has:
+That works for broad forensic search, but it is weak for questions like:
+- "What did Raul want changed about X?"
+- "What did we decide last time about proposals?"
+- "What project was this tied to?"
+- "What was the final outcome?"
+- "Is this a stable user preference or just a temporary note?"
 
-- same-day continuity
-- operational journaling
-- a shared workspace scratchpad
-- between-session context for the current day
+### Core diagnosis
+The current system indexes documents reasonably well, but not canonical memory units such as:
+- decisions
+- preferences
+- outcomes
+- bugs and fixes
+- proposal lifecycle state
+- project facts
 
-What it does **not** yet have is a true long-term retrieval system for older notes, archived sessions, and historical decisions.
+### Core fix
+Split the memory system into two clearly separated layers:
 
----
+1. Evidence Lake
+   - raw audit mirror
+   - transcripts
+   - tasks
+   - proposals
+   - schedules
+   - notes
+   - project artifacts
+   - full provenance
 
-## What this new memory system is for
+2. Operational Memory
+   - normalized extracted records
+   - canonical decisions, preferences, outcomes, facts, and summaries
+   - deduplicated and ranked for retrieval
+   - linked back to evidence
 
-The new memory system exists to solve problems like:
-
-- “What have we talked about regarding X?”
-- “What decisions did we make about this feature two weeks ago?”
-- “What changed over time on this project?”
-- “What user preferences have shown up repeatedly?”
-- “What happened in previous sessions that matters to this task?”
-- “What did we say, what did we do, and what did we decide?”
-
-In simple terms, this system is for:
-
-- long-horizon recall
-- cross-session continuity
-- cross-source search
-- project memory
-- better reasoning over past work
-- avoiding repeated re-discovery of the same ideas and fixes
-
----
-
-## Design philosophy
-
-The memory system should follow one core rule:
-
-**Preserve broadly, promote selectively, retrieve narrowly, inject minimally.**
-
-That means:
-
-- store and archive a lot
-- turn the most important parts into cleaner memory objects
-- search only when historical context is needed
-- keep always-injected memory small and focused
-
-This is important because injecting too much memory into every prompt causes:
-
-- bloated context
-- stale ideas resurfacing as if they are current
-- contradictions between old and new plans
-- weaker performance for smaller local models
-- higher noise and worse decision-making
-
-So the system should not try to make the model “see everything all the time.” It should make the model able to **find the right things at the right time**.
+`memory_search` should search operational memory first and fall back to evidence only when needed.
 
 ---
 
-## What this is based on
+## 2. What Exists Today
 
-This system is based on proven external-memory patterns used in note-based AI systems and Obsidian-style workflows:
+Based on the current codebase and memory index:
 
-1. **A raw archive exists outside the active prompt**
-   - conversations, notes, logs, and summaries are kept as durable source material
+### Existing strengths
+- Audit mirroring is already strong.
+- Multiple useful source families already exist in `workspace/audit/`.
+- `memory_search`, `memory_read_record`, and graph helpers are already wired into the runtime.
+- The current system already tracks timestamps, source paths, source types, durability, and project IDs in some cases.
 
-2. **Important knowledge is promoted into cleaner memory objects**
-   - summaries, facts, decisions, preferences, open loops
+### Current implementation shape
+The current memory index is implemented around:
+- file-level records
+- chunk-level token index
+- lightweight vector-style term embedding
+- generic relation generation
 
-3. **A retrieval layer sits on top**
-   - the AI searches when it needs long-term context
+The core implementation currently lives in:
+- [index.ts](/D:/Prometheus/src/gateway/memory-index/index.ts)
 
-4. **Always-loaded memory stays small**
-   - current state, current day, stable profile, active work only
+Current record shape is effectively:
+- `id`
+- `sourcePath`
+- `sourceType`
+- `title`
+- `timestampMs`
+- `day`
+- `projectId`
+- `durability`
 
-5. **Relations matter**
-   - sessions, notes, tasks, projects, and entities should be linked so memory becomes navigable and visualizable
+Current relations are mainly:
+- `record_family`
+- `same_project`
+- `shared_terms`
+- `semantic_neighbor`
 
-Prometheus will use this same overall model, but fitted to its own architecture, including:
-
-- intraday notes
-- background tasks
-- scheduled tasks
-- subagents
-- task journals
-- project workspaces
-- small local LLM constraints
-
----
-
-## The 4 memory layers
-
-The system should be designed as four memory layers.
-
-### 1. Live injected context
-
-This is the small set of memory that is directly injected into the model on normal turns.
-
-This should include things like:
-
-- current-day intraday note or a truncated version of it
-- active task state
-- short stable user profile memory
-- short stable project/workspace memory
-- current session state
-
-This layer should stay small.
-
-### 2. Raw archives
-
-This is the full stored historical record.
-
-This should include:
-
-- raw chat sessions
-- raw intraday notes
-- task journals
-- scheduled task logs
-- background task logs
-- manual notes
-- project notes
-- session files
-
-These should be preserved, but not injected every turn.
-
-### 3. Distilled memory
-
-This is the clean promoted memory derived from raw archives.
-
-This should include:
-
-- session summaries
-- daily summaries
-- important decisions
-n- durable facts
-- user preferences
-- open loops / unresolved items
-- project summaries
-- architecture notes
-- recurring workflow rules
-
-This layer is much more useful for retrieval than raw logs.
-
-### 4. Retrieval and relationship index
-
-This is the searchable layer that sits on top of raw and distilled memory.
-
-This layer should support:
-
-- keyword search
-- semantic search using embeddings
-- metadata filtering
-- relationship expansion
-- timeline-style retrieval
-- relevance ranking
-
-This is the part Prometheus queries when it needs to remember something older.
+### Current problems
+1. Record granularity is too file-centric.
+2. Retrieval returns discussion snippets instead of durable answers.
+3. There is not enough typed metadata.
+4. Duplicate mirrored forms pollute ranking.
+5. Graph links are too generic to support reasoning over outcomes.
+6. There is no canonical "final memory object" for a decision, preference, or completed task.
+7. Ranking is not explainable enough for debugging failures.
 
 ---
 
-## Sources Prometheus should index
+## 3. Guiding Principles
 
-The memory system should ingest both operational and conversational sources.
+These principles should govern the rebuild:
 
-### Source types to include
-
-- chat sessions
-- intraday notes
-- background task journals
-- scheduled task logs
-- task completion summaries
-- project notes
-- architecture/design notes
-- user memory notes
-- durable fact records
-- decision records
-- daily summaries
-- session summaries
-
-### Why both chats and notes matter
-
-Chats capture:
-
-- ideas
-- reasoning
-- explanations
-- brainstorming
-- user intent
-- design discussions
-
-Notes and logs capture:
-
-- what actually happened
-- progress
-- execution traces
-- updates across the day
-- task follow-through
-
-Together they give:
-
-- what was said
-- what was done
-- what was decided
-
-That combination is much stronger than either one alone.
+1. Durable answers beat transcript excerpts.
+2. Provenance must never be lost.
+3. Exact identifiers should beat semantic fuzziness.
+4. Canonical records should beat mirrored duplicates.
+5. Deterministic extraction should come before LLM-assisted extraction.
+6. Operational retrieval should be explainable and measurable.
+7. Build this as an extension of the current system, not a replacement of audit mirroring.
 
 ---
 
-## Do files need to be markdown?
+## 4. Target Architecture
 
-No. Files do not need to be markdown.
+## 4.1 Layer A - Evidence Lake
 
-The source-of-truth storage can remain in whatever native format makes sense:
+Keep the current audit-derived index, with only modest cleanup.
 
-- JSON
-- raw transcript format
-- database rows
-- log files
-- markdown notes
+Purpose:
+- preserve raw source material
+- support evidence-grounded follow-up reads
+- maintain traceability
+- remain the fallback search layer
 
-The important thing is that all memory is normalized into a shared internal format for indexing and retrieval.
+Suggested source families:
+- chats/transcripts
+- chats/compactions
+- chats/sessions
+- tasks/state
+- proposals/state
+- schedules/state
+- memory/files
+- memory/root
+- projects/state
+- teams/state
+- system state artifacts
 
-That said, markdown is still very useful for:
+Rules:
+- preserve source fidelity
+- allow chunking
+- allow embeddings / token index
+- do not treat evidence records as the primary answer unit
 
-- human-readable summaries
-- decision notes
-- project memory
-- daily summaries
-- architecture notes
-- note graph visualization
+## 4.2 Layer B - Operational Memory
 
-Recommended split:
+Add a second store containing normalized memory objects extracted from evidence.
 
-- keep raw source files in their original format
-- create normalized summaries and notes in markdown
-- store structured facts and metadata in JSON or database tables
-- store embeddings and chunk references in the memory index/database
+This becomes the main target of `memory_search`.
 
----
-
-## How the system should work at a high level
-
-The memory system should work in two phases:
-
-### Phase A: write and index
-
-Whenever new information is created, Prometheus decides how to archive it, summarize it, and index it.
-
-This happens after:
-
-- a chat session
-- a task run
-- a background task checkpoint
-- a scheduled task run
-- a day rollover
-- a major decision
-- an explicit “remember this” user instruction
-
-### Phase B: search and retrieve
-
-When Prometheus is answering or working on something, it decides whether long-term memory is needed.
-
-If yes, it searches the index, reads the most relevant results, and uses them as evidence/context.
-
-This happens when:
-
-- the user references previous discussions
-- the user asks for all information about a topic
-- a task continues work from previous days/sessions
-- the system needs historical project context
-- a project/design/architecture question likely depends on past decisions
+Purpose:
+- represent the durable memory unit
+- collapse repeated mentions
+- surface final answers before raw discussion
+- support stronger exact matching and entity-aware ranking
 
 ---
 
-## Backend logic in plain English
+## 5. Canonical Operational Record Model
 
-### Step 1: store the raw source
+The system should introduce a strict operational record schema.
 
-When something happens in Prometheus, keep the raw source material.
+### Initial record types
+- `decision`
+- `preference`
+- `project_fact`
+- `task_outcome`
+- `proposal`
+- `bug`
+- `fix`
+- `research_finding`
+- `workflow_rule`
+- `entity_fact`
+- `status_snapshot`
+- `conversation_summary`
+
+### Required shape
+
+```ts
+type OperationalRecordType =
+  | 'decision'
+  | 'preference'
+  | 'project_fact'
+  | 'task_outcome'
+  | 'proposal'
+  | 'bug'
+  | 'fix'
+  | 'research_finding'
+  | 'workflow_rule'
+  | 'entity_fact'
+  | 'status_snapshot'
+  | 'conversation_summary';
+
+interface OperationalMemoryRecord {
+  id: string;
+  canonicalKey: string;
+  recordType: OperationalRecordType;
+
+  title: string;
+  summary: string;
+  body: string;
+
+  createdAt: string;
+  updatedAt: string;
+  day: string;
+
+  sourceRefs: Array<{
+    sourceType: string;
+    sourcePath: string;
+    evidenceRecordId?: string;
+    evidenceChunkId?: string;
+    evidenceSpan?: string;
+    confidence: number;
+  }>;
+
+  entities: {
+    people: string[];
+    projects: string[];
+    features: string[];
+    files: string[];
+    tools: string[];
+    externalSystems: string[];
+    aliases: string[];
+  };
+
+  projectId: string | null;
+  sessionIds: string[];
+  taskIds: string[];
+  proposalIds: string[];
+
+  status?: 'proposed' | 'active' | 'completed' | 'denied' | 'superseded' | 'open' | 'resolved';
+  outcome?: string;
+  owner?: string;
+  subject?: string;
+
+  confidence: number;
+  durability: number;
+  sourceReliability: number;
+  recencyWeightHint: number;
+
+  supersedes: string[];
+  supersededBy: string[];
+  relatedIds: string[];
+
+  exactTerms: string[];
+  tags: string[];
+}
+```
+
+### Important constraint
+`body` must be concise normalized memory prose, not raw transcript dump.
+
+Bad:
+- large excerpts from conversation
+
+Good:
+- "On 2026-04-08 Raul asked Prometheus to update the X posting flow to use the verified inline composer path. Result: posting succeeded and the posting composite was updated to reflect the confirmed flow."
+
+---
+
+## 6. Canonical Keys and Dedup Strategy
+
+This is a major improvement to the original plan and should be treated as foundational.
+
+Every operational record should have a deterministic `canonicalKey`.
 
 Examples:
+- `preference:raul:proposal_quality`
+- `proposal:prop_1774488760222_0c7f91`
+- `task_outcome:68f787a1-7250-440e-a00d-f55584f63b6e`
+- `decision:x_posting_flow:inline_home_composer`
+- `project_fact:smallclaw:x_account_control`
 
-- save the chat transcript
-- save the daily note
-- save the task log
-- save the session file
+### Why this matters
+Without a stable canonical key, dedupe becomes fuzzy and fragile.
 
-This raw source is the evidence layer.
+With a canonical key, the system can:
+- merge repeated sightings into one record
+- append evidence to an existing canonical record
+- update `updatedAt` and status cleanly
+- represent lifecycle changes without duplicating the memory object
 
-### Step 2: normalize it
+### Dedupe rules
 
-Different source types look different. A transcript is not shaped like a note, and a note is not shaped like a log.
+1. Transcript `.jsonl` + `.md` twins
+   - keep both in evidence
+   - create one operational summary / event set
 
-So Prometheus should convert each item into a common internal memory record format.
+2. Proposal lifecycle collapse
+   - merge pending, approved, denied, archived, and discussion references into one canonical proposal record
 
-Each memory record should have fields like:
+3. Task state + transcript + note collapse
+   - merge into one canonical `task_outcome` record per task
 
-- id
-- source type
-- title
-- content
-- date/time
-- workspace/project
-- agent/task/session reference
-- tags/entities
-- related ids
-- priority
-- durability
+4. Repeated preference mentions
+   - merge into the same `preference` record
+   - update `updatedAt`
+   - append evidence
 
-This makes all memory searchable in one unified way.
-
-### Step 3: create cleaner derived memory objects
-
-The raw source is useful, but often noisy.
-
-So Prometheus should also generate cleaner derived memory objects, such as:
-
-- summary of the session
-- summary of the day
-- key decisions made
-- durable user or system facts
-- open loops and unresolved tasks
-- project update notes
-
-This makes retrieval much better later.
-
-### Step 4: split content into chunks
-
-Large files should not be searched only as giant blobs.
-
-Instead, Prometheus should split documents into smaller chunks that are easier to search and rank.
-
-Examples of chunks:
-
-- a section of a summary
-- a single conversation segment
-- a decision block
-- a part of a long daily note
-
-Each chunk should know what it came from.
-
-### Step 5: index for keyword search
-
-Prometheus should create a full-text / keyword search index so exact phrases and terms can be found quickly.
-
-This helps with questions like:
-
-- “find where we mentioned OAuth”
-- “show me the discussion about verification loops”
-- “find all notes mentioning Qwen”
-
-### Step 6: index for semantic search using embeddings
-
-Prometheus should also create embeddings for important chunks.
-
-Embeddings allow semantic search, which means the system can find related meaning even if the exact wording is different.
-
-This helps with questions like:
-
-- “what did we decide about escalation logic?”
-- “show me old discussions related to memory design”
-- “find earlier conversations about this same idea”
-
-### Step 7: create relationships between items
-
-Prometheus should store links between related memory objects.
-
-Examples:
-
-- this summary came from that session
-- this decision belongs to that project
-- this task log is part of that task
-- this note mentions the same entity as those three sessions
-- this fact was extracted from that conversation
-
-This helps with:
-
-- graph visualization
-- follow-up retrieval
-- timeline building
-- connected memory exploration
+5. Decision refinements
+   - use `supersedes` / `supersededBy` where a newer decision replaces an older one
 
 ---
 
-## How indexing should work
+## 7. Storage Layout
 
-Indexing is not just “make embeddings.” It should be a hybrid process.
+Under `workspace/audit/_index/memory/`, move toward a layered layout:
 
-### What the index should contain
+```text
+audit/_index/memory/
+  README.md
+  manifest.json
 
-For each memory item and chunk, the index should store:
+  evidence/
+    records.json
+    chunks.json
+    relations.json
+    token-index.json
+    vectors.json
 
-- the text
-- the source type
-- the source id
-- the date
-- tags/entities
-- project/workspace
-- related records
-- keyword terms
-- embedding vector if applicable
-- ranking priority
+  operational/
+    records.json
+    chunks.json
+    relations.json
+    exact-lookup.json
+    entities.json
+    aliases.json
+    timelines.json
+    token-index.json
+    vectors.json
 
-### What gets indexed most strongly
+  eval/
+    queries.json
+    judgments.json
+    reports/
+```
 
-Highest priority:
+### Practical implementation note
+This does not need to be introduced all at once.
 
-- durable facts
-- decisions
-- summaries
-- project notes
-- architecture notes
-- user preferences
-
-Medium priority:
-
-- daily notes
-- session summaries
-- task logs
-
-Lower priority:
-
-- raw tool chatter
-- repetitive logs
-- noisy execution traces
-
-The system should preserve all raw data, but ranking should prefer the cleaner, more useful memory objects.
+For the first implementation, it is acceptable to:
+- keep the current evidence store mostly intact
+- add a new `operational/` substore beside it
+- preserve compatibility for current memory tools while migrating internals
 
 ---
 
-## How searching should work
+## 8. Ingestion Pipeline
 
-Prometheus should use **hybrid search**, not vector-only search.
+Build ingestion as a deterministic multi-stage pipeline.
 
-### Search methods to combine
+## Stage 1 - Collect Evidence Sources
 
-1. **Keyword / full-text search**
-   - good for exact terms, names, phrases, ids, features
-
-2. **Semantic search with embeddings**
-   - good for related meaning and concept matching
-
-3. **Metadata filtering**
-   - by project, source type, time range, task, workspace, agent, priority
-
-4. **Relationship expansion**
-   - if one result is useful, follow connected results
-
-5. **Recency and source weighting**
-   - newer items and cleaner summaries can rank higher where appropriate
-
-### Why hybrid search matters
-
-Keyword search is best when exact terms matter.
-Semantic search is best when wording changes but the idea is the same.
-Metadata filters help narrow the result set.
-Relationship expansion helps connect the bigger picture.
-
-Using all of them together creates far better memory recall than relying on only one.
-
----
-
-## When Prometheus should search memory
-
-Prometheus should not search long-term memory on every turn.
-
-Instead, memory search should be triggered when historical context is likely useful.
-
-### Good triggers for memory search
-
-- the user says “previously,” “before,” “last week,” “earlier,” or similar
-- the user asks “what did we say about X?”
-- the user asks “tell me everything about X”
-- a task is being resumed from another day/session
-- the project has old decisions that likely matter
-- the current context is insufficient for continuity
-- the model detects likely missing historical context
-
-### Cases where search is probably not needed
-
-- simple present-tense chat
-- brand new brainstorming
-- short questions already answerable from current context
-- tasks that are fully local to the present session
-
-A routing layer should decide between:
-
-- no search
-- light search
-- deep search
-
----
-
-## Search modes Prometheus should support
-
-### 1. Quick memory search
-
-Used for normal recall.
-
-Looks across:
-
-- summaries
-- facts
-- recent notes
-- decisions
-
-Returns a small number of strong candidates.
-
-### 2. Archive search
-
-Used for broad “everything about X” queries.
-
-Looks across:
-
-- chats
-- notes
-- tasks
-- logs
-- summaries
-- decisions
-
-### 3. Project search
-
-Restricted to a specific project, workspace, or topic.
-
-Used when continuity matters inside one domain.
-
-### 4. Timeline search
-
-Returns results in chronological order.
-
-Used for:
-
-- “what changed over time?”
-- “how did this evolve?”
-- “show the history of this topic”
-
-### 5. Related-memory expansion
-
-Starts from one result and pulls linked memory.
-
-Used for:
-
-- connected exploration
-- graph browsing
-- finding neighboring ideas/notes
-
----
-
-## What search results should look like
-
-Search results should not immediately dump giant full documents into the model.
-
-Instead, the memory search should first return compact results such as:
-
-- title
-- source type
-- date
-- short snippet
-- score
-- why it matched
-- related entities
-- reference id/path
-
-Then Prometheus can decide which 1–3 items to read more deeply.
-
-This keeps context usage lower and improves reliability, especially for small models.
-
----
-
-## How injection should work
-
-Injection should stay small.
-
-### What should usually be injected
-
-- current-day note or compact active-day summary
-- active task state
-- current session state
-- short stable user profile memory
-- short stable project/workspace memory
-
-### What should not usually be injected
-
-- all old session files
-- all historical notes
-- raw archives
-- giant logs
-- broad historical memory dumps
-
-Older memory should almost always be retrieval-first, not injection-first.
-
-This means:
-
-- same-day continuity is injected
-- older history is searched when needed
-
----
-
-## How embeddings should be used
-
-Embeddings should be used as part of the retrieval system, not as the entire memory system.
-
-### Embeddings are good for
-
-- finding semantically related ideas
-- retrieving conversations with different wording
-- clustering notes and sessions by theme
-- linking similar memory objects together
-- powering graph relationships and discovery
-
-### Embeddings are not enough on their own
-
-If the system only uses embeddings, it may struggle with:
-
-- exact names
-- code identifiers
-- specific phrases
-- timestamps
-- direct term matching
-
-So embeddings should be combined with keyword and metadata search.
-
-### What should get embeddings first
-
-- session summaries
-- daily summaries
-- decision records
-- durable fact records
-- key sections of raw sessions
-- project notes
-- architecture notes
-
-This is a good first rollout without embedding every noisy raw log line.
-
----
-
-## How memory promotion should work
-
-Not everything should become long-term memory.
-
-Prometheus should selectively promote the most useful information.
-
-### Good candidates for promotion
-
-- user preferences
-- stable project rules
-- architecture decisions
-- important conclusions
-- recurring workflows
-- recurring constraints
-- important fixes and failure lessons
-- open loops that remain unresolved
-- long-running goals
-
-### Things that should usually stay raw/archive only
-
-- repetitive tool logs
-- low-value status chatter
-- temporary brainstorming fragments
-- outdated dead-end ideas
-- noisy background traces with no durable value
-
-This promotion step is what keeps memory high quality over time.
-
----
-
-## Recommended write moments
-
-Prometheus should update memory at predictable points.
-
-### After a chat session
-
-Create or update:
-
-- session archive
-- session summary
-- extracted decisions
-- extracted open loops
-- extracted entities/topics
-- any durable facts if relevant
-
-### During task execution
-
-Append to:
-
-- task journal
-- intraday note
-
-Optionally checkpoint:
-
-- current plan
-- current blockers
-- current progress state
-
-### On task completion
-
-Create:
-
-- task outcome summary
-- fixes/lessons memory
-- project update memory
-
-### On day rollover
-
-Create:
-
-- daily summary
-- important decisions from the day
-- unresolved open loops
-- retained facts worth carrying forward
-
-### On explicit remember instructions
-
-Immediately create:
-
-- durable memory entry
-- preference record
-- rule/fact record
-
----
-
-## Graph and visualization plan
-
-The graph UI should not be a separate fake layer. It should be a real view over the memory index.
-
-### Possible node types
-
-- session
-- note
-- summary
-- task
-- decision
-- fact
-- entity
-- project
-
-### Possible edge types
-
-- derived from
-- belongs to project
-- same task chain
-- same day
-- same entity
-- explicit reference
-- semantic similarity
-- user-linked or system-linked relation
-
-That allows the graph view to become a genuine memory explorer, not just a visual effect.
-
----
-
-## Prometheus-specific runtime behavior
-
-At runtime, the memory system should behave like this:
-
-### When new content is created
-
-1. Store raw source
-2. Normalize it into a shared memory record format
-3. Create summaries/facts/decisions/open loops if needed
-4. Chunk the useful content
-5. Update keyword index
-6. Update embeddings index
-7. Update relationships/graph links
-
-### When the user asks something
-
-1. Check live context first
-2. Decide if long-term memory is needed
-3. Run light or deep memory search
-4. Return top candidates
-5. Read the most relevant full records/chunks
-6. Answer grounded in those retrieved results
-7. Optionally write back new memory if the turn created useful durable knowledge
-
----
-
-## Suggested implementation phases
-
-### Phase 1: raw archive and normalization
-
-Build:
-
-- source ingestion for sessions, notes, and task logs
-- a normalized memory record schema
-- chunking support
-
-Goal:
-
-- unify all memory sources under one model
-
-### Phase 2: derived memory generation
-
-Build:
-
-- session summarizer
-- daily summarizer
-- decision extractor
-- fact extractor
-- open-loop extractor
-
-Goal:
-
-- reduce noise and create high-value memory objects
-
-### Phase 3: hybrid indexing
-
-Build:
-
-- full-text / keyword index
-- embedding index
-- metadata filters
-- ranking / source weighting
-
-Goal:
-
-- make retrieval strong and practical
-
-### Phase 4: retrieval tools
-
-Build tools like:
-
-- search memory
-- read memory record
-- search project memory
-- search timeline
-- get related memory
-
-Goal:
-
-- make long-term memory accessible to the agent
-
-### Phase 5: routing logic
-
-Build:
-
-- memory-search triggers
-- light vs deep search mode
-- retrieval gating
-
-Goal:
-
-- search only when needed
-
-### Phase 6: graph explorer
-
-Build:
-
-- node/edge projection from real memory data
-- filters by source type/project/date
-- clickable notes and sessions
-- cluster exploration
-- drag/zoom/relationship visualization
-
-Goal:
-
-- make memory visually explorable and useful
-
----
-
-## Recommended plain-English technical split
-
-### Raw layer
-
-Stores the original source data.
-
-Examples:
-
+Input families:
 - transcripts
-- logs
-- notes
-- task files
+- session snapshots
+- compactions
+- task state files
+- proposal state files
+- project state files
+- memory root files
+- intraday notes
 
-### Memory-object layer
+Output:
+- evidence documents with normalized source metadata
 
-Stores cleaner derived memory.
+## Stage 2 - Source-Specific Parsers
+
+Each source family gets its own parser.
+
+Initial parser set:
+- `parseChatTranscript()`
+- `parseChatSession()`
+- `parseChatCompaction()`
+- `parseProposalState()`
+- `parseTaskState()`
+- `parseIntradayNotes()`
+- `parseMemoryRoot()`
+- `parseProjectState()`
+
+Each parser should emit:
+1. evidence records
+2. candidate operational events
+
+## Stage 3 - Candidate Event Extraction
 
 Examples:
+- transcript -> decisions, preferences, workflow rules, conversation summaries
+- proposal -> proposal summary, status, approval or denial outcome
+- task state -> task outcome, blocker, completion state
+- notes -> discoveries, findings, outcomes
+- memory root -> stable preferences, identity facts, standing workflow rules
+- project state -> project facts and status snapshots
 
-- summaries
-- decisions
-- facts
-- open loops
-- project notes
+## Stage 4 - Entity Extraction and Normalization
 
-### Index layer
+Extract and normalize:
+- people
+- project names and IDs
+- feature names
+- file paths
+- tool names
+- external systems
+- session IDs
+- task IDs
+- proposal IDs
 
-Stores search-ready chunk and retrieval data.
+## Stage 5 - Alias Resolution
 
-Examples:
+Introduce an explicit alias map.
 
-- keywords
-- embeddings
-- metadata
-- links/relations
+Example:
 
-### Runtime memory layer
+```json
+{
+  "prometheus": ["prom", "smallclaw"],
+  "x.com": ["twitter", "x", "twitter/x"]
+}
+```
 
-Used by the agent during actual work.
+This must be explicit and inspectable, not accidental.
 
-Examples:
+## Stage 6 - Canonicalization and Merge
 
-- injected active context
-- retrieved historical results
-- follow-up reads of top memory hits
+For each candidate operational event:
+- compute `canonicalKey`
+- merge into existing canonical record if present
+- append evidence refs
+- update lifecycle fields
+- resolve supersession where relevant
+
+## Stage 7 - Retrieval Chunking
+
+Operational chunking should be semantic, not just size-based.
+
+Recommended chunk types:
+- title
+- summary
+- body
+- outcome
+
+Most operational records should produce 1 to 3 chunks.
+
+## Stage 8 - Index Build
+
+Build for both evidence and operational layers:
+- lexical token index
+- vector index
+- exact lookup tables
+- entity lookup tables
+- timeline index
+- typed relation graph
 
 ---
 
-## Recommended guiding rules
+## 9. Query Planning
 
-1. Do not inject all memory.
-2. Search older memory only when needed.
-3. Keep raw sources as evidence.
-4. Generate cleaner derived memory for better recall.
-5. Use hybrid search, not vector-only search.
-6. Rank distilled memory above noisy logs.
-7. Let the graph be powered by real relations.
-8. Keep the system friendly to small local models.
-9. Make memory explainable and inspectable.
-10. Treat memory as a pipeline, not a dump.
+`memory_search` should stop being a single naive pass.
+
+It should first classify query intent.
+
+### Query planner outputs
+- exact lookup query
+- entity query
+- time-sensitive query
+- project-scoped query
+- decision query
+- preference query
+- proposal outcome query
+- broad semantic query
+
+### Example mappings
+- "what did we decide about X" -> `decision`
+- "what does Raul prefer" -> `preference`
+- "latest changes to project foo" -> `project_fact` plus recency bias
+- "why did we deny that proposal" -> `proposal`
+- "what happened with task XYZ" -> exact task ID lookup
+
+### Implementation note
+The first query planner does not need to be ML-based.
+Simple deterministic heuristics are better for V1:
+- regexes
+- keyword classes
+- exact ID extraction
+- date phrase detection
+- project/entity hit detection
 
 ---
 
-## Final summary
+## 10. Retrieval Strategy
 
-Prometheus’s new memory system should extend the current intraday note system into a full long-term memory pipeline. Raw sessions, notes, and logs should be preserved as source truth. Cleaner derived memory objects such as summaries, decisions, durable facts, and open loops should be generated from that source material. All of this should be normalized, chunked, indexed with both keyword and embedding search, and linked together through relationships. At runtime, Prometheus should keep active injected memory small, search long-term memory only when historical context is needed, read the most relevant results, and ground its answers or task work in those retrieved records. This gives Prometheus a real searchable memory system instead of an oversized prompt dump.
+Retrieval should become layered and explainable.
+
+### Pass A - Exact Retrieval
+
+Use:
+- proposal IDs
+- task IDs
+- session IDs
+- file paths
+- exact entity names
+- aliases
+- project IDs
+- exact terms from operational records
+
+Exact matches should receive the highest boost.
+
+### Pass B - Operational Lexical Retrieval
+
+Search only operational records using:
+- summary
+- body
+- exact terms
+- entities
+- tags
+
+### Pass C - Operational Semantic Retrieval
+
+Run semantic retrieval across operational chunks.
+
+### Pass D - Score Fusion and Intent Boosting
+
+Combine:
+- exact score
+- lexical score
+- semantic score
+- entity score
+- record type intent fit
+- recency fit
+- durability
+- confidence
+- source reliability
+
+### Pass E - Graph Expansion
+
+Only after strong initial retrieval:
+- expand related candidates through typed edges
+- do not let graph expansion override clearly stronger exact hits
+
+### Pass F - Evidence Fallback
+
+If operational recall is weak:
+- search evidence layer
+- label results clearly as evidence/raw
+- surface provenance strongly
 
 ---
 
-## Immediate next build targets
+## 11. Ranking Formula
 
-1. Define the normalized memory schema.
-2. Connect chat sessions, daily notes, and task logs to a shared archive pipeline.
-3. Add session and daily summarization.
-4. Add decision, fact, and open-loop extraction.
-5. Build hybrid search over those records.
-6. Add retrieval routing into Prometheus runtime.
-7. Use the relationship layer to power the graph explorer.
+Use a transparent weighted score.
 
+```ts
+score =
+  exactMatchBoost +
+  lexicalScore * 0.9 +
+  semanticScore * 0.7 +
+  entityMatchScore * 1.0 +
+  recordTypeIntentScore * 0.8 +
+  recencyScore * queryRecencyWeight +
+  durabilityScore * 0.5 +
+  confidenceScore * 0.4 +
+  sourceReliabilityScore * 0.3 +
+  graphSupportScore * 0.2 -
+  duplicationPenalty -
+  staleSupersededPenalty;
+```
+
+### Required ranking behavior
+1. Exact IDs beat semantic similarity.
+2. Operational records beat evidence by default.
+3. Final outcomes beat intermediate discussion.
+4. Active or resolved records beat superseded ones unless the query asks for history.
+5. Recent records get boosted for time-sensitive queries.
+6. Duplicate siblings should not dominate top results.
+
+---
+
+## 12. Typed Graph Model
+
+The graph needs to be upgraded from generic relation similarity to meaning-bearing links.
+
+### Recommended edge types
+- `same_session`
+- `same_project`
+- `same_task`
+- `same_proposal`
+- `same_entity`
+- `derived_from`
+- `supports`
+- `contradicts`
+- `supersedes`
+- `resolved_by`
+- `implemented_by`
+- `mentioned_with`
+
+### Important sequencing note
+Do not start with full graph complexity.
+The graph upgrade should follow operational canonicalization and retrieval MVP.
+
+---
+
+## 13. Metadata Requirements by Record Type
+
+## decision
+Required:
+- subject
+- decision summary
+- date
+- confidence
+- evidence refs
+
+Optional:
+- why
+- projectId
+- feature refs
+- file refs
+
+## preference
+Required:
+- owner
+- preference statement
+- scope
+- durability
+- evidence refs
+
+## task_outcome
+Required:
+- taskId if known
+- outcome
+- status
+- what changed
+- related files/tools
+- date
+
+## proposal
+Required:
+- proposalId
+- title
+- status
+- summary
+- affected scope
+
+Optional:
+- approval or denial reason
+
+## bug
+Required:
+- symptom
+- summary
+- status
+- related files/features
+
+## fix
+Required:
+- fix summary
+- resolved status
+- related bug or subject
+- related files/features
+
+## research_finding
+Required:
+- finding summary
+- source reliability
+- date
+- topic/entities
+
+---
+
+## 14. Result Contract
+
+The search tool should return ranked explanations, not just snippets.
+
+```ts
+interface MemorySearchResultItem {
+  id: string;
+  layer: 'operational' | 'evidence';
+  recordType?: string;
+  title: string;
+  summary: string;
+  score: number;
+
+  whyMatched: {
+    exactTerms: string[];
+    entities: string[];
+    lexical: string[];
+    semantic: string[];
+    recordTypeReason?: string;
+    recencyReason?: string;
+  };
+
+  metadata: {
+    day: string;
+    projectId: string | null;
+    status?: string;
+    confidence?: number;
+    durability?: number;
+  };
+
+  sourceRefs: Array<{
+    sourcePath: string;
+    sourceType: string;
+  }>;
+}
+```
+
+This makes bad ranking debuggable.
+
+---
+
+## 15. Evaluation Harness
+
+This is mandatory and should be built before aggressive ranking tuning.
+
+Create:
+- `audit/_index/memory/eval/queries.json`
+- `audit/_index/memory/eval/judgments.json`
+- `audit/_index/memory/eval/reports/`
+
+### Eval set scope
+Build 50 to 100 real retrieval prompts Raul actually cares about.
+
+Categories:
+- preferences
+- workflow rules
+- proposal outcomes
+- task outcomes
+- project association
+- bug/fix history
+- exact ID lookups
+- recency questions
+- "last time we discussed"
+- cross-entity questions
+
+### Example eval entry
+
+```json
+{
+  "id": "eval_001",
+  "query": "What did Raul want about proposal quality?",
+  "expectedRecordIds": ["mem_pref_proposal_quality_001"],
+  "acceptableRecordIds": ["mem_rule_proposals_exactness_002"],
+  "notes": "Should retrieve stable preference, not random transcript discussion"
+}
+```
+
+### Metrics
+- Recall@5
+- Recall@10
+- MRR
+- nDCG@10
+- exact-hit rate for ID/entity queries
+- duplicate-rate in top 5
+- operational-vs-evidence hit ratio
+
+### Success targets
+- 85% or better Recall@5 on curated eval set
+- 95% or better exact-hit on exact ID/entity queries
+- less than 10% duplicate rate in top 5
+
+---
+
+## 16. Phased Implementation Plan
+
+This is the recommended build order.
+
+## Phase 1 - Schema and Pipeline Foundation
+
+Build:
+- operational schema types
+- layered store structure
+- source-specific parser framework
+- candidate event extraction
+- exact term extraction
+- alias map support
+- canonical key generation
+
+Deliverable:
+- deterministic operational records generated from transcripts, tasks, proposals, memory roots, notes, and project state
+
+## Phase 2 - Canonicalization and Dedupe
+
+Build:
+- transcript pair collapse
+- proposal lifecycle merger
+- task outcome merger
+- repeated preference merge
+- supersession handling
+
+Deliverable:
+- canonical operational store with merged `sourceRefs`
+
+## Phase 3 - Operational Retrieval MVP
+
+Build:
+- exact lookup tables
+- operational lexical retrieval
+- operational semantic retrieval
+- deterministic query planner
+- layered retrieval flow
+- evidence fallback
+
+Deliverable:
+- new `memory_search` implementation that is operational-first
+
+## Phase 4 - Typed Relations and Related-Memory Expansion
+
+Build:
+- typed relation generation
+- related memory expansion
+- proposal/task/session/entity traversals
+
+Deliverable:
+- meaningful related-memory results
+
+## Phase 5 - Evaluation and Tuning
+
+Build:
+- eval dataset
+- report generation
+- score tuning
+- query planner refinement
+
+Deliverable:
+- measurable retrieval quality report
+
+## Phase 6 - Optional Enhancements
+
+Only after the above is stable:
+- LLM-assisted extraction for weakly structured sources
+- stronger summarization refinement
+- richer contradiction handling
+- incremental background indexing optimization
+
+---
+
+## 17. MVP Scope for Fastest Reliability Upgrade
+
+If the goal is fastest path to a major quality jump, implement this first:
+
+1. Keep the current evidence index.
+2. Add a new operational layer.
+3. Extract only:
+   - `preference`
+   - `decision`
+   - `task_outcome`
+   - `proposal`
+   - `project_fact`
+4. Add entity extraction for:
+   - people
+   - project IDs/names
+   - proposal IDs
+   - task IDs
+   - files
+   - features/tools
+5. Deduplicate transcript `.jsonl` and `.md` pairs.
+6. Change `memory_search` to:
+   - exact lookup first
+   - operational hybrid retrieval second
+   - evidence fallback third
+7. Add 50 eval queries.
+
+That MVP should already produce a large reliability increase.
+
+---
+
+## 18. Implementation Notes for Codex
+
+### Do not do this
+- Do not remove audit mirroring.
+- Do not delete evidence indexing.
+- Do not depend on embeddings alone.
+- Do not treat transcript chunks as the final memory unit.
+- Do not rank `.jsonl` and `.md` twins as separate top answers.
+- Do not introduce LLM extraction before deterministic extraction works.
+
+### Do this
+- Preserve provenance for every operational record.
+- Start with deterministic parsers and merge rules.
+- Add `canonicalKey` before broad dedupe.
+- Keep retrieval scoring explainable.
+- Build evals before tuning.
+- Keep backward compatibility for current tools where possible.
+
+---
+
+## 19. Acceptance Criteria
+
+This plan is successful when:
+
+1. `memory_search` can return a canonical decision, preference, proposal, or task outcome before returning a transcript excerpt.
+2. Exact queries for proposal IDs, task IDs, session IDs, file paths, and project IDs are highly reliable.
+3. Duplicate evidence forms no longer dominate top search results.
+4. Every operational result can point back to evidence.
+5. Retrieval quality is measured by an eval harness and improves against baseline.
+
+---
+
+## 20. Final Recommendation
+
+If there is only one conceptual change to make, it is this:
+
+> Stop treating indexed file chunks as the primary memory object.
+> Start treating normalized decisions, preferences, outcomes, proposal states, and project facts as the primary memory object.
+
+That is the actual fix.
+
+Everything else, including hybrid search, recency behavior, graph traversal, and semantic matching, becomes much more reliable once the memory unit itself is correct.
+
+---
+
+## 21. One-Sentence Handoff
+
+Prometheus already has a strong evidence substrate; the missing step is a canonical operational memory layer that extracts, merges, and ranks durable facts, decisions, preferences, outcomes, and project-linked records above raw transcript chunks.

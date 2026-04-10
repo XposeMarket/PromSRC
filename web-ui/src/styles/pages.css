@@ -1086,17 +1086,18 @@
 
 .memory-detail-drawer {
   position: absolute;
-  top: 116px;
-  right: 20px;
-  bottom: 20px;
+  top: 0;
+  right: 0;
+  bottom: 0;
   width: min(420px, 34%);
   z-index: 8;
   border: 1px solid var(--line);
-  border-radius: 24px;
+  border-right: none;
+  border-radius: 24px 0 0 24px;
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(12px);
-  box-shadow: 0 16px 36px rgba(10, 24, 43, 0.24);
-  padding: 16px;
+  box-shadow: -8px 0 32px rgba(10, 24, 43, 0.18);
+  padding: 20px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1206,9 +1207,7 @@
   background: rgba(22, 104, 227, 0.08);
 }
 
-.memory-detail-meta,
-.memory-detail-summary,
-.memory-detail-chunk {
+.memory-detail-meta {
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--panel);
@@ -1234,24 +1233,58 @@
 }
 
 .memory-detail-summary {
-  font-size: 12px;
-  line-height: 1.7;
+  font-size: 13px;
+  line-height: 1.75;
   color: var(--text);
+  background: rgba(22, 104, 227, 0.06);
+  border: 1px solid rgba(22, 104, 227, 0.18);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.memory-detail-summary p {
+  margin: 0 0 10px;
+}
+
+.memory-detail-summary p:last-child {
+  margin-bottom: 0;
+}
+
+.memory-detail-empty-inline {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
 }
 
 .memory-detail-section-title {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--brand);
+  padding-left: 10px;
+  border-left: 2px solid var(--brand);
+  opacity: 0.72;
 }
 
 .memory-detail-chunk {
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--muted);
-  white-space: pre-wrap;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text);
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: 'Manrope', sans-serif;
+}
+
+.memory-detail-chunk p {
+  margin: 0 0 8px;
+}
+
+.memory-detail-chunk p:last-child {
+  margin-bottom: 0;
 }
 
 .memory-related-list {
@@ -1308,14 +1341,23 @@
   background: rgba(42, 49, 61, 0.82);
 }
 
-:root[data-theme="dark"] .memory-detail-summary,
+:root[data-theme="dark"] .memory-detail-summary {
+  background: rgba(76, 141, 255, 0.09);
+  border-color: rgba(76, 141, 255, 0.22);
+}
+
 :root[data-theme="dark"] .memory-detail-meta,
-:root[data-theme="dark"] .memory-detail-chunk,
 :root[data-theme="dark"] .memory-related-item,
 :root[data-theme="dark"] .memory-control select,
 :root[data-theme="dark"] .memory-action-btn,
 :root[data-theme="dark"] .memory-panel-collapse-btn {
   background: var(--panel);
+}
+
+:root[data-theme="dark"] .memory-detail-chunk {
+  background: rgba(0, 0, 0, 0.22);
+  border-color: var(--line);
+  border-left-color: var(--line-strong);
 }
 /* -- Stop Button ---------------------------------- */
 .send-btn { transition: background 0.15s ease !important; display: flex; align-items: center; justify-content: center; }
@@ -1362,12 +1404,13 @@
     border-radius: 18px;
   }
   .memory-detail-drawer {
-    top: 86px;
+    top: 0;
     left: 10px;
-    right: 10px;
-    bottom: 10px;
+    right: 0;
+    bottom: 0;
     width: auto;
-    border-radius: 18px;
+    border-radius: 18px 0 0 18px;
+    border-right: none;
   }
   .memory-controls-fab {
     right: 14px;
