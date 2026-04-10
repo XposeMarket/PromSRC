@@ -1,3 +1,0 @@
-### [2026-04-08T23:40:29.675Z] assistant
-
-Restart completed cleanly — Prometheus is back up, and the Telegram gateway should be polling again after this quick manual restart. No files changed in this restart; this was just a hot reboot to bring the updated runtime back online. What do you want me to verify next: Telegram message handling, proposal execution flow, or something else?

@@ -1,9 +1,0 @@
-{
-  "heartbeat": {
-    "enabled": false,
-    "intervalMinutes": 30,
-    "activeHoursStart": 8,
-    "activeHoursEnd": 22
-  },
-  "jobs": []
-}
