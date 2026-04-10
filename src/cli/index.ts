@@ -319,10 +319,25 @@ function hasDirtyGitChanges(rootDir: string): boolean {
   return status.stdout.trim().length > 0;
 }
 
+function discardLocalGitChanges(rootDir: string): boolean {
+  const steps: Array<[string, string]> = [
+    ['Discard tracked local changes', 'git reset --hard HEAD'],
+    ['Remove untracked files', 'git clean -fd'],
+  ];
+  for (const [label, cmd] of steps) {
+    if (!runStep(label, cmd, rootDir)) return false;
+  }
+  return true;
+}
+
 function applyGitUpdate(ctx: UpdateContext, force: boolean): boolean {
-  if (!force && hasDirtyGitChanges(ctx.rootDir)) {
-    console.error('[update] Local git changes detected. Commit/stash first or use --force.');
-    return false;
+  const dirty = hasDirtyGitChanges(ctx.rootDir);
+  if (dirty) {
+    if (!force) {
+      console.error('[update] Local git changes detected. Commit/stash first or use --force.');
+      return false;
+    }
+    if (!discardLocalGitChanges(ctx.rootDir)) return false;
   }
 
   const steps: Array<[string, string]> = [

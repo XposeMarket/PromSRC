@@ -347,6 +347,18 @@ export class TelegramChannel {
     }
   }
 
+  private discardLocalGitChanges(root: string): { ok: boolean; error?: string } {
+    const resetRes = this.runShellCapture('git reset --hard HEAD', root, 15000);
+    if (!resetRes.ok) {
+      return { ok: false, error: String(resetRes.stderr || resetRes.stdout || 'git reset --hard HEAD failed.') };
+    }
+    const cleanRes = this.runShellCapture('git clean -fd', root, 15000);
+    if (!cleanRes.ok) {
+      return { ok: false, error: String(cleanRes.stderr || cleanRes.stdout || 'git clean -fd failed.') };
+    }
+    return { ok: true };
+  }
+
   private checkForGitUpdate(): UpdateCheckResult {
     const root = path.resolve(__dirname, '..', '..', '..');
     const gitProbe = this.runShellCapture('git rev-parse --is-inside-work-tree', root, 6000);
@@ -437,8 +449,12 @@ export class TelegramChannel {
 
     const dirty = this.runShellCapture('git status --porcelain', root, 6000);
     if (dirty.ok && dirty.stdout) {
-      await this.sendMessage(chatId, '❌ Update blocked: local git changes detected. Commit/stash changes first.');
-      return;
+      await this.sendMessage(chatId, '⚠️ Local git changes detected. Discarding local tracked/untracked changes before update...');
+      const discardRes = this.discardLocalGitChanges(root);
+      if (!discardRes.ok) {
+        await this.sendMessage(chatId, `❌ Failed to discard local changes.\n\n<code>${String(discardRes.error || '').slice(-1200)}</code>`);
+        return;
+      }
     }
 
     await this.sendMessage(chatId, '🔥 Update confirmed. Running: fetch → pull --ff-only → npm install → npm run build');
@@ -4104,5 +4120,4 @@ export class TelegramChannel {
     return chunks;
   }
 }
-
 
