@@ -60,6 +60,7 @@ workspace/*.py
 workspace/*.sh
 workspace/*.bat
 workspace/*.txt
+workspace/xposemarket-site/
 
 # --- DASHBOARD RUNTIME STATE ---
 ai-dashboard/dashboard-state.json

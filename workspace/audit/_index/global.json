@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-04-10T17:10:12.072Z",
+  "generatedAt": "2026-04-10T17:18:17.668Z",
   "materializer": {
     "intervalMs": 30000,
-    "lastRunAt": 1775841012072,
+    "lastRunAt": 1775841497667,
     "filesMirrored": 1718,
-    "copied": 7,
-    "skipped": 1711,
+    "copied": 1,
+    "skipped": 1717,
     "errors": 0
   },
   "counts": {

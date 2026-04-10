@@ -1,6 +1,6 @@
 # Audit Index
 
-Generated: 2026-04-10T17:10:12.072Z
+Generated: 2026-04-10T17:18:17.668Z
 
 ## Quick Links
 - chats/sessions/
@@ -20,8 +20,8 @@ Generated: 2026-04-10T17:10:12.072Z
 
 ## Current Counts
 - mirrored files: 1718
-- copied this run: 7
-- skipped unchanged: 1711
+- copied this run: 1
+- skipped unchanged: 1717
 - errors: 0
 - tasks: 119
 - proposals: 99
