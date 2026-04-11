@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-04-11T23:25:26.856Z",
+  "generatedAt": "2026-04-11T23:28:02.112Z",
   "nodeCount": 1932,
   "edgeCount": 5000,
   "nodes": [
@@ -18304,16 +18304,6 @@
       "durability": 0.6
     },
     {
-      "id": "rec_e88431ad0a1d0036",
-      "sourceType": "memory_root",
-      "sourcePath": "memory/root/MEMORY.md",
-      "title": "MEMORY.md",
-      "timestamp": "2026-04-10T22:00:17.231Z",
-      "day": "2026-04-10",
-      "projectId": null,
-      "durability": 1
-    },
-    {
       "id": "rec_106e376c0597ab0e",
       "sourceType": "memory_root",
       "sourcePath": "memory/root/SOUL.md",
@@ -19114,16 +19104,6 @@
       "durability": 0.64
     },
     {
-      "id": "rec_c2efd911653bf659",
-      "sourceType": "memory_root",
-      "sourcePath": "memory/root/USER.md",
-      "title": "USER.md",
-      "timestamp": "2026-04-11T18:49:03.459Z",
-      "day": "2026-04-11",
-      "projectId": null,
-      "durability": 1
-    },
-    {
       "id": "rec_83d5016de300c07f",
       "sourceType": "chat_transcript",
       "sourcePath": "chats/transcripts/d56bc2bb-58ee-4db2-a248-9447353b3f55.jsonl",
@@ -19224,16 +19204,6 @@
       "durability": 0.54
     },
     {
-      "id": "rec_8c11f0cac94357c3",
-      "sourceType": "memory_note",
-      "sourcePath": "memory/files/2026-04-11-intraday-notes.md",
-      "title": "2026-04-11-intraday-notes.md",
-      "timestamp": "2026-04-11T00:00:00.000Z",
-      "day": "2026-04-11",
-      "projectId": null,
-      "durability": 0.45
-    },
-    {
       "id": "rec_1b3c8112fb69050b",
       "sourceType": "chat_transcript",
       "sourcePath": "chats/transcripts/db003ae8-a7cb-455d-a210-e303992db7fc.jsonl",
@@ -19298,7 +19268,7 @@
       "sourceType": "chat_transcript",
       "sourcePath": "chats/transcripts/cea69959-7c56-4eaf-a396-9c257e99ce21.jsonl",
       "title": "cea69959-7c56-4eaf-a396-9c257e99ce21.jsonl",
-      "timestamp": "2026-04-11T23:24:28.983Z",
+      "timestamp": "2026-04-11T23:26:18.752Z",
       "day": "2026-04-11",
       "projectId": null,
       "durability": 0.56
@@ -19308,7 +19278,7 @@
       "sourceType": "chat_transcript",
       "sourcePath": "chats/transcripts/cea69959-7c56-4eaf-a396-9c257e99ce21.md",
       "title": "cea69959-7c56-4eaf-a396-9c257e99ce21.md",
-      "timestamp": "2026-04-11T23:24:28.983Z",
+      "timestamp": "2026-04-11T23:26:18.752Z",
       "day": "2026-04-11",
       "projectId": null,
       "durability": 0.56
@@ -19318,10 +19288,40 @@
       "sourceType": "chat_session",
       "sourcePath": "chats/sessions/cea69959-7c56-4eaf-a396-9c257e99ce21.json",
       "title": "cea69959-7c56-4eaf-a396-9c257e99ce21.json",
-      "timestamp": "2026-04-11T23:24:28.985Z",
+      "timestamp": "2026-04-11T23:26:18.753Z",
       "day": "2026-04-11",
       "projectId": null,
       "durability": 0.64
+    },
+    {
+      "id": "rec_e88431ad0a1d0036",
+      "sourceType": "memory_root",
+      "sourcePath": "memory/root/MEMORY.md",
+      "title": "MEMORY.md",
+      "timestamp": "2026-04-11T23:26:58.739Z",
+      "day": "2026-04-11",
+      "projectId": null,
+      "durability": 1
+    },
+    {
+      "id": "rec_c2efd911653bf659",
+      "sourceType": "memory_root",
+      "sourcePath": "memory/root/USER.md",
+      "title": "USER.md",
+      "timestamp": "2026-04-11T23:26:58.723Z",
+      "day": "2026-04-11",
+      "projectId": null,
+      "durability": 1
+    },
+    {
+      "id": "rec_8c11f0cac94357c3",
+      "sourceType": "memory_note",
+      "sourcePath": "memory/files/2026-04-11-intraday-notes.md",
+      "title": "2026-04-11-intraday-notes.md",
+      "timestamp": "2026-04-11T00:00:00.000Z",
+      "day": "2026-04-11",
+      "projectId": null,
+      "durability": 0.45
     }
   ],
   "edges": [

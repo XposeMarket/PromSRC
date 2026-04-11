@@ -32,3 +32,4 @@
 - Spends most time coding and making programs, but built Prometheus so it can increasingly act as a real personal assistant and reduce how much manual coding/admin work is needed. [2026-04-10]
 - Lives in Frederick, Maryland and wants to start Xpose Market lead generation by targeting local small businesses there first. [2026-04-10]
 - Current business priority: rebuild Xpose Market into a client-converting agency website and start generating leads soon. [2026-04-10]
+- As of 2026-04-11, user wants to rebuild the entire team system from scratch and establish three standing teams: Xpose Website Rebuild, Xpose Lead Generation, and a nightly code bug-hunter team. [2026-04-11]

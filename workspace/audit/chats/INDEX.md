@@ -1,13 +1,13 @@
 # Chats Index
 
-Generated: 2026-04-11T23:25:26.597Z
+Generated: 2026-04-11T23:28:31.704Z
 
 - Sessions mirrored: 1384
 - Transcript files: 170
-- Compaction artifacts: 6
+- Compaction artifacts: 8
 
 ## Recent Sessions
-- cea69959-7c56-4eaf-a396-9c257e99ce21 | messages=11 | lastActive=2026-04-11T23:24:28.985Z | summary=no
+- cea69959-7c56-4eaf-a396-9c257e99ce21 | messages=12 | lastActive=2026-04-11T23:28:24.892Z | summary=yes
 - 817e83dd-75d9-43da-b17f-63348db243ee | messages=2 | lastActive=2026-04-11T23:23:32.051Z | summary=no
 - db003ae8-a7cb-455d-a210-e303992db7fc | messages=4 | lastActive=2026-04-11T23:20:55.514Z | summary=no
 - telegram_1799053599 | messages=81 | lastActive=2026-04-11T22:20:17.185Z | summary=yes

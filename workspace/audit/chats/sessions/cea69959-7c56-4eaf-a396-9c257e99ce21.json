@@ -53,19 +53,26 @@
       "timestamp": 1775947969941
     },
     {
+      "role": "assistant",
+      "content": "Error: fetch failed",
+      "timestamp": 1775950104887
+    },
+    {
       "role": "user",
-      "content": "Before continuing: summarize the conversation so far into a compact context note. Include goals, constraints, decisions, and open items in <= 180 words.",
-      "timestamp": 1775949868982
+      "content": "Okay great, I fixed the subagents so now theyre picked with the presets + team specific roles, that was the missing piece, so can we go ahead and get thee teams created now please",
+      "timestamp": 1775949978751
     }
   ],
   "workspace": "D:\\Prometheus\\workspace",
   "channel": "web",
   "createdAt": 1775947103410,
-  "lastActiveAt": 1775949868985,
+  "lastActiveAt": 1775950104892,
   "pendingMemoryFlush": false,
-  "pendingCompaction": true,
-  "contextTokenEstimate": 6167,
-  "contextStartIndex": 0,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 6187,
+  "latestContextSummary": "Error: fetch failed",
+  "contextStartIndex": 10,
+  "contextSummaryUpdatedAt": 1775950104889,
   "activatedToolCategories": [
     "team_ops",
     "browser",
