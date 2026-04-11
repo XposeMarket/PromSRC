@@ -177,7 +177,9 @@ export const PrometheusConfigSchema = z.object({
     proposal_executor_high_risk:   z.string().optional(),
     proposal_executor_low_risk:    z.string().optional(),
     manager:                       z.string().optional(),
+    team_manager:                  z.string().optional(),
     subagent:                      z.string().optional(),
+    team_subagent:                 z.string().optional(),
     background_task:               z.string().optional(),
     // Per-role-type subagent defaults (checked before generic 'subagent' fallback)
     subagent_planner:              z.string().optional(),
@@ -192,6 +194,8 @@ export const PrometheusConfigSchema = z.object({
     switch_model_medium:           z.string().optional(), // careful tier (e.g. "openai_codex/gpt-5.1-codex-mini")
     // Meta-coordinator model for ask_team_coordinator sessions
     coordinator:                   z.string().optional(),
+    // Ephemeral background_spawn agents
+    background_agent:              z.string().optional(),
   }).optional(),
 
   tools: z.object({

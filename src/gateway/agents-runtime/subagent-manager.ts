@@ -31,7 +31,7 @@ export interface SubagentDefinition {
   // request_tool_category is always available as a last-resort escape hatch.
   allowed_categories?: string[];
   // Legacy: individual tool names — still supported but superseded by allowed_categories.
-  allowed_tools: string[];
+  allowed_tools: string[];  // Legacy metadata only. Team dispatch runtime does not restrict by this list.
   forbidden_tools: string[];  // Explicit blacklist
   mcp_servers?: string[];    // Piece 4: MCP server IDs this subagent can use
   
@@ -39,6 +39,10 @@ export interface SubagentDefinition {
   system_instructions: string;    // Detailed personality/rules
   constraints: string[];          // "Do not hallucinate", "Return ONLY facts", etc.
   success_criteria: string;       // "When to stop and return results"
+  roleType?: string;              // Base preset role, e.g. researcher, analyst, operator
+  teamRole?: string;              // Team-specific role title, e.g. Website/SEO Qualifier
+  teamAssignment?: string;        // Team-specific job/mission for this agent
+  baseRolePrompt?: string;        // Original preset prompt used to create this agent
   
   // Metadata
   created_at: number;
@@ -75,6 +79,9 @@ export interface SubagentCallRequest {
     timeout_ms?: number;
     model?: string;
     roleType?: string;          // Set when created from_role — drives model resolution
+    teamRole?: string;
+    teamAssignment?: string;
+    baseRolePrompt?: string;
     is_team_manager?: boolean;  // If true, marks as team manager in config.json
   };
 }
@@ -270,11 +277,14 @@ export class SubagentManager {
       system_instructions: params.system_instructions,
       constraints: params.constraints,
       success_criteria: params.success_criteria,
+      roleType: params.roleType,
+      teamRole: params.teamRole,
+      teamAssignment: params.teamAssignment,
+      baseRolePrompt: params.baseRolePrompt,
       created_at: Date.now(),
       modified_at: Date.now(),
       created_by: 'ai',
       version: '1.0',
-      ...(params.roleType ? { roleType: params.roleType } : {}),
     } as any;
 
     // Persist
@@ -333,6 +343,16 @@ export class SubagentManager {
       `# ${def.name}`,
       ``,
       def.description,
+      ``,
+      `## Base Preset Role`,
+      def.roleType ? `Role: ${def.roleType}` : '(not recorded)',
+      def.baseRolePrompt ? `\nPreset prompt:\n${def.baseRolePrompt}` : '',
+      ``,
+      `## Team-Specific Role`,
+      def.teamRole || '(not recorded)',
+      ``,
+      `## Team-Specific Assignment`,
+      def.teamAssignment || '(not recorded)',
       ``,
       `## Instructions`,
       def.system_instructions,
@@ -437,6 +457,10 @@ export class SubagentManager {
       };
 
       if (opts.isTeamManager) entry.isTeamManager = true;
+      if (def.roleType) entry.roleType = def.roleType;
+      if (def.teamRole) entry.teamRole = def.teamRole;
+      if (def.teamAssignment) entry.teamAssignment = def.teamAssignment;
+      if ((def as any).allowed_categories) entry.allowed_categories = (def as any).allowed_categories;
 
       agents.push(entry);
       configManager.updateConfig({ agents } as any);
@@ -566,10 +590,18 @@ export const subagentSpawnTool = {
             type: 'string',
             description: 'What this subagent does',
           },
+          teamRole: {
+            type: 'string',
+            description: 'Team-specific role title, e.g. "Website/SEO Qualifier" or "Lead Enricher".',
+          },
+          teamAssignment: {
+            type: 'string',
+            description: 'Concrete team-specific mission for this agent. This is persisted into system_prompt.md alongside the base preset role.',
+          },
           allowed_tools: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Tools this subagent can use: web_fetch, browser_*, read_file, etc.',
+            description: 'Legacy metadata only. Prefer allowed_categories; team dispatches no longer restrict runtime access by this list.',
           },
           mcp_servers: {
             type: 'array',
@@ -594,7 +626,7 @@ export const subagentSpawnTool = {
             description: 'Maximum tool calls before stopping (default 20)',
           },
         },
-        required: ['description', 'allowed_tools', 'system_instructions', 'constraints', 'success_criteria'],
+        required: ['description', 'system_instructions', 'constraints', 'success_criteria'],
       },
     },
   },

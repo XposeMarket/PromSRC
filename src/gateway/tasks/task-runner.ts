@@ -12,6 +12,7 @@
 
 import crypto from 'crypto';
 import { getOllamaClient } from '../../agents/ollama-client';
+import { getConfig } from '../../config/config';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -67,6 +68,9 @@ export interface EphemeralBackgroundStatus {
   joinPolicy: BackgroundJoinPolicy;
   timeoutMs: number;
   tags?: string[];
+  providerId?: string;
+  model?: string;
+  modelSource?: string;
   startedAt: number;
   completedAt?: number;
   result?: string;
@@ -406,6 +410,9 @@ type BgHandleChat = (
   modelOverride?: string,
   executionMode?: string,
   toolFilter?: any,
+  attachments?: any,
+  reasoningOptions?: any,
+  providerOverride?: string,
 ) => Promise<string>;
 
 interface EphemeralBgDeps {
@@ -462,6 +469,39 @@ function clampBackgroundTimeoutMs(raw: number | undefined): number {
   return Math.max(500, Math.min(BACKGROUND_WAIT_ALL_CAP_MS, Math.floor(n)));
 }
 
+function resolveBackgroundAgentModelRouting(): { providerId?: string; model?: string; source: string } {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const knownProviders = new Set(['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic']);
+    const defaults = cfg?.agent_model_defaults || {};
+    const ref = String(defaults.background_agent || defaults.background_task || '').trim();
+    if (ref) {
+      const slash = ref.indexOf('/');
+      if (slash > 0) {
+        const providerId = ref.slice(0, slash).trim();
+        const model = ref.slice(slash + 1).trim();
+        if (providerId && model && knownProviders.has(providerId)) {
+          return {
+            providerId,
+            model,
+            source: defaults.background_agent ? 'agent_model_defaults.background_agent' : 'agent_model_defaults.background_task',
+          };
+        }
+      }
+      return { model: ref, source: defaults.background_agent ? 'agent_model_defaults.background_agent' : 'agent_model_defaults.background_task' };
+    }
+
+    const activeProvider = String(cfg?.llm?.provider || '').trim();
+    const activeModel = activeProvider ? String(cfg?.llm?.providers?.[activeProvider]?.model || '').trim() : '';
+    if (activeProvider || activeModel) {
+      return { providerId: activeProvider || undefined, model: activeModel || undefined, source: 'llm.primary' };
+    }
+  } catch {
+    // Fall through to the normal chat router default.
+  }
+  return { source: 'chat_router_default' };
+}
+
 function createBackgroundPrompt(prompt: string): any[] {
   return [
     {
@@ -488,6 +528,10 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       const { handleChat, broadcastWS } = _bgDeps;
       const sessionId = `background_${record.id}`;
       const { spawnerSessionId } = record;
+      const modelRouting = resolveBackgroundAgentModelRouting();
+      record.providerId = modelRouting.providerId;
+      record.model = modelRouting.model;
+      record.modelSource = modelRouting.source;
       const toolCallLog: string[] = [];
 
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
@@ -520,9 +564,12 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           undefined,   // extra
           undefined,   // abortSignal
           `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly.`,
-          undefined,   // modelOverride — use default
+          modelRouting.model,   // modelOverride
           'background_agent',
           undefined,   // toolFilter — full tool access
+          undefined,
+          undefined,
+          modelRouting.providerId,
         );
         // handleChat returns a ChatResult object — extract .text, not the whole object
         const finalText = String((chatResult as any)?.text ?? chatResult ?? '').trim();
@@ -536,7 +583,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         console.log(`[Background Agent] ${record.id} completed`);
 
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'completed', result: record.result, actor: 'Background Agent' });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'completed', result: record.result, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
         }
       } catch (err: any) {
         record.error = String(err?.message || err || 'Background execution failed');
@@ -544,7 +591,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.completedAt = Date.now();
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, actor: 'Background Agent' });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
         }
       }
       return;
@@ -606,6 +653,9 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     joinPolicy: record.joinPolicy,
     timeoutMs: record.timeoutMs,
     tags: record.tags,
+    providerId: record.providerId,
+    model: record.model,
+    modelSource: record.modelSource,
     startedAt: record.startedAt,
   };
 }
@@ -619,6 +669,9 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     joinPolicy: rec.joinPolicy,
     timeoutMs: rec.timeoutMs,
     tags: rec.tags,
+    providerId: rec.providerId,
+    model: rec.model,
+    modelSource: rec.modelSource,
     startedAt: rec.startedAt,
     completedAt: rec.completedAt,
     result: rec.result,

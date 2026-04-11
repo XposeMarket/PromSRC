@@ -23,7 +23,7 @@ export interface ReactorClient {
       system?: string;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low';
+      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
     },
     maxRetries?: number,
   ): Promise<{ response: string; thinking?: string }>;
@@ -35,7 +35,7 @@ export interface ReactorClient {
       temperature?: number;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low';
+      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       tools?: any[];
       model?: string;
     },
@@ -64,7 +64,7 @@ export class ProviderReactorClient implements ReactorClient {
       system?: string;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low';
+      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
     },
     maxRetries: number = 3,
   ): Promise<{ response: string; thinking?: string }> {
@@ -97,7 +97,7 @@ export class ProviderReactorClient implements ReactorClient {
       temperature?: number;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low';
+      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       tools?: any[];
       model?: string;
     },

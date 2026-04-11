@@ -20,6 +20,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { getAgentById } from '../../config/config';
+import type { ManagedTeam } from './managed-teams';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -78,7 +80,7 @@ export function getTeamAgentIdentityPath(teamId: string, agentId: string): strin
 /**
  * Ensures the per-team agent identity directory exists.
  * On first creation, bootstraps identity files from the global subagent workspace
- * (copies system_prompt.md, AGENTS.md, HEARTBEAT.md if they exist).
+ * (copies system_prompt.md, HEARTBEAT.md, and TOOLS.md if they exist).
  * After that, the team-scoped files are independent and can diverge.
  *
  * Returns the identity path.
@@ -98,7 +100,6 @@ export function ensureTeamAgentIdentity(
   // the team was created, or the original copy was a blank template).
   const filesToSync = [
     'system_prompt.md',
-    'AGENTS.md',
     'HEARTBEAT.md',
     'TOOLS.md',
   ];
@@ -197,19 +198,31 @@ export function initTeamMemoryFiles(teamId: string): void {
   const memoryPath = path.join(wsPath, 'memory.json');
   if (!fs.existsSync(memoryPath)) {
     fs.writeFileSync(memoryPath, JSON.stringify({
-      _note: 'Cross-run accumulated knowledge. Add entries here so future runs build on prior work.',
+      _note: 'Cross-run accumulated team knowledge and structured manager/subagent notes.',
       updatedAt: null,
       entries: [],
+      events: [],
+      runSummaries: [],
+      acceptedOutputs: [],
+      decisions: [],
     }, null, 2), 'utf-8');
   }
 
   const lastRunPath = path.join(wsPath, 'last_run.json');
   if (!fs.existsSync(lastRunPath)) {
     fs.writeFileSync(lastRunPath, JSON.stringify({
-      _note: 'What happened in the most recent run. Overwrite this at the end of each run.',
+      _note: 'What happened in the most recent manager run. Overwrite this at the end of each run.',
+      runId: null,
+      timestamp: null,
       runAt: null,
       task: null,
-      summary: null,
+      managerSummary: null,
+      dispatchesMade: [],
+      subagentResults: [],
+      verificationDecisions: [],
+      filesCreatedOrModified: [],
+      writeNotes: [],
+      unresolvedItems: [],
       agentsUsed: [],
     }, null, 2), 'utf-8');
   }
@@ -217,8 +230,12 @@ export function initTeamMemoryFiles(teamId: string): void {
   const pendingPath = path.join(wsPath, 'pending.json');
   if (!fs.existsSync(pendingPath)) {
     fs.writeFileSync(pendingPath, JSON.stringify({
-      _note: 'Things found but not yet acted on. Add items; remove when resolved.',
+      _note: 'Unresolved blockers, incomplete work, follow-up dispatches, questions, and verification failures.',
       items: [],
+      blockers: [],
+      followUpDispatches: [],
+      awaitingMainAgentOrUser: [],
+      verificationFailures: [],
     }, null, 2), 'utf-8');
   }
 }
@@ -226,7 +243,7 @@ export function initTeamMemoryFiles(teamId: string): void {
 export function readTeamMemoryContext(teamId: string): string {
   const wsPath = getTeamWorkspacePath(teamId);
   const parts: string[] = [];
-  for (const filename of ['memory.json', 'last_run.json', 'pending.json'] as const) {
+  for (const filename of ['team_info.md', 'memory.json', 'last_run.json', 'pending.json'] as const) {
     const filePath = path.join(wsPath, filename);
     if (!fs.existsSync(filePath)) continue;
     try {
@@ -235,6 +252,172 @@ export function readTeamMemoryContext(teamId: string): string {
     } catch { /* skip unreadable */ }
   }
   return parts.join('\n\n');
+}
+
+function readTextIfExists(filePath: string, maxChars = 12000): string {
+  try {
+    if (!fs.existsSync(filePath)) return '';
+    return fs.readFileSync(filePath, 'utf-8').trim().slice(0, maxChars);
+  } catch {
+    return '';
+  }
+}
+
+export function buildTeamInfoContent(team: ManagedTeam): string {
+  const wsPath = getTeamWorkspacePath(team.id);
+  const subagentLines = (team.subagentIds || []).map((id) => {
+    const agent = getAgentById(id) as any;
+    const description = String(agent?.description || '').trim() || 'No description recorded.';
+    if (!agent) return `- ${id}: ${description}`;
+
+    const roleType = String(agent.roleType || '').trim() || 'not recorded';
+    const teamRole = String(agent.teamRole || agent.name || '').trim() || 'not recorded';
+    const teamAssignment = String(agent.teamAssignment || agent.description || '').trim() || 'not recorded';
+
+    return [
+      `- ${agent.name || id} (id: ${id}): ${description}`,
+      `  - Base preset: ${roleType}`,
+      `  - Team role: ${teamRole}`,
+      `  - Team assignment: ${teamAssignment}`,
+    ].join('\n');
+  });
+  const contextRefs = Array.isArray(team.contextReferences) ? team.contextReferences : [];
+  const setupCandidates = [
+    path.join(wsPath, 'xpose-lead-gen-setup.md'),
+    path.join(wsPath, 'KICKOFF_SUMMARY.md'),
+    path.join(wsPath, 'README.md'),
+  ];
+  const setupBlocks = setupCandidates
+    .map((p) => ({ name: path.basename(p), content: readTextIfExists(p, 6000) }))
+    .filter((item) => item.content && item.name !== 'README.md');
+
+  return [
+    `# ${team.name} Team Info`,
+    ``,
+    `Team ID: ${team.id}`,
+    `Workspace: ${wsPath}`,
+    ``,
+    `## Enduring Purpose / Mandate`,
+    String((team as any).purpose || team.mission || team.teamContext || team.description || 'Not specified.').trim(),
+    ``,
+    `## Business / Project Context`,
+    String(team.teamContext || team.description || 'Not specified.').trim(),
+    ``,
+    `## What This Team Is For`,
+    String(team.mission || (team as any).purpose || team.teamContext || 'Execute the team mandate using the roster below.').trim(),
+    ``,
+    `## What This Team Should Not Do`,
+    `- Do not start work without an explicit run/start instruction or scheduled trigger.`,
+    `- Do not launch every subagent by default.`,
+    `- Do not write outputs outside the team workspace unless a higher-level Prometheus flow explicitly approves it.`,
+    `- Do not treat subagent results as accepted until the manager verifies them.`,
+    ``,
+    `## Subagent Roster and Role Rationale`,
+    subagentLines.length ? subagentLines.join('\n') : '- No subagents recorded.',
+    ``,
+    `## Operating Style`,
+    `- Dispatch only the agents relevant to the current task.`,
+    `- Check existing files and memory before doing new work.`,
+    `- Verify created/modified files when relevant.`,
+    `- Update memory.json, last_run.json, and pending.json at the end of meaningful runs.`,
+    ``,
+    `## Quality Bar / Definition of Done`,
+    `- Outputs are specific, evidence-backed, and usable by the team owner.`,
+    `- Incomplete, vague, or placeholder subagent outputs are re-dispatched with a specific correction.`,
+    `- [GOAL_COMPLETE] is used only after the current task is substantively complete and team memory files are updated.`,
+    ``,
+    `## Target Outputs`,
+    `- Durable artifacts in this workspace.`,
+    `- Structured run memory in memory.json, last_run.json, and pending.json.`,
+    `- Concise manager status in team chat.`,
+    ``,
+    `## Known Constraints`,
+    `- Team workspace writes should stay under: ${wsPath}`,
+    `- Source writes should be proposal-gated unless a narrow, low-risk path is explicitly allowed by runtime policy.`,
+    ``,
+    `## Useful Memory / Context Discovered During Creation`,
+    contextRefs.length
+      ? contextRefs.map((ref) => `### ${ref.title}\n${ref.content}`).join('\n\n')
+      : 'No context reference cards recorded yet.',
+    ``,
+    `## Important Workspace Files`,
+    `- team_info.md: durable team mandate and operating context.`,
+    `- memory.json: cumulative team knowledge and structured note events.`,
+    `- last_run.json: latest manager-run summary and verification decisions.`,
+    `- pending.json: unresolved blockers, follow-ups, and questions.`,
+    setupBlocks.length ? `\n## Migrated Setup Material\n${setupBlocks.map((b) => `### ${b.name}\n${b.content}`).join('\n\n')}` : '',
+    ``,
+  ].filter((part) => part !== '').join('\n');
+}
+
+export function ensureTeamInfoFile(team: ManagedTeam): string {
+  const wsPath = ensureTeamWorkspace(team.id);
+  const teamInfoPath = path.join(wsPath, 'team_info.md');
+  if (!fs.existsSync(teamInfoPath)) {
+    fs.writeFileSync(teamInfoPath, buildTeamInfoContent(team), 'utf-8');
+  }
+  return teamInfoPath;
+}
+
+export function initTeamWorkspaceArtifacts(team: ManagedTeam): void {
+  ensureTeamWorkspace(team.id);
+  initTeamMemoryFiles(team.id);
+  ensureTeamInfoFile(team);
+}
+
+function safeJsonRead(filePath: string, fallback: any): any {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function safeJsonWrite(filePath: string, value: any): void {
+  const tmp = `${filePath}.tmp-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf-8');
+  fs.renameSync(tmp, filePath);
+}
+
+export function appendTeamMemoryEvent(
+  teamId: string,
+  event: {
+    authorType: 'manager' | 'subagent' | 'system';
+    authorId: string;
+    taskId?: string | null;
+    tag?: string;
+    content: string;
+    timestamp?: string;
+  },
+): boolean {
+  try {
+    initTeamMemoryFiles(teamId);
+    const filePath = path.join(getTeamWorkspacePath(teamId), 'memory.json');
+    const memory = safeJsonRead(filePath, {
+      _note: 'Cross-run accumulated team knowledge and structured manager/subagent notes.',
+      updatedAt: null,
+      entries: [],
+      events: [],
+    });
+    const timestamp = event.timestamp || new Date().toISOString();
+    const record = {
+      timestamp,
+      authorType: event.authorType,
+      authorId: event.authorId,
+      taskId: event.taskId || undefined,
+      tag: event.tag || undefined,
+      content: String(event.content || '').slice(0, 4000),
+    };
+    memory.updatedAt = timestamp;
+    memory.events = Array.isArray(memory.events) ? [...memory.events, record].slice(-500) : [record];
+    memory.entries = Array.isArray(memory.entries) ? memory.entries : [];
+    safeJsonWrite(filePath, memory);
+    return true;
+  } catch (err: any) {
+    console.warn(`[TeamWorkspace] appendTeamMemoryEvent failed for ${teamId}: ${err?.message || err}`);
+    return false;
+  }
 }
 
 export function ensureTeamWorkspace(teamId: string): string {

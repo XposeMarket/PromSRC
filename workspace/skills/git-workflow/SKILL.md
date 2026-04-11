@@ -133,6 +133,55 @@ git reflog                        # Full HEAD history (recovery lifeline)
 
 ---
 
+## Prometheus-Specific Git Patterns
+
+### Repository Structure
+- **Main repo root**: `D:\Prometheus` (Windows) / `/d/Prometheus` (bash)
+- **Submodule**: `workspace/xposemarket-site` (a separate git repository tracked as mode 160000)
+- Only one `.git` directory at the root level
+
+### Working with Submodules
+
+Initialize submodules after cloning:
+```bash
+git submodule status                    # Check submodule state
+git submodule update --init --recursive # Initialize/pull all submodules
+```
+
+**For main Prometheus repo**:
+```bash
+# Direct commands work from root
+git status
+git log --oneline -5
+git branch --show-current
+```
+
+**For submodule (`workspace/xposemarket-site`)**:
+⚠️ **NEVER** use just `xposemarket-site` — always use the full relative path:
+
+```bash
+# ✅ CORRECT - use full path from project root
+cd workspace/xposemarket-site && git status
+git -C workspace/xposemarket-site status
+
+# ❌ WRONG - this will fail with "path not found"
+cd xposemarket-site && git status
+```
+
+### Recommended Pattern for Scripts & Tools
+Use `git -C` to run commands in subdirectories without changing directories. This is more reliable in automated contexts:
+
+```bash
+git -C workspace/xposemarket-site status --short
+git -C workspace/xposemarket-site log --oneline -5
+git -C workspace/xposemarket-site branch --show-current
+git -C workspace/xposemarket-site remote -v
+```
+
+**Why `git -C`**: Avoids directory state persistence issues, works consistently on Windows and Unix, and is ideal for tools and run_command operations.
+
+---
+
 ## Common Prometheus Workflows
 
 ### Save and push work
@@ -159,6 +208,13 @@ git rebase origin/main
 git push --force-with-lease
 ```
 
+### Check submodule status
+```bash
+# From project root
+git -C workspace/xposemarket-site status
+git -C workspace/xposemarket-site log --oneline -5
+```
+
 ---
 
 ## Safety Rules
@@ -168,3 +224,4 @@ git push --force-with-lease
 - ✅ Always `git status` before committing
 - ❌ Never commit API keys, secrets, or .env files
 - ✅ When unsure about destructive ops, stash or create a backup branch first
+- ⚠️ **Submodules**: Always use full path `workspace/xposemarket-site` — relative `cd` commands fail in tools

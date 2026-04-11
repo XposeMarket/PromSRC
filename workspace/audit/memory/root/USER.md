@@ -23,7 +23,8 @@
 - Reconfirmed strongly on 2026-03-27: user wants conversational turns to avoid unnecessary tool calls and gets frustrated when tools are called for casual chat; respond directly unless explicit execution is requested. [2026-03-27]
 - For Xpose Market positioning and lead-gen messaging, prefers targeting local businesses without explicitly naming Frederick, Maryland. [2026-04-10]
 - On Xpose Market website work, user wants implementation to begin directly once alignment is clear, with brief confirmations before action when requested (e.g. tool availability checks). [2026-04-10]
-
+- When repo/file state is in question, Raul prefers direct verification and continuation over speculative back-and-forth; verify the real state, then either continue the work or attach the directory to the repo. [2026-04-10]
+- For lead-searching workflows, user wants a full browser-driven process using live business listings (e.g. Google Maps), website/SEO analysis, and deterministic qualification — not generic web-search-only research. User also wants all collected evidence/data saved to workspace files during execution so nothing is lost, and wants this captured as a reusable skill. [2026-04-11]
 ## projects
 - Created a company called Xpose Market, a marketing/website creation agency intended to sell programs, websites, and related services. Wants to start actually generating exposure and leads for it. [2026-04-10]
 - Is also a day trader and wants help developing that side as well, especially around emotional pressure during trading. [2026-04-10]

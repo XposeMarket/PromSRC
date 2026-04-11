@@ -1,0 +1,2 @@
+{"timestamp":1775923712851,"timestampIso":"2026-04-11T16:08:32.851Z","sessionId":"d9153c8b-862f-4070-b03f-aae2c3122f78","role":"user","synthetic":false,"content":"hey prom"}
+{"timestamp":1775923777468,"timestampIso":"2026-04-11T16:09:37.468Z","sessionId":"d9153c8b-862f-4070-b03f-aae2c3122f78","role":"assistant","synthetic":false,"content":"Error: fetch failed"}

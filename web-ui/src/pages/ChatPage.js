@@ -824,14 +824,25 @@ function renderChatMessages() {
       ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
           ${window.currentProgressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
         </div>`
-      : '';
-    container.innerHTML += `
+	      : '';
+	    const streamingThinkingHtml = window.streamingThinkingText
+	      ? `<div class="think-block live-think-block">
+	          <button class="think-toggle open" type="button">
+	            <span class="think-icon">...</span>
+	            <span>Thought process</span>
+	            <span style="margin-left:auto;opacity:0.5">streaming</span>
+	          </button>
+	          <div class="think-content live" id="streaming-thinking-content">${escHtml(window.streamingThinkingText)}</div>
+	        </div>`
+	      : '';
+	    container.innerHTML += `
       <div class="msg ai" id="thinking-msg">
         <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
         <div class="msg-body">
           <div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>
           ${window.currentPreflightStatus ? `<div class="msg-content" style="margin-bottom:6px;color:#26487e">${escHtml(window.currentPreflightStatus)}</div>` : ''}
-          ${progressHtml}
+	          ${progressHtml}
+	          ${streamingThinkingHtml}
           ${window.streamingAIText
             ? `<div id="streaming-text-content" style="font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word">${escHtml(window.streamingAIText)}</div>`
             : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`
@@ -1261,10 +1272,11 @@ async function sendChat(queuedMessage = null) {
     input.value = '';
     input.style.height = 'auto';
   }
-  window.isThinking = true;
-  window.streamingSessionId = window.activeChatSessionId; // lock bubble to this session
-  window.streamingAIText = ''; // reset token stream buffer
-  setButtonState(true);
+	  window.isThinking = true;
+	  window.streamingSessionId = window.activeChatSessionId; // lock bubble to this session
+	  window.streamingAIText = ''; // reset token stream buffer
+	  window.streamingThinkingText = ''; // reset visible reasoning/thinking stream
+	  setButtonState(true);
   window.currentPreflightStatus = '';
   window.currentProgressLines = [];
   window.runtimeProgressState = { source: 'none', activeIndex: -1, items: [] };
@@ -1386,10 +1398,24 @@ async function sendChat(queuedMessage = null) {
                 }
               }
             }
-            break;
-          }
+	            break;
+	          }
+	
+	          case 'thinking_delta': {
+	            const chunk = String(event.thinking || event.text || '');
+	            if (chunk) {
+	              window.streamingThinkingText = (window.streamingThinkingText || '') + chunk;
+	              const thinkingEl = document.getElementById('streaming-thinking-content');
+	              if (thinkingEl) {
+	                thinkingEl.textContent += chunk;
+	              } else if (window.isThinking) {
+	                renderChatMessages();
+	              }
+	            }
+	            break;
+	          }
 
-          case 'agent_thought': {
+	          case 'agent_thought': {
             const thoughtText = String(event.text || '').trim();
             if (thoughtText) {
               addProcessEntry('think', thoughtText);
@@ -1791,12 +1817,13 @@ async function sendChat(queuedMessage = null) {
             break;
           }
 
-          case 'done':
-            finalReply = event.reply || '';
-            if (finalReply) partialContent = finalReply;
-            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
-            window.activeModelBadge = null; // clear badge when turn completes
-            break;
+	          case 'done':
+	            finalReply = event.reply || '';
+	            if (finalReply) partialContent = finalReply;
+	            if (event.thinking) collectTurnThinking(event.thinking);
+	            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
+	            window.activeModelBadge = null; // clear badge when turn completes
+	            break;
 
           case 'turn_execution_created':
           case 'turn_execution_updated':
@@ -1807,8 +1834,8 @@ async function sendChat(queuedMessage = null) {
 
     if (finalReply) {
       const finalStep = allSteps.find(s => s.finalAnswer);
-      const mergedThinking = turnThinkingBuffer.join('\n\n').trim();
-      const shouldAttachThinkingPanel = sawExecuteModeThisTurn || sawToolActivityThisTurn;
+	      const mergedThinking = (window.streamingThinkingText || turnThinkingBuffer.join('\n\n')).trim();
+	      const shouldAttachThinkingPanel = sawExecuteModeThisTurn || sawToolActivityThisTurn;
       const turnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
       window.chatHistory.push({
         role: 'ai',
@@ -1817,7 +1844,7 @@ async function sendChat(queuedMessage = null) {
         canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
         steps: allSteps,
         mode: window.useAgentMode ? 'agentic' : 'chat',
-        thinking: shouldAttachThinkingPanel ? (mergedThinking || finalStep?.thinking) : '',
+	        thinking: (mergedThinking || shouldAttachThinkingPanel) ? (mergedThinking || finalStep?.thinking || '') : '',
         processEntries: turnEntries
       });
     } else {
@@ -3153,6 +3180,11 @@ wsEventBus.on('agent_paused', (msg) => {
 // the last AI message as a proper inner panel so it's visible to the user.
 wsEventBus.on('bg_agent_done', (msg) => {
   if (msg.state !== 'completed' || !msg.result) return;
+  if (window.isThinking) {
+    addProcessEntry('info', `Background Agent ${msg.bgId}: result ready; merging into final reply.`, { actor: 'Background Agent' });
+    renderProcessLog();
+    return;
+  }
   // Only inject into the currently active session's history
   const activeSession = window.chatSessions?.find(s => s.id === window.activeChatSessionId);
   if (!activeSession) return;

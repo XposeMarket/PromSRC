@@ -1,0 +1,15 @@
+{
+  "_note": "What happened in the most recent manager run. Overwrite this at the end of each run.",
+  "runId": null,
+  "timestamp": null,
+  "runAt": null,
+  "task": null,
+  "managerSummary": null,
+  "dispatchesMade": [],
+  "subagentResults": [],
+  "verificationDecisions": [],
+  "filesCreatedOrModified": [],
+  "writeNotes": [],
+  "unresolvedItems": [],
+  "agentsUsed": []
+}

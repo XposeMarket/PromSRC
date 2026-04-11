@@ -573,6 +573,24 @@ export async function buildPersonalityContext(
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
   }
+  // ── Path T: team subagents — lean prompt, team memory only ─────────────────
+  if (executionMode === 'team_subagent') {
+    const activatedCatsTeam = getActivatedToolCategories(sessionId);
+    if (extraCats) {
+      for (const ec of extraCats) {
+        if (ec === 'browser_vision' || ec === 'browser') activatedCatsTeam.add('browser');
+        else activatedCatsTeam.add(ec);
+      }
+    }
+    const parts = [
+      buildToolsContext(activatedCatsTeam),
+    ].filter(Boolean);
+    const skillCtx = skillsManager.buildTurnContext(messageText);
+    if (skillCtx) parts.push(skillCtx);
+    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+  }
+
   // ── Path B: autonomous execution — full prompt, no changes ─────────────────
   const isAutonomous = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'cron' || executionMode === 'heartbeat';
   if (isAutonomous) {

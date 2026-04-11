@@ -136,6 +136,13 @@ export interface TaskRecord {
   subagentProfile?: SubagentProfile; // restricts tool access for this child task
   agentWorkspace?: string;           // absolute workspace path Ã¢â‚¬â€ scopes ALL file tool access for this task
 
+  teamSubagent?: {
+    teamId: string;
+    agentId: string;
+    agentName?: string;
+    callerContext?: string;
+  };
+
   status: TaskStatus;
   pauseReason?: PauseReason;
 
@@ -294,6 +301,12 @@ export function createTask(params: {
   parentTaskId?: string;
   subagentProfile?: string;
   agentWorkspace?: string;   // locks file tools to this path for the task's lifetime
+  teamSubagent?: {
+    teamId: string;
+    agentId: string;
+    agentName?: string;
+    callerContext?: string;
+  };
   onResumeInstruction?: string;
   // Schedule fields
   scheduleId?: string;
@@ -321,6 +334,7 @@ export function createTask(params: {
     pendingSubagentIds: [],
     subagentProfile: params.subagentProfile as SubagentProfile | undefined,
     agentWorkspace: params.agentWorkspace,
+    teamSubagent: params.teamSubagent,
     // Schedule linkage
     scheduleId: params.scheduleId,
     // Executor model override

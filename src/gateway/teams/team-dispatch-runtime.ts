@@ -3,6 +3,8 @@ import path from 'path';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { getManagedTeam, drainAgentMessages, recordTeamRun } from './managed-teams';
 import { getTeamWorkspacePath, buildWorkspaceContextBlock, ensureTeamWorkspace, ensureTeamAgentIdentity } from './team-workspace';
+import { BackgroundTaskRunner } from '../tasks/background-task-runner';
+import { loadTask, saveTask } from '../tasks/task-store';
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
 // These are injected at runtime to avoid circular imports with server-v2.ts
@@ -15,7 +17,7 @@ type HandleChatFn = (
   abortSignal?: { aborted: boolean },
   callerContext?: string,
   modelOverride?: string,
-  executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
+  executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron' | 'team_subagent',
   toolFilter?: string[],
   attachments?: undefined,
   reasoningOptions?: undefined,
@@ -70,6 +72,7 @@ export interface RunAgentResult {
   stepCount?: number;
   agentName: string;
   taskId?: string;
+  warning?: string;
 }
 
 /**
@@ -122,10 +125,9 @@ export async function runTeamAgentViaChat(
   };
   const agentRouting = resolveAgentModelRouting();
 
-  // Option B: do NOT override the session workspace.
-  // Subagents run with the main Prometheus workspace so all context (TOOLS.md, skills,
-  // memory) loads naturally — same as the main agent. The team workspace path is
-  // provided in callerContext; agents navigate there explicitly for shared file I/O.
+  // Team subagents run with their file tools scoped to the team workspace.
+  // Source-read tools still resolve against the main Prometheus workspace, but normal
+  // file writes land inside this team workspace only.
   let teamWorkspacePath: string | null = null;
   if (teamId) {
     try { teamWorkspacePath = ensureTeamWorkspace(teamId); } catch {}
@@ -185,22 +187,6 @@ export async function runTeamAgentViaChat(
     } catch { /* non-fatal */ }
   }
 
-  // Tool filter — blocklist approach: all tools available except dangerous/scoped ones.
-  // Agents with an explicit allowed_tools list still get that restriction honored.
-  const canPropose = agentCanPropose(agentId);
-  const TEAM_BLOCKED_TOOLS = new Set([
-    'memory_browse', 'memory_write', 'memory_read',  // personal memory — main agent only
-    'gateway_restart',                                // never from subagents
-    ...(!canPropose ? ['write_proposal', 'find_replace_source', 'replace_lines_source', 'insert_after_source', 'delete_lines_source', 'write_source'] : []),
-  ]);
-  const rawAgentToolFilter = buildTeamToolFilter(agentId);
-  const availableToolNames = (deps.buildTools as any)()
-    .map((t: any) => String(t?.function?.name || '').trim())
-    .filter(Boolean);
-  const agentToolFilter = rawAgentToolFilter
-    ? rawAgentToolFilter.filter((t: string) => !TEAM_BLOCKED_TOOLS.has(t))
-    : availableToolNames.filter((t: string) => !TEAM_BLOCKED_TOOLS.has(t));
-
   // Create task record
   const cronTask = deps.createTask({
     title: `${agentName}: ${task.slice(0, 80)}`,
@@ -215,6 +201,13 @@ export async function runTeamAgentViaChat(
 
   // Drain any queued messages for this agent
   const pendingMessages = teamId ? drainAgentMessages(teamId, agentId) : [];
+
+  // Detect complex multi-step tasks that should use declare_plan
+  const taskLower = task.toLowerCase();
+  const isComplexTask = /research|gather|analyze|investigate|compile|summarize|identify.*\d+|interview|survey|collect|evaluate/i.test(task);
+  const planRequirementBlock = isComplexTask
+    ? `\n[COMPLEX TASK PLANNING]\nThis is a multi-phase task. Call declare_plan with 2-4 meaningful steps IMMEDIATELY:\n  1. First step for initial research/setup\n  2. Execution/gathering phase\n  3. Compilation/analysis phase\n  4. Formatting/output phase (if needed)\nDeclare these steps now, then execute them in order. Do NOT skip planning for a complex task like this.`
+    : '';
 
   // Lean callerContext — subagents get role + workspace + comms only.
   // Chat history and team members list are intentionally omitted: the manager holds
@@ -244,6 +237,7 @@ export async function runTeamAgentViaChat(
     `  PROMPT MUST BE FULLY SELF-CONTAINED — include all file paths, context, and exact instructions.`,
     `  The bg agent has no session history. Write outputs to the team workspace: ${teamWorkspacePath ?? '<workspace>'}`,
     mcpServerSummary ? `\n${mcpServerSummary}` : '',
+    planRequirementBlock,
     ``,
     `[ESCALATION]`,
     `Post blockers or errors to the team workspace (pending.json) so the coordinator can act on them.`,
@@ -252,6 +246,23 @@ export async function runTeamAgentViaChat(
   if (pendingMessages.length > 0) {
     console.log(`[TeamDispatch] Injected ${pendingMessages.length} queued message(s) for agent "${agentId}"`);
   }
+
+  if (teamWorkspacePath) {
+    deps.setWorkspace(sessionId, teamWorkspacePath);
+    cronTask.agentWorkspace = teamWorkspacePath;
+  }
+  if (agentRouting.modelOverride) {
+    cronTask.executorProvider = agentRouting.providerOverride
+      ? `${agentRouting.providerOverride}/${agentRouting.modelOverride}`
+      : agentRouting.modelOverride;
+  }
+  cronTask.teamSubagent = {
+    teamId,
+    agentId,
+    agentName,
+    callerContext,
+  };
+  saveTask(cronTask);
 
   let stepCount = 0;
   const processLogLines: string[] = [];
@@ -285,61 +296,48 @@ export async function runTeamAgentViaChat(
 
   _activeAgentSessions.add(sessionId);
   try {
-    let chatResult = await Promise.race<any>([
-      deps.handleChat(
-        task,
-        sessionId,
-        sendSSE,
-        undefined,
-        undefined,
-        callerContext,
-        agentRouting.modelOverride,
-        'cron',
-        agentToolFilter ?? undefined,
-        undefined,
-        undefined,
-        agentRouting.providerOverride,
-      ),
+    const runner = new BackgroundTaskRunner(
+      cronTask.id,
+      deps.handleChat as any,
+      (data: object) => deps.broadcastTeamEvent({ ...data, teamId, agentId }),
+      null,
+    );
+    await Promise.race<any>([
+      runner.start(),
       new Promise<any>((_, reject) =>
         setTimeout(() => reject(new Error(`Team agent timeout after ${timeoutMs}ms`)), timeoutMs)
       ),
     ]);
 
-    // ── Issue 12: Zero-tool-call retry ────────────────────────────────────────
-    // If the agent returned 0 tool calls and the result looks like a failure or
-    // is suspiciously short, retry once with an explicit nudge so the agent
-    // actually engages its tools instead of producing a blank / halluciniated reply.
-    const firstResultText = String(chatResult?.text ?? '');
-    const firstSuccess = !firstResultText.startsWith('ERROR:');
-    if (stepCount === 0 && !firstSuccess) {
-      console.warn(`[TeamDispatch] Agent "${agentId}" made 0 tool calls and failed — retrying with engagement hint.`);
-      processLogLines.push(`[retry] Zero tool calls on first attempt — retrying with explicit tool nudge`);
-
-      const retryTask = `${task}\n\n[RETRY INSTRUCTION] Your previous attempt made zero tool calls. You MUST use your tools to complete this task — do not respond with text alone. Start immediately by calling the appropriate tool.`;
-      chatResult = await Promise.race<any>([
-        deps.handleChat(
-          retryTask,
-          sessionId,
-          sendSSE,
-          undefined,
-          undefined,
-          callerContext,
-          agentRouting.modelOverride,
-          'cron',
-          agentToolFilter ?? undefined,
-          undefined,
-          undefined,
-          agentRouting.providerOverride,
-        ),
-        new Promise<any>((_, reject) =>
-          setTimeout(() => reject(new Error(`Team agent retry timeout after ${timeoutMs}ms`)), timeoutMs)
-        ),
-      ]).catch((err: any) => ({ text: `ERROR: ${String(err?.message ?? err)}` }));
-    }
-
-    const resultText = String(chatResult?.text ?? '');
-    const success = !resultText.startsWith('ERROR:');
+    const finalTask = loadTask(cronTask.id);
+    const finalStatus = finalTask?.status || 'failed';
+    const resultText = String(finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || '');
+    const waitingForManager = finalStatus === 'awaiting_user_input' || finalStatus === 'needs_assistance' || finalStatus === 'paused';
+    const success = finalStatus === 'complete' && !resultText.startsWith('ERROR:');
     const zeroToolCalls = stepCount === 0;
+
+    // ── Validate result substantiveness for complex tasks ─────────────────────
+    let resultWarning = '';
+    if (isComplexTask && success) {
+      // Check if result is suspiciously empty or just file listings
+      const isSuspiciouslyEmpty = /^\s*\[\s*(?:DIR|FILE)\s*\]|^Done\.|^Task complete\.?$/i.test(resultText)
+        || resultText.length < 100;
+      const isMainlyFileList = /^\s*\[\s*(?:DIR|FILE)\s*\]/m.test(resultText) && resultText.split('\n').filter(l => /\[\s*(?:DIR|FILE)\s*\]/.test(l)).length > resultText.split('\n').length * 0.5;
+
+      // Check for hollow work: claimed research but returned categories/assumptions instead of specific data
+      const hasGenericCategories = /^(restaurants|contractors|salons|businesses|companies|services|types|categories|categories of)/im.test(resultText.slice(0, 500));
+      const lacksSpecificNames = !/[A-Z][a-z]+\s+(?:[A-Z][a-z]+)?[\s,].*?(?:website|url|phone|contact|email|address)/i.test(resultText);
+      const allVariesOrAssumed = (resultText.match(/varies|assumed|likely|probably|may have|could be|not specified/gi) || []).length > 5;
+      const isHollowWork = (hasGenericCategories || lacksSpecificNames || allVariesOrAssumed) && resultText.length > 200;
+
+      if (isSuspiciouslyEmpty || isMainlyFileList) {
+        resultWarning = `⚠️ INCOMPLETE: Result appears to be mostly file listings or placeholder text for a complex task. The agent may not have executed the research/gathering properly.`;
+        console.warn(`[TeamDispatch] Suspicious result for complex task "${agentId}": ${resultText.slice(0, 200)}`);
+      } else if (isHollowWork) {
+        resultWarning = `⚠️ HOLLOW WORK: Result contains generic categories/assumptions instead of specific extracted data (actual company names, websites, contact info). Agent reported research done but did not deliver substantive lead data.`;
+        console.warn(`[TeamDispatch] Hollow work detected for complex task "${agentId}": result has categories/assumptions but no specific extracted data`);
+      }
+    }
 
     // ── Issue 9: Record run in team-scoped history ────────────────────────────
     const finishedAt = Date.now();
@@ -355,24 +353,31 @@ export async function runTeamAgentViaChat(
         durationMs: finishedAt - startedAt,
         stepCount,
         zeroToolCalls,
-        error: success ? undefined : resultText.slice(0, 300),
+        error: success ? (resultWarning || undefined) : (waitingForManager ? `Waiting: ${resultText.slice(0, 260)}` : resultText.slice(0, 300)),
         resultPreview: success ? resultText : undefined,
       });
     }
 
-    deps.mutatePlan(cronTask.id, [{ op: 'complete', step_index: 0, notes: resultText.slice(0, 200) }]);
-    deps.updateTaskStatus(cronTask.id, success ? 'complete' : 'failed', { finalSummary: resultText });
-    deps.appendJournal(cronTask.id, { type: 'status_push', content: `Done: ${resultText.slice(0, 200)}` });
-    deps.broadcastTeamEvent({ type: 'task_complete', taskId: cronTask.id, teamId, agentId, summary: resultText.slice(0, 200) });
+    deps.appendJournal(cronTask.id, { type: 'status_push', content: `${waitingForManager ? 'Waiting' : success ? 'Done' : 'Stopped'}: ${resultText.slice(0, 200)}` });
+    deps.broadcastTeamEvent({
+      type: waitingForManager ? 'task_paused' : success ? 'task_complete' : 'task_failed',
+      taskId: cronTask.id,
+      teamId,
+      agentId,
+      summary: resultText.slice(0, 200),
+    });
 
     return {
       success,
-      result: resultText,
+      result: waitingForManager
+        ? `WAITING_FOR_MANAGER: ${resultText || 'The subagent paused for manager input.'}`
+        : resultWarning ? `${resultWarning}\n\n${resultText}` : resultText,
       processLog: processLogLines.length > 0 ? processLogLines.join('\n') : undefined,
       durationMs: finishedAt - startedAt,
       stepCount,
       agentName,
       taskId: cronTask.id,
+      warning: resultWarning || undefined,
     };
   } catch (err: any) {
     const finishedAt = Date.now();

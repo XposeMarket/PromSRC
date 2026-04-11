@@ -16,10 +16,12 @@ import {
   appendTeamChat,
   buildTeamContextRuntimeBlock,
   getMainAgentThread,
+  drainManagerMessages,
 } from './managed-teams';
 import { notifyMainAgent } from './notify-bridge';
 import { getAgentById, getConfig } from '../../config/config';
-import { getTeamWorkspacePath, readTeamMemoryContext } from './team-workspace';
+import { setWorkspace } from '../session';
+import { getTeamWorkspacePath, readTeamMemoryContext, ensureTeamInfoFile } from './team-workspace';
 
 type HandleChatFn = (
   message: string,
@@ -29,7 +31,7 @@ type HandleChatFn = (
   abortSignal?: { aborted: boolean },
   callerContext?: string,
   modelOverride?: string,
-  executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
+  executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent',
   toolFilter?: string[],
 ) => Promise<{ type: string; text: string; thinking?: string }>;
 
@@ -58,16 +60,27 @@ function buildTeamCallerContext(teamId: string): string {
       const a = getAgentById(id) as any;
       const pauseState = team.agentPauseStates?.[id];
       const pauseTag = pauseState?.paused ? ' [PAUSED]' : '';
-      return a
-        ? `  - ${a.name} (id: ${id})${pauseTag}: ${a.description || 'no description'}`
-        : `  - ${id}${pauseTag}`;
+      if (!a) return `  - ${id}${pauseTag}`;
+
+      const lines = [
+        `  - ${a.name} (id: ${id})${pauseTag}: ${a.description || 'no description'}`,
+        `    Base preset: ${a.roleType || 'not recorded'}`,
+        `    Team role: ${a.teamRole || a.name || 'not recorded'}`,
+        `    Team assignment: ${a.teamAssignment || a.description || 'not recorded'}`,
+      ];
+      return lines.join('\n');
     })
     .join('\n');
 
   const recentChat = (team.teamChat || [])
-    .slice(-50)
+    .slice(-30)
     .map(m => `  [${m.fromName}]: ${String(m.content || '').slice(0, 2000)}`)
     .join('\n') || '  (no recent chat)';
+
+  const pendingManagerMessages = drainManagerMessages(teamId);
+  const managerInbox = pendingManagerMessages.length > 0
+    ? pendingManagerMessages.map((m, i) => `  ${i + 1}. ${m}`).join('\n')
+    : '';
 
   const teamContext = buildTeamContextRuntimeBlock(team);
 
@@ -96,7 +109,7 @@ function buildTeamCallerContext(teamId: string): string {
   // Read cross-run memory files (memory.json, last_run.json, pending.json)
   let memoryContext = '';
   try {
-    const teamWsPath = getTeamWorkspacePath(team.id);
+    ensureTeamInfoFile(team);
     memoryContext = readTeamMemoryContext(team.id);
   } catch { /* non-fatal */ }
 
@@ -110,7 +123,7 @@ function buildTeamCallerContext(teamId: string): string {
   const teamWsPath = getTeamWorkspacePath(team.id);
 
   return [
-    `=== TEAM COORDINATOR MODE ===`,
+    `=== MANAGER MODE ===`,
     `You are acting as the Manager for the team: "${team.name}" (ID: ${team.id})`,
     `Team workspace: ${teamWsPath}`,
     ``,
@@ -122,26 +135,50 @@ function buildTeamCallerContext(teamId: string): string {
     ``,
     `Recent team chat:`,
     recentChat,
+    managerInbox ? `\n[SUBAGENT MESSAGES WAITING FOR MANAGER]\n${managerInbox}` : '',
     teamContext ? `\nAdditional team context:\n${teamContext}` : '',
     threadContext,
     memoryContext ? `\n[CROSS-RUN MEMORY]\n${memoryContext}` : `\n[CROSS-RUN MEMORY]\n(memory files not yet initialized — write them at end of this run)`,
     ``,
-    `COORDINATOR WORKFLOW (purpose → task → execute → write back):`,
+    `COORDINATOR WORKFLOW (purpose → task → execute → validate → write back):`,
     `STEP 1 — DERIVE THIS RUN'S TASK: Read the cross-run memory above. Based on what's already been done, what's pending, and what's new, decide what THIS specific run should accomplish. Call manage_team_goal(action="update_focus", focus="<your derived task>") to record it.`,
     `STEP 2 — EXECUTE: Dispatch agents with specific tasks derived from STEP 1. Don't re-do work that's already in memory.json as completed.`,
-    `STEP 3 — WRITE BACK: Before posting [GOAL_COMPLETE], update the memory files at ${teamWsPath}:`,
+    `STEP 3 — VALIDATE RESULTS: After EACH agent completes, carefully review their output:`,
+    `  - Is the result SUBSTANTIVE (actual findings, data, analysis — not just directory listings or placeholders)?`,
+    `  - Did they execute their task (call tools, return meaningful content)?`,
+    `  - If result is empty, suspicious, or incomplete → RED FLAG: re-dispatch that agent with a specific fix request.`,
+    `  - Do NOT accept vague/hollow completions without follow-up verification.`,
+    `STEP 4 — WRITE BACK: Before posting [GOAL_COMPLETE], update the memory files at ${teamWsPath}:`,
     `  - memory.json: append new findings/knowledge to the entries array`,
     `  - last_run.json: overwrite with what this run did (task, summary, agentsUsed, runAt)`,
     `  - pending.json: add new unresolved items; remove items that were resolved this run`,
     ``,
-    `COORDINATOR RULES:`,
+    `MANAGER RULES:`,
     `1. Use dispatch_team_agent tool to delegate tasks to subagents. Always pass team_id="${team.id}" and the agent_id from the list above.`,
     `2. Your text response will be posted to the team chat as the Manager.`,
     `3. This session is isolated from the main user chat — act now, do not defer.`,
-    `4. After a subagent completes, the result is returned as the tool output — review it and decide next steps.`,
+    `4. After a subagent completes, the result is returned as the tool output — VALIDATE IT CAREFULLY before accepting it. RED FLAGS that require re-dispatch:`,
+    `   ⚠️ Result starts with "⚠️ INCOMPLETE" — agent did NOT properly execute`,
+    `   ⚠️ Result is mostly file listings ([DIR], [FILE]) with no actual findings`,
+    `   ⚠️ Result is just "Done." or "Task complete." with no substantive output`,
+    `   ⚠️ stepCount = 0 (agent made zero tool calls) — agent did nothing`,
+    `   ⚠️ Result length < 100 chars for a complex research/analysis task`,
+    `   ⚠️ HOLLOW WORK: Agent reports "research complete" but returned:`,
+    `      - Generic categories (e.g. "restaurants in Frederick") instead of actual business names`,
+    `      - Directory sources instead of extracted lead data`,
+    `      - Assumptions instead of real contact info`,
+    `      - "Varies" or "TBD" for websites instead of actual URLs`,
+    `      - No specific companies with names, websites, contact details`,
+    `   GREEN FLAGS that indicate success:`,
+    `   ✓ Result contains SPECIFIC findings (actual company names, real data, verified info)`,
+    `   ✓ Contains extracted/verified details: company names, websites, phone/email, addresses`,
+    `   ✓ stepCount > 0 (agent called tools and gathered data)`,
+    `   ✓ Result length > 500 chars with substantive, specific content (not generic categories)`,
+    `   ✓ No warning prefix in the result`,
     `5. Be concise and action-oriented. Post status updates to keep the team owner informed.`,
-    `6. Work CONTINUOUSLY toward this run's derived task. Keep dispatching agents, reviewing results, and making progress until this run's task is done.`,
-    `7. When this run is complete (task done + memory files updated), end with: [GOAL_COMPLETE]`,
+    `6. Work CONTINUOUSLY toward this run's derived task. Keep dispatching agents, reviewing results, and re-dispatching if needed until work is actually SUBSTANTIVELY DONE.`,
+    `7. NEVER accept suspicious results — if you see ANY red flag above, immediately re-dispatch that agent with: "Your previous output was not substantive. Actually execute the task and return real findings."`,
+    `8. When this run is complete (all tasks substantively done + memory files updated), end with: [GOAL_COMPLETE]`,
     `8. If you need the team owner to make a decision or provide input, end with: [NEEDS_INPUT]`,
     `9. You are the ONLY bridge between this team and the main Prometheus agent. Use message_main_agent(team_id="${team.id}", message="...") to communicate.`,
     `10. NEVER pause or give up before first messaging the main agent. Errors, blockers, missing credentials — all go to the main agent first.`,
@@ -150,7 +187,8 @@ function buildTeamCallerContext(teamId: string): string {
     `13. Use manage_team_goal to update focus, log completed work, and manage milestones throughout the run.`,
     `14. Use manage_team_goal with pause_agent/unpause_agent to control which agents are active.`,
     `15. dispatch_team_agent is available in this coordinator session. Do NOT claim tooling limitations or say the tool is unavailable unless you actually called it and received an explicit tool error in this turn.`,
-    `16. PROPOSALS: You have write_proposal and full source_write tools available. Use them selectively:`,
+    `16. Update memory.json, last_run.json, and pending.json before [GOAL_COMPLETE]. Include dispatches, subagent results, verification decisions, files touched, unresolved items, and timestamp.`,
+    `17. PROPOSALS: You have write_proposal and full source_write tools available. Use them selectively:`,
     `    - Use write_proposal for changes that require human approval: src/ code edits, new features, major config changes, risky operations.`,
     `    - Use source_write tools (find_replace_source, etc.) directly ONLY for low-risk changes like comments, docs, or minor fixes clearly within your team mandate.`,
     `    - Workspace files (team JSON, markdown, outputs) can always be edited directly — no proposal needed.`,
@@ -202,6 +240,7 @@ export async function runCoordinatorConversation(
 
     // Rebuild caller context each turn (picks up latest team chat, goal state, thread)
     const callerContext = buildTeamCallerContext(teamId);
+    try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
 
     // Ensure team_ops + source_write tools are available in the coordinator session every turn
     // (category activation is per-session but must be re-applied after restarts)
@@ -245,7 +284,7 @@ export async function runCoordinatorConversation(
         undefined,
         callerContext,
         undefined,
-        'background_task',
+        'team_manager',
       );
 
       responseText = String(result.text || '').trim();
@@ -378,6 +417,7 @@ export async function runCoordinatorReview(
   const callerContext = buildTeamCallerContext(teamId);
   const nullSse = (_e: string, _d: any) => {};
   const bfn = broadcastFn || _deps.broadcastTeamEvent;
+  try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
 
   // Ensure team_ops + source_write tools are available in the coordinator session
   try {
@@ -406,7 +446,7 @@ export async function runCoordinatorReview(
       undefined,
       callerContext,
       undefined,
-      'background_task',
+      'team_manager',
     );
 
     const responseText = String(result.text || '').trim();
@@ -438,4 +478,24 @@ export async function runCoordinatorReview(
     changesAutoApplied: 0,
     managerToolsExecuted: 0,
   });
+}
+
+export async function runSubagentResultVerification(
+  teamId: string,
+  agentId: string,
+  dispatchPrompt: string,
+  agentResult: string,
+  broadcastFn?: (data: object) => void,
+): Promise<void> {
+  const prompt = [
+    `[SUBAGENT RESULT TO VERIFY]`,
+    `You dispatched ${agentId} for:`,
+    dispatchPrompt,
+    ``,
+    `The agent returned:`,
+    agentResult,
+    ``,
+    `Verify/analyze the work. Check files created or modified by the agent if relevant. If the output is incomplete, re-dispatch with a specific fix. If accepted, update memory.json and last_run.json.`,
+  ].join('\n');
+  await runCoordinatorConversation(teamId, prompt, broadcastFn, false);
 }

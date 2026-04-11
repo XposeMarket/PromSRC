@@ -1,0 +1,17 @@
+{
+  "id": "team_coord_team_mntox9oq_eb421a",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775873011496,
+  "lastActiveAt": 1775873011496,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "team_ops",
+    "source_write",
+    "desktop"
+  ]
+}

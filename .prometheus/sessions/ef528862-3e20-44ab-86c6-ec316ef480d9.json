@@ -1,0 +1,36 @@
+{
+  "id": "ef528862-3e20-44ab-86c6-ec316ef480d9",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom",
+      "timestamp": 1775922215733
+    },
+    {
+      "role": "assistant",
+      "content": "Hey Raul. What do you want me to knock out?",
+      "timestamp": 1775922219383
+    },
+    {
+      "role": "user",
+      "content": "Can you go ahead and do me a favor and run a background spawn and have it write a note while you create a quick fake dashboard visula for me",
+      "timestamp": 1775922299620
+    },
+    {
+      "role": "assistant",
+      "content": "Error: fetch failed",
+      "timestamp": 1775922387497
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775922215734,
+  "lastActiveAt": 1775922387498,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 86,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "team_ops"
+  ]
+}

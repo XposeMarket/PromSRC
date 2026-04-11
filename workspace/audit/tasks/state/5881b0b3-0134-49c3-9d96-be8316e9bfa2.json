@@ -1,0 +1,38 @@
+{
+  "id": "5881b0b3-0134-49c3-9d96-be8316e9bfa2",
+  "title": "Rebuild Xpose Market site for conversion",
+  "prompt": "You are rebuilding the workspace folder `xposemarket-site` into a stronger conversion-focused agency website for Xpose Market.\n\nGoal: make the site materially better at converting local small-business prospects into leads soon. Prioritize concrete offer clarity, trust, CTA flow, and polished presentation over generic branding. Do not explicitly name Frederick, Maryland in customer-facing copy. Target local businesses in a grounded, credible way without city-name-forward messaging.\n\nImportant context from prior analysis:\n- Existing files include `xposemarket-site/index.html`, `xposemarket-site/services.html`, and `xposemarket-site/testimonies.html`.\n- Current site has a decent visual base but weak positioning, generic testimonials, unclear CTA flow, and copy that does not sell strongly enough.\n- User wants implementation to begin directly now.\n\nExecution requirements:\n1. First inspect the current `xposemarket-site` files using workspace file tools.\n2. Then edit the site directly in that folder. You may rewrite files substantially if needed.\n3. Use the `landing-page-blueprint` skill guidance if helpful: clear headline/subheadline, strong CTA repeated through page, social proof/trust, problem-solution framing, service cards, simple process, FAQs, and final CTA.\n4. Keep the site production-ready and visually polished. If the current site uses separate CSS/JS files, preserve a maintainable structure. If it is mostly standalone HTML, improve within that structure.\n5. Create or improve copy for:\n   - a sharper hero section\n   - better service positioning\n   - trust-building proof/testimonial language\n   - a lead-focused CTA flow\n   - a clearer offer for small businesses needing websites / marketing / visibility\n6. Avoid fake-sounding hype. Make claims feel believable and specific.\n7. If testimonials are obviously placeholder/generic, replace them with safer, clearly stylized proof language that does not create risky fabricated specifics.\n8. Maintain or improve responsive layout and readability.\n9. After editing, verify the key files were updated successfully by re-reading relevant sections.\n10. Write a concise summary of exactly what changed and why it improves conversions.\n\nDeliverable expectation:\n- Actually perform the file edits in `xposemarket-site`.\n- Do not only analyze.\n- Verification must confirm the new messaging/CTA structure exists in the files.\n\nConstraints:\n- Only work inside the workspace.\n- Do not touch `src/`.\n- No proposal is needed because this is a workspace site folder, not Prometheus source.\n\nSuccess criteria:\n- The site copy is noticeably more conversion-oriented.\n- CTA path is clearer.\n- Trust/proof feels stronger and safer.\n- Xpose Market feels like a real agency a local business could hire now.",
+  "sessionId": "0485a1f7-c52d-4c9b-8cd1-540e490964a0",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "taskKind": "run_once",
+  "originatingSessionId": "0485a1f7-c52d-4c9b-8cd1-540e490964a0",
+  "verificationStatus": "complete",
+  "plan": [
+    {
+      "index": 0,
+      "description": "You are rebuilding the workspace folder `xposemarket-site` into a stronger conversion-focused agency website for Xpose Market.\n\nGoal: make the site materially better at converting local small-business",
+      "status": "running"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1775852397988,
+      "type": "status_push",
+      "content": "Task created: Rebuild Xpose Market site for conversion"
+    }
+  ],
+  "lastProgressAt": 1775852569934,
+  "startedAt": 1775852397988,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "finalSummary": "Verified: the rebuild looks completed successfully.\n\nKey outcomes:\n- Homepage now leads with a clearer conversion-focused promise: websites + marketing that generate leads.\n- CTA flow is much stronger and repeated throughout the site.\n- Services are positioned around practical buyer needs, not vague agency fluff.\n- Added a simple process section to reduce friction.\n- Testimonials/proof were made safer and more credible.\n- Services/pricing page now reads like a real sales page.\n- Navigation, responsiveness, and contact flow were cleaned up.\n- Broken/duplicated form/script issues were removed.\n\nFollow-up:\n- I’d still do a quick live browser pass on desktop and mobile to confirm the final layout, links, and contact form behavior are clean end-to-end.\n- If you want maximum conversion lift, the next best step is adding a stronger lead magnet or booking CTA above the fold.",
+  "completedAt": 1775852569934
+}

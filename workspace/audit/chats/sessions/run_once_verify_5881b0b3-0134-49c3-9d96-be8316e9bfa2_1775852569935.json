@@ -1,0 +1,16 @@
+{
+  "id": "run_once_verify_5881b0b3-0134-49c3-9d96-be8316e9bfa2_1775852569935",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775852569936,
+  "lastActiveAt": 1775852592341,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "team_ops"
+  ]
+}

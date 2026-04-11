@@ -39,10 +39,12 @@ export class OllamaClient {
       temperature?: number;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'extra_high' | 'high' | 'medium' | 'low';
+      think?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       tools?: any[];
       model?: string;
       onToken?: (chunk: string) => void;
+      onThinking?: (chunk: string) => void;
+      onReasoningSummary?: (chunk: string) => void;
       /** Per-call provider override — used by switch_model tool for turn-scoped routing. Does NOT mutate global config. */
       provider?: LLMProvider;
       /** Strip [TODAY_NOTES] from system prompt — set when switch_model is active to reduce context bloat. */
@@ -58,6 +60,8 @@ export class OllamaClient {
       tools:             options?.tools,
       think:             options?.think,
       onToken:           options?.onToken,
+      onThinking:        options?.onThinking,
+      onReasoningSummary: options?.onReasoningSummary,
       omitIntradayNotes: options?.omitIntradayNotes,
     });
     return { message: result.message, thinking: result.thinking };

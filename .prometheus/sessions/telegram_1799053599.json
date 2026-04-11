@@ -400,15 +400,20 @@
       "role": "user",
       "content": "Okay great can you go ahead and try that again, i fixed it i think",
       "timestamp": 1775763340708
+    },
+    {
+      "role": "assistant",
+      "content": "✅ Quick restart complete.\nAction: Telegram quick restart\nSummary: Quick restart requested from Telegram by user 1799053599.\nBuild: not run\nFiles changed: none\n\nVerify: Confirm gateway booted and Telegram polling resumed.",
+      "timestamp": 1775946017151
     }
   ],
   "workspace": "D:\\Prometheus\\workspace",
   "channel": "telegram",
   "createdAt": 1773605404065,
-  "lastActiveAt": 1775763524760,
+  "lastActiveAt": 1775946017185,
   "pendingMemoryFlush": false,
   "pendingCompaction": false,
-  "contextTokenEstimate": 7979,
+  "contextTokenEstimate": 8048,
   "latestContextSummary": "Previous summary: Because the proposal flow is probably getting re-consumed from the same queued state instead of being marked terminal fast enough. Most likely one of these is happening: 1. **Proposal approval event isn’t being acknowledged/cleared** - executor runs - completion/restart happens - same approved proposal is still visible as “pending execution” - watchdog/poller picks it up again 2. **The execution path crashes before writing final status** - so supervisor thinks “not finished, try again” 3. **Hot restart is rehydrating an in-flight execution as new work** - especially if approval state and execution state live in different places 4. **A background retry loop has no idempotency guard** - “if approved, execute” - but no “if already executing/executed for this proposal id, skip” So bluntly: this smells less like “the proposal itself is wrong” and more like **proposal orchestration missing a o Latest updates (newest first): - User: Okay great can you go ahead and try that again, i fixed it i think - Assistant: ✅ Quick restart complete. Action: Telegram quick restart Summary: Quick restart requested from Telegram by user 1799053599. Build: not run Files changed: none Verify: Confirm gateway booted and Telegram polling resumed. - Assistant: Because the proposal flow is probably getting re-consumed from the same queued state instead of being marked terminal fast enough. Most likely one",
   "contextStartIndex": 77,
   "contextSummaryUpdatedAt": 1775763428195,

@@ -8,6 +8,7 @@
 - (empty)
 
 - 2026-04-10: User explicitly confirmed desire to begin making concrete changes to the Xpose Market website now, after first verifying availability of the `run_task_now` tool. [2026-04-10]
+- 2026-04-10: Xpose Market website repo path verified in workspace as `xposemarket-site/` with `.git/`, `index.html`, `services.html`, and `testimonies.html`; next step is to inspect real file/git state directly instead of relying on prior session claims. [2026-04-10]
 ## key_decisions
 - 2026-04-09: High-priority declared-plan state-machine bug isolated to `src/gateway/routes/chat.router.ts`; hidden skill-scout pre-step and visible step-1 progress can desync, producing false repeated "run skill_list first" loops. [verified via proposal `prop_1775759744962_a7c1d3` and audit notes 2026-04-09]
 - (empty)

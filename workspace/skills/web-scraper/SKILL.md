@@ -1,29 +1,129 @@
 ---
 name: Web Scraper
-description: Scrape websites and extract structured data using Playwright or Puppeteer. Use for any task involving browsing web pages programmatically, extracting text/links/tables, handling JavaScript-rendered content, avoiding bot detection, or crawling multiple pages politely. Triggers on: scrape, crawl, extract from website, browse page, get data from site, parse HTML, playwright, puppeteer, spider, web extraction, screenshot page, automation browser.
+description: Extract structured data from websites using Prometheus-native tools (browser_extract_structured, browser_scroll_collect) or Python scripts (Playwright, BeautifulSoup). Use for data extraction, text collection, crawling, and handling JavaScript-rendered content.
 emoji: 🕷️
-version: 1.0.0
-triggers: scrape, crawl, extract from website, browse page, get data from site, parse HTML, playwright, puppeteer, spider, web extraction, screenshot, automate browser, fetch page content, harvest data
+version: 1.1.0
+triggers: scrape, crawl, extract from website, browse page, get data from site, parse HTML, playwright, puppeteer, spider, web extraction, screenshot, automate browser, fetch page content, harvest data, extract structured, browser_extract_structured
 ---
+
 
 # Web Scraper
 
 Structured patterns for scraping websites correctly — without getting blocked, without hammering servers.
 
 ---
+## Tool Choice Matrix
 
-## Tool Choice
+**Prometheus-native tools (preferred first — no external code needed):**
 
 | Situation | Use |
 |---|---|
-| Quick page content | `web_fetch(url)` — Prometheus built-in, no code needed |
-| Interactive scraping (login, click, scroll) | Prometheus `browser_*` tools — see `browser-automation-playbook` skill |
-| Static HTML (no JS required) | Python `requests` + `BeautifulSoup` |
-| JavaScript-rendered content | Python `playwright` (preferred) or `puppeteer` |
-| Already have HTML string | Python `BeautifulSoup` only |
-| Need screenshots | `desktop_screenshot()` or Python `playwright` |
+| Extract repeated structured containers (cards, rows, listings) | `browser_extract_structured(schema)` — CSS-schema to typed JSON array |
+| Collect text from paginated or infinite scroll pages | `browser_scroll_collect(...)` — multi-scroll + deduplicated text |
+| Quick page text extraction (includes iframes) | `browser_get_page_text()` — all visible text |
+| Read static page or document | `web_fetch(url)` — Prometheus built-in, fast |
+| Intercept API payloads rendered on page | `browser_intercept_network(...)` — inspect XHR/fetch responses |
 
-**Prefer built-in Prometheus tools first.** Use `web_fetch` for simple reads, `browser_open` + `browser_get_page_text` for complex pages. Only write Python scripts when you need batch processing, complex parsing, or data transformation that the built-in tools can't handle.
+**When you need code (batch processing, complex transformation, or Prometheus tools insufficient):**
+## Prometheus-Native Extraction Tools
+
+### 1. Extract Structured Data — `browser_extract_structured(schema)`
+
+Best for: product listings, search results, article lists, card grids, table rows.
+
+**One-call extraction with CSS selectors into typed JSON:**
+
+```javascript
+browser_extract_structured({
+  schema: {
+    container_selector: ".product-card",
+    fields: {
+      title: { selector: "h2", type: "text" },
+      price: { selector: ".price", type: "text" },
+      url: { selector: "a", type: "href" },
+      image: { selector: "img", type: "src" }
+    }
+  }
+})
+
+// Returns:
+// [
+//   { title: "Product A", price: "$99.99", url: "/product/a", image: "img.jpg" },
+//   { title: "Product B", price: "$149.99", url: "/product/b", image: "img2.jpg" },
+//   ...
+// ]
+```
+
+**Why prefer this:**
+- No loop/iteration needed — extracts all matches in one call
+- Type safety — specify `text`, `href`, `src`, `attr`, `html` per field
+- Built into Prometheus — no external libs
+- Works on SPA pages with live refs
+- Handles optional fields gracefully
+
+### 2. Collect Text Across Scrolls — `browser_scroll_collect(...)`
+
+Best for: infinite feeds, social search, product listings, paginated results.
+
+**Multi-scroll data collection in one call (zero LLM round-trips between scrolls):**
+
+```javascript
+browser_scroll_collect({
+  scrolls: 10,
+  multiplier: 1.75,
+  delay_ms: 1500,
+  max_chars: 50000
+})
+
+// Returns all deduplicated text from 10 scroll positions
+// Automatically stops early if:
+// - page bottom reached
+// - stop_text sentinel found
+// - max_chars limit exceeded
+```
+
+**Why prefer this:**
+- Single call replaces 10+ scroll loops
+- Automatic deduplication across positions
+- Built-in delays to let content load
+- Early stopping conditions
+- No refs returned — good for bulk text collection
+
+### 3. Full Page Text — `browser_get_page_text()`
+
+Best for: article reading, text extraction, when refs are not needed.
+
+```javascript
+browser_get_page_text()
+// Returns all visible text + list of iframe URLs if found
+```
+
+**Use when:**
+- Snapshot shows very few elements
+- Page has iframe content not visible in DOM
+- You need readable text, not clickable refs
+
+### 4. Network Interception — `browser_intercept_network(...)`
+
+Best for: extracting data from XHR/fetch APIs rendered on page.
+
+```javascript
+browser_intercept_network({ action: "start", url_filter: "/api/products" })
+browser_scroll("down", 2.0)
+browser_intercept_network({ action: "read" })
+// Returns array of captured API responses with full JSON bodies
+```
+
+**Use when:**
+- Page renders data from APIs
+- You need the payload directly without DOM parsing
+- Same-origin API calls only
+
+---
+
+## Python Scripts for Complex Tasks
+
+Use Python when Prometheus tools are insufficient.
 
 ---
 

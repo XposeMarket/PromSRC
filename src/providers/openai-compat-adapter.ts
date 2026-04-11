@@ -89,13 +89,13 @@ export class OpenAICompatAdapter implements LLMProvider {
         finalMessages = [{ role: 'system', content: mergedSystem }, ...messages.slice(1)];
       }
     }
-    const body: any = {
-      model,
-      messages: finalMessages,
-      temperature: options?.temperature ?? 0.25,
-      max_tokens: options?.max_tokens ?? 512,
-      stream: false,
-    };
+	    const body: any = {
+	      model,
+	      messages: finalMessages,
+	      temperature: options?.temperature ?? 0.25,
+	      max_tokens: options?.max_tokens ?? 512,
+	      stream: !!options?.onToken,
+	    };
     if (Array.isArray(options?.tools) && options!.tools!.length) {
       body.tools = options!.tools;
       // Force 'required' on the first model turn (last message is from user) so the
@@ -105,15 +105,128 @@ export class OpenAICompatAdapter implements LLMProvider {
       body.tool_choice = lastMsgRole === 'user' ? 'required' : 'auto';
     }
 
-    const data = await this.post('/v1/chat/completions', body);
+	    if (body.stream) {
+	      return this.streamChatCompletions(body, options);
+	    }
+
+	    const data = await this.post('/v1/chat/completions', body);
     const choice = data.choices?.[0];
     const message: ChatMessage = {
       role: 'assistant',
       content: choice?.message?.content ?? '',
       tool_calls: choice?.message?.tool_calls,
     };
-    return { message };
-  }
+	    return { message };
+	  }
+
+	  private async streamChatCompletions(body: any, options?: ChatOptions): Promise<ChatResult> {
+	    const auth = await this.getAuthHeader();
+	    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+	    if (auth) headers['Authorization'] = auth;
+
+	    const url = `${this.config.endpoint.replace(/\/$/, '')}/v1/chat/completions`;
+	    const response = await fetch(url, {
+	      method: 'POST',
+	      headers,
+	      body: JSON.stringify(body),
+	      signal: AbortSignal.timeout(300_000),
+	    });
+
+	    if (!response.ok) {
+	      const text = await response.text().catch(() => '');
+	      throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 200)}`);
+	    }
+
+	    const reader = response.body?.getReader();
+	    if (!reader) throw new Error(`${this.id} API error: no streaming response body`);
+
+	    const decoder = new TextDecoder();
+	    let buffer = '';
+	    let content = '';
+	    let thinking = '';
+	    const toolCalls: any[] = [];
+
+	    const ensureToolCall = (idx: number) => {
+	      if (!toolCalls[idx]) {
+	        toolCalls[idx] = {
+	          id: '',
+	          type: 'function',
+	          function: { name: '', arguments: '' },
+	        };
+	      }
+	      return toolCalls[idx];
+	    };
+
+	    try {
+	      while (true) {
+	        const { done, value } = await reader.read();
+	        if (done) break;
+	        buffer += decoder.decode(value, { stream: true });
+	        const lines = buffer.split('\n');
+	        buffer = lines.pop() || '';
+
+	        for (const line of lines) {
+	          if (!line.startsWith('data: ')) continue;
+	          const data = line.slice(6).trim();
+	          if (!data || data === '[DONE]') continue;
+	          try {
+	            const event = JSON.parse(data);
+	            const delta = event.choices?.[0]?.delta || {};
+	            const textDelta = delta.content || '';
+	            if (textDelta) {
+	              content += textDelta;
+	              options?.onToken?.(textDelta);
+	            }
+
+	            const thinkingDelta =
+	              delta.reasoning_content
+	              || delta.reasoning
+	              || delta.reasoning_text
+	              || delta.reasoning_summary
+	              || '';
+	            if (thinkingDelta) {
+	              thinking += thinkingDelta;
+	              options?.onThinking?.(thinkingDelta);
+	            }
+
+	            if (Array.isArray(delta.tool_calls)) {
+	              for (const tc of delta.tool_calls) {
+	                const idx = Number.isFinite(Number(tc.index)) ? Number(tc.index) : toolCalls.length;
+	                const acc = ensureToolCall(idx);
+	                if (tc.id) acc.id = tc.id;
+	                if (tc.type) acc.type = tc.type;
+	                if (tc.function?.name) acc.function.name += tc.function.name;
+	                if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
+	              }
+	            }
+	          } catch {
+	            // Skip malformed streaming chunks.
+	          }
+	        }
+	      }
+	    } finally {
+	      reader.releaseLock();
+	    }
+
+	    const normalizedToolCalls = toolCalls
+	      .filter(Boolean)
+	      .map((tc, idx) => ({
+	        id: tc.id || `call_${Date.now()}_${idx}`,
+	        type: 'function' as const,
+	        function: {
+	          name: tc.function?.name || '',
+	          arguments: tc.function?.arguments || '',
+	        },
+	      }))
+	      .filter(tc => tc.function.name);
+
+	    const message: ChatMessage = {
+	      role: 'assistant',
+	      content,
+	      tool_calls: normalizedToolCalls.length > 0 ? normalizedToolCalls : undefined,
+	    };
+	    return { message, thinking: thinking || undefined };
+	  }
 
   async generate(prompt: string, model: string, options?: GenerateOptions): Promise<GenerateResult> {
     // OpenAI-compat servers don't have a /completions generate endpoint equivalent

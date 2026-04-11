@@ -1,0 +1,15 @@
+{
+  "id": "run_once_5881b0b3-0134-49c3-9d96-be8316e9bfa2_1775852398405",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775852398408,
+  "lastActiveAt": 1775852569933,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser"
+  ]
+}

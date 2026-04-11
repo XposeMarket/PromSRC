@@ -1,9 +1,9 @@
 {
-  "total": 99,
+  "total": 101,
   "byBucket": {
-    "pending": 4,
+    "pending": 3,
     "approved": 52,
-    "denied": 31,
+    "denied": 34,
     "archive": 12
   }
 }

@@ -794,6 +794,9 @@ select.settings-input {
   font-size: 11px;
   line-height: 1.6;
 }
+.think-content.live {
+  display: block;
+}
 
 .mission-bar-label,
 .section-title,

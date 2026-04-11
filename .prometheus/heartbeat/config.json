@@ -59,6 +59,26 @@
       "enabled": false,
       "intervalMinutes": 30,
       "model": ""
+    },
+    "researcher_local_leads_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "analyst_lead_fit_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "operator_lead_enrichment_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "orchestrator_lead_pipeline_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
     }
   }
 }

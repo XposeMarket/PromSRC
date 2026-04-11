@@ -668,8 +668,8 @@ export function createManagedTeam(input: {
 
   // Initialize memory files for the purpose→task workflow
   try {
-    const { initTeamMemoryFiles } = require('../teams/team-workspace');
-    initTeamMemoryFiles(team.id);
+    const { initTeamWorkspaceArtifacts } = require('../teams/team-workspace');
+    initTeamWorkspaceArtifacts(team);
   } catch { /* non-fatal */ }
 
   return team;

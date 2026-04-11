@@ -20,8 +20,9 @@ import {
   deleteManagedTeam,
   appendTeamChat,
 } from '../teams/managed-teams';
-import { triggerManagerReview, handleManagerConversation } from '../teams/team-manager-runner';
+import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
 import { buildTeamDispatchTask } from '../teams/team-dispatch-runtime';
+import { appendTeamMemoryEvent } from '../teams/team-workspace';
 import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
 import {
@@ -102,7 +103,7 @@ import {
   type TaskControlResponse,
 } from '../tool-builder';
 import { activateToolCategory } from '../session';
-import { loadTask } from '../tasks/task-store';
+import { appendJournal, listTasks, loadTask, saveTask } from '../tasks/task-store';
 import type { SkillWindow } from '../prompt-context';
 import { isToolHiddenInPublicBuild } from '../../runtime/distribution.js';
 
@@ -158,6 +159,22 @@ function inferAgentIdFromSession(sessionId: string, args: any): string | undefin
   return sid === 'default' ? undefined : sid;
 }
 
+function inferTeamNoteContext(sessionId: string): { teamId: string; authorType: 'manager' | 'subagent'; authorId: string } | null {
+  const sid = String(sessionId || '');
+  if (sid.startsWith('team_coord_')) {
+    const teamId = sid.replace(/^team_coord_/, '').trim();
+    return teamId ? { teamId, authorType: 'manager', authorId: 'manager' } : null;
+  }
+  if (sid.startsWith('team_dispatch_')) {
+    const stripped = sid.replace(/^team_dispatch_/, '');
+    const idx = stripped.lastIndexOf('_');
+    const agentId = idx > 0 ? stripped.slice(0, idx) : stripped;
+    const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(agentId));
+    return team ? { teamId: team.id, authorType: 'subagent', authorId: agentId } : null;
+  }
+  return null;
+}
+
 function isProposalLikeSourceSessionId(sessionId: string): boolean {
   const sid = String(sessionId || '');
   return sid.startsWith('proposal_') || sid.startsWith('code_exec');
@@ -209,10 +226,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
   // (one level up from workspace) so edits land in the actual source tree.
   // All other paths resolve to workspace as normal.
   const _isProposalSession = isProposalExecutionSession(sessionId);
+  function resolveProjectRootForSourceAccess(): string {
+    if (String(sessionId || '').startsWith('team_dispatch_')) {
+      return getConfig().getWorkspacePath() || path.resolve(workspacePath, '..');
+    }
+    return path.resolve(workspacePath, '..');
+  }
   function resolveFilePath(filename: string): string {
     const normalized = String(filename || '').replace(/\\/g, '/');
     if (_isProposalSession && normalized.startsWith('src/')) {
-      return path.join(path.resolve(workspacePath, '..'), normalized);
+      return path.join(resolveProjectRootForSourceAccess(), normalized);
     }
     return path.join(workspacePath, filename);
   }
@@ -253,8 +276,47 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const team = teams.find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(targetAgentId));
           if (!team) return { name, args, result: `ERROR: Could not find a team containing agent "${targetAgentId}". Check the agent ID.`, error: true };
           queueAgentMessage(team.id, targetAgentId, message);
+          appendTeamChat(team.id, {
+            from: 'manager',
+            fromName: 'Manager',
+            content: message,
+            metadata: { agentId: targetAgentId },
+          });
+          const pausedTask = listTasks({ status: ['awaiting_user_input'] })
+            .filter((t: any) => t.teamSubagent?.teamId === team.id && t.teamSubagent?.agentId === targetAgentId)
+            .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+          if (pausedTask) {
+            pausedTask.status = 'queued';
+            pausedTask.pauseReason = undefined;
+            pausedTask.pendingClarificationQuestion = undefined;
+            pausedTask.resumeContext = pausedTask.resumeContext || { messages: [], browserSessionActive: false, round: 0 };
+            pausedTask.resumeContext.messages = [
+              ...(Array.isArray(pausedTask.resumeContext.messages) ? pausedTask.resumeContext.messages : []),
+              {
+                role: 'user',
+                content: `[MANAGER RESPONSE]\n${message}`,
+                timestamp: Date.now(),
+              },
+            ].slice(-10);
+            pausedTask.resumeContext.onResumeInstruction = `[MANAGER RESPONSE]\n${message}\n\nResume the paused team task using this manager response.`;
+            pausedTask.lastProgressAt = Date.now();
+            saveTask(pausedTask);
+            appendJournal(pausedTask.id, { type: 'resume', content: `Manager answered and resumed ${targetAgentId}.` });
+            try {
+              const { BackgroundTaskRunner } = require('../tasks/background-task-runner');
+              const runner = new BackgroundTaskRunner(
+                pausedTask.id,
+                deps.handleChat,
+                deps.broadcastWS || (() => {}),
+                deps.telegramChannel || null,
+              );
+              runner.start().catch((e: any) => console.warn('[talk_to_subagent] Resume failed:', e?.message || e));
+            } catch (resumeErr: any) {
+              console.warn('[talk_to_subagent] Could not resume paused subagent:', resumeErr?.message || resumeErr);
+            }
+          }
           console.log(`[talk_to_subagent] Queued message for "${targetAgentId}" in team "${team.name}"`);
-          return { name, args, result: `Message queued for ${targetAgentId} (team: ${team.name}). They will receive it on their next run.`, error: false };
+          return { name, args, result: pausedTask ? `Message delivered to ${targetAgentId} (team: ${team.name}) and their paused task is resuming.` : `Message queued for ${targetAgentId} (team: ${team.name}). They will receive it on their next run.`, error: false };
         } catch (e: any) {
           return { name, args, result: `ERROR: ${e.message}`, error: true };
         }
@@ -262,6 +324,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'talk_to_manager': {
         const message = String(args?.message || '').trim();
+        const waitForReply = args?.wait_for_reply === true;
         if (!message) return { name, args, result: 'ERROR: message is required', error: true };
         try {
           const { listManagedTeams: lmt, queueManagerMessage } = require('../teams/managed-teams');
@@ -275,8 +338,28 @@ export async function executeTool(name: string, args: any, workspacePath: string
             : null;
           if (!team) return { name, args, result: 'ERROR: talk_to_manager only works inside a team dispatch session. Could not identify team.', error: true };
           queueManagerMessage(team.id, fromAgentId, message);
+          appendTeamChat(team.id, {
+            from: 'subagent',
+            fromName: fromAgentId,
+            fromAgentId,
+            content: `${waitForReply ? 'Question for manager' : 'Message to manager'}: ${message}`,
+          });
+          if (waitForReply) {
+            const pausedTask = listTasks({ status: ['running', 'queued'] })
+              .filter((t: any) => t.sessionId === sessionId)
+              .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+            if (pausedTask) {
+              pausedTask.status = 'awaiting_user_input';
+              pausedTask.pauseReason = 'awaiting_user_input';
+              pausedTask.pendingClarificationQuestion = message;
+              pausedTask.lastProgressAt = Date.now();
+              saveTask(pausedTask);
+              appendJournal(pausedTask.id, { type: 'pause', content: `Paused waiting for manager response: ${message.slice(0, 200)}` });
+              try { deps.broadcastWS({ type: 'task_awaiting_input', taskId: pausedTask.id, question: message, teamId: team.id, agentId: fromAgentId }); } catch {}
+            }
+          }
           console.log(`[talk_to_manager] Agent "${fromAgentId}" queued message to manager in team "${team.name}"`);
-          return { name, args, result: `Message sent to manager of team "${team.name}". They will see it on their next review cycle.`, error: false };
+          return { name, args, result: waitForReply ? `Message sent to manager of team "${team.name}" and this task is paused waiting for their reply.` : `Message sent to manager of team "${team.name}". They will see it on their next review cycle.`, error: false };
         } catch (e: any) {
           return { name, args, result: `ERROR: ${e.message}`, error: true };
         }
@@ -365,7 +448,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'src_stats': {
         const rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/');
         if (!rel) return { name, args, result: 'file path is required', error: true };
-        const projectRoot = path.resolve(workspacePath, '..');
+        const projectRoot = resolveProjectRootForSourceAccess();
         const srcRoot = path.join(projectRoot, 'src');
         const normalizedRel = rel.replace(/^\.?\//, '').replace(/^src\//, '');
         const absPath = path.resolve(srcRoot, normalizedRel);
@@ -397,7 +480,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'webui_stats': {
         const rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/');
         if (!rel) return { name, args, result: 'file path is required', error: true };
-        const projectRoot = path.resolve(workspacePath, '..');
+        const projectRoot = resolveProjectRootForSourceAccess();
         const webUiRoot = path.join(projectRoot, 'web-ui');
         const normalizedRel = rel.replace(/^\.?\//, '').replace(/^web-ui\//, '');
         const absPath = path.resolve(webUiRoot, normalizedRel);
@@ -577,7 +660,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const gs_pattern = String(args.pattern || '');
         if (!gs_pattern) return { name, args, result: 'pattern is required', error: true };
 
-        const gs_projectRoot = path.resolve(workspacePath, '..');
+        const gs_projectRoot = resolveProjectRootForSourceAccess();
         const gs_srcRoot = path.join(gs_projectRoot, 'src');
         const gs_webUiRoot = path.join(gs_projectRoot, 'web-ui');
 
@@ -815,7 +898,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/');
         if (!rel) return { name, args, result: 'ERROR: file path required.', error: true };
         // Resolve relative to project root (one level up from workspace)
-        const projectRoot = path.resolve(workspacePath, '..');
+        const projectRoot = resolveProjectRootForSourceAccess();
         const srcRoot = path.join(projectRoot, 'src');
 
         // Allow a small allowlist of project-root files (read-only, non-sensitive)
@@ -908,7 +991,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const frs_replace = String(args.replace ?? '');
         if (!frs_rel) return { name, args, result: 'ERROR: file path required', error: true };
         if (!frs_find) return { name, args, result: 'ERROR: find text required', error: true };
-        const frs_projectRoot = path.resolve(workspacePath, '..');
+        const frs_projectRoot = resolveProjectRootForSourceAccess();
         const frs_srcRoot = path.join(frs_projectRoot, 'src');
         const frs_absPath = path.resolve(frs_srcRoot, frs_rel.replace(/^\.?\/?src\//, ''));
         if (!frs_absPath.startsWith(frs_srcRoot)) {
@@ -943,7 +1026,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const rls_end = Math.max(rls_start, Math.floor(Number(args.end_line) || rls_start));
         const rls_newContent = String(args.new_content || '');
         if (!rls_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const rls_projectRoot = path.resolve(workspacePath, '..');
+        const rls_projectRoot = resolveProjectRootForSourceAccess();
         const rls_srcRoot = path.join(rls_projectRoot, 'src');
         const rls_absPath = path.resolve(rls_srcRoot, rls_rel.replace(/^\.?\/?src\//, ''));
         if (!rls_absPath.startsWith(rls_srcRoot)) {
@@ -974,7 +1057,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const ias_afterLine = Math.max(0, Math.floor(Number(args.after_line) || 0));
         const ias_content = String(args.content || '');
         if (!ias_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const ias_projectRoot = path.resolve(workspacePath, '..');
+        const ias_projectRoot = resolveProjectRootForSourceAccess();
         const ias_srcRoot = path.join(ias_projectRoot, 'src');
         const ias_absPath = path.resolve(ias_srcRoot, ias_rel.replace(/^\.?\/?src\//, ''));
         if (!ias_absPath.startsWith(ias_srcRoot)) {
@@ -1002,7 +1085,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const dls_start = Math.max(1, Math.floor(Number(args.start_line) || 1));
         const dls_end = Math.max(dls_start, Math.floor(Number(args.end_line) || dls_start));
         if (!dls_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const dls_projectRoot = path.resolve(workspacePath, '..');
+        const dls_projectRoot = resolveProjectRootForSourceAccess();
         const dls_srcRoot = path.join(dls_projectRoot, 'src');
         const dls_absPath = path.resolve(dls_srcRoot, dls_rel.replace(/^\.?\/?src\//, ''));
         if (!dls_absPath.startsWith(dls_srcRoot)) {
@@ -1033,7 +1116,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const ws_content = String(args.content || '');
         const ws_overwrite = args.overwrite !== false;
         if (!ws_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const ws_projectRoot = path.resolve(workspacePath, '..');
+        const ws_projectRoot = resolveProjectRootForSourceAccess();
         const ws_srcRoot = path.join(ws_projectRoot, 'src');
         const ws_absPath = path.resolve(ws_srcRoot, ws_rel.replace(/^\.?\/?src\//, ''));
         if (!ws_absPath.startsWith(ws_srcRoot)) {
@@ -1053,7 +1136,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       // ── list_source: list files/dirs inside src/ ──────────────────────────────
       case 'list_source': {
         const rel = String(args.path || args.dir || '').replace(/\\/g, '/').replace(/^\.?\/?src\/?/, '') || '';
-        const projectRoot = path.resolve(workspacePath, '..');
+        const projectRoot = resolveProjectRootForSourceAccess();
         const srcRoot = path.join(projectRoot, 'src');
         const absPath = rel ? path.resolve(srcRoot, rel) : srcRoot;
         if (!absPath.startsWith(srcRoot)) {
@@ -1075,7 +1158,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       // ── list_webui_source: list files/dirs inside web-ui/ ────────────────────
       case 'list_webui_source': {
         const lwu_rel = String(args.path || args.dir || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\/?/, '') || '';
-        const lwu_projectRoot = path.resolve(workspacePath, '..');
+        const lwu_projectRoot = resolveProjectRootForSourceAccess();
         const lwu_webUiRoot = path.join(lwu_projectRoot, 'web-ui');
         const lwu_absPath = lwu_rel ? path.resolve(lwu_webUiRoot, lwu_rel) : lwu_webUiRoot;
         if (!lwu_absPath.startsWith(lwu_webUiRoot)) {
@@ -1098,7 +1181,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'read_webui_source': {
         const rwu_rel = String(args.file || args.filename || args.path || '').replace(/\\/g, '/').replace(/^\.?\/?web-ui\//, '');
         if (!rwu_rel) return { name, args, result: 'ERROR: file path required.', error: true };
-        const rwu_projectRoot = path.resolve(workspacePath, '..');
+        const rwu_projectRoot = resolveProjectRootForSourceAccess();
         const rwu_webUiRoot = path.join(rwu_projectRoot, 'web-ui');
         const rwu_absPath = path.resolve(rwu_webUiRoot, rwu_rel);
         if (!rwu_absPath.startsWith(rwu_webUiRoot)) {
@@ -1156,7 +1239,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const frwu_replace = String(args.replace ?? '');
         if (!frwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
         if (!frwu_find) return { name, args, result: 'ERROR: find text required', error: true };
-        const frwu_projectRoot = path.resolve(workspacePath, '..');
+        const frwu_projectRoot = resolveProjectRootForSourceAccess();
         const frwu_webUiRoot = path.join(frwu_projectRoot, 'web-ui');
         const frwu_absPath = path.resolve(frwu_webUiRoot, frwu_rel);
         if (!frwu_absPath.startsWith(frwu_webUiRoot)) {
@@ -1191,7 +1274,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const rlwu_end = Math.max(rlwu_start, Math.floor(Number(args.end_line) || rlwu_start));
         const rlwu_newContent = String(args.new_content || '');
         if (!rlwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const rlwu_projectRoot = path.resolve(workspacePath, '..');
+        const rlwu_projectRoot = resolveProjectRootForSourceAccess();
         const rlwu_webUiRoot = path.join(rlwu_projectRoot, 'web-ui');
         const rlwu_absPath = path.resolve(rlwu_webUiRoot, rlwu_rel);
         if (!rlwu_absPath.startsWith(rlwu_webUiRoot)) {
@@ -1222,7 +1305,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const iawu_afterLine = Math.max(0, Math.floor(Number(args.after_line) || 0));
         const iawu_content = String(args.content || '');
         if (!iawu_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const iawu_projectRoot = path.resolve(workspacePath, '..');
+        const iawu_projectRoot = resolveProjectRootForSourceAccess();
         const iawu_webUiRoot = path.join(iawu_projectRoot, 'web-ui');
         const iawu_absPath = path.resolve(iawu_webUiRoot, iawu_rel);
         if (!iawu_absPath.startsWith(iawu_webUiRoot)) {
@@ -1250,7 +1333,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const dlwu_start = Math.max(1, Math.floor(Number(args.start_line) || 1));
         const dlwu_end = Math.max(dlwu_start, Math.floor(Number(args.end_line) || dlwu_start));
         if (!dlwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const dlwu_projectRoot = path.resolve(workspacePath, '..');
+        const dlwu_projectRoot = resolveProjectRootForSourceAccess();
         const dlwu_webUiRoot = path.join(dlwu_projectRoot, 'web-ui');
         const dlwu_absPath = path.resolve(dlwu_webUiRoot, dlwu_rel);
         if (!dlwu_absPath.startsWith(dlwu_webUiRoot)) {
@@ -1281,7 +1364,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const wwu_content = String(args.content || '');
         const wwu_overwrite = args.overwrite !== false;
         if (!wwu_rel) return { name, args, result: 'ERROR: file path required', error: true };
-        const wwu_projectRoot = path.resolve(workspacePath, '..');
+        const wwu_projectRoot = resolveProjectRootForSourceAccess();
         const wwu_webUiRoot = path.join(wwu_projectRoot, 'web-ui');
         const wwu_absPath = path.resolve(wwu_webUiRoot, wwu_rel);
         if (!wwu_absPath.startsWith(wwu_webUiRoot)) {
@@ -1794,14 +1877,28 @@ export async function executeTool(name: string, args: any, workspacePath: string
               const registryPath = path.join(configDir, 'agents', `${fromRole}.json`);
               if (fs.existsSync(registryPath)) {
                 const roleDef = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+                const specialization = String(args.specialization || createIfMissing?.teamAssignment || createIfMissing?.teamRole || '').trim();
+                const roleName = String(roleDef.name || fromRole.charAt(0).toUpperCase() + fromRole.slice(1)).trim();
+                const derivedTeamRole = String(createIfMissing?.teamRole || '').trim()
+                  || (specialization
+                    ? specialization.split(/[.!?\n]/)[0].replace(/^focus on\s+/i, '').slice(0, 80)
+                    : roleName);
+                const derivedDescription = String(createIfMissing?.description || '').trim()
+                  || (specialization || roleDef.description || '');
+                const combinedSystemInstructions = [
+                  `[BASE PRESET ROLE - ${roleName}]`,
+                  String(roleDef.system_prompt || '').trim(),
+                  ``,
+                  `[TEAM-SPECIFIC ROLE - ${derivedTeamRole}]`,
+                  specialization || 'No team-specific assignment was provided. Infer it from the manager dispatch task and team_info.md.',
+                  ``,
+                  `When the team-specific role conflicts with the generic preset, follow the team-specific role while preserving the preset's quality bar and deliverable discipline.`,
+                ].filter(Boolean).join('\n');
                 // Merge registry definition into create_if_missing (caller fields take priority)
                 createIfMissing = {
-                  name: createIfMissing?.name || roleDef.name || (fromRole.charAt(0).toUpperCase() + fromRole.slice(1)),
-                  description: createIfMissing?.description || roleDef.description || '',
-                  system_instructions: createIfMissing?.system_instructions ||
-                    (args.specialization
-                      ? `${roleDef.system_prompt}\n\n[SPECIALIZATION]\n${args.specialization}`
-                      : roleDef.system_prompt || ''),
+                  name: createIfMissing?.name || derivedTeamRole || roleName,
+                  description: derivedDescription,
+                  system_instructions: createIfMissing?.system_instructions || combinedSystemInstructions,
                   allowed_categories: createIfMissing?.allowed_categories || roleDef.default_categories || [],
                   forbidden_tools: createIfMissing?.forbidden_tools || [],
                   constraints: createIfMissing?.constraints || [],
@@ -1809,6 +1906,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
                   max_steps: createIfMissing?.max_steps || 20,
                   model: createIfMissing?.model || roleDef.model || undefined,
                   roleType: fromRole,
+                  teamRole: derivedTeamRole,
+                  teamAssignment: String(createIfMissing?.teamAssignment || specialization || '').trim(),
+                  baseRolePrompt: String(roleDef.system_prompt || '').trim(),
                 };
               } else {
                 console.warn(`[spawn_subagent] Role registry file not found: ${registryPath}`);
@@ -1884,9 +1984,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
           if (action === 'create') {
             const teamName = String(args.name || '').trim();
-            const teamContext = String(args.team_context || args.teamContext || '').trim();
+            const teamContext = String(args.team_context || args.teamContext || args.purpose || '').trim();
             if (!teamName || !teamContext) {
-              return { name, args, result: 'team_manage(create) requires name and team_context', error: true };
+              return { name, args, result: 'team_manage(create) requires name and team_context (or purpose)', error: true };
             }
 
             const requestedIds = Array.isArray(args.subagent_ids)
@@ -2117,8 +2217,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
                   success: result.success,
                   resultPreview: String(result.result || result.error || ''),
                 });
-                // NOTE: Do NOT trigger a full manager review here - dispatches are transient actions,
-                // not subagent scheduled completions. Reviews only fire on scheduled agent runs.
+                await verifySubagentResult(
+                  teamId,
+                  agentId,
+                  task,
+                  result.success ? String(result.result || '') : `Task failed: ${result.error || 'unknown error'}`,
+                  deps.broadcastTeamEvent,
+                );
               } catch (err: any) {
                 appendTeamChat(teamId, {
                   from: 'subagent',
@@ -2249,11 +2354,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
             rolesBlock,
             ``,
             `YOUR WORKFLOW (execute immediately, no clarifying questions):`,
+            `0. Run memory_search for the goal and additional context before creating anything. Use relevant business/user/project memory to enrich the team purpose, role specializations, and context references.`,
             `1. Analyze the purpose — pick 2-4 roles that cover the ongoing work`,
             `2. For each role, call spawn_subagent with:`,
             `   - subagent_id: "<role>_<shortname>_v1" (e.g. "researcher_growth_v1")`,
             `   - from_role: "<role>" (e.g. "researcher")`,
-            `   - specialization: one sentence describing this agent's specific focus for THIS purpose`,
+            `   - specialization: a concrete team-specific assignment, not a generic role. Examples: "Prospect Researcher: finds local small-business leads for Xpose Market from maps/directories/search"; "Website/SEO Qualifier: reviews each lead's site quality, trust signals, UX, and basic SEO gaps"; "Lead Enricher: gathers contact info, socials, owner names, and outreach angle when available".`,
+            `   - optional create_if_missing.teamRole: a short title like "Website/SEO Qualifier"`,
+            `   - optional create_if_missing.teamAssignment: the full concrete assignment if it needs more detail than specialization`,
             `   - run_now: false`,
             `3. Call team_manage(action="create") with:`,
             `   - name, purpose (the static team purpose — NOT a one-time task), subagent_ids (all created agents)`,
@@ -2262,12 +2370,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
             `4. Respond with a brief summary: team name, team_id, agents created, purpose, status "ready (not started)".`,
             `5. End with this exact follow-up question to the main agent:`,
             `   "Team is ready. Would you like to start it now? If yes, what should the first task be?"`,
+            `   Mention that team_info.md was created automatically in the team workspace and that context reference cards should be used for relevant memory/context found during preflight.`,
             ``,
             `STRICT RULES:`,
             `- Maximum 5 agents`,
             `- Do NOT ask questions — make decisions and act`,
             `- Do NOT use browser, desktop, scheduling, or memory tools`,
+            `- Exception: do use memory_search before creating agents or the team`,
             `- Do NOT create nested teams`,
+            `- Do NOT start the team unless the original user explicitly asked to start immediately`,
+            `- Do NOT inspect random workspace files, pending tasks, or agent_info on the team ID after setup`,
             `- team_ops tools are available in this coordinator session. Do NOT claim tooling limitations or say a team_ops tool is unavailable unless you actually called it and received an explicit tool error in this turn`,
             `- Your session ends after the summary — the team manager takes over`,
             `=== END META-COORDINATOR MODE ===`,
@@ -2985,6 +3097,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
               detail: noteContent.slice(0, 2000),
             });
           } catch {}
+        }
+
+        const teamNote = inferTeamNoteContext(sessionId);
+        if (teamNote) {
+          appendTeamMemoryEvent(teamNote.teamId, {
+            authorType: teamNote.authorType,
+            authorId: teamNote.authorId,
+            taskId: noteTaskId,
+            tag: noteTag,
+            content: noteContent,
+          });
         }
 
         return { name, args, result: `Note saved [${noteTag}] (${noteContent.length} chars) â†’ intraday-notes`, error: false };

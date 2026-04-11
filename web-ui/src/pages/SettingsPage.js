@@ -2323,14 +2323,23 @@ async function saveMCPServer() {
     });
   } else {
     cfg.url = document.getElementById('mcp-f-url')?.value?.trim() || '';
-    const headersRaw = document.getElementById('mcp-f-headers')?.value || '';
+    const headersEl = document.getElementById('mcp-f-headers');
+    const headersRaw = headersEl?.value || '';
+    console.log('[MCP Debug] Headers textarea element:', { exists: !!headersEl, visible: headersEl?.offsetParent !== null, value: headersRaw });
     cfg.headers = {};
     headersRaw.split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
       const colon = line.indexOf(':'); if (colon > 0) cfg.headers[line.slice(0,colon).trim()] = line.slice(colon+1).trim();
     });
+    console.log('[MCP Debug] Parsed headers:', cfg.headers);
   }
 
   try {
+    // Debug: log what we're about to send
+    console.log('[MCP Debug] Saving config:', { id, name, transport, enabled,
+      url: cfg.url,
+      headersCount: Object.keys(cfg.headers || {}).length,
+      headers: cfg.headers ? Object.keys(cfg.headers) : 'none' });
+
     const r = await api('/api/mcp/servers', { method: 'POST', body: JSON.stringify(cfg) });
     if (r.success) {
       if (msgEl) msgEl.textContent = '? Saved';

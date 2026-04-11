@@ -1,17 +1,17 @@
 {
-  "checkedAt": 1775763200267,
+  "checkedAt": 1775944178010,
   "mode": "git",
   "packageName": "prometheus",
   "currentVersion": "1.0.1",
   "result": {
     "mode": "git",
     "source": "git",
-    "available": false,
-    "message": "No updates available on branch \"main\".",
+    "available": true,
+    "message": "Update available: \"main\" is behind by 3 commit(s).",
     "currentVersion": "1.0.1",
-    "latestVersion": "487ccff",
+    "latestVersion": "8ca7630",
     "branch": "main",
     "ahead": 0,
-    "behind": 0
+    "behind": 3
   }
 }

@@ -24,5 +24,13 @@
   "memory-governance-playbook": false,
   "web-animations": false,
   "web-design-skill": false,
-  "mcp-ops-troubleshooting": false
+  "mcp-ops-troubleshooting": false,
+  "competitive-intelligence": false,
+  "pitch-deck-builder": false,
+  "ghostwriter": false,
+  "cold-outreach-writer": false,
+  "market-research": false,
+  "deal-analyzer": false,
+  "product-discovery": false,
+  "local-lead-hunting": false
 }

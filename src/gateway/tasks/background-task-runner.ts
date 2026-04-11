@@ -120,7 +120,7 @@ export class BackgroundTaskRunner {
     abortSignal?: { aborted: boolean },
     callerContext?: string,
     modelOverride?: string,
-    executionMode?: 'interactive' | 'background_task' | 'proposal_execution' | 'heartbeat' | 'cron',
+    executionMode?: 'interactive' | 'background_task' | 'proposal_execution' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent',
     toolFilter?: string[],
     attachments?: undefined,
     reasoningOptions?: undefined,
@@ -231,12 +231,12 @@ export class BackgroundTaskRunner {
     // step, its text response becomes lastResultSummary, and that is delivered
     // directly to the user. No second LLM call needed after all steps are done.
     //
-    // Skip for: resuming mid-task, sub-agents (they don't deliver to user chat),
+    // Skip for: resuming mid-task, legacy child sub-agents (they don't deliver to user chat),
     // and tasks that already have the step (idempotent on restart).
     const isResuming = task.currentStepIndex > 0;
-    const isSubagent = !!task.subagentProfile || !!task.parentTaskId;
+    const isLegacySubagent = !task.teamSubagent && (!!task.subagentProfile || !!task.parentTaskId);
     const alreadyHasWriteNoteStep = task.plan.some((s: any) => s.notes === 'write_note_completion');
-    if (!isResuming && !isSubagent && !alreadyHasWriteNoteStep && task.plan.length > 0) {
+    if (!isResuming && !isLegacySubagent && !alreadyHasWriteNoteStep && task.plan.length > 0) {
       mutatePlan(taskId, [{
         op: 'add',
         after_index: task.plan.length - 1,
@@ -252,7 +252,7 @@ export class BackgroundTaskRunner {
     // ── Legacy memory extraction (opt-in, kept for backward compat) ───────────
     const alreadyHasMemStep = task.plan.some((s: any) => s.notes === 'memory_extraction');
     const memExtractionEnabled = !!(task as any).enableMemoryExtraction;
-    if (!isResuming && !isSubagent && !alreadyHasMemStep && task.plan.length > 0 && memExtractionEnabled) {
+    if (!isResuming && !isLegacySubagent && !alreadyHasMemStep && task.plan.length > 0 && memExtractionEnabled) {
       mutatePlan(taskId, [{
         op: 'add',
         after_index: task.plan.length - 1,
@@ -293,6 +293,9 @@ export class BackgroundTaskRunner {
       ].join('\n');
     }
 
+    const teamSubagentNote = task.teamSubagent?.callerContext
+      ? `\n${task.teamSubagent.callerContext}`
+      : '';
     const profileNote = task.subagentProfile
       ? `\nSub-agent role: ${task.subagentProfile}. Stay focused on your assigned task only. Do NOT call delegate_to_specialist or subagent_spawn.`
       : '';
@@ -335,7 +338,7 @@ export class BackgroundTaskRunner {
       `  (tag: "task_complete") with a full rundown of what was done, then write your summary`,
       `  response to the user as plain text. That text becomes the final message delivered to chat.`,
       `- If blocked, say what is blocking you and stop.`,
-      `You are running autonomously.${profileNote}${resumeNote}${xLoginGuidance}`,
+      `You are running autonomously.${teamSubagentNote}${profileNote}${resumeNote}${xLoginGuidance}`,
       `[/BACKGROUND TASK CONTEXT]`,
     ].filter(Boolean).join('\n');
   }
@@ -418,7 +421,7 @@ export class BackgroundTaskRunner {
     toolFilter?: string[],
     timeoutOverrideMs?: number,
     providerOverride?: string,
-    executionModeOverride: 'background_task' | 'proposal_execution' = 'background_task',
+    executionModeOverride: 'background_task' | 'proposal_execution' | 'team_subagent' = 'background_task',
   ): Promise<
     | { ok: true; result: { type: string; text: string; thinking?: string } }
     | { ok: false; reason: string; detail: string }
@@ -764,6 +767,7 @@ export class BackgroundTaskRunner {
       if (!task) return;
       if (task.status === 'complete' || task.status === 'failed') return;
       if (task.status === 'needs_assistance') return;
+      if (task.status === 'awaiting_user_input') return;
 
       if (pauseRequests.has(taskId)) {
         const pauseReason = task.pauseReason || 'user_pause';
@@ -906,6 +910,8 @@ export class BackgroundTaskRunner {
         if (slashIdx > 0) {
           taskProviderOverride = liveTask.executorProvider.slice(0, slashIdx);
           taskModelOverride = liveTask.executorProvider.slice(slashIdx + 1);
+        } else {
+          taskModelOverride = liveTask.executorProvider;
         }
       }
 
@@ -920,7 +926,7 @@ export class BackgroundTaskRunner {
         buildSubagentToolFilter(task.subagentProfile),
         undefined,
         taskProviderOverride,
-        isProposalLikeSourceSession ? 'proposal_execution' : 'background_task',
+        task.teamSubagent ? 'team_subagent' : isProposalLikeSourceSession ? 'proposal_execution' : 'background_task',
       );
 
       if (!roundOutcome.ok) {
@@ -1044,6 +1050,20 @@ export class BackgroundTaskRunner {
   }
 
   private async _pauseForClarification(task: TaskRecord, question: string): Promise<void> {
+    if (task.teamSubagent?.teamId && task.teamSubagent?.agentId) {
+      try {
+        const { appendTeamChat, queueManagerMessage } = await import('../teams/managed-teams.js');
+        queueManagerMessage(task.teamSubagent.teamId, task.teamSubagent.agentId, question);
+        appendTeamChat(task.teamSubagent.teamId, {
+          from: 'subagent',
+          fromName: task.teamSubagent.agentName || task.teamSubagent.agentId,
+          fromAgentId: task.teamSubagent.agentId,
+          content: `Question for manager: ${question}`,
+        });
+      } catch (e) {
+        console.warn('[TeamSubagent] Could not route clarification to manager:', e);
+      }
+    }
     const freshTask = loadTask(task.id);
     if (freshTask) {
       freshTask.pendingClarificationQuestion = question;
@@ -1124,6 +1144,40 @@ export class BackgroundTaskRunner {
       return;
     }
 
+    // run_once_task path: verification + delivery to originating session
+    if (task.taskKind === 'run_once' && task.originatingSessionId) {
+      try {
+        await this._verifyAndDeliverRunOnce(task, message);
+        // Re-load task to get the updated finalSummary from verification
+        const updatedTask = loadTask(task.id);
+        const finalMsg = updatedTask?.finalSummary || message;
+        this._broadcast('task_notification', {
+          taskId: task.id,
+          sessionId: task.originatingSessionId,
+          channel: task.channel,
+          message: finalMsg
+        });
+      } catch (e) {
+        console.warn('[BTR] run_once verification/delivery error:', e);
+        // Fallback: deliver unverified to originating session
+        try {
+          addMessage(task.originatingSessionId, {
+            role: 'assistant',
+            content: message,
+            timestamp: Date.now()
+          } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+        } catch {}
+        this._broadcast('task_notification', {
+          taskId: task.id,
+          sessionId: task.originatingSessionId,
+          channel: task.channel,
+          message
+        });
+      }
+      return;
+    }
+
+    // Normal task path (scheduled, background_spawn spawned, subagent, etc.)
     try {
       addMessage(task.sessionId, { role: 'user', content: `[BACKGROUND_TASK_RESULT task_id=${task.id}]`, timestamp: Date.now() - 1 });
       addMessage(task.sessionId, { role: 'assistant', content: message, timestamp: Date.now() });
@@ -1131,7 +1185,8 @@ export class BackgroundTaskRunner {
       console.warn('[BTR] Delivery failed (addMessage):', e);
     }
 
-    if ((opts?.forceTelegram || task.channel === 'telegram') && this.telegramChannel) {
+    // Skip Telegram delivery for run_once tasks — only web delivery
+    if (!task.taskKind?.startsWith('run_once') && ((opts?.forceTelegram || task.channel === 'telegram') && this.telegramChannel)) {
       try {
         if (task.telegramChatId && typeof this.telegramChannel.sendMessage === 'function') {
           await this.telegramChannel.sendMessage(task.telegramChatId, message);
@@ -1145,11 +1200,97 @@ export class BackgroundTaskRunner {
 
     this._broadcast('task_notification', { taskId: task.id, sessionId: task.sessionId, channel: task.channel, message });
   }
+
+  private async _verifyAndDeliverRunOnce(task: TaskRecord, taskResult: string): Promise<void> {
+    const noOp = () => {};
+    const { modelOverride, providerOverride } = this._resolveRunOnceModel();
+
+    // Collect evidence notes
+    const bus = loadEvidenceBus(task.id);
+    const notes = (bus?.entries || [])
+      .filter((e: any) => e.category === 'finding' || e.category === 'artifact')
+      .map((e: any) => `• ${String(e.value || '').slice(0, 300)}`)
+      .join('\n');
+
+    // Build and run verification prompt
+    const verifyPrompt = this._buildVerifyPrompt(task.title, taskResult, notes);
+    const verifySessionId = `run_once_verify_${task.id}_${Date.now()}`;
+
+    let verificationText = taskResult;
+    try {
+      const verifyResult = await this.handleChat(
+        verifyPrompt, verifySessionId, noOp,
+        undefined, undefined, undefined,
+        modelOverride || undefined, 'background_task',
+        undefined, undefined, undefined, providerOverride || undefined,
+      );
+      verificationText = (verifyResult?.text || '').trim() || taskResult;
+    } catch (err: any) {
+      console.warn(`[RunOnce] Verification error for task ${task.id}:`, err?.message);
+    } finally {
+      try { clearHistory(verifySessionId); } catch {}
+    }
+
+    // Update task with verification status + final result
+    task.verificationStatus = 'complete';
+    task.finalSummary = verificationText;
+    saveTask(task);
+
+    // Deliver verified result to originating session
+    if (task.originatingSessionId) {
+      try {
+        addMessage(task.originatingSessionId, {
+          role: 'assistant',
+          content: verificationText,
+          timestamp: Date.now(),
+        } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+      } catch (e) {
+        console.warn('[RunOnce] addMessage to originating session failed:', e);
+      }
+    }
+
+    console.log(`[RunOnce] Task "${task.title}" (${task.id}) verified and delivered to session ${task.originatingSessionId}`);
+  }
+
+  private _resolveRunOnceModel(): { modelOverride?: string; providerOverride?: string } {
+    try {
+      const cfg = getConfig().getConfig() as any;
+      const ref = String(cfg?.agent_model_defaults?.background_task || '').trim();
+      if (!ref) return {};
+      const slash = ref.indexOf('/');
+      if (slash > 0) return { providerOverride: ref.slice(0, slash), modelOverride: ref.slice(slash + 1) };
+      return { modelOverride: ref };
+    } catch {
+      return {};
+    }
+  }
+
+  private _buildVerifyPrompt(title: string, taskResult: string, notes: string): string {
+    const lines = [
+      `A task you executed has completed. Please review the results, verify the work was done correctly, and provide a clear summary.`,
+      '',
+      `**Task:** ${title}`,
+      '',
+      '**Results from execution:**',
+      taskResult || '*(no output)*',
+    ];
+    if (notes) lines.push('', '**Evidence collected during execution:**', notes);
+    lines.push(
+      '',
+      'Please:',
+      '1. Confirm the task was completed successfully (or identify any issues)',
+      '2. Highlight the key outcomes',
+      '3. Note anything that needs follow-up',
+      '',
+      'Keep your response concise and actionable.',
+    );
+    return lines.join('\n');
+  }
 }
 
-// ─── run_task_now: one-off silent background task with verification ────────────
-// Fully silent: both phases use a no-op sendSSE so no logs/tool calls surface.
-// Only the final verified response is delivered to the originating session.
+// ─── run_task_now: one-off background task with automatic verification ───────
+// Creates a task with proper plan, runs through BackgroundTaskRunner,
+// automatically verifies on completion, and delivers to originating session.
 
 export interface RunOnceOpts {
   title: string;
@@ -1174,165 +1315,42 @@ export interface RunOnceOpts {
   broadcastWS: (data: object) => void;
 }
 
-function _resolveRunOnceModel(): { modelOverride?: string; providerOverride?: string } {
-  try {
-    const cfg = getConfig().getConfig() as any;
-    const ref = String(cfg?.agent_model_defaults?.background_task || '').trim();
-    if (!ref) return {};
-    const slash = ref.indexOf('/');
-    if (slash > 0) return { providerOverride: ref.slice(0, slash), modelOverride: ref.slice(slash + 1) };
-    return { modelOverride: ref };
-  } catch {
-    return {};
-  }
-}
-
-function _loadSubagentContext(subagentId: string): string | undefined {
-  try {
-    const cfg = getConfig().getConfig() as any;
-    const ws = String(cfg?.workspace?.path || process.cwd());
-    const p = path.join(ws, '.prometheus', 'subagents', subagentId, 'system_prompt.md');
-    if (fs.existsSync(p)) return `[YOUR ROLE]\n${fs.readFileSync(p, 'utf-8').trim()}`;
-  } catch {}
-  return undefined;
-}
-
-function _buildVerifyPrompt(title: string, taskResult: string, notes: string): string {
-  const lines = [
-    `A background task you dispatched has completed. Please review the results, verify the work was done correctly, and provide a clear summary for the user.`,
-    '',
-    `**Task:** ${title}`,
-    '',
-    '**Results from the task:**',
-    taskResult || '*(no output)*',
-  ];
-  if (notes) lines.push('', '**Notes recorded during execution:**', notes);
-  lines.push(
-    '',
-    'Please:',
-    '1. Confirm the task was completed successfully (or identify any issues)',
-    '2. Highlight the key outcomes',
-    '3. Note anything that needs follow-up',
-    '',
-    'Keep your response concise and actionable.',
-  );
-  return lines.join('\n');
-}
-
-async function _executeRunOnceTask(task: TaskRecord, opts: RunOnceOpts): Promise<void> {
-  const noOp = () => {};
-  const { modelOverride, providerOverride } = _resolveRunOnceModel();
-  const callerContext = opts.subagentId ? _loadSubagentContext(opts.subagentId) : undefined;
-
-  // ── Phase 1: Task Execution (isolated session, fully silent) ──────────────
-  const taskSessionId = `run_once_${task.id}_${Date.now()}`;
-  updateTaskStatus(task.id, 'running');
-  setTaskStepRunning(task.id, 0);
-
-  let taskResult = '';
-  try {
-    const result = await opts.handleChat(
-      opts.prompt, taskSessionId, noOp,
-      undefined, undefined, callerContext,
-      modelOverride, 'background_task',
-      undefined, undefined, undefined, providerOverride,
-    );
-    taskResult = (result?.text || '').trim();
-  } catch (err: any) {
-    taskResult = `Task execution error: ${err?.message || String(err)}`;
-    console.error(`[RunOnce] Phase 1 error for task ${task.id}:`, err?.message || err);
-  } finally {
-    try { clearHistory(taskSessionId); } catch {}
-  }
-
-  // Collect notes from evidence bus
-  const bus = loadEvidenceBus(task.id);
-  const notes = (bus?.entries || [])
-    .filter((e: any) => e.category === 'finding' || e.category === 'artifact')
-    .map((e: any) => `• ${String(e.value || '').slice(0, 300)}`)
-    .join('\n');
-
-  updateTaskStatus(task.id, 'complete', { finalSummary: taskResult });
-
-  // ── Phase 2: Silent Verification ─────────────────────────────────────────
-  const liveTask = loadTask(task.id);
-  if (liveTask) { liveTask.verificationStatus = 'running'; saveTask(liveTask); }
-
-  const verifySessionId = `run_once_verify_${task.id}_${Date.now()}`;
-  const verifyPrompt = _buildVerifyPrompt(task.title, taskResult, notes);
-
-  let verificationText = taskResult;
-  try {
-    const verifyResult = await opts.handleChat(
-      verifyPrompt, verifySessionId, noOp,
-      undefined, undefined, undefined,
-      modelOverride, 'background_task',
-      undefined, undefined, undefined, providerOverride,
-    );
-    verificationText = (verifyResult?.text || '').trim() || taskResult;
-  } catch (err: any) {
-    console.warn(`[RunOnce] Phase 2 (verify) error for task ${task.id}:`, err?.message);
-  } finally {
-    try { clearHistory(verifySessionId); } catch {}
-  }
-
-  // Persist verification result
-  const finalTask = loadTask(task.id);
-  if (finalTask) {
-    finalTask.verificationStatus = 'complete';
-    finalTask.finalSummary = verificationText;
-    saveTask(finalTask);
-  }
-
-  // ── Phase 3: Deliver to originating session ───────────────────────────────
-  const originId = opts.originatingSessionId;
-  if (originId) {
-    try {
-      addMessage(originId, {
-        role: 'assistant',
-        content: verificationText,
-        timestamp: Date.now(),
-      } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
-    } catch (e) {
-      console.warn('[RunOnce] addMessage to originating session failed:', e);
-    }
-    opts.broadcastWS({
-      type: 'task_notification',
-      sessionId: originId,
-      taskId: task.id,
-      taskTitle: task.title,
-      message: verificationText,
-    });
-    console.log(`[RunOnce] Task "${task.title}" (${task.id}) delivered to session ${originId}`);
-  }
-}
-
 /**
- * Spawn a one-off background task that runs silently through two phases:
- *   1. Task execution (isolated session, no-op SSE)
- *   2. Verification (isolated session, no-op SSE)
- * Then delivers the final verified response as a message into the originating session.
+ * Spawn a one-off background task that runs with full plan/step tracking,
+ * then automatically verifies the result and delivers to the originating session.
  * Returns immediately with task_id — execution is fully detached.
  */
 export function runOnceTask(opts: RunOnceOpts): { task_id: string } {
   const task = createTask({
     title: opts.title,
     prompt: opts.prompt,
-    sessionId: opts.originatingSessionId,
+    sessionId: `run_once_${opts.originatingSessionId}_${Date.now()}`, // Isolated session for task execution
     channel: 'web',
-    plan: [{ index: 0, description: opts.prompt.slice(0, 200), status: 'pending' }],
+    plan: [
+      { index: 0, description: opts.prompt.slice(0, 200), status: 'pending' }
+    ],
     taskKind: 'run_once',
     originatingSessionId: opts.originatingSessionId,
   });
 
-  setImmediate(() =>
-    _executeRunOnceTask(task, opts).catch((err: any) => {
-      console.error(`[RunOnce] Fatal error for task ${task.id}:`, err?.message || err);
-      try {
-        updateTaskStatus(task.id, 'failed', { finalSummary: `Task failed: ${err?.message || 'Unknown error'}` });
-      } catch {}
-    })
-  );
+  saveTask(task);
+
+  // Spawn the BackgroundTaskRunner in background
+  setImmediate(() => {
+    try {
+      const runner = new BackgroundTaskRunner(
+        task.id,
+        opts.handleChat as any,  // Cast to match BackgroundTaskRunner's strict signature
+        opts.broadcastWS,
+        null  // No telegram channel for web-based run_once tasks
+      );
+      runner.start().catch((err: any) => {
+        console.error(`[RunOnce] BackgroundTaskRunner error for task ${task.id}:`, err?.message || err);
+      });
+    } catch (err: any) {
+      console.error(`[RunOnce] Failed to spawn runner for task ${task.id}:`, err?.message || err);
+    }
+  });
 
   return { task_id: task.id };
 }

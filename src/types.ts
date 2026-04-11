@@ -161,6 +161,15 @@ export interface AgentDefinition {
   /** Short description - shown in UI, injected into orchestrator context */
   description?: string;
 
+  /** Base preset role used to create a team subagent, e.g. researcher/analyst/operator */
+  roleType?: string;
+
+  /** Team-specific role title layered on top of the base preset, e.g. Website/SEO Qualifier */
+  teamRole?: string;
+
+  /** Team-specific assignment/mission for this agent within its managed team */
+  teamAssignment?: string;
+
   /** Emoji shown in UI and in agent output prefix */
   emoji?: string;
 
@@ -256,10 +265,16 @@ export interface AgentModelDefaults {
   proposal_executor_low_risk?: string;
   /** Team manager agents */
   manager?: string;
+  /** Dedicated managed-team runtime */
+  team_manager?: string;
   /** Team subagents */
   subagent?: string;
+  /** Dedicated managed-team subagent runtime */
+  team_subagent?: string;
   /** Background tasks / scheduled cron jobs */
   background_task?: string;
+  /** Ephemeral background_spawn agents */
+  background_agent?: string;
 }
 
 // Config Types

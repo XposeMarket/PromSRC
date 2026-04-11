@@ -21,7 +21,7 @@ import {
 } from './managed-teams';
 import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config';
 import { runTeamAgentViaChat } from './team-dispatch-runtime';
-import { runCoordinatorReview, runCoordinatorConversation } from './team-coordinator';
+import { runCoordinatorReview, runCoordinatorConversation, runSubagentResultVerification } from './team-coordinator';
 
 // Backward-compat no-op (server-v2.ts calls this)
 export function setTeamRunAgentFn(_fn: any): void { /* no-op */ }
@@ -336,4 +336,16 @@ export async function handleManagerConversation(
   const team = getManagedTeam(teamId);
   if (!team) return;
   await runCoordinatorConversation(teamId, userMessage, broadcastFn, autoContinue);
+}
+
+export async function verifySubagentResult(
+  teamId: string,
+  agentId: string,
+  dispatchPrompt: string,
+  agentResult: string,
+  broadcastFn?: (data: object) => void,
+): Promise<void> {
+  const team = getManagedTeam(teamId);
+  if (!team || team.manager?.paused === true) return;
+  await runSubagentResultVerification(teamId, agentId, dispatchPrompt, agentResult, broadcastFn);
 }

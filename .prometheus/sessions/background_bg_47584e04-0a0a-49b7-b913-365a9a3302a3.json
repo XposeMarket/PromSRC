@@ -1,0 +1,15 @@
+{
+  "id": "background_bg_47584e04-0a0a-49b7-b913-365a9a3302a3",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775921062641,
+  "lastActiveAt": 1775921062641,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "team_ops"
+  ]
+}

@@ -35,6 +35,7 @@
 ## Key Vendors & Tools
 <!-- Format: Vendor | What for | Cost | Notes -->
 - X / Twitter | Social media growth |  | Primary platform Raul wants to grow on.
+- Google Maps + website intelligence workflow | Local lead discovery and qualification |  | Use live business listings, website review, and saved evidence files to identify and qualify Xpose Market prospects.
 
 ## Approval Thresholds
 - Spending without approval: under $

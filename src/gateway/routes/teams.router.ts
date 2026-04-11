@@ -13,7 +13,7 @@ import {
 } from '../teams/managed-teams';
 import { createTask, listTasks, updateTaskStatus, mutatePlan, appendJournal } from '../tasks/task-store';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory } from '../../scheduler';
-import { triggerManagerReview, handleManagerConversation } from '../teams/team-manager-runner';
+import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
 import { dismissTeamSuggestion } from '../teams/team-detector';
 import { buildTeamDispatchTask, runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
 import * as fs from 'fs';
@@ -204,7 +204,7 @@ router.post('/api/teams', (req, res) => {
         source: 'api_create_team',
       });
     }
-    const kickoff = kickoffInitialReview !== false;
+    const kickoff = kickoffInitialReview === true;
     const kickoffSecondsRaw = Number(kickoffAfterSeconds);
     const kickoffSeconds = Number.isFinite(kickoffSecondsRaw)
       ? Math.max(5, Math.min(300, Math.floor(kickoffSecondsRaw)))
@@ -553,9 +553,13 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
           agentId, success: result.success,
           resultPreview: String(result.result || result.error || ''),
         });
-        // NOTE: Do NOT auto-trigger a review on manual dispatch - only scheduled
-        // subagent completions should trigger reviews. Manual dispatches are
-        // one-off tasks and should not cause the manager to propose changes.
+        await verifySubagentResult(
+          req.params.id,
+          String(agentId),
+          String(task),
+          result.success ? String(result.result || '') : `Task failed: ${result.error || 'unknown error'}`,
+          broadcastTeamEvent,
+        );
       } catch (err: any) {
         appendTeamChat(req.params.id, {
           from: 'subagent', fromName: agentId, fromAgentId: agentId,

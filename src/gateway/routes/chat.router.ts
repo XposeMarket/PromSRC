@@ -254,7 +254,7 @@ import {
   initSkillWindows,
   setSkillRecoveryFn,
 } from '../skills-runtime/skill-windows';
-import { buildProviderById } from '../../providers/factory';
+import { buildProviderById, getPrimaryModel } from '../../providers/factory';
 import { clearTurnModelOverride, getTurnModelOverride } from '../chat/model-switch-state';
 import {
   separateThinkingFromContent,
@@ -433,7 +433,11 @@ export function initChatRouter(deps: ChatRouterDeps): void {
 
 export const router = express.Router();
 
-type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron';
+type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent';
+type ReasoningOptions = {
+  enabled?: boolean;
+  level?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'extra_high';
+};
 const ROLLING_COMPACTION_SUMMARY_PREFIX = '[Rolling context summary]';
 const LEGACY_COMPACTION_SUMMARY_PREFIX = '[Compacted context summary]';
 const CONTEXT_COMPACTION_TOOL_NAME = 'context_compaction';
@@ -654,7 +658,7 @@ async function handleChat(
   executionMode: ExecutionMode = 'interactive',
   toolFilter?: string[],  // Piece 2: optional allowlist (supports wildcards like browser_*)
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
-  reasoningOptions?: undefined,
+  reasoningOptions?: ReasoningOptions,
   providerOverride?: string,
 ): Promise<HandleChatResult> {
   try {
@@ -683,7 +687,7 @@ async function handleChat(
   // serialisation that causes browser_open to receive JSON strings instead of objects.
   const isTelegramSessionForTools = String(sessionId || '').startsWith('telegram_');
   // start_task spawns a local Ollama sub-loop — never appropriate inside a background task or subagent run.
-  const isBackgroundOrSubagentMode = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent' || executionMode === 'cron';
+  const isBackgroundOrSubagentMode = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent' || executionMode === 'cron' || executionMode === 'team_manager' || executionMode === 'team_subagent';
   const isProposalExecutionMode = executionMode === 'proposal_execution';
   // Tools always stripped from subagent/background runs
   const alwaysStrip = new Set(isBackgroundOrSubagentMode ? ['start_task'] : []);
@@ -846,6 +850,10 @@ async function handleChat(
       : executionMode === 'background_agent'
         // background_spawn agents: prefer dedicated key, fall back to background_task
         ? (defaults?.background_agent ? 'background_agent' : 'background_task')
+        : executionMode === 'team_manager'
+          ? (defaults?.team_manager ? 'team_manager' : defaults?.manager ? 'manager' : 'background_task')
+        : executionMode === 'team_subagent'
+          ? (defaults?.team_subagent ? 'team_subagent' : defaults?.subagent ? 'subagent' : 'background_task')
         : (executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'cron')
           ? 'background_task'
           : '';
@@ -869,6 +877,22 @@ async function handleChat(
     }
 
     return { model: explicitModel || undefined, source: 'default' };
+  };
+
+  let currentModelSystemBlock = '';
+  const formatCurrentModelSystemBlock = (generationOverride: ReturnType<typeof resolveProviderModelOverride>): string => {
+    const cfg = getConfig().getConfig() as any;
+    const activeProvider = String(cfg?.llm?.provider || '').trim();
+    const providerId = String(generationOverride.providerId || providerOverride || activeProvider || '').trim() || 'configured primary provider';
+    const providerCfgModel = activeProvider ? String(cfg?.llm?.providers?.[activeProvider]?.model || '').trim() : '';
+    const model = String(generationOverride.model || modelOverride || providerCfgModel || getPrimaryModel() || '').trim() || 'configured primary model';
+    return [
+      '[CURRENT_MODEL]',
+      `provider=${providerId}`,
+      `model=${model}`,
+      `source=${generationOverride.source}`,
+      `execution_mode=${executionMode || 'interactive'}`,
+    ].join('\n');
   };
 
   const seedProgressFromLines = (
@@ -1498,6 +1522,22 @@ async function handleChat(
         'Act autonomously and complete the prompt without asking follow-up questions.',
       ].join('\n');
     }
+    if (executionMode === 'team_subagent') {
+      return [
+        'EXECUTION MODE: Team subagent task.',
+        'You are Prometheus running locally on the user\'s computer.',
+        'You have access to this computer through tools. Use tools directly, verify your work, and do not claim you lack tool access.',
+        'Complete the assigned team task. If you need clarification or a decision, ask the team manager with talk_to_manager instead of asking the user.',
+      ].join('\n');
+    }
+    if (executionMode === 'team_manager') {
+      return [
+        'EXECUTION MODE: Team manager.',
+        'You are running a managed team, not the main user chat.',
+        'Use the manager context exactly: dispatch only useful subagents, verify their outputs, update team memory, and ask the main Prometheus agent only when team-level context is required.',
+        'Use [GOAL_COMPLETE], [NEEDS_INPUT], or [WAITING_MAIN_AGENT] only when those states are genuinely true.',
+      ].join('\n');
+    }
     return '';
   })();
   const responseStyleInstruction = executionMode === 'heartbeat'
@@ -1514,7 +1554,7 @@ async function handleChat(
     if (mode === 'switch_model') {
       return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
     }
-    return `${baseSystemPrompt}${recentToolLog ? '\n\n' + recentToolLog : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${(getConfig().getConfig() as any)?.agent_builder?.enabled === true ? '\n\n' + getWorkflowContextBlock() : ''}`;
+    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${(getConfig().getConfig() as any)?.agent_builder?.enabled === true ? '\n\n' + getWorkflowContextBlock() : ''}`;
   };
   const messages: any[] = [
     {
@@ -2944,8 +2984,25 @@ RULES:
           && (r.name.startsWith('browser_') || r.name.startsWith('desktop_')),
         )
       );
-      const primaryThinkMode: boolean | 'high' | 'medium' | 'low' = (multiAgentActive && !isActiveAutomationOp) ? true : false;
-      const generationOverride = resolveProviderModelOverride();
+	      const requestedThinkMode = reasoningOptions?.enabled
+	        ? (reasoningOptions.level === 'extra_high' ? 'xhigh' : (reasoningOptions.level || 'low'))
+	        : undefined;
+	      const primaryThinkMode: boolean | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' =
+	        requestedThinkMode || ((multiAgentActive && !isActiveAutomationOp) ? true : false);
+	      const emitStreamToken = (chunk: string) => {
+	        if (abortSignal?.aborted) return;
+	        const text = String(chunk || '');
+	        if (text) sendSSE('token', { text });
+	      };
+	      const emitThinkingToken = (chunk: string, source: 'thinking' | 'reasoning_summary' = 'thinking') => {
+	        if (abortSignal?.aborted) return;
+	        const text = String(chunk || '');
+	        if (!text) return;
+	        allThinking += text;
+	        sendSSE('thinking_delta', { thinking: text, source });
+	      };
+	      const generationOverride = resolveProviderModelOverride();
+      currentModelSystemBlock = formatCurrentModelSystemBlock(generationOverride);
       if (generationOverride.source === 'turn_override') {
         // ── Local primary switch_model promotion ──────────────────────────────────
         // When primary is a local LLM, the switched cloud model must receive the full
@@ -2975,10 +3032,13 @@ RULES:
         temperature: 0.3,
         num_ctx: 8192,
         num_predict: 4096,
-        think: primaryThinkMode,
-        model: generationOverride.model,
-        provider: generationOverride.provider,
-      });
+	        think: primaryThinkMode,
+	        model: generationOverride.model,
+	        provider: generationOverride.provider,
+	        onToken: emitStreamToken,
+	        onThinking: (chunk: string) => emitThinkingToken(chunk, 'thinking'),
+	        onReasoningSummary: (chunk: string) => emitThinkingToken(chunk, 'reasoning_summary'),
+	      });
 
       // ── Preempt watchdog ────────────────────────────────────────────
       if (
@@ -3115,23 +3175,27 @@ RULES:
         }
 
         // Generation finished before watchdog
-        const result = watchdogOutcome.result;
-        response = result.message;
-        if (result.thinking) {
-          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
-          allThinking += (allThinking ? '\n\n' : '') + result.thinking;
-          sendSSE('thinking', { thinking: result.thinking });
-        }
-      } else {
+	        const result = watchdogOutcome.result;
+	        response = result.message;
+	        if (result.thinking) {
+	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
+	          if (!allThinking.includes(result.thinking)) {
+	            allThinking += (allThinking ? '\n\n' : '') + result.thinking;
+	            sendSSE('thinking', { thinking: result.thinking });
+	          }
+	        }
+	      } else {
         // Watchdog not active — normal await
         const result = await generationPromise;
-        response = result.message;
-        if (result.thinking) {
-          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
-          allThinking += (allThinking ? '\n\n' : '') + result.thinking;
-          sendSSE('thinking', { thinking: result.thinking });
-        }
-      }
+	        response = result.message;
+	        if (result.thinking) {
+	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
+	          if (!allThinking.includes(result.thinking)) {
+	            allThinking += (allThinking ? '\n\n' : '') + result.thinking;
+	            sendSSE('thinking', { thinking: result.thinking });
+	          }
+	        }
+	      }
 
       const explicitThink = stripExplicitThinkTags(response?.content || '');
       if (explicitThink.thinking) {
@@ -3417,7 +3481,7 @@ RULES:
               : `Call the next required tool now. Do not explain — execute.`,
           );
         }
-        if (executionMode === 'cron' || executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent') {
+        if (executionMode === 'cron' || executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent' || executionMode === 'team_manager' || executionMode === 'team_subagent') {
           nudgeParts.push(`Filesystem: list_directory(path="."), read_file, create_file, replace_lines, find_replace, mkdir. Never use path="".`);
         }
 
@@ -3720,17 +3784,31 @@ RULES:
       }
 
       // ── Background agent finalization gate ───────────────────────────────────
-      // Collect all background_spawn IDs from this turn, join them, and if any
-      // produced results, do one more LLM turn so the model synthesizes them.
-      const spawnedBgIds: string[] = allToolResults
+	      // Collect all background_spawn IDs from this turn, join them, and merge
+	      // their results without starting another foreground model request.
+      const spawnedBgRuns: Array<{ id: string; timeoutMs?: number }> = allToolResults
         .filter((r) => r.name === 'background_spawn' && !r.error)
-        .map((r) => { try { return JSON.parse(r.result)?.id; } catch { return null; } })
-        .filter(Boolean) as string[];
+        .map((r) => {
+          try {
+            const parsed = JSON.parse(r.result);
+            const id = String(parsed?.id || '').trim();
+            if (!id) return null;
+            const timeoutMs = Number(parsed?.timeoutMs);
+            return {
+              id,
+              timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.floor(timeoutMs) : undefined,
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean) as Array<{ id: string; timeoutMs?: number }>;
+      const spawnedBgIds = spawnedBgRuns.map((run) => run.id);
 
-      if (spawnedBgIds.length > 0) {
-        sendSSE('info', { message: `Waiting for ${spawnedBgIds.length} background agent${spawnedBgIds.length > 1 ? 's' : ''} to complete...` });
+      if (spawnedBgRuns.length > 0) {
+        sendSSE('info', { message: `Waiting for ${spawnedBgRuns.length} background agent${spawnedBgRuns.length > 1 ? 's' : ''} to complete...` });
         const joinedResults = await Promise.all(
-          spawnedBgIds.map((bgId) => backgroundJoin({ backgroundId: bgId, joinPolicy: 'wait_until_timeout', timeoutMs: 60_000 }))
+          spawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_until_timeout', timeoutMs: run.timeoutMs }))
         );
         const resultBlocks = joinedResults
           .map((r, i) => {
@@ -3741,25 +3819,13 @@ RULES:
           })
           .filter(Boolean);
         if (resultBlocks.length > 0) {
-          messages.push({ role: 'assistant', content: finalText });
-          messages.push({
-            role: 'user',
-            content: `[BACKGROUND AGENT RESULTS — synthesize these into your final reply to the user]\n\n${resultBlocks.join('\n\n')}`,
-          });
-          sendSSE('info', { message: 'Background agents complete — synthesizing results...' });
-          const synthOverride = resolveProviderModelOverride();
-          const synthResult = await ollama.chatWithThinking(messages, 'executor', {
-            tools: undefined,
-            temperature: 0.3,
-            num_ctx: 8192,
-            num_predict: 2048,
-            think: false,
-            model: synthOverride.model,
-            provider: synthOverride.provider,
-            onToken: (chunk: string) => { sendSSE('token', { text: chunk }); },
-          });
-          finalText = String(synthResult.message.content || finalText).trim();
-          console.log(`[v2] BG SYNTHESIS: ${finalText.slice(0, 150)}`);
+	          sendSSE('info', { message: 'Background agents complete - merging results...' });
+	          const backgroundText = `Background agent response:\n${resultBlocks.join('\n\n')}`;
+	          finalText = [finalText, backgroundText]
+	            .map((part) => String(part || '').trim())
+	            .filter(Boolean)
+	            .join('\n\n');
+	          console.log(`[v2] BG MERGE: ${finalText.slice(0, 150)}`);
         }
       }
       // ── End background agent finalization gate ────────────────────────────────
@@ -4628,7 +4694,7 @@ RULES:
 
       // ── Canvas auto-present: emit canvas_present + track session canvas files ──
       // Only on success, only for file-mutation tools, not during background tasks.
-      if (!toolResult.error && executionMode !== 'background_task' && executionMode !== 'proposal_execution' && executionMode !== 'background_agent' && executionMode !== 'cron') {
+      if (!toolResult.error && executionMode !== 'background_task' && executionMode !== 'proposal_execution' && executionMode !== 'background_agent' && executionMode !== 'cron' && executionMode !== 'team_manager' && executionMode !== 'team_subagent') {
         const FILE_PRESENT_TOOLS = new Set(['create_file', 'write', 'present_file']);
         if (FILE_PRESENT_TOOLS.has(toolName)) {
           const presentPath = toolArgs?.filename || toolArgs?.name || toolArgs?.path || '';
@@ -4804,10 +4870,11 @@ async function runInteractiveTurn(
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
-  callerContext?: string,
-  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
-): Promise<HandleChatResult> {
+	  abortSignal?: { aborted: boolean },
+	  callerContext?: string,
+	  reasoningOptions?: ReasoningOptions,
+	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+	): Promise<HandleChatResult> {
   const userMsg = { role: 'user' as const, content: message, timestamp: Date.now() };
   const rollingCompactionPolicy = resolveRollingCompactionPolicy();
   let rollingCompactionApplied = false;
@@ -4950,15 +5017,16 @@ async function runInteractiveTurn(
   const result = await handleChat(
     message,
     sessionId,
-    sendSSE,
-    pins.length > 0 ? pins : undefined,
-    abortSignal,
-    mergedCallerContext,
-    undefined,
-    undefined,
-    undefined,
-    Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
-  );
+	    sendSSE,
+	    pins.length > 0 ? pins : undefined,
+	    abortSignal,
+	    mergedCallerContext,
+	    undefined,
+	    undefined,
+	    undefined,
+	    Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
+	    reasoningOptions,
+	  );
 
   if (!abortSignal?.aborted) {
     if (result.toolResults && result.toolResults.length > 0) {
@@ -5037,7 +5105,7 @@ router.get('/api/status', async (_req, res) => {
 });
 
 router.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', pinnedMessages, attachments } = req.body;
+  const { message, sessionId = 'default', pinnedMessages, attachments, reasoning } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
   setLastMainSessionId(String(sessionId || 'default'));
 
@@ -5068,10 +5136,11 @@ router.post('/api/chat', async (req, res) => {
       sessionId,
       sendSSE,
       pinnedMessages,
-      abortSignal,
-      undefined,
-      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
-    );
+	      abortSignal,
+	      undefined,
+	      reasoning && typeof reasoning === 'object' ? reasoning : undefined,
+	      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
+	    );
     if (!abortSignal.aborted) {
       sendSSE('final', { text: result.text });
       sendSSE('done', {

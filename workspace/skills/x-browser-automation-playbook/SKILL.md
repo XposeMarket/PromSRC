@@ -2,7 +2,7 @@
 name: X Browser Automation Playbook
 description: Tested, stable patterns for X.com (Twitter) browser automation — posting, liking, searching, replying. Read this before any X task.
 emoji: "🐦"
-version: 1.5.0
+version: 1.6.1
 triggers: x.com, twitter.com, x app, twitter app, x.com/home, Home / X, tweet, post tweet, compose tweet, publish tweet, send tweet, reply on x, like tweets, unlike tweet, retweet, repost, quote tweet, x search, twitter search, browse x feed, engage on x, x automation, twitter automation, x keyboard shortcuts, j k l x shortcut, focused tweet
 ---
 # X (Twitter) Browser Automation Playbook
@@ -16,7 +16,8 @@ Read this file before doing ANY work on X.com. These are the tested, stable patt
 - Chrome profile is persistent and is often already logged in, but do not assume auth. If X redirects to login, complete login first before any posting flow.
 - `browser_open`, `browser_fill`, `browser_wait`, and `browser_click` ALL return a fresh snapshot automatically. Do NOT call `browser_snapshot` immediately after any of them.
 - **For standard posting on X, use the `x_post_text` composite tool by default instead of manually opening the composer.** This is the preferred path whenever the goal is simply to publish a normal post from Home. Only fall back to manual composer steps if the composite fails or the user explicitly wants a different flow.
-- Never use `browser_navigate` or `browser_type` — they do not exist. Use `browser_open` and `browser_fill`.
+- Never use `browser_navigate` — it does not exist. Use `browser_open`.
+- `browser_type` exists and is used for contenteditable/rich-text areas (e.g., X composer when `browser_fill` does not work). For standard inputs, use `browser_fill`.
 - **Speed rule:** prefer bulk/keyboard workflows over repeated click/snapshot loops.
 - **Snapshot rule:** only call `browser_snapshot()` when you need new @refs after text-only tools (like `browser_scroll_collect`) or when state is unclear.
 
@@ -62,9 +63,10 @@ When a task includes both scraping and X interaction, prioritize this skill for 
 **Fallback to manual flow only if needed:**
 1. `browser_open("https://x.com/home")` — opens feed, returns snapshot
 2. Find the inline composer textbox (preferred) or use `n` if the user specifically wants modal composer
-3. `browser_fill(<composer_ref>, "your tweet text")`
+3. If the composer is a standard `[INPUT]`, use `browser_fill(<composer_ref>, "your tweet text")`; if it's contenteditable, click it first then use `browser_type("your tweet text")`
 4. Click the submit button shown in the refreshed snapshot
 5. `browser_wait(1500-2500)` and confirm posted state
+
 
 **Char limit:** Keep tweets under 280 chars. Count before filling.
 ---
@@ -133,6 +135,7 @@ Use this only when keyboard focus fails or shortcuts are blocked.
 ---
 
 ## Error Handling
+## Error Handling
 
 | Situation | Action |
 |-----------|--------|
@@ -141,17 +144,17 @@ Use this only when keyboard focus fails or shortcuts are blocked.
 | Keyboard focus unclear during likes | Use `browser_get_focused_item()` before pressing `l`. |
 | 429 Too Many Requests | Stop run. Log. Wait 15+ min before retry. |
 | Compose box already has text | `browser_press_key("Control+a")` then `browser_press_key("Delete")` to clear |
-| 2026-04-10 | v1.6.0: Updated posting guidance so standard X posts should use the verified `x_post_text` composite by default; manual composer flow is now fallback-only. |
+
 ## Changelog
 
 | Date | Change |
 |------|--------|
-| 2026-03-25 | v1.3.0: Made fast mode default. Added keyboard like workflow (`j` + focused-item check + `l`), bulk collection defaults, posting speed path, snapshot minimization rules, and explicit fallback mode. |
-
-| Date | Change |
-|------|--------|
+| 2026-04-11 | v1.6.1: Clarified that `browser_type` exists for contenteditable composers; corrected outdated statement saying it does not exist. Updated fallback composer flow to distinguish between `browser_fill` (standard input) and `browser_type` (contenteditable). |
+| 2026-04-10 | v1.6.0: Updated posting guidance so standard X posts should use the verified `x_post_text` composite by default; manual composer flow is now fallback-only. |
 | 2026-03-25 | v1.3.0: Made fast mode default. Added keyboard like workflow (`j` + focused-item check + `l`), bulk collection defaults, posting speed path, snapshot minimization rules, and explicit fallback mode. |
 | 2026-03-20 | Added Playbook 2 (Search & Collect) using browser_scroll_collect for bulk tweet collection. Renumbered playbooks. |
 | 2026-03-19 | Updated account from @Small_Claw_ to @PrometheusAI_X. Updated search queries for Prometheus branding. |
 | 2026-03-13 | Fixed tool names (browser_open not browser_navigate, browser_fill not browser_type). Added keyboard shortcut for composer. |
+| 2026-03-08 | Initial playbook from weekly performance review |
+
 | 2026-03-08 | Initial playbook from weekly performance review |

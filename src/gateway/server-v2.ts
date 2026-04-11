@@ -368,8 +368,8 @@ const telegramChannel = new TelegramChannel(
   {
     handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments) =>
       handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments),
-    runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, attachments) =>
-      runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, attachments),
+	    runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, attachments) =>
+	      runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, undefined, attachments),
     addMessage,
     getIsModelBusy: isModelBusy,
     broadcast: broadcastWS,

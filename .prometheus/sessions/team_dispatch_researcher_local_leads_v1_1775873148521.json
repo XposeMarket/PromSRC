@@ -1,0 +1,17 @@
+{
+  "id": "team_dispatch_researcher_local_leads_v1_1775873148521",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775873148538,
+  "lastActiveAt": 1775873148538,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops"
+  ]
+}

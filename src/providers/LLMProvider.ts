@@ -40,9 +40,13 @@ export interface ChatOptions {
   max_tokens?: number;
   num_ctx?: number;
   tools?: any[];
-  think?: boolean | 'extra_high' | 'high' | 'medium' | 'low';
+  think?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
   /** Called with each text token as it streams from the model. */
   onToken?: (chunk: string) => void;
+  /** Called with provider-visible reasoning/thinking deltas as they stream. */
+  onThinking?: (chunk: string) => void;
+  /** Called with provider-visible reasoning summary deltas as they stream. */
+  onReasoningSummary?: (chunk: string) => void;
   /** When true, strip [TODAY_NOTES] intraday context from system prompt (used after switch_model to reduce context). */
   omitIntradayNotes?: boolean;
 }
@@ -53,7 +57,7 @@ export interface GenerateOptions {
   num_ctx?: number;
   format?: 'json';
   system?: string;
-  think?: boolean | 'extra_high' | 'high' | 'medium' | 'low';
+  think?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
 export interface ChatResult {

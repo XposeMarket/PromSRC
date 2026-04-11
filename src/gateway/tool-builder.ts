@@ -37,8 +37,9 @@ const TEAM_OPS_TOOL_NAMES = new Set([
   'update_my_status', 'update_team_goal', 'team_manage',
   'dispatch_to_agent', 'dispatch_team_agent', 'get_agent_result',
   'post_to_team_chat', 'message_main_agent', 'reply_to_team',
-  'manage_team_goal', 'deploy_analysis_team',
+  'manage_team_goal',
   // ask_team_coordinator intentionally excluded — it's a core tool (always available)
+  // deploy_analysis_team intentionally excluded — user-facing tool, must always be available
 ]);
 
 // schedule_job + parse_schedule_pattern are CORE — always injected so cron/heartbeat/subagent
@@ -97,11 +98,11 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'run_command',
-        description: 'Run shell commands or open apps. Dev CLI commands (git, npm, node, python, etc.) run CAPTURED by default — output is returned inline, no new window. Pass visible:true only if the user explicitly needs to see a terminal window. For GUI apps (notepad, code, explorer) a visible window opens automatically. NEVER use for Chrome/Edge — use browser_open instead.',
+        description: 'Run shell commands or open apps. Dev CLI commands (git, npm, node, python, etc.) run CAPTURED by default — output is returned inline, no new window. Pass visible:true only if the user explicitly needs to see a terminal window. For GUI apps (notepad, code, explorer) a visible window opens automatically. NEVER use for Chrome/Edge — use browser_open instead. **GIT BEST PRACTICES FOR PROMETHEUS**: (1) For submodule (workspace/xposemarket-site), ALWAYS use full path: `git -C workspace/xposemarket-site status` NOT `cd xposemarket-site` which fails with "path not found". (2) Use `git -C <path>` pattern for reliable automation. (3) Initialize submodules: `git submodule update --init --recursive`.',
         parameters: {
           type: 'object', required: ['command'],
           properties: {
-            command: { type: 'string', description: 'Examples: "notepad", "git init", "npm install", "npm run build", "git push origin main", "code D:\\project". Do NOT use "chrome" or "msedge" here — use browser_open instead.' },
+            command: { type: 'string', description: 'Examples: "notepad", "git init", "npm install", "npm run build", "git push origin main", "code D:\\project", "git -C workspace/xposemarket-site status", "git status". **CRITICAL FOR GIT**: (1) Submodule at workspace/xposemarket-site — NEVER use `cd xposemarket-site` alone. Use `git -C workspace/xposemarket-site status` instead. (2) Do NOT use "chrome" or "msedge" — use browser_open instead.' },
             visible: { type: 'boolean', description: 'If true, opens a visible terminal window instead of capturing output. Default: false (captured).' },
           },
         },

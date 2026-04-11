@@ -1,0 +1,23 @@
+{
+  "id": "auto_boot_1775889424600",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "No live task or schedule state is available in this snapshot, so the main active thread is Xpose Market lead generation: the prospecting team is running its first cycle and Frederick-area research has already identified candidate businesses with weak or missing web presence. Today’s notes show the research phase is complete, and the next concrete step is to consolidate and return a tight 10–15 prospect list with website status, location, and pain signals. Where things left off: lead discovery is done, but the final qualified prospect list still needs to be assembled.",
+      "timestamp": 1775889439404
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775889424610,
+  "lastActiveAt": 1775889439407,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 170,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops"
+  ]
+}

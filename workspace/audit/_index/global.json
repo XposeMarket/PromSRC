@@ -1,33 +1,33 @@
 {
-  "generatedAt": "2026-04-10T17:18:17.668Z",
+  "generatedAt": "2026-04-11T23:25:26.597Z",
   "materializer": {
     "intervalMs": 30000,
-    "lastRunAt": 1775841497667,
-    "filesMirrored": 1718,
-    "copied": 1,
-    "skipped": 1717,
+    "lastRunAt": 1775949926596,
+    "filesMirrored": 1760,
+    "copied": 0,
+    "skipped": 1760,
     "errors": 0
   },
   "counts": {
     "sessionsPreviewed": 80,
-    "tasks": 119,
-    "proposals": 99,
-    "teams": 1,
-    "teamRuns": 3,
-    "chatTranscripts": 124,
+    "tasks": 122,
+    "proposals": 101,
+    "teams": 0,
+    "teamRuns": 0,
+    "chatTranscripts": 170,
     "chatCompactions": 6
   },
   "byDomain": {
-    "chats": 1348,
+    "chats": 1384,
     "projects": 2,
-    "tasks": 139,
-    "proposals": 99,
+    "tasks": 142,
+    "proposals": 101,
     "cron": 29,
     "schedules": 56,
     "teams": 2,
     "connections": 2,
     "startup": 2,
-    "memory": 30,
+    "memory": 31,
     "system": 9
   }
 }

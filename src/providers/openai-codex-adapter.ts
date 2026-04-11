@@ -182,16 +182,19 @@ export class OpenAICodexAdapter implements LLMProvider {
     };
     if (instructions) body.instructions = instructions;
     // Reasoning effort support (o-series / reasoning models)
-    if (options?.think) {
-      const effortMap: Record<string, string> = {
-        low: 'low',
-        medium: 'medium',
-        high: 'high',
-        extra_high: 'x-high',
-      };
-      const effort = typeof options.think === 'string' ? (effortMap[options.think] || 'medium') : 'medium';
-      body.reasoning = { effort };
-    }
+	    if (options?.think) {
+	      const effortMap: Record<string, string> = {
+	        low: 'low',
+	        medium: 'medium',
+	        high: 'high',
+	        minimal: 'minimal',
+	        none: 'none',
+	        extra_high: 'xhigh',
+	        xhigh: 'xhigh',
+	      };
+	      const effort = typeof options.think === 'string' ? (effortMap[options.think] || 'medium') : 'medium';
+	      body.reasoning = { effort, summary: 'auto' };
+	    }
     if (Array.isArray(options?.tools) && options!.tools!.length) {
       body.tools = options!.tools.map((t: any) => ({
         type: 'function',
@@ -213,19 +216,25 @@ export class OpenAICodexAdapter implements LLMProvider {
       throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
     }
 
-    // Parse SSE stream to extract the completed response
-    const result = await this.parseSSEStream(response, options?.onToken);
-    return result;
-  }
+	    // Parse SSE stream to extract the completed response
+	    const result = await this.parseSSEStream(response, options?.onToken, options?.onThinking, options?.onReasoningSummary);
+	    return result;
+	  }
 
-  private async parseSSEStream(response: Response, onToken?: (chunk: string) => void): Promise<ChatResult> {
+	  private async parseSSEStream(
+	    response: Response,
+	    onToken?: (chunk: string) => void,
+	    onThinking?: (chunk: string) => void,
+	    onReasoningSummary?: (chunk: string) => void,
+	  ): Promise<ChatResult> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body from Codex endpoint');
 
     const decoder = new TextDecoder();
-    let buffer = '';
-    let finalContent = '';
-    let toolCalls: any[] = [];
+	    let buffer = '';
+	    let finalContent = '';
+	    let thinking = '';
+	    let toolCalls: any[] = [];
 
     try {
       while (true) {
@@ -246,10 +255,34 @@ export class OpenAICodexAdapter implements LLMProvider {
             const type = event.type as string;
 
             // Accumulate text deltas
-            if (type === 'response.output_text.delta') {
-              finalContent += event.delta || '';
-              onToken?.(event.delta || '');
-            }
+	            if (type === 'response.output_text.delta') {
+	              finalContent += event.delta || '';
+	              onToken?.(event.delta || '');
+	            }
+
+	            if (
+	              type === 'response.reasoning_summary_text.delta'
+	              || type === 'response.reasoning_text.delta'
+	            ) {
+	              const delta = event.delta || event.text || '';
+	              if (delta) {
+	                thinking += delta;
+	                if (type === 'response.reasoning_summary_text.delta') onReasoningSummary?.(delta);
+	                else onThinking?.(delta);
+	              }
+	            }
+
+	            if (
+	              type === 'response.reasoning_summary_text.done'
+	              || type === 'response.reasoning_text.done'
+	            ) {
+	              const text = event.text || '';
+	              if (text && !thinking.includes(text)) {
+	                thinking += (thinking ? '\n\n' : '') + text;
+	                if (type === 'response.reasoning_summary_text.done') onReasoningSummary?.(text);
+	                else onThinking?.(text);
+	              }
+	            }
 
             // Tool/function call detected
             if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
@@ -316,8 +349,8 @@ export class OpenAICodexAdapter implements LLMProvider {
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
 
-    return { message };
-  }
+	    return { message, thinking: thinking || undefined };
+	  }
 
   async generate(prompt: string, model: string, options?: GenerateOptions): Promise<GenerateResult> {
     const messages: ChatMessage[] = [];

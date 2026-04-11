@@ -25,11 +25,10 @@
     "id": "vercel",
     "name": "Vercel",
     "enabled": true,
-    "transport": "http",
-    "description": "Vercel MCP (HTTP)",
+    "transport": "sse",
     "url": "https://mcp.vercel.com",
     "headers": {
-      "Authorization": "Bearer vcp_REDACTED"
+      "Authorization": "Bearer vcp_2Xbgxj08i9IDdG28JO5SkAuOgQcW1CJNIqLg7n8T3Q5X5G5axl1F9RN2"
     }
   }
 ]

@@ -311,7 +311,9 @@ export class AnthropicAdapter implements LLMProvider {
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
     const raw = getConfig().getConfig() as any;
     const anthropicCfg = raw.llm?.providers?.anthropic || {};
-    const extendedThinkingEnabled = options?.think !== false && anthropicCfg.extended_thinking === true;
+    const extendedThinkingEnabled = options?.think !== false
+      && options?.think !== 'none'
+      && (anthropicCfg.extended_thinking === true || !!options?.think);
 
     const headers = this.buildHeaders(model, extendedThinkingEnabled);
     const { system, messages: anthropicMessages } = this.buildMessages(messages, options?.omitIntradayNotes);
@@ -352,7 +354,7 @@ export class AnthropicAdapter implements LLMProvider {
         const text = await response.text().catch(() => '');
         throw new Error(`Anthropic API error ${response.status}: ${text.slice(0, 500)}`);
       }
-      return this.parseStreamingResponse(response, options.onToken);
+      return this.parseStreamingResponse(response, options.onToken, options.onThinking);
     }
 
     const response = await fetch(MESSAGES_ENDPOINT, {
@@ -373,7 +375,7 @@ export class AnthropicAdapter implements LLMProvider {
 
   // ─── Parse Anthropic streaming SSE response ──────────────────────────────────
 
-  private async parseStreamingResponse(response: Response, onToken: (chunk: string) => void): Promise<ChatResult> {
+  private async parseStreamingResponse(response: Response, onToken: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<ChatResult> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body from Anthropic streaming endpoint');
 
@@ -419,9 +421,11 @@ export class AnthropicAdapter implements LLMProvider {
               if (delta.type === 'text_delta') {
                 textContent += delta.text || '';
                 onToken(delta.text || '');
-              } else if (delta.type === 'thinking_delta') {
-                thinking += delta.thinking || '';
-              } else if (delta.type === 'input_json_delta') {
+	              } else if (delta.type === 'thinking_delta') {
+	                const thinkDelta = delta.thinking || '';
+	                thinking += thinkDelta;
+	                if (thinkDelta) onThinking?.(thinkDelta);
+	              } else if (delta.type === 'input_json_delta') {
                 if (blocks[idx]) blocks[idx].inputJson += delta.partial_json || '';
               }
             }

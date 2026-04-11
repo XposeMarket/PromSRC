@@ -33,6 +33,7 @@ import {
   getTeamRunHistory,
 } from '../teams/managed-teams';
 import { handleManagerConversation } from '../teams/team-manager-runner';
+import { getTeamWorkspacePath, readTeamMemoryContext, initTeamWorkspaceArtifacts } from '../teams/team-workspace';
 import type { BrainRunner } from '../brain/brain-runner';
 import { setTeamRunAgentFn } from '../teams/team-manager-runner';
 import {
@@ -69,6 +70,99 @@ export interface StartupDeps {
   runTeamAgentViaChat: any;
 }
 
+function safeReadFile(filePath: string, maxChars = 12000): string {
+  try {
+    if (!fs.existsSync(filePath)) return '';
+    return fs.readFileSync(filePath, 'utf-8').trim().slice(0, maxChars);
+  } catch {
+    return '';
+  }
+}
+
+function buildOriginatingTranscript(workspacePath: string, sessionId?: string): string {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return '(No originating session ID recorded.)';
+  const candidates = [
+    path.join(workspacePath, 'audit', 'chats', 'transcripts', `${sid}.jsonl`),
+    path.join(workspacePath, 'audit', 'chats', 'sessions', `${sid}.json`),
+  ];
+  const transcriptPath = candidates.find(p => fs.existsSync(p));
+  if (!transcriptPath) return `(No transcript file found for ${sid}.)`;
+  try {
+    if (transcriptPath.endsWith('.jsonl')) {
+      const lines = fs.readFileSync(transcriptPath, 'utf-8').trim().split(/\r?\n/).filter(Boolean).slice(-30);
+      return lines.map((line) => {
+        try {
+          const item = JSON.parse(line);
+          return `- ${item.role || 'unknown'} (${item.timestampIso || item.timestamp || 'unknown-time'}): ${String(item.content || '').replace(/\s+/g, ' ').slice(0, 500)}`;
+        } catch {
+          return `- ${line.slice(0, 500)}`;
+        }
+      }).join('\n');
+    }
+    const parsed = JSON.parse(fs.readFileSync(transcriptPath, 'utf-8'));
+    const messages = Array.isArray(parsed?.history) ? parsed.history : Array.isArray(parsed?.messages) ? parsed.messages : [];
+    return messages.slice(-30).map((m: any) => `- ${m.role || m.from || 'unknown'}: ${String(m.content || m.message || '').replace(/\s+/g, ' ').slice(0, 500)}`).join('\n') || '(Transcript contained no messages.)';
+  } catch (err: any) {
+    return `(Could not read transcript ${transcriptPath}: ${err?.message || err})`;
+  }
+}
+
+function buildTeamCompletionPacket(teamId: string, managerMessage: string, turns: number): string {
+  const team = getManagedTeam(teamId) || listManagedTeams().find(t => t.id === teamId);
+  const teamName = team?.name || teamId;
+  const workspacePath = getConfig().getWorkspacePath();
+  const teamWs = getTeamWorkspacePath(teamId);
+  const files = fs.existsSync(teamWs)
+    ? fs.readdirSync(teamWs, { withFileTypes: true })
+      .filter(d => d.isFile() && !d.name.startsWith('.'))
+      .map(d => {
+        const p = path.join(teamWs, d.name);
+        const st = fs.statSync(p);
+        return `- ${d.name} (${st.size} bytes, modified ${new Date(st.mtimeMs).toISOString()})`;
+      }).slice(0, 80).join('\n')
+    : '(team workspace missing)';
+  const recentChat = (team?.teamChat || []).slice(-30)
+    .map((m: any) => `- [${m.fromName || m.from}] ${String(m.content || '').replace(/\s+/g, ' ').slice(0, 600)}`)
+    .join('\n') || '(No recent team chat.)';
+  const runHistory = getTeamRunHistory(teamId, 20)
+    .map((run: any) => `- ${run.agentName || run.agentId}: ${run.success ? 'success' : 'failed'} task=${run.taskId || 'n/a'} ${String(run.resultPreview || run.error || '').replace(/\s+/g, ' ').slice(0, 300)}`)
+    .join('\n') || '(No run history.)';
+
+  return [
+    `[TEAM COMPLETION PACKET]`,
+    `teamId: ${teamId}`,
+    `teamName: ${teamName}`,
+    `originatingSessionId: ${team?.originatingSessionId || '(none)'}`,
+    `managerTurns: ${turns}`,
+    ``,
+    `[MANAGER COMPLETION MESSAGE]`,
+    managerMessage || '(No manager completion message.)',
+    ``,
+    `[TEAM STATE]`,
+    `currentTask: ${(team as any)?.currentTask || ''}`,
+    `currentFocus: ${team?.currentFocus || ''}`,
+    `purpose: ${(team as any)?.purpose || team?.mission || team?.teamContext || ''}`,
+    ``,
+    `[TEAM INFO AND MEMORY]`,
+    readTeamMemoryContext(teamId) || '(No team memory files found.)',
+    ``,
+    `[RECENT TEAM CHAT]`,
+    recentChat,
+    ``,
+    `[RUN HISTORY / SUBAGENT LOGS]`,
+    runHistory,
+    ``,
+    `[FILES CREATED OR MODIFIED IN TEAM WORKSPACE]`,
+    files,
+    ``,
+    `[ORIGINATING CHAT SESSION]`,
+    `originatingSessionId: ${team?.originatingSessionId || '(none)'}`,
+    `Relevant transcript:`,
+    buildOriginatingTranscript(workspacePath, team?.originatingSessionId),
+  ].join('\n');
+}
+
 // ─── Main startup function ────────────────────────────────────────────────────
 
 export async function runStartup(deps: StartupDeps): Promise<void> {
@@ -97,13 +191,18 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   else if (gpuInfo.backend === 'amd')           gpuDisplay = `${gpuInfo.name ?? 'AMD'} (ROCm)`;
   else if (gpuInfo.backend === 'apple-silicon') gpuDisplay = 'Apple Silicon (Metal)';
 
+  const activeProvider = (liveConfig as any).llm?.provider || 'ollama';
+  const effectiveModel =
+    (liveConfig as any).llm?.providers?.[activeProvider]?.model ||
+    liveConfig.models.primary;
+
   // Notify the terminal UI — triggers Phase 2 (status board) + Phase 3 (menu)
   try {
     const { notifyServerReady } = require('../terminal-ui') as typeof import('../terminal-ui');
     notifyServerReady({
       host: HOST,
       port: PORT,
-      model: liveConfig.models.primary,
+      model: effectiveModel,
       workspace: liveConfig.workspace.path,
       skillsTotal: skillsManager.getAll().length,
       skillsEnabled: skillsManager.getEnabledSkills().length,
@@ -372,6 +471,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
         const teamName = team?.name || teamId;
         const sessionId = `cron_team_goal_complete_${teamId}_${Date.now()}`;
 
+        const completionPacket = buildTeamCompletionPacket(teamId, normalizedManagerMessage, turns);
         const recentRuns = getTeamRunHistory(teamId, 12);
         const recentRunsBlock = recentRuns.length > 0
           ? recentRuns.slice(-12).map((run: any, idx: number) => {
@@ -383,32 +483,23 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
           }).join('\n')
           : '(No recent team run history found.)';
 
-        const managerExcerpt = normalizedManagerMessage.slice(0, 1200) || '(No manager completion message provided.)';
-
         const prompt = [
-          'You are Prometheus main agent. A managed team coordinator has just signaled [GOAL_COMPLETE].',
+          'You are Prometheus main agent. A managed team manager has just signaled [GOAL_COMPLETE].',
           '',
-          `Team ID: ${teamId}`,
-          `Team Name: ${teamName}`,
-          `Coordinator turns used: ${turns}`,
+          completionPacket,
           '',
-          'Latest manager completion message:',
-          managerExcerpt,
+          'Review the manager claim against the originating chat session and the evidence above. Choose one outcome:',
+          '1) Accept: tell the user the team completed and summarize what was done and where outputs are.',
+          '2) Reject / revise: send a correction back to the manager with missing items and required next actions, then re-run the manager/team.',
+          '3) Accept with follow-up: tell the user what completed and also send the manager back for a correction or next step.',
           '',
-          'Recent team run history snapshot:',
+          'Recent team run history snapshot fallback:',
           recentRunsBlock,
-          '',
-          'Produce a concise owner-facing post-run analysis in markdown with these sections:',
-          '1) Team mission/current focus/completed work/milestones (load latest team state and summarize).',
-          '2) Manager completion summary (what was achieved, based on the message above).',
-          '3) Recent agent execution recap (use available run history; call tools if needed).',
-          '4) Tool-usage synopsis from recent relevant tasks/journals (focus on meaningful patterns, not noise).',
-          '5) Risks, open items, and clear recommendations for next actions.',
           '',
           'Constraints:',
           '- Keep it concise, specific, and owner-readable.',
           '- Mention uncertainties explicitly instead of guessing.',
-          '- Do not ask the user for input in this auto-summary.',
+          '- Do not verify only against the manager summary; use the originating transcript and artifacts.',
           '- End with a short "Bottom line" paragraph.',
         ].join('\n');
 
@@ -452,6 +543,15 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   }
 
   // Intelligence pipeline jobs are managed via cron/jobs.json — not hardcoded here.
+
+  try {
+    for (const team of listManagedTeams()) {
+      initTeamWorkspaceArtifacts(team);
+    }
+    console.log('[TeamWorkspace] Existing team workspace artifacts verified.');
+  } catch (e: any) {
+    console.warn('[TeamWorkspace] Existing team artifact migration skipped:', e?.message || e);
+  }
 
   heartbeatRunner.start();
 

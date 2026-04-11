@@ -1,0 +1,28 @@
+{
+  "id": "brain_dream_2026-04-10",
+  "history": [
+    {
+      "role": "user",
+      "content": "[Brain Dream] Nightly synthesis for 2026-04-10 — 4 thought(s)",
+      "timestamp": 1775878476464
+    },
+    {
+      "role": "assistant",
+      "content": "Tonight’s Brain Dream completed.\n\n- Thoughts synthesized: 4\n- Memory updates applied: 1\n  - Deduplicated a repeated repo/file-state preference entry in `USER.md`\n- Proposals created: 2\n  - `prop_1775878572456_e7481e` — Run final live browser QA on Xpose Market site after conversion rebuild\n  - `prop_1775878631783_4355f9` — Add early workspace-path fallback when team audits reference missing canonical src paths\n- Deferred items: 18\n\nFiles written:\n- `Brain\\dreams\\2026-04-10\\23-34-dream.md`\n- `Brain\\proposals.md` (rewritten)\n- `USER.md` (surgical dedup)",
+      "timestamp": 1775878729971,
+      "toolLog": "✓ grep_file({\"filename\":\"Brain\\\\proposals.md\",\"pattern\":\"Xpose Market|browser QA|team-contex): {   \"file\": \"Brain\\\\proposals.md\",   \"pattern\": \"Xpose Market|browser QA|team-context|prompt-length overflow|token overf\n✓ write_proposal({\"type\":\"task_trigger\",\"priority\":\"high\",\"title\":\"Run final live browser QA on X): Proposal created: prop_1775878572456_e7481e Title: Run final live browser QA on Xpose Market site after conversion rebui\n✗ write_proposal({\"type\":\"feature_addition\",\"priority\":\"medium\",\"title\":\"Add early workspace-path): write_proposal error: [ProposalStore] Proposals that edit src/ MUST include these exact sections in details: Why this ch\n✓ write_proposal({\"type\":\"feature_addition\",\"priority\":\"medium\",\"title\":\"Add early workspace-path): Proposal created: prop_1775878631783_4355f9 Title: Add early workspace-path fallback when team audits reference missing \n✓ mkdir({\"path\":\"Brain\\\\dreams\\\\2026-04-10\"}): Directory \"Brain/dreams/2026-04-10\" ready\n✓ create_file({\"filename\":\"Brain\\\\dreams\\\\2026-04-10\\\\23-34-dream.md\",\"content\":\"---\\n# Dream ): Brain\\dreams\\2026-04-10\\23-34-dream.md created\n✗ create_file({\"filename\":\"Brain\\\\proposals.md\",\"content\":\"---\\n# Brain Proposal Ledger\\n_Last): \"Brain\\proposals.md\" already exists. Use replace_lines or insert_after to edit.\n✓ replace_lines({\"filename\":\"Brain\\\\proposals.md\",\"start_line\":1,\"end_line\":33,\"new_content\":\"--): Brain\\proposals.md: replaced lines 1-33 (now 45 lines)"
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775878476464,
+  "lastActiveAt": 1775878729975,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 190,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop"
+  ]
+}

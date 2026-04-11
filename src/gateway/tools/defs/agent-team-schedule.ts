@@ -28,7 +28,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             specialization: {
               type: 'string',
-              description: 'One sentence describing this agent\'s specific focus when using from_role. Appended to the base role prompt. E.g. "Focus on X competitor pricing data only."',
+              description: 'Team-specific assignment when using from_role. This becomes the agent\'s concrete team role on top of the generic preset. E.g. "Prospect Researcher: finds local small-business leads for Xpose Market from maps/directories/search."',
             },
             task_prompt: {
               type: 'string',
@@ -53,6 +53,14 @@ export function getAgentTeamScheduleTools(): any[] {
                 description: {
                   type: 'string',
                   description: 'What this subagent specializes in. Shown in the Agents panel.',
+                },
+                teamRole: {
+                  type: 'string',
+                  description: 'Team-specific role title, e.g. "Website/SEO Qualifier" or "Lead Enricher".',
+                },
+                teamAssignment: {
+                  type: 'string',
+                  description: 'Concrete team-specific mission for this agent. This is persisted into system_prompt.md alongside the base preset role.',
                 },
                 allowed_categories: {
                   type: 'array',
@@ -106,7 +114,7 @@ export function getAgentTeamScheduleTools(): any[] {
                   description: 'Set true if this agent is a team manager (orchestrator). Marks isTeamManager=true in config.json so it appears at the top of its team in the Agents panel.',
                 },
               },
-              required: ['description', 'allowed_tools', 'system_instructions', 'constraints', 'success_criteria'],
+              required: ['description', 'system_instructions', 'constraints', 'success_criteria'],
             },
           },
         },
@@ -162,13 +170,13 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'talk_to_subagent',
-        description: 'Send a direct message to a specific subagent on your team. The message is queued and delivered the next time that agent runs. Use this to give instructions, share findings, pass data, or redirect an agent mid-pipeline. Only works inside team dispatches.',
+        description: 'Send a direct message to a specific subagent on your team. The message is queued and delivered to that agent. If the agent is paused waiting for manager input, this resumes it. Use this to give instructions, share findings, pass data, or redirect an agent mid-pipeline. Only works inside team dispatches.',
         parameters: {
           type: 'object',
           required: ['agent_id', 'message'],
           properties: {
             agent_id: { type: 'string', description: 'ID of the subagent to message (e.g. "post_writer_v1")' },
-            message: { type: 'string', description: 'Message to deliver to the agent on their next run. Include all context they need.' },
+            message: { type: 'string', description: 'Message to deliver to the agent. Include all context they need.' },
           },
         },
       },
@@ -177,12 +185,13 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'talk_to_manager',
-        description: 'Send a message to your team manager. Use this to report blockers, share findings, request a new task, or ask for clarification. The manager will see it on their next review cycle. Only works inside team dispatches.',
+        description: 'Send a message to your team manager. Use this to report blockers, share findings, request a new task, or ask for clarification. Set wait_for_reply=true when you need the task paused until the manager answers. Only works inside team dispatches.',
         parameters: {
           type: 'object',
           required: ['message'],
           properties: {
             message: { type: 'string', description: 'Message for the manager. Be specific: what you did, what you found, what you need.' },
+            wait_for_reply: { type: 'boolean', description: 'If true, pause this task after sending the message so the manager can answer and resume you.' },
           },
         },
       },

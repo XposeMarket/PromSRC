@@ -264,7 +264,11 @@ export class MCPManager {
     if (idx >= 0) this.configs[idx] = normalized;
     else this.configs.push(normalized);
     this.save();
-    log.security('[MCP] Config saved for server:', normalized.id, 'transport:', normalized.transport);
+    // Defer security logging to avoid blocking the API response with file I/O
+    setImmediate(() => {
+      const headerCount = Object.keys(normalized.headers || {}).length;
+      log.security('[MCP] Config saved for server:', normalized.id, 'transport:', normalized.transport, `headers: ${headerCount}`);
+    });
   }
 
   deleteConfig(id: string): boolean {
@@ -420,6 +424,9 @@ export class MCPManager {
         'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
         ...(cfg.headers || {}),
       };
+      // Debug logging
+      const headerKeys = Object.keys(baseHeaders).filter(k => k !== 'Content-Type' && k !== 'Accept' && k !== 'MCP-Protocol-Version');
+      console.log(`[MCP:${cfg.id}] Connecting to ${cfg.url} with ${headerKeys.length} custom headers:`, headerKeys);
 
       // Step 1: initialize handshake
       const initResp = await fetch(cfg.url, {
@@ -438,7 +445,14 @@ export class MCPManager {
 
       if (!initResp.ok) {
         session.status = 'error';
-        session.error = `HTTP ${initResp.status} ${initResp.statusText}`;
+        // Try to get more details from response body for debugging
+        let bodyText = '';
+        try {
+          bodyText = await initResp.text();
+        } catch {}
+        const details = bodyText ? ` — ${bodyText.slice(0, 100)}` : '';
+        session.error = `HTTP ${initResp.status} ${initResp.statusText}${details}`;
+        console.warn(`[MCP:${cfg.id}] Connection failed: ${session.error}`);
         return { success: false, error: session.error };
       }
 
@@ -588,11 +602,24 @@ export class MCPManager {
 
   async startEnabledServers(): Promise<void> {
     const enabled = this.configs.filter(c => c.enabled);
-    if (enabled.length === 0) return;
+    if (enabled.length === 0) {
+      console.log('[MCP] No enabled servers configured');
+      return;
+    }
     console.log(`[MCP] Auto-connecting ${enabled.length} enabled server(s)...`);
-    await Promise.allSettled(enabled.map(c => this.connect(c.id)));
-    const connected = this.getStatus().filter(s => s.status === 'connected');
+    const results = await Promise.allSettled(enabled.map(c => this.connect(c.id)));
+    const status = this.getStatus();
+    const connected = status.filter(s => s.status === 'connected');
+    const failed = status.filter(s => s.status === 'error');
+
     console.log(`[MCP] ${connected.length}/${enabled.length} server(s) connected`);
+
+    if (failed.length > 0) {
+      console.warn(`[MCP] ${failed.length} server(s) failed to connect:`);
+      for (const f of failed) {
+        console.warn(`  - ${f.name} (${f.id}): ${f.error}`);
+      }
+    }
   }
 
   // ── JSON-RPC ───────────────────────────────────────────────────────────────

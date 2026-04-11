@@ -287,7 +287,7 @@ router.post('/api/settings/model', (req, res) => {
       },
       models: {
         primary: model,
-        roles: current.models.roles,
+        roles: { manager: model, executor: model, verifier: model },
       },
     } as any);
     res.json({ success: true, provider, model });
@@ -755,7 +755,17 @@ router.post('/api/settings/provider', (req, res) => {
         ...(llm.providers || {}),
       },
     };
-    configManager.updateConfig({ llm: mergedLlm } as any);
+    const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
+    const legacyModelSync = activeModel
+      ? {
+          models: {
+            ...((configManager.getConfig() as any).models || {}),
+            primary: activeModel,
+            roles: { manager: activeModel, executor: activeModel, verifier: activeModel },
+          },
+        }
+      : {};
+    configManager.updateConfig({ llm: mergedLlm, ...legacyModelSync } as any);
     resetProvider();
     res.json({ success: true });
   } catch (err: any) {

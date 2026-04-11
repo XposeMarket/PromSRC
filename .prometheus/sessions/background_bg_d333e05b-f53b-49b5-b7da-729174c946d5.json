@@ -1,0 +1,12 @@
+{
+  "id": "background_bg_d333e05b-f53b-49b5-b7da-729174c946d5",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1775928857541,
+  "lastActiveAt": 1775928857541,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0
+}

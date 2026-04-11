@@ -264,7 +264,7 @@ function isAllowedShellSegment(segment: string): boolean {
     'basename', 'dirname', 'realpath', 'stat', 'du', 'df', 'date', 'uname', 'env', 'printenv', 'which',
     'git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'python', 'python3', 'pip', 'pip3', 'tsc', 'ts-node',
     'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'dotnet', 'docker', 'kubectl', 'az', 'aws',
-    'curl', 'wget', 'cmd', 'powershell', 'pwsh',
+    'curl', 'wget', 'cmd', 'powershell', 'pwsh', 'vercel',
   ]);
   return allowed.has(token);
 }

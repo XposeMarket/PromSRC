@@ -85,11 +85,15 @@ export class OllamaAdapter implements LLMProvider {
               fullContent += delta;
               options!.onToken!(delta);
             }
-            if (thinkDelta) {
-              fullThinking += thinkDelta;
-              // Emit thinking tokens prefixed so the UI can distinguish them
-              options!.onToken!(`<think_delta>${thinkDelta}</think_delta>`);
-            }
+	            if (thinkDelta) {
+	              fullThinking += thinkDelta;
+	              if (options?.onThinking) {
+	                options.onThinking(thinkDelta);
+	              } else {
+	                // Backward-compatible marker for older callers that only had onToken.
+	                options!.onToken!(`<think_delta>${thinkDelta}</think_delta>`);
+	              }
+	            }
             if (chunk?.message?.tool_calls?.length) {
               tool_calls = chunk.message.tool_calls;
             }
@@ -207,10 +211,16 @@ export class OllamaAdapter implements LLMProvider {
     await this.client.pull({ model: modelName, stream: false });
   }
 
-  private buildThinkCandidates(requested?: boolean | 'extra_high' | 'high' | 'medium' | 'low') {
+  private buildThinkCandidates(requested?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none') {
     // Ollama doesn't support extra_high — fall back to high
     const normalized: boolean | 'high' | 'medium' | 'low' | undefined =
-      requested === 'extra_high' ? 'high' : requested;
+      requested === 'extra_high' || requested === 'xhigh'
+        ? 'high'
+        : requested === 'minimal'
+          ? 'low'
+          : requested === 'none'
+            ? false
+            : requested;
     const candidates: Array<boolean | 'high' | 'medium' | 'low' | undefined> = [];
     const push = (v: boolean | 'high' | 'medium' | 'low' | undefined) => {
       if (!candidates.some(x => x === v)) candidates.push(v);
