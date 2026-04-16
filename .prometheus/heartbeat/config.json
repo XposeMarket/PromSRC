@@ -79,6 +79,51 @@
       "enabled": false,
       "intervalMinutes": 30,
       "model": ""
+    },
+    "researcher_site_audit_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "builder_site_executor_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "analyst_site_performance_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "researcher_lead_finder_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "analyst_lead_qualifier_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "builder_lead_enricher_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "operator_bug_scanner_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "analyst_bug_triager_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
+    },
+    "verifier_bug_reviewer_v1": {
+      "enabled": false,
+      "intervalMinutes": 30,
+      "model": ""
     }
   }
 }

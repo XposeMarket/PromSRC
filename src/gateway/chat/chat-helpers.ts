@@ -461,11 +461,12 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
     return { text: result.text };
   });
 
-  if (bootResult?.status === 'ran' && bootResult.automatedSession) {
-    broadcastWS({
-      type: 'session_notification',
-      sessionId: bootResult.sessionId,
-      text: bootResult.reply,
+	if (bootResult?.status === 'ran' && bootResult.automatedSession) {
+	    broadcastWS({
+	      type: 'session_notification',
+	      notificationId: bootResult.notificationId,
+	      sessionId: bootResult.sessionId,
+	      text: bootResult.reply,
       title: bootResult.title,
       source: bootResult.source,
       automatedSession: bootResult.automatedSession,

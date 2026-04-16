@@ -1,0 +1,21 @@
+{
+  "id": "auto_boot_1776314204240",
+  "history": [
+    {
+      "role": "assistant",
+      "content": "Error: fetch failed",
+      "timestamp": 1776314227210
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1776314204320,
+  "lastActiveAt": 1776314227212,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 12,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser"
+  ]
+}

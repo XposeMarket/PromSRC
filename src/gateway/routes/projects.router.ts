@@ -44,11 +44,39 @@ import {
   getProjectKnowledgeDir,
 } from '../projects/project-store.js';
 import { refreshProjectContextFromLatestPriorSession } from '../projects/project-learning.js';
+import { getSession, sessionExists } from '../session.js';
 
 const router = Router();
 
+function hydrateProjectSessions(project: any): any {
+  const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
+  return {
+    ...project,
+    sessions: sessions.map((stored: any) => {
+      try {
+        const sessionId = String(stored.id || '');
+        if (!sessionExists(sessionId)) return stored;
+        const session = getSession(sessionId);
+        const firstUserMsg = session.history?.find((m: any) => m.role === 'user');
+        const title = firstUserMsg?.content
+          ? String(firstUserMsg.content).slice(0, 60)
+          : (stored.title || 'New chat');
+        return {
+          ...stored,
+          title,
+          createdAt: session.createdAt || stored.createdAt,
+          updatedAt: session.lastActiveAt || stored.updatedAt,
+          messageCount: session.history?.length || 0,
+        };
+      } catch {
+        return stored;
+      }
+    }),
+  };
+}
+
 router.get('/api/projects', (_req: Request, res: Response) => {
-  try { res.json(listProjects()); }
+  try { res.json(listProjects().map(hydrateProjectSessions)); }
   catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to list projects' }); }
 });
 
@@ -64,7 +92,7 @@ router.get('/api/projects/:id', (req: Request, res: Response) => {
   try {
     const project = getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    res.json(project);
+    res.json(hydrateProjectSessions(project));
   } catch (err: any) { res.status(500).json({ error: err?.message || 'Failed to get project' }); }
 });
 

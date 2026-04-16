@@ -1,0 +1,60 @@
+{
+  "id": "0a37fd1c-b193-4cc1-ac90-2bb6a12b28df",
+  "title": "Nightly Bug Hunter Scan",
+  "prompt": "You are the Bug Scanner for the Nightly Code Bug Hunter team. Run your nightly scan now:\\n\\n1. Run `npm run build` in the Prometheus workspace to catch TypeScript/JavaScript compilation errors\\n2. Scan src/ for syntax errors, broken imports, type mismatches, undefined variables\\n3. Check recent runtime logs for console.error, exceptions, or fatal patterns\\n4. Report all findings with: file path, line number, error message, and severity (critical/high/medium/low)\\n5. Flag critical issues (runtime-breaking) for immediate Triager review\\n\\nAfter scanning, dispatch to the Bug Triager (analyst_bug_triager_v1) with your findings so they can triage and escalate critical issues.\\n\\nBe thorough; catch syntax and structural problems before they reach production.",
+  "sessionId": "cron_job_1775950457845_00ezm_1776161976566",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "teamSubagent": {
+    "teamId": "team_mnuyznzb_15d161",
+    "agentId": "operator_bug_scanner_v1",
+    "agentName": "Bug Scanner"
+  },
+  "scheduleId": "job_1775950457845_00ezm",
+  "plan": [
+    {
+      "index": 0,
+      "description": "You are the Bug Scanner for the Nightly Code Bug Hunter team. Run your nightly scan now:\\n\\n1. Run `npm run build` in th",
+      "status": "done",
+      "completedAt": 1776161977612,
+      "notes": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1776358427,\"eligible_promo\":null,\"resets_in_second"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1776161976603,
+      "type": "status_push",
+      "content": "Task created: Nightly Bug Hunter Scan"
+    },
+    {
+      "t": 1776161977612,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"Error: openai_codex API error 429: {\\\"error\\\":{\\\"type\\\":\\\"usage_limit_reached\\\",\\\"message\\\":\\\"The usage limit has been reached\\\",\\\"plan_type\\\":\\\"plus\\\",\\\"resets_at\\\":1776358427,\\\"eligible_promo\\\":null,\\\"resets_in_second\"}]"
+    },
+    {
+      "t": 1776161977617,
+      "type": "status_push",
+      "content": "Done: Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1776358427,\"eligible_promo\":null,\"resets_in_second"
+    }
+  ],
+  "lastProgressAt": 1776161977617,
+  "startedAt": 1776161976603,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1776161976680
+  },
+  "finalSummary": "Error: openai_codex API error 429: {\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"plus\",\"resets_at\":1776358427,\"eligible_promo\":null,\"resets_in_seconds\":196450}}",
+  "completedAt": 1776161977615
+}

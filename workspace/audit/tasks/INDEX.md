@@ -1,10 +1,10 @@
 # Tasks Index
 
-Generated: 2026-04-11T23:28:31.704Z
+Generated: 2026-04-16T14:10:47.904Z
 
-- Total task records: 122
+- Total task records: 146
 ## By Status
-- complete: 117
+- complete: 138
+- running: 4
 - needs_assistance: 2
 - paused: 2
-- running: 1

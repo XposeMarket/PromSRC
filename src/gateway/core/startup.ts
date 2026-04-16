@@ -52,6 +52,7 @@ import { setBackgroundAgentDeps } from '../tasks/task-runner';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import { startAuditMaterializer } from '../audit/materializer';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
+import { markProviderStatus, markProviderStatusChecking } from '../provider-status';
 
 // ─── Deps contract ────────────────────────────────────────────────────────────
 // All singletons that live in server-v2.ts and are needed during startup wiring.
@@ -161,6 +162,37 @@ function buildTeamCompletionPacket(teamId: string, managerMessage: string, turns
     `Relevant transcript:`,
     buildOriginatingTranscript(workspacePath, team?.originatingSessionId),
   ].join('\n');
+}
+
+function scheduleStartupProviderWarmup(host: string, port: number): void {
+  markProviderStatusChecking(true);
+  const timer = setTimeout(async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetch(`http://${host}:${port}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Reply with exactly: pong',
+          sessionId: `startup_connection_probe_${Date.now()}`,
+        }),
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      const connected = response.ok && /"type":"done"/.test(text) && !/"type":"error"/.test(text);
+      markProviderStatus(connected);
+      broadcastWS({ type: 'provider_status', providerOnline: connected, source: 'startup_probe' });
+      console.log(`[ProviderStatus] Startup probe ${connected ? 'succeeded' : 'failed'}.`);
+    } catch (err: any) {
+      markProviderStatus(false);
+      broadcastWS({ type: 'provider_status', providerOnline: false, source: 'startup_probe' });
+      console.warn('[ProviderStatus] Startup probe failed:', err?.message || err);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, 1500);
+  if (typeof (timer as any).unref === 'function') (timer as any).unref();
 }
 
 // ─── Main startup function ────────────────────────────────────────────────────
@@ -615,6 +647,8 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
 
   const bootWorkspace = getConfig().getWorkspacePath() || (getConfig().getConfig() as any).workspace?.path || '';
   if (bootWorkspace) {
+    scheduleStartupProviderWarmup(HOST, PORT);
+
     try {
       startAuditMaterializer({
         workspacePath: bootWorkspace,

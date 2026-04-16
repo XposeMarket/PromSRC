@@ -29,7 +29,9 @@
       "Bash(awk '/case.*dispatch_team_agent/,/^      case/ {if \\(/^      case/ && !/dispatch_team_agent/\\) exit; print NR\": \"$0}' src/gateway/agents-runtime/subagent-executor.ts)",
       "Bash(sort -t: -k2 -nr)",
       "Bash(npm list *)",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Next:', d.get\\('dependencies',{}\\).get\\('next','?'\\)\\)\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Next:', d.get\\('dependencies',{}\\).get\\('next','?'\\)\\)\")",
+      "Bash(git -C \"D:/Prometheus\" diff 305a24e..5cb00af -- \"web-ui/src/styles/components.css\" \"web-ui/src/styles/base.css\")",
+      "Bash(git -C \"D:/Prometheus\" diff 305a24e..5cb00af -- \"web-ui/src/styles/components.css\")"
     ]
   }
 }

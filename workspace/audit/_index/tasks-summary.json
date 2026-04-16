@@ -1,9 +1,9 @@
 {
-  "total": 122,
+  "total": 146,
   "byStatus": {
-    "complete": 117,
+    "complete": 138,
+    "running": 4,
     "needs_assistance": 2,
-    "running": 1,
     "paused": 2
   }
 }

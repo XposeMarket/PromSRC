@@ -29,6 +29,27 @@ const THEME_KEY = window.THEME_KEY || 'prometheus_theme';
 const MAX_QUEUED_PROMPTS = window.MAX_QUEUED_PROMPTS || 8;
 const AGENT_STATUS = window.AGENT_STATUS || { ACTIVE: 'active', COMPLETED: 'completed', PAUSED: 'paused' };
 
+// Build the `reasoning` payload for /api/chat based on the active provider and
+// any user selection from the model-switcher popover. For cloud reasoning-capable
+// providers (openai / openai_codex / perplexity) we forward the effort level;
+// for anthropic, extended_thinking + thinking_budget; for local backends, undefined.
+function buildReasoningPayload() {
+  const prov = window._activeProvider || 'ollama';
+  const effortProviders = new Set(['openai', 'openai_codex', 'perplexity']);
+  if (effortProviders.has(prov)) {
+    const level = window.reasoningLevel || (prov === 'openai_codex' ? 'medium' : 'low');
+    if (level === 'none') return undefined;
+    return { enabled: true, level };
+  }
+  if (prov === 'anthropic') {
+    const enabled = window.anthropicExtendedThinking !== false;
+    if (!enabled) return undefined;
+    return { enabled: true, extended_thinking: true, thinking_budget: window.anthropicThinkingBudget || 10000 };
+  }
+  // Local providers ignore reasoning.
+  return window.reasoningEnabled ? { enabled: true, level: window.reasoningLevel || 'low' } : undefined;
+}
+
 // Ensure context pin state exists on window
 if (window.contextPinMode === undefined) window.contextPinMode = false;
 if (window.contextPinnedIndices === undefined) window.contextPinnedIndices = [];
@@ -111,6 +132,14 @@ function updateQueuedPromptUI() {
 
 function saveChatSessions() {
   localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(window.chatSessions));
+}
+
+async function deleteSessionFromServer(id) {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) {
+    const body = await res.text().catch(() => '');
+    throw new Error(body || `Delete failed (${res.status})`);
+  }
 }
 
 function makeSessionTitle(history) {
@@ -330,12 +359,20 @@ function toggleSessionsEditMode() {
   renderSessionsList();
 }
 
-function deleteChatSession(id, ev) {
+async function deleteChatSession(id, ev) {
   if (ev) ev.stopPropagation();
   const idx = window.chatSessions.findIndex(s => s.id === id);
-  if (idx === -1) return;
+  try {
+    await deleteSessionFromServer(id);
+  } catch (err) {
+    showToast(`Delete failed: ${err.message}`, 'error');
+    return;
+  }
 
-  window.chatSessions.splice(idx, 1);
+  if (idx !== -1) window.chatSessions.splice(idx, 1);
+  if (Array.isArray(window.terminalSessions)) {
+    window.terminalSessions = window.terminalSessions.filter(s => s.id !== id);
+  }
   if (window.chatSessions.length === 0) {
     const newId = crypto?.randomUUID?.() || ('chat_' + Math.random().toString(36).slice(2));
     window.chatSessions.push({ id: newId, title: 'New chat', history: [], processLog: [], createdAt: Date.now(), updatedAt: Date.now() });
@@ -348,6 +385,8 @@ function deleteChatSession(id, ev) {
 
   saveChatSessions();
   syncActiveChat();
+  if (typeof window.loadProjects === 'function') window.loadProjects();
+  if (typeof window.renderChannelsList === 'function') window.renderChannelsList();
 }
 
 async function openSession(id) {
@@ -1358,7 +1397,7 @@ async function sendChat(queuedMessage = null) {
         'Accept': 'text/event-stream'
       },
       signal: currentAbortController.signal,
-      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: window.agentSessionId, pinnedMessages: confirmedPins.length > 0 ? confirmedPins : undefined, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, reasoning: window._activeProvider === 'openai_codex' ? { enabled: true, level: window.reasoningLevel || 'low' } : (window.reasoningEnabled ? { enabled: true, level: window.reasoningLevel || 'low' } : undefined) })
+      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: window.agentSessionId, pinnedMessages: confirmedPins.length > 0 ? confirmedPins : undefined, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, reasoning: buildReasoningPayload() })
     });
 
     if (!res.ok) {

@@ -10,6 +10,21 @@
 
 import type { LLMProvider, ChatMessage, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ProviderID } from './LLMProvider';
 import { contentToString } from './content-utils';
+import { getConfig } from '../config/config';
+
+// Map Prometheus-internal think hints → OpenAI-style reasoning_effort literal.
+// 'xhigh' / 'extra_high' are Codex-only; regular OpenAI + Perplexity cap at 'high',
+// so we clamp those cases to 'high'.
+const EFFORT_MAP: Record<string, string> = {
+  none: 'none', minimal: 'minimal', fast: 'minimal',
+  low: 'low', medium: 'medium', high: 'high',
+  xhigh: 'high', extra_high: 'high',
+};
+
+// Providers that meaningfully accept a `reasoning_effort` parameter via the
+// OpenAI-compat surface. lm_studio / llama_cpp ignore unknown fields, so we
+// leave them alone to avoid confusing local servers.
+const EFFORT_PROVIDERS = new Set<string>(['openai', 'perplexity']);
 
 export interface OpenAICompatConfig {
   endpoint: string;
@@ -96,6 +111,25 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      max_tokens: options?.max_tokens ?? 512,
 	      stream: !!options?.onToken,
 	    };
+	    // Reasoning effort: only forward for providers that implement it.
+	    if (EFFORT_PROVIDERS.has(this.id as string)) {
+	      let rawEffort: string | undefined;
+	      if (options?.think === false) {
+	        rawEffort = undefined;
+	      } else if (typeof options?.think === 'string') {
+	        rawEffort = options.think;
+	      } else {
+	        const cfgRoot = getConfig().getConfig() as any;
+	        const provCfg = cfgRoot?.llm?.providers?.[this.id] || {};
+	        if (typeof provCfg.reasoning_effort === 'string') {
+	          rawEffort = provCfg.reasoning_effort.trim();
+	        }
+	      }
+	      if (rawEffort) {
+	        const effort = EFFORT_MAP[rawEffort] || 'medium';
+	        if (effort !== 'none') body.reasoning_effort = effort;
+	      }
+	    }
     if (Array.isArray(options?.tools) && options!.tools!.length) {
       body.tools = options!.tools;
       // Force 'required' on the first model turn (last message is from user) so the

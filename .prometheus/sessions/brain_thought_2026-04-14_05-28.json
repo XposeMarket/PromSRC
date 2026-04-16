@@ -1,0 +1,28 @@
+{
+  "id": "brain_thought_2026-04-14_05-28",
+  "history": [
+    {
+      "role": "user",
+      "content": "[Brain Thought 1] Window: 2026-04-14 09:28 UTC → 2026-04-14 21:28 UTC",
+      "timestamp": 1776202096269
+    },
+    {
+      "role": "assistant",
+      "content": "Error: fetch failed",
+      "timestamp": 1776202164358
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1776202096269,
+  "lastActiveAt": 1776202164360,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 38,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "desktop",
+    "team_ops"
+  ]
+}

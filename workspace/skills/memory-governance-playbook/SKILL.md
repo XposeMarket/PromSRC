@@ -22,7 +22,7 @@ Route facts safely to the right memory target (USER.md, SOUL.md, daily notes, or
 Use this flowchart to route every fact to the correct target:
 
 ```
-┌─ Is this a fact about Raul's IDENTITY or PREFERENCES? ──→ USER.md
+┌─ Is this a fact about the USER's IDENTITY or PREFERENCES? ──→ USER.md
 │  (name, email, accounts, communication style, location, platform, stack)
 │
 ├─ Is this a PRINCIPLE, PATTERN, or EVOLVED BEHAVIOR about Prom?
@@ -49,7 +49,7 @@ Use this flowchart to route every fact to the correct target:
 
 | Target | Purpose | TTL | When to Use | Example |
 |--------|---------|-----|-------------|---------|
-| **USER.md** | Biographical & preference facts | Permanent (update only if changes) | Name, email, account, platform, communication style, recurring preferences | "Name: Raul", "Prefers direct tone" |
+| **USER.md** | Biographical & preference facts | Permanent (update only if changes) | Name, email, account, platform, communication style, recurring preferences | "Name: Alex", "Prefers direct tone" |
 | **SOUL.md** | Prom's principles & evolved behavior | Permanent (add as philosophy solidifies) | Core beliefs, risk tolerance, decision-making patterns, values | "Be genuine before performative", "Try first, ask later" |
 | **daily notes** | Session-scoped context & progress | 1 day (reference in next day if relevant, archive after) | What happened today, task work, debugging, local context, meetings | Task progress, file edits made, decisions, discoveries |
 | **write_note** | Structured task completion & events | Permanent (audit trail) | Task completion, step milestones, significant decisions, learnings | Use tag=task_complete, debug, discovery |
@@ -173,7 +173,7 @@ memory_write(
 **Pattern 4: Over-Writing USER.md / SOUL.md**
 ```python
 # Called on every session
-memory_write(file="user", category="identity", content="Raul still prefers direct tone")
+memory_write(file="user", category="identity", content="User still prefers direct tone")
 # ❌ Write once, update only if it changes.
 ```
 **Fix:** Check the category first. Only write if new or changed.

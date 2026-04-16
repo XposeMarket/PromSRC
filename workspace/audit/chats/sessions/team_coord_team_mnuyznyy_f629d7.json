@@ -1,0 +1,17 @@
+{
+  "id": "team_coord_team_mnuyznyy_f629d7",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace\\teams\\team_mnuyznyy_f629d7\\workspace",
+  "channel": "web",
+  "createdAt": 1775950365713,
+  "lastActiveAt": 1775950365713,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "team_ops",
+    "source_write",
+    "browser"
+  ]
+}

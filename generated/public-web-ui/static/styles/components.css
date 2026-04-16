@@ -26,6 +26,7 @@
 }
 
 .job-item {
+  position: relative;
   padding: 12px;
   margin-bottom: 8px;
   cursor: pointer;
@@ -48,6 +49,32 @@
   border-top: 1px solid var(--border);
   margin-top: 8px;
   margin-bottom: 4px;
+}
+
+.chat-pin-btn {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.chat-pin-btn:hover,
+.chat-pin-btn.active {
+  color: var(--brand);
+  background: rgba(249,115,22,0.12);
+}
+.pinned-chats-heading {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 4px;
 }
 
 .session-terminal {

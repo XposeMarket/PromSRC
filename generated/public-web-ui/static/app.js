@@ -143,6 +143,9 @@ export function setSidebarSegTab(tab) {
     }
   });
 
+  const sessionsEditBar = document.getElementById('sessions-edit-bar');
+  if (sessionsEditBar) sessionsEditBar.style.display = tab === 'chats' ? 'flex' : 'none';
+
   // Load content for the selected tab
   if (tab === 'channels' && typeof window.renderChannelsList === 'function') {
     window.renderChannelsList();

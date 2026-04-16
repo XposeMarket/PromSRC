@@ -10,6 +10,8 @@
  *   openai       - OpenAI API key (api.openai.com)
  *   openai_codex - OpenAI OAuth / GPT Plus subscription
  *   anthropic    - Anthropic Claude (setup-token or API key)
+ *   perplexity   - Perplexity AI (sonar family, API key)
+ *   gemini       - Google Gemini via OpenAI-compat endpoint (API key)
  */
 
 import { getConfig } from '../config/config';
@@ -19,11 +21,15 @@ import { OllamaAdapter } from './ollama-adapter';
 import { OpenAICompatAdapter } from './openai-compat-adapter';
 import { OpenAICodexAdapter } from './openai-codex-adapter';
 import { AnthropicAdapter } from './anthropic-adapter';
+import { PerplexityAdapter } from './perplexity-adapter';
+import { GeminiAdapter } from './gemini-adapter';
 
 const LEGACY_BLOCKED_MODELS = new Set(['codex-davinci-002']);
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
-const DEFAULT_OPENAI_CODEX_MODEL = 'gpt-5.3-codex';
+const DEFAULT_OPENAI_CODEX_MODEL = 'gpt-5.4-codex';
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_PERPLEXITY_MODEL = 'sonar-pro';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-pro';
 
 // ─── Config Resolution ─────────────────────────────────────────────────────────
 
@@ -149,6 +155,20 @@ function buildProvider(id: ProviderID, providers: any): LLMProvider {
       return new AnthropicAdapter(configDir);
     }
 
+    case 'perplexity': {
+      const cfg = providers.perplexity || {};
+      const apiKey = resolveSecretKey(cfg.api_key);
+      if (!apiKey) throw new Error('Perplexity API key not configured. Add it in Settings → Models.');
+      return new PerplexityAdapter(apiKey);
+    }
+
+    case 'gemini': {
+      const cfg = providers.gemini || {};
+      const apiKey = resolveSecretKey(cfg.api_key);
+      if (!apiKey) throw new Error('Gemini API key not configured. Add it in Settings → Models.');
+      return new GeminiAdapter(apiKey);
+    }
+
     default:
       log.warn(`[Provider] Unknown provider "${id}", falling back to Ollama`);
       return new OllamaAdapter('http://localhost:11434');
@@ -191,6 +211,8 @@ export function getModelForRole(role: 'manager' | 'executor' | 'verifier'): stri
   if (active === 'openai_codex') return DEFAULT_OPENAI_CODEX_MODEL;
   if (active === 'openai') return DEFAULT_OPENAI_MODEL;
   if (active === 'anthropic') return DEFAULT_ANTHROPIC_MODEL;
+  if (active === 'perplexity') return DEFAULT_PERPLEXITY_MODEL;
+  if (active === 'gemini') return DEFAULT_GEMINI_MODEL;
 
   // Legacy
   return raw.models?.roles?.[role] || raw.models?.primary || 'qwen3:4b';

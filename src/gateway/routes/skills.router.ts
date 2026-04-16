@@ -14,6 +14,7 @@ export function setSkillsRouterDeps(_deps: { getOrchestrationSessionStats: (s: s
 
 router.get('/api/skills', async (_req, res) => {
   recoverSkillsIfEmpty();
+  _sm.scanSkills();
 
   const skills = _sm.getAll().map(s => ({
     id: s.id,
@@ -25,7 +26,7 @@ router.get('/api/skills', async (_req, res) => {
     eligible: true,
     eligibleReason: undefined as string | undefined,
   }));
-  res.json({ success: true, skills });
+  res.json({ success: true, skills, skillsDir: _sm.getSkillsDir() });
 });
 
 router.get('/api/skills/:id', (req, res) => {

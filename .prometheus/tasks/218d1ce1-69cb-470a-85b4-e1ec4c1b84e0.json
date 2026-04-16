@@ -1,0 +1,97 @@
+{
+  "id": "218d1ce1-69cb-470a-85b4-e1ec4c1b84e0",
+  "title": "[Dispatch] researcher_lead_finder_v1: You are the Lead Finder for Xpose Market's lead generation p",
+  "prompt": "You are the Lead Finder for Xpose Market's lead generation pipeline. Your mission:\n\nDISCOVER 20–30 LOCAL SMB PROSPECTS\nSearch for small-to-medium businesses in Xpose's service areas with high propensity for digital marketing, web design, and local SEO services.\n\nTARGET INDUSTRIES:\n- Service-based businesses (plumbing, HVAC, electricians, contractors, consultants, agencies)\n- E-commerce / online retail\n- Local brick-and-mortar retail (boutiques, specialty shops, local chains)\n- Small marketing agencies, digital agencies, design studios\n- Local professional services (accounting, legal, insurance, real estate)\n\nSEARCH SOURCES (use multiple):\n1. Google Maps (search broad keywords in target regions, extract business listings)\n2. LinkedIn (SMB company search, filter by size 10–100 employees)\n3. Business directories (Better Business Bureau, Yellow Pages, Yelp, industry-specific directories)\n4. Chamber of Commerce websites (local business networks)\n5. Industry-specific listings\n\nDATA TO COLLECT FOR EACH LEAD:\n- Company name\n- Location (city, state, address if available)\n- Website URL (if discoverable)\n- Industry / Business category\n- Size signal (employees, revenue signals, or description markers)\n- Source (where you found them)\n\nOUTPUT FORMAT:\nCreate a structured list (CSV, JSON, or markdown table) with columns:\n  Company Name | Location (City, State) | Website | Industry | Size Signal | Source\n\nQUANTITY & QUALITY:\n- Aim for 20–30 leads minimum\n- Prioritize businesses with web presence (website, LinkedIn profile, or strong directory listing)\n- Avoid large corporations or franchises without local decision-making\n- Include only real, discoverable businesses—no generic categories or placeholders\n\nOnce you've compiled the list, deliver it as structured text. This will be passed to the Lead Qualifier for fit assessment.",
+  "sessionId": "dispatch_researcher_lead_finder_v1_1775950607082",
+  "channel": "web",
+  "status": "running",
+  "pendingSubagentIds": [],
+  "subagentProfile": "researcher_lead_finder_v1",
+  "plan": [
+    {
+      "index": 0,
+      "description": "Execute dispatched task for agent researcher_lead_finder_v1",
+      "status": "running"
+    },
+    {
+      "index": 1,
+      "description": "Return results",
+      "status": "pending"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1775950607083,
+      "type": "status_push",
+      "content": "Task created: [Dispatch] researcher_lead_finder_v1: You are the Lead Finder for Xpose Market's lead generation p"
+    },
+    {
+      "t": 1775950607089,
+      "type": "resume",
+      "content": "Runner started."
+    },
+    {
+      "t": 1775950610092,
+      "type": "tool_call",
+      "content": "request_tool_category({\"category\":\"browser\"})"
+    },
+    {
+      "t": 1775950610097,
+      "type": "tool_result",
+      "content": "request_tool_category: Tool category \"browser\" activated for session task_218d1ce1-69cb-470a-85b4-e1ec4c1b84e0."
+    },
+    {
+      "t": 1775950610106,
+      "type": "tool_call",
+      "content": "skill_list({})"
+    },
+    {
+      "t": 1775950611766,
+      "type": "tool_result",
+      "content": "skill_list: 65 skills available:\n🧩 api-integration - (no description)\n🧩 brand-strategist - >\n🌐 browser-automation-playbook - Curr"
+    },
+    {
+      "t": 1775950635502,
+      "type": "tool_call",
+      "content": "skill_read({\"id\":\"local-lead-hunting\"})"
+    },
+    {
+      "t": 1775950635511,
+      "type": "tool_result",
+      "content": "skill_read: 🎯 Local Lead Hunting (local-lead-hunting)\n\n---\nname: Local Lead Hunting\ndescription: >\n  Run a browser-driven local lea"
+    },
+    {
+      "t": 1775950640584,
+      "type": "tool_call",
+      "content": "browser_open({\"url\":\"https://www.google.com/maps/search/plumbers+near+Frederick+MD\",\"observe\")"
+    },
+    {
+      "t": 1775950733025,
+      "type": "tool_result",
+      "content": "browser_open: Page: plumbers near Frederick MD - Google Maps\nElements (48):\nSnapshot diagnostics: scanned=57 included=48 hidden=8 unla"
+    },
+    {
+      "t": 1775950762793,
+      "type": "error",
+      "content": "Attempt 1 threw: Round timeout (120s)"
+    }
+  ],
+  "lastProgressAt": 1775974073020,
+  "startedAt": 1775950607083,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 1853259,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1775974073020
+  },
+  "lastToolCall": "browser_open({\"url\":\"https://www.google.com/maps/search/plumbers+near+Frederick+MD\",\"observe\")",
+  "lastToolCallAt": 1775950640584
+}

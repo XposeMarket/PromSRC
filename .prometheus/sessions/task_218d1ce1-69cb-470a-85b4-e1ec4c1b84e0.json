@@ -1,0 +1,16 @@
+{
+  "id": "task_218d1ce1-69cb-470a-85b4-e1ec4c1b84e0",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1775950607091,
+  "lastActiveAt": 1775950791401,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "browser",
+    "team_ops"
+  ]
+}

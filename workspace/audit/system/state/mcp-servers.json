@@ -19,7 +19,10 @@
       "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js",
       "-y",
       "@modelcontextprotocol/server-github"
-    ]
+    ],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "vault:integrations.github.pat"
+    }
   },
   {
     "id": "vercel",

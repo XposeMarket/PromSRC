@@ -16,19 +16,39 @@
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo } from './LLMProvider';
 import { loadTokens, getValidToken } from '../auth/openai-oauth';
 import { contentToString } from './content-utils';
+import { getConfig } from '../config/config';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 
-// Models available via Codex OAuth
+// Models available via Codex OAuth (latest first; flagship = gpt-5.4-codex)
 export const CODEX_MODELS = [
+  'gpt-5.4-codex',
+  'gpt-5.4-codex-mini',
+  'gpt-5.4',
+  'gpt-5.4-mini',
   'gpt-5.3-codex',
   'gpt-5.3-codex-spark',
+  'gpt-5.3',
   'gpt-5.2-codex',
+  'gpt-5.2',
   'gpt-5.1-codex-max',
   'gpt-5.1-codex-mini',
+  'gpt-5.1-codex',
   'gpt-5.1',
-  'gpt-5.2',
 ];
+
+// Reasoning effort levels accepted by the Codex Responses API.
+// Maps Prometheus-internal "think" hints → the literal effort string sent in the request body.
+export const CODEX_EFFORT_MAP: Record<string, string> = {
+  none: 'none',
+  minimal: 'minimal',
+  fast: 'minimal',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  extra_high: 'xhigh',
+  xhigh: 'xhigh',
+};
 
 export class OpenAICodexAdapter implements LLMProvider {
   readonly id = 'openai_codex' as const;
@@ -181,20 +201,20 @@ export class OpenAICodexAdapter implements LLMProvider {
       parallel_tool_calls: true,
     };
     if (instructions) body.instructions = instructions;
-    // Reasoning effort support (o-series / reasoning models)
-	    if (options?.think) {
-	      const effortMap: Record<string, string> = {
-	        low: 'low',
-	        medium: 'medium',
-	        high: 'high',
-	        minimal: 'minimal',
-	        none: 'none',
-	        extra_high: 'xhigh',
-	        xhigh: 'xhigh',
-	      };
-	      const effort = typeof options.think === 'string' ? (effortMap[options.think] || 'medium') : 'medium';
-	      body.reasoning = { effort, summary: 'auto' };
-	    }
+    // Reasoning effort support (Codex reasoning models).
+    // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
+    const cfgRoot = getConfig().getConfig() as any;
+    const codexCfg = cfgRoot?.llm?.providers?.openai_codex || {};
+    const configuredEffort = typeof codexCfg.reasoning_effort === 'string' ? codexCfg.reasoning_effort.trim() : '';
+    if (options?.think !== false && (options?.think || configuredEffort)) {
+      const rawEffort = options?.think
+        ? (typeof options.think === 'string' ? options.think : 'medium')
+        : configuredEffort;
+      const effort = CODEX_EFFORT_MAP[rawEffort] || 'medium';
+      if (effort !== 'none') {
+        body.reasoning = { effort, summary: 'auto' };
+      }
+    }
     if (Array.isArray(options?.tools) && options!.tools!.length) {
       body.tools = options!.tools.map((t: any) => ({
         type: 'function',
@@ -366,12 +386,17 @@ export class OpenAICodexAdapter implements LLMProvider {
     return CODEX_MODELS.map(name => ({ name }));
   }
 
-  async testConnection(): Promise<boolean> {
-    try {
-      await getValidToken(this.configDir);
-      return true;
-    } catch {
-      return false;
-    }
-  }
+	  async testConnection(): Promise<boolean> {
+	    try {
+	      const raw = getConfig().getConfig() as any;
+	      const model = String(raw?.llm?.providers?.openai_codex?.model || 'gpt-5.4-codex').trim() || 'gpt-5.4-codex';
+	      const result = await Promise.race([
+	        this.chat([{ role: 'user', content: 'Reply with pong only.' }], model),
+	        new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
+	      ]);
+	      return !!result;
+	    } catch {
+	      return false;
+	    }
+	  }
 }

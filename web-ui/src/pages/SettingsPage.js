@@ -488,7 +488,7 @@ function toggleCredVis(inputId, btn) {
 
 // --- Provider-aware Model Settings ------------------------------------------
 
-const PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic'];
+const PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini'];
 
 function onProviderChange() {
   const provider = document.getElementById('settings-llm-provider').value;
@@ -526,8 +526,15 @@ async function loadModelSettings() {
     v('settings-lmstudio-model',    pc.lm_studio?.model);
     v('settings-openai-key',        pc.openai?.api_key);
     if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
+    if (pc.openai?.reasoning_effort) { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai.reasoning_effort; }
     if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
+    if (pc.openai_codex?.reasoning_effort) { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex.reasoning_effort; }
     if (pc.anthropic?.model) { const s = document.getElementById('settings-anthropic-model'); if (s) s.value = pc.anthropic.model; }
+    v('settings-perplexity-key',    pc.perplexity?.api_key);
+    if (pc.perplexity?.model) { const s = document.getElementById('settings-perplexity-model'); if (s) s.value = pc.perplexity.model; }
+    if (pc.perplexity?.reasoning_effort) { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity.reasoning_effort; }
+    v('settings-gemini-key',        pc.gemini?.api_key);
+    if (pc.gemini?.model) { const s = document.getElementById('settings-gemini-model'); if (s) s.value = pc.gemini.model; }
     if (pc.anthropic) {
       const chk = document.getElementById('settings-anthropic-extended-thinking');
       if (chk) {
@@ -605,7 +612,7 @@ async function refreshProviderModels() {
 
 async function testProviderConnection() {
   const provider = document.getElementById('settings-llm-provider').value;
-  const statusIds = { ollama: 'provider-status-msg', llama_cpp: 'provider-status-msg-llamacpp', lm_studio: 'provider-status-msg-lmstudio', openai: 'provider-status-msg-openai', openai_codex: 'codex-oauth-status', anthropic: 'anthropic-oauth-status' };
+  const statusIds = { ollama: 'provider-status-msg', llama_cpp: 'provider-status-msg-llamacpp', lm_studio: 'provider-status-msg-lmstudio', openai: 'provider-status-msg-openai', openai_codex: 'codex-oauth-status', anthropic: 'anthropic-oauth-status', perplexity: 'provider-status-msg-perplexity', gemini: 'provider-status-msg-gemini' };
   const msgId = statusIds[provider] || 'provider-status-msg';
   const msg = document.getElementById(msgId);
   if (msg) msg.textContent = 'Testing…';
@@ -668,14 +675,28 @@ function buildProviderPayload() {
   providers.ollama    = { endpoint: document.getElementById('settings-ollama-endpoint')?.value  || 'http://localhost:11434', model: document.getElementById('settings-primary-model')?.value || 'qwen3:4b' };
   providers.llama_cpp = { endpoint: document.getElementById('settings-llamacpp-endpoint')?.value || 'http://localhost:8080',  model: document.getElementById('settings-llamacpp-model')?.value  || '' };
   providers.lm_studio = { endpoint: document.getElementById('settings-lmstudio-endpoint')?.value || 'http://localhost:1234',  model: document.getElementById('settings-lmstudio-model')?.value   || '' };
+  const openaiEffort = document.getElementById('settings-openai-effort')?.value || '';
   providers.openai    = { api_key:  document.getElementById('settings-openai-key')?.value         || '',                       model: document.getElementById('settings-openai-model')?.value      || 'gpt-4o' };
-  providers.openai_codex = { model: document.getElementById('settings-codex-model')?.value         || 'gpt-5.4' };
+  if (openaiEffort) providers.openai.reasoning_effort = openaiEffort;
+  const codexEffort = document.getElementById('settings-codex-effort')?.value || '';
+  providers.openai_codex = { model: document.getElementById('settings-codex-model')?.value         || 'gpt-5.4-codex' };
+  if (codexEffort) providers.openai_codex.reasoning_effort = codexEffort;
   const anthropicExtThinking = document.getElementById('settings-anthropic-extended-thinking')?.checked || false;
   const anthropicBudget = parseInt(document.getElementById('settings-anthropic-thinking-budget')?.value || '10000', 10);
   providers.anthropic = {
     model: document.getElementById('settings-anthropic-model')?.value || 'claude-sonnet-4-6',
     extended_thinking: anthropicExtThinking,
     thinking_budget: anthropicBudget,
+  };
+  const perplexityEffort = document.getElementById('settings-perplexity-effort')?.value || '';
+  providers.perplexity = {
+    api_key: document.getElementById('settings-perplexity-key')?.value || '',
+    model: document.getElementById('settings-perplexity-model')?.value || 'sonar-pro',
+  };
+  if (perplexityEffort) providers.perplexity.reasoning_effort = perplexityEffort;
+  providers.gemini = {
+    api_key: document.getElementById('settings-gemini-key')?.value || '',
+    model: document.getElementById('settings-gemini-model')?.value || 'gemini-2.5-pro',
   };
   return { provider, providers };
 }
@@ -1370,8 +1391,10 @@ async function loadAgentModelOptions(preserveSelected = false) {
   // Static fallback model lists per provider (used when live fetch returns nothing)
   const STATIC_MODEL_FALLBACKS = {
     openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-    openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
+    openai_codex: ['gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
     anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+    gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
   };
 
   try {
@@ -1391,6 +1414,12 @@ async function loadAgentModelOptions(preserveSelected = false) {
     } else if (provider === 'anthropic') {
       models = getSelectOptionValues('settings-anthropic-model');
       if (!models.length) models = [...(STATIC_MODEL_FALLBACKS.anthropic)];
+    } else if (provider === 'perplexity') {
+      models = getSelectOptionValues('settings-perplexity-model');
+      if (!models.length) models = [...(STATIC_MODEL_FALLBACKS.perplexity)];
+    } else if (provider === 'gemini') {
+      models = getSelectOptionValues('settings-gemini-model');
+      if (!models.length) models = [...(STATIC_MODEL_FALLBACKS.gemini)];
     } else {
       // ollama / llama_cpp / lm_studio — query the live endpoint
       const llm = buildProviderPayload();
@@ -2479,8 +2508,10 @@ const AMD_SLOTS = {
 
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
+  openai_codex: ['gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+  gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
 
 async function amdProviderChange(slotId) {
@@ -2505,6 +2536,12 @@ async function amdProviderChange(slotId) {
     } else if (prov === 'anthropic') {
       models = Array.from(document.getElementById('settings-anthropic-model')?.options || []).map(o => o.value).filter(Boolean);
       if (!models.length) models = [...AMD_STATIC_MODELS.anthropic];
+    } else if (prov === 'perplexity') {
+      models = Array.from(document.getElementById('settings-perplexity-model')?.options || []).map(o => o.value).filter(Boolean);
+      if (!models.length) models = [...AMD_STATIC_MODELS.perplexity];
+    } else if (prov === 'gemini') {
+      models = Array.from(document.getElementById('settings-gemini-model')?.options || []).map(o => o.value).filter(Boolean);
+      if (!models.length) models = [...AMD_STATIC_MODELS.gemini];
     } else {
       const llm = typeof buildProviderPayload === 'function' ? buildProviderPayload() : {};
       llm.provider = prov;
@@ -2588,7 +2625,11 @@ async function brainProviderChange(type) {
       models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
       if (!models.length) models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
     } else if (prov === 'openai_codex') {
-      models = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'];
+      models = ['gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'];
+    } else if (prov === 'perplexity') {
+      models = ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'];
+    } else if (prov === 'gemini') {
+      models = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'];
     } else {
       const llm = typeof buildProviderPayload === 'function' ? buildProviderPayload() : {};
       llm.provider = prov;

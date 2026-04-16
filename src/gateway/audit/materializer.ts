@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { refreshMemoryIndexFromAudit } from '../memory-index/index';
 
 type StartAuditMaterializerOpts = {
   workspacePath: string;
@@ -28,7 +27,10 @@ type SessionPreview = {
   hasSummary: boolean;
 };
 
-const DEFAULT_INTERVAL_MS = 30_000;
+const DEFAULT_INTERVAL_MS = 5 * 60_000;
+const MIN_INTERVAL_MS = 5 * 60_000;
+const INITIAL_DELAY_MS = 5 * 60_000;
+const COUNT_CAP = 5_000;
 const MAX_PREVIEW_ROWS = 80;
 
 let _timer: NodeJS.Timeout | null = null;
@@ -338,8 +340,26 @@ function buildTeamsSummary(configDir: string): { teamCount: number; totalRuns: n
   return { teamCount: teams.length, totalRuns };
 }
 
-function countFiles(rootDir: string): number {
-  return listFilesRecursive(rootDir).length;
+function countFiles(rootDir: string, cap = COUNT_CAP): number {
+  if (!fs.existsSync(rootDir)) return 0;
+  let count = 0;
+  const stack = [rootDir];
+  while (stack.length > 0 && count < cap) {
+    const current = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (count >= cap) break;
+      const abs = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(abs);
+      else if (entry.isFile()) count += 1;
+    }
+  }
+  return count;
 }
 
 function writeIndexes(auditRoot: string, configDir: string, workspacePath: string, mirrors: MirrorFile[], mirrorStats: MirrorStats): void {
@@ -476,17 +496,10 @@ function runMaterialization(configDir: string, workspacePath: string): void {
   const mirrorStats = copyMirrors(auditRoot, mirrors, manifestPath);
   _lastRunAt = Date.now();
   writeIndexes(auditRoot, configDir, workspacePath, mirrors, mirrorStats);
-  try {
-    // Keep long-term memory indexing bound to the audit mirror surface.
-    // Process a bounded number of changed files per cycle to avoid long stalls.
-    refreshMemoryIndexFromAudit(workspacePath, { maxChangedFiles: 140, minIntervalMs: 20_000 });
-  } catch (err: any) {
-    console.warn('[AuditMaterializer] Memory index refresh failed:', String(err?.message || err));
-  }
 }
 
 export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
-  const intervalMs = Math.max(10_000, Number(opts.intervalMs || DEFAULT_INTERVAL_MS));
+  const intervalMs = Math.max(MIN_INTERVAL_MS, Number(opts.intervalMs || DEFAULT_INTERVAL_MS));
   if (_timer) return;
   _intervalMs = intervalMs;
 
@@ -502,7 +515,9 @@ export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
     }
   };
 
-  runSafe();
+  const initialDelay = Math.min(INITIAL_DELAY_MS, intervalMs);
+  const initialTimer = setTimeout(runSafe, initialDelay);
+  if (typeof initialTimer.unref === 'function') initialTimer.unref();
   _timer = setInterval(runSafe, intervalMs);
   if (typeof _timer.unref === 'function') _timer.unref();
   console.log(`[AuditMaterializer] Started (interval=${intervalMs}ms)`);

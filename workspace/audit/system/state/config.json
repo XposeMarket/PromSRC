@@ -16,7 +16,7 @@
     }
   },
   "llm": {
-    "provider": "openai_codex",
+    "provider": "anthropic",
     "providers": {
       "ollama": {
         "endpoint": "http://localhost:11434",
@@ -38,18 +38,18 @@
         "model": "gpt-5.4"
       },
       "anthropic": {
-        "model": "claude-opus-4-6",
+        "model": "claude-haiku-4-5-20251001",
         "extended_thinking": false,
         "thinking_budget": 10000
       }
     }
   },
   "models": {
-    "primary": "gpt-5.4",
+    "primary": "claude-haiku-4-5-20251001",
     "roles": {
-      "manager": "gpt-5.4",
-      "executor": "gpt-5.4",
-      "verifier": "gpt-5.4"
+      "manager": "claude-haiku-4-5-20251001",
+      "executor": "claude-haiku-4-5-20251001",
+      "verifier": "claude-haiku-4-5-20251001"
     }
   },
   "tools": {
@@ -71,17 +71,8 @@
         ]
       },
       "files": {
-        "allowed_paths": [
-          "D:\\Prometheus\\workspace",
-          "D:\\Prometheus\\src"
-        ],
-        "blocked_paths": [
-          "D:\\etc",
-          "D:\\System",
-          "C:\\Windows",
-          "D:\\usr",
-          "D:\\bin"
-        ]
+        "allowed_paths": [],
+        "blocked_paths": []
       },
       "browser": {
         "profile": "automation",
@@ -256,6 +247,145 @@
       "teamRole": "Pipeline Manager",
       "teamAssignment": "Coordinate the Xpose Market lead pipeline. Normalize records, remove junk or duplicates, track lead stage and outreach status, coordinate researcher/analyst/operator handoffs, update pipeline files, and write concise status reports.",
       "allowed_categories": []
+    },
+    {
+      "id": "researcher_site_audit_v1",
+      "name": "Site Auditor",
+      "description": "Audits Xpose website for UX, conversion blockers, SEO gaps, and competitor positioning.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\researcher_site_audit_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950305697,
+      "createdBy": "ai",
+      "roleType": "researcher",
+      "teamRole": "Site Auditor",
+      "teamAssignment": "Inspect Xpose Market website for UX issues, broken elements, unclear messaging, SEO gaps. Compare against 2–3 competitor agencies. Identify top 3–5 improvements and prioritize by impact. Report with screenshots and concrete recommendations.",
+      "allowed_categories": [
+        "integrations"
+      ]
+    },
+    {
+      "id": "builder_site_executor_v1",
+      "name": "Site Builder/Executor",
+      "description": "Implements website improvements: copy edits, design tweaks, UX fixes, and deployment.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\builder_site_executor_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950306054,
+      "createdBy": "ai",
+      "roleType": "builder",
+      "teamRole": "Site Builder",
+      "teamAssignment": "Receive audit recommendations and priority items. Edit xposemarket-site/ files: update copy, fix broken elements, add components. Test locally, deploy to production, verify live. Communicate progress to team.",
+      "allowed_categories": [
+        "source_write"
+      ]
+    },
+    {
+      "id": "analyst_site_performance_v1",
+      "name": "Performance Analyst",
+      "description": "Tracks website metrics: traffic, conversions, engagement, and improvement velocity.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\analyst_site_performance_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950306527,
+      "createdBy": "ai",
+      "roleType": "analyst",
+      "teamRole": "Performance Analyst",
+      "teamAssignment": "Pull website analytics: traffic, bounce rate, pages per session, conversions, device breakdown. Track week-over-week impact of auditor recommendations and builder deployments. Report patterns and recommend next audit focus.",
+      "allowed_categories": []
+    },
+    {
+      "id": "researcher_lead_finder_v1",
+      "name": "Lead Finder",
+      "description": "Discovers local business prospects from maps, directories, search results, and social signals.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\researcher_lead_finder_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950306914,
+      "createdBy": "ai",
+      "roleType": "researcher",
+      "teamRole": "Lead Finder",
+      "teamAssignment": "Search for local SMB prospects in Xpose's service areas: web design, digital marketing, local SEO. Use Google Maps, LinkedIn, directories, chamber sites. Collect: business name, location, website, industry, size signal. Pass to Qualifier.",
+      "allowed_categories": [
+        "integrations"
+      ]
+    },
+    {
+      "id": "analyst_lead_qualifier_v1",
+      "name": "Lead Qualifier",
+      "description": "Evaluates prospects for fit, intent, and conversion probability.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\analyst_lead_qualifier_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950307263,
+      "createdBy": "ai",
+      "roleType": "analyst",
+      "teamRole": "Lead Qualifier",
+      "teamAssignment": "Review leads from Finder. Assess: website quality, market size, buyer intent, digital marketing readiness. Score fit 1–5. Pass qualified (3+) to Enricher; report rejects.",
+      "allowed_categories": []
+    },
+    {
+      "id": "builder_lead_enricher_v1",
+      "name": "Lead Enricher",
+      "description": "Gathers contact info, owner/decision-maker names, and outreach angle for qualified leads.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\builder_lead_enricher_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950307598,
+      "createdBy": "ai",
+      "roleType": "builder",
+      "teamRole": "Lead Enricher",
+      "teamAssignment": "Take qualified leads. Find decision-maker names (owner, marketing manager, sales lead). Gather contacts: email, phone, LinkedIn URL. Note outreach angle (pain point). Export as lead cards ready for outreach.",
+      "allowed_categories": [
+        "source_write"
+      ]
+    },
+    {
+      "id": "operator_bug_scanner_v1",
+      "name": "Bug Scanner",
+      "description": "Automated nightly scans for code errors, broken imports, and syntax issues.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\operator_bug_scanner_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950307902,
+      "createdBy": "ai",
+      "roleType": "operator",
+      "teamRole": "Bug Scanner",
+      "teamAssignment": "Run nightly scans of src/: TypeScript/JS errors, broken imports, syntax issues. Run npm run build, capture errors. Scan logs for console.error patterns. Report with file/line/severity.",
+      "allowed_categories": [
+        "browser",
+        "desktop"
+      ]
+    },
+    {
+      "id": "analyst_bug_triager_v1",
+      "name": "Bug Triager",
+      "description": "Reviews scan findings, verifies impact, and prioritizes fixes.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\analyst_bug_triager_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950331347,
+      "createdBy": "ai",
+      "roleType": "analyst",
+      "teamRole": "Bug Triager",
+      "teamAssignment": "Review Scanner findings. Verify each: check git context, assess true impact. Categorize by severity: critical (blocks core), high (data issue), medium (performance), low (dead code). Generate triage report.",
+      "allowed_categories": []
+    },
+    {
+      "id": "verifier_bug_reviewer_v1",
+      "name": "Bug Verifier",
+      "description": "Validates critical bugs, recommends fixes, and prepares for developer action.",
+      "workspace": "D:\\Prometheus\\workspace\\.prometheus\\subagents\\verifier_bug_reviewer_v1",
+      "maxSteps": 20,
+      "subagentType": "dynamic",
+      "createdAt": 1775950331592,
+      "createdBy": "ai",
+      "roleType": "verifier",
+      "teamRole": "Bug Verifier",
+      "teamAssignment": "Review critical and high-priority issues from Triager. Verify: bug is real, impact confirmed, root cause understood. Recommend fix. Create bug report with reproduction steps. Hand off to dev team.",
+      "allowed_categories": [
+        "integrations"
+      ]
     }
   ],
   "session": {
@@ -357,23 +487,23 @@
     "url": "http://localhost:3005"
   },
   "search": {
-    "preferred_provider": "google",
+    "preferred_provider": "tavily",
     "tavily_api_key": "vault:search.tavily_api_key",
     "google_api_key": "vault:search.google_api_key",
-    "google_cx": "c3222d232efab4b73",
+    "google_cx": "",
     "search_rigor": "verified",
     "brave_api_key": ""
   },
   "agent_policy": {
-    "force_web_for_fresh": true,
-    "memory_fallback_on_search_failure": true,
-    "auto_store_web_facts": true,
-    "natural_language_tool_router": true,
-    "retrieval_mode": "standard"
+    "force_web_for_fresh": false,
+    "memory_fallback_on_search_failure": false,
+    "auto_store_web_facts": false,
+    "natural_language_tool_router": false,
+    "retrieval_mode": "fast"
   },
   "telegram": {
     "enabled": true,
-    "botToken": "8644288416:AAGF5d_VF5q1N6hBqgtcZZEEm4K2AR1B7uo",
+    "botToken": "vault:channels.telegram.botToken",
     "allowedUserIds": [
       1799053599
     ],

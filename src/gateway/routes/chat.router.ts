@@ -25,11 +25,12 @@ import {
 import { getVault } from '../../security/vault';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, getSessionsByChannel, recordSessionCompaction } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, getSessionsByChannel, recordSessionCompaction, deleteSession } from '../session';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
+import { findProjectBySessionId, removeSessionFromProject } from '../projects/project-store.js';
 import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
@@ -381,6 +382,7 @@ import { createApp } from '../core/app';
 import { createServer } from '../core/server';
 import { runStartup } from '../core/startup';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
+import { isProviderStatusChecking, markProviderStatus, readProviderStatusCache, resolveProviderStatus } from '../provider-status';
 
 
 import {
@@ -5082,17 +5084,21 @@ function bindTeamNotificationTargetFromSession(teamId: string, sessionId: string
   }
 }
 
-
 router.get('/api/status', async (_req, res) => {
   const ollama = getOllamaClient();
-  const connected = await ollama.testConnection();
   const rawCfg = getConfig().getConfig() as any;
   const provider: string = rawCfg.llm?.provider || 'ollama';
+  const isCloudProvider = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic';
+  const cachedProviderStatus = readProviderStatusCache();
+  const connected = isCloudProvider
+    ? !!cachedProviderStatus?.connected
+    : await resolveProviderStatus(() => ollama.testConnection());
+  const providerChecking = isCloudProvider && !cachedProviderStatus && isProviderStatusChecking();
   const providerCfg = rawCfg.llm?.providers?.[provider] || {};
   const activeModel: string = providerCfg.model || rawCfg.models?.primary || 'unknown';
   const orchCfg = getOrchestrationConfig();
   res.json({
-    status: 'ok', version: 'v2-tools', ollama: connected,
+	    status: 'ok', version: 'v2-tools', ollama: connected, providerOnline: connected, providerChecking,
     provider,
     currentModel: activeModel,
     workspace: (getConfig().getConfig() as any).workspace?.path || '',
@@ -5140,17 +5146,19 @@ router.post('/api/chat', async (req, res) => {
 	      undefined,
 	      reasoning && typeof reasoning === 'object' ? reasoning : undefined,
 	      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
-	    );
-    if (!abortSignal.aborted) {
-      sendSSE('final', { text: result.text });
-      sendSSE('done', {
+		    );
+		    if (!abortSignal.aborted) {
+		      markProviderStatus(true);
+	      sendSSE('final', { text: result.text });
+	      sendSSE('done', {
         reply: result.text, mode: result.type,
         sections: [{ type: result.type === 'execute' ? 'tool_results' : 'text', content: result.text }],
         thinking: result.thinking, results: result.toolResults,
       });
     }
-  } catch (err: any) {
-    if (!abortSignal.aborted) {
+		  } catch (err: any) {
+		    markProviderStatus(false);
+	    if (!abortSignal.aborted) {
       console.error('[v2] ERROR:', err);
       sendSSE('error', { message: err.message || 'Unknown error' });
     }
@@ -5252,6 +5260,28 @@ router.get('/api/sessions/:id', (req, res) => {
     });
   } catch (e: any) {
     console.error('[/api/sessions/:id] Error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/api/sessions/:id', (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    if (!sessionId) {
+      res.status(400).json({ error: 'Session id is required' });
+      return;
+    }
+    const project = findProjectBySessionId(sessionId);
+    const deleted = project
+      ? !!removeSessionFromProject(project.id, sessionId)
+      : deleteSession(sessionId);
+    if (!deleted) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    res.json({ success: true, projectId: project?.id });
+  } catch (e: any) {
+    console.error('[/api/sessions/:id DELETE] Error:', e);
     res.status(500).json({ error: e.message });
   }
 });

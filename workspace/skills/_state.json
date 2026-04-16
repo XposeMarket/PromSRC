@@ -7,11 +7,10 @@
   "day-trading-mnq-mgc": false,
   "landing-page-blueprint": false,
   "git-workflow": false,
-  "api-integration": false,
+  "api-integration": true,
   "self-repair-protocol": false,
   "data-pipeline": false,
   "prometheus-team-design": false,
-  "smallclaw-team-design": false,
   "error-budget-tracker": false,
   "web-scraper": false,
   "skill-creator": false,
@@ -32,5 +31,6 @@
   "market-research": false,
   "deal-analyzer": false,
   "product-discovery": false,
-  "local-lead-hunting": false
+  "local-lead-hunting": false,
+  "brand-strategist": false
 }

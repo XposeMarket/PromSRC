@@ -1,7 +1,7 @@
 # Teams Index
 
-Generated: 2026-04-11T23:28:31.704Z
+Generated: 2026-04-16T14:10:47.904Z
 
-- Managed teams: 0
-- Recorded team runs: 0
+- Managed teams: 1
+- Recorded team runs: 12
 - Note: team/subagent workspace files are intentionally excluded from this audit mirror.

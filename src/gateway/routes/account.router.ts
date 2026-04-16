@@ -33,6 +33,7 @@ interface AuthSession {
 
 let _session: AuthSession | null = null;
 const SUBSCRIPTION_REFRESH_TTL_MS = 5 * 60 * 1000;
+type SubscriptionRefreshResult = 'active' | 'inactive' | 'unknown';
 
 function sessionFilePath(): string {
   const dataDir = (getConfig() as any).getDataDir?.() ||
@@ -62,6 +63,11 @@ function persistSession(): void {
   } catch {}
 }
 
+function clearSession(): void {
+  _session = null;
+  persistSession();
+}
+
 // Load on module init (called when gateway starts)
 loadPersistedSession();
 
@@ -84,7 +90,7 @@ async function sbFetch(urlPath: string, opts: RequestInit = {}, token?: string):
   return body;
 }
 
-async function checkSubscription(userId: string, accessToken: string, isAdmin: boolean): Promise<boolean> {
+async function checkSubscription(userId: string, accessToken: string, isAdmin: boolean): Promise<boolean | null> {
   if (isAdmin) return true;
   try {
     const data = await sbFetch(
@@ -94,7 +100,7 @@ async function checkSubscription(userId: string, accessToken: string, isAdmin: b
     );
     return Array.isArray(data) && data.length > 0;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -127,25 +133,31 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   }
 }
 
-async function refreshSubscriptionIfNeeded(force: boolean = false): Promise<void> {
-  if (!_session) return;
+async function refreshSubscriptionIfNeeded(force: boolean = false): Promise<SubscriptionRefreshResult> {
+  if (!_session) return 'inactive';
   if (_session.isAdmin) {
     _session.subscriptionActive = true;
     _session.subscriptionCheckedAt = Date.now();
     persistSession();
-    return;
+    return 'active';
   }
 
   const lastCheckedAt = Number(_session.subscriptionCheckedAt || 0);
-  if (!force && Date.now() - lastCheckedAt < SUBSCRIPTION_REFRESH_TTL_MS) return;
+  if (!force && Date.now() - lastCheckedAt < SUBSCRIPTION_REFRESH_TTL_MS) {
+    return _session.subscriptionActive ? 'active' : 'inactive';
+  }
 
-  _session.subscriptionActive = await checkSubscription(
+  const subscriptionActive = await checkSubscription(
     _session.userId,
     _session.accessToken,
     _session.isAdmin,
   );
+  if (subscriptionActive === null) return 'unknown';
+
+  _session.subscriptionActive = subscriptionActive;
   _session.subscriptionCheckedAt = Date.now();
   persistSession();
+  return subscriptionActive ? 'active' : 'inactive';
 }
 
 // ─── Startup refresh ──────────────────────────────────────────────────────────
@@ -160,13 +172,15 @@ export async function refreshPersistedSession(): Promise<void> {
     const refreshed = await refreshAccessToken(_session.refreshToken);
     if (refreshed) {
       _session = { ..._session, ...refreshed };
-      await refreshSubscriptionIfNeeded(true);
     } else {
       // Refresh failed — clear session, user must log in again
-      _session = null;
-      persistSession();
+      clearSession();
+      return;
     }
   }
+
+  const subscriptionState = await refreshSubscriptionIfNeeded(true);
+  if (subscriptionState === 'inactive') clearSession();
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -191,20 +205,25 @@ router.get('/api/account/status', async (_req, res) => {
       const refreshed = await refreshAccessToken(_session.refreshToken);
       if (refreshed) {
         _session = { ..._session, ...refreshed };
-        await refreshSubscriptionIfNeeded(true);
       } else {
-        _session = null;
-        persistSession();
+        clearSession();
         return res.json({ authenticated: false });
       }
     } else {
-      _session = null;
-      persistSession();
+      clearSession();
       return res.json({ authenticated: false });
     }
   }
 
-  await refreshSubscriptionIfNeeded();
+  const subscriptionState = await refreshSubscriptionIfNeeded();
+  if (subscriptionState === 'inactive') {
+    clearSession();
+    return res.json({
+      authenticated: false,
+      subscriptionActive: false,
+      reason: 'subscription_inactive',
+    });
+  }
 
   res.json({
     authenticated: true,
@@ -227,7 +246,7 @@ router.post('/api/account/login', (req, res) => {
     return res.status(400).json({ error: 'accessToken, email, and userId are required' });
   }
 
-  _session = {
+  const nextSession: AuthSession = {
     userId: String(userId),
     email: String(email),
     accessToken: String(accessToken),
@@ -237,6 +256,20 @@ router.post('/api/account/login', (req, res) => {
     subscriptionActive: Boolean(subscriptionActive),
     subscriptionCheckedAt: Date.now(),
   };
+
+  if (!nextSession.isAdmin && !nextSession.subscriptionActive) {
+    clearSession();
+    return res.json({
+      authenticated: false,
+      email: nextSession.email,
+      userId: nextSession.userId,
+      isAdmin: false,
+      subscriptionActive: false,
+      reason: 'subscription_inactive',
+    });
+  }
+
+  _session = nextSession;
   persistSession();
 
   res.json({
@@ -250,8 +283,7 @@ router.post('/api/account/login', (req, res) => {
 
 // POST /api/account/logout
 router.post('/api/account/logout', (_req, res) => {
-  _session = null;
-  persistSession();
+  clearSession();
   res.json({ success: true });
 });
 
@@ -263,13 +295,16 @@ router.post('/api/account/refresh', async (_req, res) => {
 
   const refreshed = await refreshAccessToken(_session.refreshToken);
   if (!refreshed) {
-    _session = null;
-    persistSession();
+    clearSession();
     return res.status(401).json({ error: 'Session expired — please log in again' });
   }
 
   _session = { ..._session, ...refreshed };
-  await refreshSubscriptionIfNeeded(true);
+  const subscriptionState = await refreshSubscriptionIfNeeded(true);
+  if (subscriptionState === 'inactive') {
+    clearSession();
+    return res.status(401).json({ error: 'No active subscription found' });
+  }
 
   res.json({
     authenticated: true,

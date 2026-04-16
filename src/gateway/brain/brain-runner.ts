@@ -196,10 +196,9 @@ export class BrainRunner {
     ensureBrainDirs();
     markGatewayStarted();
 
-    // Tick immediately on start, then every 15 minutes
-    this._tick().catch(err =>
-      console.warn('[BrainRunner] Initial tick error:', err?.message)
-    );
+    // Do not run model-backed brain jobs during gateway boot. Startup status and
+    // user chat should get the first provider slot; the periodic ticker handles
+    // eligible thought/dream work after the app is already settled.
     this.ticker = setInterval(() => {
       this._tick().catch(err =>
         console.warn('[BrainRunner] Tick error:', err?.message)

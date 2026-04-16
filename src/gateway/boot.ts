@@ -28,10 +28,11 @@ type BootResult =
       status: 'ran';
       reply: string;
       sessionId: string;
-      title: string;
-      source: 'boot_startup' | 'hot_restart';
-      automatedSession: BootAutomatedSession;
-    }
+	      title: string;
+	      source: 'boot_startup' | 'hot_restart';
+	      automatedSession: BootAutomatedSession;
+	      notificationId?: string;
+	    }
   | { status: 'failed'; reason: string };
 
 type HandleChatFn = (
@@ -246,10 +247,10 @@ export async function runBootMd(
       source: sessionMeta.source,
       previousSessionId: restartCtx.previousSessionId,
     };
-    queueStartupNotification({
-      sessionId: sessionMeta.id,
-      title: sessionMeta.title,
-      text: finalText,
+	    const notification = queueStartupNotification({
+	      sessionId: sessionMeta.id,
+	      title: sessionMeta.title,
+	      text: finalText,
       source: sessionMeta.source,
       automatedSession,
       previousSessionId: restartCtx.previousSessionId,
@@ -262,12 +263,13 @@ export async function runBootMd(
     return {
       status: 'ran',
       reply: finalText,
-      sessionId: sessionMeta.id,
-      title: sessionMeta.title,
-      source: sessionMeta.source,
-      automatedSession,
-    };
-  }
+	      sessionId: sessionMeta.id,
+	      title: sessionMeta.title,
+	      source: sessionMeta.source,
+	      automatedSession,
+	      notificationId: notification.id,
+	    };
+	  }
 
   const bootPath = path.join(workspacePath, 'BOOT.md');
   if (!fs.existsSync(bootPath)) return { status: 'skipped', reason: 'BOOT.md not found' };
@@ -346,10 +348,10 @@ export async function runBootMd(
       createdAt: sessionMeta.createdAt,
       source: sessionMeta.source,
     };
-    queueStartupNotification({
-      sessionId: sessionMeta.id,
-      title: sessionMeta.title,
-      text: finalText,
+	    const notification = queueStartupNotification({
+	      sessionId: sessionMeta.id,
+	      title: sessionMeta.title,
+	      text: finalText,
       source: sessionMeta.source,
       automatedSession,
       previousSessionId: undefined,
@@ -358,11 +360,12 @@ export async function runBootMd(
     return {
       status: 'ran',
       reply: finalText,
-      sessionId: sessionMeta.id,
-      title: sessionMeta.title,
-      source: sessionMeta.source,
-      automatedSession,
-    };
+	      sessionId: sessionMeta.id,
+	      title: sessionMeta.title,
+	      source: sessionMeta.source,
+	      automatedSession,
+	      notificationId: notification.id,
+	    };
   } catch (err: any) {
     const reason = String(err?.message || err || 'unknown error');
     console.warn(`[boot-md] Failed: ${reason}`);

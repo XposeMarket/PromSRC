@@ -18,6 +18,9 @@
 - 2026-04-09: Declared-plan reliability work is now an active long-term through-line; a concrete patch proposal exists to separate hidden scout completion from visible step progression in `chat.router.ts` (`prop_1775759744962_a7c1d3`).
 - (empty)
 
+
+## task_outcomes
+- Nightly code scan for Prometheus codebase: `npm run build` completed successfully with exit 0 and output `> prometheus@1.0.1 build` / `> tsc`. No TypeScript build errors or warnings were emitted in the captured build output. A recursive source scan attempt using workspace `src/` tools failed because the workspace root does not expose a `src` directory; the visible root contains only docs/meta files. Need a proper workspace path or source tree to perform the requested recursive code scan. [2026-04-11]
 ---
 
 *Use this file for durable memory only. Keep short-lived notes in workspace/memory/*

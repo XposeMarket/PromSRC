@@ -32,7 +32,6 @@ function copyRecursive(src, dest) {
 // Skills that are internal/dev-only and should NOT be shipped to public users
 const SKILLS_EXCLUDE = new Set([
   'prometheus-team-design',
-  'smallclaw-team-design',
   'subagent-system-prompt-design',
 ]);
 
@@ -52,6 +51,7 @@ function bundleSkills() {
   for (const entry of fs.readdirSync(srcSkills, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     if (SKILLS_EXCLUDE.has(entry.name)) continue;
+    if (entry.name.endsWith('-team-design')) continue;
     if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
 
     const srcSkillDir = path.join(srcSkills, entry.name);

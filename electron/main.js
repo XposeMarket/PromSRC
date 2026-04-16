@@ -22,8 +22,8 @@ const fs         = require('fs');
 // ─── Config ────────────────────────────────────────────────────────────────
 const GATEWAY_URL  = 'http://127.0.0.1:18789';
 const APP_ROOT     = path.join(__dirname, '..');
-const ICON_PATH    = path.join(APP_ROOT, 'assets', 'Prometheus.png');
-const MAX_RETRIES  = 60;   // 60 × 300ms = 18s max wait
+const ICON_PATH    = path.join(APP_ROOT, 'assets', 'Prometheus.ico');
+const MAX_RETRIES  = 200;  // 200 x 300ms = 60s max wait (dev tsx startup can be slow)
 const RETRY_DELAY  = 300;
 const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
 const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JSON.prometheusBuild || '').trim().toLowerCase() === 'public';
@@ -255,11 +255,72 @@ function killPortIfInUse(port) {
   } catch { /* port not in use or netstat unavailable */ }
 }
 
+// ─── Gateway Log ───────────────────────────────────────────────────────────
+// In packaged builds stdout/stderr have no terminal — write to a log file so
+// crashes are diagnosable. Also keeps the last 200 lines in memory for the
+// error dialog shown when the gateway fails to start.
+const GATEWAY_LOG_PATH = path.join(USER_DATA_DIR, 'gateway.log');
+let gatewayLogStream = null;
+const gatewayLogLines = [];   // rolling last-200-lines buffer for error dialog
+const MAX_LOG_LINES = 200;
+
+function openGatewayLog() {
+  try {
+    const logsDir = path.dirname(GATEWAY_LOG_PATH);
+    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+    gatewayLogStream = fs.createWriteStream(GATEWAY_LOG_PATH, { flags: 'w' });
+    gatewayLogStream.on('error', (err) => {
+      if (err?.code !== 'EPIPE') {
+        console.warn('[Prometheus] Gateway log stream error:', err?.message || err);
+      }
+    });
+  } catch (e) {
+    console.warn('[Prometheus] Could not open gateway log:', e.message);
+  }
+}
+
+function safeWriteMainStdout(text) {
+  try {
+    if (!process.stdout || process.stdout.destroyed || !process.stdout.writable) return;
+    process.stdout.write(text);
+  } catch (err) {
+    if (err?.code !== 'EPIPE') {
+      try { console.warn('[Prometheus] Could not write gateway output to stdout:', err?.message || err); } catch {}
+    }
+  }
+}
+
+function writeGatewayLog(data) {
+  const text = String(data);
+  if (gatewayLogStream) {
+    try { gatewayLogStream.write(text); } catch {}
+  }
+  // Keep rolling buffer for error dialog
+  const lines = text.split('\n');
+  for (const line of lines) {
+    if (line.trim()) {
+      gatewayLogLines.push(line);
+      if (gatewayLogLines.length > MAX_LOG_LINES) gatewayLogLines.shift();
+    }
+  }
+  // Also forward to main-process stdio (visible in dev / when run from terminal)
+  safeWriteMainStdout(`[gateway] ${text}`);
+}
+
+function getLastGatewayOutput(maxLines = 30) {
+  return gatewayLogLines.slice(-maxLines).join('\n');
+}
+
 // ─── Gateway ───────────────────────────────────────────────────────────────
 function startGateway() {
   console.log('[Prometheus] Starting gateway...');
   console.log(`[Prometheus] User data: ${USER_DATA_DIR}`);
   console.log(`[Prometheus] Packaged runtime: ${IS_PACKAGED_RUNTIME ? 'yes' : 'no'}`);
+
+  openGatewayLog();
+  writeGatewayLog(`[main] Gateway starting — pid will follow\n`);
+  writeGatewayLog(`[main] Data dir: ${USER_DATA_DIR}\n`);
+  writeGatewayLog(`[main] Packaged: ${IS_PACKAGED_RUNTIME}\n`);
 
   // Kill any stale gateway process that may still hold the port from a previous run.
   // This is synchronous — Windows releases the port almost immediately after kill.
@@ -281,6 +342,8 @@ function startGateway() {
 
   if (IS_PACKAGED_RUNTIME) {
     const gatewayEntry = getGatewayEntryPath();
+    writeGatewayLog(`[main] Entry: ${gatewayEntry}\n`);
+    writeGatewayLog(`[main] Exec: ${process.execPath}\n`);
     gatewayProcess = spawn(process.execPath, [gatewayEntry], {
       cwd: getGatewayWorkingDirectory(),
       env: {
@@ -290,8 +353,6 @@ function startGateway() {
       windowsHide: true,
     });
   } else {
-    // Use the local tsx binary directly — avoids npx PATH lookup overhead and
-    // the reliability issues npx has on Windows when PATH isn't fully inherited.
     const isWin = process.platform === 'win32';
     const tsxBin = path.join(
       APP_ROOT, 'node_modules', '.bin', isWin ? 'tsx.cmd' : 'tsx'
@@ -304,28 +365,36 @@ function startGateway() {
     gatewayProcess = spawn(cmd, args, {
       cwd:   getGatewayWorkingDirectory(),
       env:   gatewayEnv,
-      shell: isWin,   // .cmd files need shell on Windows
+      shell: isWin,
       windowsHide: true,
     });
   }
 
-  gatewayProcess.stdout?.on('data', (d) => process.stdout.write(`[gateway] ${d}`));
-  gatewayProcess.stderr?.on('data', (d) => process.stderr.write(`[gateway] ${d}`));
+  writeGatewayLog(`[main] Gateway spawned (pid=${gatewayProcess.pid})\n`);
+
+  gatewayProcess.stdout?.on('data', (d) => writeGatewayLog(d));
+  gatewayProcess.stderr?.on('data', (d) => writeGatewayLog(d));
 
   gatewayProcess.on('error', (err) => {
-    console.error('[Prometheus] Gateway spawn error:', err.message);
+    writeGatewayLog(`[main] Spawn error: ${err.message}\n`);
     if (!isQuitting) {
       dialog.showErrorBox(
         'Prometheus — Gateway Error',
-        `Failed to start the Prometheus gateway:\n\n${err.message}\n\n${IS_PACKAGED_RUNTIME ? 'The packaged runtime could not boot correctly.' : 'Make sure Node.js and npm dependencies are installed.'}`
+        `Failed to start the Prometheus gateway:\n\n${err.message}\n\nLog: ${GATEWAY_LOG_PATH}`
       );
       app.quit();
     }
   });
 
   gatewayProcess.on('exit', (code, signal) => {
+    writeGatewayLog(`[main] Gateway exited (code=${code}, signal=${signal})\n`);
     if (!isQuitting) {
-      console.error(`[Prometheus] Gateway exited unexpectedly (code=${code}, signal=${signal})`);
+      const lastOutput = getLastGatewayOutput();
+      dialog.showErrorBox(
+        'Prometheus — Gateway Crashed',
+        `The Prometheus gateway exited unexpectedly (code=${code}).\n\nLast output:\n${lastOutput || '(none)'}\n\nFull log: ${GATEWAY_LOG_PATH}`
+      );
+      app.quit();
     }
   });
 }
@@ -536,9 +605,10 @@ app.whenReady().then(async () => {
     setupAutoUpdater();
   } catch (err) {
     loader.close();
+    const lastOutput = getLastGatewayOutput();
     dialog.showErrorBox(
       'Prometheus — Startup Failed',
-      `The Prometheus gateway did not start in time.\n\n${err.message}\n\nCheck that port 18789 is not already in use.`
+      `The Prometheus gateway did not start in time.\n\n${err.message}\n\nLast gateway output:\n${lastOutput || '(none — check log file)'}\n\nFull log: ${GATEWAY_LOG_PATH}`
     );
     app.quit();
   }
@@ -564,3 +634,4 @@ app.on('before-quit', () => {
     }
   }
 });
+

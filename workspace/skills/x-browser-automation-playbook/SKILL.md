@@ -88,10 +88,10 @@ Use `browser_scroll_collect` for bulk tweet collection — one call replaces man
 - `browser_scroll_collect` returns raw text, NOT a DOM snapshot. If you need to interact (like/reply) afterward, call `browser_snapshot()` once to restore @refs.
 - If per-scroll new chars trend to 0, the feed segment is exhausted.
 
-**Good search queries for @PrometheusAI_X:**
-- `(openclaw OR claude) -from:PrometheusAI_X`
-- `(Prometheus AI OR "autonomous AI agent") -from:PrometheusAI_X`
-- `"AI agent" automation -from:PrometheusAI_X`
+**Good search query patterns:**
+- `(<brand keyword> OR <competitor keyword>) -from:<your_handle>`
+- `("<brand phrase>" OR "<category phrase>") -from:<your_handle>`
+- `"<category keyword>" automation -from:<your_handle>`
 
 ---
 
@@ -153,7 +153,7 @@ Use this only when keyboard focus fails or shortcuts are blocked.
 | 2026-04-10 | v1.6.0: Updated posting guidance so standard X posts should use the verified `x_post_text` composite by default; manual composer flow is now fallback-only. |
 | 2026-03-25 | v1.3.0: Made fast mode default. Added keyboard like workflow (`j` + focused-item check + `l`), bulk collection defaults, posting speed path, snapshot minimization rules, and explicit fallback mode. |
 | 2026-03-20 | Added Playbook 2 (Search & Collect) using browser_scroll_collect for bulk tweet collection. Renumbered playbooks. |
-| 2026-03-19 | Updated account from @Small_Claw_ to @PrometheusAI_X. Updated search queries for Prometheus branding. |
+| 2026-03-19 | Generalized account-specific search examples into reusable query patterns. |
 | 2026-03-13 | Fixed tool names (browser_open not browser_navigate, browser_fill not browser_type). Added keyboard shortcut for composer. |
 | 2026-03-08 | Initial playbook from weekly performance review |
 

@@ -71,6 +71,11 @@ function getSessionPath(id: string): string {
   return path.join(SESSION_DIR, `${id}.json`);
 }
 
+export function sessionExists(id: string): boolean {
+  const sessionId = String(id || '').trim();
+  return !!sessionId && fs.existsSync(getSessionPath(sessionId));
+}
+
 function inferChannelFromSessionId(sessionId: string): Session['channel'] {
   if (sessionId.startsWith('cli_')) return 'terminal';
   if (sessionId.startsWith('telegram_')) return 'telegram';
@@ -633,6 +638,25 @@ export function clearHistory(id: string): void {
   session.contextSummaryUpdatedAt = undefined;
   session.lastActiveAt = Date.now();
   saveSession(id);
+}
+
+export function deleteSession(id: string): boolean {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return false;
+  sessions.delete(sessionId);
+  const existing = sessionSaveTimers.get(sessionId);
+  if (existing) {
+    clearTimeout(existing);
+    sessionSaveTimers.delete(sessionId);
+  }
+  const filePath = getSessionPath(sessionId);
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function cleanupSessions(nowMs: number = Date.now()): { deleted: number; scanned: number } {

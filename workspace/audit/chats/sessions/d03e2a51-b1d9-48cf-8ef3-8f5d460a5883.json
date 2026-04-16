@@ -1,0 +1,23 @@
+{
+  "id": "d03e2a51-b1d9-48cf-8ef3-8f5d460a5883",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hey prom!",
+      "timestamp": 1776348409686
+    },
+    {
+      "role": "assistant",
+      "content": "Error: fetch failed",
+      "timestamp": 1776348519223
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1776348409686,
+  "lastActiveAt": 1776348519225,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 21,
+  "contextStartIndex": 0
+}

@@ -44,6 +44,12 @@ export interface RestartContext {
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
 function getProjectRoot(): string {
+  // In packaged Electron, __dirname resolves to inside app.asar (a file, not a dir).
+  // PROMETHEUS_DATA_DIR is set by main.js to %APPDATA%\Prometheus — use that so
+  // all .prometheus/ paths land in the correct user data directory.
+  if (process.env.PROMETHEUS_DATA_DIR) {
+    return process.env.PROMETHEUS_DATA_DIR;
+  }
   return path.resolve(__dirname, '..', '..');
 }
 

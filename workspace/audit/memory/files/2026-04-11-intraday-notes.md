@@ -124,3 +124,48 @@ User reset prior teams and is planning a fresh 3-team architecture: Xpose websit
 ### [COMPACTION_SUMMARY] 2026-04-11T23:28:24.891Z
 Error: fetch failed
 
+
+### [TASK] 2026-04-11T23:34:42.878Z
+## Three Standing Teams Created (2026-04-11)
+
+Successfully created and started three standing teams using preset role + specialization architecture:
+
+### 1. Xpose Website Rebuild (team_mnuyznyf_6e9f20) — STARTED
+- **Purpose**: Continuously improve Xpose Market website for conversion. Weekly audit → implement → measure cycle.
+- **Members**: 
+  - researcher_site_audit_v1 (Site Auditor) — inspects UX, conversion blockers, SEO gaps vs competitors
+  - builder_site_executor_v1 (Site Builder) — implements auditor recommendations, tests, deploys to xposemarket-site/
+  - analyst_site_performance_v1 (Performance Analyst) — tracks traffic, conversions, provides weekly metrics feedback
+- **Status**: Started with initial audit kickoff. Auditor reviewing current site now.
+
+### 2. Xpose Lead Generation (team_mnuyznyy_f629d7) — STARTED
+- **Purpose**: Generate 8–15 qualified leads/week for sales pipeline. Weekly find → qualify → enrich cycle.
+- **Members**:
+  - researcher_lead_finder_v1 (Lead Finder) — discovers 20–30 raw SMB prospects from Maps, directories, LinkedIn
+  - analyst_lead_qualifier_v1 (Lead Qualifier) — filters for fit (score 3+), passes qualified leads only
+  - builder_lead_enricher_v1 (Lead Enricher) — gathers contact info, decision-maker names, outreach angles
+- **Status**: Started with initial discovery phase. Finder sourcing leads now.
+
+### 3. Nightly Code Bug Hunter (team_mnuyznzb_15d161) — STARTED
+- **Purpose**: Monitor Prometheus codebase nightly for errors, regressions, critical bugs. Scan → triage → verify cycle.
+- **Members**:
+  - operator_bug_scanner_v1 (Bug Scanner) — runs npm build, scans src/, checks logs, reports all errors
+  - analyst_bug_triager_v1 (Bug Triager) — categorizes severity (critical/high/medium/low), filters noise
+  - verifier_bug_reviewer_v1 (Bug Verifier) — confirms critical bugs, reproduces, recommends fixes
+- **Status**: Started. Nightly scheduled job (2 AM ET daily) configured; first run scheduled for 2026-04-12 06:00 UTC.
+
+### Architecture Notes
+- All three teams use preset base roles (researcher/analyst/builder/operator/verifier) + team-specific specializations
+- No bespoke role sprawl; clean 3-agent pipelines per team
+- Each team has clear input/output flow and weekly/nightly cadence
+- Teams created with originating_session_id for traceability back to user request
+- All teams use after_each_run review trigger for manager oversight
+
+**Next recommended steps**:
+1. Monitor first audit/lead/scan results in team chats
+2. Establish feedback loop between teams (e.g., lead engagement data back to lead gen team)
+3. Consider connecting Analytics/CRM connectors to make auditor and lead enricher data gathering faster
+4. Review Bug Hunter's first nightly scan output and establish triage SLA for critical bugs
+
+### [TASK] 2026-04-11T23:35:46.581Z
+Created and started three standing teams via team coordinator after user confirmed preset-role + team-specific-role subagent selection was fixed: Xpose Website Rebuild, Xpose Lead Generation, and Nightly Code Bug Hunter. Coordinator returned team IDs and role compositions; bug hunter reported as running + scheduled.

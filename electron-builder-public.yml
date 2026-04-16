@@ -12,7 +12,7 @@ publish:
   repo: prometheus-releases
   private: false
 
-icon: assets/Prometheus.png
+icon: assets/Prometheus.ico
 
 files:
   - electron/**/*
@@ -48,7 +48,7 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: assets/Prometheus.png
+  icon: assets/Prometheus.ico
   signAndEditExecutable: false
   verifyUpdateCodeSignature: false
 
@@ -59,6 +59,9 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Prometheus
+  # Never touch %APPDATA%\Prometheus — user data (vault, config, workspace) lives there.
+  # The installer detects existing installations via the Windows registry and upgrades
+  # in place — no manual uninstall needed between versions.
   deleteAppDataOnUninstall: false
 
 asar: true

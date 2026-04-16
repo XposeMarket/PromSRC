@@ -693,6 +693,8 @@ function preserveMaskedProviderSecrets(nextLlm: any, currentLlm: any): any {
   const secretPaths: Array<[string, string]> = [
     ['openai', 'api_key'],
     ['lm_studio', 'api_key'],
+    ['perplexity', 'api_key'],
+    ['gemini', 'api_key'],
   ];
 
   for (const [providerId, field] of secretPaths) {

@@ -443,6 +443,8 @@ const SECRET_FIELD_MAP: Array<[string[], string]> = [
   [['search', 'brave_api_key'],                   'search.brave_api_key'],
   [['llm', 'providers', 'openai', 'api_key'],     'llm.openai.api_key'],
   [['llm', 'providers', 'lm_studio', 'api_key'],  'llm.lm_studio.api_key'],
+  [['llm', 'providers', 'perplexity', 'api_key'], 'llm.perplexity.api_key'],
+  [['llm', 'providers', 'gemini', 'api_key'],     'llm.gemini.api_key'],
   [['hooks', 'token'],                             'hooks.token'],
 ];
 

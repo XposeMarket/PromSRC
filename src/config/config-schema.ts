@@ -15,7 +15,7 @@ import { z } from 'zod';
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
-const ProviderIDSchema = z.enum(['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic']);
+const ProviderIDSchema = z.enum(['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini']);
 
 // ─── LLM Providers ──────────────────────────────────────────────────────────
 
@@ -36,19 +36,36 @@ const LMStudioProviderSchema = z.object({
   api_key: z.string().optional(),
 });
 
+// Accepted reasoning effort levels for providers that expose one
+// (OpenAI / Codex / Perplexity reasoning models).
+const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional();
+
 const OpenAIProviderSchema = z.object({
   api_key: z.string(),   // may be "vault:<key>" or "env:VAR"
   model: z.string(),
+  reasoning_effort: ReasoningEffortSchema,
 });
 
 const OpenAICodexProviderSchema = z.object({
   model: z.string(),
+  reasoning_effort: ReasoningEffortSchema,
 });
 
 const AnthropicProviderSchema_LLM = z.object({
   model: z.string(),
   extended_thinking: z.boolean().optional(),
   thinking_budget: z.number().int().min(1024).optional(),
+});
+
+const PerplexityProviderSchema = z.object({
+  api_key: z.string(),
+  model: z.string(),
+  reasoning_effort: ReasoningEffortSchema,
+});
+
+const GeminiProviderSchema = z.object({
+  api_key: z.string(),
+  model: z.string(),
 });
 
 const LLMConfigSchema = z.object({
@@ -60,6 +77,8 @@ const LLMConfigSchema = z.object({
     openai:        OpenAIProviderSchema.optional(),
     openai_codex:  OpenAICodexProviderSchema.optional(),
     anthropic:     AnthropicProviderSchema_LLM.optional(),
+    perplexity:    PerplexityProviderSchema.optional(),
+    gemini:        GeminiProviderSchema.optional(),
   }),
 });
 

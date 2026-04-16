@@ -1,0 +1,60 @@
+{
+  "id": "c6e665cc-dc2a-49f7-bc73-7843a8212ba8",
+  "title": "Nightly Bug Hunter Scan",
+  "prompt": "You are the Bug Scanner for the Nightly Code Bug Hunter team. Run your nightly scan now:\\n\\n1. Run `npm run build` in the Prometheus workspace to catch TypeScript/JavaScript compilation errors\\n2. Scan src/ for syntax errors, broken imports, type mismatches, undefined variables\\n3. Check recent runtime logs for console.error, exceptions, or fatal patterns\\n4. Report all findings with: file path, line number, error message, and severity (critical/high/medium/low)\\n5. Flag critical issues (runtime-breaking) for immediate Triager review\\n\\nAfter scanning, dispatch to the Bug Triager (analyst_bug_triager_v1) with your findings so they can triage and escalate critical issues.\\n\\nBe thorough; catch syntax and structural problems before they reach production.",
+  "sessionId": "cron_job_1775950457845_00ezm_1776205210024",
+  "channel": "web",
+  "status": "complete",
+  "pendingSubagentIds": [],
+  "teamSubagent": {
+    "teamId": "team_mnuyznzb_15d161",
+    "agentId": "operator_bug_scanner_v1",
+    "agentName": "Bug Scanner"
+  },
+  "scheduleId": "job_1775950457845_00ezm",
+  "plan": [
+    {
+      "index": 0,
+      "description": "You are the Bug Scanner for the Nightly Code Bug Hunter team. Run your nightly scan now:\\n\\n1. Run `npm run build` in th",
+      "status": "done",
+      "completedAt": 1776205278516,
+      "notes": "Error: fetch failed"
+    }
+  ],
+  "currentStepIndex": 0,
+  "maxPlanDepth": 20,
+  "journal": [
+    {
+      "t": 1776205210072,
+      "type": "status_push",
+      "content": "Task created: Nightly Bug Hunter Scan"
+    },
+    {
+      "t": 1776205278516,
+      "type": "plan_mutation",
+      "content": "Plan mutated: complete",
+      "detail": "[{\"op\":\"complete\",\"step_index\":0,\"notes\":\"Error: fetch failed\"}]"
+    },
+    {
+      "t": 1776205278519,
+      "type": "status_push",
+      "content": "Done: Error: fetch failed"
+    }
+  ],
+  "lastProgressAt": 1776205278519,
+  "startedAt": 1776205210072,
+  "resumeContext": {
+    "messages": [],
+    "browserSessionActive": false,
+    "round": 0,
+    "orchestrationLog": []
+  },
+  "runtimeProgress": {
+    "source": "none",
+    "activeIndex": -1,
+    "items": [],
+    "updatedAt": 1776205210156
+  },
+  "finalSummary": "Error: fetch failed",
+  "completedAt": 1776205278517
+}

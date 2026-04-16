@@ -137,7 +137,7 @@
       <!-- Chats tab -->
       <div id="sidebar-jobs" class="session-list">
         <!-- Edit mode header (hidden until edit mode) -->
-        <div id="sessions-edit-bar" style="display:none;justify-content:space-between;align-items:center;padding:2px 0 6px">
+        <div id="sessions-edit-bar" style="display:flex;justify-content:space-between;align-items:center;padding:2px 0 6px">
           <button class="sidebar-action" id="sessions-edit-btn" onclick="toggleSessionsEditMode()">Edit</button>
         </div>
         <div id="jobs-list">
@@ -997,7 +997,7 @@
 	        <div class="right-section-title" style="margin-bottom:8px">Runtime</div>
 	        <div class="info-row"><span class="info-key">Model</span><span class="info-val" id="settings-runtime-model">-</span></div>
         <div class="info-row"><span class="info-key">Gateway</span><span class="info-val" id="settings-runtime-gateway">-</span></div>
-        <div class="info-row"><span class="info-key">Ollama</span><span class="info-val" id="settings-runtime-ollama">-</span></div>
+        <div class="info-row"><span class="info-key">Provider</span><span class="info-val" id="settings-runtime-ollama">-</span></div>
       </div>
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
         <div class="right-section-title" style="margin-bottom:8px">Notes</div>
@@ -1213,6 +1213,8 @@
           <option value="openai">OpenAI — API Key</option>
           <option value="openai_codex">OpenAI — GPT Plus / Codex (OAuth)</option>
           <option value="anthropic">Anthropic — Claude (Setup Token / API Key)</option>
+          <option value="perplexity">Perplexity AI — API Key</option>
+          <option value="gemini">Google Gemini — API Key</option>
         </select>
       </div>
 
@@ -1282,6 +1284,14 @@
               <option value="o3">o3</option>
               <option value="o1">o1</option>
             </select>
+            <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Reasoning Effort <span style="color:var(--muted);font-weight:400">(o-series / GPT-5 reasoning models)</span></label>
+            <select id="settings-openai-effort" class="settings-input" style="font-size:13px">
+              <option value="">— none (disabled) —</option>
+              <option value="minimal">minimal (fast)</option>
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
+            </select>
             <div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn btn-sm" onclick="refreshOpenAIModels()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>
               <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
@@ -1304,11 +1314,28 @@
               </div>
               <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
               <select id="settings-codex-model" class="settings-input" style="font-size:13px">
-                <option value="gpt-5.4">gpt-5.4 (flagship)</option>
+                <option value="gpt-5.4-codex">gpt-5.4-codex (flagship)</option>
+                <option value="gpt-5.4-codex-mini">gpt-5.4-codex-mini</option>
+                <option value="gpt-5.4">gpt-5.4</option>
                 <option value="gpt-5.4-mini">gpt-5.4-mini</option>
                 <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+                <option value="gpt-5.3-codex-spark">gpt-5.3-codex-spark</option>
+                <option value="gpt-5.3">gpt-5.3</option>
                 <option value="gpt-5.2-codex">gpt-5.2-codex</option>
+                <option value="gpt-5.2">gpt-5.2</option>
+                <option value="gpt-5.1-codex-max">gpt-5.1-codex-max</option>
+                <option value="gpt-5.1-codex-mini">gpt-5.1-codex-mini</option>
                 <option value="gpt-5.1-codex">gpt-5.1-codex</option>
+                <option value="gpt-5.1">gpt-5.1</option>
+              </select>
+              <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Reasoning Effort</label>
+              <select id="settings-codex-effort" class="settings-input" style="font-size:13px">
+                <option value="">— none (disabled) —</option>
+                <option value="minimal">minimal (fast)</option>
+                <option value="low">low</option>
+                <option value="medium" selected>medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh (extra high)</option>
               </select>
               <button class="btn btn-sm" onclick="disconnectCodex()" style="margin-top:10px;background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect Account</button>
             </div>
@@ -1346,6 +1373,55 @@
                 <button class="btn btn-sm" onclick="disconnectAnthropic()" style="background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect</button>
               </div>
             </div>
+          </div>
+
+          <!-- Perplexity AI -->
+          <div id="prov-fields-perplexity" style="display:none">
+            <div class="right-section-title" style="margin-bottom:8px">Perplexity AI</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">Get an API key at <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">perplexity.ai/settings/api</code>. Sonar models are web-grounded.</div>
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">API Key</label>
+            <input id="settings-perplexity-key" type="password" placeholder="pplx-..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
+            <select id="settings-perplexity-model" class="settings-input" style="font-size:13px">
+              <option value="sonar-pro">sonar-pro (flagship)</option>
+              <option value="sonar">sonar</option>
+              <option value="sonar-reasoning-pro">sonar-reasoning-pro</option>
+              <option value="sonar-reasoning">sonar-reasoning</option>
+              <option value="sonar-deep-research">sonar-deep-research</option>
+            </select>
+            <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Reasoning Effort <span style="color:var(--muted);font-weight:400">(reasoning models only)</span></label>
+            <select id="settings-perplexity-effort" class="settings-input" style="font-size:13px">
+              <option value="">— none (disabled) —</option>
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
+            </select>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
+            </div>
+            <div id="provider-status-msg-perplexity" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+          </div>
+
+          <!-- Google Gemini -->
+          <div id="prov-fields-gemini" style="display:none">
+            <div class="right-section-title" style="margin-bottom:8px">Google Gemini</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">Get an API key at <code style="background:var(--bg-soft);padding:1px 5px;border-radius:4px">aistudio.google.com/apikey</code>. Uses the OpenAI-compatible Gemini endpoint.</div>
+            <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">API Key</label>
+            <input id="settings-gemini-key" type="password" placeholder="AIza..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
+            <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
+            <select id="settings-gemini-model" class="settings-input" style="font-size:13px">
+              <option value="gemini-2.5-pro">gemini-2.5-pro (flagship)</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+              <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+              <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
+              <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+              <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+            </select>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
+            </div>
+            <div id="provider-status-msg-gemini" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
           </div>
 
         </div>
@@ -1387,6 +1463,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="amd-proposal-high-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1402,6 +1480,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="amd-proposal-low-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1422,6 +1502,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="amd-coordinator-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1437,6 +1519,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="amd-manager-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1446,17 +1530,17 @@
 
 	            <div>
 	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Team Manager Runtime</div>
-	              <select id="amd-team-manager-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-manager')"><option value="">inherit from Manager</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+	              <select id="amd-team-manager-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-manager')"><option value="">inherit from Manager</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
 	              <select id="amd-team-manager-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
 	            </div>
 	            <div>
 	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Generic Subagent</div>
-	              <select id="amd-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent')"><option value="">use primary</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+	              <select id="amd-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent')"><option value="">use primary</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
 	              <select id="amd-subagent-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
 	            </div>
 	            <div>
 	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Team Subagent Runtime</div>
-	              <select id="amd-team-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-subagent')"><option value="">inherit from role/generic</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+	              <select id="amd-team-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-subagent')"><option value="">inherit from role/generic</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
 	              <select id="amd-team-subagent-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
 	            </div>
 	          <!-- Background Tasks -->
@@ -1470,6 +1554,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
             </select>
             <select id="amd-background-task-model" class="settings-input" style="width:100%">
               <option value="">select provider first</option>
@@ -1482,37 +1568,37 @@
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F4CB; Planner</div>
-              <select id="amd-subagent-planner-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-planner')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+              <select id="amd-subagent-planner-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-planner')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
               <select id="amd-subagent-planner-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F3BC; Orchestrator</div>
-              <select id="amd-subagent-orchestrator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-orchestrator')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+              <select id="amd-subagent-orchestrator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-orchestrator')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
               <select id="amd-subagent-orchestrator-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F50D; Researcher</div>
-              <select id="amd-subagent-researcher-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-researcher')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+              <select id="amd-subagent-researcher-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-researcher')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
               <select id="amd-subagent-researcher-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F4CA; Analyst</div>
-              <select id="amd-subagent-analyst-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-analyst')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+              <select id="amd-subagent-analyst-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-analyst')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
               <select id="amd-subagent-analyst-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F6E0; Builder</div>
-              <select id="amd-subagent-builder-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-builder')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+              <select id="amd-subagent-builder-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-builder')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
               <select id="amd-subagent-builder-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x2699;&#xFE0F; Operator</div>
-              <select id="amd-subagent-operator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-operator')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+              <select id="amd-subagent-operator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-operator')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
               <select id="amd-subagent-operator-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x2705; Verifier</div>
-              <select id="amd-subagent-verifier-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-verifier')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+              <select id="amd-subagent-verifier-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-verifier')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
               <select id="amd-subagent-verifier-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
           </div>
@@ -1531,6 +1617,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="amd-switch-model-low-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1546,6 +1634,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="amd-switch-model-medium-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1566,6 +1656,8 @@
               <option value="openai">OpenAI</option>
               <option value="openai_codex">OpenAI Codex / ChatGPT</option>
               <option value="anthropic">Anthropic Claude</option>
+              <option value="perplexity">Perplexity AI</option>
+              <option value="gemini">Google Gemini</option>
             </select>
             <select id="amd-background-agent-model" class="settings-input" style="width:100%">
               <option value="">select provider first</option>
@@ -1586,6 +1678,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="brain-thought-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1601,6 +1695,8 @@
                 <option value="openai">OpenAI</option>
                 <option value="openai_codex">OpenAI Codex / ChatGPT</option>
                 <option value="anthropic">Anthropic Claude</option>
+                <option value="perplexity">Perplexity AI</option>
+                <option value="gemini">Google Gemini</option>
               </select>
               <select id="brain-dream-model" class="settings-input" style="width:100%">
                 <option value="">select provider first</option>
@@ -1808,6 +1904,8 @@
                     <option value="llama_cpp">llama_cpp</option>
                     <option value="lm_studio">lm_studio</option>
                     <option value="anthropic">anthropic (Claude)</option>
+                    <option value="perplexity">perplexity</option>
+                    <option value="gemini">gemini</option>
                   </select>
                   <select id="agent-edit-model-select" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
                     <option value="">select provider first</option>
@@ -2230,10 +2328,27 @@ function connectWS() {
 // ─── Heartbeat/Settings WS handlers (stay inline until Settings is extracted) ───
 (function _registerInlineWsHandlers() {
   function _waitForEventBus() {
-    if (typeof window.wsEventBus === 'undefined') { setTimeout(_waitForEventBus, 100); return; }
-    const bus = window.wsEventBus;
+	    if (typeof window.wsEventBus === 'undefined') { setTimeout(_waitForEventBus, 100); return; }
+	    const bus = window.wsEventBus;
 
-    bus.on('heartbeat_done', (msg) => {
+	    bus.on('provider_status', (msg) => {
+	      const online = !!msg?.providerOnline;
+	      const dot = document.getElementById('ollama-dot');
+	      if (dot) dot.className = 'dot ' + (online ? 'online' : 'offline');
+	      const statusEl = document.getElementById('ollama-status');
+	      if (statusEl) {
+	        const current = String(statusEl.textContent || 'Provider').replace(/\s+(Online|Offline)$/i, '') || 'Provider';
+	        statusEl.textContent = online ? `${current} Online` : `${current} Offline`;
+	      }
+	      const ro = document.getElementById('r-ollama');
+	      if (ro) {
+	        ro.textContent = online ? 'Online' : 'Offline';
+	        ro.className = 'info-val ' + (online ? 'green' : 'red');
+	      }
+	      if (typeof checkStatus === 'function') setTimeout(() => checkStatus(), 250);
+	    });
+	
+	    bus.on('heartbeat_done', (msg) => {
       if (msg.automatedSession && typeof window.upsertAutomatedSession === 'function') {
         window.upsertAutomatedSession(msg.automatedSession);
       }
@@ -2291,6 +2406,8 @@ let _sessionSearchQuery = '';
 let _sessionShowCount = 20; // limit displayed chats to 20, then show "More"
 let _channelsViewOpen = false;
 let _activeChannelDrill = null; // null = hub view, 'telegram'|'discord'|'whatsapp'|'terminal' = drilled in
+let _channelsEditMode = false;
+let _pinnedChats = JSON.parse(localStorage.getItem('prometheus_pinned_chats') || '[]');
 
 function filterSessions(query) {
   _sessionSearchQuery = (query || '').toLowerCase().trim();
@@ -2426,6 +2543,11 @@ function _drillChannel(channelKey) {
   _renderChannelDrill(channelKey);
 }
 
+function toggleChannelsEditMode() {
+  _channelsEditMode = !_channelsEditMode;
+  if (_activeChannelDrill) _renderChannelDrill(_activeChannelDrill);
+}
+
 function _renderChannelDrill(channelKey) {
   const el = document.getElementById('channels-list');
   if (!el) return;
@@ -2452,6 +2574,7 @@ function _renderChannelDrill(channelKey) {
     Channels
   </button>
   <span class="channel-drill-title" style="color:${def.color}">${def.icon} ${def.label}</span>
+  <button class="sidebar-action" onclick="toggleChannelsEditMode()" style="margin-left:auto">${_channelsEditMode ? 'Done' : 'Edit'}</button>
 </div>`;
 
   if (!sessions.length && !serverOnly.length) {
@@ -2465,6 +2588,7 @@ function _renderChannelDrill(channelKey) {
 <div class="job-item${isActive ? ' active' : ''}${s.unread ? ' unread' : ''}" onclick="openSession('${s.id}');toggleChannelsView()">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
     <div class="job-item-title" style="flex:1">${s.unread ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3b82f6;margin-right:5px;vertical-align:middle"></span>' : ''}${escHtml(s.title || 'Untitled')}</div>
+    ${_channelsEditMode ? `<button class="sidebar-action" style="padding:3px 8px;font-size:10px" onclick="deleteChatSession('${s.id}', event)">Delete</button>` : ''}
   </div>
   <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
     <span class="badge badge-queued">${(s.history || []).length} msgs</span>
@@ -2480,6 +2604,7 @@ function _renderChannelDrill(channelKey) {
 <div class="job-item${isActive ? ' active' : ''} session-terminal" onclick="openTerminalSession('${s.id}');toggleChannelsView()">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
     <div class="job-item-title" style="flex:1">${title}</div>
+    ${_channelsEditMode ? `<button class="sidebar-action" style="padding:3px 8px;font-size:10px" onclick="deleteChatSession('${s.id}', event)">Delete</button>` : ''}
   </div>
   <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
     <span class="badge badge-queued">${(s.history || []).length} msgs</span>
@@ -2493,7 +2618,35 @@ function _renderChannelDrill(channelKey) {
 
 function _backToChannelHub() {
   _activeChannelDrill = null;
+  _channelsEditMode = false;
   _renderChannelHub();
+}
+
+function toggleChatPin(id, ev) {
+  if (ev) ev.stopPropagation();
+  const idx = _pinnedChats.indexOf(id);
+  if (idx === -1) _pinnedChats.push(id);
+  else _pinnedChats.splice(idx, 1);
+  localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
+  renderSessionsList();
+}
+
+function renderChatSessionCard(s) {
+  const isPinned = _pinnedChats.includes(s.id);
+  return `
+    <div class="job-item ${s.id === window.activeChatSessionId ? 'active' : ''}${s.unread ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}" onclick="openSession('${s.id}')">
+      <button class="chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding-right:24px">
+        <div class="job-item-title" style="flex:1">${s.unread ? '🔵 ' : ''}${escHtml(s.title || 'New chat')}</div>
+        ${window.sessionsEditMode ? `<button class="sidebar-action" style="padding:3px 8px;font-size:10px" onclick="deleteChatSession('${s.id}', event)">Delete</button>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+        ${s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : ''}
+        <span class="badge badge-queued">${(s.history || []).length} msgs</span>
+        <span style="color:var(--muted);font-size:10px">${timeAgo(s.updatedAt || s.createdAt)}</span>
+      </div>
+    </div>
+  `;
 }
 
 function renderSessionsList() {
@@ -2515,30 +2668,24 @@ function renderSessionsList() {
     });
   }
 
-  // Limit to _sessionShowCount (default 20), with "Show more" button if more exist
-  const displayedSessions = sorted.slice(0, _sessionShowCount);
-  const hasMore = sorted.length > _sessionShowCount;
-
-  const html = displayedSessions.map(s => `
-    <div class="job-item ${s.id === window.activeChatSessionId ? 'active' : ''}${s.unread ? ' unread' : ''}" onclick="openSession('${s.id}')">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <div class="job-item-title" style="flex:1">${s.unread ? '🔵 ' : ''}${escHtml(s.title || 'New chat')}</div>
-        ${window.sessionsEditMode ? `<button class="sidebar-action" style="padding:3px 8px;font-size:10px" onclick="deleteChatSession('${s.id}', event)">Delete</button>` : ''}
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
-        ${s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : ''}
-        <span class="badge badge-queued">${(s.history || []).length} msgs</span>
-        <span style="color:var(--muted);font-size:10px">${timeAgo(s.updatedAt || s.createdAt)}</span>
-      </div>
-    </div>
-  `).join('');
+  const pinned = sorted.filter(s => _pinnedChats.includes(s.id));
+  const unpinned = sorted.filter(s => !_pinnedChats.includes(s.id));
+  const displayedUnpinned = unpinned.slice(0, _sessionShowCount);
+  const hasMore = unpinned.length > _sessionShowCount;
+  const pinnedHtml = pinned.length
+    ? `<div class="sessions-section-header pinned-chats-heading">Pinned Chats</div>${pinned.map(renderChatSessionCard).join('')}`
+    : '';
+  const sessionsHeading = pinned.length && displayedUnpinned.length
+    ? '<div class="sessions-section-header">Sessions</div>'
+    : '';
+  const html = pinnedHtml + sessionsHeading + displayedUnpinned.map(renderChatSessionCard).join('');
 
   let content = html || `<div class="empty-state">No sessions match "${escHtml(_sessionSearchQuery)}".</div>`;
 
   // Add "Show more" button if there are more sessions
   if (hasMore) {
     content += `<button onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">
-      + Show more (${sorted.length - _sessionShowCount} more)
+      + Show more (${unpinned.length - _sessionShowCount} more)
     </button>`;
   }
 
@@ -2584,6 +2731,31 @@ function updateTokenCount() {
 // ---- Model switcher ----
 let _modelSwitcherOpen = false;
 
+const LOCAL_PROVIDERS = new Set(['ollama', 'llama_cpp', 'lm_studio']);
+const EFFORT_CAPABLE_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity']);
+const THINKING_CAPABLE_PROVIDERS = new Set(['anthropic']);
+
+function _effortLevelsForProvider(provider) {
+  // Codex supports xhigh; other effort-capable providers cap at high.
+  if (provider === 'openai_codex') {
+    return [
+      { v: 'none',    label: 'None',           desc: 'No reasoning' },
+      { v: 'minimal', label: 'Minimal (fast)', desc: 'Snappy replies' },
+      { v: 'low',     label: 'Low',            desc: 'Light thinking' },
+      { v: 'medium',  label: 'Medium',         desc: 'Balanced' },
+      { v: 'high',    label: 'High',           desc: 'Deep reasoning' },
+      { v: 'xhigh',   label: 'Extra High',     desc: 'Maximum effort' },
+    ];
+  }
+  return [
+    { v: 'none',    label: 'None',           desc: 'No reasoning' },
+    { v: 'minimal', label: 'Minimal (fast)', desc: 'Snappy replies' },
+    { v: 'low',     label: 'Low',            desc: 'Light thinking' },
+    { v: 'medium',  label: 'Medium',         desc: 'Balanced' },
+    { v: 'high',    label: 'High',           desc: 'Deep reasoning' },
+  ];
+}
+
 async function toggleModelSwitcher() {
   const popover = document.getElementById('model-switcher-popover');
   if (!popover) return;
@@ -2591,27 +2763,72 @@ async function toggleModelSwitcher() {
   if (!_modelSwitcherOpen) { popover.style.display = 'none'; return; }
   popover.style.display = 'block';
   const listEl = document.getElementById('model-switcher-list');
+  const titleEl = popover.querySelector('div[style*="text-transform:uppercase"]');
   listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">Loading...</div>';
-  try {
-    const data = await api('/api/ollama/models');
-    const models = (data.models || []).map(m => m.name || m);
-    const current = document.getElementById('chat-model-name')?.textContent || '';
-    if (models.length === 0) {
-      listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">No models found.</div>';
-      return;
+
+  const provider = window._activeProvider || 'ollama';
+
+  if (LOCAL_PROVIDERS.has(provider)) {
+    if (titleEl) titleEl.textContent = 'Switch Model';
+    try {
+      const data = await api('/api/ollama/models');
+      const models = (data.models || []).map(m => m.name || m);
+      const current = document.getElementById('chat-model-name')?.textContent || '';
+      if (models.length === 0) {
+        listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">No models found.</div>';
+        return;
+      }
+      listEl.innerHTML = models.map(m => `
+        <button onclick="switchModel('${escHtml(m)}')" style="text-align:left;background:${m === current ? 'var(--brand)' : 'transparent'};color:${m === current ? '#fff' : 'var(--text)'};border:1px solid ${m === current ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;transition:background 0.1s">${escHtml(m)}</button>
+      `).join('');
+    } catch {
+      listEl.innerHTML = '<div style="font-size:11px;color:var(--err);padding:4px">Failed to load models.</div>';
     }
-    listEl.innerHTML = models.map(m => `
-      <button onclick="switchModel('${escHtml(m)}')" style="text-align:left;background:${m === current ? 'var(--brand)' : 'transparent'};color:${m === current ? '#fff' : 'var(--text)'};border:1px solid ${m === current ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;transition:background 0.1s">${escHtml(m)}</button>
-    `).join('');
-  } catch {
-    listEl.innerHTML = '<div style="font-size:11px;color:var(--err);padding:4px">Failed to load models.</div>';
+    return;
   }
+
+  if (EFFORT_CAPABLE_PROVIDERS.has(provider)) {
+    if (titleEl) titleEl.textContent = 'Reasoning Effort';
+    const levels = _effortLevelsForProvider(provider);
+    const current = window.reasoningLevel || 'medium';
+    listEl.innerHTML = levels.map(l => `
+      <button onclick="setReasoningLevel('${l.v}')" style="text-align:left;background:${l.v === current ? 'var(--brand)' : 'transparent'};color:${l.v === current ? '#fff' : 'var(--text)'};border:1px solid ${l.v === current ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;transition:background 0.1s">
+        <div style="font-weight:600">${escHtml(l.label)}</div>
+        <div style="font-size:10px;opacity:0.75">${escHtml(l.desc)}</div>
+      </button>
+    `).join('');
+    return;
+  }
+
+  if (THINKING_CAPABLE_PROVIDERS.has(provider)) {
+    if (titleEl) titleEl.textContent = 'Extended Thinking';
+    const enabled = window.anthropicExtendedThinking !== false;
+    const budget = window.anthropicThinkingBudget || 10000;
+    const budgets = [2048, 5000, 10000, 16000, 24000, 32000];
+    listEl.innerHTML = `
+      <button onclick="setAnthropicThinking(${!enabled})" style="text-align:left;background:${enabled ? 'var(--brand)' : 'transparent'};color:${enabled ? '#fff' : 'var(--text)'};border:1px solid ${enabled ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;margin-bottom:6px">
+        ${enabled ? 'Extended Thinking: ON' : 'Extended Thinking: OFF'}
+      </button>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:4px">Budget (tokens)</div>
+      ${budgets.map(b => `
+        <button onclick="setAnthropicBudget(${b})" style="text-align:left;background:${b === budget ? 'var(--brand)' : 'transparent'};color:${b === budget ? '#fff' : 'var(--text)'};border:1px solid ${b === budget ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;margin-bottom:4px">${b.toLocaleString()} tokens</button>
+      `).join('')}
+    `;
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = 'Model';
+  listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">No options for this provider.</div>';
 }
 
-async function switchModel(modelName) {
+function _closeModelSwitcher() {
   const popover = document.getElementById('model-switcher-popover');
   if (popover) popover.style.display = 'none';
   _modelSwitcherOpen = false;
+}
+
+async function switchModel(modelName) {
+  _closeModelSwitcher();
   try {
     await api('/api/settings/model', { method: 'POST', body: JSON.stringify({ primary: modelName }) });
     document.getElementById('chat-model-name').textContent = modelName;
@@ -2619,6 +2836,41 @@ async function switchModel(modelName) {
     // silent fail — model will still update on next status poll
   }
 }
+
+function setReasoningLevel(level) {
+  window.reasoningLevel = level;
+  try { localStorage.setItem('prometheus.reasoningLevel', level); } catch {}
+  _closeModelSwitcher();
+  // Surface the choice next to the model name.
+  const el = document.getElementById('chat-model-name');
+  if (el && !el.dataset.baseName) el.dataset.baseName = el.textContent;
+  const base = el?.dataset.baseName || el?.textContent || '';
+  if (el) el.textContent = `${base} · ${level}`;
+}
+
+function setAnthropicThinking(enabled) {
+  window.anthropicExtendedThinking = !!enabled;
+  try { localStorage.setItem('prometheus.anthropicExtendedThinking', enabled ? '1' : '0'); } catch {}
+  _closeModelSwitcher();
+}
+
+function setAnthropicBudget(budget) {
+  window.anthropicThinkingBudget = Number(budget) || 10000;
+  try { localStorage.setItem('prometheus.anthropicThinkingBudget', String(window.anthropicThinkingBudget)); } catch {}
+  _closeModelSwitcher();
+}
+
+// Hydrate from localStorage on load
+(function hydrateModelSwitcherPrefs() {
+  try {
+    const r = localStorage.getItem('prometheus.reasoningLevel');
+    if (r) window.reasoningLevel = r;
+    const t = localStorage.getItem('prometheus.anthropicExtendedThinking');
+    if (t !== null) window.anthropicExtendedThinking = t === '1';
+    const b = localStorage.getItem('prometheus.anthropicThinkingBudget');
+    if (b) window.anthropicThinkingBudget = Number(b) || 10000;
+  } catch {}
+})();
 
 // Close model switcher on outside click
 document.addEventListener('click', (e) => {
@@ -2921,26 +3173,30 @@ async function loadSystemStats() {
 // ---- Status ----
 const PROVIDER_LABELS = {
   ollama: 'Ollama', llama_cpp: 'llama.cpp', lm_studio: 'LM Studio',
-  openai: 'OpenAI', openai_codex: 'ChatGPT', anthropic: 'Claude'
+  openai: 'OpenAI', openai_codex: 'ChatGPT', anthropic: 'Claude',
+  perplexity: 'Perplexity', gemini: 'Gemini'
 };
 async function checkStatus() {
   try {
     const status = await api('/api/status');
     const provider = status.provider || 'ollama';
     const providerLabel = PROVIDER_LABELS[provider] || provider;
-    const isCloud = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic';
+    const isCloud = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';
+    window._activeProvider = provider;
     const dot = document.getElementById('ollama-dot');
 
     // For cloud providers, always show as online if gateway is up
-    const backendOnline = isCloud ? true : !!status.ollama;
-    dot.className = 'dot ' + (backendOnline ? 'online' : 'offline');
-    document.getElementById('ollama-status').textContent = backendOnline
-      ? `${providerLabel} Online` : `${providerLabel} Offline`;
-    const ro = document.getElementById('r-ollama');
-    if (ro) {
-      ro.textContent = backendOnline ? 'Online' : 'Offline';
-      ro.className = 'info-val ' + (backendOnline ? 'green' : 'red');
-    }
+	    const providerChecking = !!status.providerChecking;
+	    const backendOnline = status.providerOnline !== undefined ? !!status.providerOnline : !!status.ollama;
+	    dot.className = providerChecking ? 'dot' : 'dot ' + (backendOnline ? 'online' : 'offline');
+	    document.getElementById('ollama-status').textContent = providerChecking
+	      ? `${providerLabel} Checking...`
+	      : (backendOnline ? `${providerLabel} Online` : `${providerLabel} Offline`);
+	    const ro = document.getElementById('r-ollama');
+	    if (ro) {
+	      ro.textContent = providerChecking ? 'Checking...' : (backendOnline ? 'Online' : 'Offline');
+	      ro.className = 'info-val ' + (providerChecking ? '' : (backendOnline ? 'green' : 'red'));
+	    }
 
     const modelName = status.currentModel || '-';
     const rm = document.getElementById('r-model');
@@ -2971,8 +3227,10 @@ const AMD_SLOTS = {
 // Static model fallbacks (mirrors what loadAgentModelOptions uses)
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
+  openai_codex: ['gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+  gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
 
 async function amdProviderChange(slotId) {
@@ -2997,6 +3255,12 @@ async function amdProviderChange(slotId) {
     } else if (prov === 'anthropic') {
       models = Array.from(document.getElementById('settings-anthropic-model')?.options || []).map(o => o.value).filter(Boolean);
       if (!models.length) models = [...(AMD_STATIC_MODELS.anthropic)];
+    } else if (prov === 'perplexity') {
+      models = Array.from(document.getElementById('settings-perplexity-model')?.options || []).map(o => o.value).filter(Boolean);
+      if (!models.length) models = [...(AMD_STATIC_MODELS.perplexity)];
+    } else if (prov === 'gemini') {
+      models = Array.from(document.getElementById('settings-gemini-model')?.options || []).map(o => o.value).filter(Boolean);
+      if (!models.length) models = [...(AMD_STATIC_MODELS.gemini)];
     } else {
       // ollama / llama_cpp / lm_studio — live fetch via /api/models/test
       const llm = typeof buildProviderPayload === 'function' ? buildProviderPayload() : {};

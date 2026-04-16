@@ -1,0 +1,15 @@
+{
+  "id": "cron_job_1775950457845_00ezm_1776060117611",
+  "history": [],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "system",
+  "createdAt": 1776060117612,
+  "lastActiveAt": 1776060119604,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 0,
+  "contextStartIndex": 0,
+  "activatedToolCategories": [
+    "team_ops"
+  ]
+}
