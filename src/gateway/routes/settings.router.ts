@@ -337,7 +337,9 @@ const AGENT_MODEL_DEFAULT_KEYS = [
   'proposal_executor_high_risk',
   'proposal_executor_low_risk',
   'manager',
+  'team_manager',
   'subagent',
+  'team_subagent',
   'background_task',
   // Per-role-type subagent defaults
   'subagent_planner',

@@ -43,17 +43,16 @@ Windows uses backslashes, but PowerShell accepts forward slashes in most context
 
 ```
 # Both work in PowerShell:
-Get-Content "D:\Prometheus\workspace\SOUL.md"
-Get-Content "D:/Prometheus/workspace/SOUL.md"
+Get-Content "$env:APPDATA\Prometheus\workspace\SOUL.md"
+Get-Content "$env:APPDATA/Prometheus/workspace/SOUL.md"
 ```
 
 **Prometheus paths:**
-- Project root: `D:\Prometheus\`
-- Workspace root: `D:\Prometheus\workspace\`
-- Skills: `D:\Prometheus\workspace\skills\`
-- Memory: `D:\Prometheus\workspace\memory\`
-- Config dir: `D:\Prometheus\.prometheus\`
-- Source: `D:\Prometheus\src\`
+- Data root: `$env:APPDATA\Prometheus\`
+- Workspace root: `$env:APPDATA\Prometheus\workspace\`
+- Skills: `$env:APPDATA\Prometheus\workspace\skills\`
+- Memory: `$env:APPDATA\Prometheus\workspace\memory\`
+- Config dir: `$env:APPDATA\Prometheus\.prometheus\`
 **When constructing paths in shell:** Use backslash or wrap in quotes to handle spaces.
 
 ---
@@ -62,12 +61,12 @@ Get-Content "D:/Prometheus/workspace/SOUL.md"
 
 **Read and pretty-print a JSON file:**
 ```powershell
-powershell -NoProfile -Command "Get-Content 'D:\Prometheus\.prometheus\config.json' | ConvertFrom-Json | ConvertTo-Json -Depth 10"
+powershell -NoProfile -Command "Get-Content '$env:APPDATA\Prometheus\.prometheus\config.json' | ConvertFrom-Json | ConvertTo-Json -Depth 10"
 ```
 
 **Read a specific field:**
 ```powershell
-powershell -NoProfile -Command "(Get-Content 'D:\Prometheus\.prometheus\config.json' | ConvertFrom-Json).gateway.port"
+powershell -NoProfile -Command "(Get-Content '$env:APPDATA\Prometheus\.prometheus\config.json' | ConvertFrom-Json).gateway.port"
 ```
 
 **Validate JSON is parseable:**

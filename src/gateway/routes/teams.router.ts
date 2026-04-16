@@ -991,7 +991,7 @@ router.post('/api/schedules', (req: any, res: any) => {
 });
 
 router.put('/api/schedules/:id', (req: any, res: any) => {
-  const { name, pattern, prompt, timezone, delivery_channel, confirm } = req.body;
+  const { name, pattern, prompt, timezone, delivery_channel, confirm, subagent_id } = req.body;
   
   if (confirm !== true) {
     return res.json({
@@ -1001,14 +1001,18 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
     });
   }
   
-  try {
-    const job = _cronScheduler.updateJob(req.params.id, {
-      name: name ? String(name).slice(0, 100) : undefined,
-      prompt: prompt ? String(prompt).slice(0, 2000) : undefined,
-      schedule: pattern && /^\d/.test(pattern) ? pattern : undefined,
-      runAt: pattern && !/^\d/.test(pattern) ? pattern : undefined,
-      tz: timezone || undefined,
-    });
+	  try {
+	    const updates: any = {
+	      name: name ? String(name).slice(0, 100) : undefined,
+	      prompt: prompt ? String(prompt).slice(0, 2000) : undefined,
+	      schedule: pattern && /^\d/.test(pattern) ? pattern : undefined,
+	      runAt: pattern && !/^\d/.test(pattern) ? pattern : undefined,
+	      tz: timezone || undefined,
+	    };
+	    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'subagent_id')) {
+	      updates.subagent_id = subagent_id ? String(subagent_id).trim() : undefined;
+	    }
+	    const job = _cronScheduler.updateJob(req.params.id, updates);
     
     res.json({ success: true, job });
   } catch (err: any) {

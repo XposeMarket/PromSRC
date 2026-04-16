@@ -119,7 +119,7 @@ export async function runTeamAgentViaChat(
     const roleType = String((agent as any)?.roleType || '').trim().toLowerCase();
     const roleKey = roleType ? `subagent_${roleType}` : '';
     const fallbackRef =
-      String((roleKey && defaults?.[roleKey]) || defaults?.subagent || '').trim();
+      String(defaults?.team_subagent || (roleKey && defaults?.[roleKey]) || defaults?.subagent || '').trim();
     if (!fallbackRef) return {};
     return parseProviderModel(fallbackRef);
   };

@@ -54,7 +54,7 @@ import {
   desktopWaitForChange, desktopDiffScreenshot, desktopScreenshotWithHistory,
   getDesktopToolDefinitions, getDesktopAdvisorPacket,
 } from './desktop-tools';
-import { CronScheduler } from './scheduling/cron-scheduler';
+import { CronScheduler, setCronSchedulerInstance } from './scheduling/cron-scheduler';
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
 import { BrainRunner, setBrainRunnerInstance } from './brain/brain-runner';
 import {
@@ -360,6 +360,7 @@ const cronScheduler = new CronScheduler({
     }
   },
 });
+setCronSchedulerInstance(cronScheduler);
 
 // ─── Telegram Channel Init ─────────────────────────────────────────────────────
 
@@ -438,6 +439,8 @@ setBrainRunnerInstance(brainRunner);
   }
   heartbeatRunner.registerAgent('main', mainWorkspace);
 }
+/* Subagent heartbeats are intentionally disabled. Subagents run through scheduled jobs with subagent_id. */
+/*
 (function registerSubagentHeartbeats() {
   try {
     const workspacePath = getConfig().getWorkspacePath();
@@ -463,6 +466,7 @@ setBrainRunnerInstance(brainRunner);
     }
   } catch (err: any) { console.warn('[HeartbeatRunner] Subagent auto-registration failed:', err?.message); }
 })();
+*/
 
 // ─── B6: Wire chat router ──────────────────────────────────────────────────────
 initChatRouter({ cronScheduler, telegramChannel, skillsManager });

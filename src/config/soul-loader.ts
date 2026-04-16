@@ -3,11 +3,15 @@ import path from 'path';
 import os from 'os';
 import { resolveSkillsRoot } from '../skills/store.js';
 
-// Prefer config next to the project, fall back to home
+// Prefer config next to the project, fall back to home.
+// In packaged Electron runtime PROMETHEUS_DATA_DIR is set by main.js and takes priority
+// so user data is read from %APPDATA%\Prometheus rather than the resources directory.
 const PROJECT_CONFIG_NEW = path.join(process.cwd(), '.prometheus');
 const PROJECT_CONFIG_OLD = path.join(process.cwd(), '.smallclaw'); // legacy fallback
 const PROJECT_CONFIG = fs.existsSync(PROJECT_CONFIG_NEW) ? PROJECT_CONFIG_NEW : PROJECT_CONFIG_OLD;
-const CONFIG_DIR = fs.existsSync(PROJECT_CONFIG) ? PROJECT_CONFIG : path.join(os.homedir(), '.prometheus');
+const CONFIG_DIR = process.env.PROMETHEUS_DATA_DIR
+  ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
+  : fs.existsSync(PROJECT_CONFIG) ? PROJECT_CONFIG : path.join(os.homedir(), '.prometheus');
 const SOUL_PATHS = [
   path.join(CONFIG_DIR, 'soul.md'),
   path.join(process.cwd(), 'src', 'config', 'soul.md'),

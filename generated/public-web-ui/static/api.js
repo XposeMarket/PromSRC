@@ -17,7 +17,7 @@ import { API } from './state.js';
  */
 export async function api(path, opts = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, signal: controller.signal, ...opts });
     if (!r.ok) {

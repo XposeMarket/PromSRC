@@ -344,6 +344,56 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
     });
   }
 
+  // ── Env-var path enforcement (all platforms, including Windows) ───────────
+  // When the app runs with explicit env vars (always the case in Electron),
+  // those env vars are the authoritative source of truth — even on Windows.
+  // This prevents stale paths from a previous install on a different drive or
+  // user account from silently persisting in a saved config.json.
+  if (process.env.PROMETHEUS_WORKSPACE_DIR) {
+    const runtimeWs = path.resolve(WORKSPACE_DIR);
+    if (out?.workspace?.path && path.resolve(out.workspace.path) !== runtimeWs) {
+      console.log(`[Config] Overriding workspace path "${out.workspace.path}" → "${WORKSPACE_DIR}" (PROMETHEUS_WORKSPACE_DIR)`);
+      out.workspace = { ...(out.workspace || {}), path: WORKSPACE_DIR };
+    }
+    // Sync allowed_paths to the runtime workspace root
+    if (Array.isArray(out?.tools?.permissions?.files?.allowed_paths)) {
+      out.tools.permissions.files.allowed_paths = out.tools.permissions.files.allowed_paths.map(
+        (p: string) => {
+          const resolved = path.resolve(String(p || ''));
+          if (resolved !== runtimeWs && !resolved.startsWith(runtimeWs + path.sep)) {
+            return WORKSPACE_DIR;
+          }
+          return p;
+        }
+      );
+    }
+  }
+
+  if (process.env.PROMETHEUS_DATA_DIR) {
+    const expectedSkillsDir = path.join(CONFIG_DIR, 'skills');
+    const expectedMemoryPath = path.join(CONFIG_DIR, 'memory');
+    if (out?.skills?.directory &&
+        path.resolve(out.skills.directory) !== path.resolve(expectedSkillsDir)) {
+      console.log(`[Config] Overriding skills path "${out.skills.directory}" → "${expectedSkillsDir}" (PROMETHEUS_DATA_DIR)`);
+      out.skills = { ...(out.skills || {}), directory: expectedSkillsDir };
+    }
+    if (out?.memory?.path &&
+        path.resolve(out.memory.path) !== path.resolve(expectedMemoryPath)) {
+      console.log(`[Config] Overriding memory path "${out.memory.path}" → "${expectedMemoryPath}" (PROMETHEUS_DATA_DIR)`);
+      out.memory = { ...(out.memory || {}), path: expectedMemoryPath };
+    }
+    // Fix agent workspaces that point outside the current runtime workspace
+    if (Array.isArray(out?.agents)) {
+      const runtimeWs = path.resolve(WORKSPACE_DIR);
+      out.agents = out.agents.map((agent: any) => {
+        if (agent?.workspace && !path.resolve(agent.workspace).startsWith(runtimeWs)) {
+          return { ...agent, workspace: path.join(WORKSPACE_DIR, '.prometheus', 'subagents', agent.id) };
+        }
+        return agent;
+      });
+    }
+  }
+
   // ── Ollama endpoint self-correction ──────────────────────────────────────
   // If the stored Ollama endpoint is pointing at the gateway port (common
   // misconfiguration when config was copied from a different machine), reset

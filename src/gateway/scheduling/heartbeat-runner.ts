@@ -270,6 +270,12 @@ export class SubagentHeartbeatManager {
 
   /** Called by the AI tool `update_heartbeat` and the settings UI */
   updateAgentConfig(agentId: string, partial: Partial<AgentHeartbeatConfig>): AgentHeartbeatConfig {
+    if (agentId !== 'main' && agentId !== 'default') {
+      const next: AgentHeartbeatConfig = { ...DEFAULT_AGENT, enabled: false };
+      delete this.persisted.agents[agentId];
+      savePersistedConfig(this.configPath, this.persisted);
+      return next;
+    }
     const current = this.getAgentConfig(agentId);
     const next: AgentHeartbeatConfig = {
       ...current,
@@ -297,6 +303,7 @@ export class SubagentHeartbeatManager {
   listAgentConfigs(): Array<{ agentId: string; config: AgentHeartbeatConfig; lastRunAt: number | null; lastResult: string | null }> {
     const out: Array<{ agentId: string; config: AgentHeartbeatConfig; lastRunAt: number | null; lastResult: string | null }> = [];
     for (const [agentId, entry] of this.agents) {
+      if (agentId !== 'main' && agentId !== 'default') continue;
       out.push({ agentId, config: entry.config, lastRunAt: entry.lastRunAt, lastResult: entry.lastResult });
     }
     return out;
@@ -310,6 +317,7 @@ export class SubagentHeartbeatManager {
    * Agents with enabled=false in config will be registered but not ticking.
    */
   registerAgent(agentId: string, workspacePath: string): void {
+    if (agentId !== 'main' && agentId !== 'default') return;
     if (this.agents.has(agentId)) {
       // Update workspace path if it changed
       const entry = this.agents.get(agentId)!;

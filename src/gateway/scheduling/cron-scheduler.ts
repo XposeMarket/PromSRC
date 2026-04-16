@@ -14,7 +14,7 @@ import path from 'path';
 import { Cron } from 'croner';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { clearHistory } from '../session';
-import { getConfig } from '../../config/config';
+import { getAgentById, getConfig } from '../../config/config';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
 import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, addLearnedContext, setNote } from './schedule-memory';
 import {
@@ -28,6 +28,16 @@ import {
   writeToEvidenceBus,
   mutatePlan,
 } from '../tasks/task-store';
+import {
+  getAgentTeamId,
+  appendTeamChat,
+  getManagedTeam,
+  recordTeamRun,
+  saveManagedTeam,
+  type ManagedTeam,
+} from '../teams/managed-teams';
+import { triggerManagerReview } from '../teams/team-manager-runner';
+import { broadcastTeamEvent } from '../comms/broadcaster';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -71,6 +81,16 @@ export interface CronStore {
   jobs: CronJob[];
 }
 
+let _cronSchedulerInstance: CronScheduler | null = null;
+
+export function setCronSchedulerInstance(scheduler: CronScheduler): void {
+  _cronSchedulerInstance = scheduler;
+}
+
+export function getCronSchedulerInstance(): CronScheduler | null {
+  return _cronSchedulerInstance;
+}
+
 export interface AutomatedSession {
   id: string;
   title: string;
@@ -112,6 +132,89 @@ function applyDeterministicStagger(nextRunIso: string, jobId: string, schedule: 
   const nextRunDate = new Date(nextRunIso);
   if (!Number.isFinite(nextRunDate.getTime())) return nextRunIso;
   return new Date(nextRunDate.getTime() + staggerMs).toISOString();
+}
+
+function getMarkdownSection(content: string, heading: string): string {
+  const lines = content.split(/\r?\n/);
+  const start = lines.findIndex(line => line.trim().toLowerCase() === `## ${heading}`.toLowerCase());
+  if (start < 0) return '';
+  const out: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i].trim())) break;
+    out.push(lines[i]);
+  }
+  return out.join('\n').trim();
+}
+
+function hydrateManagedTeamFromWorkspaceInfo(agentId: string): ManagedTeam | null {
+  const workspace = getConfig().getWorkspacePath() || process.cwd();
+  const teamsRoot = path.join(workspace, 'teams');
+  if (!fs.existsSync(teamsRoot)) return null;
+
+  try {
+    for (const dirent of fs.readdirSync(teamsRoot, { withFileTypes: true })) {
+      if (!dirent.isDirectory()) continue;
+      const teamInfoPath = path.join(teamsRoot, dirent.name, 'workspace', 'team_info.md');
+      if (!fs.existsSync(teamInfoPath)) continue;
+      const content = fs.readFileSync(teamInfoPath, 'utf-8');
+      const subagentIds = Array.from(content.matchAll(/\(id:\s*([^)]+)\)/g))
+        .map(match => String(match[1] || '').trim())
+        .filter(Boolean);
+      if (!subagentIds.includes(agentId)) continue;
+
+      const teamId = content.match(/^Team ID:\s*(\S+)/m)?.[1]?.trim() || dirent.name;
+      const existing = getManagedTeam(teamId);
+      if (existing) return existing;
+
+      const title = content.match(/^#\s+(.+?)\s+Team Info\s*$/m)?.[1]?.trim() || teamId;
+      const purpose = getMarkdownSection(content, 'Enduring Purpose / Mandate')
+        || getMarkdownSection(content, 'What This Team Is For')
+        || title;
+      const now = Date.now();
+      const team: ManagedTeam = {
+        id: teamId,
+        name: title,
+        description: purpose,
+        emoji: 'T',
+        manager: {
+          systemPrompt: `Coordinate the ${title} team. Purpose: ${purpose}`,
+          reviewTrigger: 'after_each_run',
+          autoApplyLowRisk: true,
+          paused: false,
+        },
+        subagentIds,
+        teamContext: purpose,
+        teamMode: 'autonomous',
+        mission: purpose,
+        purpose,
+        currentFocus: '',
+        currentTask: undefined,
+        completedWork: [],
+        milestones: [],
+        mainAgentThread: [],
+        agentPauseStates: {},
+        contextReferences: [],
+        managerNotes: [],
+        teamChat: [],
+        pendingChanges: [],
+        changeHistory: [],
+        pendingMessages: {},
+        pendingManagerMessages: [],
+        runHistory: [],
+        totalRuns: 0,
+        createdAt: now,
+        updatedAt: now,
+        notificationTargets: [],
+      };
+      saveManagedTeam(team);
+      console.log(`[CronScheduler] Hydrated managed team "${team.name}" (${team.id}) from ${teamInfoPath}`);
+      return team;
+    }
+  } catch (err: any) {
+    console.warn(`[CronScheduler] Failed to scan team workspaces for ${agentId}:`, err?.message || err);
+  }
+
+  return null;
 }
 
 // ─── Minimal Cron Parser ───────────────────────────────────────────────────────
@@ -508,6 +611,16 @@ export class CronScheduler {
       ? mainSessionId
       : `cron_${job.id}_${Date.now()}`;
     const isolatedRunSession = job.sessionTarget !== 'main';
+    const teamSubagentId = String(job.subagent_id || '').trim();
+    let teamId = teamSubagentId ? getAgentTeamId(teamSubagentId) : null;
+    let team = teamId ? getManagedTeam(teamId) : null;
+    if (!team && teamSubagentId) {
+      team = hydrateManagedTeamFromWorkspaceInfo(teamSubagentId);
+      teamId = team?.id || null;
+    }
+    const teamAgentName = teamSubagentId
+      ? (getAgentById(teamSubagentId)?.name || teamSubagentId)
+      : '';
     if (isolatedRunSession) {
       // Defensive clear to guarantee clean isolated context for this run.
       clearHistory(targetSessionId);
@@ -564,10 +677,18 @@ export class CronScheduler {
           scheduleId: job.id,
           plan: [{ index: 0, description: job.prompt.slice(0, 120), status: 'pending' }],
         });
+        if (teamId && teamSubagentId) {
+          cronTask.teamSubagent = {
+            teamId,
+            agentId: teamSubagentId,
+            agentName: teamAgentName,
+          };
+          saveTask(cronTask);
+        }
         updateTaskStatus(cronTask.id, 'running');
         setTaskStepRunning(cronTask.id, 0);
         this.deps.broadcast({ type: 'task_running', taskId: cronTask.id, jobId: job.id, jobName: job.name });
-        this.deps.broadcast({ type: 'cron_task_spawned', jobId: job.id, jobName: job.name, taskId: cronTask.id });
+        this.deps.broadcast({ type: 'cron_task_spawned', jobId: job.id, jobName: job.name, taskId: cronTask.id, teamId: teamId || undefined, agentId: teamSubagentId || undefined });
 
         // Mirror sendSSE events into the task journal so the kanban panel shows live tool calls
         // Also intercepts write_note tool calls to persist schedule-scoped insights into schedule memory
@@ -705,6 +826,28 @@ export class CronScheduler {
             scheduledAt,
           });
         } catch { /* best effort */ }
+
+        if (teamId && teamSubagentId) {
+          const finishedAt = Date.now();
+          try {
+            recordTeamRun(teamId, {
+              agentId: teamSubagentId,
+              agentName: teamAgentName,
+              trigger: 'cron',
+              taskId: cronTask.id,
+              success: taskSuccess,
+              startedAt: start,
+              finishedAt,
+              durationMs: finishedAt - start,
+              stepCount: 1,
+              zeroToolCalls: !events.some(e => e.type === 'tool_call'),
+              error: taskSuccess ? undefined : resultText.slice(0, 300),
+              resultPreview: taskSuccess ? resultText : undefined,
+            });
+          } catch (teamRunErr: any) {
+            console.warn(`[CronScheduler] Failed to record team run for "${job.name}":`, teamRunErr?.message || teamRunErr);
+          }
+        }
       }
       duration = Date.now() - start;
     } catch (err: any) {
@@ -746,7 +889,46 @@ export class CronScheduler {
 
     let automatedSession: AutomatedSession | null = null;
 
-    if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent') {
+    const shouldRouteToTeam = !!(teamId && teamSubagentId);
+
+    if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToTeam) {
+      try {
+        const success = runStatus !== 'error';
+        const chatMessage = appendTeamChat(teamId!, {
+          from: 'subagent',
+          fromName: teamAgentName,
+          fromAgentId: teamSubagentId,
+          content: success
+            ? `Scheduled task complete (${job.name}): ${resultText}`
+            : `Scheduled task failed (${job.name}): ${resultText}`,
+          metadata: {
+            agentId: teamSubagentId,
+            runSuccess: success,
+          },
+        });
+        broadcastTeamEvent({
+          type: 'team_chat_message',
+          teamId,
+          teamName: team?.name || teamId,
+          message: chatMessage,
+        });
+        broadcastTeamEvent({
+          type: 'team_subagent_completed',
+          teamId,
+          teamName: team?.name || teamId,
+          agentId: teamSubagentId,
+          agentName: teamAgentName,
+          taskId: undefined,
+          success,
+          resultPreview: resultText.slice(0, 800),
+          trigger: 'cron',
+        });
+        console.log(`[CronScheduler] Job "${job.name}" produced output -> routed to team chat ${teamId}`);
+        await triggerManagerReview(teamId!, broadcastTeamEvent);
+      } catch (teamRouteErr: any) {
+        console.error(`[CronScheduler] Failed to route "${job.name}" output to team chat:`, teamRouteErr?.message || teamRouteErr);
+      }
+    } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent') {
       // Create an automated chat session with the output
       const sessionId = `auto_${job.id}_${Date.now()}`;
       const title = `🕐 ${job.name} — ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;

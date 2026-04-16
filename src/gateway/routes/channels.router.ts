@@ -365,6 +365,44 @@ function findLastCronRunAt(agentId: string): number | null {
   return hit ? hit.finishedAt : null;
 }
 
+function getPrimaryModelRef(cfg: any): string {
+  const provider = String(cfg?.llm?.provider || '').trim();
+  const providerModel = provider ? String(cfg?.llm?.providers?.[provider]?.model || '').trim() : '';
+  const model = providerModel || String(cfg?.models?.primary || '').trim();
+  return provider && model ? `${provider}/${model}` : model;
+}
+
+function inferAgentDefaultModelKey(agent: any, isManager: boolean, isTeamMember: boolean): string {
+  if (isManager) return 'team_manager';
+  if (isTeamMember) return 'team_subagent';
+  if (String(agent?.id || '') === 'main' || agent?.default === true) return 'main_chat';
+  return 'subagent';
+}
+
+function resolveEffectiveAgentModel(cfg: any, agent: any, isManager: boolean, isTeamMember: boolean): { model: string; source: string } {
+  const explicit = String(agent?.model || '').trim();
+  if (explicit) return { model: explicit, source: 'agent_override' };
+
+  const defaults = cfg?.agent_model_defaults || {};
+  const typeKey = inferAgentDefaultModelKey(agent, isManager, isTeamMember);
+  const roleType = String(agent?.roleType || '').trim().toLowerCase();
+  const roleKey = roleType ? `subagent_${roleType}` : '';
+  const candidates: Array<[string, string | undefined]> = typeKey === 'team_subagent'
+    ? [['team_subagent', defaults?.team_subagent], ...(roleKey ? [[roleKey, defaults?.[roleKey]] as [string, string | undefined]] : []), ['subagent', defaults?.subagent]]
+    : typeKey === 'subagent'
+      ? [...(roleKey ? [[roleKey, defaults?.[roleKey]] as [string, string | undefined]] : []), ['subagent', defaults?.subagent]]
+      : typeKey === 'team_manager'
+        ? [['team_manager', defaults?.team_manager], ['manager', defaults?.manager]]
+        : [[typeKey, defaults?.[typeKey]]];
+  for (const [key, value] of candidates) {
+    const defaultModel = String(value || '').trim();
+    if (defaultModel) return { model: defaultModel, source: `agent_model_defaults.${key}` };
+  }
+
+  const primary = getPrimaryModelRef(cfg);
+  return { model: primary, source: 'primary' };
+}
+
 router.get('/api/agents', (_req, res) => {
   const cfg = getConfig().getConfig() as any;
   const explicitAgents = Array.isArray(cfg.agents) ? cfg.agents : [];
@@ -405,6 +443,7 @@ router.get('/api/agents', (_req, res) => {
     const lastRun = getAgentLastRun(agent.id);
     const isManager = !!(agent as any).isTeamManager || managerTeamMap.has(agent.id);
     const teamInfo = agentTeamMap.get(agent.id) || managerTeamMap.get(agent.id);
+    const effectiveModel = resolveEffectiveAgentModel(cfg, agent, isManager, teamMemberIds.has(agent.id));
     return {
       ...agent,
       workspaceResolved: workspace,
@@ -417,6 +456,8 @@ router.get('/api/agents', (_req, res) => {
       teamId: teamInfo?.teamId || null,
       teamName: teamInfo?.teamName || null,
       teamEmoji: teamInfo?.teamEmoji || null,
+      effectiveModel: effectiveModel.model,
+      effectiveModelSource: effectiveModel.source,
     };
   });
   const defaultAgent = agents.find((a) => a.default) || agents[0] || null;

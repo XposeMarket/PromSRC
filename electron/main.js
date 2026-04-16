@@ -13,7 +13,7 @@
  *   during installation so users see progress rather than a blank window.
  */
 
-const { app, BrowserWindow, shell, Menu, dialog } = require('electron');
+const { app, BrowserWindow, shell, Menu, dialog, ipcMain } = require('electron');
 const { spawn, execSync }  = require('child_process');
 const path       = require('path');
 const http       = require('http');
@@ -89,10 +89,25 @@ function getMissingPackages() {
   return DOC_PACKAGES.filter(p => !isInstalled(p));
 }
 
+// ─── Auto-Updater ──────────────────────────────────────────────────────────
+// Only active in packaged public builds — skip entirely in dev mode.
+let autoUpdater = null;
+if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
+  try {
+    autoUpdater = require('electron-updater').autoUpdater;
+    autoUpdater.autoDownload    = true;   // download silently in background
+    autoUpdater.autoInstallOnAppQuit = false; // we control install via the UI button
+    autoUpdater.logger          = null;   // suppress console noise; surface via events only
+  } catch (e) {
+    console.error('[Updater] electron-updater not available:', e.message);
+  }
+}
+
 // ─── State ─────────────────────────────────────────────────────────────────
 let mainWindow     = null;
 let gatewayProcess = null;
 let isQuitting     = false;
+let pendingUpdate  = null;  // holds UpdateInfo once a release is downloaded
 
 // ─── Setup Splash Screen ───────────────────────────────────────────────────
 // Shown during first-run dependency installation.
@@ -404,6 +419,16 @@ function createLoadingWindow() {
   return loader;
 }
 
+// ─── IPC Handlers ──────────────────────────────────────────────────────────
+ipcMain.handle('get-app-version', () => CURRENT_VERSION);
+
+ipcMain.on('install-update', () => {
+  if (autoUpdater && pendingUpdate) {
+    isQuitting = true;
+    autoUpdater.quitAndInstall(false, true); // isSilent=false, isForceRunAfter=true
+  }
+});
+
 // ─── Main Window ───────────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -416,6 +441,7 @@ function createWindow() {
     backgroundColor: '#0a0a0a',
     show:            false,
     webPreferences: {
+      preload:          path.join(__dirname, 'preload.js'),
       nodeIntegration:  false,
       contextIsolation: true,
       sandbox:          true,
@@ -446,6 +472,49 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
+// ─── Auto-Update Events ────────────────────────────────────────────────────
+// Wire after createWindow() has been called so mainWindow exists.
+function setupAutoUpdater() {
+  if (!autoUpdater) return;
+
+  autoUpdater.on('update-available', (info) => {
+    console.log(`[Updater] Update available: v${info.version}`);
+    // Start download automatically (autoDownload=true handles this)
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-download-progress', Math.round(progress.percent));
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log(`[Updater] Update downloaded: v${info.version} — ready to install`);
+    pendingUpdate = info;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-ready', {
+        version:     info.version,
+        releaseName: info.releaseName || `v${info.version}`,
+        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
+      });
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('[Updater] Error:', err.message);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-error', err.message);
+    }
+  });
+
+  // Delay the first check so it doesn't race with gateway startup.
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((e) => {
+      console.error('[Updater] checkForUpdates failed:', e.message);
+    });
+  }, 10_000); // 10s after app is ready
+}
+
 // ─── App Lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
 
@@ -464,6 +533,7 @@ app.whenReady().then(async () => {
     await waitForGateway();
     createWindow();
     loader.close();
+    setupAutoUpdater();
   } catch (err) {
     loader.close();
     dialog.showErrorBox(

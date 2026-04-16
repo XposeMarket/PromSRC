@@ -263,7 +263,7 @@ export class TelegramChannel {
   private lastUpdateId: number = 0;
   private botInfo: { id: number; first_name: string; username: string } | null = null;
   private abortController: AbortController | null = null;
-  private workspaceRoot: string = process.cwd();
+  private workspaceRoot: string = process.env.PROMETHEUS_WORKSPACE_DIR || process.cwd();
   private progressMessageQueues = new Map<number, Promise<void>>();
 
   private getTelegramSessionId(userId: number, chatId?: number): string {

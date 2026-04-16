@@ -11,7 +11,7 @@
  * and the current user message.
  *
  * The local model's sole jobs:
- *   1. Converse naturally with Raul.
+ *   1. Converse naturally with the user.
  *   2. Call write_note(content) to save anything worth remembering.
  *   3. Call switch_model(tier) to hand execution work to a capable cloud model.
  *
@@ -109,7 +109,7 @@ You handle conversation. For anything that requires execution — code, files, b
 desktop, research, automation — hand it off by calling switch_model first:
   • switch_model('high') → complex tasks, code, analysis, multi-step work
   • switch_model('low')  → quick lookups, memory writes, simple summaries
-After calling switch_model, briefly tell Raul what you're handing off. That's it.
+After calling switch_model, briefly tell the user what you're handing off. That's it.
 The switched model picks up automatically with full context and handles the rest.
 
 [MEMORY]

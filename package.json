@@ -18,6 +18,7 @@
     "electron": "electron .",
     "build:win": "npm run patch:electron-native && electron-builder --win --config electron-builder.yml",
     "build:public": "npm run build && npm run prepare:public && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml",
+    "release": "npm run build && npm run prepare:public && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml --publish=always",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
@@ -38,6 +39,7 @@
     "croner": "^10.0.1",
     "docx": "^8.5.0",
     "dotenv": "^16.4.0",
+    "electron-updater": "^6.8.3",
     "express": "^4.18.0",
     "mammoth": "^1.8.0",
     "mermaid": "^11.13.0",

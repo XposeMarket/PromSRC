@@ -1,5 +1,5 @@
 /**
- * team-manager-runner.ts — Team Coordinator Facade
+ * team-manager-runner.ts - Team Coordinator Facade
  *
  * The manager AI loop has been replaced by the main Prometheus agent acting
  * as coordinator (see team-coordinator.ts). This file now:
@@ -22,15 +22,16 @@ import {
 import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config';
 import { runTeamAgentViaChat } from './team-dispatch-runtime';
 import { runCoordinatorReview, runCoordinatorConversation, runSubagentResultVerification } from './team-coordinator';
+import { getCronSchedulerInstance } from '../scheduling/cron-scheduler';
 
 // Backward-compat no-op (server-v2.ts calls this)
 export function setTeamRunAgentFn(_fn: any): void { /* no-op */ }
 
-// ─── applyChangeToAgent helpers ───────────────────────────────────────────────
+// applyChangeToAgent helpers
 
 /**
- * Convert a natural-language or cron schedule string to intervalMinutes for the
- * heartbeat runner. Returns null if the input can't be mapped.
+ * Convert a natural-language or cron schedule string to intervalMinutes.
+ * Returns null if the input can't be mapped.
  */
 function scheduleToIntervalMinutes(raw: string): number | null {
   const v = String(raw || '').trim();
@@ -82,6 +83,35 @@ function normalizeScheduleValue(raw: string): string {
   return v;
 }
 
+function intervalMinutesToCron(intervalMinutes: number): string | null {
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1) return null;
+  const mins = Math.floor(intervalMinutes);
+  if (mins < 60) return `*/${mins} * * * *`;
+  if (mins === 60) return '0 * * * *';
+  if (mins % 1440 === 0) return '0 9 * * *';
+  if (mins % 60 === 0) return `0 */${Math.max(1, Math.floor(mins / 60))} * * *`;
+  return null;
+}
+
+function resolveCronSchedule(raw: string): string | null {
+  const normalized = normalizeScheduleValue(raw);
+  if (/^\S+\s+\S+\s+\S+\s+\S+\s+\S+(\s+\S+)?$/.test(normalized)) return normalized;
+  const intervalMinutes = scheduleToIntervalMinutes(raw);
+  return intervalMinutes ? intervalMinutesToCron(intervalMinutes) : null;
+}
+
+function buildSchedulePromptForAgent(agent: any): string {
+  const role = [
+    String(agent?.teamRole || agent?.name || agent?.id || 'Subagent').trim(),
+    String(agent?.teamAssignment || agent?.description || '').trim(),
+  ].filter(Boolean).join('\n');
+  return [
+    role || `You are ${agent?.id || 'the assigned subagent'}.`,
+    '',
+    'This is a recurring scheduled team task. Follow your system_prompt.md role, check the team workspace for current memory and pending context, do the useful scheduled work for your role, and return a concise result. The scheduler will post your result into team chat for the manager to continue the workflow.',
+  ].join('\n');
+}
+
 function pickChangeString(obj: any, keys: string[]): string {
   if (!obj || typeof obj !== 'object') return '';
   for (const key of keys) {
@@ -129,7 +159,7 @@ function resolveContextAfter(rawAfter: any): { title: string; content: string } 
   return { title: title.slice(0, 120), content };
 }
 
-// ─── Change Application ────────────────────────────────────────────────────────
+// Change Application
 
 export async function applyChangeToAgent(change: TeamChange, teamId?: string): Promise<boolean> {
   try {
@@ -186,27 +216,48 @@ export async function applyChangeToAgent(change: TeamChange, teamId?: string): P
 
     switch (effectiveType) {
       case 'modify_schedule': {
-        const rawSchedule = resolveScheduleAfter(change?.diff?.after);
-        const intervalMinutes = scheduleToIntervalMinutes(rawSchedule);
-        if (!intervalMinutes) {
-          console.warn('[TeamCoordinator] Could not convert schedule to interval minutes:', rawSchedule);
-          return false;
-        }
-        // Update heartbeat config for this agent (enables heartbeat at the given interval)
-        try {
-          const { getHeartbeatRunnerInstance } = await import('../scheduling/heartbeat-runner.js');
-          const runner = getHeartbeatRunnerInstance();
-          if (runner) {
-            runner.updateAgentConfig(change.targetSubagentId!, { enabled: true, intervalMinutes });
-          } else {
-            console.warn('[TeamCoordinator] Heartbeat runner not available — schedule not applied.');
+        {
+          const rawSchedule = resolveScheduleAfter(change?.diff?.after);
+          const schedule = resolveCronSchedule(rawSchedule);
+          if (!schedule) {
+            console.warn('[TeamCoordinator] Could not resolve schedule:', rawSchedule);
+            return false;
           }
-        } catch (e: any) {
-          console.warn('[TeamCoordinator] Failed to update heartbeat config:', e.message);
+          const scheduler = getCronSchedulerInstance();
+          if (!scheduler) {
+            console.warn('[TeamCoordinator] Cron scheduler not available - schedule not applied.');
+            return false;
+          }
+          const jobName = `${agent.name || agent.id}: scheduled team run`;
+          const existing = scheduler.getJobs().find((job: any) =>
+            String(job.subagent_id || '') === String(change.targetSubagentId || '') &&
+            (String(job.name || '') === jobName || String(job.name || '').startsWith(`${agent.name || agent.id}:`))
+          );
+          const prompt = buildSchedulePromptForAgent(agent);
+          if (existing) {
+            scheduler.updateJob(existing.id, {
+              name: jobName,
+              prompt,
+              schedule,
+              type: 'recurring',
+              status: 'scheduled',
+              enabled: true,
+              subagent_id: change.targetSubagentId,
+            } as any);
+          } else {
+            scheduler.createJob({
+              name: jobName,
+              prompt,
+              type: 'recurring',
+              schedule,
+              tz: String((getConfig().getConfig() as any)?.timezone || 'America/New_York'),
+              sessionTarget: 'isolated',
+              subagent_id: change.targetSubagentId,
+            } as any);
+          }
+          if (change?.diff) change.diff.after = schedule;
+          return true;
         }
-        if (change?.diff) change.diff.after = `every ${intervalMinutes} minutes`;
-        // Return early — no agent config field to write, no save needed
-        return true;
       }
       case 'modify_max_steps': {
         const maxSteps = resolveMaxStepsAfter(change?.diff?.after);
@@ -267,7 +318,7 @@ export async function applyChangeToAgent(change: TeamChange, teamId?: string): P
   }
 }
 
-// ─── Public API ────────────────────────────────────────────────────────────────
+// Public API
 
 export interface ManagerReviewResult {
   teamId: string;
@@ -325,7 +376,7 @@ export async function triggerManagerReview(
  * Handle a user message sent in the team chat.
  * Called from teams.router.ts.
  *
- * @param autoContinue — when true, coordinator auto-loops until goal complete (used by Start button)
+ * @param autoContinue - when true, coordinator auto-loops until goal complete (used by Start button)
  */
 export async function handleManagerConversation(
   teamId: string,

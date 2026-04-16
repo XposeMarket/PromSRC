@@ -106,14 +106,11 @@ function setSettingsTab(tab) {
         if (t === 'heartbeat') {
           if (!window.heartbeatSettingsLoaded) loadHeartbeatSettings().catch(() => {});
           else if (window.heartbeatEditor) window.heartbeatEditor.refresh();
-          loadSubagentHeartbeatList().catch(() => {});
         }
         if (t === 'channels') loadChannelsStatus();
         if (t === 'models') loadModelSettings();
         if (t === 'agents') loadAgentsTab().then(() => {
           if (window.agentMdEditor) window.agentMdEditor.refresh();
-          ensureAgentHbEditor();
-          if (window.agentHbEditor) window.agentHbEditor.refresh();
         });
         if (t === 'integrations') loadIntegrationsTab();
         if (t === 'credentials') loadCredentialsTab();
@@ -247,6 +244,8 @@ let agentHbEditor = null;
 async function loadSubagentHeartbeatList() {
   const el = document.getElementById('hb-agent-list');
   if (!el) return;
+  el.innerHTML = '<div style="color:var(--muted);font-size:12px">Subagent heartbeats are disabled. Create a Scheduled Task and assign a subagent to run recurring subagent work.</div>';
+  return;
   el.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading...</div>';
   try {
     const data = await api('/api/heartbeat/agents');
@@ -1094,6 +1093,13 @@ function setAgentForm(agent) {
   document.getElementById('agent-edit-can-spawn').checked = a.canSpawn === true;
   document.getElementById('agent-edit-spawn-allowlist').value = Array.isArray(a.spawnAllowlist) ? a.spawnAllowlist.join(',') : '';
   document.getElementById('agent-edit-profile').value = a.tools?.profile || '';
+  const modelStatus = document.getElementById('agent-model-status');
+  if (modelStatus) {
+    const source = String(a.effectiveModelSource || '').replace(/^agent_model_defaults\./, 'default: ');
+    modelStatus.textContent = a.effectiveModel
+      ? `Effective model: ${a.effectiveModel}${source ? ` (${source})` : ''}`
+      : '';
+  }
   // Reset team permission flags before async load
   document.getElementById('agent-edit-src-read-access').checked = false;
   document.getElementById('agent-edit-can-propose').checked = false;
@@ -1211,6 +1217,10 @@ function renderAgentsList() {
     const defaultBadge = a.default ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#eaf2ff;color:#0d4faf;border:1px solid #bdd3f6">default</span>' : '';
     const dynamicBadge = a.subagentType === 'dynamic' ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0">dynamic</span>' : '';
     const managerBadge = a.isTeamManager ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#fffbeb;color:#92400e;border:1px solid #fde68a">manager</span>' : '';
+    const modelSource = String(a.effectiveModelSource || '').replace(/^agent_model_defaults\./, 'default: ');
+    const modelLine = a.effectiveModel
+      ? `<div style="margin-top:2px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted)">model: ${escHtml(a.effectiveModel)}${modelSource ? ` <span style="font-family:inherit;color:var(--muted)">(${escHtml(modelSource)})</span>` : ''}</div>`
+      : '';
     const indentStyle = indent ? 'margin-left:14px;width:calc(100% - 14px)' : 'width:100%';
     const borderColor = selected ? '#bdd3f6' : 'var(--line)';
     const bg = selected ? '#f5f9ff' : 'var(--panel-2,#fff)';
@@ -1222,6 +1232,7 @@ function renderAgentsList() {
           ${defaultBadge}${dynamicBadge}${managerBadge}
         </div>
         <div style="margin-top:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted)">${escHtml(a.id)}</div>
+        ${modelLine}
         <div style="margin-top:2px;font-size:11px;color:var(--muted)">last run: ${escHtml(lastRun)} &nbsp;·&nbsp; heartbeat: ${escHtml(heartbeat)}</div>
       </button>
     `;
@@ -1312,7 +1323,6 @@ async function selectAgent(id) {
     await loadAgentModelOptions(true); // true = preserve current selection
   }
   await loadSelectedAgentMd();
-  await loadAgentHeartbeat();
   await loadAgentRunHistory();
 }
 
@@ -1328,7 +1338,7 @@ async function onAgentProviderChange() {
   if (!provSel || !mdlSel) return;
   const prov = provSel.value;
   if (!prov) {
-    mdlSel.innerHTML = '<option value="">— same as primary —</option>';
+    mdlSel.innerHTML = '<option value="">— use effective default —</option>';
     if (status) status.textContent = '';
     return;
   }
@@ -1349,7 +1359,7 @@ async function loadAgentModelOptions(preserveSelected = false) {
 
   const provider = provSel.value;
   if (!provider) {
-    mdlSel.innerHTML = '<option value="">— same as primary —</option>';
+    mdlSel.innerHTML = '<option value="">— use effective default —</option>';
     if (status) status.textContent = '';
     return;
   }
@@ -1504,12 +1514,10 @@ async function loadAgentsTab() {
     if (selected) {
     // Refresh CodeMirror so it doesn't show blank on tab re-open
     if (window.agentMdEditor) { window.agentMdEditor.setValue(''); window.agentMdEditor.refresh(); }
-    if (agentHbEditor) { agentHbEditor.setValue(''); agentHbEditor.refresh(); }
     // Load model options for the selected agent's provider
     const provEl = document.getElementById('agent-edit-provider');
     if (provEl && provEl.value) await loadAgentModelOptions(true);
     await loadSelectedAgentMd();
-      await loadAgentHeartbeat();
       await loadAgentRunHistory();
     } else {
       agentFormNew();
@@ -1593,8 +1601,8 @@ function applyAgentEditorLayout() {
   const noteEl = document.getElementById('agent-md-team-note');
   const badgeEl = document.getElementById('agent-md-team-badge');
 
-  if (heartbeatCard) heartbeatCard.style.order = '1';
-  if (promptCard) promptCard.style.order = '2';
+  if (heartbeatCard) heartbeatCard.style.display = 'none';
+  if (promptCard) promptCard.style.order = '1';
 
   if (isMain) {
     if (promptCard) promptCard.style.display = 'none';
@@ -1608,7 +1616,7 @@ function applyAgentEditorLayout() {
     if (saveBtn) saveBtn.textContent = 'Save system_prompt.md';
     if (noteEl) {
       noteEl.style.display = 'block';
-      noteEl.innerHTML = 'This subagent prompt comes from <strong>system_prompt.md</strong>. Heartbeat instructions are edited in the Heartbeat panel above.';
+      noteEl.innerHTML = 'This subagent prompt comes from <strong>system_prompt.md</strong>. Recurring work is configured from Scheduled Tasks by assigning this subagent.';
     }
     if (badgeEl) badgeEl.style.display = 'inline-block';
   }
@@ -2448,8 +2456,11 @@ const AMD_SLOTS = {
   'main-chat':       'main_chat',
   'proposal-high':   'proposal_executor_high_risk',
   'proposal-low':    'proposal_executor_low_risk',
-  'coordinator':            'coordinator',
+  'coordinator':     'coordinator',
   'manager':         'manager',
+  'team-manager':    'team_manager',
+  'subagent':        'subagent',
+  'team-subagent':   'team_subagent',
   'background-task': 'background_task',
   // Per-role-type subagent defaults
   'subagent-planner':       'subagent_planner',

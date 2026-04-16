@@ -301,7 +301,7 @@ export class SubagentManager {
       this.buildSystemPromptFile(definition),
     );
 
-    // Always create HEARTBEAT.md so heartbeat tooling can manage this subagent.
+    // Keep a legacy HEARTBEAT.md instructions file for schedule-job previews and imports.
     const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
     const heartbeatContent = params.heartbeat_instructions
       ? String(params.heartbeat_instructions).trim()
@@ -318,18 +318,6 @@ export class SubagentManager {
 
     // Register into config.json agents array so agent_list() can see it
     this.registerInConfig(definition, { isTeamManager: params.is_team_manager === true });
-
-    // New subagents should start with heartbeat disabled until explicitly enabled.
-    // This avoids newly-created agents running autonomously before they are configured.
-    try {
-      // Late import avoids direct startup coupling and circular init concerns.
-      const { getHeartbeatRunnerInstance } = require('../scheduling/heartbeat-runner.js');
-      const runner = getHeartbeatRunnerInstance?.();
-      if (runner) {
-        runner.registerAgent(id, agentDir);
-        runner.updateAgentConfig(id, { enabled: false });
-      }
-    } catch { /* non-fatal */ }
 
     console.log(`[SubagentManager] Created new subagent: ${id}`);
     return definition;

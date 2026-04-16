@@ -1,0 +1,1854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prometheus UI Mockup</title>
+  <style>
+    :root {
+      /* ── Prometheus theme ── */
+      --bg: #2e2e2e;                          /* outer ash grey shell */
+      --panel: rgba(210,210,208,0.88);        /* main chat — light grey panels */
+      --panel-strong: rgba(215,215,213,0.96);
+      --sidebar-bg: #2e2e2e;                  /* sidebar / side panels — matches outer ash grey bg */
+      --line: rgba(15,23,42,0.10);
+      --line-strong: rgba(15,23,42,0.18);
+      --text: #1a1a1a;
+      --muted: #5a5a5a;
+      --soft: #d8d6d1;
+      --chip: #cccac6;
+      --brand: #1a1a1a;
+      /* sidebar-scoped overrides for dark panel text */
+      --sidebar-text: #e8e6e1;
+      --sidebar-muted: #9a9890;
+      --sidebar-icon-bg: rgba(255,255,255,0.08);
+      --sidebar-icon-border: rgba(255,255,255,0.12);
+      --sidebar-item-bg: rgba(255,255,255,0.05);
+      --sidebar-item-hover: rgba(255,255,255,0.10);
+      --sidebar-active-bg: rgba(255,255,255,0.12);
+      --sidebar-search-bg: rgba(255,255,255,0.07);
+      --sidebar-seg-bg: rgba(255,255,255,0.07);
+      --sidebar-seg-active: rgba(255,255,255,0.15);
+      --blue: #2563eb;
+      /* Prometheus orange-flame accent */
+      --flame: #f97316;
+      --flame-mid: #fb923c;
+      --flame-glow: rgba(251,146,60,0.22);
+      --flame-border: rgba(249,115,22,0.45);
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+      --shadow-flame: 0 0 12px rgba(249,115,22,0.15), 0 4px 14px rgba(0,0,0,0.12);
+      --radius: 18px;
+      --sidebar-w: 288px;
+      --right-w: 380px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(249,115,22,0.06), transparent 32%),
+        radial-gradient(circle at bottom right, rgba(251,146,60,0.04), transparent 28%),
+        var(--bg);
+      overflow: hidden;
+    }
+
+    /* ── Layout shell ── */
+    .app {
+      height: 100vh;
+      display: flex;
+      flex-direction: row;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      background: var(--sidebar-bg);
+      backdrop-filter: none;
+      border-right: 1px solid rgba(249,115,22,0.20);
+      color: var(--sidebar-text);
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      transition: width .22s ease, min-width .22s ease, opacity .18s ease;
+      overflow: hidden;
+      flex-shrink: 0;
+      position: relative;
+      z-index: 10;
+    }
+
+    /* Fixed top: logo + new chat + search */
+    .sidebar-fixed {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 14px 12px 10px;
+      border-bottom: 1px solid rgba(249,115,22,0.10);
+    }
+
+    /* Scrollable body: nav + sessions + footer */
+    .sidebar-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 10px 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(249,115,22,0.35) transparent;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+    .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+    .sidebar-scroll::-webkit-scrollbar-thumb {
+      background: rgba(249,115,22,0.35);
+      border-radius: 999px;
+    }
+    .sidebar-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(249,115,22,0.6);
+    }
+
+    .sidebar.collapsed {
+      width: 72px;
+      min-width: 72px;
+      border-right: 1px solid rgba(249,115,22,0.20);
+    }
+
+    /* Collapsed: tighten padding so nothing bleeds */
+    .sidebar.collapsed .sidebar-fixed {
+      padding: 14px 8px 10px;
+      align-items: center;
+    }
+
+    .sidebar.collapsed .sidebar-scroll {
+      padding: 10px 8px 14px;
+      align-items: center;
+    }
+
+    .sidebar.collapsed .sidebar-top {
+      justify-content: center;
+      padding: 6px 0 4px;
+    }
+
+    .sidebar.collapsed #sidebarToggle {
+      display: none;
+    }
+
+    .sidebar.collapsed .new-chat {
+      width: 48px;
+      padding: 0;
+      justify-content: center;
+      border-radius: 14px;
+      height: 48px;
+    }
+
+    .sidebar.collapsed .nav-item,
+    .sidebar.collapsed .session-item,
+    .sidebar.collapsed .project-card,
+    .sidebar.collapsed .skill-item {
+      width: 48px;
+      padding: 0;
+      justify-content: center;
+      border-radius: 14px;
+      height: 48px;
+    }
+
+    .sidebar.collapsed .nav-group,
+    .sidebar.collapsed .sidebar-section {
+      align-items: center;
+      width: 100%;
+    }
+
+    .sidebar.collapsed .session-list,
+    .sidebar.collapsed .project-list,
+    .sidebar.collapsed .skill-list {
+      align-items: center;
+      width: 100%;
+    }
+
+    .sidebar.collapsed .sidebar-footer {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* When right panel opens, sidebar collapses fully */
+    .sidebar.panel-pushed {
+      width: 0;
+      min-width: 0;
+      padding-left: 0;
+      padding-right: 0;
+      border-right: none;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .sidebar-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 6px 4px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .logo {
+      width: 46px;
+      height: 46px;
+      border-radius: 12px;
+      background: transparent;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    .logo img {
+      width: 46px;
+      height: 46px;
+      object-fit: contain;
+      display: block;
+    }
+
+    .brand-copy {
+      min-width: 0;
+      transition: opacity .18s ease;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+      color: var(--sidebar-text);
+    }
+
+    .brand-sub {
+      font-size: 11px;
+      color: var(--sidebar-muted);
+      margin-top: 2px;
+      white-space: nowrap;
+    }
+
+    .icon-btn {
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.08);
+      color: var(--sidebar-text);
+      border-radius: 12px;
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: .18s ease;
+      flex-shrink: 0;
+    }
+
+    .sidebar .icon-btn:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.22); transform: translateY(-1px); }
+    .nav-item:hover,
+    .session-item:hover,
+    .seg-btn:hover {
+      background: var(--sidebar-item-hover);
+      border-color: rgba(249,115,22,0.40);
+      transform: translateY(-1px);
+    }
+    .pill-btn:hover,
+    .composer-action:hover,
+    .ghost:hover,
+    .tab:hover {
+      background: rgba(245,243,238,0.95);
+      border-color: var(--line-strong);
+      transform: translateY(-1px);
+    }
+
+    .new-chat {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border: 1px solid var(--flame-border);
+      background: rgba(249,115,22,0.12);
+      border-radius: 16px;
+      padding: 12px 14px;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--sidebar-text);
+      box-shadow: var(--shadow-flame);
+      transition: .18s ease;
+    }
+
+    /* Collapsed state — hide text labels cleanly */
+    .sidebar.collapsed .brand-copy,
+    .sidebar.collapsed .new-chat span,
+    .sidebar.collapsed .nav-item span,
+    .sidebar.collapsed .section-title,
+    .sidebar.collapsed .search,
+    .sidebar.collapsed .session-copy,
+    .sidebar.collapsed .seg-tabs,
+    .sidebar.collapsed .project-mini,
+    .sidebar.collapsed .skill-copy {
+      display: none;
+    }
+
+    /* Keep the More popover itself visible when collapsed */
+    .sidebar.collapsed .more-popover {
+      display: block;
+    }
+
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: var(--sidebar-search-bg);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: var(--sidebar-muted);
+      font-size: 14px;
+    }
+
+    .nav-group,
+    .sidebar-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .section-title {
+      padding: 8px 10px 4px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--sidebar-muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .nav-item,
+    .session-item,
+    .project-card,
+    .skill-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      padding: 11px 12px;
+      cursor: pointer;
+      transition: .18s ease;
+      color: var(--sidebar-text);
+    }
+
+    .nav-item.active,
+    .session-item.active {
+      background: var(--sidebar-active-bg);
+      border-color: var(--flame-border);
+      box-shadow: var(--shadow-flame);
+    }
+
+    .nav-icon,
+    .session-icon,
+    .project-icon,
+    .skill-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: var(--sidebar-icon-bg);
+      border: 1px solid var(--sidebar-icon-border);
+      display: grid;
+      place-items: center;
+      color: var(--sidebar-text);
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+
+    /* ── Sessions segmented tabs ── */
+    .seg-tabs {
+      display: flex;
+      background: var(--sidebar-seg-bg);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 4px;
+      gap: 2px;
+    }
+
+    .seg-btn {
+      flex: 1;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--sidebar-muted);
+      border-radius: 10px;
+      padding: 7px 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: .18s ease;
+      white-space: nowrap;
+      text-align: center;
+    }
+
+    .seg-btn.active {
+      background: var(--sidebar-seg-active);
+      border-color: var(--flame-border);
+      color: var(--sidebar-text);
+      box-shadow: 0 2px 10px rgba(249,115,22,0.12);
+    }
+
+    .session-list,
+    .project-list,
+    .skill-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-right: 4px;
+    }
+
+    .session-item,
+    .project-card,
+    .skill-item {
+      align-items: flex-start;
+      background: var(--sidebar-item-bg);
+      border-color: rgba(255,255,255,0.06);
+    }
+
+    /* Flame-glow border on session/project/skill cards */
+    .session-item:not(.active),
+    .project-card,
+    .skill-item {
+      border: 1px solid rgba(249,115,22,0.25);
+      box-shadow: 0 0 8px rgba(249,115,22,0.08), inset 0 0 14px rgba(251,146,60,0.03);
+    }
+
+    .session-copy,
+    .project-mini,
+    .skill-copy {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .session-title,
+    .project-name,
+    .skill-name {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--sidebar-text);
+    }
+
+    .session-meta,
+    .project-meta,
+    .skill-meta {
+      font-size: 12px;
+      color: var(--sidebar-muted);
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding-top: 10px;
+      border-top: 1px solid rgba(249,115,22,0.22);
+    }
+
+    /* ── Workspace (center + right) ── */
+    .workspace {
+      min-width: 0;
+      flex: 1;
+      height: 100vh;
+      display: flex;
+      flex-direction: row;
+      overflow: hidden;
+    }
+
+    /* ── Center column ── */
+    .center-col {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      gap: 0;
+      position: relative;
+      transition: flex .24s ease;
+    }
+
+    /* unified shell — full height, no gap/radius */
+    .main-shell-wrap {
+      min-height: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border-radius: 0;
+      border: none;
+      border-left: 1px solid rgba(15,23,42,0.10);
+      background: #d8d6d2;
+      backdrop-filter: blur(18px);
+      box-shadow: none;
+      overflow: hidden;
+    }
+
+    .topbar {
+      height: 64px;
+      border-radius: 0;
+      background: transparent;
+      backdrop-filter: none;
+      border: none;
+      border-bottom: 1px solid var(--line-strong);
+      box-shadow: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .topbar-left,
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .page-title {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .page-title strong {
+      font-size: 15px;
+      letter-spacing: -.02em;
+    }
+
+    .page-title span {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .status-pill {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.7);
+      padding: 9px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #ef4444;
+      box-shadow: 0 0 0 4px rgba(239,68,68,0.12);
+    }
+
+    .status-dot.ok {
+      background: #22c55e;
+      box-shadow: 0 0 0 4px rgba(34,197,94,0.12);
+    }
+
+    /* Topbar hamburger — ash grey to match the light chat panel */
+    .topbar .icon-btn {
+      background: #3a3a3a;
+      border-color: rgba(255,255,255,0.12);
+      color: #ffffff;
+    }
+
+    .topbar .icon-btn:hover {
+      background: #3a3a3a;
+      border-color: rgba(15,23,42,0.20);
+      color: var(--text);
+      transform: translateY(-1px);
+    }
+
+    /* Panel toggle icon button — right panel open/close */
+    .panel-toggle-btn {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+      color: var(--muted);
+      border-radius: 12px;
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: .18s ease;
+      flex-shrink: 0;
+    }
+
+    .panel-toggle-btn:hover {
+      background: white;
+      border-color: var(--line-strong);
+      color: var(--text);
+      transform: translateY(-1px);
+    }
+
+    .panel-toggle-btn.active {
+      background: linear-gradient(145deg, #f97316, #c2410c);
+      border-color: #ea580c;
+      color: white;
+      box-shadow: 0 4px 14px rgba(249,115,22,0.36);
+    }
+
+    .panel-toggle-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .main-shell {
+      min-height: 0;
+      flex: 1;
+      border-radius: 0;
+      border: none;
+      background: transparent;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .chat-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 28px 0 180px;
+    }
+
+    .chat-inner {
+      width: min(860px, calc(100% - 32px));
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .hero {
+      padding: 24px 8px 8px;
+      text-align: center;
+    }
+
+    .hero-mark {
+      width: 80px;
+      height: 80px;
+      border-radius: 24px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 16px;
+      background: transparent;
+      font-weight: 800;
+      font-size: 24px;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 42px);
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      margin: 12px auto 0;
+      max-width: 680px;
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    .welcome-suggestions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .suggestion {
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(220,218,213,0.75);
+      border: 1px solid var(--flame-border);
+      box-shadow: 0 0 10px var(--flame-glow);
+      text-align: left;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+
+    .suggestion:hover { background: rgba(235,233,228,0.95); border-color: var(--flame); box-shadow: 0 0 16px rgba(249,115,22,0.28); }
+    .suggestion strong { display: block; font-size: 14px; margin-bottom: 6px; }
+    .suggestion span { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+    .message-row {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .message-row.user { justify-content: flex-end; }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      background: white;
+      border: 1px solid var(--line);
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+
+    .bubble {
+      max-width: min(720px, 82%);
+      padding: 16px 18px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: rgba(225,223,218,0.88);
+      line-height: 1.7;
+      font-size: 14px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+    }
+
+    .message-row.user .bubble {
+      background: #2e2e2e;
+      color: #ffffff;
+      border-color: var(--flame-border);
+      box-shadow: 0 0 14px var(--flame-glow), 0 6px 20px rgba(0,0,0,0.10);
+    }
+
+    .inline-plan {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(210,208,202,0.65);
+      border: 1px solid var(--flame-border);
+      box-shadow: 0 0 8px var(--flame-glow);
+      display: grid;
+      gap: 8px;
+    }
+
+    .plan-step {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #334155;
+      font-size: 13px;
+    }
+
+    .plan-step .dot {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+
+    .composer-wrap {
+      position: absolute;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      width: min(900px, calc(100% - 32px));
+      z-index: 3;
+    }
+
+    .composer {
+      background: rgba(215,213,208,0.97);
+      border: 1px solid var(--flame-border);
+      backdrop-filter: blur(18px);
+      border-radius: 28px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 0 16px var(--flame-glow);
+      padding: 10px;
+    }
+
+    .composer-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 4px 4px 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .composer-main {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+    }
+
+    .composer-input {
+      flex: 1;
+      min-height: 64px;
+      max-height: 180px;
+      border: 0;
+      outline: 0;
+      resize: none;
+      background: transparent;
+      font: inherit;
+      font-size: 15px;
+      color: var(--text);
+      padding: 12px 8px 12px 10px;
+      line-height: 1.55;
+    }
+
+    .composer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 4px 4px 0;
+    }
+
+    .composer-action {
+      border: 1px solid var(--line);
+      background: rgba(235,233,228,0.9);
+      color: var(--muted);
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: .18s ease;
+    }
+
+    .composer-send {
+      width: 52px;
+      height: 52px;
+      border-radius: 18px;
+      border: 0;
+      background: linear-gradient(145deg, #f97316, #c2410c);
+      color: white;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      box-shadow: 0 8px 22px rgba(249,115,22,0.40);
+    }
+
+    /* ── Right panel — inline (not overlay) ── */
+    .right-panel {
+      width: 0;
+      min-width: 0;
+      height: 100vh;
+      overflow: hidden;
+      transition: width .24s ease, min-width .24s ease;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+    }
+
+    .right-panel.open {
+      width: var(--right-w);
+      min-width: var(--right-w);
+      padding: 0;
+    }
+
+    .right-panel-inner {
+      flex: 1;
+      border-radius: 0;
+      border: none;
+      border-left: 1px solid rgba(249,115,22,0.20);
+      background: #2e2e2e;
+      backdrop-filter: none;
+      box-shadow: -4px 0 40px rgba(0,0,0,0.28);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      height: 100%;
+      opacity: 0;
+      transform: translateX(16px);
+      transition: opacity .22s ease, transform .22s ease;
+      color: var(--sidebar-text);
+    }
+
+    .right-panel.open .right-panel-inner {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .drawer-header {
+      padding: 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .drawer-title strong {
+      display: block;
+      font-size: 15px;
+      letter-spacing: -.02em;
+      color: var(--sidebar-text);
+    }
+
+    .drawer-title span {
+      display: block;
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--sidebar-muted);
+    }
+
+    .drawer-tabs {
+      display: flex;
+      gap: 8px;
+      padding: 12px 14px 0;
+    }
+
+    .drawer-tab {
+      flex: 1;
+      border: 1px solid rgba(249,115,22,0.25);
+      background: rgba(255,255,255,0.06);
+      color: var(--sidebar-muted);
+      border-radius: 14px;
+      padding: 11px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: .18s ease;
+      box-shadow: 0 0 6px rgba(249,115,22,0.08);
+    }
+
+    .drawer-tab.active {
+      background: rgba(255,255,255,0.13);
+      color: var(--sidebar-text);
+      border-color: var(--flame);
+      box-shadow: 0 0 12px rgba(249,115,22,0.22);
+    }
+
+    .drawer-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      scrollbar-color: rgba(249,115,22,0.35) transparent;
+    }
+
+    .panel-card {
+      border: 1px solid rgba(249,115,22,0.22);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.05);
+      box-shadow: 0 0 10px rgba(249,115,22,0.08);
+      padding: 14px;
+    }
+
+    .panel-card h3 {
+      margin: 0 0 12px;
+      font-size: 13px;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+      color: var(--sidebar-muted);
+    }
+
+    .connector-grid,
+    .canvas-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mini-tile {
+      border: 1px solid rgba(249,115,22,0.20);
+      background: rgba(255,255,255,0.06);
+      box-shadow: 0 0 7px rgba(249,115,22,0.07);
+      border-radius: 16px;
+      padding: 12px;
+    }
+
+    .mini-tile strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 5px;
+      color: var(--sidebar-text);
+    }
+
+    .mini-tile span {
+      color: var(--sidebar-muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .todo-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .todo-item {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+
+    .todo-item:last-child { border-bottom: 0; }
+
+    .todo-check {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.07);
+      display: grid;
+      place-items: center;
+      color: var(--sidebar-muted);
+      flex-shrink: 0;
+      margin-top: 1px;
+      font-size: 12px;
+    }
+
+    .todo-item.active .todo-check {
+      background: rgba(37,99,235,0.22);
+      color: #93c5fd;
+      border-color: rgba(37,99,235,0.40);
+    }
+
+    .todo-item.done .todo-check {
+      background: linear-gradient(145deg, #f97316, #c2410c);
+      border-color: #ea580c;
+      color: white;
+      box-shadow: 0 2px 8px rgba(249,115,22,0.3);
+    }
+
+    .todo-copy strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: var(--sidebar-text);
+    }
+
+    .todo-copy span {
+      font-size: 12px;
+      color: var(--sidebar-muted);
+      line-height: 1.5;
+    }
+
+    .approval {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(249,115,22,0.25);
+      box-shadow: 0 0 8px rgba(249,115,22,0.08);
+    }
+
+    .approval-copy strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: var(--sidebar-text);
+    }
+
+    .approval-copy span {
+      font-size: 12px;
+      color: var(--sidebar-muted);
+      line-height: 1.5;
+    }
+
+    .approval-actions {
+      display: flex;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.08);
+      color: var(--sidebar-text);
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      background: linear-gradient(135deg, #f97316, #c2410c);
+      border-color: #ea580c;
+      color: white;
+      box-shadow: 0 4px 12px rgba(249,115,22,0.32);
+    }
+
+    .code-preview {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: #0f172a;
+      color: #cbd5e1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .code-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .code-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #334155;
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+
+    .hidden { display: none !important; }
+
+    /* ── More popover ── */
+    .nav-more-wrap {
+      position: relative;
+    }
+
+    .more-popover {
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 0;
+      width: 200px;
+      background: #262626;
+      border: 1px solid rgba(249,115,22,0.28);
+      border-radius: 18px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.40), 0 0 16px rgba(249,115,22,0.10);
+      padding: 6px;
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(-6px);
+      transition: opacity .16s ease, transform .16s ease;
+    }
+
+    .sidebar.collapsed .more-popover {
+      left: calc(100% + 8px);
+      top: 0;
+    }
+
+    .more-popover.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(0);
+    }
+
+    .more-popover-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid transparent;
+      color: var(--sidebar-text);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: .15s ease;
+    }
+
+    .more-popover-item:hover {
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(249,115,22,0.30);
+    }
+
+    .more-popover-item .nav-icon {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+
+    /* Project card styling (for Projects tab) */
+    .project-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      border: 1px solid rgba(249,115,22,0.25);
+      border-radius: 14px;
+      padding: 11px 12px;
+      cursor: pointer;
+      transition: .18s ease;
+      background: rgba(255,255,255,0.05);
+      box-shadow: 0 0 8px rgba(249,115,22,0.08);
+      color: var(--sidebar-text);
+    }
+    .project-card:hover { background: rgba(255,255,255,0.10); border-color: var(--flame); box-shadow: 0 0 14px rgba(249,115,22,0.22); }
+
+    @media (max-width: 1100px) {
+      .welcome-suggestions { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 820px) {
+      .sidebar {
+        position: absolute;
+        inset: 0 auto 0 0;
+        height: 100vh;
+        z-index: 30;
+        box-shadow: 0 30px 60px rgba(15,23,42,0.16);
+      }
+      .sidebar.collapsed {
+        transform: translateX(-100%);
+        width: var(--sidebar-w);
+        min-width: var(--sidebar-w);
+      }
+      .center-col { padding: 12px; }
+      .topbar,
+      .main-shell { border-radius: 20px; }
+      .chat-inner,
+      .composer-wrap { width: calc(100% - 20px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+
+      <!-- FIXED TOP -->
+      <div class="sidebar-fixed">
+        <div class="sidebar-top">
+          <div class="brand">
+            <div class="logo"><img src="../assets/Prometheus.png" alt="Prometheus" /></div>
+            <div class="brand-copy">
+              <div class="brand-title">Prometheus</div>
+              <div class="brand-sub">Operator workspace</div>
+            </div>
+          </div>
+          <button class="icon-btn" id="sidebarToggle" aria-label="Toggle sidebar" style="display:none">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="16" height="16">
+              <line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/>
+            </svg>
+          </button>
+        </div>
+
+        <button class="new-chat">
+          <div class="nav-icon">+</div>
+          <span>New chat</span>
+        </button>
+
+        <div class="search">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="14" height="14"><circle cx="6.5" cy="6.5" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+          <span>Search chats, channels, projects</span>
+        </div>
+      </div><!-- end .sidebar-fixed -->
+
+      <!-- SCROLLABLE BODY -->
+      <div class="sidebar-scroll">
+
+        <!-- Nav -->
+        <div class="nav-group">
+          <div class="nav-item active">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+            </div>
+            <span>Chat</span>
+          </div>
+          <div class="nav-item">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><polyline points="3,8 6,11 13,4"/></svg>
+            </div>
+            <span>Tasks</span>
+          </div>
+          <div class="nav-item">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><rect x="1" y="2" width="14" height="13" rx="2"/><line x1="1" y1="6" x2="15" y2="6"/><line x1="5" y1="2" x2="5" y2="6"/><line x1="11" y1="2" x2="11" y2="6"/></svg>
+            </div>
+            <span>Schedule</span>
+          </div>
+          <div class="nav-item">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><circle cx="6" cy="5" r="2.5"/><circle cx="11" cy="5" r="2.5"/><path d="M1 14c0-2.8 2.2-5 5-5h4c2.8 0 5 2.2 5 5"/></svg>
+            </div>
+            <span>Teams</span>
+          </div>
+          <div class="nav-item">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><polygon points="8,1 10,6 15,6 11,9.5 12.5,14.5 8,11.5 3.5,14.5 5,9.5 1,6 6,6"/></svg>
+            </div>
+            <span>Proposals</span>
+          </div>
+          <!-- More — popover with extra page tabs -->
+          <div class="nav-more-wrap">
+            <div class="nav-item" id="moreNavBtn">
+              <div class="nav-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><circle cx="4" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="12" cy="8" r="1.2" fill="currentColor"/></svg>
+              </div>
+              <span>More</span>
+            </div>
+            <div class="more-popover" id="morePopover">
+              <div class="more-popover-item">
+                <div class="nav-icon">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M2 12V4a1 1 0 011-1h10a1 1 0 011 1v8"/><polyline points="1,12 15,12"/><polyline points="5,7 5,12"/><polyline points="8,5 8,12"/><polyline points="11,9 11,12"/></svg>
+                </div>
+                <span>Audit</span>
+              </div>
+              <div class="more-popover-item">
+                <div class="nav-icon">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><ellipse cx="8" cy="5" rx="5" ry="3"/><path d="M3 5v3c0 1.66 2.24 3 5 3s5-1.34 5-3V5"/><path d="M3 8v3c0 1.66 2.24 3 5 3s5-1.34 5-3V8"/></svg>
+                </div>
+                <span>Memory</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sessions section -->
+        <div class="sidebar-section">
+          <div class="section-title">Sessions</div>
+          <div class="seg-tabs" id="segTabs">
+            <button class="seg-btn active" data-tab="chats">Chats</button>
+            <button class="seg-btn" data-tab="channels">Channels</button>
+            <button class="seg-btn" data-tab="projects">Projects</button>
+            <button class="seg-btn" data-tab="skills">Skills</button>
+          </div>
+
+          <!-- Chats tab -->
+          <div class="session-list" id="tab-chats">
+            <div class="session-item active">
+              <div class="session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.5"/></svg>
+              </div>
+              <div class="session-copy">
+                <div class="session-title">Main workspace</div>
+                <div class="session-meta">Web chat · Active now</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+              </div>
+              <div class="session-copy">
+                <div class="session-title">UI redesign session</div>
+                <div class="session-meta">Web chat · 2h ago</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+              </div>
+              <div class="session-copy">
+                <div class="session-title">Pipeline debug</div>
+                <div class="session-meta">Web chat · Yesterday</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+              </div>
+              <div class="session-copy">
+                <div class="session-title">Policy enforcement</div>
+                <div class="session-meta">Web chat · 2 days ago</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+              </div>
+              <div class="session-copy">
+                <div class="session-title">Gateway refactor</div>
+                <div class="session-meta">Web chat · 3 days ago</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+              </div>
+              <div class="session-copy">
+                <div class="session-title">Proposal runner test</div>
+                <div class="session-meta">Web chat · Last week</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+              </div>
+              <div class="session-copy">
+                <div class="session-title">Background task runner</div>
+                <div class="session-meta">Web chat · Last week</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Channels tab -->
+          <div class="session-list hidden" id="tab-channels">
+            <div class="session-item">
+              <div class="session-icon">TG</div>
+              <div class="session-copy">
+                <div class="session-title">Telegram social clips</div>
+                <div class="session-meta">Telegram · Unread</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">DC</div>
+              <div class="session-copy">
+                <div class="session-title">Discord issue intake</div>
+                <div class="session-meta">Discord · Linked channel</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">CLI</div>
+              <div class="session-copy">
+                <div class="session-title">CLI deployment help</div>
+                <div class="session-meta">CLI · 14m ago</div>
+              </div>
+            </div>
+            <div class="session-item">
+              <div class="session-icon">WA</div>
+              <div class="session-copy">
+                <div class="session-title">WhatsApp alerts</div>
+                <div class="session-meta">WhatsApp · 1h ago</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Projects tab -->
+          <div class="session-list hidden" id="tab-projects">
+            <div class="project-card">
+              <div class="project-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="1" y="3" width="14" height="11" rx="2"/><path d="M5 3V1h6v2"/></svg>
+              </div>
+              <div class="project-mini">
+                <div class="project-name">Prometheus Core</div>
+                <div class="project-meta">Active · 12 files, 3 artifacts</div>
+              </div>
+            </div>
+            <div class="project-card">
+              <div class="project-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="1" y="3" width="14" height="11" rx="2"/><path d="M5 3V1h6v2"/></svg>
+              </div>
+              <div class="project-mini">
+                <div class="project-name">UI Mockups</div>
+                <div class="project-meta">Active · 5 files, 1 artifact</div>
+              </div>
+            </div>
+            <div class="project-card">
+              <div class="project-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="1" y="3" width="14" height="11" rx="2"/><path d="M5 3V1h6v2"/></svg>
+              </div>
+              <div class="project-mini">
+                <div class="project-name">Gateway Refactor</div>
+                <div class="project-meta">Paused · 8 files</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Skills tab -->
+          <div class="session-list hidden" id="tab-skills">
+            <div class="skill-item session-item">
+              <div class="skill-icon session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M8 1l1.5 4.5H14l-3.8 2.8 1.5 4.5L8 10 4.3 12.8l1.5-4.5L2 5.5h4.5z"/></svg>
+              </div>
+              <div class="skill-copy session-copy">
+                <div class="skill-name session-title">web-search</div>
+                <div class="skill-meta session-meta">Tool · Active</div>
+              </div>
+            </div>
+            <div class="skill-item session-item">
+              <div class="skill-icon session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M8 1l1.5 4.5H14l-3.8 2.8 1.5 4.5L8 10 4.3 12.8l1.5-4.5L2 5.5h4.5z"/></svg>
+              </div>
+              <div class="skill-copy session-copy">
+                <div class="skill-name session-title">write-proposal</div>
+                <div class="skill-meta session-meta">Tool · Active</div>
+              </div>
+            </div>
+            <div class="skill-item session-item">
+              <div class="skill-icon session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M8 1l1.5 4.5H14l-3.8 2.8 1.5 4.5L8 10 4.3 12.8l1.5-4.5L2 5.5h4.5z"/></svg>
+              </div>
+              <div class="skill-copy session-copy">
+                <div class="skill-name session-title">declare-plan</div>
+                <div class="skill-meta session-meta">Tool · Blocked</div>
+              </div>
+            </div>
+            <div class="skill-item session-item">
+              <div class="skill-icon session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M8 1l1.5 4.5H14l-3.8 2.8 1.5 4.5L8 10 4.3 12.8l1.5-4.5L2 5.5h4.5z"/></svg>
+              </div>
+              <div class="skill-copy session-copy">
+                <div class="skill-name session-title">run-background-task</div>
+                <div class="skill-meta session-meta">Flow · Active</div>
+              </div>
+            </div>
+            <div class="skill-item session-item">
+              <div class="skill-icon session-icon">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M8 1l1.5 4.5H14l-3.8 2.8 1.5 4.5L8 10 4.3 12.8l1.5-4.5L2 5.5h4.5z"/></svg>
+              </div>
+              <div class="skill-copy session-copy">
+                <div class="skill-name session-title">send-email</div>
+                <div class="skill-meta session-meta">Connector · Gmail</div>
+              </div>
+            </div>
+          </div>
+        </div><!-- end sidebar-section -->
+
+        <!-- Footer inside scroll -->
+        <div class="sidebar-footer">
+          <div class="nav-item">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+            </div>
+            <span>Settings</span>
+          </div>
+        </div>
+
+      </div><!-- end .sidebar-scroll -->
+    </aside>
+
+    <!-- CENTER + RIGHT PANEL WRAPPER -->
+    <div class="workspace" id="workspace">
+
+      <!-- CENTER COLUMN -->
+      <div class="center-col" id="centerCol">
+        <div class="main-shell-wrap">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="icon-btn" id="mobileSidebar">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15">
+                <line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/>
+              </svg>
+            </button>
+            <div class="page-title">
+              <strong>Main chat</strong>
+              <span>Prometheus operator workspace</span>
+            </div>
+          </div>
+
+          <div class="topbar-right">
+            <div class="status-pill"><span class="status-dot ok"></span><span>Ready</span></div>
+            <button class="panel-toggle-btn" id="drawerToggle" aria-label="Toggle workspace panel" title="Workspace panel">
+              <!-- Layout/panel icon -->
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16">
+                <rect x="1" y="2" width="14" height="12" rx="2"/>
+                <line x1="10" y1="2" x2="10" y2="14"/>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <section class="main-shell">
+          <div class="chat-scroll">
+            <div class="chat-inner">
+              <div class="hero">
+                <div class="hero-mark"><img src="../assets/Prometheus.png" alt="Prometheus" style="width:72px;height:72px;object-fit:contain;display:block;" /></div>
+                <h1>Prometheus</h1>
+                <p>
+                <strong> "I whom you see am Prometheus, who gave fire to mankind."</strong>
+
+c. 440–430 BCE, from Prometheus Bound.
+                </p>
+
+                <div class="welcome-suggestions">
+                  <div class="suggestion">
+                    <strong>Start a new build</strong>
+                    <span>Create a landing page, app mockup, or feature plan inside the current project.</span>
+                  </div>
+                  <div class="suggestion">
+                    <strong>Open attached artifacts</strong>
+                    <span>Preview code, markdown, PDFs, images, and generated files in the side workspace.</span>
+                  </div>
+                  <div class="suggestion">
+                    <strong>Resume an agent run</strong>
+                    <span>See progress, pending approvals, and tool activity without a permanent third column.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="message-row user">
+                <div class="bubble">Redesign the chat page to feel more like ChatGPT or Claude. Remove the always-open right column.</div>
+              </div>
+
+              <div class="message-row">
+                <div class="avatar">P</div>
+                <div class="bubble">
+                  Got it — the main interaction should stay centered and calm, while the heavier operator tooling moves into a slide-in workspace that compresses the chat rather than overlaying it.
+                  <div class="inline-plan">
+                    <div class="plan-step"><div class="dot">1</div><div>Keep the main chat as a clean single-column experience.</div></div>
+                    <div class="plan-step"><div class="dot">2</div><div>Move sessions, channels, skills, and projects into the left rail.</div></div>
+                    <div class="plan-step"><div class="dot">3</div><div>Turn the right column into an inline panel that shrinks the chat and auto-collapses the left sidebar.</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer">
+              <div class="composer-toolbar">
+                <div>Prometheus · model routing enabled</div>
+                <div>Enter to send · Shift+Enter for newline</div>
+              </div>
+              <div class="composer-main">
+                <button class="composer-action">+</button>
+                <textarea class="composer-input" placeholder="Message Prometheus..."></textarea>
+                <div class="composer-actions">
+                  <button class="composer-action">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><rect x="1" y="4" width="14" height="9" rx="2"/><path d="M5 4V2h6v2"/></svg>
+                  </button>
+                  <button class="composer-action">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+                  </button>
+                  <button class="composer-send">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="white" stroke-width="2" width="14" height="14"><line x1="2" y1="14" x2="14" y2="2"/><polyline points="6,2 14,2 14,10"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        </div><!-- end .main-shell-wrap -->
+      </div>
+
+      <!-- RIGHT INLINE PANEL -->
+      <div class="right-panel" id="rightPanel">
+        <div class="right-panel-inner">
+          <div class="drawer-header">
+            <div class="drawer-title">
+              <strong>Workspace panel</strong>
+              <span>Canvas, context, approvals, connectors, activity</span>
+            </div>
+            <button class="icon-btn" id="drawerClose">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><line x1="2" y1="2" x2="14" y2="14"/><line x1="14" y1="2" x2="2" y2="14"/></svg>
+            </button>
+          </div>
+
+          <div class="drawer-tabs">
+            <button class="drawer-tab active" data-panel="context">Context</button>
+            <button class="drawer-tab" data-panel="canvas">Canvas</button>
+            <button class="drawer-tab" data-panel="activity">Activity</button>
+          </div>
+
+          <div class="drawer-body" id="panel-context">
+            <div class="panel-card">
+              <h3>Progress</h3>
+              <div class="todo-list">
+                <div class="todo-item done">
+                  <div class="todo-check">
+                    <svg viewBox="0 0 10 10" fill="none" stroke="white" stroke-width="2" width="9" height="9"><polyline points="1.5,5 4,7.5 8.5,2"/></svg>
+                  </div>
+                  <div class="todo-copy">
+                    <strong>Define layout direction</strong>
+                    <span>Single-column chat with left sidebar and removable right workspace.</span>
+                  </div>
+                </div>
+                <div class="todo-item active">
+                  <div class="todo-check">·</div>
+                  <div class="todo-copy">
+                    <strong>Mock the side rails</strong>
+                    <span>Blend page tabs, sessions, channels, skills, and projects into one left rail.</span>
+                  </div>
+                </div>
+                <div class="todo-item">
+                  <div class="todo-check">○</div>
+                  <div class="todo-copy">
+                    <strong>Refine responsive behavior</strong>
+                    <span>On smaller screens, both side panels become temporary overlays.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <h3>Pending approvals</h3>
+              <div class="approval">
+                <div class="approval-copy">
+                  <strong>Overwrite chat page shell</strong>
+                  <span>Update the current chat layout to remove the fixed right column.</span>
+                </div>
+                <div class="approval-actions">
+                  <button class="btn">Deny</button>
+                  <button class="btn primary">Approve</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel-card">
+              <h3>Connectors</h3>
+              <div class="connector-grid">
+                <div class="mini-tile"><strong>Gmail</strong><span>Connected · read, draft, send</span></div>
+                <div class="mini-tile"><strong>Slack</strong><span>Connected · mentions, channels</span></div>
+                <div class="mini-tile"><strong>Salesforce</strong><span>Available · CRM sync</span></div>
+                <div class="mini-tile"><strong>X / Social</strong><span>Available · posting workflows</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-body hidden" id="panel-canvas">
+            <div class="panel-card">
+              <h3>Canvas tabs</h3>
+              <div class="canvas-grid">
+                <div class="mini-tile"><strong>mockup.html</strong><span>CodeMirror + live preview</span></div>
+                <div class="mini-tile"><strong>plan.md</strong><span>Markdown render</span></div>
+                <div class="mini-tile"><strong>wireframe.png</strong><span>Image preview</span></div>
+                <div class="mini-tile"><strong>brief.pdf</strong><span>Document preview</span></div>
+              </div>
+            </div>
+            <div class="code-preview">
+              <div class="code-top">
+                <div class="code-dot"></div>
+                <div class="code-dot"></div>
+                <div class="code-dot"></div>
+                <span style="margin-left:6px; opacity:.8;">prometheus_chat_redesign_v2.html</span>
+              </div>
+              <pre>&lt;aside class="sidebar"&gt;
+  &lt;!-- left rail with tabs + sessions --&gt;
+&lt;/aside&gt;
+
+&lt;main class="chat-shell"&gt;
+  &lt;!-- single column chat --&gt;
+&lt;/main&gt;
+
+&lt;div class="right-panel open"&gt;
+  &lt;!-- inline canvas / context / activity --&gt;
+&lt;/div&gt;</pre>
+            </div>
+          </div>
+
+          <div class="drawer-body hidden" id="panel-activity">
+            <div class="panel-card">
+              <h3>Process log</h3>
+              <div class="todo-list">
+                <div class="todo-item"><div class="todo-check" style="font-size:10px">↳</div><div class="todo-copy"><strong>Loaded chat session state</strong><span>Recovered active workspace and unread channel sessions.</span></div></div>
+                <div class="todo-item"><div class="todo-check" style="font-size:10px">↳</div><div class="todo-copy"><strong>Updated UI shell proposal</strong><span>Prepared a cleaner main view with optional right-side tooling.</span></div></div>
+                <div class="todo-item"><div class="todo-check" style="font-size:10px">↳</div><div class="todo-copy"><strong>Canvas available</strong><span>Files can open here without taking permanent screen space.</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- end .workspace -->
+  </div><!-- end .app -->
+
+  <script>
+    const sidebar = document.getElementById('sidebar');
+    const rightPanel = document.getElementById('rightPanel');
+    const drawerToggle = document.getElementById('drawerToggle');
+
+    // Sidebar toggle (manual)
+    document.getElementById('sidebarToggle').addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+    });
+    document.getElementById('mobileSidebar').addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+    });
+
+    // Open right panel — auto-collapse sidebar, mark toggle active
+    drawerToggle.addEventListener('click', () => {
+      const isOpen = rightPanel.classList.contains('open');
+      if (isOpen) {
+        closePanel();
+      } else {
+        openPanel();
+      }
+    });
+
+    document.getElementById('drawerClose').addEventListener('click', () => {
+      closePanel();
+    });
+
+    function openPanel() {
+      rightPanel.classList.add('open');
+      drawerToggle.classList.add('active');
+      // Auto-collapse sidebar
+      sidebar.classList.add('panel-pushed');
+    }
+
+    function closePanel() {
+      rightPanel.classList.remove('open');
+      drawerToggle.classList.remove('active');
+      // Restore sidebar
+      sidebar.classList.remove('panel-pushed');
+    }
+
+    // Right panel drawer tabs
+    const drawerTabs = document.querySelectorAll('.drawer-tab');
+    const panels = {
+      context: document.getElementById('panel-context'),
+      canvas: document.getElementById('panel-canvas'),
+      activity: document.getElementById('panel-activity')
+    };
+
+    drawerTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        drawerTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        Object.values(panels).forEach(p => p.classList.add('hidden'));
+        panels[tab.dataset.panel].classList.remove('hidden');
+      });
+    });
+
+    // More popover toggle
+    const moreNavBtn = document.getElementById('moreNavBtn');
+    const morePopover = document.getElementById('morePopover');
+
+    moreNavBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      morePopover.classList.toggle('open');
+      moreNavBtn.classList.toggle('active');
+    });
+
+    // Close popover when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!moreNavBtn.contains(e.target) && !morePopover.contains(e.target)) {
+        morePopover.classList.remove('open');
+        moreNavBtn.classList.remove('active');
+      }
+    });
+
+    // Sessions segmented tabs
+    const segBtns = document.querySelectorAll('.seg-btn');
+    const sessionTabs = {
+      chats: document.getElementById('tab-chats'),
+      channels: document.getElementById('tab-channels'),
+      projects: document.getElementById('tab-projects'),
+      skills: document.getElementById('tab-skills'),
+    };
+
+    segBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        segBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        Object.values(sessionTabs).forEach(t => t.classList.add('hidden'));
+        sessionTabs[btn.dataset.tab].classList.remove('hidden');
+      });
+    });
+  </script>
+</body>
+</html>

@@ -22,31 +22,246 @@
 </head>
 <body>
 
-<!-- HEADER -->
-<header>
-  <div class="logo">
-    <img src="/assets/Prometheus.png" alt="Prometheus" style="width:36px;height:36px;object-fit:contain;"> Prometheus
-  </div>
+<div class="app">
 
-  <div class="mode-toggle">
-    <button class="mode-btn active" id="btn-chat" onclick="setMode('chat')">Chat</button>
-    <button class="mode-btn" id="btn-bgtasks" onclick="setMode('bgtasks')">Tasks</button>
-    <button class="mode-btn" id="btn-schedule" onclick="setMode('schedule')">Schedule</button>
-    <button class="mode-btn" id="btn-teams" onclick="setMode('teams')" style="position:relative">Teams<span id="teams-badge" style="display:none;position:absolute;top:-4px;right:-4px;width:8px;height:8px;border-radius:50%;background:#e05c5c"></span></button>
-    <button class="mode-btn" id="btn-proposals" onclick="setMode('proposals')" style="position:relative">Proposals<span id="proposals-badge" style="display:none;position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;background:#e05c5c;color:#fff;font-size:9px;font-weight:700;line-height:16px;text-align:center;padding:0 3px"></span></button>
-    <div class="more-menu" id="more-menu">
-      <button class="mode-btn" id="btn-more" type="button" onclick="toggleMoreMenu(event)" aria-haspopup="true" aria-expanded="false">
-        More
-        <svg class="more-menu-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-      </button>
-      <div class="more-menu-dropdown" id="more-menu-dropdown">
-        <button class="more-menu-item" type="button" id="btn-audit" onclick="setMode('audit')">Audit</button>
-        <button class="more-menu-item" type="button" id="btn-memory" onclick="setMode('memory')">Memory</button>
+<!-- ═══════════════════════════════════════════════════════════
+     LEFT SIDEBAR (v2)
+═══════════════════════════════════════════════════════════ -->
+<aside class="sidebar" id="sidebar">
+
+  <!-- FIXED TOP: logo + new chat + search -->
+  <div class="sidebar-fixed">
+    <div class="sidebar-top">
+      <div class="brand" onclick="toggleSidebar()" style="cursor:pointer;transition:opacity 0.2s" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'" title="Toggle sidebar">
+        <div class="logo"><img src="/assets/Prometheus.png" alt="Prometheus"></div>
+        <div class="brand-copy">
+          <div class="brand-title">Prometheus</div>
+          <div class="brand-sub">Operator workspace</div>
+        </div>
       </div>
+      <button class="icon-btn" id="sidebarToggle" onclick="toggleSidebar()" aria-label="Collapse sidebar" title="Collapse sidebar">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15">
+          <line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/>
+        </svg>
+      </button>
+    </div>
+
+    <button class="new-chat" id="sessions-new-btn" onclick="newChatSession()">
+      <div class="nav-icon">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
+      </div>
+      <span>New chat</span>
+    </button>
+
+    <div class="sidebar-search">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><circle cx="6.5" cy="6.5" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+      <input id="session-search" type="text" placeholder="Search sessions..." oninput="filterSessions(this.value)">
     </div>
   </div>
 
-  <div class="status-bar">
+  <!-- SCROLLABLE BODY -->
+  <div class="sidebar-scroll">
+
+    <!-- PAGE NAVIGATION -->
+    <div class="nav-group">
+      <div class="nav-item active" id="nav-chat" onclick="setMode('chat')">
+        <div class="nav-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M14 10.5a2 2 0 01-2 2H4l-2 2V3a2 2 0 012-2h8a2 2 0 012 2v7.5z"/></svg>
+        </div>
+        <span>Chat</span>
+      </div>
+      <div class="nav-item" id="nav-bgtasks" onclick="setMode('bgtasks')">
+        <div class="nav-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><polyline points="3,8 6,11 13,4"/></svg>
+        </div>
+        <span>Tasks</span>
+        <span id="teams-badge" class="nav-badge" style="display:none"></span>
+      </div>
+      <div class="nav-item" id="nav-schedule" onclick="setMode('schedule')">
+        <div class="nav-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="1" y="2" width="14" height="13" rx="2"/><line x1="1" y1="6" x2="15" y2="6"/><line x1="5" y1="2" x2="5" y2="6"/><line x1="11" y1="2" x2="11" y2="6"/></svg>
+        </div>
+        <span>Schedule</span>
+      </div>
+      <div class="nav-item" id="nav-teams" onclick="setMode('teams')">
+        <div class="nav-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><circle cx="6" cy="5" r="2.5"/><circle cx="11" cy="5" r="2.5"/><path d="M1 14c0-2.8 2.2-5 5-5h4c2.8 0 5 2.2 5 5"/></svg>
+        </div>
+        <span>Teams</span>
+      </div>
+      <div class="nav-item" id="nav-proposals" onclick="setMode('proposals')" style="position:relative">
+        <div class="nav-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><polygon points="8,1 10,6 15,6 11,9.5 12.5,14.5 8,11.5 3.5,14.5 5,9.5 1,6 6,6"/></svg>
+        </div>
+        <span>Proposals</span>
+        <span id="proposals-badge" style="display:none;position:absolute;top:6px;right:8px;min-width:16px;height:16px;border-radius:8px;background:#e05c5c;color:#fff;font-size:9px;font-weight:700;line-height:16px;text-align:center;padding:0 3px"></span>
+      </div>
+
+      <!-- More popover: Audit + Memory + Connections -->
+      <div class="nav-more-wrap">
+        <div class="nav-item" id="moreNavBtn" onclick="toggleMorePopover(event)">
+          <div class="nav-icon">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13"><circle cx="4" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="12" cy="8" r="1.2" fill="currentColor"/></svg>
+          </div>
+          <span>More</span>
+        </div>
+        <div class="more-popover" id="morePopover">
+          <div class="more-popover-item" id="nav-audit" onclick="setMode('audit');closeMorePopover()">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><path d="M2 12V4a1 1 0 011-1h10a1 1 0 011 1v8"/><polyline points="1,12 15,12"/><polyline points="5,7 5,12"/><polyline points="8,5 8,12"/><polyline points="11,9 11,12"/></svg>
+            </div>
+            <span>Audit</span>
+          </div>
+          <div class="more-popover-item" id="nav-memory" onclick="setMode('memory');closeMorePopover()">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><ellipse cx="8" cy="5" rx="5" ry="3"/><path d="M3 5v3c0 1.66 2.24 3 5 3s5-1.34 5-3V5"/><path d="M3 8v3c0 1.66 2.24 3 5 3s5-1.34 5-3V8"/></svg>
+            </div>
+            <span>Memory</span>
+          </div>
+        </div>
+      </div>
+    </div><!-- end nav-group -->
+
+    <!-- SESSION SECTION (only shown in chat mode) -->
+    <div class="sidebar-section" id="sidebar-sessions-section">
+      <div class="section-title">Sessions</div>
+
+      <!-- Segmented tabs: Chats / Channels / Projects / Skills -->
+      <div class="seg-tabs" id="segTabs">
+        <button class="seg-btn active" data-tab="chats" onclick="setSidebarSegTab('chats')">Chats</button>
+        <button class="seg-btn" data-tab="channels" onclick="setSidebarSegTab('channels')">Channels</button>
+        <button class="seg-btn" data-tab="projects" onclick="setSidebarSegTab('projects')">Projects</button>
+        <button class="seg-btn" data-tab="skills" onclick="setSidebarSegTab('skills')">Skills</button>
+      </div>
+
+      <!-- Chats tab -->
+      <div id="sidebar-jobs" class="session-list">
+        <!-- Edit mode header (hidden until edit mode) -->
+        <div id="sessions-edit-bar" style="display:none;justify-content:space-between;align-items:center;padding:2px 0 6px">
+          <button class="sidebar-action" id="sessions-edit-btn" onclick="toggleSessionsEditMode()">Edit</button>
+        </div>
+        <div id="jobs-list">
+          <div class="empty-state" style="font-size:11px">No chats yet.<br>Start a new conversation.</div>
+        </div>
+      </div>
+
+      <!-- Channels tab -->
+      <div id="sidebar-channels" class="session-list" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0 6px">
+          <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--sidebar-muted)">Channels</span>
+        </div>
+        <div id="channels-list"></div>
+      </div>
+
+      <!-- Projects tab -->
+      <div id="sidebar-projects" class="session-list" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0 6px">
+          <button class="sidebar-action" onclick="newProject()">+ New</button>
+          <button class="sidebar-action" id="projects-edit-btn" onclick="toggleProjectsEditMode()">Edit</button>
+        </div>
+        <div id="projects-list">
+          <div class="empty-state" style="font-size:11px">No projects yet.</div>
+        </div>
+      </div>
+
+      <!-- Skills tab -->
+      <div id="sidebar-skills" class="session-list" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0 6px">
+          <button class="sidebar-action" onclick="openCreateSkillModal()">+ Create</button>
+        </div>
+        <div id="skills-list" style="font-size:11px">
+          <div class="empty-state" style="font-size:11px">Loading skills...</div>
+        </div>
+      </div>
+
+    </div><!-- end sidebar-section -->
+
+    <!-- SIDEBAR FOOTER -->
+    <div class="sidebar-footer">
+      <div class="nav-item" onclick="openSettings()">
+        <div class="nav-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/></svg>
+        </div>
+        <span>Settings</span>
+      </div>
+    </div>
+
+  </div><!-- end sidebar-scroll -->
+</aside>
+
+<!-- ═══════════════════════════════════════════════════════════
+     WORKSPACE (center column + right panel)
+═══════════════════════════════════════════════════════════ -->
+<div class="workspace" id="workspace">
+<div class="center-col" id="centerCol">
+<div class="main-shell-wrap">
+
+<!-- TOPBAR -->
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="page-title">
+      <strong id="page-title-text">Chat</strong>
+      <span id="page-title-sub">Prometheus operator workspace</span>
+    </div>
+  </div>
+  <div class="topbar-right">
+
+    <!-- ── Update Available pill ── hidden until electron-updater fires ── -->
+    <div id="update-pill" class="status-pill" style="
+      display:none;cursor:pointer;position:relative;
+      background:rgba(249,115,22,0.10);
+      border-color:rgba(249,115,22,0.35);
+      color:#f97316;
+      user-select:none;
+    " onclick="toggleUpdateDropdown(event)" title="Update available">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0">
+        <path d="M6 9V2M3 5l3-3 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M1.5 10.5h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span style="font-weight:600;font-size:12px">Update Available</span>
+
+      <!-- Dropdown panel -->
+      <div id="update-dropdown" style="
+        display:none;
+        position:absolute;
+        top:calc(100% + 10px);
+        right:0;
+        background:var(--panel,#17171a);
+        border:1px solid rgba(249,115,22,0.3);
+        border-radius:12px;
+        padding:16px;
+        min-width:230px;
+        box-shadow:0 12px 32px rgba(0,0,0,.6);
+        z-index:9999;
+        text-align:left;
+        color:var(--fg,#e2e8f0);
+      " onclick="event.stopPropagation()">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--muted,#64748b);margin-bottom:6px">NEW RELEASE</div>
+        <div id="update-version-text" style="font-size:15px;font-weight:700;color:var(--fg,#e2e8f0);margin-bottom:14px">Version —</div>
+        <button onclick="if(window.prometheusUpdater) window.prometheusUpdater.installUpdate()" style="
+          width:100%;background:#f97316;color:#0a0a0a;
+          border:none;border-radius:8px;padding:9px 14px;
+          font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.03em;
+          transition:background .15s;
+        " onmouseover="this.style.background='#ea6c10'" onmouseout="this.style.background='#f97316'">
+          Relaunch to Update
+        </button>
+        <div style="font-size:10px;color:var(--muted,#64748b);margin-top:8px;text-align:center">
+          App will restart and apply the update
+        </div>
+      </div>
+    </div>
+
+    <div class="status-pill">
+      <div class="dot" id="ollama-dot"></div>
+      <span id="ollama-status">Checking...</span>
+    </div>
+    <div class="status-pill" id="model-pill" onclick="openSettings('models')" title="Click to change model" style="cursor:pointer">
+      <span id="current-provider-badge" style="font-size:10px;font-weight:700;color:var(--muted);margin-right:4px"></span><span id="current-model">-</span>
+    </div>
+    <div class="status-pill stat-compact" id="system-pill">
+      <span id="quick-system-stats">CPU --% • RAM --% • GPU --%</span>
+    </div>
     <button
       id="theme-toggle"
       class="icon-btn"
@@ -63,110 +278,18 @@
         <path d="M21 12.79A9 9 0 1 1 11.21 3c-.04.25-.06.5-.06.76a8 8 0 0 0 9.85 7.84z"></path>
       </svg>
     </button>
-    <button onclick="openSettings()" title="Settings" style="display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-sm);padding:6px 12px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap" onmouseover="this.style.color='var(--text)';this.style.borderColor='var(--line-strong)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--line)'">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      Settings
+    <!-- Right panel toggle -->
+    <button class="panel-toggle-btn" id="drawerToggle" onclick="toggleRightPanel()" aria-label="Toggle workspace panel" title="Workspace panel">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16">
+        <rect x="1" y="2" width="14" height="12" rx="2"/>
+        <line x1="10" y1="2" x2="10" y2="14"/>
+      </svg>
     </button>
-    <div class="status-pill">
-      <div class="dot" id="ollama-dot"></div>
-      <span id="ollama-status">Checking...</span>
-    </div>
-    <div class="status-pill" id="model-pill" onclick="openSettings('models')" title="Click to change model" style="cursor:pointer">
-      <span id="current-provider-badge" style="font-size:10px;font-weight:700;color:var(--muted);margin-right:4px"></span><span id="current-model">-</span>
-    </div>
-    <div class="status-pill stat-compact" id="system-pill">
-      <span id="quick-system-stats">CPU --% • RAM --% • GPU --%</span>
-    </div>
   </div>
 </header>
 
-<!-- SIDEBAR -->
-<aside>
-  <div id="sidebar-tabs">
-    <div id="sidebar-tabs-row1">
-      <button class="sidebar-tab active" id="tab-jobs" onclick="setSidebarTab('jobs')">Sessions</button>
-      <button class="sidebar-tab" id="tab-skills" onclick="setSidebarTab('skills')">🧩 Skills</button>
-    </div>
-    <div id="sidebar-tabs-row2">
-      <button class="sidebar-tab" id="sidebar-projects-btn" onclick="setSidebarTab('projects')">🗂 Projects</button>
-    </div>
-  </div>
-
-  <!-- SESSIONS TAB -->
-  <div id="sidebar-jobs">
-    <div class="sidebar-section" style="border-top:none;flex-direction:column;gap:8px;align-items:stretch">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <button class="sidebar-action" id="btn-channels" onclick="toggleChannelsView()">📡 Channels</button>
-        <div style="display:flex;gap:6px">
-          <button class="sidebar-action" id="sessions-new-btn" onclick="newChatSession()">+ New Chat</button>
-          <button class="sidebar-action" id="sessions-edit-btn" onclick="toggleSessionsEditMode()">Edit</button>
-        </div>
-      </div>
-      <div style="position:relative">
-        <svg style="position:absolute;left:8px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--muted)" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="session-search" type="text" placeholder="Search sessions..." oninput="filterSessions(this.value)" style="width:100%;box-sizing:border-box;padding:6px 8px 6px 28px;border:1px solid var(--line);border-radius:8px;font-size:12px;background:var(--bg-soft);color:var(--text);outline:none;font-family:inherit">
-      </div>
-    </div>
-    <div id="jobs-list">
-      <div class="empty-state">No chats yet.<br>Start a new conversation.</div>
-    </div>
-
-    <!-- CHANNELS PANEL (toggle via Channels button) -->
-    <div id="sidebar-channels" style="display:none;flex:1;min-height:0;overflow-y:auto;flex-direction:column">
-      <div style="padding:10px 12px 6px 14px;font-size:10px;font-weight:800;letter-spacing:0.06em;color:var(--muted);text-transform:uppercase">Channels</div>
-      <div id="channels-list"></div>
-    </div>
-  </div>
-
-  <!-- SKILLS TAB -->
-  <div id="sidebar-skills">
-    <div class="sidebar-section" style="border-top:none;flex-direction:column;gap:8px;align-items:stretch">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <span>Skills</span>
-        <button class="sidebar-action" onclick="openCreateSkillModal()">+ Create</button>
-      </div>
-      <div style="position:relative">
-        <svg style="position:absolute;left:8px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--muted)" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="skill-search" type="text" placeholder="Search skills..." oninput="filterSkills(this.value)" style="width:100%;box-sizing:border-box;padding:6px 8px 6px 28px;border:1px solid var(--line);border-radius:8px;font-size:12px;background:var(--bg-soft);color:var(--text);outline:none;font-family:inherit">
-      </div>
-    </div>
-    <div id="skills-list" style="flex:1;min-height:0;overflow-y:auto;padding:10px">
-      <div class="empty-state" style="padding:16px">Loading skills...</div>
-    </div>
-  </div>
-
-  <!-- PROJECTS TAB -->
-  <div id="sidebar-projects" style="display:none;flex-direction:column;flex:1;min-height:0">
-    <div class="sidebar-section" style="border-top:none;flex-direction:column;gap:8px;align-items:stretch">
-      <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
-        <button class="sidebar-action" onclick="newProject()">+ New Project</button>
-        <button class="sidebar-action" id="projects-edit-btn" onclick="toggleProjectsEditMode()">Edit</button>
-      </div>
-      <div style="position:relative">
-        <svg style="position:absolute;left:8px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--muted)" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="project-search" type="text" placeholder="Search projects..." oninput="filterProjects(this.value)" style="width:100%;box-sizing:border-box;padding:6px 8px 6px 28px;border:1px solid var(--line);border-radius:8px;font-size:12px;background:var(--bg-soft);color:var(--text);outline:none;font-family:inherit">
-      </div>
-    </div>
-    <div id="projects-list" style="flex:1;min-height:0;overflow-y:auto;padding:10px">
-      <div class="empty-state">No projects yet.<br>Create your first project.</div>
-    </div>
-  </div>
-
-  <!-- NEW PROJECT MODAL -->
-  <div id="new-project-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;background:rgba(0,0,0,0.4)">
-    <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;min-width:340px;max-width:480px;width:90%">
-      <div style="font-size:15px;font-weight:700;margin-bottom:16px">New Project</div>
-      <input id="new-project-name" type="text" placeholder="Project name..." onkeydown="if(event.key==='Enter')confirmNewProject()" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--bg-soft);color:var(--text);outline:none;font-family:inherit;margin-bottom:16px">
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button onclick="closeNewProjectModal()" style="padding:8px 18px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
-        <button onclick="confirmNewProject()" style="padding:8px 18px;border:none;border-radius:8px;background:var(--brand);color:#fff;font-size:13px;font-weight:700;cursor:pointer">Create</button>
-      </div>
-    </div>
-  </div>
-</aside>
-
-<!-- MAIN -->
-<main>
+<!-- MAIN CONTENT AREA -->
+<main class="main-shell">
   <!-- CHAT VIEW (default) -->
   <div id="chat-view">
     <div id="chat-messages">
@@ -252,45 +375,11 @@
     </div>
   </div>
 </main>
-
-<!-- CONNECTOR DETAIL VIEW (injected into main column when connector clicked) -->
-<div id="connector-view" style="display:none;position:fixed;top:90px;bottom:12px;left:calc(280px + 12px + 14px);right:calc(max(380px,34vw) + 12px + 14px);background:var(--bg);z-index:50;border:1px solid var(--line);border-radius:var(--radius-lg,12px);box-shadow:var(--shadow-md,0 4px 24px rgba(0,0,0,0.18));overflow:hidden;flex-direction:column">
-  <div style="padding:20px 28px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-shrink:0">
-    <button onclick="closeConnectorView()" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;align-items:center" title="Back to chat">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-    </button>
-    <div id="cv-logo" style="width:40px;height:40px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--panel-2)"></div>
-    <div>
-      <div id="cv-name" style="font-size:17px;font-weight:800;color:var(--text)"></div>
-      <div id="cv-category" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-top:1px"></div>
-    </div>
-    <div style="margin-left:auto">
-      <span id="cv-status-badge" style="display:none;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;background:rgba(49,184,132,0.15);color:var(--ok)">● Connected</span>
-    </div>
-  </div>
-  <div style="flex:1;overflow-y:auto;padding:24px 28px;display:flex;flex-direction:column;gap:20px">
-    <!-- Description + permissions -->
-    <div>
-      <div id="cv-desc" style="font-size:14px;color:var(--text);line-height:1.7;margin-bottom:16px"></div>
-      <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">What Prom can access</div>
-      <div id="cv-permissions" style="display:flex;flex-direction:column;gap:6px"></div>
-    </div>
-    <!-- Connect / disconnect actions -->
-    <div id="cv-actions" style="display:flex;flex-direction:column;gap:10px"></div>
-    <!-- Activity log (shown when connected) -->
-    <div id="cv-activity-wrap" style="display:none">
-      <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
-        <span>Activity Log</span>
-        <span id="cv-activity-count" style="font-size:10px;font-weight:700;color:var(--muted)"></span>
-      </div>
-      <div id="cv-activity-list" style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto"></div>
-      <div id="cv-activity-empty" style="font-size:12px;color:var(--muted);padding:12px 0">No activity yet — Prom will log every read and write here.</div>
-    </div>
-  </div>
-</div>
+</div><!-- end main-shell-wrap -->
+</div><!-- end center-col -->
 
 <!-- BACKGROUND TASKS KANBAN VIEW -->
-<div id="proposals-view" style="display:none;flex-direction:column;gap:0;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);padding:16px;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5;">
+<div id="proposals-view" class="page-view" style="display:none;flex-direction:column;gap:0;padding:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-shrink:0">
     <div>
       <div style="font-size:15px;font-weight:700;color:var(--fg)">Proposals</div>
@@ -313,7 +402,7 @@
 </div>
 
 <!-- AUDIT LOG VIEW — Phase 5 -->
-<div id="audit-view" style="display:none;flex-direction:column;gap:0;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);padding:16px;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5;">
+<div id="audit-view" class="page-view" style="display:none;flex-direction:column;gap:0;padding:16px;">
   <!-- Header -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-shrink:0;flex-wrap:wrap;gap:10px">
     <div>
@@ -366,7 +455,7 @@
   <div id="audit-pagination" style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 0;flex-shrink:0;font-size:11px;color:var(--muted)"></div>
 </div>
 
-<div id="memory-view" style="display:none;flex-direction:column;gap:0;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);padding:0;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5;">
+<div id="memory-view" class="page-view" style="display:none;flex-direction:column;gap:0;padding:0;">
   <div class="memory-page-shell">
     <div class="memory-page-header">
       <div>
@@ -455,7 +544,7 @@
   </div>
 </div>
 
-<div id="bgtasks-view" style="display:none;flex-direction:column;gap:0;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);padding:16px;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5;">
+<div id="bgtasks-view" class="page-view" style="display:none;flex-direction:column;gap:0;padding:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:12px">
       <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Background Tasks</span>
@@ -501,7 +590,7 @@
 </div>
 
 <!-- SCHEDULE VIEW -->
-<div id="schedule-view" style="display:none;flex-direction:column;gap:0;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);padding:16px;overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5;">
+<div id="schedule-view" class="page-view" style="display:none;flex-direction:column;gap:0;padding:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:12px">
       <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Schedules</span>
@@ -593,10 +682,10 @@
         <select id="schedule-subagent" onchange="_updateHeartbeatMdPreview(this.value)" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
           <option value="">Main agent (default)</option>
         </select>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Select a configured agent to run this schedule as a specialized subagent.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Select a configured agent to run this scheduled task as a specialized subagent.</div>
         <div id="schedule-heartbeat-preview" style="display:none;margin-top:10px;border:1px solid var(--line);border-radius:8px;overflow:hidden">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--panel-2);border-bottom:1px solid var(--line)">
-            <span style="font-size:11px;font-weight:700;color:var(--muted);font-family:monospace">HEARTBEAT.md</span>
+            <span style="font-size:11px;font-weight:700;color:var(--muted);font-family:monospace">Agent instructions preview</span>
             <button onclick="openAgentSettings(document.getElementById('schedule-subagent').value)" style="font-size:10px;padding:2px 8px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--muted);cursor:pointer">Open Agent Settings →</button>
           </div>
           <pre id="schedule-heartbeat-content" style="margin:0;padding:10px;font-size:11px;color:var(--fg);white-space:pre-wrap;max-height:180px;overflow-y:auto;background:var(--bg);font-family:'IBM Plex Mono',monospace;line-height:1.5"></pre>
@@ -639,29 +728,35 @@
   </div>
 </div>
 
-<!-- RIGHT PANEL -->
-  <div class="right-panel" id="right-panel" style="position:relative">
+<!-- RIGHT INLINE PANEL (drawer) -->
+<div class="right-panel" id="right-panel" style="">
+
+  <!-- Resize handle - drag left edge to widen panel -->
+  <div class="rp-resize-handle" id="rp-resize" title="Drag to resize"></div>
 
   <!-- Canvas Panel (full-column, hidden by default) -->
-  <div id="canvas-panel" style="display:none;position:absolute;inset:0;z-index:20;flex-direction:column;background:var(--panel)">
+  <div id="canvas-panel" style="display:none;position:absolute;inset:0;z-index:20;flex-direction:column;background:#2a2a2a">
     <!-- Canvas header: back button + tabs + actions -->
-    <div style="display:flex;align-items:stretch;border-bottom:1px solid var(--line);background:var(--panel-2);flex-shrink:0;min-height:38px">
+    <div style="display:flex;align-items:stretch;border-bottom:1px solid rgba(255,255,255,0.09);background:rgba(0,0,0,0.25);flex-shrink:0;min-height:40px">
       <!-- Back to context button -->
-      <button onclick="toggleCanvas()" title="Back to Context" style="display:flex;align-items:center;gap:5px;border:0;border-right:1px solid var(--line);background:transparent;color:var(--muted);padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;flex-shrink:0;transition:color 0.12s ease" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">
+      <button onclick="toggleCanvas()" title="Back to Context" style="display:flex;align-items:center;gap:5px;border:0;border-right:1px solid rgba(255,255,255,0.09);background:transparent;color:#9a9890;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;flex-shrink:0;transition:color 0.12s ease" onmouseover="this.style.color='#e8e6e1'" onmouseout="this.style.color='#9a9890'">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         Context
       </button>
       <!-- Tabs -->
       <div id="canvas-tabs" style="display:flex;align-items:stretch;flex:1;min-width:0;overflow-x:auto"></div>
       <!-- Action buttons -->
-      <div style="display:flex;align-items:center;gap:4px;padding:4px 8px;flex-shrink:0;border-left:1px solid var(--line)">
-        <div style="display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel-2,#f5f5f5)">
-          <button id="canvas-code-btn" onclick="setCanvasMode('code')" class="canvas-mode-btn active" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:var(--muted)">Code</button>
-          <button id="canvas-preview-btn" onclick="setCanvasMode('preview')" class="canvas-mode-btn" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:var(--muted)">Preview</button>
+      <div style="display:flex;align-items:center;gap:4px;padding:4px 8px;flex-shrink:0;border-left:1px solid rgba(255,255,255,0.09)">
+        <div style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;background:rgba(255,255,255,0.06)">
+          <button id="canvas-code-btn" onclick="setCanvasMode('code')" class="canvas-mode-btn active" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Code</button>
+          <button id="canvas-preview-btn" onclick="setCanvasMode('preview')" class="canvas-mode-btn" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Preview</button>
         </div>
-        <button onclick="canvasSave()" id="canvas-save-btn" title="Save to workspace (Ctrl+S)" style="display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--panel-2,#f5f5f5);color:var(--text);border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">
+        <button onclick="canvasSave()" id="canvas-save-btn" title="Save to workspace (Ctrl+S)" style="display:flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);color:#e8e6e1;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           Save
+        </button>
+        <button id="canvas-fullscreen-btn" onclick="toggleCanvasFullscreen()" title="Fullscreen" style="display:flex;align-items:center;gap:4px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
         </button>
       </div>
     </div>
@@ -750,7 +845,7 @@
     <div style="padding:10px 14px 8px;display:flex;align-items:center;justify-content:space-between">
       <div style="display:flex;align-items:center;gap:7px">
         <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Pending Actions</span>
-        <span id="session-approvals-badge" style="display:none;font-size:10px;background:#fff6e9;color:#b06b00;border:1px solid #f0d49e;border-radius:999px;padding:1px 7px;font-weight:700"></span>
+        <span id="session-approvals-badge" style="display:none;font-size:10px;background:rgba(249,115,22,0.15);color:#fb923c;border:1px solid rgba(249,115,22,0.32);border-radius:999px;padding:1px 7px;font-weight:700"></span>
       </div>
       <button onclick="loadSessionApprovals()" title="Refresh" style="border:0;background:none;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px">↻</button>
     </div>
@@ -772,9 +867,54 @@
       <div style="color:var(--muted);text-align:center;padding:20px 0;opacity:0.5">Waiting for activity...</div>
     </div>
   </div>
+</div><!-- end right-panel -->
+</div><!-- end workspace -->
+
+<!-- NEW PROJECT MODAL -->
+<div id="new-project-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;background:rgba(0,0,0,0.5)">
+  <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;min-width:340px;max-width:480px;width:90%">
+    <div style="font-size:15px;font-weight:700;margin-bottom:16px;color:var(--text)">New Project</div>
+    <input id="new-project-name" type="text" placeholder="Project name..." onkeydown="if(event.key==='Enter')confirmNewProject()" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--bg-soft);color:var(--text);outline:none;font-family:inherit;margin-bottom:16px">
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeNewProjectModal()" style="padding:8px 18px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
+      <button onclick="confirmNewProject()" style="padding:8px 18px;border:none;border-radius:8px;background:var(--brand);color:#fff;font-size:13px;font-weight:700;cursor:pointer">Create</button>
+    </div>
+  </div>
 </div>
 
-<!-- ERROR RESPONSE MODAL -->
+<!-- CONNECTOR DETAIL VIEW -->
+<div id="connector-view" style="display:none;position:fixed;top:56px;bottom:0;left:288px;right:0;background:var(--panel);z-index:50;border-left:1px solid var(--line);box-shadow:var(--shadow-md);overflow:hidden;flex-direction:column">
+  <div style="padding:18px 24px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-shrink:0">
+    <button onclick="closeConnectorView()" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;align-items:center" title="Back to chat">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div id="cv-logo" style="width:40px;height:40px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--panel-2)"></div>
+    <div>
+      <div id="cv-name" style="font-size:17px;font-weight:800;color:var(--text)"></div>
+      <div id="cv-category" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-top:1px"></div>
+    </div>
+    <div style="margin-left:auto">
+      <span id="cv-status-badge" style="display:none;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;background:rgba(49,184,132,0.15);color:var(--ok)">● Connected</span>
+    </div>
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:24px 28px;display:flex;flex-direction:column;gap:20px">
+    <div>
+      <div id="cv-desc" style="font-size:14px;color:var(--text);line-height:1.7;margin-bottom:16px"></div>
+      <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">What Prom can access</div>
+      <div id="cv-permissions" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+    <div id="cv-actions" style="display:flex;flex-direction:column;gap:10px"></div>
+    <div id="cv-activity-wrap" style="display:none">
+      <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between">
+        <span>Activity Log</span>
+        <span id="cv-activity-count" style="font-size:10px;font-weight:700;color:var(--muted)"></span>
+      </div>
+      <div id="cv-activity-list" style="display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto"></div>
+      <div id="cv-activity-empty" style="font-size:12px;color:var(--muted);padding:12px 0">No activity yet — Prom will log every read and write here.</div>
+    </div>
+  </div>
+</div>
+
 <div id="error-response-panel">
   <div class="error-response-header">
     <div class="error-response-title" id="error-response-title">⚠️ Authentication Required</div>
@@ -923,16 +1063,15 @@
 	          </div>
 	        </div>
 	      </div>
-	      <!-- Subagent heartbeat list -->
-	      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-	        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-	          <div class="right-section-title">Subagent Heartbeats</div>
-	          <button class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="loadSubagentHeartbeatList()">Refresh</button>
-	        </div>
-	        <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Each subagent can have its own heartbeat timer and interval. Configure them here or let the AI manage them via the <code style="background:var(--bg-soft);padding:1px 3px;border-radius:3px">update_heartbeat</code> tool. Edit each agent's <code style="background:var(--bg-soft);padding:1px 3px;border-radius:3px">HEARTBEAT.md</code> in the Agents tab.</div>
-	        <div id="hb-agent-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
-	          <div style="color:var(--muted);font-size:12px">Loading...</div>
-	        </div>
+		      <!-- Subagent schedules now live in Scheduled Tasks -->
+		      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
+		        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+		          <div class="right-section-title">Subagent Schedules</div>
+		        </div>
+		        <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Subagent cron runs are configured as Scheduled Tasks. Create or edit a schedule, then choose a subagent in Run As Agent.</div>
+		        <div id="hb-agent-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
+		          <div style="color:var(--muted);font-size:12px">Use Scheduled Tasks for recurring subagent work.</div>
+		        </div>
 	      </div>
 	    </div>
 
@@ -1053,7 +1192,7 @@
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px">
         <div class="right-section-title" style="margin-bottom:8px">File Access</div>
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Workspace Path</label>
-        <input id="settings-workspace-path" type="text" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;margin-bottom:10px" placeholder="e.g. D:\Prometheus\workspace" />
+        <input id="settings-workspace-path" type="text" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;margin-bottom:10px" placeholder="e.g. %APPDATA%\Prometheus\workspace" />
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Allowed Paths (one per line)</label>
         <textarea id="settings-allowed-paths" style="width:100%;min-height:120px;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:'IBM Plex Mono',monospace;font-size:12px"></textarea>
         <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Blocked Paths (one per line)</label>
@@ -1222,7 +1361,7 @@
           <div style="margin-bottom:12px">
             <div style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">&#x1F4AC; Main Chat Agent</div>
             <select id="amd-main-chat-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('main-chat')">
-              <option value="">— use primary —</option>
+              <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1231,7 +1370,7 @@
                 <option value="anthropic">Anthropic Claude</option>
             </select>
             <select id="amd-main-chat-model" class="settings-input" style="width:100%">
-              <option value="">— select provider first —</option>
+              <option value="">select provider first</option>
             </select>
           </div>
 
@@ -1241,7 +1380,7 @@
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F534; High Risk</div>
               <select id="amd-proposal-high-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('proposal-high')">
-                <option value="">— use primary —</option>
+                <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1250,13 +1389,13 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="amd-proposal-high-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F7E1; Low Risk</div>
               <select id="amd-proposal-low-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('proposal-low')">
-                <option value="">— use primary —</option>
+                <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1265,7 +1404,7 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="amd-proposal-low-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
           </div>
@@ -1276,7 +1415,7 @@
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F91D; Coordinator</div>
               <select id="amd-coordinator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('coordinator')">
-                <option value="">— use primary —</option>
+                <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1285,13 +1424,13 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="amd-coordinator-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F9E0; Manager</div>
               <select id="amd-manager-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('manager')">
-                <option value="">— use primary —</option>
+                <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1300,16 +1439,31 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="amd-manager-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
           </div>
 
-          <!-- Background Tasks -->
+	            <div>
+	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Team Manager Runtime</div>
+	              <select id="amd-team-manager-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-manager')"><option value="">inherit from Manager</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+	              <select id="amd-team-manager-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
+	            </div>
+	            <div>
+	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Generic Subagent</div>
+	              <select id="amd-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent')"><option value="">use primary</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+	              <select id="amd-subagent-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
+	            </div>
+	            <div>
+	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Team Subagent Runtime</div>
+	              <select id="amd-team-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-subagent')"><option value="">inherit from role/generic</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
+	              <select id="amd-team-subagent-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
+	            </div>
+	          <!-- Background Tasks -->
           <div style="margin-bottom:16px">
             <div style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">&#x23F1; Background Tasks</div>
             <select id="amd-background-task-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('background-task')">
-              <option value="">— use primary —</option>
+              <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1318,7 +1472,7 @@
                 <option value="anthropic">Anthropic Claude</option>
             </select>
             <select id="amd-background-task-model" class="settings-input" style="width:100%">
-              <option value="">— select provider first —</option>
+              <option value="">select provider first</option>
             </select>
           </div>
 
@@ -1329,37 +1483,37 @@
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F4CB; Planner</div>
               <select id="amd-subagent-planner-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-planner')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
-              <select id="amd-subagent-planner-model" class="settings-input" style="width:100%"><option value="">— select provider first —</option></select>
+              <select id="amd-subagent-planner-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F3BC; Orchestrator</div>
               <select id="amd-subagent-orchestrator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-orchestrator')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
-              <select id="amd-subagent-orchestrator-model" class="settings-input" style="width:100%"><option value="">— select provider first —</option></select>
+              <select id="amd-subagent-orchestrator-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F50D; Researcher</div>
               <select id="amd-subagent-researcher-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-researcher')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
-              <select id="amd-subagent-researcher-model" class="settings-input" style="width:100%"><option value="">— select provider first —</option></select>
+              <select id="amd-subagent-researcher-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F4CA; Analyst</div>
               <select id="amd-subagent-analyst-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-analyst')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
-              <select id="amd-subagent-analyst-model" class="settings-input" style="width:100%"><option value="">— select provider first —</option></select>
+              <select id="amd-subagent-analyst-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F6E0; Builder</div>
               <select id="amd-subagent-builder-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-builder')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
-              <select id="amd-subagent-builder-model" class="settings-input" style="width:100%"><option value="">— select provider first —</option></select>
+              <select id="amd-subagent-builder-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x2699;&#xFE0F; Operator</div>
               <select id="amd-subagent-operator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-operator')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
-              <select id="amd-subagent-operator-model" class="settings-input" style="width:100%"><option value="">— select provider first —</option></select>
+              <select id="amd-subagent-operator-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x2705; Verifier</div>
               <select id="amd-subagent-verifier-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-verifier')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option></select>
-              <select id="amd-subagent-verifier-model" class="settings-input" style="width:100%"><option value="">— select provider first —</option></select>
+              <select id="amd-subagent-verifier-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
             </div>
           </div>
 
@@ -1379,7 +1533,7 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="amd-switch-model-low-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
             <div>
@@ -1394,7 +1548,7 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="amd-switch-model-medium-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
           </div>
@@ -1414,7 +1568,7 @@
               <option value="anthropic">Anthropic Claude</option>
             </select>
             <select id="amd-background-agent-model" class="settings-input" style="width:100%">
-              <option value="">— select provider first —</option>
+              <option value="">select provider first</option>
             </select>
           </div>
 
@@ -1425,7 +1579,7 @@
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F4AD; Brain Thought</div>
               <select id="brain-thought-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="brainProviderChange('thought')">
-                <option value="">— use primary —</option>
+                <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1434,13 +1588,13 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="brain-thought-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
             <div>
               <div style="font-size:11px;color:var(--muted);margin-bottom:4px">&#x1F319; Brain Dream</div>
               <select id="brain-dream-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="brainProviderChange('dream')">
-                <option value="">— use primary —</option>
+                <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
                 <option value="llama_cpp">llama.cpp (local)</option>
                 <option value="lm_studio">LM Studio (local)</option>
@@ -1449,7 +1603,7 @@
                 <option value="anthropic">Anthropic Claude</option>
               </select>
               <select id="brain-dream-model" class="settings-input" style="width:100%">
-                <option value="">— select provider first —</option>
+                <option value="">select provider first</option>
               </select>
             </div>
           </div>
@@ -1641,13 +1795,13 @@
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
               <div>
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Workspace</label>
-                <input id="agent-edit-workspace" type="text" placeholder="D:/Prometheus/agents/researcher/workspace" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+                <input id="agent-edit-workspace" type="text" placeholder="%APPDATA%\Prometheus\workspace\agents\researcher" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
               </div>
               <div style="grid-column:1/-1">
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Model <span style="color:var(--muted);font-weight:400">(provider / model)</span></label>
                 <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center">
                   <select id="agent-edit-provider" onchange="onAgentProviderChange()" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
-                    <option value="">— same as primary —</option>
+                    <option value="">use effective default</option>
                     <option value="ollama">ollama</option>
                     <option value="openai_codex">openai_codex (OAuth)</option>
                     <option value="openai">openai (API key)</option>
@@ -1656,7 +1810,7 @@
                     <option value="anthropic">anthropic (Claude)</option>
                   </select>
                   <select id="agent-edit-model-select" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
-                    <option value="">— select provider first —</option>
+                    <option value="">select provider first</option>
                   </select>
                   <button onclick="loadAgentModelOptions()" title="Refresh models for selected provider" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;white-space:nowrap">&#8635;</button>
                 </div>
@@ -1701,8 +1855,8 @@
             </div>
             <div id="agent-md-path" style="margin-top:6px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace"></div>
           </div>
-          <!-- Heartbeat editor for this agent -->
-          <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
+	          <!-- Legacy per-agent heartbeat editor: subagent schedules now live in Scheduled Tasks. -->
+	          <div id="agent-heartbeat-card" style="display:none;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
               <div class="right-section-title">💓 Heartbeat</div>
               <div style="display:flex;align-items:center;gap:8px">
@@ -2102,10 +2256,10 @@ function connectWS() {
       }
     });
 
-    bus.on('heartbeat_agent_config_updated', (msg) => {
-      const hbPanel = document.getElementById('settings-panel-heartbeat');
-      if (hbPanel && hbPanel.style.display !== 'none' && typeof loadSubagentHeartbeatList === 'function') loadSubagentHeartbeatList().catch(() => {});
-      if (msg.agentId && msg.agentId === window.selectedAgentId) {
+	    bus.on('heartbeat_agent_config_updated', (msg) => {
+	      const hbPanel = document.getElementById('settings-panel-heartbeat');
+	      void hbPanel;
+	      if (msg.agentId && msg.agentId === window.selectedAgentId) {
         const enabledEl = document.getElementById('agent-hb-enabled');
         const intervalEl = document.getElementById('agent-hb-interval');
         if (enabledEl && msg.config) enabledEl.checked = msg.config.enabled === true;
@@ -2134,6 +2288,7 @@ function connectWS() {
 
 // ---- Sessions list ----
 let _sessionSearchQuery = '';
+let _sessionShowCount = 20; // limit displayed chats to 20, then show "More"
 let _channelsViewOpen = false;
 let _activeChannelDrill = null; // null = hub view, 'telegram'|'discord'|'whatsapp'|'terminal' = drilled in
 
@@ -2142,12 +2297,23 @@ function filterSessions(query) {
   renderSessionsList();
 }
 
+function showMoreSessions() {
+  _sessionShowCount += 20; // Show 20 more
+  renderSessionsList();
+}
+
 // ---- Channel classification ----
+const CHANNEL_ICONS = {
+  telegram: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`,
+  discord:  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="9" cy="10" r="1" fill="currentColor"/><circle cx="15" cy="10" r="1" fill="currentColor"/></svg>`,
+  whatsapp: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
+  terminal: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+};
 const CHANNEL_DEFS = [
-  { key: 'telegram',  label: 'Telegram',  icon: '✈️',  color: '#229ED9', desc: 'Chats via Telegram bot' },
-  { key: 'discord',   label: 'Discord',   icon: '🎮',  color: '#5865F2', desc: 'Chats via Discord bot' },
-  { key: 'whatsapp',  label: 'WhatsApp',  icon: '💬',  color: '#25D366', desc: 'Chats via WhatsApp' },
-  { key: 'terminal',  label: 'CLI',       icon: '⌨️',  color: '#6B7280', desc: 'Terminal /new sessions' },
+  { key: 'telegram',  label: 'Telegram',  icon: CHANNEL_ICONS.telegram,  color: '#229ED9', desc: 'Chats via Telegram bot' },
+  { key: 'discord',   label: 'Discord',   icon: CHANNEL_ICONS.discord,   color: '#5865F2', desc: 'Chats via Discord bot' },
+  { key: 'whatsapp',  label: 'WhatsApp',  icon: CHANNEL_ICONS.whatsapp,  color: '#25D366', desc: 'Chats via WhatsApp' },
+  { key: 'terminal',  label: 'CLI',       icon: CHANNEL_ICONS.terminal,  color: '#6B7280', desc: 'Terminal /new sessions' },
 ];
 
 function _getSessionChannel(s) {
@@ -2264,7 +2430,7 @@ function _renderChannelDrill(channelKey) {
   const el = document.getElementById('channels-list');
   if (!el) return;
 
-  const def = CHANNEL_DEFS.find(c => c.key === channelKey) || { label: channelKey, icon: '📡', color: '#888' };
+  const def = CHANNEL_DEFS.find(c => c.key === channelKey) || { label: channelKey, icon: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M19.07 4.93l-2.83 2.83M7.76 16.24l-2.83 2.83"/></svg>`, color: '#888' };
 
   // Collect sessions for this channel
   let sessions = (window.chatSessions || [])
@@ -2298,7 +2464,7 @@ function _renderChannelDrill(channelKey) {
     return `
 <div class="job-item${isActive ? ' active' : ''}${s.unread ? ' unread' : ''}" onclick="openSession('${s.id}');toggleChannelsView()">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-    <div class="job-item-title" style="flex:1">${s.unread ? '🔵 ' : ''}${escHtml(s.title || 'Untitled')}</div>
+    <div class="job-item-title" style="flex:1">${s.unread ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3b82f6;margin-right:5px;vertical-align:middle"></span>' : ''}${escHtml(s.title || 'Untitled')}</div>
   </div>
   <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
     <span class="badge badge-queued">${(s.history || []).length} msgs</span>
@@ -2349,7 +2515,11 @@ function renderSessionsList() {
     });
   }
 
-  const html = sorted.map(s => `
+  // Limit to _sessionShowCount (default 20), with "Show more" button if more exist
+  const displayedSessions = sorted.slice(0, _sessionShowCount);
+  const hasMore = sorted.length > _sessionShowCount;
+
+  const html = displayedSessions.map(s => `
     <div class="job-item ${s.id === window.activeChatSessionId ? 'active' : ''}${s.unread ? ' unread' : ''}" onclick="openSession('${s.id}')">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
         <div class="job-item-title" style="flex:1">${s.unread ? '🔵 ' : ''}${escHtml(s.title || 'New chat')}</div>
@@ -2363,7 +2533,16 @@ function renderSessionsList() {
     </div>
   `).join('');
 
-  el.innerHTML = html || `<div class="empty-state">No sessions match "${escHtml(_sessionSearchQuery)}".</div>`;
+  let content = html || `<div class="empty-state">No sessions match "${escHtml(_sessionSearchQuery)}".</div>`;
+
+  // Add "Show more" button if there are more sessions
+  if (hasMore) {
+    content += `<button onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">
+      + Show more (${sorted.length - _sessionShowCount} more)
+    </button>`;
+  }
+
+  el.innerHTML = content;
 
   // Also refresh channels list if it's open, and update badge
   if (_channelsViewOpen) renderChannelsList();
@@ -2802,7 +2981,7 @@ async function amdProviderChange(slotId) {
   if (!provSel || !modelSel) return;
   const prov = provSel.value;
   if (!prov) {
-    modelSel.innerHTML = '<option value="">— use primary model —</option>';
+    modelSel.innerHTML = '<option value="">use primary</option>';
     return;
   }
   modelSel.innerHTML = '<option value="">Loading…</option>';
@@ -2917,36 +3096,60 @@ window.setSidebarTab = setSidebarTab;
 let skillsCache = [];
 let editingSkillId = null;
 let _skillSearchQuery = '';
+let _pinnedSkills = JSON.parse(localStorage.getItem('prometheus_pinned_skills') || '[]');
+
+function toggleSkillPin(id) {
+  const idx = _pinnedSkills.indexOf(id);
+  if (idx === -1) _pinnedSkills.push(id);
+  else _pinnedSkills.splice(idx, 1);
+  localStorage.setItem('prometheus_pinned_skills', JSON.stringify(_pinnedSkills));
+  renderSkillsList();
+}
+window.toggleSkillPin = toggleSkillPin;
 
 function filterSkills(query) {
   _skillSearchQuery = (query || '').toLowerCase().trim();
   renderSkillsList();
 }
 
+const SKILL_FLAME_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c0 0-5 4-5 9a5 5 0 0 0 10 0c0-5-5-9-5-9z"/><path d="M12 12c0 0-2 1.5-2 3a2 2 0 0 0 4 0c0-1.5-2-3-2-3z" fill="currentColor" stroke="none"/></svg>`;
+const SKILL_EDIT_ICON  = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+const SKILL_DEL_ICON   = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>`;
+const SKILL_STAR_ICON  = (filled) => filled
+  ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="#f97316" stroke="#f97316" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`
+  : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+
 function renderSkillsList() {
   const el = document.getElementById('skills-list');
   if (!el) return;
-  const skills = _skillSearchQuery
+  let skills = _skillSearchQuery
     ? skillsCache.filter(s => (s.name || '').toLowerCase().includes(_skillSearchQuery) || (s.description || '').toLowerCase().includes(_skillSearchQuery))
     : skillsCache;
+  // Pinned skills float to top
+  skills = [...skills].sort((a, b) => {
+    const ap = _pinnedSkills.includes(a.id) ? 0 : 1;
+    const bp = _pinnedSkills.includes(b.id) ? 0 : 1;
+    return ap - bp;
+  });
   if (skills.length === 0) {
     el.innerHTML = _skillSearchQuery
       ? `<div class="empty-state" style="padding:16px">No skills match "${escHtml(_skillSearchQuery)}".</div>`
       : '<div class="empty-state" style="padding:16px">No skills yet.<br>Click "+ Create" to make one!</div>';
   } else {
     el.innerHTML = skills.map(s => {
-      const skillEmoji = (s.emoji === '🧩' || s.emoji === '🔥' || s.emoji === '⚠️') ? s.emoji : '🧩';
+      const isPinned = _pinnedSkills.includes(s.id);
       return `
-      <div class="skill-card ${s.enabled ? 'enabled' : ''}" data-skill-id="${escHtml(s.id)}" onclick="toggleSkill('${escHtml(s.id)}')">
-        <div class="skill-card-top">
-          <div class="skill-card-emoji">${escHtml(skillEmoji)}</div>
+      <div class="skill-card ${s.enabled ? 'enabled' : ''}${isPinned ? ' pinned' : ''}" data-skill-id="${escHtml(s.id)}">
+        <button class="skill-pin-btn${isPinned ? ' active' : ''}" onclick="event.stopPropagation();toggleSkillPin('${escHtml(s.id)}')" title="${isPinned ? 'Unpin' : 'Pin'} skill" aria-label="${isPinned ? 'Unpin' : 'Pin'} skill">${SKILL_STAR_ICON(isPinned)}</button>
+        <div class="skill-card-top" onclick="toggleSkill('${escHtml(s.id)}')">
+          <div class="skill-card-icon">${SKILL_FLAME_ICON}</div>
           <div class="skill-card-info">
             <div class="skill-card-name">${escHtml(s.name)}</div>
             <div class="skill-card-desc">${escHtml(s.description || 'No description')}</div>
           </div>
           <div class="skill-card-actions">
-            <button class="skill-mini-btn" onclick="event.stopPropagation();editSkill('${escHtml(s.id)}')" title="Edit" aria-label="Edit skill">&#9998;</button>
-            <button class="skill-remove-btn" onclick="event.stopPropagation();deleteSkill('${escHtml(s.id)}')" title="Delete" aria-label="Delete skill">&#128465;</button>
+            <button class="skill-mini-btn" onclick="event.stopPropagation();editSkill('${escHtml(s.id)}')" title="Edit" aria-label="Edit skill">${SKILL_EDIT_ICON}</button>
+            <button class="skill-remove-btn" onclick="event.stopPropagation();deleteSkill('${escHtml(s.id)}')" title="Delete" aria-label="Delete skill">${SKILL_DEL_ICON}</button>
             <div class="skill-card-dot"></div>
           </div>
         </div>
@@ -3187,6 +3390,8 @@ window.addEventListener('DOMContentLoaded', () => {
   // Delay to ensure all <script type="module"> have executed and registered window.* exports
   setTimeout(() => {
     if (typeof loadChatSessions === 'function') loadChatSessions().catch(() => {});
+    if (typeof loadInstalledSkills === 'function') loadInstalledSkills().catch(() => {});
+    if (typeof loadProjects === 'function') loadProjects().catch(() => {});
     if (typeof applyTheme === 'function') applyTheme(getInitialTheme());
     if (typeof setupProcessAndRightScrollTracking === 'function') setupProcessAndRightScrollTracking();
     if (typeof updateHeartbeatUI === 'function') updateHeartbeatUI();
@@ -3233,10 +3438,54 @@ let _errBackdrop = null;
 // ═══ CONNECTIONS PANEL — EXTRACTED to static/pages/ConnectionsPage.js ═══
 // 18 functions + CONNECTORS const moved
 
+// ── Auto-Update pill ────────────────────────────────────────────────────────
+(function() {
+  var _dropdownOpen = false;
+
+  window.toggleUpdateDropdown = function(e) {
+    if (e) e.stopPropagation();
+    var dd = document.getElementById('update-dropdown');
+    if (!dd) return;
+    _dropdownOpen = !_dropdownOpen;
+    dd.style.display = _dropdownOpen ? 'block' : 'none';
+    if (_dropdownOpen) {
+      // close when clicking anywhere outside the pill
+      setTimeout(function() {
+        document.addEventListener('click', function outsideClick(ev) {
+          var pill = document.getElementById('update-pill');
+          if (pill && !pill.contains(ev.target)) {
+            dd.style.display = 'none';
+            _dropdownOpen = false;
+            document.removeEventListener('click', outsideClick);
+          }
+        });
+      }, 0);
+    }
+  };
+
+  function showUpdatePill(info) {
+    var pill = document.getElementById('update-pill');
+    var vt   = document.getElementById('update-version-text');
+    if (!pill) return;
+    if (info && info.version && vt) {
+      vt.textContent = 'Version ' + info.version;
+    }
+    pill.style.display = 'flex';
+  }
+
+  // Wire up as soon as preload bridge is available.
+  // The preload runs before the page, so window.prometheusUpdater exists at DOMContentLoaded.
+  if (window.prometheusUpdater) {
+    window.prometheusUpdater.onUpdateReady(function(info) {
+      showUpdatePill(info);
+    });
+  }
+})();
+
 </script>
 
 <!-- TEAMS VIEW -->
-<div id="teams-view" style="display:none;flex-direction:row;position:absolute;top:90px;bottom:12px;left:12px;right:12px;background:var(--bg);overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);z-index:5">
+<div id="teams-view" class="page-view" style="display:none;flex-direction:row;">
   <!-- Canvas wrap (shrinks when board opens) -->
   <div id="teams-canvas-wrap" style="width:100%;display:flex;flex-direction:column;transition:width 0.35s cubic-bezier(0.4,0,0.2,1);overflow:hidden">
     <!-- Header bar -->
@@ -3369,8 +3618,42 @@ let _errBackdrop = null;
 
   // Refresh account display once gateway is ready
   setTimeout(() => window.refreshAccountDisplay?.(), 2000);
+
+  // Right panel resize handler (drag left edge to widen)
+  (function() {
+    const handle = document.getElementById('rp-resize');
+    const rightPanel = document.getElementById('right-panel');
+    if (!handle || !rightPanel) return;
+
+    let startX, startW;
+    handle.addEventListener('mousedown', e => {
+      startX = e.clientX;
+      startW = rightPanel.offsetWidth;
+      handle.classList.add('dragging');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+
+    function onMove(e) {
+      const delta = startX - e.clientX; // drag left = wider panel
+      const newW = Math.max(280, Math.min(900, startW + delta));
+      rightPanel.style.width = newW + 'px';
+      rightPanel.style.minWidth = newW + 'px';
+      if (typeof window._syncPageViewPositions === 'function') {
+        window._syncPageViewPositions();
+      }
+    }
+
+    function onUp() {
+      handle.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    }
+  })();
 </script>
 
+</div><!-- end .app -->
 </body>
 </html>
 

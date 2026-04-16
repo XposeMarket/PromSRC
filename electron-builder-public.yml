@@ -2,6 +2,16 @@ appId: com.prometheus.desktop
 productName: Prometheus
 copyright: "Prometheus Desktop"
 
+# ── Update feed ──────────────────────────────────────────────────────────────
+# Uses a separate *public* GitHub repo for releases so the source repo (PromSRC)
+# can stay private. Users never need a GitHub token to receive updates.
+# Set GH_TOKEN env var when running `npm run release` to publish.
+publish:
+  provider: github
+  owner: XposeMarket
+  repo: prometheus-releases
+  private: false
+
 icon: assets/Prometheus.png
 
 files:
@@ -52,6 +62,12 @@ nsis:
   deleteAppDataOnUninstall: false
 
 asar: true
+
+# Native .node modules cannot be loaded from inside an asar archive.
+# These must be unpacked so Node can require() them from the real filesystem.
+asarUnpack:
+  - "node_modules/better-sqlite3/**/*"
+  - "node_modules/node-pty/**/*"
 
 extraResources:
   - from: "generated/bundled-skills"

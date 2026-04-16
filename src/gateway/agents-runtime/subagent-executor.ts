@@ -19,10 +19,19 @@ import {
   saveManagedTeam,
   deleteManagedTeam,
   appendTeamChat,
+  appendMainAgentThread,
+  updateTeamFocus,
+  updateTeamMission,
+  logCompletedWork,
+  addTeamMilestone,
+  updateTeamMilestone,
+  pauseTeamAgent,
+  unpauseTeamAgent,
 } from '../teams/managed-teams';
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
-import { buildTeamDispatchTask } from '../teams/team-dispatch-runtime';
+import { buildTeamDispatchTask, _bgAgentResults } from '../teams/team-dispatch-runtime';
 import { appendTeamMemoryEvent } from '../teams/team-workspace';
+import { notifyMainAgent } from '../teams/notify-bridge';
 import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
 import {
@@ -363,6 +372,254 @@ export async function executeTool(name: string, args: any, workspacePath: string
         } catch (e: any) {
           return { name, args, result: `ERROR: ${e.message}`, error: true };
         }
+      }
+
+      case 'dispatch_team_agent': {
+        const teamId = String(args?.team_id || '').trim();
+        const agentId = String(args?.agent_id || '').trim();
+        const task = String(args?.task || '').trim();
+        const context = args?.context ? String(args.context) : undefined;
+        const background = args?.background === true;
+        const timeoutMs = Math.max(5000, Math.min(1800000, Number(args?.timeout_ms) || 300000));
+        if (!teamId || !agentId || !task) {
+          return { name, args, result: 'ERROR: dispatch_team_agent requires team_id, agent_id, and task', error: true };
+        }
+        const team = getManagedTeam(teamId);
+        if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
+        if (team.manager?.paused === true) return { name, args, result: `ERROR: Team "${team.name}" is paused.`, error: true };
+        if (!team.subagentIds.includes(agentId)) {
+          return { name, args, result: `ERROR: Agent "${agentId}" is not a member of team "${team.name}".`, error: true };
+        }
+        if (team.agentPauseStates?.[agentId]?.paused === true) {
+          return { name, args, result: `ERROR: Agent "${agentId}" is paused on team "${team.name}".`, error: true };
+        }
+
+        deps.bindTeamNotificationTargetFromSession(teamId, sessionId, 'dispatch_team_agent');
+        const dispatchPrompt = buildTeamDispatchTask({ agentId, task, teamId, context });
+        appendTeamChat(teamId, {
+          from: 'manager',
+          fromName: 'Manager',
+          content: `Dispatched ${agentId}: ${task}`,
+        });
+        deps.broadcastTeamEvent({ type: 'team_dispatch', teamId, teamName: team.name, agentId, task });
+
+        const run = async () => {
+          const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId, timeoutMs);
+          appendTeamChat(teamId, {
+            from: 'subagent',
+            fromName: agentId,
+            fromAgentId: agentId,
+            content: result.success
+              ? `Task complete: ${String(result.result || '')}`
+              : `Task failed: ${result.error || result.result || 'unknown error'}`,
+          });
+          deps.broadcastTeamEvent({
+            type: 'team_dispatch_complete',
+            teamId,
+            teamName: team.name,
+            agentId,
+            success: result.success,
+            resultPreview: String(result.result || result.error || ''),
+          });
+          return result;
+        };
+
+        if (background) {
+          const taskId = `team_bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+          const promise = run()
+            .then((result) => {
+              const entry = _bgAgentResults.get(taskId);
+              if (entry) {
+                entry.status = result.success ? 'complete' : 'failed';
+                entry.result = result;
+              }
+              return result;
+            })
+            .catch((err: any) => {
+              const result = {
+                success: false,
+                result: '',
+                error: String(err?.message || err),
+                durationMs: 0,
+                agentName: agentId,
+              };
+              const entry = _bgAgentResults.get(taskId);
+              if (entry) {
+                entry.status = 'failed';
+                entry.result = result;
+              }
+              return result;
+            });
+          _bgAgentResults.set(taskId, {
+            status: 'running',
+            agentId,
+            teamId,
+            startedAt: Date.now(),
+            promise,
+          });
+          return {
+            name,
+            args,
+            result: JSON.stringify({ success: true, status: 'running', task_id: taskId, team_id: teamId, agent_id: agentId }, null, 2),
+            error: false,
+          };
+        }
+
+        const result = await run();
+        return {
+          name,
+          args,
+          result: JSON.stringify({
+            success: result.success,
+            team_id: teamId,
+            agent_id: agentId,
+            agent_name: result.agentName,
+            task_id: result.taskId,
+            duration_ms: result.durationMs,
+            step_count: result.stepCount,
+            result: result.result,
+            error: result.error,
+            warning: result.warning,
+          }, null, 2),
+          error: result.success !== true,
+        };
+      }
+
+      case 'get_agent_result': {
+        const taskId = String(args?.task_id || '').trim();
+        const block = args?.block !== false;
+        const timeoutMs = Math.max(1000, Math.min(1800000, Number(args?.timeout_ms) || 300000));
+        if (!taskId) return { name, args, result: 'ERROR: get_agent_result requires task_id', error: true };
+        const entry = _bgAgentResults.get(taskId);
+        if (!entry) return { name, args, result: `ERROR: Unknown background team task_id: ${taskId}`, error: true };
+        if (!block || entry.status !== 'running') {
+          return { name, args, result: JSON.stringify({ success: entry.status === 'complete', status: entry.status, task_id: taskId, result: entry.result || null }, null, 2), error: entry.status === 'failed' };
+        }
+        const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+        const completed = await Promise.race([entry.promise, timeout]);
+        if (!completed) {
+          return { name, args, result: JSON.stringify({ success: true, status: 'running', task_id: taskId, message: 'Still running.' }, null, 2), error: false };
+        }
+        return { name, args, result: JSON.stringify({ success: completed.success, status: completed.success ? 'complete' : 'failed', task_id: taskId, result: completed }, null, 2), error: completed.success !== true };
+      }
+
+      case 'post_to_team_chat': {
+        const teamId = String(args?.team_id || '').trim();
+        const message = String(args?.message || '').trim();
+        if (!teamId || !message) return { name, args, result: 'ERROR: post_to_team_chat requires team_id and message', error: true };
+        const team = getManagedTeam(teamId);
+        if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
+        const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: message });
+        deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, message });
+        return { name, args, result: JSON.stringify({ success: true, team_id: teamId, message_id: chatMsg?.id || null }, null, 2), error: false };
+      }
+
+      case 'message_main_agent': {
+        const teamId = String(args?.team_id || '').trim();
+        const message = String(args?.message || '').trim();
+        const waitForReply = args?.wait_for_reply !== false;
+        const messageType = String(args?.message_type || 'planning').trim().toLowerCase();
+        if (!teamId || !message) return { name, args, result: 'ERROR: message_main_agent requires team_id and message', error: true };
+        const team = getManagedTeam(teamId);
+        if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
+        const type = (['planning', 'error', 'status'].includes(messageType) ? messageType : 'planning') as 'planning' | 'error' | 'status';
+        const threadMsg = appendMainAgentThread(teamId, { from: 'coordinator', content: message, read: false, type });
+        const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: `Message to main agent (${type}): ${message}` });
+        try {
+          const mainWorkspacePath = getConfig().getWorkspacePath() || workspacePath;
+          notifyMainAgent(mainWorkspacePath, teamId, type === 'error' ? 'team_error' : 'team_task_complete', {
+            task: 'Coordinator message',
+            result: message,
+            messageType: type,
+            waitForReply,
+            threadMessageId: threadMsg?.id,
+          }, team.name, team.originatingSessionId);
+        } catch { /* non-fatal */ }
+        deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, message });
+        return { name, args, result: JSON.stringify({ success: true, team_id: teamId, waiting_for_reply: waitForReply, thread_message_id: threadMsg?.id || null }, null, 2), error: false };
+      }
+
+      case 'reply_to_team': {
+        const teamId = String(args?.team_id || '').trim();
+        const message = String(args?.message || '').trim();
+        if (!teamId || !message) return { name, args, result: 'ERROR: reply_to_team requires team_id and message', error: true };
+        const team = getManagedTeam(teamId);
+        if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
+        appendMainAgentThread(teamId, { from: 'main_agent', content: message, read: true, type: 'reply' });
+        const chatMsg = appendTeamChat(teamId, { from: 'user', fromName: 'Main Agent', content: message });
+        deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, message });
+        handleManagerConversation(teamId, `[MAIN AGENT REPLY]\n${message}`, deps.broadcastTeamEvent, true).catch((err: any) =>
+          console.error('[reply_to_team] Coordinator resume failed:', err?.message || err)
+        );
+        return { name, args, result: JSON.stringify({ success: true, team_id: teamId, resumed: true }, null, 2), error: false };
+      }
+
+      case 'manage_team_goal': {
+        const teamId = String(args?.team_id || '').trim();
+        const actionRaw = String(args?.action || '').trim().toLowerCase();
+        const action = actionRaw === 'update_focus' ? 'set_focus' : actionRaw;
+        if (!teamId || !action) return { name, args, result: 'ERROR: manage_team_goal requires team_id and action', error: true };
+        const team = getManagedTeam(teamId);
+        if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
+        let ok = false;
+        let data: any = { team_id: teamId, action };
+        if (action === 'set_focus') {
+          const value = String(args?.value || args?.focus || '').trim();
+          if (!value) return { name, args, result: 'ERROR: set_focus requires value', error: true };
+          ok = updateTeamFocus(teamId, value);
+          data.focus = value;
+        } else if (action === 'set_mission') {
+          const value = String(args?.value || args?.mission || '').trim();
+          if (!value) return { name, args, result: 'ERROR: set_mission requires value', error: true };
+          ok = updateTeamMission(teamId, value);
+          data.mission = value;
+        } else if (action === 'log_completed') {
+          const value = String(args?.value || args?.entry || '').trim();
+          if (!value) return { name, args, result: 'ERROR: log_completed requires value', error: true };
+          ok = logCompletedWork(teamId, value);
+          data.entry = value;
+        } else if (action === 'add_milestone') {
+          const description = String(args?.milestone_description || args?.value || '').trim();
+          if (!description) return { name, args, result: 'ERROR: add_milestone requires milestone_description', error: true };
+          const status = ['pending', 'active', 'complete', 'blocked'].includes(String(args?.milestone_status || 'pending'))
+            ? String(args?.milestone_status || 'pending') as 'pending' | 'active' | 'complete' | 'blocked'
+            : 'pending';
+          const milestone = addTeamMilestone(teamId, {
+            description,
+            status,
+            relevantAgentIds: Array.isArray(args?.relevant_agent_ids) ? args.relevant_agent_ids.map((v: any) => String(v)).filter(Boolean) : [],
+          });
+          ok = !!milestone;
+          data.milestone = milestone;
+        } else if (action === 'update_milestone') {
+          const milestoneId = String(args?.milestone_id || '').trim();
+          if (!milestoneId) return { name, args, result: 'ERROR: update_milestone requires milestone_id', error: true };
+          const updates: any = {};
+          if (args?.milestone_description !== undefined) updates.description = String(args.milestone_description);
+          if (['pending', 'active', 'complete', 'blocked'].includes(String(args?.milestone_status || ''))) updates.status = String(args.milestone_status);
+          if (Array.isArray(args?.relevant_agent_ids)) updates.relevantAgentIds = args.relevant_agent_ids.map((v: any) => String(v)).filter(Boolean);
+          const milestone = updateTeamMilestone(teamId, milestoneId, updates);
+          ok = !!milestone;
+          data.milestone = milestone;
+        } else if (action === 'pause_agent') {
+          const agentId = String(args?.agent_id || '').trim();
+          if (!agentId) return { name, args, result: 'ERROR: pause_agent requires agent_id', error: true };
+          ok = pauseTeamAgent(teamId, agentId, String(args?.reason || '').trim() || undefined);
+          data.agent_id = agentId;
+        } else if (action === 'unpause_agent') {
+          const agentId = String(args?.agent_id || '').trim();
+          if (!agentId) return { name, args, result: 'ERROR: unpause_agent requires agent_id', error: true };
+          ok = unpauseTeamAgent(teamId, agentId);
+          data.agent_id = agentId;
+        } else {
+          return { name, args, result: `ERROR: Unknown manage_team_goal action "${actionRaw}".`, error: true };
+        }
+        if (ok) {
+          const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: `Goal update (${action}): ${JSON.stringify(data).slice(0, 500)}` });
+          deps.broadcastTeamEvent({ type: 'team_goal_updated', teamId, teamName: team.name, action, data });
+          deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg });
+        }
+        return { name, args, result: JSON.stringify({ success: ok, ...data }, null, 2), error: !ok };
       }
 
       case 'list_files': {
@@ -2378,7 +2635,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             `- Do NOT use browser, desktop, scheduling, or memory tools`,
             `- Exception: do use memory_search before creating agents or the team`,
             `- Do NOT create nested teams`,
-            `- Do NOT start the team unless the original user explicitly asked to start immediately`,
+            `- NEVER start the team from this meta-coordinator flow. "Create now" means create the team now, not run it. The main chat agent or user must explicitly call team_manage(action="start") later with a first task.`,
+            `- Do NOT call team_manage(action="start"), team_manage(action="dispatch"), dispatch_team_agent, schedule_job(action="run_now"), or kickoff_initial_review:true in this flow.`,
             `- Do NOT inspect random workspace files, pending tasks, or agent_info on the team ID after setup`,
             `- team_ops tools are available in this coordinator session. Do NOT claim tooling limitations or say a team_ops tool is unavailable unless you actually called it and received an explicit tool error in this turn`,
             `- Your session ends after the summary — the team manager takes over`,
@@ -3451,6 +3709,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
         // config and HEARTBEAT.md at runtime without a human touching the UI.
         if (name === 'update_heartbeat') {
           const targetAgentId = String(args.agent_id || 'main').trim();
+          if (targetAgentId !== 'main' && targetAgentId !== 'default') {
+            return {
+              name,
+              args,
+              result: 'Subagent heartbeats are disabled. Use schedule_job(action:"create", subagent_id:"...", instruction_prompt:"...", schedule:{kind:"recurring", cron:"..."}) for recurring subagent work.',
+              error: true,
+            };
+          }
           const partial: Record<string, any> = {};
           if (typeof args.enabled === 'boolean') partial.enabled = args.enabled;
           const rawInterval = Number(args.interval_minutes);

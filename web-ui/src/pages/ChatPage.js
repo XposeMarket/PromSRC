@@ -216,6 +216,8 @@ function syncActiveChat() {
   renderChatMessages();
   renderProcessLog();
   renderProgressPanel();
+  // Reset session list pagination when loading fresh sessions
+  if (typeof window._sessionShowCount !== 'undefined') window._sessionShowCount = 20;
   renderSessionsList();
   updateStats([]);
   // Restore canvas tabs for this session (re-fetch content from disk)
@@ -409,22 +411,35 @@ function setMode(mode) {
   if (!validModes.includes(mode)) mode = 'chat';
   window.currentMode = mode;
 
-  // Toggle nav buttons
+  // Activate v2 sidebar nav items
   validModes.forEach((m) => {
-    const btn = document.getElementById(`btn-${m}`);
-    if (btn) btn.classList.toggle('active', m === mode);
+    const el = document.getElementById(`nav-${m}`);
+    if (el) el.classList.toggle('active', m === mode);
   });
-  const moreMenu = document.getElementById('more-menu');
-  if (moreMenu) moreMenu.classList.remove('open');
-  const moreBtn = document.getElementById('btn-more');
-  if (moreBtn) {
-    moreBtn.classList.toggle('active', mode === 'audit' || mode === 'memory');
-    moreBtn.setAttribute('aria-expanded', 'false');
-  }
-  const auditItem = document.getElementById('btn-audit');
-  if (auditItem) auditItem.classList.toggle('active', mode === 'audit');
-  const memoryItem = document.getElementById('btn-memory');
-  if (memoryItem) memoryItem.classList.toggle('active', mode === 'memory');
+  // More popover items
+  ['audit', 'memory'].forEach(m => {
+    const el = document.getElementById(`nav-${m}`);
+    if (el) el.classList.toggle('active', m === mode);
+  });
+  const moreBtn = document.getElementById('moreNavBtn');
+  if (moreBtn) moreBtn.classList.toggle('active', mode === 'audit' || mode === 'memory');
+  if (typeof window.closeMorePopover === 'function') window.closeMorePopover();
+
+  // Update page title in topbar
+  const pageTitles = {
+    chat: ['Chat', 'Prometheus operator workspace'],
+    bgtasks: ['Tasks', 'Background task queue'],
+    schedule: ['Schedule', 'Recurring + one-off jobs'],
+    teams: ['Teams', 'Managed agent teams'],
+    proposals: ['Proposals', 'Awaiting approval'],
+    audit: ['Audit Log', 'Non-main agent runs'],
+    memory: ['Memory Graph', 'Knowledge web'],
+  };
+  const parts = pageTitles[mode] || ['Chat', ''];
+  const titleEl = document.getElementById('page-title-text');
+  const subEl = document.getElementById('page-title-sub');
+  if (titleEl) titleEl.textContent = parts[0];
+  if (subEl) subEl.textContent = parts[1];
 
   // Toggle view panels
   const viewMap = {
@@ -441,13 +456,18 @@ function setMode(mode) {
     if (el) el.style.display = m === mode ? 'flex' : 'none';
   });
 
-  // Sidebar/main/right panel should only be visible in chat mode
-  const aside = document.querySelector('aside');
-  const mainEl = document.querySelector('main');
-  const rightPanel = document.getElementById('right-panel');
-  if (aside) aside.style.display = mode === 'chat' ? '' : 'none';
+  // In v2 layout: sidebar is always visible; main-shell hidden for non-chat modes
+  const mainEl = document.querySelector('main.main-shell');
   if (mainEl) mainEl.style.display = mode === 'chat' ? '' : 'none';
-  if (rightPanel) rightPanel.style.display = mode === 'chat' ? '' : 'none';
+  // Right panel: close when switching away from chat; hide toggle on non-chat pages
+  const rightPanel = document.getElementById('right-panel');
+  const toggleBtn = document.getElementById('drawerToggle');
+  if (mode !== 'chat') {
+    if (rightPanel) rightPanel.classList.remove('open');
+    if (toggleBtn) { toggleBtn.classList.remove('active'); toggleBtn.style.display = 'none'; }
+  } else {
+    if (toggleBtn) toggleBtn.style.display = '';
+  }
 
   // Load data for selected page
   if (mode === 'bgtasks' && typeof window.refreshBgTasks === 'function') window.refreshBgTasks();
@@ -473,12 +493,13 @@ function setMode(mode) {
 
 // ---- Sidebar tabs ----
 function setSidebarTab(tab) {
-  window.sidebarTab = tab;
-  document.getElementById('tab-jobs').classList.toggle('active', tab === 'jobs');
-  document.getElementById('tab-skills').classList.toggle('active', tab === 'skills');
-  document.getElementById('sidebar-jobs').style.display = tab === 'jobs' ? 'flex' : 'none';
-  document.getElementById('sidebar-skills').style.display = tab === 'skills' ? 'flex' : 'none';
-  if (tab === 'skills') loadInstalledSkills();
+  // Map old tab names to new seg tab names
+  const tabMap = { jobs: 'chats', skills: 'skills', projects: 'projects' };
+  const newTab = tabMap[tab] || tab;
+  if (typeof window.setSidebarSegTab === 'function') {
+    window.setSidebarSegTab(newTab);
+  }
+  if (tab === 'skills' || newTab === 'skills') window.loadInstalledSkills?.();
 }
 
 // ---- Agent mode toggle ----
@@ -804,11 +825,12 @@ function renderChatMessages() {
     const clickHandler = contextPinMode ? ` onclick="togglePinMessage(${idx})"` : '';
     const isTelegramMsg = String(msg?.channel || '').toLowerCase() === 'telegram';
     const channelTag = isTelegramMsg ? '<span class="msg-channel-tag">(telegram)</span>' : '';
+    const isUser = msg.role === 'user';
     return `
     <div class="msg ${msg.role}${pinClass}${selectedClass}${confirmedClass}"${clickHandler}>
-      <div class="msg-avatar">${msg.role === 'user' ? 'U' : '<img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;">'}</div>
+      ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
       <div class="msg-body">
-        <div class="msg-role">${msg.role === 'user' ? 'You' : 'Prom'}${channelTag}</div>
+        ${!isUser ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
         ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantContent(msg.content) : renderUserMessageContent(msg)}
         ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
         ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
@@ -835,22 +857,23 @@ function renderChatMessages() {
 	          <div class="think-content live" id="streaming-thinking-content">${escHtml(window.streamingThinkingText)}</div>
 	        </div>`
 	      : '';
+	    const thinkingOnly = !window.streamingAIText && !progressHtml && !streamingThinkingHtml && !window.currentPreflightStatus;
 	    container.innerHTML += `
-      <div class="msg ai" id="thinking-msg">
+      <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
         <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
         <div class="msg-body">
-          <div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>
+          ${!thinkingOnly ? `<div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>` : ''}
           ${window.currentPreflightStatus ? `<div class="msg-content" style="margin-bottom:6px;color:#26487e">${escHtml(window.currentPreflightStatus)}</div>` : ''}
 	          ${progressHtml}
 	          ${streamingThinkingHtml}
           ${window.streamingAIText
-            ? `<div id="streaming-text-content" style="font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word">${escHtml(window.streamingAIText)}</div>`
+            ? `<div id="streaming-text-content" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word">${escHtml(window.streamingAIText)}</div>`
             : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`
           }
-          <div style="margin-top:8px">
+          ${!thinkingOnly ? `<div style="margin-top:8px">
             <button class="skill-install-btn" style="font-size:10px;padding:3px 9px" onclick="toggleCurrentProcess()">Process</button>
             <div id="current-turn-process" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6"></div>
-          </div>
+          </div>` : ''}
         </div>
       </div>`;
   }
@@ -2008,6 +2031,7 @@ document.getElementById('chat-input').addEventListener('input', function() {
 
 // ---- Canvas Panel ----
 let canvasOpen = false;
+let canvasFullscreenMode = false;
 let leftPanelCollapsed = false;
 let rightPanelCollapsed = false;
 let canvasTabs = [];
@@ -2040,10 +2064,24 @@ function toggleLeftPanel() {
 }
 
 function toggleRightPanel() {
-  rightPanelCollapsed = !rightPanelCollapsed;
-  document.body.classList.toggle('right-collapsed', rightPanelCollapsed);
-  const btn = document.getElementById('right-collapse-btn');
-  if (btn) btn.title = rightPanelCollapsed ? 'Expand panel' : 'Collapse panel';
+  const panel = document.getElementById('right-panel');
+  const toggleBtn = document.getElementById('drawerToggle');
+  if (!panel) return;
+  const wasOpen = panel.classList.contains('open');
+  const isOpen = panel.classList.toggle('open');
+  if (toggleBtn) toggleBtn.classList.toggle('active', isOpen);
+  // When closing: clear inline resize styles so CSS width:0 takes effect
+  if (!isOpen && wasOpen) {
+    panel.style.removeProperty('width');
+    panel.style.removeProperty('min-width');
+    panel.style.removeProperty('max-width');
+  } else if (isOpen && !wasOpen) {
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar && !sidebar.classList.contains('collapsed')) {
+      if (typeof window.toggleSidebar === 'function') window.toggleSidebar();
+    }
+  }
+  if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
 }
 
 function toggleCanvas() {
@@ -2054,16 +2092,56 @@ function toggleCanvas() {
   const dot = document.getElementById('canvas-notify-dot');
   if (!panel) return;
   if (canvasOpen) {
+    // Ensure right panel is open
+    const rightPanel = document.getElementById('right-panel');
+    if (rightPanel && !rightPanel.classList.contains('open')) {
+      if (typeof window.toggleRightPanel === 'function') window.toggleRightPanel();
+    }
+    // Auto-collapse sidebar for more canvas space
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar && !sidebar.classList.contains('collapsed')) {
+      if (typeof window.toggleSidebar === 'function') window.toggleSidebar();
+    }
     panel.style.display = 'flex';
-    if (topbar) topbar.style.display = 'none'; // canvas has its own header
-    if (btn) { btn.style.background='#eaf2ff'; btn.style.borderColor='#bdd3f6'; btn.style.color='#0d4faf'; }
-    if (dot) dot.style.display = 'none'; // clear notification when opened
+    if (topbar) topbar.style.display = 'none';
+    if (btn) { btn.style.background='rgba(249,115,22,0.15)'; btn.style.borderColor='rgba(249,115,22,0.45)'; btn.style.color='#f97316'; }
+    if (dot) dot.style.display = 'none';
     if (!canvasEditorInitialized) initCanvasEditor();
     canvasRenderTabs();
   } else {
+    // Reset fullscreen if active
+    if (canvasFullscreenMode) {
+      canvasFullscreenMode = false;
+      panel.style.position = 'absolute';
+      panel.style.inset = '0';
+      panel.style.zIndex = '20';
+      panel.style.background = '';
+      const fsBtn = document.getElementById('canvas-fullscreen-btn');
+      if (fsBtn) fsBtn.title = 'Fullscreen';
+    }
     panel.style.display = 'none';
     if (topbar) topbar.style.display = 'flex';
     if (btn) { btn.style.background=''; btn.style.borderColor=''; btn.style.color=''; }
+  }
+}
+
+function toggleCanvasFullscreen() {
+  const panel = document.getElementById('canvas-panel');
+  if (!panel || !canvasOpen) return;
+  canvasFullscreenMode = !canvasFullscreenMode;
+  const btn = document.getElementById('canvas-fullscreen-btn');
+  if (canvasFullscreenMode) {
+    panel.style.position = 'fixed';
+    panel.style.inset = '0';
+    panel.style.zIndex = '1000';
+    panel.style.background = '#2a2a2a';
+    if (btn) btn.title = 'Exit fullscreen';
+  } else {
+    panel.style.position = 'absolute';
+    panel.style.inset = '0';
+    panel.style.zIndex = '20';
+    panel.style.background = '';
+    if (btn) btn.title = 'Fullscreen';
   }
 }
 
@@ -2941,6 +3019,7 @@ window.clearChat = clearChat;
 window.getCanvasLang = getCanvasLang;
 window.isHtmlFile = isHtmlFile;
 window.toggleCanvas = toggleCanvas;
+window.toggleCanvasFullscreen = toggleCanvasFullscreen;
 window.toggleLeftPanel = toggleLeftPanel;
 window.toggleRightPanel = toggleRightPanel;
 window.initCanvasEditor = initCanvasEditor;
@@ -2956,6 +3035,15 @@ window.canvasAddToContext = canvasAddToContext;
 window.renderChatFilePills = renderChatFilePills;
 window.removeChatFile = removeChatFile;
 window.stageFiles = stageFiles;
+// ─── Sidebar Rendering - Channels/Skills ────────────────────────
+// These are called from index.html's renderSessionsList() and setSidebarSegTab()
+// Channels: delegates to existing _renderChannelsPanel in index.html
+function renderChannelsList() {
+  if (typeof window._renderChannelsPanel === 'function') {
+    window._renderChannelsPanel();
+  }
+}
+
 window.onChatFileInputChange = onChatFileInputChange;
 window.uploadStagedFilesToCanvas = uploadStagedFilesToCanvas;
 window.buildFileContextNote = buildFileContextNote;
@@ -2976,6 +3064,7 @@ window.togglePinMessage = togglePinMessage;
 window.removePinFromList = removePinFromList;
 window.updatePinUI = updatePinUI;
 window.updatePinBadge = updatePinBadge;
+window.renderChannelsList = renderChannelsList;
 
 // ─── WS Event Handlers (F5) ────────────────────────────────────
 

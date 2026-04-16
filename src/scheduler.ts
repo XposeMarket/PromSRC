@@ -1,16 +1,19 @@
 /**
  * scheduler.ts — Agent run history store.
  *
- * The agent cron scheduler has been removed. Subagent scheduling is now
- * handled exclusively by the heartbeat runner (SubagentHeartbeatManager).
- * This file retains only the run history helpers used by the heartbeat
- * runner and team dispatch to record completed agent runs.
+ * The agent cron scheduler has been removed. Subagent scheduling now runs
+ * through CronScheduler jobs with subagent_id.
+ * This file retains only the run history helpers used by scheduled jobs
+ * and team dispatch to record completed agent runs.
  */
 
 import fs from 'fs';
 import path from 'path';
 
-const historyPath = path.join(process.cwd(), '.prometheus', 'agents', 'run-history.json');
+const _prometheusBase = process.env.PROMETHEUS_DATA_DIR
+  ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
+  : path.join(process.cwd(), '.prometheus');
+const historyPath = path.join(_prometheusBase, 'agents', 'run-history.json');
 const MAX_HISTORY = 300;
 
 export interface AgentRunHistoryEntry {
@@ -79,11 +82,11 @@ export function getAgentLastRun(agentId: string): AgentRunHistoryEntry | null {
 }
 
 // ── Stubs kept for backward-compat imports that haven't been cleaned up yet ──
-/** @deprecated Subagent cron scheduling moved to heartbeat runner */
+/** @deprecated Subagent cron scheduling moved to CronScheduler jobs with subagent_id */
 export function initializeAgentSchedules(): void {}
-/** @deprecated Subagent cron scheduling moved to heartbeat runner */
+/** @deprecated Subagent cron scheduling moved to CronScheduler jobs with subagent_id */
 export function reloadAgentSchedules(): void {}
-/** @deprecated Subagent cron scheduling moved to heartbeat runner */
+/** @deprecated Subagent cron scheduling moved to CronScheduler jobs with subagent_id */
 export function stopAgentSchedules(): void {}
 /** @deprecated Broadcast injection no longer needed */
 export function setSchedulerBroadcast(_fn: (data: object) => void): void {}

@@ -11,6 +11,7 @@ import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { log } from '../security/log-scrubber';
+import { SecretVault } from '../security/vault';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,12 +79,44 @@ export interface MCPServerStatus {
 
 export class MCPManager {
   private configPath: string;
+  private configDir: string;
   private sessions = new Map<string, MCPSession>();
   private configs: MCPServerConfig[] = [];
 
   constructor(configDir: string) {
+    this.configDir = configDir;
     this.configPath = path.join(configDir, 'mcp-servers.json');
     this.load();
+  }
+
+  /**
+   * Resolve vault: references in an env map.
+   * Values like "vault:integrations.github.pat" are decrypted at spawn time.
+   * Missing or expired vault entries are skipped with a warning (never crash the spawn).
+   */
+  private resolveEnvSecrets(env: Record<string, string>): Record<string, string> {
+    const out: Record<string, string> = {};
+    let vault: SecretVault | null = null;
+
+    for (const [k, v] of Object.entries(env)) {
+      if (typeof v === 'string' && v.startsWith('vault:')) {
+        const vaultKey = v.slice('vault:'.length).trim();
+        try {
+          if (!vault) vault = new SecretVault(this.configDir);
+          const secret = vault.get(vaultKey, `mcp:${k}`);
+          if (secret) {
+            out[k] = secret.expose();
+          } else {
+            log.warn(`[MCP] vault ref "${v}" for env var "${k}" not found — skipping`);
+          }
+        } catch (e: any) {
+          log.warn(`[MCP] Failed to resolve vault ref "${v}": ${e.message}`);
+        }
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
   }
 
   static normalizeTransport(raw: any): MCPTransport {
@@ -310,8 +343,9 @@ export class MCPManager {
 
     return new Promise((resolve) => {
       try {
-        // HIGH-04: sanitize env vars — block PATH, NODE_OPTIONS, LD_PRELOAD etc.
-        const safeUserEnv = MCPManager.sanitizeEnv(cfg.env || {});
+        // HIGH-04: resolve vault: refs, then sanitize env vars
+        const resolvedEnv = this.resolveEnvSecrets(cfg.env || {});
+        const safeUserEnv = MCPManager.sanitizeEnv(resolvedEnv);
         const env = { ...process.env, ...safeUserEnv };
 
         // CRIT-02: shell: false always — args are passed as a list, not a shell string.
@@ -418,11 +452,12 @@ export class MCPManager {
     const MCP_PROTOCOL_VERSION = '2025-03-26';
 
     try {
+      const resolvedHeaders = this.resolveEnvSecrets(cfg.headers || {});
       const baseHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/event-stream',
         'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
-        ...(cfg.headers || {}),
+        ...resolvedHeaders,
       };
       // Debug logging
       const headerKeys = Object.keys(baseHeaders).filter(k => k !== 'Content-Type' && k !== 'Accept' && k !== 'MCP-Protocol-Version');

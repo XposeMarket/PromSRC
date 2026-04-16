@@ -197,7 +197,7 @@ export function getCisSystemTools(): any[] {
           required: ['team_id', 'action'],
           properties: {
             team_id: { type: 'string', description: 'The team ID' },
-            action: { type: 'string', enum: ['set_focus', 'set_mission', 'log_completed', 'add_milestone', 'update_milestone', 'pause_agent', 'unpause_agent'], description: 'The goal management action to perform' },
+            action: { type: 'string', enum: ['set_focus', 'update_focus', 'set_mission', 'log_completed', 'add_milestone', 'update_milestone', 'pause_agent', 'unpause_agent'], description: 'The goal management action to perform. update_focus is accepted as an alias for set_focus.' },
             value: { type: 'string', description: 'For set_focus/set_mission/log_completed: the text value' },
             milestone_id: { type: 'string', description: 'For update_milestone: the milestone ID to update' },
             milestone_description: { type: 'string', description: 'For add_milestone: description of the milestone' },

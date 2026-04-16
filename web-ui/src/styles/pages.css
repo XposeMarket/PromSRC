@@ -609,10 +609,66 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  cursor: pointer;
+  padding-right: 20px;
 }
 .skill-card-emoji {
   font-size: 18px;
   flex-shrink: 0;
+}
+/* Flame icon replaces emoji */
+.skill-card-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(249,115,22,0.12);
+  border: 1px solid rgba(249,115,22,0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #f97316;
+}
+.skill-card.enabled .skill-card-icon {
+  background: rgba(249,115,22,0.18);
+  border-color: rgba(249,115,22,0.45);
+}
+/* Pin button — top-right corner */
+.skill-card {
+  position: relative;
+}
+.skill-pin-btn {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  padding: 0;
+}
+.skill-card:hover .skill-pin-btn,
+.skill-pin-btn.active {
+  opacity: 1;
+}
+.skill-pin-btn:hover {
+  background: rgba(249,115,22,0.10);
+  color: #f97316;
+}
+.skill-pin-btn.active {
+  color: #f97316;
+}
+.skill-card.pinned {
+  border-color: rgba(249,115,22,0.45);
+  box-shadow: 0 0 0 1px rgba(249,115,22,0.15);
 }
 .skill-card-info {
   flex: 1;

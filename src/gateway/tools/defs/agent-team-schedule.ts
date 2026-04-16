@@ -276,18 +276,7 @@ export function getAgentTeamScheduleTools(): any[] {
               items: { type: 'string' },
               description: 'Existing subagent IDs to include in the team',
             },
-            create_subagents: {
-              type: 'array',
-              description: 'Optional subagents to create/ensure for this team without running them.',
-              items: {
-                type: 'object',
-                properties: {
-                  subagent_id: { type: 'string' },
-                  create_if_missing: { type: 'object' },
-                },
-              },
-            },
-            kickoff_initial_review: { type: 'boolean', description: 'If true (default), schedule initial manager review shortly after creation.' },
+            kickoff_initial_review: { type: 'boolean', description: 'If true, schedule an initial manager review shortly after creation. Default is false; leave unset when only creating a ready/not-started team.' },
             kickoff_after_seconds: { type: 'number', description: 'Delay before initial review (default 30s, range 5-300).' },
             agent_id: { type: 'string', description: 'For dispatch: target team member agent ID' },
             task: { type: 'string', description: 'For start: kickoff task for manager coordination. For dispatch: one-off task to execute now' },
@@ -305,16 +294,16 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'update_heartbeat',
-        description: 'Update the heartbeat configuration or HEARTBEAT.md instructions for an agent. Use this to enable/disable an agent\'s heartbeat, change its interval, or rewrite what it does when it wakes up. Managers can use this to configure subagents. Agents can self-configure.',
+        description: 'Update the main/default heartbeat configuration or HEARTBEAT.md instructions. Subagent heartbeats are disabled; use schedule_job with subagent_id for recurring subagent work.',
         parameters: {
           type: 'object',
           required: [],
           properties: {
-            agent_id: { type: 'string', description: 'Which agent to configure. Defaults to "main". Use the agent\'s ID (e.g. "xpose_news_scout_v1", "post_writer_v1").' },
-            enabled: { type: 'boolean', description: 'Enable or disable the heartbeat timer for this agent.' },
-            interval_minutes: { type: 'number', description: 'How often the heartbeat fires, in minutes. Min 1, max 1440. Default 30.' },
-            model: { type: 'string', description: 'Optional model override for this agent\'s heartbeat runs. Leave blank to use the global default.' },
-            instructions: { type: 'string', description: 'Full replacement content for this agent\'s HEARTBEAT.md file. Write the complete checklist the agent should follow each time it wakes up. Omit to leave HEARTBEAT.md unchanged.' },
+            agent_id: { type: 'string', description: 'Which heartbeat to configure. Defaults to "main". Only "main" and "default" are supported.' },
+            enabled: { type: 'boolean', description: 'Enable or disable the main/default heartbeat timer.' },
+            interval_minutes: { type: 'number', description: 'How often the main/default heartbeat fires, in minutes. Min 1, max 1440. Default 30.' },
+            model: { type: 'string', description: 'Optional model override for main/default heartbeat runs. Leave blank to use the global default.' },
+            instructions: { type: 'string', description: 'Full replacement content for the main/default HEARTBEAT.md file. For subagents, create a schedule_job with subagent_id instead.' },
           },
         },
       },
@@ -323,7 +312,7 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'schedule_job',
-        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). Use for recurring or time-based automation.',
+        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). Use this for recurring or time-based automation, including any subagent cron by setting subagent_id.',
         parameters: {
           type: 'object',
           required: ['action'],

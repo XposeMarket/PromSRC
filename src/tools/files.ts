@@ -197,7 +197,10 @@ export interface ReadToolArgs {
 type RetrievalMode = 'fast' | 'standard' | 'deep';
 
 function getLocalConfigFilePath(): string {
-  const projectCfg = path.join(process.cwd(), '.prometheus', 'config.json');
+  const base = process.env.PROMETHEUS_DATA_DIR
+    ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
+    : path.join(process.cwd(), '.prometheus');
+  const projectCfg = path.join(base, 'config.json');
   return fsSync.existsSync(projectCfg) ? projectCfg : path.join(os.homedir(), '.prometheus', 'config.json');
 }
 

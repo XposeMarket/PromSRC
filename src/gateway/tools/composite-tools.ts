@@ -13,7 +13,11 @@ export interface CompositeDef {
   steps: CompositeStep[];
 }
 
-const COMPOSITES_DIR = path.join(process.cwd(), '.prometheus', 'composites');
+// Use PROMETHEUS_DATA_DIR when set (packaged Electron) so composites land in user data dir.
+const COMPOSITES_DIR = path.join(
+  process.env.PROMETHEUS_DATA_DIR ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus') : path.join(process.cwd(), '.prometheus'),
+  'composites'
+);
 
 function ensureDir() {
   if (!fs.existsSync(COMPOSITES_DIR)) fs.mkdirSync(COMPOSITES_DIR, { recursive: true });

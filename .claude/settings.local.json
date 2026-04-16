@@ -26,7 +26,10 @@
       "Bash(TMPDIR=/d/tmp TEMP=/d/tmp TMP=/d/tmp npm run:*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
-      "Bash(awk '/case.*dispatch_team_agent/,/^      case/ {if \\(/^      case/ && !/dispatch_team_agent/\\) exit; print NR\": \"$0}' src/gateway/agents-runtime/subagent-executor.ts)"
+      "Bash(awk '/case.*dispatch_team_agent/,/^      case/ {if \\(/^      case/ && !/dispatch_team_agent/\\) exit; print NR\": \"$0}' src/gateway/agents-runtime/subagent-executor.ts)",
+      "Bash(sort -t: -k2 -nr)",
+      "Bash(npm list *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Next:', d.get\\('dependencies',{}\\).get\\('next','?'\\)\\)\")"
     ]
   }
 }

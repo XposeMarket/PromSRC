@@ -893,7 +893,10 @@ async function runOcr(imagePath: string): Promise<{ text: string; confidence: nu
     const ocrEnabled = String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0';
     if (!ocrEnabled) return null;
     const timeoutMs = clampInt(process.env.PROMETHEUS_OCR_TIMEOUT_MS, 1000, 120000, 15000);
-    const ocrCacheDir = path.join(process.cwd(), '.prometheus', 'ocr-cache');
+    const ocrCacheDir = path.join(
+      process.env.PROMETHEUS_DATA_DIR ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus') : path.join(process.cwd(), '.prometheus'),
+      'ocr-cache'
+    );
     fs.mkdirSync(ocrCacheDir, { recursive: true });
     const { stdout } = await execFileAsync(
       process.execPath,
