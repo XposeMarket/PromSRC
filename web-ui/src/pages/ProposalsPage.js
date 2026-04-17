@@ -58,7 +58,7 @@ function renderProposals(proposals) {
     const created = new Date(p.createdAt).toLocaleString();
     const decided = p.decidedAt ? new Date(p.decidedAt).toLocaleString() : null;
     const files = (p.affectedFiles || []).map(f =>
-      `<span style="font-size:10px;background:var(--bg-soft,#f0f0f0);padding:2px 6px;border-radius:4px;font-family:monospace;border:1px solid var(--line)">${f.action}: ${escHtml(f.path)}</span>`
+      `<span style="font-size:10px;background:var(--panel-2);padding:2px 6px;border-radius:4px;font-family:monospace;border:1px solid var(--line)">${f.action}: ${escHtml(f.path)}</span>`
     ).join(' ');
     const borderAccent = isPending ? 'var(--brand)' : isExecuting ? '#6c8ebf' : isExecuted ? '#3aaa6b' : isFailed ? '#e05c5c' : 'var(--line)';
     const executingSpinner = isExecuting ? '<span class="thinking-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#6c8ebf;margin-left:4px"></span>' : '';
@@ -92,8 +92,8 @@ function renderProposals(proposals) {
         </div>
       </div>
       <details style="margin-top:8px"><summary style="font-size:11px;color:var(--muted);cursor:pointer;user-select:none">View details &amp; plan</summary>
-        <div class="markdown-body proposal-detail-body" style="font-size:12px;margin-top:8px;padding:10px 12px;background:var(--bg-soft,#f5f5f5);border-radius:6px;overflow:auto;max-height:400px">${(typeof marked !== 'undefined' ? marked.parse(p.details || p.summary || '', { breaks: true, gfm: true, mangle: false, headerIds: false }) : `<pre style='white-space:pre-wrap'>${escHtml(p.details || p.summary)}</pre>`)}</div>
-        ${p.diffPreview ? `<pre style="font-size:10px;color:var(--fg);white-space:pre-wrap;margin-top:6px;padding:8px 10px;background:var(--bg-soft,#f5f5f5);border-radius:6px;border:1px solid var(--line);overflow:auto;max-height:240px;font-family:'IBM Plex Mono',monospace;line-height:1.5">${escHtml(p.diffPreview)}</pre>` : ''}
+        <div class="markdown-body proposal-detail-body" style="font-size:12px;margin-top:8px;padding:10px 12px;background:var(--panel-2);border-radius:6px;overflow:auto;max-height:400px">${(typeof marked !== 'undefined' ? marked.parse(p.details || p.summary || '', { breaks: true, gfm: true, mangle: false, headerIds: false }) : `<pre style='white-space:pre-wrap'>${escHtml(p.details || p.summary)}</pre>`)}</div>
+        ${p.diffPreview ? `<pre style="font-size:10px;color:var(--fg);white-space:pre-wrap;margin-top:6px;padding:8px 10px;background:var(--panel-2);border-radius:6px;border:1px solid var(--line);overflow:auto;max-height:240px;font-family:'IBM Plex Mono',monospace;line-height:1.5">${escHtml(p.diffPreview)}</pre>` : ''}
       </details>
     </div>`;
   }).join('');

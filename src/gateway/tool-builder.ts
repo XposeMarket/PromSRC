@@ -12,6 +12,7 @@ import { getFileWebMemoryTools } from './tools/defs/file-web-memory';
 import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
 import { getCisSystemTools } from './tools/defs/cis-system';
 import { getCompositeDefs, getCompositeManagementTools } from './tools/composite-tools';
+import { getConnectorToolDefs, buildConnectorStatus } from './tools/defs/connector-tools';
 import { getPublicBuildAllowedCategories } from '../runtime/distribution.js';
 
 export interface BuildToolsDeps {
@@ -22,8 +23,10 @@ export interface BuildToolsDeps {
 // Tools split into: core (always injected) + 6 on-demand categories.
 // Categories are activated per-session via request_tool_category tool.
 
-export const ALL_TOOL_CATEGORIES = ['browser', 'desktop', 'team_ops', 'source_write', 'integrations'] as const;
+export const ALL_TOOL_CATEGORIES = ['browser', 'desktop', 'team_ops', 'source_write', 'integrations', 'connectors'] as const;
 export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
+
+export { buildConnectorStatus };
 
 export function getRuntimeToolCategories(): ToolCategory[] {
   return getPublicBuildAllowedCategories(ALL_TOOL_CATEGORIES) as ToolCategory[];
@@ -61,8 +64,10 @@ const INTEGRATIONS_TOOL_NAMES = new Set([
 export function getToolCategory(name: string): ToolCategory | null {
   // Keep these always available as core runtime tools.
   if (name === 'browser_send_to_telegram') return null;
+  if (name === 'connector_list') return null; // core tool — always available
   if (name.startsWith('browser_')) return 'browser';
   if (name.startsWith('desktop_')) return 'desktop';
+  if (name.startsWith('connector_')) return 'connectors';
   if (TEAM_OPS_TOOL_NAMES.has(name)) return 'team_ops';
   if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'source_write';
   if (INTEGRATIONS_TOOL_NAMES.has(name)) return 'integrations';
@@ -177,6 +182,24 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   if (agentBuilderEnabled) {
     registerAgentBuilderTools(toolDefs);
   }
+
+  // ── connector_list: always-available connector discovery tool ─────────────
+  toolDefs.push({
+    type: 'function',
+    function: {
+      name: 'connector_list',
+      description:
+        'List all available connectors (Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, Google Analytics) and their connection status. ' +
+        'Shows which connectors are connected and what tools are available for each. ' +
+        'Use this before activating the connectors category to check what\'s available.',
+      parameters: { type: 'object', required: [], properties: {} },
+    },
+  });
+
+  // ── Connector tools (activated via connectors category) ───────────────────
+  try {
+    toolDefs.push(...getConnectorToolDefs());
+  } catch { /* connector defs may not load in all build targets */ }
 
   // ── Inject MCP tools from connected servers ────────────────────────────────
   try {
@@ -293,6 +316,35 @@ export function normalizeToolArgs(rawArgs: any): any {
   }
   if (typeof rawArgs === 'object') return rawArgs;
   return {};
+}
+
+export function normalizeToolArgsForTool(toolName: string, rawArgs: any): any {
+  const normalized = normalizeToolArgs(rawArgs);
+  if (toolName !== 'request_tool_category' || normalized?.category) return normalized;
+
+  const categories = getRuntimeToolCategories();
+  const readCategory = (value: unknown): string => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return '';
+    if (categories.includes(raw as ToolCategory)) return raw;
+    const match = raw.match(/\b(browser|desktop|team_ops|source_write|integrations|connectors)\b/);
+    return match && categories.includes(match[1] as ToolCategory) ? match[1] : '';
+  };
+
+  if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {
+    const category = readCategory((rawArgs as any).category || (rawArgs as any).name || (rawArgs as any).tool || (rawArgs as any).value);
+    return category ? { ...normalized, category } : normalized;
+  }
+
+  if (typeof rawArgs === 'string') {
+    const trimmed = rawArgs.trim();
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(trimmed); } catch { /* tolerate shorthand provider output */ }
+    const category = readCategory(parsed || trimmed.replace(/^['"]|['"]$/g, ''));
+    return category ? { ...normalized, category } : normalized;
+  }
+
+  return normalized;
 }
 
 export function parseJsonLike(raw: any): any {

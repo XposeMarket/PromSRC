@@ -213,7 +213,7 @@ import {
   normalizeScheduleJobAction,
   summarizeCronJob,
   normalizeDeliveryChannel,
-  normalizeToolArgs,
+  normalizeToolArgsForTool,
   parseJsonLike,
   toStringRecord,
   parseLooseMap,
@@ -720,6 +720,7 @@ async function handleChat(
     'task_control',
     'declare_plan', 'complete_plan_step', 'step_complete',
     'request_tool_category',
+    'connector_list',
     'switch_model',
     ...(!isPublicDistributionBuild() ? [
       'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
@@ -2813,7 +2814,7 @@ RULES:
       for (const call of syntheticCalls) {
         const toolCallId = String((call as any)?.id || '').trim();
         const toolName = call.function?.name || 'unknown';
-        const toolArgs = normalizeToolArgs(call.function?.arguments);
+        const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
         console.log(`[v2] SYNTHETIC TOOL: ${toolName}(${JSON.stringify(toolArgs).slice(0, 100)})`);
         markProgressStepStart(toolName);
         sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, synthetic: true });
@@ -3849,7 +3850,7 @@ RULES:
     for (const call of toolCalls) {
       const toolCallId = String((call as any)?.id || '').trim();
       const toolName = call.function?.name || 'unknown';
-      const toolArgs = normalizeToolArgs(call.function?.arguments);
+      const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
 
       // For declared plans, reserve step 1 for skill scouting only.
       // This keeps skill discovery contained to the first step so later steps stay focused.

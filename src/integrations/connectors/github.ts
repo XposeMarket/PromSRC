@@ -63,19 +63,73 @@ export class GitHubConnector extends OAuthConnector {
     }
   }
 
-  async getUser(): Promise<any> {
+  private async ghGet(path: string): Promise<any> {
     const token = await this.getValidAccessToken();
-    const res = await fetch('https://api.github.com/user', {
-      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS' },
+    const res = await fetch(`https://api.github.com${path}`, {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS', Accept: 'application/vnd.github+json' },
     });
+    if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text().catch(() => '')}`);
     return res.json();
   }
 
-  async listRepos(): Promise<any[]> {
+  private async ghPost(path: string, body: any): Promise<any> {
     const token = await this.getValidAccessToken();
-    const res = await fetch('https://api.github.com/user/repos?per_page=50&sort=updated', {
-      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS' },
+    const res = await fetch(`https://api.github.com${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS', Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
-    return res.json() as any;
+    if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text().catch(() => '')}`);
+    return res.json();
+  }
+
+  async getUser(): Promise<any> {
+    return this.ghGet('/user');
+  }
+
+  async listRepos(perPage = 50): Promise<any[]> {
+    return this.ghGet(`/user/repos?per_page=${perPage}&sort=updated`);
+  }
+
+  async getRepo(owner: string, repo: string): Promise<any> {
+    return this.ghGet(`/repos/${owner}/${repo}`);
+  }
+
+  async listIssues(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open', perPage = 30): Promise<any[]> {
+    return this.ghGet(`/repos/${owner}/${repo}/issues?state=${state}&per_page=${perPage}&sort=updated`);
+  }
+
+  async createIssue(owner: string, repo: string, title: string, body = '', labels: string[] = []): Promise<any> {
+    return this.ghPost(`/repos/${owner}/${repo}/issues`, { title, body, labels });
+  }
+
+  async listPRs(owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open', perPage = 30): Promise<any[]> {
+    return this.ghGet(`/repos/${owner}/${repo}/pulls?state=${state}&per_page=${perPage}&sort=updated`);
+  }
+
+  async getPR(owner: string, repo: string, prNumber: number): Promise<any> {
+    return this.ghGet(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+  }
+
+  async listCommits(owner: string, repo: string, perPage = 20): Promise<any[]> {
+    return this.ghGet(`/repos/${owner}/${repo}/commits?per_page=${perPage}`);
+  }
+
+  async searchCode(query: string, perPage = 20): Promise<any[]> {
+    const params = new URLSearchParams({ q: query, per_page: String(perPage) });
+    const data = await this.ghGet(`/search/code?${params}`);
+    return data.items || [];
+  }
+
+  async searchRepos(query: string, perPage = 20): Promise<any[]> {
+    const params = new URLSearchParams({ q: query, sort: 'stars', per_page: String(perPage) });
+    const data = await this.ghGet(`/search/repositories?${params}`);
+    return data.items || [];
+  }
+
+  async getFileContents(owner: string, repo: string, path: string): Promise<{ content: string; sha: string }> {
+    const data = await this.ghGet(`/repos/${owner}/${repo}/contents/${path}`);
+    const content = Buffer.from(data.content, 'base64').toString('utf-8');
+    return { content, sha: data.sha };
   }
 }

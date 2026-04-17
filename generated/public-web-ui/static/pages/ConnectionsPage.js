@@ -205,6 +205,20 @@ const CONNECTORS = [
   },
 ];
 
+// ── AI tools available per connected connector ──────────────────────────────
+const CONNECTOR_AI_TOOLS = {
+  gmail:        ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels'],
+  github:       ['connector_github_list_repos', 'connector_github_list_issues', 'connector_github_create_issue', 'connector_github_list_prs', 'connector_github_search'],
+  slack:        ['connector_slack_list_channels', 'connector_slack_send_message', 'connector_slack_get_history', 'connector_slack_search'],
+  notion:       ['connector_notion_search', 'connector_notion_get_page', 'connector_notion_create_page', 'connector_notion_query_database'],
+  google_drive: ['connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file', 'connector_gdrive_search'],
+  reddit:       ['connector_reddit_get_posts', 'connector_reddit_search', 'connector_reddit_submit_post', 'connector_reddit_get_comments'],
+  hubspot:      ['connector_hubspot_list_contacts', 'connector_hubspot_get_contact', 'connector_hubspot_create_contact', 'connector_hubspot_search', 'connector_hubspot_list_deals'],
+  salesforce:   ['connector_salesforce_query', 'connector_salesforce_search', 'connector_salesforce_create_record', 'connector_salesforce_get_record'],
+  stripe:       ['connector_stripe_get_balance', 'connector_stripe_list_customers', 'connector_stripe_list_charges', 'connector_stripe_list_products'],
+  ga4:          ['connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties'],
+};
+
 // ── Connection state (backed by /api/connections) ───────────────────────────
 
 let connectionsState = {}; // { [id]: { connected, connectedAt, tokenRef } }
@@ -285,6 +299,32 @@ function openConnectorView(id) {
       <span>${p.label}</span>
     </div>
   `).join('');
+
+  // AI tools section
+  const aiToolsEl = document.getElementById('cv-ai-tools');
+  if (aiToolsEl) {
+    const tools = CONNECTOR_AI_TOOLS[id] || [];
+    if (tools.length && isConnected) {
+      aiToolsEl.style.display = '';
+      aiToolsEl.innerHTML = `
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">AI Tools Unlocked</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px">
+          ${tools.map(t => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">${t}</code>`).join('')}
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"connectors"})</code></div>
+      `;
+    } else if (tools.length && !isConnected) {
+      aiToolsEl.style.display = '';
+      aiToolsEl.innerHTML = `
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">AI Tools (connect to unlock)</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;opacity:0.45">
+          ${tools.map(t => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">${t}</code>`).join('')}
+        </div>
+      `;
+    } else {
+      aiToolsEl.style.display = 'none';
+    }
+  }
 
   // Actions
   renderConnectorActions(c, isConnected);

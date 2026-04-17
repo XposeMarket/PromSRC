@@ -10,6 +10,7 @@ export function getCisSystemTools(): any[] {
     ['team_ops', 'team_ops — 19 agent/team coordination tools (spawn_subagent, team_manage, dispatch_team_agent, etc.)'],
     ['source_write', 'source_write — 10 code editing tools (find_replace_source, write_source, etc.)'],
     ['integrations', 'integrations — 5 MCP/webhook/CIS tools (mcp_server_manage, webhook_manage, social_intel, etc.)'],
+    ['connectors', 'connectors — 34 external service tools (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4). Use connector_list first to see what\'s connected.'],
   ];
   const categoryEnum = getPublicBuildAllowedCategories([
     'browser',
@@ -17,6 +18,7 @@ export function getCisSystemTools(): any[] {
     'team_ops',
     'source_write',
     'integrations',
+    'connectors',
   ] as const);
   const requestToolCategoryDescription =
     'Activate a tool category for this session, unlocking those tool schemas for use. ' +

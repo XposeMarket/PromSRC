@@ -39,18 +39,70 @@ export class NotionConnector extends OAuthConnector {
     return `http://localhost:${this.cfg.callbackPort}${this.cfg.callbackPath}`;
   }
 
-  async searchPages(query: string): Promise<any[]> {
+  private async notionGet(path: string): Promise<any> {
     const token = await this.getValidAccessToken();
-    const res = await fetch('https://api.notion.com/v1/search', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28',
-      },
-      body: JSON.stringify({ query, page_size: 20 }),
+    const res = await fetch(`https://api.notion.com/v1${path}`, {
+      headers: { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' },
     });
-    const data = await res.json() as any;
+    if (!res.ok) throw new Error(`Notion API error ${res.status}: ${await res.text().catch(() => '')}`);
+    return res.json();
+  }
+
+  private async notionPost(path: string, body: any): Promise<any> {
+    const token = await this.getValidAccessToken();
+    const res = await fetch(`https://api.notion.com/v1${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`Notion API error ${res.status}: ${await res.text().catch(() => '')}`);
+    return res.json();
+  }
+
+  async searchPages(query: string, pageSize = 20): Promise<any[]> {
+    const data = await this.notionPost('/search', { query, page_size: pageSize, filter: { property: 'object', value: 'page' } });
     return data.results || [];
+  }
+
+  async searchDatabases(query: string, pageSize = 20): Promise<any[]> {
+    const data = await this.notionPost('/search', { query, page_size: pageSize, filter: { property: 'object', value: 'database' } });
+    return data.results || [];
+  }
+
+  async getPage(pageId: string): Promise<any> {
+    return this.notionGet(`/pages/${pageId}`);
+  }
+
+  async getPageBlocks(pageId: string): Promise<any[]> {
+    const data = await this.notionGet(`/blocks/${pageId}/children`);
+    return data.results || [];
+  }
+
+  async createPage(parentPageId: string, title: string, content?: string): Promise<any> {
+    const children = content ? [{
+      object: 'block',
+      type: 'paragraph',
+      paragraph: { rich_text: [{ type: 'text', text: { content } }] },
+    }] : [];
+    return this.notionPost('/pages', {
+      parent: { page_id: parentPageId },
+      properties: { title: { title: [{ type: 'text', text: { content: title } }] } },
+      children,
+    });
+  }
+
+  async queryDatabase(databaseId: string, filter?: any, sorts?: any[], pageSize = 20): Promise<any[]> {
+    const body: any = { page_size: pageSize };
+    if (filter) body.filter = filter;
+    if (sorts) body.sorts = sorts;
+    const data = await this.notionPost(`/databases/${databaseId}/query`, body);
+    return data.results || [];
+  }
+
+  async createDatabaseEntry(databaseId: string, properties: Record<string, any>): Promise<any> {
+    return this.notionPost('/pages', {
+      parent: { database_id: databaseId },
+      properties,
+    });
   }
 }

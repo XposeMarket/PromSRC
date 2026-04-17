@@ -51,14 +51,55 @@ export class GoogleDriveConnector extends OAuthConnector {
     return tokens;
   }
 
-  async listFiles(query = '', pageSize = 20): Promise<any[]> {
+  private async driveGet(path: string, params: Record<string, string> = {}): Promise<any> {
     const token = await this.getValidAccessToken();
-    const params = new URLSearchParams({ pageSize: String(pageSize), fields: 'files(id,name,mimeType,modifiedTime,size)' });
-    if (query) params.set('q', query);
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    const qs = new URLSearchParams(params).toString();
+    const res = await fetch(`https://www.googleapis.com${path}${qs ? '?' + qs : ''}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const data = await res.json() as any;
+    if (!res.ok) throw new Error(`Google Drive API error ${res.status}: ${await res.text().catch(() => '')}`);
+    return res.json();
+  }
+
+  async listFiles(query = '', pageSize = 20): Promise<any[]> {
+    const params: Record<string, string> = { pageSize: String(pageSize), fields: 'files(id,name,mimeType,modifiedTime,size,webViewLink,parents)' };
+    if (query) params.q = query;
+    const data = await this.driveGet('/drive/v3/files', params);
     return data.files || [];
+  }
+
+  async getFile(fileId: string): Promise<any> {
+    return this.driveGet(`/drive/v3/files/${fileId}`, { fields: 'id,name,mimeType,modifiedTime,size,webViewLink,description,parents,owners' });
+  }
+
+  async readFileContent(fileId: string): Promise<string> {
+    const token = await this.getValidAccessToken();
+    // For Google Docs/Sheets/Slides — export as plain text
+    const meta = await this.getFile(fileId);
+    const mimeType = meta.mimeType || '';
+
+    if (mimeType.includes('google-apps.document')) {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`Drive export failed: ${res.status}`);
+      return res.text();
+    }
+
+    // For regular files — download content directly (text-safe types only)
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Drive download failed: ${res.status}`);
+    return res.text();
+  }
+
+  async searchFiles(query: string, pageSize = 20): Promise<any[]> {
+    return this.listFiles(query, pageSize);
+  }
+
+  async listSharedDrives(): Promise<any[]> {
+    const data = await this.driveGet('/drive/v3/drives', { pageSize: '50', fields: 'drives(id,name)' });
+    return data.drives || [];
   }
 }

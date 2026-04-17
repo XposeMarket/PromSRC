@@ -10,6 +10,10 @@ import { GitHubConnector } from './connectors/github.js';
 import { NotionConnector } from './connectors/notion.js';
 import { RedditConnector } from './connectors/reddit.js';
 import { GoogleDriveConnector } from './connectors/google-drive.js';
+import { HubSpotConnector } from './connectors/hubspot.js';
+import { SalesforceConnector } from './connectors/salesforce.js';
+import { StripeConnector } from './connectors/stripe.js';
+import { GoogleAnalyticsConnector } from './connectors/google-analytics.js';
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
@@ -23,7 +27,10 @@ export function initConnectorRegistry(configDir: string): void {
     new NotionConnector(configDir),
     new RedditConnector(configDir),
     new GoogleDriveConnector(configDir),
-    // Phase 4 additions: HubSpot, Salesforce, Stripe, GA4
+    new HubSpotConnector(configDir),
+    new SalesforceConnector(configDir),
+    new StripeConnector(configDir),
+    new GoogleAnalyticsConnector(configDir),
   ];
   for (const c of registry) connectors.set(c.id, c);
   console.log(`[Connectors] Registry loaded: ${[...connectors.keys()].join(', ')}`);

@@ -64,7 +64,7 @@ export class GmailConnector extends OAuthConnector {
     return tokens;
   }
 
-  // ── Gmail API helpers (used by future integration sync) ──────────────────
+  // ── Gmail API helpers ────────────────────────────────────────────────────
 
   async listMessages(maxResults = 20, query = ''): Promise<any[]> {
     const token = await this.getValidAccessToken();
@@ -94,5 +94,71 @@ export class GmailConnector extends OAuthConnector {
     });
     if (!res.ok) throw new Error(`Gmail profile failed: ${res.status}`);
     return res.json() as any;
+  }
+
+  // Fetch message + extract human-readable fields (subject, from, snippet, body)
+  async getMessageParsed(id: string): Promise<{ id: string; subject: string; from: string; date: string; snippet: string; body: string }> {
+    const msg = await this.getMessage(id);
+    const headers = (msg.payload?.headers || []) as Array<{ name: string; value: string }>;
+    const h = (name: string) => headers.find(x => x.name.toLowerCase() === name.toLowerCase())?.value || '';
+    const body = this.extractBody(msg.payload);
+    return { id, subject: h('subject'), from: h('from'), date: h('date'), snippet: msg.snippet || '', body };
+  }
+
+  private extractBody(payload: any): string {
+    if (!payload) return '';
+    if (payload.body?.data) return Buffer.from(payload.body.data, 'base64').toString('utf-8');
+    if (Array.isArray(payload.parts)) {
+      for (const part of payload.parts) {
+        if (part.mimeType === 'text/plain' && part.body?.data) return Buffer.from(part.body.data, 'base64').toString('utf-8');
+      }
+      for (const part of payload.parts) {
+        const nested = this.extractBody(part);
+        if (nested) return nested;
+      }
+    }
+    return '';
+  }
+
+  async sendEmail(to: string, subject: string, body: string, cc?: string, bcc?: string): Promise<{ id: string; threadId: string }> {
+    const token = await this.getValidAccessToken();
+    const profile = await this.getProfile();
+    const lines = [
+      `To: ${to}`,
+      cc ? `Cc: ${cc}` : '',
+      bcc ? `Bcc: ${bcc}` : '',
+      `From: ${profile.email}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      body,
+    ].filter(l => l !== '');
+    const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
+    const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ raw }),
+    });
+    if (!res.ok) throw new Error(`Gmail send failed: ${res.status} ${await res.text().catch(() => '')}`);
+    return res.json() as any;
+  }
+
+  async getThread(threadId: string): Promise<any> {
+    const token = await this.getValidAccessToken();
+    const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Gmail get thread failed: ${res.status}`);
+    return res.json();
+  }
+
+  async listLabels(): Promise<any[]> {
+    const token = await this.getValidAccessToken();
+    const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/labels', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Gmail list labels failed: ${res.status}`);
+    const data = await res.json() as any;
+    return data.labels || [];
   }
 }

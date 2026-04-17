@@ -16,7 +16,7 @@ const program = new Command();
 program
   .name('prometheus')
   .description('Local AI agent powered by your choice of LLM provider')
-  .version('1.0.1');
+  .version('1.0.2');
 
 type InstallMode = 'git' | 'npm' | 'unknown';
 type UpdateSource = 'git' | 'npm' | 'none';

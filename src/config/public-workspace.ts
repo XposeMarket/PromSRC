@@ -166,12 +166,11 @@ const PUBLIC_WORKSPACE_FILES: Record<string, string> = {
 };
 
 /**
- * Copy bundled skills from the app package into the user's workspace/skills directory.
+ * Copy bundled skills from the app package into a skills directory.
  * Only copies skills that don't already exist — never overwrites user customizations.
  */
-export function seedBundledSkills(workspacePath: string, bundledSkillsDir: string): void {
+export function seedBundledSkillsIntoDir(targetSkillsDir: string, bundledSkillsDir: string): void {
   if (!fs.existsSync(bundledSkillsDir)) return;
-  const targetSkillsDir = path.join(workspacePath, 'skills');
   fs.mkdirSync(targetSkillsDir, { recursive: true });
 
   let seeded = 0;
@@ -191,6 +190,14 @@ export function seedBundledSkills(workspacePath: string, bundledSkillsDir: strin
   if (seeded > 0) {
     console.log(`[Skills] Seeded ${seeded} bundled skill(s) into ${targetSkillsDir}`);
   }
+}
+
+/**
+ * Copy bundled skills from the app package into the user's workspace/skills directory.
+ * Only copies skills that don't already exist — never overwrites user customizations.
+ */
+export function seedBundledSkills(workspacePath: string, bundledSkillsDir: string): void {
+  seedBundledSkillsIntoDir(path.join(workspacePath, 'skills'), bundledSkillsDir);
 }
 
 export function ensurePublicWorkspaceScaffold(workspacePath: string): void {

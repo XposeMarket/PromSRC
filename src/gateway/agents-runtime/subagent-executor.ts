@@ -104,6 +104,7 @@ import {
   normalizeScheduleJobAction,
   summarizeCronJob,
   normalizeDeliveryChannel,
+  normalizeToolArgsForTool,
   parseJsonLike,
   parseLooseMap,
   toStringRecord,
@@ -112,6 +113,8 @@ import {
   type TaskControlResponse,
 } from '../tool-builder';
 import { activateToolCategory } from '../session';
+import { buildConnectorStatus } from '../tool-builder';
+import { handleConnectorTool } from '../tools/handlers/connector-handlers';
 import { appendJournal, listTasks, loadTask, saveTask } from '../tasks/task-store';
 import type { SkillWindow } from '../prompt-context';
 import { isToolHiddenInPublicBuild } from '../../runtime/distribution.js';
@@ -4223,8 +4226,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
         }
 
+        // ── connector_list: always-available connector discovery ──────────────
+        if (name === 'connector_list') {
+          return { name, args, result: buildConnectorStatus(), error: false };
+        }
+
+        // ── connector_* tools: dispatch to connector handlers ─────────────
+        if (name.startsWith('connector_') && name !== 'connector_list') {
+          const connResult = await handleConnectorTool(name, args);
+          return { name, args, ...connResult };
+        }
+
         if (name === 'request_tool_category') {
-          const rawCategory = String(args?.category || '').trim().toLowerCase();
+          const categoryArgs = normalizeToolArgsForTool(name, args);
+          const rawCategory = String(categoryArgs?.category || '').trim().toLowerCase();
           const runtimeCategories = getRuntimeToolCategories();
           if (!rawCategory) {
             return { name, args, result: `request_tool_category requires category. Valid: ${runtimeCategories.join(', ')}`, error: true };
@@ -4233,6 +4248,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
             return { name, args, result: `Invalid category "${rawCategory}". Valid: ${runtimeCategories.join(', ')}`, error: true };
           }
           activateToolCategory(sessionId, rawCategory);
+          // For connectors category: also return connected connector status
+          if (rawCategory === 'connectors') {
+            const status = buildConnectorStatus();
+            return { name, args, result: `Tool category "connectors" activated for session ${sessionId}.\n\n${status}`, error: false };
+          }
           return { name, args, result: `Tool category "${rawCategory}" activated for session ${sessionId}.`, error: false };
         }
 

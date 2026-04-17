@@ -21,6 +21,7 @@ const fs         = require('fs');
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const GATEWAY_URL  = 'http://127.0.0.1:18789';
+const APP_ID       = 'com.prometheus.desktop';
 const APP_ROOT     = path.join(__dirname, '..');
 const ICON_PATH    = path.join(APP_ROOT, 'assets', 'Prometheus.ico');
 const MAX_RETRIES  = 200;  // 200 x 300ms = 60s max wait (dev tsx startup can be slow)
@@ -47,6 +48,7 @@ function getGatewayWorkingDirectory() {
 
 // ─── User Data Dir ─────────────────────────────────────────────────────────
 const USER_DATA_DIR = path.join(app.getPath('appData'), 'Prometheus');
+app.setAppUserModelId(APP_ID);
 app.setPath('userData', USER_DATA_DIR);
 if (!fs.existsSync(USER_DATA_DIR)) {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true });
@@ -634,4 +636,3 @@ app.on('before-quit', () => {
     }
   }
 });
-

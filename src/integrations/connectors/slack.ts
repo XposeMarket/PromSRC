@@ -41,22 +41,59 @@ export class SlackConnector extends OAuthConnector {
     };
   }
 
-  async postMessage(channel: string, text: string): Promise<any> {
+  private async slackGet(path: string, params: Record<string, string> = {}): Promise<any> {
     const token = await this.getValidAccessToken();
-    const res = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel, text }),
-    });
-    return res.json();
-  }
-
-  async listChannels(): Promise<any[]> {
-    const token = await this.getValidAccessToken();
-    const res = await fetch('https://slack.com/api/conversations.list?limit=100', {
+    const qs = new URLSearchParams(params).toString();
+    const res = await fetch(`https://slack.com/api/${path}${qs ? '?' + qs : ''}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const data = await res.json() as any;
+    if (!data.ok) throw new Error(`Slack API error: ${data.error || 'unknown'}`);
+    return data;
+  }
+
+  private async slackPost(path: string, body: any): Promise<any> {
+    const token = await this.getValidAccessToken();
+    const res = await fetch(`https://slack.com/api/${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json() as any;
+    if (!data.ok) throw new Error(`Slack API error: ${data.error || 'unknown'}`);
+    return data;
+  }
+
+  async postMessage(channel: string, text: string, blocks?: any[]): Promise<any> {
+    return this.slackPost('chat.postMessage', { channel, text, ...(blocks ? { blocks } : {}) });
+  }
+
+  async listChannels(limit = 100): Promise<any[]> {
+    const data = await this.slackGet('conversations.list', { limit: String(limit), types: 'public_channel,private_channel' });
     return data.channels || [];
+  }
+
+  async getChannelHistory(channelId: string, limit = 20): Promise<any[]> {
+    const data = await this.slackGet('conversations.history', { channel: channelId, limit: String(limit) });
+    return data.messages || [];
+  }
+
+  async searchMessages(query: string, count = 20): Promise<any[]> {
+    const data = await this.slackGet('search.messages', { query, count: String(count), sort: 'timestamp' });
+    return data.messages?.matches || [];
+  }
+
+  async getUserInfo(userId: string): Promise<any> {
+    const data = await this.slackGet('users.info', { user: userId });
+    return data.user;
+  }
+
+  async getChannelInfo(channelId: string): Promise<any> {
+    const data = await this.slackGet('conversations.info', { channel: channelId });
+    return data.channel;
+  }
+
+  async uploadFile(channels: string, content: string, filename: string, title?: string): Promise<any> {
+    return this.slackPost('files.upload', { channels, content, filename, title: title || filename });
   }
 }

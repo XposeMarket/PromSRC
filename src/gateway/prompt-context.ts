@@ -459,6 +459,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['team_ops', 'team_ops (19 tools)'],
     ['source_write', 'source_write (10 tools)'],
     ['integrations', 'integrations (5 tools)'],
+    ['connectors', 'connectors (34 tools: Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4 — use connector_list to see what\'s connected)'],
   ];
   const allowedCategoryIds = new Set(getPublicBuildAllowedCategories(runtimeCategoryDefs.map(([id]) => id)));
   const categoryMenu = runtimeCategoryDefs
@@ -468,7 +469,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
 
   const menu = `[TOOLS] Core tools loaded (file ops, web, memory, shell, skills via skill_list/skill_read/skill_create, tasks, schedule_job, switch_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
   ${categoryMenu}
-  Use: request_tool_category('browser') — stays active for the whole session. Full reference: read_file('TOOLS.md')
+  Use: request_tool_category({"category":"browser"}) — stays active for the whole session. Full reference: read_file('TOOLS.md')
 
 [SEARCH] Providers: ${searchProviders}.
 WHEN: freshness (today/latest/current/price), high-stakes facts, named entity lookup, uncertainty ("not sure if…"). Skip for timeless well-known facts.

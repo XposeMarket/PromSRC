@@ -66,7 +66,7 @@ export function getAgentTeamScheduleTools(): any[] {
                   type: 'array',
                   items: {
                     type: 'string',
-                    enum: ['browser', 'desktop', 'team_ops', 'source_write', 'integrations'],
+                    enum: ['browser', 'desktop', 'team_ops', 'source_write', 'integrations', 'connectors'],
                   },
                   description: 'Tool categories to pre-activate for this subagent. Core tools (file ops, web search/fetch, run_command, send_telegram, memory) are ALWAYS available regardless. request_tool_category is always available as a last-resort escape hatch. Use this instead of listing individual tools.',
                 },

@@ -43,4 +43,64 @@ export class RedditConnector extends OAuthConnector {
     } catch {}
     return tokens;
   }
+
+  private async redditGet(path: string): Promise<any> {
+    const token = await this.getValidAccessToken();
+    const res = await fetch(`https://oauth.reddit.com${path}`, {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS/1.0' },
+    });
+    if (!res.ok) throw new Error(`Reddit API error ${res.status}: ${await res.text().catch(() => '')}`);
+    return res.json();
+  }
+
+  private async redditPost(path: string, body: Record<string, string>): Promise<any> {
+    const token = await this.getValidAccessToken();
+    const res = await fetch(`https://oauth.reddit.com${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS/1.0', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body).toString(),
+    });
+    if (!res.ok) throw new Error(`Reddit API error ${res.status}: ${await res.text().catch(() => '')}`);
+    return res.json();
+  }
+
+  async getMe(): Promise<any> {
+    return this.redditGet('/api/v1/me');
+  }
+
+  async getSubredditPosts(subreddit: string, sort: 'hot' | 'new' | 'top' | 'rising' = 'hot', limit = 25): Promise<any[]> {
+    const data = await this.redditGet(`/r/${subreddit}/${sort}?limit=${limit}`);
+    return data?.data?.children?.map((c: any) => c.data) || [];
+  }
+
+  async searchPosts(query: string, subreddit?: string, sort: 'relevance' | 'new' | 'top' = 'relevance', limit = 25): Promise<any[]> {
+    const sub = subreddit ? `/r/${subreddit}` : '';
+    const params = new URLSearchParams({ q: query, sort, limit: String(limit), type: 'link' });
+    const data = await this.redditGet(`${sub}/search?${params}`);
+    return data?.data?.children?.map((c: any) => c.data) || [];
+  }
+
+  async getPostComments(subreddit: string, postId: string, limit = 20): Promise<any[]> {
+    const data = await this.redditGet(`/r/${subreddit}/comments/${postId}?limit=${limit}`);
+    if (Array.isArray(data) && data[1]) {
+      return data[1]?.data?.children?.map((c: any) => c.data) || [];
+    }
+    return [];
+  }
+
+  async submitPost(subreddit: string, title: string, text: string): Promise<any> {
+    return this.redditPost('/api/submit', {
+      sr: subreddit,
+      kind: 'self',
+      title,
+      text,
+      resubmit: 'true',
+    });
+  }
+
+  async getUserHistory(username?: string, limit = 25): Promise<any[]> {
+    const path = username ? `/user/${username}/submitted` : '/user/me/submitted';
+    const data = await this.redditGet(`${path}?limit=${limit}`);
+    return data?.data?.children?.map((c: any) => c.data) || [];
+  }
 }

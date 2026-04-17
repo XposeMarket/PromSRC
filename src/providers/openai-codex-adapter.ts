@@ -250,13 +250,34 @@ export class OpenAICodexAdapter implements LLMProvider {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body from Codex endpoint');
 
-    const decoder = new TextDecoder();
-	    let buffer = '';
-	    let finalContent = '';
-	    let thinking = '';
-	    let toolCalls: any[] = [];
-
-    try {
+	    const decoder = new TextDecoder();
+		    let buffer = '';
+		    let finalContent = '';
+		    let thinking = '';
+		    let toolCalls: any[] = [];
+		    const toolCallByOutputIndex = new Map<number, any>();
+		    const toolCallByItemId = new Map<string, any>();
+		    const toolCallByCallId = new Map<string, any>();
+		    const rememberToolCall = (tc: any, item?: any, outputIndex?: unknown): any => {
+		      if (typeof outputIndex === 'number') toolCallByOutputIndex.set(outputIndex, tc);
+		      const itemId = String(item?.id || item?.item_id || '').trim();
+		      if (itemId) toolCallByItemId.set(itemId, tc);
+		      const callId = String(item?.call_id || tc?.id || '').trim();
+		      if (callId) toolCallByCallId.set(callId, tc);
+		      return tc;
+		    };
+		    const findToolCallForEvent = (event: any): any | undefined => {
+		      const callId = String(event?.call_id || event?.item?.call_id || '').trim();
+		      if (callId && toolCallByCallId.has(callId)) return toolCallByCallId.get(callId);
+		      const itemId = String(event?.item_id || event?.item?.id || '').trim();
+		      if (itemId && toolCallByItemId.has(itemId)) return toolCallByItemId.get(itemId);
+		      if (typeof event?.output_index === 'number' && toolCallByOutputIndex.has(event.output_index)) {
+		        return toolCallByOutputIndex.get(event.output_index);
+		      }
+		      return toolCalls[toolCalls.length - 1];
+		    };
+	
+	    try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -304,28 +325,40 @@ export class OpenAICodexAdapter implements LLMProvider {
 	              }
 	            }
 
-            // Tool/function call detected
-            if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
-              toolCalls.push({
-                id:       event.item.call_id || `call_${Date.now()}`,
-                type:     'function',
-                function: {
-                  name:      event.item.name || '',
-                  arguments: '',
-                },
-                _idx: toolCalls.length,
-              });
-            }
+	            // Tool/function call detected
+	            if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
+	              const tc = {
+	                id:       event.item.call_id || `call_${Date.now()}`,
+	                type:     'function',
+	                function: {
+	                  name:      event.item.name || '',
+	                  arguments: event.item.arguments || '',
+	                },
+	                _idx: toolCalls.length,
+	              };
+	              toolCalls.push(tc);
+	              rememberToolCall(tc, event.item, event.output_index);
+	            }
+	
+	            // Accumulate function call argument deltas
+	            if (type === 'response.function_call_arguments.delta') {
+	              const tc = findToolCallForEvent(event);
+	              if (tc) tc.function.arguments += event.delta || '';
+	            }
 
-            // Accumulate function call argument deltas
-            if (type === 'response.function_call_arguments.delta') {
-              const idx = event.output_index ?? (toolCalls.length - 1);
-              if (toolCalls[idx]) {
-                toolCalls[idx].function.arguments += event.delta || '';
-              }
-            }
-
-            // response.completed contains the full final snapshot
+	            if (
+	              (type === 'response.function_call_arguments.done' || type === 'response.output_item.done')
+	              && event.item?.type === 'function_call'
+	            ) {
+	              const tc = findToolCallForEvent(event);
+	              if (tc) {
+	                tc.function.name = event.item.name || tc.function.name;
+	                tc.function.arguments = event.item.arguments || event.arguments || tc.function.arguments;
+	                rememberToolCall(tc, event.item, event.output_index);
+	              }
+	            }
+	
+	            // response.completed contains the full final snapshot
             if (type === 'response.completed') {
               const outputs = event.response?.output || [];
               for (const item of outputs) {
@@ -335,21 +368,24 @@ export class OpenAICodexAdapter implements LLMProvider {
                     .map((c: any) => c.text || '')
                     .join('');
                 }
-                if (item.type === 'function_call') {
-                  // Prefer the complete snapshot over accumulated deltas
-                  const existing = toolCalls.find(tc => tc.id === item.call_id);
-                  if (existing) {
-                    existing.function.name      = item.name || existing.function.name;
-                    existing.function.arguments = item.arguments || existing.function.arguments;
-                  } else {
-                    toolCalls.push({
-                      id:       item.call_id || `call_${Date.now()}`,
-                      type:     'function',
-                      function: { name: item.name || '', arguments: item.arguments || '' },
-                    });
-                  }
-                }
-              }
+	                if (item.type === 'function_call') {
+	                  // Prefer the complete snapshot over accumulated deltas
+	                  const existing = toolCallByCallId.get(String(item.call_id || '').trim())
+	                    || toolCalls.find(tc => tc.id === item.call_id);
+	                  if (existing) {
+	                    existing.function.name      = item.name || existing.function.name;
+	                    existing.function.arguments = item.arguments || existing.function.arguments;
+	                  } else {
+	                    const tc = {
+	                      id:       item.call_id || `call_${Date.now()}`,
+	                      type:     'function',
+	                      function: { name: item.name || '', arguments: item.arguments || '' },
+	                    };
+	                    toolCalls.push(tc);
+	                    rememberToolCall(tc, item);
+	                  }
+	                }
+	              }
             }
           } catch {
             // Skip malformed SSE lines

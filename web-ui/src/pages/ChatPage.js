@@ -874,7 +874,6 @@ function renderChatMessages() {
         ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
         ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
         ${(msg.role === 'ai' || msg.role === 'assistant') && msg.processEntries && msg.processEntries.length ? renderProcessPill(msg.processEntries) : ''}
-        ${(msg.role === 'ai' || msg.role === 'assistant') ? renderThinkBlock(msg.thinking) : ''}
         ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
       </div>
     </div>`;
@@ -886,17 +885,7 @@ function renderChatMessages() {
           ${window.currentProgressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
         </div>`
 	      : '';
-	    const streamingThinkingHtml = window.streamingThinkingText
-	      ? `<div class="think-block live-think-block">
-	          <button class="think-toggle open" type="button">
-	            <span class="think-icon">...</span>
-	            <span>Thought process</span>
-	            <span style="margin-left:auto;opacity:0.5">streaming</span>
-	          </button>
-	          <div class="think-content live" id="streaming-thinking-content">${escHtml(window.streamingThinkingText)}</div>
-	        </div>`
-	      : '';
-	    const thinkingOnly = !window.streamingAIText && !progressHtml && !streamingThinkingHtml && !window.currentPreflightStatus;
+	    const thinkingOnly = !window.streamingAIText && !progressHtml && !window.currentPreflightStatus;
 	    container.innerHTML += `
       <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
         <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
@@ -904,7 +893,6 @@ function renderChatMessages() {
           ${!thinkingOnly ? `<div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>` : ''}
           ${window.currentPreflightStatus ? `<div class="msg-content" style="margin-bottom:6px;color:#26487e">${escHtml(window.currentPreflightStatus)}</div>` : ''}
 	          ${progressHtml}
-	          ${streamingThinkingHtml}
           ${window.streamingAIText
             ? `<div id="streaming-text-content" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word">${escHtml(window.streamingAIText)}</div>`
             : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`
@@ -1467,12 +1455,17 @@ async function sendChat(queuedMessage = null) {
 	            const chunk = String(event.thinking || event.text || '');
 	            if (chunk) {
 	              window.streamingThinkingText = (window.streamingThinkingText || '') + chunk;
-	              const thinkingEl = document.getElementById('streaming-thinking-content');
-	              if (thinkingEl) {
-	                thinkingEl.textContent += chunk;
-	              } else if (window.isThinking) {
-	                renderChatMessages();
+	              const preview = window.streamingThinkingText.slice(0, 80).replace(/\n/g, ' ');
+	              const suffix = window.streamingThinkingText.length > 80 ? '...' : '';
+	              const thinkLine = `Thinking: ${preview}${suffix}`;
+	              const lastIdx = window.currentProgressLines.length - 1;
+	              if (lastIdx >= 0 && window.currentProgressLines[lastIdx].startsWith('Thinking:')) {
+	                window.currentProgressLines[lastIdx] = thinkLine;
+	              } else {
+	                window.currentProgressLines.push(thinkLine);
+	                if (window.currentProgressLines.length > 8) window.currentProgressLines = window.currentProgressLines.slice(-8);
 	              }
+	              if (window.isThinking) renderChatMessages();
 	            }
 	            break;
 	          }
