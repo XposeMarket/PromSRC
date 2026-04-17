@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
 import { checkForTeamSuggestion } from '../teams/team-detector';
+import { getTeamWorkspacePath } from '../teams/team-workspace';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
@@ -272,8 +273,6 @@ router.post('/api/channels/send-test/:channel', async (req, res) => {
   res.status(400).json({ success: false, error: `Unsupported channel: ${channel}` });
 });
 
-type AgentToolProfile = 'minimal' | 'coding' | 'web' | 'full';
-
 export function sanitizeAgentId(value: any): string { return _sanitizeAgentId(value); }
 export function normalizeAgentsForSave(agents: any[]): any[] { return _normalizeAgentsForSave(agents); }
 
@@ -287,34 +286,23 @@ function _sanitizeAgentId(value: any): string {
 
 function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   const id = _sanitizeAgentId(raw?.id || fallbackId || '');
-  const profile = String(raw?.tools?.profile || '').trim();
   const normalized: any = {
     id,
     name: String(raw?.name || id || 'Agent').trim() || 'Agent',
   };
   if (raw?.description !== undefined) normalized.description = String(raw.description || '').trim();
-  if (raw?.emoji !== undefined) normalized.emoji = String(raw.emoji || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
   if (raw?.model !== undefined) normalized.model = String(raw.model || '').trim();
-  if (typeof raw?.minimalPrompt === 'boolean') normalized.minimalPrompt = raw.minimalPrompt;
   if (typeof raw?.default === 'boolean') normalized.default = raw.default;
-  if (typeof raw?.canSpawn === 'boolean') normalized.canSpawn = raw.canSpawn;
-  if (raw?.cronSchedule !== undefined) normalized.cronSchedule = String(raw.cronSchedule || '').trim();
   if (raw?.maxSteps !== undefined) {
     const n = Number(raw.maxSteps);
     if (Number.isFinite(n) && n > 0) normalized.maxSteps = Math.floor(n);
-  }
-  if (Array.isArray(raw?.spawnAllowlist)) {
-    normalized.spawnAllowlist = raw.spawnAllowlist
-      .map((v: any) => _sanitizeAgentId(v))
-      .filter((v: string) => !!v);
   }
   if (raw?.tools && typeof raw.tools === 'object') {
     normalized.tools = {};
     if (Array.isArray(raw.tools.allow)) normalized.tools.allow = raw.tools.allow.map((s: any) => String(s || '').trim()).filter(Boolean);
     if (Array.isArray(raw.tools.deny)) normalized.tools.deny = raw.tools.deny.map((s: any) => String(s || '').trim()).filter(Boolean);
-    if (['minimal', 'coding', 'web', 'full'].includes(profile)) normalized.tools.profile = profile as AgentToolProfile;
-    if (!normalized.tools.allow && !normalized.tools.deny && !normalized.tools.profile) delete normalized.tools;
+    if (!normalized.tools.allow && !normalized.tools.deny) delete normalized.tools;
   }
   if (Array.isArray(raw?.bindings)) {
     normalized.bindings = raw.bindings
@@ -373,7 +361,7 @@ function getPrimaryModelRef(cfg: any): string {
 }
 
 function inferAgentDefaultModelKey(agent: any, isManager: boolean, isTeamMember: boolean): string {
-  if (isManager) return 'team_manager';
+  if (isManager) return 'manager';
   if (isTeamMember) return 'team_subagent';
   if (String(agent?.id || '') === 'main' || agent?.default === true) return 'main_chat';
   return 'subagent';
@@ -388,12 +376,10 @@ function resolveEffectiveAgentModel(cfg: any, agent: any, isManager: boolean, is
   const roleType = String(agent?.roleType || '').trim().toLowerCase();
   const roleKey = roleType ? `subagent_${roleType}` : '';
   const candidates: Array<[string, string | undefined]> = typeKey === 'team_subagent'
-    ? [['team_subagent', defaults?.team_subagent], ...(roleKey ? [[roleKey, defaults?.[roleKey]] as [string, string | undefined]] : []), ['subagent', defaults?.subagent]]
+    ? [...(roleKey ? [[roleKey, defaults?.[roleKey]] as [string, string | undefined]] : [])]
     : typeKey === 'subagent'
       ? [...(roleKey ? [[roleKey, defaults?.[roleKey]] as [string, string | undefined]] : []), ['subagent', defaults?.subagent]]
-      : typeKey === 'team_manager'
-        ? [['team_manager', defaults?.team_manager], ['manager', defaults?.manager]]
-        : [[typeKey, defaults?.[typeKey]]];
+      : [[typeKey, defaults?.[typeKey]]];
   for (const [key, value] of candidates) {
     const defaultModel = String(value || '').trim();
     if (defaultModel) return { model: defaultModel, source: `agent_model_defaults.${key}` };
@@ -442,12 +428,15 @@ router.get('/api/agents', (_req, res) => {
     const workspace = resolveAgentWorkspace(agent as any);
     const lastRun = getAgentLastRun(agent.id);
     const isManager = !!(agent as any).isTeamManager || managerTeamMap.has(agent.id);
-    const teamInfo = agentTeamMap.get(agent.id) || managerTeamMap.get(agent.id);
-    const effectiveModel = resolveEffectiveAgentModel(cfg, agent, isManager, teamMemberIds.has(agent.id));
-    return {
-      ...agent,
-      workspaceResolved: workspace,
-      workspaceExists: fs.existsSync(workspace),
+	    const teamInfo = agentTeamMap.get(agent.id) || managerTeamMap.get(agent.id);
+	    const effectiveModel = resolveEffectiveAgentModel(cfg, agent, isManager, teamMemberIds.has(agent.id));
+      const teamWorkspacePath = teamInfo?.teamId ? getTeamWorkspacePath(teamInfo.teamId) : null;
+	    return {
+	      ...agent,
+	      workspaceResolved: workspace,
+        workspaceDefault: teamWorkspacePath || workspace,
+        teamWorkspacePath,
+	      workspaceExists: fs.existsSync(workspace),
       isSynthetic: agent.id === 'main' && !explicitAgents.some((a: any) => _sanitizeAgentId(a.id) === 'main'),
       lastRun: lastRun || null,
       lastHeartbeatAt: findLastCronRunAt(agent.id),
@@ -640,13 +629,17 @@ router.delete('/api/agents/:id', (req, res) => {
   ]);
   if (target?.workspace) candidateDirs.add(String(target.workspace));
 
-  const safeSuffix = `/.prometheus/subagents/${targetId}`.toLowerCase();
+  const safeSuffixes = [
+    `/.prometheus/subagents/${targetId}`.toLowerCase(),
+    `/subagents/${targetId}`.toLowerCase(),
+  ];
   const removedPaths: string[] = [];
   for (const dir of candidateDirs) {
     try {
-      const resolved = path.resolve(dir);
-      const normalized = resolved.replace(/\\/g, '/').toLowerCase();
-      if (!normalized.endsWith(safeSuffix)) continue;
+	      const resolved = path.resolve(dir);
+	      const normalized = resolved.replace(/\\/g, '/').toLowerCase();
+	      const underWorkspace = normalized.startsWith(path.resolve(cfgWorkspace).replace(/\\/g, '/').toLowerCase() + '/');
+	      if (!underWorkspace || !safeSuffixes.some((suffix) => normalized.endsWith(suffix))) continue;
       if (!fs.existsSync(resolved)) continue;
       fs.rmSync(resolved, { recursive: true, force: true });
       removedPaths.push(resolved);
@@ -664,11 +657,11 @@ router.delete('/api/agents/:id', (req, res) => {
 });
 
 // Helper: resolve the correct workspace for an agent, preferring the registered
-// workspace field (which points to workspace/.prometheus/subagents/<id> for subagents)
-// over the CONFIG_DIR fallback which points to the wrong .prometheus/agents dir.
+// workspace field. Standalone agents live in workspace/.prometheus/subagents/<id>;
+// team agents live in workspace/teams/<teamId>/subagents/<id>.
 function resolveAgentWorkspaceSafe(agent: any): string {
   if (agent.workspace) return agent.workspace;
-  // Fallback: check workspace/.prometheus/subagents/<id> first (team subagents)
+  // Fallback: check workspace/.prometheus/subagents/<id> for standalone agents.
   const subagentPath = path.join(getConfig().getWorkspacePath(), '.prometheus', 'subagents', agent.id);
   if (fs.existsSync(subagentPath)) return subagentPath;
   // Final fallback: standard ensureAgentWorkspace path

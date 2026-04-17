@@ -1,4 +1,4 @@
-import { getAgentById, ensureAgentWorkspace } from '../config/config.js';
+import { getAgentById, ensureAgentWorkspace, getConfig } from '../config/config.js';
 import { ensureTeamAgentIdentity } from '../gateway/teams/team-workspace.js';
 import { getOllamaClient } from './ollama-client.js';
 import { buildProviderById } from '../providers/factory.js';
@@ -26,14 +26,14 @@ export interface SpawnOptions {
   /**
    * Override the workspace path for this agent run.
    * For team dispatches: pass the team workspace so file tools operate on
-   * the shared team workspace, while system_prompt.md is still read from
-   * the agent's own subagent dir (ensureAgentWorkspace).
+   * the shared team workspace, while system_prompt.md is read from the
+   * team-scoped subagent identity directory.
    */
   workspacePath?: string;
   /**
    * Team ID for this dispatch. When set, the agent's identity (system_prompt.md,
-   * AGENTS.md, etc.) is loaded from a per-team isolated directory instead of the
-   * shared global subagent workspace. This makes the same agent act as completely
+   * AGENTS.md, etc.) is loaded from a per-team isolated directory. This makes
+   * the same agent act as completely
    * separate entities in different teams — no context bleed between teams.
    */
   teamId?: string;
@@ -199,22 +199,27 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
     };
   }
 
-  // The agent's own subagent workspace — global baseline for identity files.
-  const agentOwnWorkspace = ensureAgentWorkspace(agent);
+  // The agent's own subagent workspace. Standalone one-off agents use this as
+  // their identity/artifact root; team agents use a team identity root plus the
+  // shared team workspace passed in options.workspacePath.
+  const agentOwnWorkspace = options.teamId
+    ? ensureTeamAgentIdentity(options.teamId, options.agentId, (agent as any).workspace || undefined)
+    : ensureAgentWorkspace(agent);
   // If a teamId is provided, use a per-team isolated identity directory so the
   // same agent can serve multiple teams as completely separate entities.
   // This prevents any cross-team context bleed via shared system_prompt.md.
   const identityWorkspace = options.teamId
     ? ensureTeamAgentIdentity(options.teamId, options.agentId, agentOwnWorkspace)
     : agentOwnWorkspace;
-  // If a team workspace override is provided, file operations happen there;
-  // otherwise fall back to the agent's own workspace.
-  const workspacePath = options.workspacePath || agentOwnWorkspace;
+  const mainWorkspacePath = getConfig().getWorkspacePath() || process.cwd();
+  // Team dispatches pass the team workspace here. Standalone one-off subagents
+  // run with the full main workspace so they can read/edit normal project files;
+  // their private subagent workspace is guidance for their own artifacts only.
+  const workspacePath = options.workspacePath || mainWorkspacePath;
   const maxSteps = options.maxSteps ?? agent.maxSteps ?? 8;
-  // minimalPrompt controls how much extra workspace/bootstrap context is included.
-  // Identity is always sourced from system_prompt.md for spawned sub-agents.
-  // If unset (undefined), treat as false => full prompt mode.
-  const promptMode = agent.minimalPrompt === true ? 'minimal' : 'full';
+  // Subagents use the same full runtime context as main chat, with their
+  // identity layered in from system_prompt.md / HEARTBEAT.md.
+  const promptMode = 'full';
   // Sub-agents run with full tool access.
   const agentToolProfile = 'full';
   const toolRegistry = getToolRegistry();
@@ -236,9 +241,12 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
     mode: 'general',
   });
 
+  const workspaceGuidance = options.teamId
+    ? `\n\n[Workspace rules]\nYou have full subagent runtime and tool access. Work inside the assigned team workspace by default so team artifacts stay together.\nTeam workspace: ${workspacePath}`
+    : `\n\n[Workspace rules]\nYou have full main-chat-equivalent runtime and tool access. You may read, edit, and modify files anywhere in the main workspace when the task requires it.\n\nYou are also assigned as a one-off subagent with a private artifact workspace. Put your own outputs, notes, logs, scratch files, and memory updates in that subagent workspace by default so your work stays separated from main chat and other agents. Do not treat this as a restriction on editing project files.\nMain workspace: ${workspacePath}\nSubagent artifact workspace: ${agentOwnWorkspace}`;
   const taskMessageBase = options.context
-    ? `${options.task}\n\n[Context from orchestrator]\n${options.context}`
-    : options.task;
+    ? `${options.task}\n\n[Context from orchestrator]\n${options.context}${workspaceGuidance}`
+    : `${options.task}${workspaceGuidance}`;
   const taskMessage = selfLearnSuffix ? `${taskMessageBase}${selfLearnSuffix}` : taskMessageBase;
 
   const resolved = resolveAgentProvider(agent, options.agentType);
@@ -267,9 +275,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   updateTaskStatus(agentTask.id, 'running');
 
   // ── Workspace isolation ───────────────────────────────────────────────────
-  // Wrap the entire reactor run in a workspace context so every file tool
-  // call made by this agent is automatically scoped to its own workspace.
-  // This prevents any agent from reading or writing outside its directory.
+  // Wrap the entire reactor run in a workspace context. Team agents are scoped
+  // to the team workspace. Standalone one-off agents are scoped to the main
+  // workspace, with prompt guidance to keep their own artifacts under their
+  // private subagent workspace.
   console.log(`${label} Workspace scoped to: ${workspacePath}`);
 
   const runAgent = async (): Promise<string> => {
@@ -279,13 +288,14 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
       reactor.run(taskMessage, {
         role: 'executor',
         promptMode,
-        subagentSystemPromptOnly: true,
+        includeAgentSystemPrompt: true,
+        subagentSystemPromptOnly: false,
         workspacePath,
         skillSlugs: agentSkills,
         // When dispatched to a team, load identity from the per-team isolated dir
         // so this agent is a completely separate entity in each team context.
         // Falls back to agentOwnWorkspace if no team override is active.
-        systemPromptWorkspacePath: options.workspacePath ? identityWorkspace : undefined,
+        systemPromptWorkspacePath: identityWorkspace,
         maxSteps,
         toolProfile: agentToolProfile,
         onStep: (step) => {

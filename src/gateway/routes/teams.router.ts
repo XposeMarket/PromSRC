@@ -16,6 +16,7 @@ import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory } from '../../
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
 import { dismissTeamSuggestion } from '../teams/team-detector';
 import { buildTeamDispatchTask, runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
+import { claimAgentForTeamWorkspace } from '../teams/team-workspace';
 import * as fs from 'fs';
 import * as path from 'path';
 import { appendManagerNote, getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -186,7 +187,7 @@ router.post('/api/teams', (req, res) => {
     if (!name || !subagentIds || !teamContext) {
       return res.status(400).json({ success: false, error: 'name, subagentIds, and teamContext are required' });
     }
-    const team = createManagedTeam({
+	    const team = createManagedTeam({
       name: String(name).slice(0, 80),
       description: String(description || '').slice(0, 300),
       emoji: String(emoji || '🏠').slice(0, 4),
@@ -194,8 +195,11 @@ router.post('/api/teams', (req, res) => {
       teamContext: String(teamContext).slice(0, 1000),
       managerSystemPrompt: String(managerSystemPrompt || `You are the manager of the "${name}" team. Your goal is: ${teamContext}`).slice(0, 2000),
       managerModel: managerModel ? String(managerModel) : undefined,
-      reviewTrigger: reviewTrigger || 'after_each_run',
-    });
+	      reviewTrigger: reviewTrigger || 'after_each_run',
+	    });
+	    for (const agentId of team.subagentIds || []) {
+	      claimAgentForTeamWorkspace(team.id, agentId);
+	    }
     const telegramChatIdRaw = Number(req.body?.telegramChatId || req.body?.notificationChatId || 0);
     if (Number.isFinite(telegramChatIdRaw) && telegramChatIdRaw > 0) {
       addTeamNotificationTarget(team.id, {
@@ -259,9 +263,14 @@ router.put('/api/teams/:id', (req, res) => {
       _bindTeamNotificationTargetFromSession(team.id, String(req.body.sessionId), 'api_team_chat');
     }
     const allowed = ['name', 'description', 'emoji', 'teamContext', 'contextNotes', 'contextReferences', 'subagentIds'];
-    for (const key of allowed) {
-      if (req.body[key] !== undefined) (team as any)[key] = req.body[key];
-    }
+	    for (const key of allowed) {
+	      if (req.body[key] !== undefined) (team as any)[key] = req.body[key];
+	    }
+	    if (Array.isArray(req.body?.subagentIds)) {
+	      for (const agentId of team.subagentIds || []) {
+	        claimAgentForTeamWorkspace(team.id, agentId);
+	      }
+	    }
     if (req.body.manager) {
       team.manager = { ...team.manager, ...req.body.manager };
     }
@@ -1109,7 +1118,7 @@ router.post('/api/schedules/parse', (req: any, res: any) => {
     const t = text.toLowerCase().trim();
     
     // Helper: extract time from text and handle AM/PM
-    function extractTime(text: string): { hour: number; minute: number } | null {
+	    function extractTime(text: string): { hour: number; minute: number } | null {
       // Match: "3:13pm", "15:13", "3:13", "11am", etc.
       const timeMatch = text.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
       if (!timeMatch) return null;
@@ -1128,11 +1137,40 @@ router.post('/api/schedules/parse', (req: any, res: any) => {
       // Validate ranges
       if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
       
-      return { hour, minute };
-    }
-    
-    if (t.includes('daily') || t.includes('every day')) {
-      const timeInfo = extractTime(t);
+	      return { hour, minute };
+	    }
+
+	    function extractDays(text: string): { cron: string; label: string } | null {
+	      if (/\bweekdays?\b|\bmon\s*(?:-|to)\s*fri\b/.test(text)) {
+	        return { cron: '1-5', label: 'weekdays' };
+	      }
+	      if (/\bweekends?\b/.test(text)) {
+	        return { cron: '0,6', label: 'weekends' };
+	      }
+	      const days = [
+	        ['sunday', '0', 'Sunday'],
+	        ['monday', '1', 'Monday'],
+	        ['tuesday', '2', 'Tuesday'],
+	        ['wednesday', '3', 'Wednesday'],
+	        ['thursday', '4', 'Thursday'],
+	        ['friday', '5', 'Friday'],
+	        ['saturday', '6', 'Saturday'],
+	      ];
+	      const hits = days.filter(([name]) => new RegExp(`\\b${name}\\b`).test(text));
+	      if (!hits.length) return null;
+	      return {
+	        cron: hits.map(([, n]) => n).join(','),
+	        label: hits.map(([, , label]) => label).join(', '),
+	      };
+	    }
+	    
+	    const dayInfo = extractDays(t);
+	    if (dayInfo) {
+	      const timeInfo = extractTime(t) || { hour: 9, minute: 0 };
+	      cron = `${timeInfo.minute} ${timeInfo.hour} * * ${dayInfo.cron}`;
+	      preview = `${dayInfo.label.charAt(0).toUpperCase()}${dayInfo.label.slice(1)} at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
+	    } else if (t.includes('daily') || t.includes('every day')) {
+	      const timeInfo = extractTime(t);
       if (timeInfo) {
         const hourStr = String(timeInfo.hour).padStart(2, '0');
         const minStr = String(timeInfo.minute).padStart(2, '0');
@@ -1142,8 +1180,8 @@ router.post('/api/schedules/parse', (req: any, res: any) => {
         cron = '0 9 * * *';
         preview = 'Daily at 09:00';
       }
-    } else if (t.includes('weekly')) {
-      const timeInfo = extractTime(t);
+	    } else if (t.includes('weekly')) {
+	      const timeInfo = extractTime(t);
       if (timeInfo) {
         cron = `${timeInfo.minute} ${timeInfo.hour} * * 1`;
         preview = `Weekly on Monday at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
@@ -1151,16 +1189,7 @@ router.post('/api/schedules/parse', (req: any, res: any) => {
         cron = '0 9 * * 1';
         preview = 'Weekly on Monday at 09:00';
       }
-    } else if (t.includes('monday') || t.includes('tuesday') || t.includes('wednesday') || t.includes('thursday') || t.includes('friday')) {
-      const timeInfo = extractTime(t);
-      if (timeInfo) {
-        cron = `${timeInfo.minute} ${timeInfo.hour} * * 1-5`;
-        preview = `Weekdays at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
-      } else {
-        cron = '0 9 * * 1-5';
-        preview = 'Weekdays at 09:00';
-      }
-    } else if (/^\d{1,2} \d{1,2} \d|\d \d \*/.test(t)) {
+	    } else if (/^\d{1,2} \d{1,2} \d|\d \d \*/.test(t)) {
       cron = t;
       preview = 'Custom cron pattern';
     } else {

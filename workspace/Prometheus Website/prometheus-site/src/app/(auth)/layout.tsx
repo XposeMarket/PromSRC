@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -13,22 +14,14 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           className="group flex items-center gap-2 text-foreground transition-colors hover:text-ember"
           aria-label="Back to homepage"
         >
-          <svg
-            width="28"
-            height="28"
-            viewBox="0 0 32 32"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            className="transition-transform duration-300 group-hover:scale-110"
-            aria-hidden="true"
-          >
-            {/* Flame icon */}
-            <path
-              d="M16 2C16 2 6 14 6 20a10 10 0 0 0 20 0C26 14 16 2 16 2Zm0 24a6 6 0 0 1-6-6c0-3 3-8 6-12 3 4 6 9 6 12a6 6 0 0 1-6 6Z"
-              fill="currentColor"
-              className="text-ember"
-            />
-          </svg>
+          <Image
+            src="/images/prometheus-logo.png"
+            alt="Prometheus"
+            width={32}
+            height={38}
+            className="transition-transform duration-300 group-hover:scale-110 drop-shadow-[0_0_8px_rgba(220,74,26,0.5)]"
+            priority
+          />
           <span className="font-display text-xl font-semibold tracking-tight">
             Prometheus
           </span>

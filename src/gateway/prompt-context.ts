@@ -393,12 +393,12 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
     ? `DEBUG: Use workspace files, logs, and visible runtime state to diagnose issues in the public app build.`
     : `DEBUG: read_source(file) for src/ errors, read_webui_source(file) for web-ui/. SELF.md has architecture overview. Read before diagnosing.`,
 
-  agents: `AGENTS: agent_list()→all agents. agent_info(id)→details. spawn_subagent(id, task_prompt, create_if_missing?, run_now?)→run or create a standalone agent. delete_agent(id, confirm:true)→remove.
-RULES: Always agent_list() first. Never spawn to list/inspect — use agent_list(). spawn_subagent is for single-agent delegation — one focused task, one agent, done.`,
+  agents: `AGENTS: agent_list()→all agents. agent_info(id)→details. spawn_subagent(id, task_prompt, create_if_missing?, run_now?)→run or create a standalone agent. message_subagent(agent_id,message,context?)→send a background message to a standalone non-team subagent and return a task id. delete_agent(id, confirm:true)→remove.
+RULES: Always agent_list() first. Never spawn to list/inspect — use agent_list(). spawn_subagent creates/starts standalone one-off agents. message_subagent is for plain agent-to-agent handoff with an existing standalone subagent; its work/results stay in the subagent task panel so main chat can continue.`,
 
   teams: `TEAMS: ask_team_coordinator(goal, context?) for multi-agent team work. spawn_subagent() for single standalone agent tasks.
 WHEN TO USE EACH:
-  → spawn_subagent: one agent, one focused task (research X, run a script, analyze a file, scheduled background work)
+  → spawn_subagent/message_subagent: one standalone non-team agent, one focused task or background handoff
   → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles (planner+builder+verifier etc.)
 TEAM OPS: Do NOT call team_manage directly from main chat — ask_team_coordinator handles it. reply_to_team(team_id, msg) is the only direct team call — use it when a coordinator is waiting on your reply.`,
 
@@ -429,6 +429,7 @@ export const CATEGORY_POLICIES: Record<string, string> = {
   scheduling: TOOL_BLOCKS.schedule,
   ...(isPublicDistributionBuild() ? {} : { source_write: `${TOOL_BLOCKS.files}` }),
   integrations: TOOL_BLOCKS.integrations,
+  composites: 'COMPOSITES: Activate when the user wants to create, inspect, edit, delete, list, or run saved multi-step composite tools. Composite management tools are not core; request the composites category first.',
 };
 
 // ─── buildToolsContext ────────────────────────────────────────────────────────
@@ -460,6 +461,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['source_write', 'source_write (10 tools)'],
     ['integrations', 'integrations (5 tools)'],
     ['connectors', 'connectors (34 tools: Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4 — use connector_list to see what\'s connected)'],
+    ['composites', 'composites (saved multi-step tools and composite management)'],
   ];
   const allowedCategoryIds = new Set(getPublicBuildAllowedCategories(runtimeCategoryDefs.map(([id]) => id)));
   const categoryMenu = runtimeCategoryDefs
@@ -485,7 +487,7 @@ SPEED RULE: if write_note is the only action in your turn, call switch_model('lo
 DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered data, intermediate results, or blockers keeps context recoverable if the task is interrupted.
 
 [TEAMS & AGENTS] Two delegation paths — pick the right one:
-  → spawn_subagent('id', task, ...) — single agent, single focused task. Good for: research, file ops, running scripts, scheduled background work. Requires team_ops category.
+  → spawn_subagent('id', task, ...) — create/run one standalone non-team agent. message_subagent(id,message) — send a background message to an existing standalone agent; returns task_id and keeps the conversation/result in the subagent task panel. Requires team_ops category.
   → ask_team_coordinator(goal) — always available (core). Multi-agent teams with roles. Use when: parallel workstreams, multiple specializations needed, or task is too large for one agent context.
 Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct team call — use only when a coordinator is waiting on your reply.
 

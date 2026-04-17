@@ -31,7 +31,10 @@ function copyRecursive(src, dest) {
 
 // Skills that are internal/dev-only and should NOT be shipped to public users
 const SKILLS_EXCLUDE = new Set([
+  'json-and-config-surgery',
   'prometheus-team-design',
+  'self-repair-protocol',
+  'src-edit-proposal-rigor',
   'subagent-system-prompt-design',
 ]);
 

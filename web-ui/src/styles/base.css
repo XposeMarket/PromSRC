@@ -849,21 +849,6 @@ main,
   border-color: var(--line);
   color: var(--text);
 }
-:root[data-theme="dark"] .skill-card {
-  background: var(--panel-2);
-  border-color: var(--line);
-}
-:root[data-theme="dark"] .skill-card:hover {
-  border-color: #5c6980;
-  box-shadow: 0 6px 16px rgba(8, 12, 20, 0.35);
-}
-:root[data-theme="dark"] .skill-card.enabled {
-  border-color: #3f8f67;
-  background: linear-gradient(135deg, #273b33 0%, #23352e 100%);
-  box-shadow: 0 0 0 2px rgba(49, 184, 132, 0.18), 0 4px 12px rgba(10, 20, 14, 0.35);
-}
-:root[data-theme="dark"] .skill-card.enabled .skill-card-name { color: #9fe3c2; }
-:root[data-theme="dark"] .skill-card-dot { background: #6c788f; }
 :root[data-theme="dark"] .skill-card.enabled .skill-card-dot {
   background: #31b884;
   box-shadow: 0 0 0 3px rgba(49, 184, 132, 0.22);

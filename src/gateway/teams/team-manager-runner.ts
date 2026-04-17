@@ -23,6 +23,7 @@ import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/conf
 import { runTeamAgentViaChat } from './team-dispatch-runtime';
 import { runCoordinatorReview, runCoordinatorConversation, runSubagentResultVerification } from './team-coordinator';
 import { getCronSchedulerInstance } from '../scheduling/cron-scheduler';
+import { claimAgentForTeamWorkspace } from './team-workspace';
 
 // Backward-compat no-op (server-v2.ts calls this)
 export function setTeamRunAgentFn(_fn: any): void { /* no-op */ }
@@ -286,11 +287,12 @@ export async function applyChangeToAgent(change: TeamChange, teamId?: string): P
         if (!agentDef) return false;
         const addTeam = getManagedTeam(resolvedTeamId);
         if (!addTeam) return false;
-        if (addTeam.subagentIds.includes(agentToAdd)) return true;
-        addTeam.subagentIds = [...addTeam.subagentIds, agentToAdd];
-        saveManagedTeam(addTeam);
-        return true;
-      }
+	        if (addTeam.subagentIds.includes(agentToAdd)) return true;
+	        addTeam.subagentIds = [...addTeam.subagentIds, agentToAdd];
+	        saveManagedTeam(addTeam);
+	        claimAgentForTeamWorkspace(resolvedTeamId, agentToAdd);
+	        return true;
+	      }
       case 'remove_subagent': {
         const resolvedTeamId = String(teamId || '').trim()
           || (change.targetSubagentId ? (getTeamForAgent(change.targetSubagentId)?.id || '') : '');

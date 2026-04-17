@@ -15,9 +15,29 @@ const capabilities = [
     icon: "📁",
   },
   {
+    title: "Desktop Automation",
+    description: "Control local apps, windows, files, and workflows across your machine with real desktop-level execution.",
+    icon: "🖥️",
+  },
+  {
+    title: "Interactive Chat Visuals",
+    description: "Turn conversations into live cards, previews, diagrams, and visual interfaces that respond as work evolves.",
+    icon: "💬",
+  },
+  {
+    title: "Built-in Marketing Tools",
+    description: "Plan campaigns, shape landing pages, draft launch assets, and generate customer-facing content in one flow.",
+    icon: "📣",
+  },
+  {
     title: "Persistent Memory",
-    description: "Remembers context across sessions. Your preferences, your projects, your history — all retained.",
+    description: "Remembers context across sessions. Your preferences, your projects, your history - all retained.",
     icon: "🧠",
+  },
+  {
+    title: "Full Business Context Injection System",
+    description: "Bring company docs, product knowledge, workflows, and customer context directly into every agent task.",
+    icon: "🧩",
   },
   {
     title: "Background Tasks",
@@ -33,6 +53,11 @@ const capabilities = [
     title: "Teams & Subagents",
     description: "Orchestrate multiple AI agents working together on complex projects with shared workspaces.",
     icon: "👥",
+  },
+  {
+    title: "Skills",
+    description: "Use 60+ built-in skills for specialized work, with the ability to add or create more as your needs grow.",
+    icon: "🛠️",
   },
   {
     title: "Integrations",

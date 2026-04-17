@@ -116,7 +116,6 @@ const AgentDefinitionSchema = z.object({
   workspace:   z.string().optional(),
   model:       z.string().optional(),
   tools:       AgentToolPolicySchema.optional(),
-  minimalPrompt: z.boolean().optional(),
   default:     z.boolean().optional(),
   bindings: z.array(z.object({
     channel:   z.enum(['telegram', 'discord', 'whatsapp']),
@@ -125,8 +124,6 @@ const AgentDefinitionSchema = z.object({
   })).optional(),
   cronSchedule: z.string().optional(),
   maxSteps:    z.number().int().positive().optional(),
-  canSpawn:    z.boolean().optional(),
-  spawnAllowlist: z.array(z.string()).optional(),
 });
 
 // ─── Channel Configs ─────────────────────────────────────────────────────────

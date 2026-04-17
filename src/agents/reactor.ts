@@ -57,6 +57,8 @@ export interface ReactOptions {
    * own subagent dir has the system prompt. Falls back to workspacePath.
    */
   systemPromptWorkspacePath?: string;
+  /** Add the agent identity file on top of the regular runtime prompt. */
+  includeAgentSystemPrompt?: boolean;
   /** Sub-agent mode: identity comes from system_prompt.md only (no SOUL.md injection). */
   subagentSystemPromptOnly?: boolean;
 }
@@ -381,10 +383,11 @@ function buildNodeCallSystemPrompt(
 ): string {
   const today = new Date().toISOString().slice(0, 10);
   const subagentSystemPromptOnly = options.subagentSystemPromptOnly === true;
-  const agentSystemPrompt = subagentSystemPromptOnly ? loadAgentSystemPrompt(options) : '';
+  const includeAgentSystemPrompt = subagentSystemPromptOnly || options.includeAgentSystemPrompt === true;
+  const agentSystemPrompt = includeAgentSystemPrompt ? loadAgentSystemPrompt(options) : '';
   const mergedExtraInstructions = subagentSystemPromptOnly
     ? [agentSystemPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
-    : String(options.extraInstructions || '').trim();
+    : [agentSystemPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim();
   // Subagents now support skills — use explicitly passed skillSlugs (set by spawner
   // from agent.skills config or relevance-based fallback). Only fall back to [] if
   // no slugs at all, so we don't inflate context on agents with no relevant skills.
@@ -495,7 +498,8 @@ function buildNativeToolSystemPrompt(
 ): string {
   const today = new Date().toISOString().slice(0, 10);
   const subagentSystemPromptOnly = options.subagentSystemPromptOnly === true;
-  const agentSystemPrompt = loadAgentSystemPrompt(options);
+  const includeAgentSystemPrompt = subagentSystemPromptOnly || options.includeAgentSystemPrompt === true;
+  const agentSystemPrompt = includeAgentSystemPrompt ? loadAgentSystemPrompt(options) : '';
   const mergedExtraInstructions = subagentSystemPromptOnly
     ? [agentSystemPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
     : (agentSystemPrompt || String(options.extraInstructions || '').trim());

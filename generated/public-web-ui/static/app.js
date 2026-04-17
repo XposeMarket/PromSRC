@@ -157,13 +157,14 @@ export function setSidebarSegTab(tab) {
 }
 
 // ── Page mode ─────────────────────────────────────────────────
-const VALID_MODES = ['chat', 'bgtasks', 'schedule', 'teams', 'proposals', 'audit', 'memory'];
+const VALID_MODES = ['chat', 'bgtasks', 'schedule', 'teams', 'subagents', 'proposals', 'audit', 'memory'];
 
 const PAGE_TITLES = {
   chat: ['Chat', 'Prometheus operator workspace'],
   bgtasks: ['Tasks', 'Background task queue'],
   schedule: ['Schedule', 'Recurring + one-off jobs'],
   teams: ['Teams', 'Managed agent teams'],
+  subagents: ['Subagents', 'Standalone subagent workspace'],
   proposals: ['Proposals', 'Agent-generated proposals awaiting approval'],
   audit: ['Audit Log', 'Non-main agent runs'],
   memory: ['Memory Graph', 'Knowledge web across sessions'],
@@ -201,6 +202,7 @@ export function setMode(mode) {
     bgtasks: 'bgtasks-view',
     schedule: 'schedule-view',
     teams: 'teams-view',
+    subagents: 'subagents-view',
     proposals: 'proposals-view',
     audit: 'audit-view',
     memory: 'memory-view',
@@ -235,6 +237,11 @@ export function setMode(mode) {
     if (typeof window.loadProposals === 'function') window.loadProposals();
     const badge = document.getElementById('proposals-badge');
     if (badge) badge.style.display = 'none';
+  }
+  if (mode === 'subagents') {
+    console.log('[app] setMode subagents, subagentsPageActivate defined:', typeof window.subagentsPageActivate);
+    if (typeof window.subagentsPageActivate === 'function') window.subagentsPageActivate();
+    else if (typeof window.refreshSubagents === 'function') window.refreshSubagents();
   }
   if (mode === 'audit' && typeof window.loadAuditLog === 'function') window.loadAuditLog();
   if (mode === 'memory' && typeof window.memoryPageActivate === 'function') window.memoryPageActivate();

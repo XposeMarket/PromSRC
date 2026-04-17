@@ -30,7 +30,7 @@ import {
 } from '../teams/managed-teams';
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
 import { buildTeamDispatchTask, _bgAgentResults } from '../teams/team-dispatch-runtime';
-import { appendTeamMemoryEvent } from '../teams/team-workspace';
+import { appendTeamMemoryEvent, claimAgentForTeamWorkspace } from '../teams/team-workspace';
 import { notifyMainAgent } from '../teams/notify-bridge';
 import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
@@ -2149,10 +2149,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
                   `[BASE PRESET ROLE - ${roleName}]`,
                   String(roleDef.system_prompt || '').trim(),
                   ``,
-                  `[TEAM-SPECIFIC ROLE - ${derivedTeamRole}]`,
-                  specialization || 'No team-specific assignment was provided. Infer it from the manager dispatch task and team_info.md.',
+                  `[SUBAGENT SPECIALIZATION - ${derivedTeamRole}]`,
+                  specialization || 'No specialization was provided. Infer the assignment from the direct task message.',
                   ``,
-                  `When the team-specific role conflicts with the generic preset, follow the team-specific role while preserving the preset's quality bar and deliverable discipline.`,
+                  `When the specialization conflicts with the generic preset, follow the specialization while preserving the preset's quality bar and deliverable discipline.`,
                 ].filter(Boolean).join('\n');
                 // Merge registry definition into create_if_missing (caller fields take priority)
                 createIfMissing = {
@@ -2279,7 +2279,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               : 'after_each_run') as 'after_each_run' | 'after_all_runs' | 'daily' | 'manual';
 
             const purposeStr = args.purpose ? String(args.purpose).slice(0, 1000) : undefined;
-            const team = createManagedTeam({
+	            const team = createManagedTeam({
               name: teamName.slice(0, 80),
               description: String(args.description || '').slice(0, 300),
               emoji: String(args.emoji || '🏠').slice(0, 4),
@@ -2291,9 +2291,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
               ).slice(0, 2000),
               managerModel: args.manager_model ? String(args.manager_model) : undefined,
               reviewTrigger,
-              originatingSessionId: args.originating_session_id ? String(args.originating_session_id) : undefined,
-            });
-            deps.bindTeamNotificationTargetFromSession(team.id, sessionId, 'team_manage:create');
+	              originatingSessionId: args.originating_session_id ? String(args.originating_session_id) : undefined,
+	            });
+            const claimedSubagents = finalIds
+              .map((id) => ({ subagent_id: id, ...(claimAgentForTeamWorkspace(team.id, id) || {}) }))
+              .filter((entry) => !!entry.identityPath);
+	            deps.bindTeamNotificationTargetFromSession(team.id, sessionId, 'team_manage:create');
 
             // Default false — team must be explicitly started via trigger_review or the Start button.
             // Auto-kickoff was removed: teams should wait for the user to assign a first task.
@@ -2333,9 +2336,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
                   emoji: team.emoji,
                   subagentIds: team.subagentIds,
                   reviewTrigger: team.manager.reviewTrigger,
-                },
-                createdSubagents,
-                kickoffScheduled: kickoffInitial,
+	                },
+	                createdSubagents,
+	                claimedSubagents,
+	                kickoffScheduled: kickoffInitial,
                 kickoffAfterSeconds: kickoffInitial ? kickoffSeconds : null,
                 kickoffAt,
               }, null, 2),
@@ -2743,7 +2747,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const t = text.toLowerCase().trim();
           
           // Helper: extract time from text and handle AM/PM
-          function extractTime(text: string): { hour: number; minute: number } | null {
+	          function extractTime(text: string): { hour: number; minute: number } | null {
             const timeMatch = text.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
             if (!timeMatch) return null;
             
@@ -2759,11 +2763,40 @@ export async function executeTool(name: string, args: any, workspacePath: string
             
             if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
             
-            return { hour, minute };
-          }
-          
-          if (t.includes('daily') || t.includes('every day')) {
-            const timeInfo = extractTime(t);
+	            return { hour, minute };
+	          }
+
+	          function extractDays(text: string): { cron: string; label: string } | null {
+	            if (/\bweekdays?\b|\bmon\s*(?:-|to)\s*fri\b/.test(text)) {
+	              return { cron: '1-5', label: 'weekdays' };
+	            }
+	            if (/\bweekends?\b/.test(text)) {
+	              return { cron: '0,6', label: 'weekends' };
+	            }
+	            const days = [
+	              ['sunday', '0', 'Sunday'],
+	              ['monday', '1', 'Monday'],
+	              ['tuesday', '2', 'Tuesday'],
+	              ['wednesday', '3', 'Wednesday'],
+	              ['thursday', '4', 'Thursday'],
+	              ['friday', '5', 'Friday'],
+	              ['saturday', '6', 'Saturday'],
+	            ];
+	            const hits = days.filter(([day]) => new RegExp(`\\b${day}\\b`).test(text));
+	            if (!hits.length) return null;
+	            return {
+	              cron: hits.map(([, n]) => n).join(','),
+	              label: hits.map(([, , label]) => label).join(', '),
+	            };
+	          }
+	          
+	          const dayInfo = extractDays(t);
+	          if (dayInfo) {
+	            const timeInfo = extractTime(t) || { hour: 9, minute: 0 };
+	            cron = `${timeInfo.minute} ${timeInfo.hour} * * ${dayInfo.cron}`;
+	            preview = `${dayInfo.label.charAt(0).toUpperCase()}${dayInfo.label.slice(1)} at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
+	          } else if (t.includes('daily') || t.includes('every day')) {
+	            const timeInfo = extractTime(t);
             if (timeInfo) {
               const hourStr = String(timeInfo.hour).padStart(2, '0');
               const minStr = String(timeInfo.minute).padStart(2, '0');
@@ -2773,8 +2806,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
               cron = '0 9 * * *';
               preview = 'Daily at 09:00';
             }
-          } else if (t.includes('weekly')) {
-            const timeInfo = extractTime(t);
+	          } else if (t.includes('weekly')) {
+	            const timeInfo = extractTime(t);
             if (timeInfo) {
               cron = `${timeInfo.minute} ${timeInfo.hour} * * 1`;
               preview = `Weekly on Monday at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
@@ -2782,16 +2815,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               cron = '0 9 * * 1';
               preview = 'Weekly on Monday at 09:00';
             }
-          } else if (t.includes('monday') || t.includes('tuesday') || t.includes('wednesday') || t.includes('thursday') || t.includes('friday')) {
-            const timeInfo = extractTime(t);
-            if (timeInfo) {
-              cron = `${timeInfo.minute} ${timeInfo.hour} * * 1-5`;
-              preview = `Weekdays at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
-            } else {
-              cron = '0 9 * * 1-5';
-              preview = 'Weekdays at 09:00';
-            }
-          } else if (/^\d{1,2} \d{1,2} \d|\d \d \*/.test(t)) {
+	          } else if (/^\d{1,2} \d{1,2} \d|\d \d \*/.test(t)) {
             cron = t;
             preview = 'Custom cron pattern';
           } else {
@@ -3542,6 +3566,69 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         // ── run_task_now ──────────────────────────────────────
+        if (name === 'message_subagent') {
+          const agentId = String(args.agent_id || '').trim();
+          const message = String(args.message || '').trim();
+          const context = args.context ? String(args.context).trim() : '';
+
+          if (!agentId) return { name, args, result: 'message_subagent requires agent_id', error: true };
+          if (!message) return { name, args, result: 'message_subagent requires message', error: true };
+
+          const agent = getAgentById(agentId) as any;
+          if (!agent) return { name, args, result: `Unknown subagent: ${agentId}. Call agent_list first.`, error: true };
+          if (agent.default === true || agentId === 'main') {
+            return { name, args, result: 'message_subagent is for standalone subagents, not the main/default agent.', error: true };
+          }
+
+          const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(agentId));
+          if (team) {
+            return {
+              name,
+              args,
+              result: `Agent "${agentId}" belongs to team "${team.name}" (${team.id}). Use team messaging/dispatch tools for team agents; message_subagent is only for standalone one-off subagents.`,
+              error: true,
+            };
+          }
+
+          try {
+            const workspacePath = getConfig().getConfig().workspace?.path || process.cwd();
+            const subagentMgr = new SubagentManager(workspacePath, deps.broadcastWS, deps.handleChat, deps.telegramChannel);
+            const result = await subagentMgr.callSubagent(
+              {
+                subagent_id: agentId,
+                task_prompt: [
+                  `Direct background message from main chat to standalone subagent "${agentId}".`,
+                  ``,
+                  `Message:`,
+                  message,
+                  ``,
+                  `Work in your subagent task thread. Keep intermediate collaboration in the subagent chat/task UI, not the main chat. If you need user input, ask clearly in the task so it can pause for assistance there.`,
+                ].join('\n'),
+                context_data: context ? { main_chat_context: context } : undefined,
+                run_now: true,
+                delivery_mode: 'task_panel_only',
+              },
+              sessionId
+            );
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: true,
+                agent_id: result.subagent_id,
+                task_id: result.task_id,
+                status: result.status,
+                response:
+                  `Message sent to subagent "${agentId}" in the background. ` +
+                  `The working conversation and final result will stay in the subagent task panel, so main chat can continue uninterrupted.`,
+              }, null, 2),
+              error: false,
+            };
+          } catch (err: any) {
+            return { name, args, result: `message_subagent error: ${err.message}`, error: true };
+          }
+        }
+
         if (name === 'run_task_now') {
           const title = String(args.title || '').trim();
           const prompt = String(args.prompt || '').trim();
@@ -3708,19 +3795,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         // ── update_heartbeat ──────────────────────────────────────
-        // Lets agents/managers modify their own (or another agent's) heartbeat
-        // config and HEARTBEAT.md at runtime without a human touching the UI.
-        if (name === 'update_heartbeat') {
-          const targetAgentId = String(args.agent_id || 'main').trim();
-          if (targetAgentId !== 'main' && targetAgentId !== 'default') {
-            return {
-              name,
-              args,
-              result: 'Subagent heartbeats are disabled. Use schedule_job(action:"create", subagent_id:"...", instruction_prompt:"...", schedule:{kind:"recurring", cron:"..."}) for recurring subagent work.',
-              error: true,
-            };
-          }
-          const partial: Record<string, any> = {};
+	        // Lets agents/managers modify their own (or another agent's) heartbeat
+	        // config and HEARTBEAT.md at runtime without a human touching the UI.
+	        if (name === 'update_heartbeat') {
+	          const targetAgentId = String(args.agent_id || 'main').trim();
+	          const partial: Record<string, any> = {};
           if (typeof args.enabled === 'boolean') partial.enabled = args.enabled;
           const rawInterval = Number(args.interval_minutes);
           if (Number.isFinite(rawInterval) && rawInterval > 0) {

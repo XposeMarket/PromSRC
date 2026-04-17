@@ -27,6 +27,8 @@ import type { BootAutomatedSession } from './boot';
 export interface RestartContext {
   reason: 'proposal' | 'repair' | 'self_update' | 'manual' | 'build_deploy';
   timestamp: number;
+  restartLauncher?: 'electron' | 'prom_gateway_start';
+  electronManaged?: boolean;
   proposalId?: string;
   repairId?: string;
   title?: string;
@@ -47,15 +49,18 @@ function getProjectRoot(): string {
   // In packaged Electron, __dirname resolves to inside app.asar (a file, not a dir).
   // PROMETHEUS_DATA_DIR is set by main.js to %APPDATA%\Prometheus — use that so
   // all .prometheus/ paths land in the correct user data directory.
-  if (process.env.PROMETHEUS_DATA_DIR) {
-    return process.env.PROMETHEUS_DATA_DIR;
-  }
+  if (process.env.PROMETHEUS_APP_ROOT) return process.env.PROMETHEUS_APP_ROOT;
   return path.resolve(__dirname, '..', '..');
+}
+
+function getLifecycleStateRoot(): string {
+  if (process.env.PROMETHEUS_DATA_DIR) return process.env.PROMETHEUS_DATA_DIR;
+  return getProjectRoot();
 }
 
 function getRestartContextPath(): string {
   // Use .prometheus dir so it persists across restarts
-  const prometheusDir = path.join(getProjectRoot(), '.prometheus');
+  const prometheusDir = path.join(getLifecycleStateRoot(), '.prometheus');
   if (!fs.existsSync(prometheusDir)) fs.mkdirSync(prometheusDir, { recursive: true });
   return path.join(prometheusDir, 'restart-context.json');
 }
@@ -90,6 +95,12 @@ function buildRestartCompletionMessage(ctx: RestartContext): string {
   const lines: string[] = [
     `✅ Gateway restart complete (${ctx.reason}).`,
   ];
+
+  if (ctx.restartLauncher === 'electron') {
+    lines.push('Launcher: Electron app');
+  } else if (ctx.restartLauncher === 'prom_gateway_start') {
+    lines.push('Launcher: prom gateway start');
+  }
 
   if (ctx.title) lines.push(`Change: ${ctx.title}`);
   if (ctx.summary) lines.push(`Summary: ${ctx.summary}`);
@@ -246,7 +257,7 @@ interface PendingStartupNotificationStore {
 }
 
 function getStartupNotificationsPath(): string {
-  const prometheusDir = path.join(getProjectRoot(), '.prometheus');
+  const prometheusDir = path.join(getLifecycleStateRoot(), '.prometheus');
   if (!fs.existsSync(prometheusDir)) fs.mkdirSync(prometheusDir, { recursive: true });
   return path.join(prometheusDir, 'startup-notifications.json');
 }
@@ -359,15 +370,32 @@ async function shutdownGateway(): Promise<void> {
  */
 export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   const root = getProjectRoot();
+  const electronManaged = process.env.PROMETHEUS_ELECTRON_MANAGED === '1';
+  const restartCtx: RestartContext = {
+    ...ctx,
+    restartLauncher: electronManaged ? 'electron' : 'prom_gateway_start',
+    electronManaged,
+  };
+  console.log(`[lifecycle] Launcher: ${restartCtx.restartLauncher}`);
 
   console.log(`[lifecycle] ═══ Graceful restart initiated: ${ctx.reason} ═══`);
   console.log(`[lifecycle] Title: ${ctx.title || '(none)'}`);
 
   // Step 1: Write context for the next boot
-  writeRestartContext(ctx);
+  writeRestartContext(restartCtx);
 
   // Step 2: Shut down current gateway
   await shutdownGateway();
+
+  // If Electron spawned this gateway, let Electron own the replacement process.
+  // That keeps packaged apps on the correct executable, env, data dir, and UI reload path.
+  if (electronManaged) {
+    console.log('[lifecycle] Electron-managed gateway detected. Handing restart to Electron...');
+    setTimeout(() => {
+      process.exit(42);
+    }, 250);
+    return;
+  }
 
   // Step 3: Spawn new gateway process.
   //

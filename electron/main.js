@@ -110,6 +110,8 @@ let mainWindow     = null;
 let gatewayProcess = null;
 let isQuitting     = false;
 let pendingUpdate  = null;  // holds UpdateInfo once a release is downloaded
+let isGatewayRestarting = false;
+const GATEWAY_RESTART_EXIT_CODE = 42;
 
 // ─── Setup Splash Screen ───────────────────────────────────────────────────
 // Shown during first-run dependency installation.
@@ -337,8 +339,10 @@ function startGateway() {
     ...process.env,
     FORCE_COLOR:                  '0',
     PROMETHEUS_DATA_DIR:          USER_DATA_DIR,
+    PROMETHEUS_APP_ROOT:          APP_ROOT,
     PROMETHEUS_WORKSPACE_DIR:     path.join(USER_DATA_DIR, 'workspace'),
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
+    PROMETHEUS_ELECTRON_MANAGED:  '1',
     ...(IS_PUBLIC_BUILD ? { PROMETHEUS_PUBLIC_BUILD: '1' } : {}),
   };
 
@@ -390,6 +394,10 @@ function startGateway() {
 
   gatewayProcess.on('exit', (code, signal) => {
     writeGatewayLog(`[main] Gateway exited (code=${code}, signal=${signal})\n`);
+    if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
+      restartGatewayFromElectron();
+      return;
+    }
     if (!isQuitting) {
       const lastOutput = getLastGatewayOutput();
       dialog.showErrorBox(
@@ -399,6 +407,41 @@ function startGateway() {
       app.quit();
     }
   });
+}
+
+async function restartGatewayFromElectron() {
+  if (isGatewayRestarting) return;
+  isGatewayRestarting = true;
+  writeGatewayLog('[main] Electron-managed gateway restart requested\n');
+
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('gateway-restarting');
+    }
+  } catch {}
+
+  try {
+    gatewayProcess = null;
+    startGateway();
+    await waitForGateway();
+    writeGatewayLog('[main] Electron-managed gateway restart complete\n');
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(GATEWAY_URL);
+    }
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    writeGatewayLog(`[main] Electron-managed gateway restart failed: ${message}\n`);
+    if (!isQuitting) {
+      dialog.showErrorBox(
+        'Prometheus - Gateway Restart Failed',
+        `Prometheus could not restart the gateway:\n\n${message}\n\nLog: ${GATEWAY_LOG_PATH}`
+      );
+      app.quit();
+    }
+  } finally {
+    isGatewayRestarting = false;
+  }
 }
 
 function waitForGateway(retries = MAX_RETRIES) {

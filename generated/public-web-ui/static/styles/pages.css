@@ -583,9 +583,9 @@
 
 /* Skill cards - same color as chat sessions, green glow when enabled */
 .skill-card {
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255,255,255,0.10);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: rgba(255,255,255,0.06);
   padding: 10px 12px;
   margin-bottom: 8px;
   cursor: pointer;
@@ -593,17 +593,18 @@
   user-select: none;
 }
 .skill-card:hover {
-  border-color: #c2d6f4;
-  box-shadow: 0 4px 12px rgba(15, 60, 120, 0.08);
+  border-color: rgba(255,255,255,0.20);
+  background: rgba(255,255,255,0.09);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
 }
 .skill-card.enabled {
-  border-color: #86d4a8;
-  background: linear-gradient(135deg, #f0faf4 0%, #e8f8ee 100%);
-  box-shadow: 0 0 0 2px rgba(15, 159, 110, 0.12), 0 2px 8px rgba(15, 159, 110, 0.1);
+  border-color: #3f8f67;
+  background: linear-gradient(135deg, #273b33 0%, #23352e 100%);
+  box-shadow: 0 0 0 2px rgba(49,184,132,0.18), 0 2px 8px rgba(10,20,14,0.35);
 }
 .skill-card.enabled:hover {
-  border-color: #5ec48a;
-  box-shadow: 0 0 0 2px rgba(15, 159, 110, 0.18), 0 4px 12px rgba(15, 159, 110, 0.14);
+  border-color: #4faf80;
+  box-shadow: 0 0 0 2px rgba(49,184,132,0.28), 0 4px 12px rgba(10,20,14,0.4);
 }
 .skill-card-top {
   display: flex;
@@ -677,15 +678,15 @@
 .skill-card-name {
   font-size: 12px;
   font-weight: 700;
-  color: var(--text);
+  color: #e8e6e1;
   line-height: 1.3;
 }
 .skill-card.enabled .skill-card-name {
-  color: #0a6b3d;
+  color: #9fe3c2;
 }
 .skill-card-desc {
   font-size: 10px;
-  color: var(--muted);
+  color: #9a9890;
   line-height: 1.4;
   margin-top: 2px;
   overflow: hidden;
@@ -704,7 +705,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #c5d0de;
+  background: #5a6272;
   transition: all 0.2s ease;
 }
 .skill-card.enabled .skill-card-dot {

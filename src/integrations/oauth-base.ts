@@ -151,7 +151,40 @@ export abstract class OAuthConnector {
     return crypto.createHash('sha256').update(v).digest('base64url');
   }
 
+  // Load credentials from vault if env vars weren't set at startup time.
+  // Mutates cfg so subsequent calls (handleCallback, refreshTokens) use them too.
+  private loadCredentialsFromVault(): void {
+    if (this.cfg.clientId) return; // already have credentials
+    try {
+      const vaultKey = `integration.${this.cfg.id}.credentials`;
+      const secret = getVault(this.configDir).get(vaultKey, `creds:load:${this.cfg.id}`);
+      if (!secret) return;
+      const creds = JSON.parse(secret.expose()) as { clientId?: string; clientSecret?: string; apiKey?: string };
+      if (creds.clientId) this.cfg.clientId = creds.clientId;
+      if (creds.clientSecret) this.cfg.clientSecret = creds.clientSecret;
+    } catch { /* vault not ready or no creds stored */ }
+  }
+
+  saveCredentials(clientId: string, clientSecret?: string): void {
+    const vaultKey = `integration.${this.cfg.id}.credentials`;
+    getVault(this.configDir).set(vaultKey, JSON.stringify({ clientId, clientSecret: clientSecret || '' }), `creds:save:${this.cfg.id}`);
+    this.cfg.clientId = clientId;
+    if (clientSecret) this.cfg.clientSecret = clientSecret;
+  }
+
+  hasCredentials(): boolean {
+    if (this.cfg.clientId) return true;
+    try {
+      const vaultKey = `integration.${this.cfg.id}.credentials`;
+      const secret = getVault(this.configDir).get(vaultKey, `creds:check:${this.cfg.id}`);
+      if (!secret) return false;
+      const creds = JSON.parse(secret.expose()) as { clientId?: string };
+      return !!creds.clientId;
+    } catch { return false; }
+  }
+
   startFlow(): OAuthStartResult {
+    this.loadCredentialsFromVault();
     const state = crypto.randomBytes(16).toString('hex');
     const flowState: FlowState = { state, createdAt: Date.now() };
 
@@ -178,6 +211,7 @@ export abstract class OAuthConnector {
   }
 
   public async handleCallback(code: string, returnedState: string): Promise<OAuthCallbackResult> {
+    this.loadCredentialsFromVault();
     const flow = activeFlows.get(this.cfg.id);
     if (!flow || Date.now() - flow.createdAt > FLOW_TTL_MS) {
       return { success: false, error: 'OAuth session expired or not found. Click Connect again.' };

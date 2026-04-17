@@ -4,8 +4,8 @@ import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AsciiReveal } from "@/components/ascii/AsciiReveal";
 import { STARTUP_ASCII } from "@/content/ascii/startup";
-import { LOGO_ASCII } from "@/content/ascii/logo";
 import { parseAsciiToLines } from "@/lib/ascii/loader";
+import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { analytics } from "@/lib/analytics";
 
@@ -29,7 +29,6 @@ export function IntroSequence({ onComplete }: IntroSequenceProps) {
   }, [onComplete]);
 
   const startupLines = parseAsciiToLines(STARTUP_ASCII);
-  const logoLines   = parseAsciiToLines(LOGO_ASCII);
 
   return (
     <div className="fixed inset-0 z-[100] bg-black flex items-center justify-center overflow-hidden">
@@ -70,14 +69,24 @@ export function IntroSequence({ onComplete }: IntroSequenceProps) {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.8 }}
+              className="w-[min(76vw,540px)]"
             >
-              <AsciiReveal
-                lines={logoLines}
-                color="ember"
-                msPerLine={25}
-                className="text-[8px] sm:text-[10px]"
-                onComplete={() => setTimeout(() => setPhase("cta"), 800)}
-              />
+              <motion.div
+                initial={{ clipPath: "inset(0 0 100% 0)" }}
+                animate={{ clipPath: "inset(0 0 0% 0)" }}
+                transition={{ duration: 1.6, ease: "linear" }}
+                onAnimationComplete={() => setTimeout(() => setPhase("cta"), 800)}
+              >
+                <Image
+                  src="/images/prometheus-ascii-color.svg"
+                  alt=""
+                  width={1192}
+                  height={1195}
+                  className="h-auto w-full select-none"
+                  priority
+                  aria-hidden="true"
+                />
+              </motion.div>
             </motion.div>
           )}
 
@@ -90,12 +99,20 @@ export function IntroSequence({ onComplete }: IntroSequenceProps) {
               transition={{ duration: 0.8, delay: 0.2 }}
               className="flex flex-col items-center gap-10"
             >
-              <div className="flex flex-col items-center gap-3">
+              <div className="flex flex-col items-center gap-6">
+                <Image
+                  src="/images/prometheus-logo.png"
+                  alt="Prometheus"
+                  width={120}
+                  height={144}
+                  className="drop-shadow-[0_0_24px_rgba(220,74,26,0.6)]"
+                  priority
+                />
                 <Button size="lg" onClick={handleEnter} className="glow-ember-strong px-10 py-4 text-lg">
-                  Enter the fire
+                  Ignite your Flame
                 </Button>
-                <span className="text-xs text-muted/30 tracking-widest uppercase">
-                  Everything AI
+                <span className="text-sm text-muted/50 tracking-widest uppercase">
+                  The World&apos;s First Everything AI
                 </span>
               </div>
             </motion.div>

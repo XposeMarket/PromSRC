@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-04-16T14:10:47.904Z",
+  "generatedAt": "2026-04-17T20:57:37.750Z",
   "materializer": {
-    "intervalMs": 30000,
-    "lastRunAt": 1776348647904,
-    "filesMirrored": 1955,
+    "intervalMs": 300000,
+    "lastRunAt": 1776459457750,
+    "filesMirrored": 1938,
     "copied": 0,
-    "skipped": 1955,
+    "skipped": 1938,
     "errors": 0
   },
   "counts": {
@@ -14,11 +14,11 @@
     "proposals": 101,
     "teams": 1,
     "teamRuns": 12,
-    "chatTranscripts": 448,
+    "chatTranscripts": 470,
     "chatCompactions": 8
   },
   "byDomain": {
-    "chats": 1551,
+    "chats": 1534,
     "projects": 2,
     "tasks": 166,
     "proposals": 101,

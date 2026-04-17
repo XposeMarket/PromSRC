@@ -578,57 +578,45 @@ export class TelegramChannel {
     return `Desktop screenshot sent (${packet.width}x${packet.height}).`;
   }
 
-  private buildTelegramCommandsMessage(userId: number): string {
+  private buildTelegramCommandsMessage(_userId: number): string {
     return [
-      `🔥 <b>Prometheus Telegram Commands</b>`,
+      `🔥 <b>Prometheus Commands</b>`,
       ``,
-      `<b>Core Chat</b>`,
-      `/start — welcome + quick start`,
-      `/commands — full command list`,
-      `/help — alias of /commands`,
-      `/status — check bot/model status`,
-      `/clear — clear linked Telegram + web history`,
-      `/new — start a fresh Telegram channel session`,
-      `/cancel — cancel pending one-shot chat/edit flows`,
+      `💬 <b>Chat</b>`,
+      `/status — bot &amp; model status`,
+      `/clear — clear history  /new — new session`,
+      `/cancel — cancel pending flow`,
       ``,
-      `<b>Workspace</b>`,
-      `/browse [path] — browse files with inline buttons`,
-      `/download &lt;path&gt; — download a workspace file`,
-      `/screenshot — browser screenshot or per-monitor desktop screenshot`,
-      `/restart — choose full or quick gateway restart`,
-      `/update — check for updates, preview commits, and confirm install`,
+      `📁 <b>Workspace</b>`,
+      `/browse [path] — file browser`,
+      `/download &lt;path&gt; — download file`,
+      `/screenshot — browser or desktop screenshot`,
+      `/restart — full or quick restart`,
+      `/update — check &amp; apply updates`,
       ``,
-      `<b>Teams, Agents, Tasks</b>`,
-      `/teams — team browser + manager/agent controls`,
-      `/agents — browse agents, dispatch, edit prompt/model`,
-      `/tasks — background tasks list + controls`,
-      `/schedule — schedule list + controls`,
-      `/schedules — alias of /schedule`,
+      `🤖 <b>Teams &amp; Agents</b>`,
+      `/teams — team browser &amp; controls`,
+      `/agents — browse, dispatch, edit agents`,
+      `/tasks — background tasks &amp; controls`,
+      `/schedule — schedules &amp; controls`,
       ``,
-      `<b>Models</b>`,
-      `/models — provider/model picker`,
-      `/model — alias of /models`,
+      `⚡ <b>Models</b>`,
+      `/models — provider &amp; model picker`,
       ``,
-      `<b>Proposals & Repairs</b>`,
-      `/proposals [pending|done|id] — proposal inbox/details`,
-      `/repairs — list pending repair proposals`,
-      `/repair &lt;id&gt; — show repair details`,
-      `/approve &lt;id&gt; — approve/apply repair`,
-      `/reject &lt;id&gt; — reject repair`,
+      `📋 <b>Proposals &amp; Repairs</b>`,
+      `/proposals [pending|done|id] — inbox`,
+      `/repairs — pending repairs`,
+      `/approve &lt;id&gt; · /reject &lt;id&gt; — act on proposal`,
       ``,
-      `<b>Integrations</b>`,
-      `/integrations — list configured integrations`,
-      `/mcp-status — list MCP server status`,
-      `/setup &lt;service&gt; — guided integration setup`,
+      `🔌 <b>Integrations</b>`,
+      `/integrations — configured integrations`,
+      `/mcp-status — MCP server status`,
+      `/setup &lt;service&gt; — connect a service`,
       ``,
-      `<b>Goals & Improvement</b>`,
-      `/approve_goal &lt;id&gt; — approve decomposed goal`,
-      `/reject_goal &lt;id&gt; — reject/archive goal`,
+      `🎯 <b>Goals &amp; Performance</b>`,
+      `/approve_goal &lt;id&gt; · /reject_goal &lt;id&gt;`,
       `/approve_skill &lt;id&gt; — approve skill evolution`,
       `/perf — latest performance report`,
-      `/performance — alias of /perf`,
-      ``,
-      `Your Telegram user ID: <code>${userId}</code>`,
     ].join('\n');
   }
 
@@ -685,6 +673,37 @@ export class TelegramChannel {
       return;
     }
 
+    // Register commands in Telegram's command menu
+    try {
+      await this.apiCall('setMyCommands', {
+        commands: [
+          { command: 'status',       description: 'Check connection and model status' },
+          { command: 'new',          description: 'Start a new chat session' },
+          { command: 'clear',        description: 'Reset chat history' },
+          { command: 'browse',       description: 'Browse workspace files' },
+          { command: 'teams',        description: 'View and manage agent teams' },
+          { command: 'agents',       description: 'Browse and dispatch agents' },
+          { command: 'tasks',        description: 'List background tasks' },
+          { command: 'schedule',     description: 'Manage scheduled jobs' },
+          { command: 'models',       description: 'Switch provider / model' },
+          { command: 'screenshot',   description: 'Take a browser or desktop screenshot' },
+          { command: 'download',     description: 'Download a workspace file' },
+          { command: 'proposals',    description: 'List pending code proposals' },
+          { command: 'repairs',      description: 'List self-repair items' },
+          { command: 'integrations', description: 'Show configured integrations' },
+          { command: 'mcp_status',   description: 'Show MCP server status' },
+          { command: 'setup',        description: 'Connect a service (github, slack, …)' },
+          { command: 'perf',         description: 'Performance metrics' },
+          { command: 'restart',      description: 'Restart the gateway' },
+          { command: 'update',       description: 'Check and apply updates' },
+          { command: 'commands',     description: 'Full command catalog' },
+        ],
+      });
+      console.log('[Telegram] Commands registered in Telegram menu');
+    } catch (err: any) {
+      console.warn(`[Telegram] setMyCommands failed (non-fatal): ${err.message}`);
+    }
+
     this.polling = true;
     this.pollLoop();
   }
@@ -700,11 +719,19 @@ export class TelegramChannel {
 
   updateConfig(newConfig: Partial<TelegramConfig>): void {
     const wasEnabled = this.config.enabled;
+    const oldToken = this.config.botToken;
     this.config = { ...this.config, ...newConfig };
+
+    const tokenChanged = newConfig.botToken && newConfig.botToken !== oldToken;
 
     if (wasEnabled && !this.config.enabled) {
       this.stop();
     } else if (!wasEnabled && this.config.enabled) {
+      this.start();
+    } else if (wasEnabled && this.config.enabled && tokenChanged) {
+      // Token changed while running — reconnect with new bot
+      this.stop();
+      this.botInfo = null;
       this.start();
     }
   }

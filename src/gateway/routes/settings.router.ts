@@ -355,6 +355,12 @@ const AGENT_MODEL_DEFAULT_KEYS = [
   'background_agent',
 ] as const;
 
+const HIDDEN_AGENT_MODEL_DEFAULT_KEYS = [
+  'subagent',
+  'team_manager',
+  'team_subagent',
+] as const;
+
 // GET /api/settings/agent-model-defaults
 // Returns the stored per-type defaults and the per-agent overrides for reference.
 router.get('/api/settings/agent-model-defaults', (_req, res) => {
@@ -393,6 +399,9 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
   }
   // Merge: existing + patch (empty-string values are excluded from final object)
   const merged: Record<string, string> = { ...existing };
+  for (const key of HIDDEN_AGENT_MODEL_DEFAULT_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, key)) delete merged[key];
+  }
   for (const [k, v] of Object.entries(patch)) {
     if (v) merged[k] = v;
     else delete merged[k];

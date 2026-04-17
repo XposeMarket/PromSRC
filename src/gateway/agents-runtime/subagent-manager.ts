@@ -10,9 +10,9 @@
 
 import fs from 'fs';
 import path from 'path';
-import { TaskRecord, createTask } from '../tasks/task-store';
+import { TaskRecord, createTask, loadTask } from '../tasks/task-store';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { getConfig } from '../../config/config.js';
+import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config.js';
 
 export interface SubagentDefinition {
   id: string;
@@ -60,6 +60,7 @@ export interface SubagentCallRequest {
   task_prompt: string;            // "Extract headlines from these 3 Reuters pages"
   context_data?: Record<string, any>;  // Snapshots, URLs, etc.
   run_now?: boolean;              // default true; set false to create/ensure without executing
+  delivery_mode?: 'notify_main' | 'task_panel_only';
   
   // Create new subagent if doesn't exist
   create_if_missing?: {
@@ -98,6 +99,7 @@ export interface SubagentResult {
 const SUBAGENT_STORE_DIR = '.prometheus/subagents';
 
 export class SubagentManager {
+  private workspacePath: string;
   private storePath: string;
   private broadcastFn?: (data: any) => void;
   // Piece 3: references for launching real BackgroundTaskRunner
@@ -110,6 +112,7 @@ export class SubagentManager {
     handleChatFn?: (...args: any[]) => Promise<any>,
     telegramChannelRef?: any,
   ) {
+    this.workspacePath = workspacePath;
     this.storePath = path.join(workspacePath, SUBAGENT_STORE_DIR);
     this.broadcastFn = broadcastFn;
     this.handleChatFn = handleChatFn;
@@ -155,21 +158,26 @@ export class SubagentManager {
       throw new Error('task_prompt is required when run_now=true');
     }
 
-    // Build task for this subagent
-    const subagentPrompt = this.buildSubagentPrompt(definition, taskPrompt, request.context_data);
-
-    // Resolve this subagent's dedicated workspace so BackgroundTaskRunner
-    // can scope all file tool calls to it via workspace-context.ts.
-    let agentWorkspace: string | undefined;
+    let agentArtifactWorkspace: string | undefined;
     try {
-      const { getAgentById, ensureAgentWorkspace } = require('../../config/config');
       const agentDef = getAgentById(subagentId);
-      if (agentDef) agentWorkspace = ensureAgentWorkspace(agentDef);
+      if (agentDef) agentArtifactWorkspace = ensureAgentWorkspace(agentDef);
     } catch { /* non-fatal */ }
-    // Fallback: derive from the store path (matches registerInConfig logic)
-    if (!agentWorkspace) {
-      agentWorkspace = path.join(this.storePath, subagentId);
+    if (!agentArtifactWorkspace) {
+      agentArtifactWorkspace = path.join(this.storePath, subagentId);
     }
+
+    // Build task for this subagent. Standalone subagents keep main workspace
+    // access for project edits, while their own subagent directory is the
+    // artifact/memory/log home.
+    const subagentPrompt = this.buildSubagentPrompt(definition, taskPrompt, request.context_data, {
+      mainWorkspace: this.workspacePath,
+      artifactWorkspace: agentArtifactWorkspace,
+    });
+    const agentWorkspace = this.workspacePath;
+    const parentTask = loadTask(parentTaskId);
+    const parentTaskLink = parentTask ? parentTaskId : undefined;
+    const originatingSessionId = parentTask ? undefined : parentTaskId;
 
     const subagentSessionId = `subagent_${subagentId}_${Date.now()}`;
     const subagentTask = createTask({
@@ -178,8 +186,10 @@ export class SubagentManager {
       sessionId: subagentSessionId,
       channel: 'web',
       subagentProfile: definition.id,  // Mark as subagent with restrictions
-      parentTaskId,  // Link to parent
-      agentWorkspace,                   // Workspace isolation — scopes file tools
+      parentTaskId: parentTaskLink,
+      originatingSessionId,
+      suppressOriginDelivery: request.delivery_mode === 'task_panel_only',
+      agentWorkspace,
       plan: this.buildDefaultPlan(definition),
     });
 
@@ -316,6 +326,17 @@ export class SubagentManager {
         ].join('\n');
     fs.writeFileSync(heartbeatPath, heartbeatContent, 'utf-8');
 
+    const memoryPath = path.join(agentDir, 'MEMORY.md');
+    if (!fs.existsSync(memoryPath)) {
+      fs.writeFileSync(memoryPath, [
+        `# MEMORY.md - ${definition.name}`,
+        '',
+        'Persistent notes for this standalone subagent.',
+        '',
+        'Use this for durable observations, decisions, open threads, and follow-up context that belongs to this subagent.',
+      ].join('\n'), 'utf-8');
+    }
+
     // Register into config.json agents array so agent_list() can see it
     this.registerInConfig(definition, { isTeamManager: params.is_team_manager === true });
 
@@ -327,6 +348,22 @@ export class SubagentManager {
    * Build system prompt file that user can edit
    */
   private buildSystemPromptFile(def: SubagentDefinition): string {
+    const hasTeamAssignment = !!(def.teamRole || def.teamAssignment);
+    const identityBlock = hasTeamAssignment
+      ? [
+          `## Team-Specific Role`,
+          def.teamRole || '(not recorded)',
+          ``,
+          `## Team-Specific Assignment`,
+          def.teamAssignment || '(not recorded)',
+        ]
+      : [
+          `## Standalone Subagent Identity`,
+          `You are a standalone one-off subagent, not a member of a managed team.`,
+          `You are main-chat-like in capability: use the normal runtime, tools, memory context, and workspace access.`,
+          `Your difference from main chat is assignment and ownership: you answer as this named subagent, keep your own durable notes in this subagent workspace, and keep generated support artifacts separated there when practical.`,
+        ];
+
     return [
       `# ${def.name}`,
       ``,
@@ -336,11 +373,7 @@ export class SubagentManager {
       def.roleType ? `Role: ${def.roleType}` : '(not recorded)',
       def.baseRolePrompt ? `\nPreset prompt:\n${def.baseRolePrompt}` : '',
       ``,
-      `## Team-Specific Role`,
-      def.teamRole || '(not recorded)',
-      ``,
-      `## Team-Specific Assignment`,
-      def.teamAssignment || '(not recorded)',
+      ...identityBlock,
       ``,
       `## Instructions`,
       def.system_instructions,
@@ -378,6 +411,7 @@ export class SubagentManager {
     def: SubagentDefinition,
     taskPrompt: string,
     contextData?: Record<string, any>,
+    workspaceInfo?: { mainWorkspace: string; artifactWorkspace: string },
   ): string {
     const contextSection = contextData
       ? `\n\nCONTEXT DATA:\n${JSON.stringify(contextData, null, 2)}`
@@ -386,6 +420,20 @@ export class SubagentManager {
     return [
       `[SUBAGENT: ${def.name}]`,
       ``,
+      `IDENTITY: You are a standalone subagent unless this prompt explicitly says you are serving inside a managed team. You keep your own artifacts and MEMORY.md in your subagent workspace, but you may read/edit project files in the main workspace when the task requires it.`,
+      ``,
+      `SYSTEM INSTRUCTIONS:`,
+      def.system_instructions,
+      ``,
+      workspaceInfo
+        ? [
+            `WORKSPACE RULES:`,
+            `- Main workspace for project files and edits: ${workspaceInfo.mainWorkspace}`,
+            `- Subagent artifact workspace for your own outputs, notes, logs, scratch files, and MEMORY.md updates: ${workspaceInfo.artifactWorkspace}`,
+            `- Do not treat the artifact workspace as a restriction on project edits.`,
+            ``,
+          ].join('\n')
+        : '',
       `TASK: ${taskPrompt}`,
       contextSection,
       ``,
@@ -549,7 +597,7 @@ export class SubagentManager {
 export const subagentSpawnTool = {
   name: 'spawn_subagent',
   description:
-    'Create a specialized sub-agent for a specific task (research, analysis, etc). The subagent gets a restricted tool set and explicit constraints. Perfect for delegating work while maintaining quality control.',
+    'Create a specialized sub-agent for a specific task (research, analysis, etc). The subagent runs as a full agent with explicit role guidance and constraints. Perfect for delegating work while maintaining quality control.',
   schema: {
     type: 'object',
     required: ['subagent_id'],

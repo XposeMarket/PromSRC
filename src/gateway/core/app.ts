@@ -23,7 +23,9 @@ export function createApp(): express.Application {
   const webUiPath = isPublicDistributionBuild() && hasPublicWebUiBuild()
     ? getPublicWebUiRoot()
     : path.join(root, 'web-ui');
-  app.use(express.static(webUiPath));
+  app.use(express.static(webUiPath, { etag: false, lastModified: false, setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store');
+  } }));
 
   // Serve shared assets (icons, images, etc.)
   const assetsPath = path.join(root, 'assets');

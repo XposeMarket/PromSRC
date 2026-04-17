@@ -15,7 +15,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { getAgentById, ensureAgentWorkspace } from '../../config/config.js';
+import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -439,7 +439,7 @@ function normalizeTeamChangeRecord(raw: any): TeamChange | null {
 // ─── Storage ───────────────────────────────────────────────────────────────────
 
 function getStorePath(): string {
-  const base = path.join(process.cwd(), '.prometheus');
+  const base = getConfig().getConfigDir();
   fs.mkdirSync(base, { recursive: true });
   return path.join(base, 'managed-teams.json');
 }

@@ -244,8 +244,6 @@ let agentHbEditor = null;
 async function loadSubagentHeartbeatList() {
   const el = document.getElementById('hb-agent-list');
   if (!el) return;
-  el.innerHTML = '<div style="color:var(--muted);font-size:12px">Subagent heartbeats are disabled. Create a Scheduled Task and assign a subagent to run recurring subagent work.</div>';
-  return;
   el.innerHTML = '<div style="color:var(--muted);font-size:12px">Loading...</div>';
   try {
     const data = await api('/api/heartbeat/agents');
@@ -905,6 +903,7 @@ async function openSettings(tab) {
 
 function closeSettings() {
   document.getElementById('settings-modal').style.display = 'none';
+  channelsStatusLoaded = false;
 }
 
 // -- Keyboard Shortcuts panel ---------------------------------------------------------------------------------------------------
@@ -1045,19 +1044,15 @@ function ensureAgentMdEditor() {
 }
 
 function getAgentFromForm() {
-  const profile = document.getElementById('agent-edit-profile').value.trim();
   const maxStepsRaw = document.getElementById('agent-edit-max-steps').value;
   const maxSteps = Number(maxStepsRaw);
-  const spawnAllowlist = (document.getElementById('agent-edit-spawn-allowlist').value || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
+  const selected = findSelectedAgent();
+  const workspaceValue = document.getElementById('agent-edit-workspace').value.trim();
+  const isTeamScoped = !!selected?.teamId;
   const agent = {
     id: document.getElementById('agent-edit-id').value.trim(),
     name: document.getElementById('agent-edit-name').value.trim(),
-    emoji: document.getElementById('agent-edit-emoji').value.trim(),
     description: document.getElementById('agent-edit-description').value.trim(),
-    workspace: document.getElementById('agent-edit-workspace').value.trim(),
     model: (function() {
       const prov = (document.getElementById('agent-edit-provider')?.value || '').trim();
       const mdl  = (document.getElementById('agent-edit-model-select')?.value || '').trim();
@@ -1065,17 +1060,10 @@ function getAgentFromForm() {
       if (!prov) return mdl; // bare model, use global provider
       return mdl ? `${prov}/${mdl}` : ''; // must include model when provider is selected
     })(),
-    cronSchedule: document.getElementById('agent-edit-cron').value.trim(),
-    minimalPrompt: document.getElementById('agent-edit-minimal').checked,
     default: document.getElementById('agent-edit-default').checked,
-    canSpawn: document.getElementById('agent-edit-can-spawn').checked,
-    spawnAllowlist,
-    tools: {},
   };
-  if (profile) agent.tools.profile = profile;
+  if (workspaceValue && !isTeamScoped) agent.workspace = workspaceValue;
   if (Number.isFinite(maxSteps) && maxSteps > 0) agent.maxSteps = Math.floor(maxSteps);
-  if (!agent.tools.profile) delete agent.tools;
-  if (!agent.spawnAllowlist.length) delete agent.spawnAllowlist;
   return agent;
 }
 
@@ -1083,9 +1071,8 @@ function setAgentForm(agent) {
   const a = agent || {};
   document.getElementById('agent-edit-id').value = a.id || '';
   document.getElementById('agent-edit-name').value = a.name || '';
-  document.getElementById('agent-edit-emoji').value = a.emoji || '';
   document.getElementById('agent-edit-description').value = a.description || '';
-  document.getElementById('agent-edit-workspace').value = a.workspace || '';
+  document.getElementById('agent-edit-workspace').value = a.workspaceDefault || a.teamWorkspacePath || a.workspace || '';
   // Parse "provider/model" back into the two-picker UI
   (function() {
     const raw = String(a.model || '').trim();
@@ -1107,13 +1094,8 @@ function setAgentForm(agent) {
       mdlSel.value = mdl || '';
     }
   })();
-  document.getElementById('agent-edit-cron').value = a.cronSchedule || '';
   document.getElementById('agent-edit-max-steps').value = (a.maxSteps || '') + '';
   document.getElementById('agent-edit-default').checked = a.default === true;
-  document.getElementById('agent-edit-minimal').checked = a.minimalPrompt === true;
-  document.getElementById('agent-edit-can-spawn').checked = a.canSpawn === true;
-  document.getElementById('agent-edit-spawn-allowlist').value = Array.isArray(a.spawnAllowlist) ? a.spawnAllowlist.join(',') : '';
-  document.getElementById('agent-edit-profile').value = a.tools?.profile || '';
   const modelStatus = document.getElementById('agent-model-status');
   if (modelStatus) {
     const source = String(a.effectiveModelSource || '').replace(/^agent_model_defaults\./, 'default: ');
@@ -1248,7 +1230,6 @@ function renderAgentsList() {
     return `
       <button onclick="selectAgent('${escHtml(a.id)}')" style="text-align:left;border:1px solid ${borderColor};border-radius:9px;padding:8px 10px;background:${bg};cursor:pointer;${indentStyle};box-sizing:border-box">
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-          <span style="font-size:14px">${escHtml(a.emoji || '🤖')}</span>
           <span style="font-weight:700;font-size:13px;color:var(--text)">${escHtml(a.name || a.id)}</span>
           ${defaultBadge}${dynamicBadge}${managerBadge}
         </div>
@@ -1298,17 +1279,11 @@ function agentFormNew() {
   setAgentForm({
     id: '',
     name: '',
-    emoji: '',
     description: '',
     workspace: '',
     model: '',
-    cronSchedule: '',
     maxSteps: '',
     default: false,
-    minimalPrompt: true,
-    canSpawn: false,
-    spawnAllowlist: [],
-    tools: {},
   });
   if (window.agentMdEditor) window.agentMdEditor.setValue('');
   const mdPath = document.getElementById('agent-md-path');
@@ -1343,9 +1318,10 @@ async function selectAgent(id) {
   if (provEl && provEl.value) {
     await loadAgentModelOptions(true); // true = preserve current selection
   }
-  await loadSelectedAgentMd();
-  await loadAgentRunHistory();
-}
+	  await loadSelectedAgentMd();
+  await loadAgentHeartbeat();
+	  await loadAgentRunHistory();
+	}
 
 // --- Agent model picker ------------------------------------------------------
 
@@ -2487,9 +2463,6 @@ const AMD_SLOTS = {
   'proposal-low':    'proposal_executor_low_risk',
   'coordinator':     'coordinator',
   'manager':         'manager',
-  'team-manager':    'team_manager',
-  'subagent':        'subagent',
-  'team-subagent':   'team_subagent',
   'background-task': 'background_task',
   // Per-role-type subagent defaults
   'subagent-planner':       'subagent_planner',

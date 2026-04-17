@@ -219,18 +219,35 @@ const CONNECTOR_AI_TOOLS = {
   ga4:          ['connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties'],
 };
 
+// ── Credential metadata per connector (for setup forms) ─────────────────────
+const CONNECTOR_CRED_INFO = {
+  gmail:        { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: '123456789-abc.apps.googleusercontent.com' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'GOCSPX-...', secret: true }], docsUrl: 'https://console.cloud.google.com/', docsHint: 'Google Cloud Console → Enable Gmail API → OAuth 2.0 Credentials → Desktop app.' },
+  slack:        { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: '1234567890.1234567890' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'abc123...', secret: true }], docsUrl: 'https://api.slack.com/apps', docsHint: 'Slack API → Create App → OAuth & Permissions → Redirect URL: http://localhost:19421/auth/callback/slack' },
+  github:       { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: 'Iv1.abc123...' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'abc123...', secret: true }], docsUrl: 'https://github.com/settings/applications/new', docsHint: 'GitHub → Settings → Developer settings → OAuth Apps → Callback URL: http://localhost:19422/auth/callback/github' },
+  notion:       { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: 'abc123...' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'secret_...', secret: true }], docsUrl: 'https://www.notion.so/my-integrations', docsHint: 'Notion → My Integrations → New public integration → Redirect URI: http://localhost:19423/auth/callback/notion' },
+  reddit:       { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: 'abc123...' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'abc123...', secret: true }], docsUrl: 'https://www.reddit.com/prefs/apps', docsHint: 'Reddit → Preferences → Apps → Create App (web app) → Redirect URI: http://localhost:19424/auth/callback/reddit' },
+  google_drive: { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: '123456789-abc.apps.googleusercontent.com' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'GOCSPX-...', secret: true }], docsUrl: 'https://console.cloud.google.com/', docsHint: 'Google Cloud Console → Enable Drive API → Same OAuth Desktop app credentials as Gmail work here too.' },
+  hubspot:      { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: 'abc123...' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'abc123...', secret: true }], docsUrl: 'https://developers.hubspot.com/', docsHint: 'HubSpot → Developer Account → Apps → Create App → Auth → Redirect: http://localhost:19426/auth/callback/hubspot' },
+  salesforce:   { type: 'oauth', fields: [{ key: 'clientId', label: 'Consumer Key', placeholder: 'abc123...' }, { key: 'clientSecret', label: 'Consumer Secret', placeholder: 'abc123...', secret: true }], docsUrl: 'https://login.salesforce.com/', docsHint: 'Salesforce → Setup → App Manager → New Connected App → Enable OAuth → Callback: http://localhost:19427/auth/callback/salesforce' },
+  stripe:       { type: 'apikey', fields: [{ key: 'apiKey', label: 'Secret Key', placeholder: 'sk_live_... or sk_test_...', secret: true }], docsUrl: 'https://dashboard.stripe.com/apikeys', docsHint: 'Stripe Dashboard → Developers → API Keys → Reveal your Secret key (or create a restricted key with read access).' },
+  ga4:          { type: 'oauth', fields: [{ key: 'clientId', label: 'Client ID', placeholder: '123456789-abc.apps.googleusercontent.com' }, { key: 'clientSecret', label: 'Client Secret', placeholder: 'GOCSPX-...', secret: true }], docsUrl: 'https://console.cloud.google.com/', docsHint: 'Google Cloud Console → Enable Analytics Data API → Same OAuth Desktop app credentials as Gmail work here too. Also set GA4_PROPERTY_ID env var.' },
+};
+
 // ── Connection state (backed by /api/connections) ───────────────────────────
 
 let connectionsState = {}; // { [id]: { connected, connectedAt, tokenRef } }
+let connectorStatuses = {}; // { [id]: { connected, hasCredentials, authType } } from server
 let activeConnectorId = null;
 
 async function loadConnectionsState() {
   try {
     const data = await api('/api/connections');
     connectionsState = data?.connections || {};
+    connectorStatuses = data?.statuses || {};
   } catch (e) {
     // Route not yet available (first boot before build) — degrade silently
     connectionsState = {};
+    connectorStatuses = {};
     console.warn('[connections] Could not load state:', e?.message || e);
   }
   renderConnectionsGrid();
@@ -260,13 +277,17 @@ function renderConnectionsGrid() {
   const q = (document.getElementById('connections-search')?.value || '').toLowerCase().trim();
   CONNECTORS.forEach(c => {
     const isConnected = !!connectionsState[c.id]?.connected;
+    const hasCreds = connectorStatuses[c.id]?.hasCredentials;
+    const needsCreds = c.authType === 'oauth' && !isConnected && !hasCreds && CONNECTOR_CRED_INFO[c.id];
     const card = document.createElement('div');
     card.className = 'conn-card' + (isConnected ? ' connected' : '');
-    card.title = c.name + (isConnected ? ' — Connected' : '');
+    card.title = c.name + (isConnected ? ' — Connected' : needsCreds ? ' — Credentials needed' : '');
     card.innerHTML = `
       <div class="conn-card-logo" style="background:${c.color}18">${c.logo}</div>
       <div class="conn-card-name">${c.name}</div>
+      ${isConnected ? `<div style="width:7px;height:7px;border-radius:50%;background:var(--ok);position:absolute;top:8px;right:8px"></div>` : ''}
     `;
+    card.style.position = 'relative';
     card.style.display = (!q || c.name.toLowerCase().includes(q) || c.category.toLowerCase().includes(q)) ? '' : 'none';
     card.onclick = () => openConnectorView(c.id);
     grid.appendChild(card);
@@ -352,23 +373,38 @@ function renderConnectorActions(c, isConnected) {
   const el = document.getElementById('cv-actions');
 
   if (isConnected) {
+    const connectedAt = connectionsState[c.id]?.connectedAt;
+    const whenStr = connectedAt ? new Date(connectedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
     el.innerHTML = `
-      <button class="cv-btn-disconnect" onclick="disconnectConnector('${c.id}')">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        Disconnect ${c.name}
-      </button>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${whenStr ? `<div style="font-size:11.5px;color:var(--muted)">Connected ${whenStr}</div>` : ''}
+        <button class="cv-btn-disconnect" onclick="disconnectConnector('${c.id}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Disconnect ${c.name}
+        </button>
+      </div>
     `;
     return;
   }
 
   if (c.authType === 'oauth') {
-    el.innerHTML = `
-      <button class="cv-btn-connect" onclick="startOAuthFlow('${c.id}')">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
-        Connect with ${c.name}
-      </button>
-      <div style="font-size:11px;color:var(--muted);text-align:center">You'll be redirected to authorize Prometheus to access your ${c.name} account.</div>
-    `;
+    // Check if credentials are already configured (env vars or previously saved)
+    const hasCreds = connectorStatuses[c.id]?.hasCredentials;
+    if (hasCreds) {
+      // Credentials exist — just need to authorize
+      el.innerHTML = `
+        <button class="cv-btn-connect" onclick="startOAuthFlow('${c.id}')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+          Authorize ${c.name}
+        </button>
+        <div style="font-size:11px;color:var(--muted);text-align:center">Opens a popup to authorize Prometheus in your ${c.name} account.</div>
+        <div style="font-size:11px;color:var(--muted);text-align:center;cursor:pointer;text-decoration:underline" onclick="renderCredentialForm('${c.id}', CONNECTORS.find(x=>x.id==='${c.id}'))">Update credentials</div>
+      `;
+    } else {
+      // No credentials yet — show the form directly
+      renderCredentialForm(c.id, c);
+      return;
+    }
   } else {
     // Browser login flow
     el.innerHTML = `
@@ -401,25 +437,31 @@ async function startOAuthFlow(id) {
   const btn = document.querySelector(`#cv-actions .cv-btn-connect`);
   if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
 
+  // Stripe uses API key — show key entry form directly
+  if (id === 'stripe') {
+    renderCredentialForm(id, c);
+    return;
+  }
+
   try {
     const res = await api('/api/connections/oauth/start', { method: 'POST', body: JSON.stringify({ id }) });
 
-    if (res?.needsSetup) {
-      // Connector is wired but env vars not set yet — show setup instructions
-      renderOAuthSetupInstructions(id, c, res.message);
+    if (res?.needsCredentials || res?.needsSetup) {
+      // No credentials configured — show inline credential entry form
+      renderCredentialForm(id, c);
       return;
     }
 
     if (res?.url) {
-      // Real OAuth URL — open popup and start polling the dedicated poll endpoint
+      // Real OAuth URL — open popup and start polling
       window.open(res.url, '_blank', 'width=600,height=700');
       renderOAuthWaiting(id, c);
       pollOAuthCompletion(id);
     } else {
-      renderOAuthManualFallback(id, c);
+      renderCredentialForm(id, c, res?.error || 'OAuth failed to start.');
     }
   } catch (e) {
-    renderOAuthManualFallback(id, c);
+    renderCredentialForm(id, c, e.message);
     console.warn('[oauth]', e.message);
   }
 }
@@ -442,76 +484,128 @@ function renderOAuthWaiting(id, c) {
   `;
 }
 
-function renderOAuthSetupInstructions(id, c, serverMessage) {
+function renderCredentialForm(id, c, errorMsg) {
   const el = document.getElementById('cv-actions');
   if (!el) return;
   const name = c?.name || id;
+  const info = CONNECTOR_CRED_INFO[id];
+  if (!info) {
+    el.innerHTML = `<div style="font-size:12px;color:var(--err)">No credential config found for ${name}.</div>`;
+    return;
+  }
 
-  // Map connector IDs to their env var names and setup URLs
-  const setupInfo = {
-    gmail:        { vars: 'GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET',        url: 'https://console.cloud.google.com/', steps: 'Enable Gmail API → OAuth 2.0 Client ID → Desktop app' },
-    slack:        { vars: 'SLACK_CLIENT_ID, SLACK_CLIENT_SECRET',        url: 'https://api.slack.com/apps',        steps: 'Create App → OAuth & Permissions → Add scopes' },
-    github:       { vars: 'GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET',      url: 'https://github.com/settings/applications/new', steps: 'New OAuth App → Callback: http://localhost:19422/auth/callback/github' },
-    notion:       { vars: 'NOTION_CLIENT_ID, NOTION_CLIENT_SECRET',      url: 'https://www.notion.so/my-integrations', steps: 'New integration → Public → Redirect URI: http://localhost:19423/auth/callback/notion' },
-    reddit:       { vars: 'REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET',      url: 'https://www.reddit.com/prefs/apps', steps: 'Create App → Redirect: http://localhost:19424/auth/callback/reddit' },
-    google_drive: { vars: 'GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET',      url: 'https://console.cloud.google.com/', steps: 'Enable Drive API → same OAuth client as Gmail' },
-    hubspot:      { vars: 'HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET',    url: 'https://developers.hubspot.com/',    steps: 'Create App → Auth → Redirect: http://localhost:19426/auth/callback/hubspot' },
-    salesforce:   { vars: 'SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET', url: 'https://login.salesforce.com/',  steps: 'Setup → App Manager → New Connected App' },
-    stripe:       { vars: 'STRIPE_RESTRICTED_KEY',                       url: 'https://dashboard.stripe.com/apikeys', steps: 'Create restricted key with read permissions' },
-    ga4:          { vars: 'GA4_CLIENT_ID, GA4_CLIENT_SECRET',            url: 'https://console.cloud.google.com/', steps: 'Enable Analytics Reporting API → OAuth client' },
-  };
-
-  const info = setupInfo[id] || { vars: `${id.toUpperCase()}_CLIENT_ID, ${id.toUpperCase()}_CLIENT_SECRET`, url: '#', steps: 'See documentation' };
+  const isApiKey = info.type === 'apikey';
+  const inputsHtml = info.fields.map(f => `
+    <div style="display:flex;flex-direction:column;gap:5px">
+      <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">${escHtml(f.label)}</label>
+      <input
+        id="cred-input-${id}-${f.key}"
+        type="${f.secret ? 'password' : 'text'}"
+        placeholder="${escHtml(f.placeholder || '')}"
+        autocomplete="off"
+        style="width:100%;box-sizing:border-box;padding:9px 11px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:13px;outline:none;transition:border .15s"
+        onfocus="this.style.borderColor='var(--brand)'"
+        onblur="this.style.borderColor='var(--line)'"
+        onkeydown="if(event.key==='Enter')saveConnectorCredentials('${id}')"
+      />
+    </div>
+  `).join('');
 
   el.innerHTML = `
-    <div style="background:var(--panel-2);border:1px solid var(--warn);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px">
-      <div style="font-size:13px;font-weight:700;color:var(--warn)">⚙️ Setup Required — ${name}</div>
-      <div style="font-size:12px;color:var(--muted);line-height:1.7">
-        To connect ${name}, you need to register an OAuth app and set your credentials.
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <div style="font-size:13px;font-weight:700;color:var(--text)">Enter ${name} credentials</div>
+        <div style="font-size:11.5px;color:var(--muted);line-height:1.6">${escHtml(info.docsHint)}</div>
+        <a href="${info.docsUrl}" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--brand);text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          Get credentials →
+        </a>
       </div>
-      <div style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:11.5px;line-height:1.8">
-        <div style="font-weight:700;color:var(--text);margin-bottom:4px">Setup steps:</div>
-        <div style="color:var(--muted)">1. Go to <a href="${info.url}" target="_blank" style="color:var(--brand)">${info.url}</a></div>
-        <div style="color:var(--muted)">2. ${info.steps}</div>
-        <div style="color:var(--muted)">3. Set environment variables:</div>
-        <div style="font-family:monospace;color:var(--text);background:var(--panel);padding:6px 8px;border-radius:5px;margin-top:4px;font-size:11px">${info.vars}</div>
-        <div style="color:var(--muted);margin-top:6px">4. Restart Prometheus, then click Connect again.</div>
+      ${errorMsg ? `<div style="font-size:12px;color:var(--err);background:rgba(224,109,109,.1);border:1px solid rgba(224,109,109,.25);border-radius:7px;padding:9px 12px">${escHtml(errorMsg)}</div>` : ''}
+      ${inputsHtml}
+      <div style="display:flex;gap:8px">
+        <button
+          id="cred-save-btn-${id}"
+          class="cv-btn-connect"
+          onclick="saveConnectorCredentials('${id}')"
+          style="flex:1"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+          ${isApiKey ? 'Connect Stripe' : 'Save & Authorize'}
+        </button>
+        <button onclick="openConnectorView('${id}')" style="padding:0 14px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:12px;cursor:pointer">Cancel</button>
       </div>
-      <button class="cv-btn-connect" style="background:var(--ok)" onclick="markConnectorManual('${id}')">
-        ✓ Already set up — mark as connected
-      </button>
+      <div id="cred-status-${id}" style="display:none;font-size:11.5px;text-align:center;color:var(--muted)"></div>
     </div>
   `;
 }
 
-function renderOAuthManualFallback(id, c) {
-  const el = document.getElementById('cv-actions');
-  if (!el) return;
-  const name = c?.name || id;
-  el.innerHTML = `
-    <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px">
-      <div style="font-size:13px;font-weight:700;color:var(--text)">🔗 ${name}</div>
-      <div style="font-size:12px;color:var(--muted);line-height:1.6">Could not start the OAuth flow. You can mark this as connected if you've already set up access.</div>
-      <button class="cv-btn-connect" style="background:var(--ok)" onclick="markConnectorManual('${id}')">
-        ✓ Mark as Connected
-      </button>
-    </div>
-  `;
-}
+async function saveConnectorCredentials(id) {
+  const info = CONNECTOR_CRED_INFO[id];
+  if (!info) return;
+  const btn = document.getElementById(`cred-save-btn-${id}`);
+  const statusEl = document.getElementById(`cred-status-${id}`);
 
-async function markConnectorManual(id) {
+  // Collect field values
+  const body = { id };
+  let valid = true;
+  for (const f of info.fields) {
+    const inputEl = document.getElementById(`cred-input-${id}-${f.key}`);
+    const val = inputEl?.value?.trim() || '';
+    if (!val) {
+      inputEl.style.borderColor = 'var(--err)';
+      valid = false;
+    } else {
+      inputEl.style.borderColor = 'var(--line)';
+      body[f.key] = val;
+    }
+  }
+  if (!valid) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Saving credentials…'; statusEl.style.color = 'var(--muted)'; }
+
   try {
-    await api('/api/connections/save', {
-      method: 'POST',
-      body: JSON.stringify({ id, authType: 'manual', verified: true })
-    });
-    connectionsState[id] = { connected: true, connectedAt: Date.now(), authType: 'manual' };
-    renderConnectionsGrid();
-    updateConnectionsBadge();
-    openConnectorView(id);
-    showToast('Connected', (CONNECTORS.find(c=>c.id===id)?.name || id) + ' marked as connected.', 'success');
+    await api('/api/connections/credentials', { method: 'POST', body: JSON.stringify(body) });
   } catch (e) {
-    showToast('Error', 'Could not save: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Save & Authorize'; }
+    if (statusEl) { statusEl.textContent = 'Failed to save: ' + e.message; statusEl.style.color = 'var(--err)'; }
+    return;
+  }
+
+  // For Stripe (API key), just mark as connected — no OAuth redirect needed
+  if (info.type === 'apikey') {
+    if (statusEl) { statusEl.textContent = 'Verifying key…'; }
+    try {
+      await api('/api/connections/save', { method: 'POST', body: JSON.stringify({ id, authType: 'apikey', verified: true }) });
+      connectionsState[id] = { connected: true, connectedAt: Date.now(), authType: 'apikey' };
+      connectorStatuses[id] = { ...connectorStatuses[id], connected: true, hasCredentials: true };
+      renderConnectionsGrid();
+      updateConnectionsBadge();
+      openConnectorView(id);
+      showToast('Connected!', 'Stripe connected with your API key.', 'success');
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Connect Stripe'; }
+      if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = 'var(--err)'; }
+    }
+    return;
+  }
+
+  // OAuth connectors — now trigger the OAuth flow (credentials are now in vault)
+  if (statusEl) { statusEl.textContent = 'Credentials saved — opening authorization…'; }
+  try {
+    const res = await api('/api/connections/oauth/start', { method: 'POST', body: JSON.stringify({ id }) });
+    if (res?.url) {
+      window.open(res.url, '_blank', 'width=600,height=700');
+      renderOAuthWaiting(id, CONNECTORS.find(c => c.id === id));
+      pollOAuthCompletion(id);
+    } else {
+      const c = CONNECTORS.find(x => x.id === id);
+      renderCredentialForm(id, c, res?.error || 'OAuth failed to start. Check your credentials and try again.');
+    }
+  } catch (e) {
+    const c = CONNECTORS.find(x => x.id === id);
+    renderCredentialForm(id, c, 'OAuth error: ' + e.message);
   }
 }
 
@@ -666,14 +760,14 @@ window.renderConnectionsGrid = renderConnectionsGrid;
 window.openConnectorView = openConnectorView;
 window.closeConnectorView = closeConnectorView;
 window.renderConnectorActions = renderConnectorActions;
+window.renderCredentialForm = renderCredentialForm;
+window.saveConnectorCredentials = saveConnectorCredentials;
 window.startOAuthFlow = startOAuthFlow;
 window.renderOAuthWaiting = renderOAuthWaiting;
-window.renderOAuthSetupInstructions = renderOAuthSetupInstructions;
-window.renderOAuthManualFallback = renderOAuthManualFallback;
-window.markConnectorManual = markConnectorManual;
 window.pollOAuthCompletion = pollOAuthCompletion;
 window.startBrowserLogin = startBrowserLogin;
 window.verifyBrowserLogin = verifyBrowserLogin;
 window.disconnectConnector = disconnectConnector;
 window.loadConnectorActivity = loadConnectorActivity;
 window.escapeHtml = escapeHtml;
+window.CONNECTORS = CONNECTORS;

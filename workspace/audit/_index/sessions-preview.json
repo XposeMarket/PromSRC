@@ -1,5 +1,82 @@
 [
   {
+    "id": "startup_connection_probe_1776459157685",
+    "mtimeMs": 1776459160550.0405,
+    "lastActiveAt": 1776459160042,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "brain_thought_2026-04-17_04-25",
+    "mtimeMs": 1776457514838.1824,
+    "lastActiveAt": 1776457514335,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "startup_connection_probe_1776456613712",
+    "mtimeMs": 1776456614562.331,
+    "lastActiveAt": 1776456613745,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "startup_connection_probe_1776456420240",
+    "mtimeMs": 1776456420841.825,
+    "lastActiveAt": 1776456420269,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "startup_connection_probe_1776455901095",
+    "mtimeMs": 1776455904090.847,
+    "lastActiveAt": 1776455903586,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "startup_connection_probe_1776455665682",
+    "mtimeMs": 1776455669173.5967,
+    "lastActiveAt": 1776455668666,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "brain_thought_2026-04-17_03-36",
+    "mtimeMs": 1776454592193.0896,
+    "lastActiveAt": 1776454591686,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "startup_connection_probe_1776453692348",
+    "mtimeMs": 1776453695353.5886,
+    "lastActiveAt": 1776453694848,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
+    "id": "brain_thought_2026-04-17_03-20",
+    "mtimeMs": 1776453653592.7266,
+    "lastActiveAt": 1776453652746,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "auto_boot_1776452755152",
+    "mtimeMs": 1776452840193.3193,
+    "lastActiveAt": 1776452830709,
+    "historyLength": 1,
+    "hasSummary": false
+  },
+  {
+    "id": "startup_connection_probe_1776452757191",
+    "mtimeMs": 1776452830687.397,
+    "lastActiveAt": 1776452761470,
+    "historyLength": 2,
+    "hasSummary": false
+  },
+  {
     "id": "d03e2a51-b1d9-48cf-8ef3-8f5d460a5883",
     "mtimeMs": 1776348556897.9045,
     "lastActiveAt": 1776348519225,
@@ -479,83 +556,6 @@
     "id": "brain_thought_2026-04-14_15-41",
     "mtimeMs": 1776152464762.0425,
     "lastActiveAt": 1776152464251,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-14_15-11",
-    "mtimeMs": 1776150663046.9365,
-    "lastActiveAt": 1776150662543,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-14_14-41",
-    "mtimeMs": 1776148863638.839,
-    "lastActiveAt": 1776148863133,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1775950457845_00ezm_1776147569689",
-    "mtimeMs": 1776147572453.2866,
-    "lastActiveAt": 1776147571950,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-14_14-11",
-    "mtimeMs": 1776147061929.8608,
-    "lastActiveAt": 1776147061416,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-14_13-40",
-    "mtimeMs": 1776145261255.3464,
-    "lastActiveAt": 1776145260753,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-14_13-10",
-    "mtimeMs": 1776143460114.2688,
-    "lastActiveAt": 1776143459604,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-14_12-40",
-    "mtimeMs": 1776141660155.463,
-    "lastActiveAt": 1776141659641,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-14_12-10",
-    "mtimeMs": 1776139854304.3313,
-    "lastActiveAt": 1776139853770,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_dream_2026-04-13",
-    "mtimeMs": 1776138054983.516,
-    "lastActiveAt": 1776138054462,
-    "historyLength": 2,
-    "hasSummary": false
-  },
-  {
-    "id": "cron_job_1775950457845_00ezm_1776133157098",
-    "mtimeMs": 1776133159809.4026,
-    "lastActiveAt": 1776133159305,
-    "historyLength": 0,
-    "hasSummary": false
-  },
-  {
-    "id": "brain_thought_2026-04-13_09-55",
-    "mtimeMs": 1776131749292.588,
-    "lastActiveAt": 1776131748786,
     "historyLength": 2,
     "hasSummary": false
   }

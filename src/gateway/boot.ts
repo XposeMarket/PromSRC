@@ -141,6 +141,12 @@ function buildDeterministicRestartMessage(ctx: RestartContext): string {
     lines.push('Build: not run');
   }
 
+  if (ctx.restartLauncher === 'electron') {
+    lines.push('Launcher: Electron app');
+  } else if (ctx.restartLauncher === 'prom_gateway_start') {
+    lines.push('Launcher: prom gateway start');
+  }
+
   const files = ctx.affectedFiles || [];
   if (files.length > 0) {
     lines.push(`Files changed (${files.length}):`);

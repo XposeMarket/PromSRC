@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-04-16T14:10:18.130Z",
-  "nodeCount": 2408,
+  "generatedAt": "2026-04-17T20:41:54.900Z",
+  "nodeCount": 2438,
   "edgeCount": 5000,
   "nodes": [
     {
@@ -24080,6 +24080,306 @@
       "title": "d03e2a51-b1d9-48cf-8ef3-8f5d460a5883.json",
       "timestamp": "2026-04-16T14:08:39.225Z",
       "day": "2026-04-16",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_678f72d4ce9c545a",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776452757191.jsonl",
+      "title": "startup_connection_probe_1776452757191.jsonl",
+      "timestamp": "2026-04-17T19:06:01.471Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_d998436710bf924e",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776452757191.md",
+      "title": "startup_connection_probe_1776452757191.md",
+      "timestamp": "2026-04-17T19:06:01.471Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_98e279c28d4fd436",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/auto_boot_1776452755152.jsonl",
+      "title": "auto_boot_1776452755152.jsonl",
+      "timestamp": "2026-04-17T19:07:10.707Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_7cc870342c9eb34a",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/auto_boot_1776452755152.md",
+      "title": "auto_boot_1776452755152.md",
+      "timestamp": "2026-04-17T19:07:10.708Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_8692380a901fec11",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/auto_boot_1776452755152.json",
+      "title": "auto_boot_1776452755152.json",
+      "timestamp": "2026-04-17T19:07:10.709Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_533f4b7c19c4f071",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/startup_connection_probe_1776452757191.json",
+      "title": "startup_connection_probe_1776452757191.json",
+      "timestamp": "2026-04-17T19:06:01.470Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_5bdadc2af3374eba",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-17_03-20.jsonl",
+      "title": "brain_thought_2026-04-17_03-20.jsonl",
+      "timestamp": "2026-04-17T00:00:00.000Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_35ac3b4d2d8405a8",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-17_03-20.md",
+      "title": "brain_thought_2026-04-17_03-20.md",
+      "timestamp": "2026-04-17T00:00:00.000Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_a0e4b93f1ffe895d",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776453692348.jsonl",
+      "title": "startup_connection_probe_1776453692348.jsonl",
+      "timestamp": "2026-04-17T19:21:34.848Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_44a22c462a29fb49",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776453692348.md",
+      "title": "startup_connection_probe_1776453692348.md",
+      "timestamp": "2026-04-17T19:21:34.848Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_31e1a5b99639b680",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/brain_thought_2026-04-17_03-20.json",
+      "title": "brain_thought_2026-04-17_03-20.json",
+      "timestamp": "2026-04-17T19:20:52.746Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_fdb39b74375847cc",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/startup_connection_probe_1776453692348.json",
+      "title": "startup_connection_probe_1776453692348.json",
+      "timestamp": "2026-04-17T19:21:34.848Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_6d723a3fc18d3295",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-17_03-36.jsonl",
+      "title": "brain_thought_2026-04-17_03-36.jsonl",
+      "timestamp": "2026-04-17T00:00:00.000Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_b99ddf3cb741c0e8",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-17_03-36.md",
+      "title": "brain_thought_2026-04-17_03-36.md",
+      "timestamp": "2026-04-17T00:00:00.000Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_0a95df506ef7dc57",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/brain_thought_2026-04-17_03-36.json",
+      "title": "brain_thought_2026-04-17_03-36.json",
+      "timestamp": "2026-04-17T19:36:31.686Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_f38a1c138508e864",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776455665682.jsonl",
+      "title": "startup_connection_probe_1776455665682.jsonl",
+      "timestamp": "2026-04-17T19:54:28.664Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_a62bd86350a17216",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776455665682.md",
+      "title": "startup_connection_probe_1776455665682.md",
+      "timestamp": "2026-04-17T19:54:28.666Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_9c4cd6027cf97f67",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776455901095.jsonl",
+      "title": "startup_connection_probe_1776455901095.jsonl",
+      "timestamp": "2026-04-17T19:58:23.585Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_03305a7541355b08",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776455901095.md",
+      "title": "startup_connection_probe_1776455901095.md",
+      "timestamp": "2026-04-17T19:58:23.586Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_4962811090cd065b",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776456420240.jsonl",
+      "title": "startup_connection_probe_1776456420240.jsonl",
+      "timestamp": "2026-04-17T20:07:00.269Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_ba492eaf247976a3",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776456420240.md",
+      "title": "startup_connection_probe_1776456420240.md",
+      "timestamp": "2026-04-17T20:07:00.270Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_03488eef41604002",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/startup_connection_probe_1776455665682.json",
+      "title": "startup_connection_probe_1776455665682.json",
+      "timestamp": "2026-04-17T19:54:28.666Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_f0b583677ac44e4b",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/startup_connection_probe_1776455901095.json",
+      "title": "startup_connection_probe_1776455901095.json",
+      "timestamp": "2026-04-17T19:58:23.586Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_e0871227d7a40f4c",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776456613712.jsonl",
+      "title": "startup_connection_probe_1776456613712.jsonl",
+      "timestamp": "2026-04-17T20:10:13.755Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_655be7e8cb943907",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/startup_connection_probe_1776456613712.md",
+      "title": "startup_connection_probe_1776456613712.md",
+      "timestamp": "2026-04-17T20:10:13.756Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_2bf72b245cdcb0a2",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-17_04-25.jsonl",
+      "title": "brain_thought_2026-04-17_04-25.jsonl",
+      "timestamp": "2026-04-17T00:00:00.000Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_09b4f24cc4d2181f",
+      "sourceType": "chat_transcript",
+      "sourcePath": "chats/transcripts/brain_thought_2026-04-17_04-25.md",
+      "title": "brain_thought_2026-04-17_04-25.md",
+      "timestamp": "2026-04-17T00:00:00.000Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.56
+    },
+    {
+      "id": "rec_fdad111c2bf2914a",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/brain_thought_2026-04-17_04-25.json",
+      "title": "brain_thought_2026-04-17_04-25.json",
+      "timestamp": "2026-04-17T20:25:14.335Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_3847179967fd6d57",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/startup_connection_probe_1776456420240.json",
+      "title": "startup_connection_probe_1776456420240.json",
+      "timestamp": "2026-04-17T20:07:00.269Z",
+      "day": "2026-04-17",
+      "projectId": null,
+      "durability": 0.64
+    },
+    {
+      "id": "rec_18a41c6be75b405f",
+      "sourceType": "chat_session",
+      "sourcePath": "chats/sessions/startup_connection_probe_1776456613712.json",
+      "title": "startup_connection_probe_1776456613712.json",
+      "timestamp": "2026-04-17T20:10:13.745Z",
+      "day": "2026-04-17",
       "projectId": null,
       "durability": 0.64
     }

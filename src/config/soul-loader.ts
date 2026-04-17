@@ -7,8 +7,7 @@ import { resolveSkillsRoot } from '../skills/store.js';
 // In packaged Electron runtime PROMETHEUS_DATA_DIR is set by main.js and takes priority
 // so user data is read from %APPDATA%\Prometheus rather than the resources directory.
 const PROJECT_CONFIG_NEW = path.join(process.cwd(), '.prometheus');
-const PROJECT_CONFIG_OLD = path.join(process.cwd(), '.smallclaw'); // legacy fallback
-const PROJECT_CONFIG = fs.existsSync(PROJECT_CONFIG_NEW) ? PROJECT_CONFIG_NEW : PROJECT_CONFIG_OLD;
+const PROJECT_CONFIG = PROJECT_CONFIG_NEW;
 const CONFIG_DIR = process.env.PROMETHEUS_DATA_DIR
   ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
   : fs.existsSync(PROJECT_CONFIG) ? PROJECT_CONFIG : path.join(os.homedir(), '.prometheus');

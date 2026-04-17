@@ -191,15 +191,6 @@ export interface AgentDefinition {
   tools?: AgentToolPolicy;
 
   /**
-   * Whether this agent uses minimal prompt mode.
-   * Minimal = reduced workspace/bootstrap context for faster specialist runs.
-   * Sub-agent identity is provided separately via system_prompt.md.
-   * Ideal for sub-agents and background specialists.
-   * Default: false for main, true for any agent spawned as a sub-agent.
-   */
-  minimalPrompt?: boolean;
-
-  /**
    * If true, this agent is the default receiver for user chat sessions.
    * Only one agent should have default: true.
    * If none is set, the first agent in the list is used.
@@ -232,17 +223,6 @@ export interface AgentDefinition {
    */
   maxSteps?: number;
 
-  /**
-   * Whether this agent can spawn other sub-agents.
-   * Default: false (only the orchestrator should spawn).
-   */
-  canSpawn?: boolean;
-
-  /**
-   * List of agent IDs this agent is allowed to spawn.
-   * If omitted and canSpawn is true, can spawn any agent.
-   */
-  spawnAllowlist?: string[];
 }
 
 // ─── Agent Model Defaults ─────────────────────────────────────────────────────

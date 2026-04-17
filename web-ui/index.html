@@ -20,7 +20,58 @@
 <link rel="stylesheet" href="src/styles/pages.css">
 <link rel="stylesheet" href="src/styles/projects.css">
 </head>
-<body>
+<body class="auth-pending">
+
+<style>
+  body.auth-pending .app {
+    visibility: hidden;
+    pointer-events: none;
+  }
+  #prometheus-auth-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 99998;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0a0a0f;
+    color: #e8edf6;
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  .pag-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    text-align: center;
+  }
+  .pag-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(255,255,255,0.12);
+    border-top-color: #f97316;
+    border-radius: 50%;
+    animation: pag-spin 0.75s linear infinite;
+  }
+  .pag-title {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+  }
+  .pag-sub {
+    font-size: 13px;
+    color: #7a8799;
+  }
+  @keyframes pag-spin { to { transform: rotate(360deg); } }
+</style>
+
+<div id="prometheus-auth-gate" role="status" aria-live="polite">
+  <div class="pag-card">
+    <div class="pag-spinner"></div>
+    <div class="pag-title">PROMETHEUS</div>
+    <div class="pag-sub">Checking account...</div>
+  </div>
+</div>
 
 <div class="app">
 
@@ -55,7 +106,7 @@
 
     <div class="sidebar-search">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><circle cx="6.5" cy="6.5" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
-      <input id="session-search" type="text" placeholder="Search sessions..." oninput="filterSessions(this.value)">
+      <input id="session-search" type="text" placeholder="Search sessions, skills..." oninput="filterSessions(this.value)">
     </div>
   </div>
 
@@ -88,6 +139,12 @@
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><circle cx="6" cy="5" r="2.5"/><circle cx="11" cy="5" r="2.5"/><path d="M1 14c0-2.8 2.2-5 5-5h4c2.8 0 5 2.2 5 5"/></svg>
         </div>
         <span>Teams</span>
+      </div>
+      <div class="nav-item" id="nav-subagents" onclick="console.log('nav-subagents clicked, setMode=', typeof setMode); if(typeof setMode==='function'){setMode('subagents');}else{document.getElementById('subagents-view').style.display='flex';document.querySelector('main.main-shell').style.display='none';}">
+        <div class="nav-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="4" y="5" width="8" height="7" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><line x1="8" y1="2" x2="8" y2="5"/><circle cx="8" cy="1.5" r="1" fill="currentColor" stroke="none"/></svg>
+        </div>
+        <span>Subagents</span>
       </div>
       <div class="nav-item" id="nav-proposals" onclick="setMode('proposals')" style="position:relative">
         <div class="nav-icon">
@@ -631,10 +688,11 @@
           <option value="0 * * * *">Every hour</option>
           <option value="0 */3 * * *">Every 3 hours</option>
           <option value="0 */6 * * *">Every 6 hours</option>
-          <option value="0 */8 * * *">Every 8 hours</option>
-          <option value="0 */12 * * *">Every 12 hours</option>
-          <option value="daily">Daily (at a specific time)</option>
-          <option value="every48">Every 48 hours (at a specific time)</option>
+	          <option value="0 */8 * * *">Every 8 hours</option>
+	          <option value="0 */12 * * *">Every 12 hours</option>
+	          <option value="daily">Daily (at a specific time)</option>
+	          <option value="weekday">Weekdays (at a specific time)</option>
+	          <option value="every48">Every 48 hours (at a specific time)</option>
           <option value="custom">Custom cron expression</option>
         </select>
       </div>
@@ -1069,9 +1127,9 @@
 		        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
 		          <div class="right-section-title">Subagent Schedules</div>
 		        </div>
-		        <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Subagent cron runs are configured as Scheduled Tasks. Create or edit a schedule, then choose a subagent in Run As Agent.</div>
+		        <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Each agent can keep its own HEARTBEAT.md and timer. Scheduled Tasks remain separate for explicit cron jobs.</div>
 		        <div id="hb-agent-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">
-		          <div style="color:var(--muted);font-size:12px">Use Scheduled Tasks for recurring subagent work.</div>
+		          <div style="color:var(--muted);font-size:12px">Loading agent heartbeats...</div>
 		        </div>
 	      </div>
 	    </div>
@@ -1529,21 +1587,6 @@
             </div>
           </div>
 
-	            <div>
-	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Team Manager Runtime</div>
-	              <select id="amd-team-manager-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-manager')"><option value="">inherit from Manager</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
-	              <select id="amd-team-manager-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
-	            </div>
-	            <div>
-	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Generic Subagent</div>
-	              <select id="amd-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent')"><option value="">use primary</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
-	              <select id="amd-subagent-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
-	            </div>
-	            <div>
-	              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Team Subagent Runtime</div>
-	              <select id="amd-team-subagent-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('team-subagent')"><option value="">inherit from role/generic</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
-	              <select id="amd-team-subagent-model" class="settings-input" style="width:100%"><option value="">select provider first</option></select>
-	            </div>
 	          <!-- Background Tasks -->
           <div style="margin-bottom:16px">
             <div style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">&#x23F1; Background Tasks</div>
@@ -1872,20 +1915,6 @@
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Name</label>
                 <input id="agent-edit-name" type="text" placeholder="Scout" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box" />
               </div>
-              <div>
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Emoji</label>
-                <input id="agent-edit-emoji" type="text" placeholder="🔍" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box" />
-              </div>
-              <div>
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Tool Profile</label>
-                <select id="agent-edit-profile" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box">
-                  <option value="">(inherit)</option>
-                  <option value="minimal">minimal</option>
-                  <option value="coding">coding</option>
-                  <option value="web">web</option>
-                  <option value="full">full</option>
-                </select>
-              </div>
             </div>
             <label style="display:block;font-size:11px;color:var(--muted);margin:8px 0 4px">Description</label>
             <textarea id="agent-edit-description" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box;resize:vertical"></textarea>
@@ -1916,26 +1945,18 @@
                 <div id="agent-model-status" style="font-size:10px;color:var(--muted);margin-top:3px"></div>
               </div>
               <div>
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Cron Schedule</label>
-                <input id="agent-edit-cron" type="text" placeholder="0 8 * * *" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-              </div>
-              <div>
                 <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Max Steps</label>
                 <input id="agent-edit-max-steps" type="number" min="1" step="1" placeholder="8" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box" />
               </div>
             </div>
             <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:12px">
               <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="agent-edit-default" /> default</label>
-              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="agent-edit-minimal" /> minimalPrompt</label>
-              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="agent-edit-can-spawn" /> canSpawn</label>
             </div>
             <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:12px;padding:6px 8px;background:#f8faff;border:1px solid #dbeafe;border-radius:8px">
               <span style="font-size:10px;color:var(--muted);align-self:center;font-weight:600;letter-spacing:.04em">TEAM&nbsp;PERMISSIONS</span>
               <label style="display:flex;align-items:center;gap:6px" title="Allow this agent to read Prometheus source files via read_source / list_source"><input type="checkbox" id="agent-edit-src-read-access" /> src_read_access</label>
               <label style="display:flex;align-items:center;gap:6px" title="Allow this agent to submit proposals directly (managers only — others must use talk_to_manager)"><input type="checkbox" id="agent-edit-can-propose" /> can_propose</label>
             </div>
-            <label style="display:block;font-size:11px;color:var(--muted);margin:8px 0 4px">Spawn Allowlist (comma-separated IDs)</label>
-            <input id="agent-edit-spawn-allowlist" type="text" placeholder="researcher,writer" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
             <div style="display:flex;gap:8px;margin-top:10px">
               <button class="btn btn-sm" onclick="saveAgentFromForm()">Save Agent</button>
               <button class="btn btn-sm" id="agent-delete-btn" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="deleteSelectedAgent()">Delete</button>
@@ -1954,8 +1975,7 @@
             </div>
             <div id="agent-md-path" style="margin-top:6px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace"></div>
           </div>
-	          <!-- Legacy per-agent heartbeat editor: subagent schedules now live in Scheduled Tasks. -->
-	          <div id="agent-heartbeat-card" style="display:none;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
+		          <div id="agent-heartbeat-card" style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
               <div class="right-section-title">💓 Heartbeat</div>
               <div style="display:flex;align-items:center;gap:8px">
@@ -2413,6 +2433,7 @@ let _pinnedChats = JSON.parse(localStorage.getItem('prometheus_pinned_chats') ||
 function filterSessions(query) {
   _sessionSearchQuery = (query || '').toLowerCase().trim();
   renderSessionsList();
+  if (typeof filterSkills === 'function') filterSkills(query);
 }
 
 function showMoreSessions() {
@@ -2688,6 +2709,27 @@ function renderSessionsList() {
     content += `<button onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">
       + Show more (${unpinned.length - _sessionShowCount} more)
     </button>`;
+  }
+
+  // When searching, append matching skills inline below sessions
+  if (_sessionSearchQuery && typeof skillsCache !== 'undefined' && skillsCache.length) {
+    const matchedSkills = skillsCache.filter(s =>
+      (s.name || '').toLowerCase().includes(_sessionSearchQuery) ||
+      (s.description || '').toLowerCase().includes(_sessionSearchQuery)
+    );
+    if (matchedSkills.length) {
+      content += `<div class="sessions-section-header" style="margin-top:10px">Skills</div>` +
+        matchedSkills.map(s => `
+          <div class="job-item" onclick="setSidebarSegTab('skills')" style="cursor:pointer">
+            <div style="display:flex;align-items:center;gap:7px">
+              <span style="font-size:11px;color:#f97316;opacity:0.8">&#9650;</span>
+              <div class="job-item-title">${escHtml(s.name)}</div>
+              ${s.enabled ? '<span class="badge" style="background:rgba(49,184,132,0.18);color:#4ade80;border:1px solid rgba(49,184,132,0.3);font-size:9px;padding:1px 5px">ON</span>' : ''}
+            </div>
+            ${s.description ? `<div style="color:var(--sidebar-muted);font-size:10px;margin-top:3px;padding-left:18px">${escHtml(s.description)}</div>` : ''}
+          </div>
+        `).join('');
+    }
   }
 
   el.innerHTML = content;
@@ -3221,7 +3263,6 @@ const AMD_SLOTS = {
   'proposal-high':   'proposal_executor_high_risk',
   'proposal-low':    'proposal_executor_low_risk',
   'manager':         'manager',
-  'subagent':        'subagent',
   'background-task': 'background_task',
 };
 
@@ -3556,17 +3597,22 @@ async function saveSkillFromModal() {
 let currentAbortController = null;
 
 function handleSendStop() {
-  if (window.isThinking) stopGeneration();
+  if (window._sessionThinking?.[window.activeChatSessionId]) stopGeneration();
   else { (window.sendChat || sendChat)(); }
 }
 
 function stopGeneration() {
-  if (currentAbortController) {
-    currentAbortController.abort();
-    currentAbortController = null;
+  const activeId = window.activeChatSessionId;
+  const sessionCtrl = window._sessionAbortControllers?.[activeId];
+  const ctrl = sessionCtrl || currentAbortController;
+  if (ctrl) {
+    ctrl.abort();
+    if (sessionCtrl) delete window._sessionAbortControllers[activeId];
+    if (ctrl === currentAbortController) currentAbortController = null;
   }
-  // Immediately reset UI — don't wait for the catch block to propagate
-  window.isThinking = false;
+  // Per-session cleanup
+  if (window._sessionThinking) delete window._sessionThinking[activeId];
+  window.isThinking = Object.values(window._sessionThinking || {}).some(Boolean);
   setButtonState(false);
   const sendBtn = document.getElementById('send-btn');
   if (sendBtn) sendBtn.disabled = false;
@@ -3576,7 +3622,6 @@ function stopGeneration() {
     input.disabled = false;
     input.focus();
   }
-  // Remove the thinking indicator immediately
   const thinkingMsg = document.getElementById('thinking-msg');
   if (thinkingMsg) thinkingMsg.remove();
   renderChatMessages();
@@ -3780,6 +3825,31 @@ let _errBackdrop = null;
   </div>
 </div>
 
+<!-- SUBAGENTS VIEW -->
+<div id="subagents-view" class="page-view" style="display:none;flex-direction:row;">
+  <!-- Canvas wrap (shrinks when detail opens) -->
+  <div id="subagents-canvas-wrap" style="width:100%;display:flex;flex-direction:column;transition:width 0.35s cubic-bezier(0.4,0,0.2,1);overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line);flex-shrink:0;background:var(--panel)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Subagents</span>
+        <span id="subagents-count" style="font-size:11px;background:#f0fdf4;color:#166534;border-radius:999px;padding:2px 10px;font-weight:700;border:1px solid #bbf7d0">0 agents</span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="refreshSubagents()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">Refresh</button>
+      </div>
+    </div>
+    <div id="subagents-canvas" style="flex:1;overflow:auto;padding:32px 24px;display:flex;flex-wrap:wrap;align-content:flex-start;gap:20px">
+      <div id="subagents-canvas-placeholder" style="width:100%;text-align:center;color:var(--muted);padding:60px 20px;font-size:13px">Loading subagents...</div>
+    </div>
+  </div>
+
+  <!-- Detail Panel (slides in) -->
+  <div id="subagent-board" style="display:none;flex-direction:column;width:0;overflow:hidden;border-left:1px solid var(--line);background:var(--panel)">
+    <div id="subagent-board-header" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);flex-shrink:0;gap:8px"></div>
+    <div id="subagent-board-body" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden"></div>
+  </div>
+</div>
+
 <!-- Create Team Modal -->
 <div id="create-team-modal" style="display:none;position:fixed;inset:0;background:rgba(10,20,40,0.35);z-index:9999;align-items:center;justify-content:center;padding:18px">
   <div style="width:min(500px,96vw);max-height:92vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-md)">
@@ -3819,7 +3889,7 @@ let _errBackdrop = null;
 <script type="module" src="src/api.js"></script>
 <script type="module" src="src/utils.js"></script>
 <script type="module" src="src/ws.js"></script>
-<script type="module" src="src/app.js?v=2"></script>
+<script type="module" src="src/app.js?v=5"></script>
 <script type="module" src="src/pages/ChatPage.js"></script>
 <script type="module" src="src/pages/AuditPage.js"></script>
 <script type="module" src="src/pages/MemoryPage.js"></script>
@@ -3827,18 +3897,37 @@ let _errBackdrop = null;
 <script type="module" src="src/pages/SchedulePage.js"></script>
 <script type="module" src="src/pages/TasksPage.js"></script>
 <script type="module" src="src/pages/TeamsPage.js"></script>
+<script type="module" src="src/pages/SubagentsPage.js"></script>
 <script type="module" src="src/pages/ConnectionsPage.js"></script>
 <script type="module" src="src/pages/SettingsPage.js"></script>
 <script type="module" src="src/pages/ProjectsPage.js"></script>
 <script type="module">
-  import { checkSession, mountLoginScreen, dismissLoginScreen, getAccount } from './src/auth/account.js';
+  import { checkSession, mountLoginScreen, getAccount } from './src/auth/account.js';
+
+  function unlockApp() {
+    document.body.classList.remove('auth-pending');
+    document.getElementById('prometheus-auth-gate')?.remove();
+  }
 
   async function bootWithAuth() {
+    let hasAccountHint = false;
+    try { hasAccountHint = !!localStorage.getItem('prometheus_account'); } catch {}
+
+    if (!hasAccountHint) {
+      mountLoginScreen((_account) => {
+        updateAccountDisplay(_account);
+        unlockApp();
+      });
+      return;
+    }
+
     const hasSession = await checkSession();
     const account = getAccount();
 
     if (hasSession && (account?.subscriptionActive || account?.isAdmin)) {
       // Already logged in with active sub — show app immediately
+      updateAccountDisplay(account);
+      unlockApp();
       return;
     }
 
@@ -3846,6 +3935,7 @@ let _errBackdrop = null;
     mountLoginScreen((_account) => {
       // Update account display in system settings
       updateAccountDisplay(_account);
+      unlockApp();
     });
   }
 
@@ -3857,7 +3947,10 @@ let _errBackdrop = null;
   // Run auth boot — always show login on error rather than silently failing
   bootWithAuth().catch(err => {
     console.error('[prometheus auth]', err);
-    mountLoginScreen((acc) => updateAccountDisplay(acc));
+    mountLoginScreen((acc) => {
+      updateAccountDisplay(acc);
+      unlockApp();
+    });
   });
 
   // Expose logout globally for settings button — always reload even if logout fails

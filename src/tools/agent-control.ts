@@ -36,9 +36,6 @@ export async function executeAgentList(_args: any): Promise<ToolResult> {
   for (const agent of agents) {
     const tags: string[] = [];
     if (agent.default) tags.push('DEFAULT');
-    if (agent.cronSchedule) tags.push(`CRON: ${agent.cronSchedule}`);
-    if (agent.canSpawn) tags.push('CAN-SPAWN');
-    if (agent.minimalPrompt === false) tags.push('FULL-PROMPT');
 
     const tagStr = tags.length ? `  [${tags.join(' | ')}]` : '';
     lines.push(`• ${agent.emoji ?? '🤖'} ${agent.name} (id: ${agent.id})${tagStr}`);
@@ -51,13 +48,10 @@ export async function executeAgentList(_args: any): Promise<ToolResult> {
         .join(', ');
       lines.push(`  Bindings: ${bindingStr}`);
     }
-    if (agent.spawnAllowlist?.length) {
-      lines.push(`  Can spawn: ${agent.spawnAllowlist.join(', ')}`);
-    }
     lines.push('');
   }
 
-  lines.push('Use spawn_agent(agentId, task) to run any agent.');
+  lines.push('Use message_subagent(agent_id, message) to send a background message to a standalone non-team subagent; its chat/result stays in the subagent task panel. Use spawn_subagent(...) to create/run one.');
 
   return {
     success: true,
@@ -70,7 +64,7 @@ export const agentListTool = {
   name: 'agent_list',
   description:
     'List all configured agents. Use this to see what sub-agents are available, ' +
-    'their IDs, descriptions, schedules, and capabilities. ' +
+    'their IDs, descriptions, models, workspaces, and bindings. ' +
     'Call this when the user asks about agents, sub-agents, or available workers.',
   execute: executeAgentList,
   schema: {},
@@ -115,9 +109,6 @@ export async function executeAgentInfo(args: any): Promise<ToolResult> {
   if (agent.model)         lines.push(`Model: ${agent.model}`);
   if (agent.workspace)     lines.push(`Workspace: ${agent.workspace}`);
   if (agent.maxSteps)      lines.push(`Max Steps: ${agent.maxSteps}`);
-  if (agent.cronSchedule)  lines.push(`Cron: ${agent.cronSchedule}`);
-  if (agent.canSpawn)      lines.push(`Can Spawn: yes`);
-  if (agent.minimalPrompt !== undefined) lines.push(`Minimal Prompt: ${agent.minimalPrompt}`);
   if (agent.bindings?.length) {
     lines.push(`Bindings:`);
     for (const b of agent.bindings) {
@@ -126,12 +117,8 @@ export async function executeAgentInfo(args: any): Promise<ToolResult> {
   }
   if (agent.tools) {
     lines.push(`Tool Policy:`);
-    if (agent.tools.profile) lines.push(`  Profile: ${agent.tools.profile}`);
     if (agent.tools.allow?.length) lines.push(`  Allow: ${agent.tools.allow.join(', ')}`);
     if (agent.tools.deny?.length)  lines.push(`  Deny: ${agent.tools.deny.join(', ')}`);
-  }
-  if (agent.spawnAllowlist?.length) {
-    lines.push(`Spawn Allowlist: ${agent.spawnAllowlist.join(', ')}`);
   }
 
   return {
@@ -145,7 +132,7 @@ export const agentInfoTool = {
   name: 'agent_info',
   description:
     'Get detailed information about a specific agent by its ID. ' +
-    'Returns config, model, workspace, bindings, tool policy, and cron schedule.',
+    'Returns config, model, workspace, bindings, and tool policy.',
   execute: executeAgentInfo,
   schema: {
     agentId: 'ID of the agent to inspect (from agent_list)',

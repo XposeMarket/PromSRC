@@ -111,3 +111,28 @@ export async function getConnectorToken(id: string): Promise<string> {
   if (!connector) throw new Error(`Unknown connector: ${id}`);
   return connector.getValidAccessToken();
 }
+
+/**
+ * Save OAuth client credentials (clientId + clientSecret) to the vault for a connector.
+ * Called when the user enters credentials in the UI before starting OAuth.
+ */
+export function saveConnectorCredentials(id: string, clientId: string, clientSecret?: string): void {
+  const connector = connectors.get(id);
+  if (!connector) throw new Error(`Unknown connector: ${id}`);
+  connector.saveCredentials(clientId, clientSecret || '');
+}
+
+/**
+ * Return credential and connection status for all connectors — used by the UI.
+ */
+export function getConnectorStatuses(): Record<string, { connected: boolean; hasCredentials: boolean; authType: string }> {
+  const result: Record<string, { connected: boolean; hasCredentials: boolean; authType: string }> = {};
+  for (const [id, c] of connectors.entries()) {
+    result[id] = {
+      connected: c.isConnected(),
+      hasCredentials: c.hasCredentials(),
+      authType: 'oauth',
+    };
+  }
+  return result;
+}

@@ -7,7 +7,7 @@
   "day-trading-mnq-mgc": false,
   "landing-page-blueprint": false,
   "git-workflow": false,
-  "api-integration": true,
+  "api-integration": false,
   "self-repair-protocol": false,
   "data-pipeline": false,
   "prometheus-team-design": false,

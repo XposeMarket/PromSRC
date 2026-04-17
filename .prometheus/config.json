@@ -32,15 +32,26 @@
       },
       "openai": {
         "api_key": "",
-        "model": "gpt-4.1"
+        "model": "gpt-4.1",
+        "reasoning_effort": "medium"
       },
       "openai_codex": {
-        "model": "gpt-5.4"
+        "model": "gpt-5.4",
+        "reasoning_effort": "medium"
       },
       "anthropic": {
         "model": "claude-haiku-4-5-20251001",
         "extended_thinking": false,
         "thinking_budget": 10000
+      },
+      "perplexity": {
+        "api_key": "",
+        "model": "sonar-pro",
+        "reasoning_effort": "medium"
+      },
+      "gemini": {
+        "api_key": "",
+        "model": "gemini-2.5-pro"
       }
     }
   },
@@ -503,7 +514,7 @@
   },
   "telegram": {
     "enabled": true,
-    "botToken": "vault:channels.telegram.botToken",
+    "botToken": "8425269365:AAGk2748JTSg2ZOONU2RVkRD_N5--tETGBI",
     "allowedUserIds": [
       1799053599
     ],

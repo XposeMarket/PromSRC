@@ -2,6 +2,7 @@ import { createMetadata } from "@/lib/seo/metadata";
 import { Section } from "@/components/ui/Section";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { getLatestRelease } from "@/lib/releases/github";
 
 export const metadata = createMetadata({
   title: "Download Prometheus",
@@ -9,30 +10,6 @@ export const metadata = createMetadata({
     "Download the Prometheus desktop app for Windows. Local-first AI automation that runs on your machine.",
   path: "/download",
 });
-
-interface ReleaseInfo {
-  available: boolean;
-  version?: string;
-  publishedAt?: string;
-  downloadUrl?: string;
-  fileSize?: number | null;
-}
-
-async function getLatestRelease(): Promise<ReleaseInfo> {
-  try {
-    const baseUrl =
-      process.env.NEXT_PUBLIC_SITE_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
-
-    const res = await fetch(`${baseUrl}/api/release/latest`, {
-      next: { revalidate: 300 },
-    });
-    if (!res.ok) return { available: false };
-    return res.json();
-  } catch {
-    return { available: false };
-  }
-}
 
 function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;

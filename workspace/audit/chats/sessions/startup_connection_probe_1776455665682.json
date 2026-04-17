@@ -1,0 +1,23 @@
+{
+  "id": "startup_connection_probe_1776455665682",
+  "history": [
+    {
+      "role": "user",
+      "content": "Reply with exactly: pong",
+      "timestamp": 1776455665777
+    },
+    {
+      "role": "assistant",
+      "content": "Hey! How can I help?",
+      "timestamp": 1776455668665
+    }
+  ],
+  "workspace": "D:\\Prometheus\\workspace",
+  "channel": "web",
+  "createdAt": 1776455665778,
+  "lastActiveAt": 1776455668666,
+  "pendingMemoryFlush": false,
+  "pendingCompaction": false,
+  "contextTokenEstimate": 25,
+  "contextStartIndex": 0
+}

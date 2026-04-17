@@ -63,17 +63,15 @@
   flex-direction: column;
   align-items: stretch;
   gap: 0;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255,255,255,0.10);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: rgba(255,255,255,0.06);
   margin-bottom: 8px;
   overflow: hidden;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.project-card:hover { border-color: #c2d6f4; box-shadow: 0 3px 10px rgba(15,60,120,0.07); }
-.project-card.active-project { border-color: #9fbef1; background: #f1f6ff; }
-:root[data-theme="dark"] .project-card { background: var(--panel-2); border-color: var(--line); }
-:root[data-theme="dark"] .project-card.active-project { background: rgba(76,141,255,0.1); border-color: #3a5080; }
+.project-card:hover { border-color: rgba(255,255,255,0.20); background: rgba(255,255,255,0.09); box-shadow: 0 3px 10px rgba(0,0,0,0.25); }
+.project-card.active-project { border-color: #3a5080; background: rgba(76,141,255,0.12); }
 
 .project-card-header {
   display: flex;
@@ -87,39 +85,35 @@
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #e8f1ff, #d5e6ff);
-  border: 1px solid #c4d9fb;
+  background: rgba(76,141,255,0.15);
+  border: 1px solid #3a5080;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   font-size: 15px;
 }
-:root[data-theme="dark"] .project-card-icon {
-  background: rgba(76,141,255,0.15);
-  border-color: #3a5080;
-}
 .project-card-meta { flex: 1; min-width: 0; }
 .project-card-name {
   font-size: 12px;
   font-weight: 700;
-  color: var(--text);
+  color: #e8e6e1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .project-card-sub {
   font-size: 10px;
-  color: var(--muted);
+  color: #9a9890;
   margin-top: 1px;
 }
 .project-card-add-btn {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: var(--muted);
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.08);
+  color: #9a9890;
   display: flex;
   align-items: center;
   justify-content: center;

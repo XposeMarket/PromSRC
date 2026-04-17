@@ -444,34 +444,42 @@ setBrainRunnerInstance(brainRunner);
   }
   heartbeatRunner.registerAgent('main', mainWorkspace);
 }
-/* Subagent heartbeats are intentionally disabled. Subagents run through scheduled jobs with subagent_id. */
-/*
 (function registerSubagentHeartbeats() {
   try {
     const workspacePath = getConfig().getWorkspacePath();
     const subagentsDir = path.join(workspacePath, '.prometheus', 'subagents');
-    if (!fs.existsSync(subagentsDir)) return;
-    const entries = fs.readdirSync(subagentsDir);
-    for (const entry of entries) {
-      const agentDir = path.join(subagentsDir, entry);
-      if (!fs.statSync(agentDir).isDirectory()) continue;
-      const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
-      if (!fs.existsSync(heartbeatPath)) {
-        fs.writeFileSync(heartbeatPath, [
-          `# HEARTBEAT.md - ${entry}`,
-          '',
-          '## Heartbeat Checklist',
-          '- Perform only clearly actionable tasks for this role.',
-          '- Persist outputs to files in this workspace.',
-          '- If nothing is actionable, reply with HEARTBEAT_OK.',
-        ].join('\n'), 'utf-8');
+    if (fs.existsSync(subagentsDir)) {
+      const entries = fs.readdirSync(subagentsDir);
+      for (const entry of entries) {
+        const agentDir = path.join(subagentsDir, entry);
+        if (!fs.statSync(agentDir).isDirectory()) continue;
+        const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
+        if (!fs.existsSync(heartbeatPath)) {
+          fs.writeFileSync(heartbeatPath, [
+            `# HEARTBEAT.md - ${entry}`,
+            '',
+            '## Heartbeat Checklist',
+            '- Perform only clearly actionable tasks for this role.',
+            '- Persist outputs to files in this workspace.',
+            '- If nothing is actionable, reply with HEARTBEAT_OK.',
+          ].join('\n'), 'utf-8');
+        }
+        heartbeatRunner.registerAgent(entry, agentDir);
+        console.log(`[HeartbeatRunner] Auto-registered standalone subagent "${entry}"`);
       }
-      heartbeatRunner.registerAgent(entry, agentDir);
-      console.log(`[HeartbeatRunner] Auto-registered subagent "${entry}"`);
+    }
+
+    for (const agent of getAgents()) {
+      if (!agent || agent.id === 'main' || agent.default === true) continue;
+      const agentDir = String((agent as any).workspace || '').trim();
+      if (!agentDir || !fs.existsSync(agentDir)) continue;
+      const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
+      if (!fs.existsSync(heartbeatPath)) continue;
+      heartbeatRunner.registerAgent(agent.id, agentDir);
+      console.log(`[HeartbeatRunner] Auto-registered configured agent "${agent.id}"`);
     }
   } catch (err: any) { console.warn('[HeartbeatRunner] Subagent auto-registration failed:', err?.message); }
 })();
-*/
 
 // ─── B6: Wire chat router ──────────────────────────────────────────────────────
 initChatRouter({ cronScheduler, telegramChannel, skillsManager });

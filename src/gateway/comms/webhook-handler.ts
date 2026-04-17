@@ -129,7 +129,7 @@ function createAuthMiddleware(getConfig: () => HookConfig) {
 
     // Extract token from headers
     const authHeader = String(req.headers['authorization'] || '');
-    const xToken = String(req.headers['x-prometheus-token'] || req.headers['x-smallclaw-token'] || ''); // x-smallclaw-token kept for backward compat
+    const xToken = String(req.headers['x-prometheus-token'] || '');
     let providedToken = '';
 
     if (authHeader.toLowerCase().startsWith('bearer ')) {

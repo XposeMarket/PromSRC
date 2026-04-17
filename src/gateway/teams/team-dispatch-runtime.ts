@@ -118,8 +118,7 @@ export async function runTeamAgentViaChat(
     const defaults = cfg?.agent_model_defaults || {};
     const roleType = String((agent as any)?.roleType || '').trim().toLowerCase();
     const roleKey = roleType ? `subagent_${roleType}` : '';
-    const fallbackRef =
-      String(defaults?.team_subagent || (roleKey && defaults?.[roleKey]) || defaults?.subagent || '').trim();
+    const fallbackRef = String((roleKey && defaults?.[roleKey]) || '').trim();
     if (!fallbackRef) return {};
     return parseProviderModel(fallbackRef);
   };
@@ -141,9 +140,11 @@ export async function runTeamAgentViaChat(
   let agentIdentityPath = '';
   if (agent) {
     try {
-      const globalAgentWs = ensureAgentWorkspace(agent as any);
+      const globalAgentWs = teamId
+        ? String((agent as any)?.workspace || '')
+        : ensureAgentWorkspace(agent as any);
       const identityWs = teamId
-        ? ensureTeamAgentIdentity(teamId, agentId, globalAgentWs)
+        ? ensureTeamAgentIdentity(teamId, agentId, globalAgentWs || undefined)
         : globalAgentWs;
       agentIdentityPath = identityWs;
       const spFile = [path.join(identityWs, 'system_prompt.md'), path.join(identityWs, 'HEARTBEAT.md')]

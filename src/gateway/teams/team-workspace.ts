@@ -6,6 +6,7 @@
  *
  * Storage layout:
  *   <globalWorkspace>/teams/<teamId>/workspace/   ← shared files agents read/write
+ *   <globalWorkspace>/teams/<teamId>/subagents/<agentId>/ ← team-scoped agent identity files
  *   <globalWorkspace>/teams/<teamId>/workspace/.metadata.json ← file metadata (writtenBy, readBy, etc.)
  *
  * Design principles:
@@ -67,19 +68,19 @@ export interface WorkspaceMetadata {
  * Returns the identity directory for a specific agent scoped to a specific team.
  * This is where system_prompt.md and agent-specific config live for that team.
  *
- * Layout: <globalWorkspace>/teams/<teamId>/agents/<agentId>/
+ * Layout: <globalWorkspace>/teams/<teamId>/subagents/<agentId>/
  *
  * This ensures an agent reused across teams acts as a completely separate entity
  * in each team — different workspace, different identity, zero context bleed.
  */
 export function getTeamAgentIdentityPath(teamId: string, agentId: string): string {
   const root = getTeamWorkspaceRoot();
-  return path.join(root, sanitizeId(teamId), 'agents', sanitizeId(agentId));
+  return path.join(root, sanitizeId(teamId), 'subagents', sanitizeId(agentId));
 }
 
 /**
  * Ensures the per-team agent identity directory exists.
- * On first creation, bootstraps identity files from the global subagent workspace
+ * On first creation, bootstraps identity files from an optional source workspace
  * (copies system_prompt.md, HEARTBEAT.md, and TOOLS.md if they exist).
  * After that, the team-scoped files are independent and can diverge.
  *
@@ -88,16 +89,15 @@ export function getTeamAgentIdentityPath(teamId: string, agentId: string): strin
 export function ensureTeamAgentIdentity(
   teamId: string,
   agentId: string,
-  globalAgentWorkspace: string,
+  globalAgentWorkspace?: string,
 ): string {
   const identityPath = getTeamAgentIdentityPath(teamId, agentId);
   const firstTime = !fs.existsSync(identityPath);
   fs.mkdirSync(identityPath, { recursive: true });
 
-  // Files to sync from the global subagent workspace.
+  // Files to sync from an optional source workspace.
   // These are identity files — copied once on first use, then re-synced if the
-  // team-scoped copy is still empty/blank (e.g. the global file was updated after
-  // the team was created, or the original copy was a blank template).
+  // team-scoped copy is still empty/blank.
   const filesToSync = [
     'system_prompt.md',
     'HEARTBEAT.md',
@@ -105,8 +105,10 @@ export function ensureTeamAgentIdentity(
   ];
 
   for (const filename of filesToSync) {
+    if (!globalAgentWorkspace) continue;
     const src = path.join(globalAgentWorkspace, filename);
     const dst = path.join(identityPath, filename);
+    if (path.resolve(src) === path.resolve(dst)) continue;
 
     if (!fs.existsSync(src)) continue; // nothing to copy
 
@@ -130,6 +132,8 @@ export function ensureTeamAgentIdentity(
     }
   }
 
+  bootstrapTeamAgentIdentityFiles(teamId, agentId, identityPath);
+
   // Write/update marker so the UI/tooling can identify team-scoped identity dirs
   if (firstTime) {
     fs.writeFileSync(
@@ -140,6 +144,126 @@ export function ensureTeamAgentIdentity(
   }
 
   return identityPath;
+}
+
+function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identityPath: string): void {
+  const agent = getAgentById(agentId) as any;
+  const displayName = String(agent?.name || agentId || 'Agent');
+  const description = String(agent?.description || 'No description set.');
+  const teamRole = String(agent?.teamRole || displayName);
+  const teamAssignment = String(agent?.teamAssignment || description);
+
+  const agentsMd = path.join(identityPath, 'AGENTS.md');
+  if (!fs.existsSync(agentsMd)) {
+    fs.writeFileSync(agentsMd, [
+      `# AGENTS.md - ${displayName}`,
+      '',
+      '## Role',
+      description,
+      '',
+      '## Team Assignment',
+      teamAssignment,
+      '',
+      '## Output Format',
+      'Return a concise summary of what was accomplished.',
+    ].join('\n'), 'utf-8');
+  }
+
+  const systemPrompt = path.join(identityPath, 'system_prompt.md');
+  if (!fs.existsSync(systemPrompt)) {
+    fs.writeFileSync(systemPrompt, [
+      `# ${displayName}`,
+      '',
+      description,
+      '',
+      '## Team-Specific Role',
+      teamRole,
+      '',
+      '## Team-Specific Assignment',
+      teamAssignment,
+    ].join('\n'), 'utf-8');
+  }
+
+  const heartbeat = path.join(identityPath, 'HEARTBEAT.md');
+  if (!fs.existsSync(heartbeat)) {
+    fs.writeFileSync(heartbeat, [
+      `# HEARTBEAT.md - ${displayName}`,
+      '',
+      '## Heartbeat Checklist',
+      '- Review team memory and pending work for actionable follow-up.',
+      '- Persist outputs to the team workspace.',
+      '- If nothing is actionable, reply with HEARTBEAT_OK.',
+    ].join('\n'), 'utf-8');
+  }
+
+  const configPath = path.join(identityPath, 'config.json');
+  if (!fs.existsSync(configPath)) {
+    fs.writeFileSync(configPath, JSON.stringify({
+      agentId,
+      teamId,
+      name: displayName,
+      description,
+      teamRole,
+      teamAssignment,
+      teamScoped: true,
+      createdAt: Date.now(),
+    }, null, 2), 'utf-8');
+  }
+}
+
+function isGlobalSubagentPath(candidate: string, agentId: string): boolean {
+  try {
+    const workspace = getConfig().getWorkspacePath() || process.cwd();
+    const expected = path.join(workspace, '.prometheus', 'subagents', sanitizeId(agentId));
+    return path.resolve(candidate) === path.resolve(expected);
+  } catch {
+    return false;
+  }
+}
+
+export function claimAgentForTeamWorkspace(teamId: string, agentId: string): { identityPath: string; removedGlobalPath?: string } | null {
+  const safeAgentId = sanitizeId(agentId);
+  if (!safeAgentId) return null;
+
+  const cm = getConfig();
+  const cfg = cm.getConfig() as any;
+  const agents = Array.isArray(cfg.agents) ? [...cfg.agents] : [];
+  const idx = agents.findIndex((a: any) => sanitizeId(a?.id) === safeAgentId);
+  const agent = idx >= 0 ? agents[idx] : getAgentById(safeAgentId);
+  if (!agent) return null;
+
+  const identityPath = getTeamAgentIdentityPath(teamId, safeAgentId);
+  const globalPath = path.join(cm.getWorkspacePath() || process.cwd(), '.prometheus', 'subagents', safeAgentId);
+  const configuredWorkspace = String((agent as any).workspace || '').trim();
+  const sourceWorkspace = configuredWorkspace && path.resolve(configuredWorkspace) !== path.resolve(identityPath)
+    ? configuredWorkspace
+    : fs.existsSync(globalPath)
+      ? globalPath
+      : undefined;
+
+  ensureTeamAgentIdentity(teamId, safeAgentId, sourceWorkspace);
+
+  if (idx >= 0) {
+    agents[idx] = {
+      ...agents[idx],
+      workspace: identityPath,
+    };
+    cm.updateConfig({ agents } as any);
+  }
+
+  let removedGlobalPath: string | undefined;
+  if (sourceWorkspace && isGlobalSubagentPath(sourceWorkspace, safeAgentId) && path.resolve(sourceWorkspace) !== path.resolve(identityPath)) {
+    try {
+      if (fs.existsSync(sourceWorkspace)) {
+        fs.rmSync(sourceWorkspace, { recursive: true, force: true });
+        removedGlobalPath = sourceWorkspace;
+      }
+    } catch {
+      // Non-fatal; config now points at the team identity path.
+    }
+  }
+
+  return { identityPath, removedGlobalPath };
 }
 
 export function getTeamWorkspaceRoot(): string {

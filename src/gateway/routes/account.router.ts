@@ -72,7 +72,9 @@ function clearSession(): void {
 loadPersistedSession();
 
 // ─── Supabase helpers ─────────────────────────────────────────────────────────
-async function sbFetch(urlPath: string, opts: RequestInit = {}, token?: string): Promise<any> {
+async function sbFetch(urlPath: string, opts: RequestInit = {}, token?: string, timeoutMs = 10000): Promise<any> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const headers: Record<string, string> = {
     apikey: SUPABASE_ANON_KEY,
     'Content-Type': 'application/json',
@@ -80,7 +82,13 @@ async function sbFetch(urlPath: string, opts: RequestInit = {}, token?: string):
     ...(opts.headers as Record<string, string> || {}),
   };
 
-  const res = await fetch(`${SUPABASE_URL}${urlPath}`, { ...opts, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}${urlPath}`, { ...opts, headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+
   const body = await res.json().catch(() => ({}));
 
   if (!res.ok) {
@@ -90,13 +98,14 @@ async function sbFetch(urlPath: string, opts: RequestInit = {}, token?: string):
   return body;
 }
 
-async function checkSubscription(userId: string, accessToken: string, isAdmin: boolean): Promise<boolean | null> {
+async function checkSubscription(userId: string, accessToken: string, isAdmin: boolean, timeoutMs = 10000): Promise<boolean | null> {
   if (isAdmin) return true;
   try {
     const data = await sbFetch(
       `/rest/v1/subscriptions?user_id=eq.${userId}&status=in.(active,trialing)&limit=1`,
       {},
-      accessToken
+      accessToken,
+      timeoutMs,
     );
     return Array.isArray(data) && data.length > 0;
   } catch {
@@ -117,12 +126,12 @@ async function checkIsAdmin(userId: string, accessToken: string): Promise<boolea
   }
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; refreshToken: string; expiresAt: number } | null> {
+async function refreshAccessToken(refreshToken: string, timeoutMs = 10000): Promise<{ accessToken: string; refreshToken: string; expiresAt: number } | null> {
   try {
     const data = await sbFetch('/auth/v1/token?grant_type=refresh_token', {
       method: 'POST',
       body: JSON.stringify({ refresh_token: refreshToken }),
-    });
+    }, undefined, timeoutMs);
     return {
       accessToken: data.access_token,
       refreshToken: data.refresh_token || refreshToken,
@@ -133,7 +142,7 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   }
 }
 
-async function refreshSubscriptionIfNeeded(force: boolean = false): Promise<SubscriptionRefreshResult> {
+async function refreshSubscriptionIfNeeded(force: boolean = false, timeoutMs = 10000): Promise<SubscriptionRefreshResult> {
   if (!_session) return 'inactive';
   if (_session.isAdmin) {
     _session.subscriptionActive = true;
@@ -151,6 +160,7 @@ async function refreshSubscriptionIfNeeded(force: boolean = false): Promise<Subs
     _session.userId,
     _session.accessToken,
     _session.isAdmin,
+    timeoutMs,
   );
   if (subscriptionActive === null) return 'unknown';
 
@@ -191,38 +201,36 @@ router.get('/api/account/config', (_req, res) => {
   res.json({ supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY });
 });
 
-// GET /api/account/status — return current auth + subscription state
-// If token is expired but refresh token exists, attempt inline refresh so the
-// web UI doesn't briefly show the login screen on the first request after restart.
-router.get('/api/account/status', async (_req, res) => {
+// GET /api/account/status — return cached auth state instantly (no blocking Supabase calls).
+// Token refresh and subscription checks happen in the background so this endpoint
+// always responds in <1ms regardless of Supabase latency.
+router.get('/api/account/status', (_req, res) => {
   if (!_session) {
     return res.json({ authenticated: false });
   }
 
   const now = Math.floor(Date.now() / 1000);
-  if (_session.expiresAt < now) {
-    if (_session.refreshToken) {
-      const refreshed = await refreshAccessToken(_session.refreshToken);
-      if (refreshed) {
-        _session = { ..._session, ...refreshed };
-      } else {
-        clearSession();
-        return res.json({ authenticated: false });
-      }
-    } else {
-      clearSession();
-      return res.json({ authenticated: false });
-    }
+
+  // No refresh token and token expired — definitively logged out
+  if (_session.expiresAt < now && !_session.refreshToken) {
+    clearSession();
+    return res.json({ authenticated: false });
   }
 
-  const subscriptionState = await refreshSubscriptionIfNeeded();
-  if (subscriptionState === 'inactive') {
-    clearSession();
-    return res.json({
-      authenticated: false,
-      subscriptionActive: false,
-      reason: 'subscription_inactive',
-    });
+  // Token expired but refresh token exists — kick off background refresh,
+  // return optimistic authenticated state (next request will use fresh token)
+  if (_session.expiresAt < now) {
+    refreshAccessToken(_session.refreshToken).then(refreshed => {
+      if (refreshed && _session) {
+        _session = { ..._session, ...refreshed };
+        persistSession();
+      } else {
+        clearSession();
+      }
+    }).catch(() => clearSession());
+  } else {
+    // Token valid — background-refresh subscription if TTL lapsed
+    refreshSubscriptionIfNeeded(false).catch(() => {});
   }
 
   res.json({
@@ -279,6 +287,74 @@ router.post('/api/account/login', (req, res) => {
     isAdmin: _session.isAdmin,
     subscriptionActive: _session.subscriptionActive,
   });
+});
+
+// POST /api/account/login/password - authenticate through the gateway.
+// This keeps the Electron renderer from surfacing opaque browser/CORS/network
+// TypeErrors such as "Failed to fetch" when Supabase cannot be reached directly.
+router.post('/api/account/login/password', async (req, res) => {
+  const { email, password } = req.body || {};
+  const normalizedEmail = String(email || '').trim();
+  const normalizedPassword = String(password || '');
+
+  if (!normalizedEmail || !normalizedPassword) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  try {
+    const auth = await sbFetch('/auth/v1/token?grant_type=password', {
+      method: 'POST',
+      body: JSON.stringify({ email: normalizedEmail, password: normalizedPassword }),
+    }, undefined, 15000);
+
+    const userId = auth?.user?.id;
+    const accessToken = auth?.access_token;
+    const refreshToken = auth?.refresh_token || '';
+    const expiresAt = Math.floor(Date.now() / 1000) + (auth?.expires_in || 3600);
+
+    if (!userId || !accessToken) {
+      return res.status(401).json({ error: 'Authentication failed - no token returned' });
+    }
+
+    const isAdmin = await checkIsAdmin(userId, accessToken);
+    const subscriptionActive = Boolean(await checkSubscription(userId, accessToken, isAdmin, 10000));
+
+    const nextSession: AuthSession = {
+      userId: String(userId),
+      email: normalizedEmail,
+      accessToken: String(accessToken),
+      refreshToken: String(refreshToken),
+      expiresAt,
+      isAdmin,
+      subscriptionActive,
+      subscriptionCheckedAt: Date.now(),
+    };
+
+    if (!nextSession.isAdmin && !nextSession.subscriptionActive) {
+      clearSession();
+      return res.json({
+        authenticated: false,
+        email: nextSession.email,
+        userId: nextSession.userId,
+        isAdmin: false,
+        subscriptionActive: false,
+        reason: 'subscription_inactive',
+      });
+    }
+
+    _session = nextSession;
+    persistSession();
+
+    return res.json({
+      authenticated: true,
+      email: _session.email,
+      userId: _session.userId,
+      isAdmin: _session.isAdmin,
+      subscriptionActive: _session.subscriptionActive,
+    });
+  } catch (err: any) {
+    return res.status(401).json({ error: err?.message || 'Login failed' });
+  }
 });
 
 // POST /api/account/logout

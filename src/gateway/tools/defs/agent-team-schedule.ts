@@ -28,7 +28,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             specialization: {
               type: 'string',
-              description: 'Team-specific assignment when using from_role. This becomes the agent\'s concrete team role on top of the generic preset. E.g. "Prospect Researcher: finds local small-business leads for Xpose Market from maps/directories/search."',
+              description: 'Concrete standalone specialization when using from_role. If the agent is later added to a team, this can become its team role. E.g. "Prospect Researcher: finds local small-business leads for Xpose Market from maps/directories/search."',
             },
             task_prompt: {
               type: 'string',
@@ -44,7 +44,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             create_if_missing: {
               type: 'object',
-              description: 'If subagent does not exist, create it with these specifications. Subagent configs are saved to .prometheus/subagents/ and auto-registered in config.json so they appear in the Agents panel and can be added to teams.',
+              description: 'If subagent does not exist, create it with these specifications. Standalone subagent configs are saved globally; team-assigned identity files live under workspace/teams/<teamId>/subagents/ and appear in the Agents panel.',
               properties: {
                 name: {
                   type: 'string',
@@ -60,7 +60,7 @@ export function getAgentTeamScheduleTools(): any[] {
                 },
                 teamAssignment: {
                   type: 'string',
-                  description: 'Concrete team-specific mission for this agent. This is persisted into system_prompt.md alongside the base preset role.',
+                  description: 'Optional team-specific mission. Leave blank for standalone one-off subagents; use system_instructions/description for normal standalone identity.',
                 },
                 allowed_categories: {
                   type: 'array',
@@ -86,7 +86,7 @@ export function getAgentTeamScheduleTools(): any[] {
                 },
                 heartbeat_instructions: {
                   type: 'string',
-                  description: 'Written to HEARTBEAT.md. Used when this agent is assigned to a cron schedule via schedule_job(subagent_id). Include: what to check, what to do, when to stop.',
+                  description: 'Written to HEARTBEAT.md. Used by this agent heartbeat when enabled. Include: what to check, what to do, when to stop.',
                 },
                 constraints: {
                   type: 'array',
@@ -177,6 +177,25 @@ export function getAgentTeamScheduleTools(): any[] {
           properties: {
             agent_id: { type: 'string', description: 'ID of the subagent to message (e.g. "post_writer_v1")' },
             message: { type: 'string', description: 'Message to deliver to the agent. Include all context they need.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'message_subagent',
+        description:
+          'Send a normal direct message to a standalone one-off subagent in the background and return a task id immediately. ' +
+          'Use this when the user wants the main chat agent to hand work or a question to an existing standalone subagent as a peer while main chat continues. ' +
+          'The subagent working conversation and final result stay in the subagent task panel, not the main chat. This is not team dispatch and only works for subagents that are not assigned to a managed team. Call agent_list() first if you are unsure of the ID.',
+        parameters: {
+          type: 'object',
+          required: ['agent_id', 'message'],
+          properties: {
+            agent_id: { type: 'string', description: 'ID of the standalone subagent to message.' },
+            message: { type: 'string', description: 'Plain-language message to send to the subagent in the background. Include the task or question.' },
+            context: { type: 'string', description: 'Optional additional context from the main chat.' },
           },
         },
       },
@@ -290,23 +309,23 @@ export function getAgentTeamScheduleTools(): any[] {
         },
       },
     },
-    {
-      type: 'function',
-      function: {
-        name: 'update_heartbeat',
-        description: 'Update the main/default heartbeat configuration or HEARTBEAT.md instructions. Subagent heartbeats are disabled; use schedule_job with subagent_id for recurring subagent work.',
-        parameters: {
-          type: 'object',
-          required: [],
-          properties: {
-            agent_id: { type: 'string', description: 'Which heartbeat to configure. Defaults to "main". Only "main" and "default" are supported.' },
-            enabled: { type: 'boolean', description: 'Enable or disable the main/default heartbeat timer.' },
-            interval_minutes: { type: 'number', description: 'How often the main/default heartbeat fires, in minutes. Min 1, max 1440. Default 30.' },
-            model: { type: 'string', description: 'Optional model override for main/default heartbeat runs. Leave blank to use the global default.' },
-            instructions: { type: 'string', description: 'Full replacement content for the main/default HEARTBEAT.md file. For subagents, create a schedule_job with subagent_id instead.' },
-          },
-        },
-      },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'update_heartbeat',
+	        description: 'Update heartbeat configuration or HEARTBEAT.md instructions for main/default or any configured subagent. Managers can use this to adjust a team subagent heartbeat.',
+	        parameters: {
+	          type: 'object',
+	          required: [],
+	          properties: {
+	            agent_id: { type: 'string', description: 'Which heartbeat to configure. Defaults to "main". Use a configured subagent ID to update that agent.' },
+	            enabled: { type: 'boolean', description: 'Enable or disable this agent heartbeat timer.' },
+	            interval_minutes: { type: 'number', description: 'How often the main/default heartbeat fires, in minutes. Min 1, max 1440. Default 30.' },
+	            model: { type: 'string', description: 'Optional model override for heartbeat runs. Leave blank to use the global/default agent model.' },
+	            instructions: { type: 'string', description: 'Full replacement content for this agent HEARTBEAT.md file.' },
+	          },
+	        },
+	      },
     },
     {
       type: 'function',
@@ -338,7 +357,7 @@ export function getAgentTeamScheduleTools(): any[] {
               },
             },
             model_override: { type: 'string', description: 'Optional model override for this scheduled job' },
-            subagent_id: { type: 'string', description: 'Optional: ID of a subagent definition in workspace/.prometheus/subagents/ to use for this job. When set, the subagent system instructions and constraints are automatically injected at runtime.' },
+	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use for this scheduled job. When set, the subagent system instructions and constraints are automatically injected at runtime.' },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
           },

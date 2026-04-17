@@ -245,12 +245,11 @@ router.put('/api/bg-tasks/heartbeat/config', (req, res) => {
   });
 });
 
-// ─── Legacy Per-Agent Heartbeat API ───────────────────────────────────────────
-// Subagent heartbeats are disabled. Use scheduled jobs with subagent_id instead.
+// ─── Per-Agent Heartbeat API ─────────────────────────────────────────────────
 
 router.get('/api/heartbeat/agents', (_req, res) => {
   try {
-    const agents = _heartbeatRunner.listAgentConfigs().filter((a: any) => a.agentId === 'main' || a.agentId === 'default');
+    const agents = _heartbeatRunner.listAgentConfigs();
     res.json({ success: true, agents });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });
@@ -261,34 +260,17 @@ router.get('/api/heartbeat/agents/:agentId', (req, res) => {
 	try {
 	    const agentId = String(req.params.agentId || '').trim();
 	    if (!agentId) { res.status(400).json({ success: false, error: 'agentId required' }); return; }
-	    if (agentId !== 'main' && agentId !== 'default') {
-	      res.json({
-	        success: true,
-	        agentId,
-	        config: { enabled: false, intervalMinutes: 30, model: '' },
-	        deprecated: true,
-	        message: 'Subagent heartbeats are disabled. Create a scheduled job with subagent_id instead.',
-	      });
-	      return;
-	    }
 	    const config = _heartbeatRunner.getAgentConfig(agentId);
-    res.json({ success: true, agentId, config });
+	    res.json({ success: true, agentId, config });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });
   }
 });
 
 router.put('/api/heartbeat/agents/:agentId', (req, res) => {
-  try {
+	try {
 	    const agentId = String(req.params.agentId || '').trim();
 	    if (!agentId) { res.status(400).json({ success: false, error: 'agentId required' }); return; }
-	    if (agentId !== 'main' && agentId !== 'default') {
-	      res.status(400).json({
-	        success: false,
-	        error: 'Subagent heartbeats are disabled. Create or update a scheduled job with subagent_id instead.',
-	      });
-	      return;
-	    }
 	    const body = req.body || {};
     const partial: Record<string, any> = {};
     if (typeof body.enabled === 'boolean') partial.enabled = body.enabled;
@@ -316,17 +298,10 @@ router.put('/api/heartbeat/agents/:agentId', (req, res) => {
 });
 
 router.post('/api/heartbeat/agents/:agentId/tick', async (req, res) => {
-  try {
+	try {
 	    const agentId = String(req.params.agentId || '').trim();
 	    if (!agentId) { res.status(400).json({ success: false, error: 'agentId required' }); return; }
-	    if (agentId !== 'main' && agentId !== 'default') {
-	      res.status(400).json({
-	        success: false,
-	        error: 'Subagent heartbeat ticks are disabled. Use /api/schedules/:id/run for a scheduled job assigned to this subagent.',
-	      });
-	      return;
-	    }
-    res.json({ success: true, message: `Heartbeat tick queued for "${agentId}"` });
+	    res.json({ success: true, message: `Heartbeat tick queued for "${agentId}"` });
     _heartbeatRunner.tick(agentId).catch((err: any) =>
       console.warn(`[HeartbeatRunner] Manual tick failed for "${agentId}":`, err?.message)
     );

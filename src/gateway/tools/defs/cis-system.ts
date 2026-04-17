@@ -7,10 +7,11 @@ export function getCisSystemTools(): any[] {
   const categoryDocs: Array<[string, string]> = [
     ['browser', 'browser — 20 web automation tools (browser_open, browser_click, browser_fill, etc.)'],
     ['desktop', 'desktop — 26 OS/desktop automation tools (desktop_screenshot, desktop_click, etc.)'],
-    ['team_ops', 'team_ops — 19 agent/team coordination tools (spawn_subagent, team_manage, dispatch_team_agent, etc.)'],
+    ['team_ops', 'team_ops - agent/team coordination tools (spawn_subagent, message_subagent, team_manage, dispatch_team_agent, etc.)'],
     ['source_write', 'source_write — 10 code editing tools (find_replace_source, write_source, etc.)'],
     ['integrations', 'integrations — 5 MCP/webhook/CIS tools (mcp_server_manage, webhook_manage, social_intel, etc.)'],
     ['connectors', 'connectors — 34 external service tools (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4). Use connector_list first to see what\'s connected.'],
+    ['composites', 'composites - saved multi-step composite tools plus create/get/edit/delete/list composite management tools.'],
   ];
   const categoryEnum = getPublicBuildAllowedCategories([
     'browser',
@@ -19,6 +20,7 @@ export function getCisSystemTools(): any[] {
     'source_write',
     'integrations',
     'connectors',
+    'composites',
   ] as const);
   const requestToolCategoryDescription =
     'Activate a tool category for this session, unlocking those tool schemas for use. ' +
@@ -42,7 +44,7 @@ export function getCisSystemTools(): any[] {
           '  - Any team management action is needed (pause, update goal, query team state)',
           'The coordinator has full knowledge of the teams system, role registry, and all team tools.',
           'It creates the team (or handles the query), then returns a summary. Team runs autonomously after.',
-          'IMPORTANT: Do NOT call team_manage or spawn_subagent directly from main chat — always use this tool.',
+          'IMPORTANT: Do NOT call team_manage directly from main chat. Use this tool for managed team work. Standalone one-off subagents are separate: main chat may use spawn_subagent and message_subagent directly for a single non-team agent.',
         ].join(' '),
         parameters: {
           type: 'object',

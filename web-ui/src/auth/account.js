@@ -19,12 +19,27 @@ export function hasActiveSubscription() {
 
 // ─── Gateway calls ────────────────────────────────────────────────────────────
 async function gatewayRequest(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
+  const timeoutMs = Number(opts.timeoutMs || 0);
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeout = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  const { timeoutMs: _timeoutMs, ...fetchOpts } = opts;
+
+  try {
+    const res = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller?.signal,
+      ...fetchOpts,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    if (err.name === 'AbortError') return { ok: false, status: 0, data: {} };
+    throw err;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 // ─── Supabase config (loaded once from gateway) ───────────────────────────────
@@ -55,9 +70,27 @@ async function sbBrowserFetch(supabaseUrl, supabaseAnonKey, urlPath, opts = {}, 
 }
 
 // ─── Login ────────────────────────────────────────────────────────────────────
-// All Supabase calls happen in the browser (renderer) to avoid gateway firewall issues.
-// The verified session is then stored in the gateway for server-side persistence.
+// Prefer gateway auth so renderer-side CORS/TLS/network failures do not become
+// opaque browser TypeErrors like "Failed to fetch".
 export async function login(email, password) {
+  const { ok, data } = await gatewayRequest('/api/account/login/password', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+  if (!ok) throw new Error(data.error || 'Login failed');
+
+  _account = {
+    email: data.email || email,
+    userId: data.userId,
+    isAdmin: Boolean(data.isAdmin),
+    subscriptionActive: Boolean(data.subscriptionActive),
+  };
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ email })); } catch {}
+  return _account;
+}
+
+// Direct browser fallback retained for diagnostics.
+export async function loginLegacyBrowser(email, password) {
   const { supabaseUrl, supabaseAnonKey } = await getSupabaseConfig();
 
   // 1. Authenticate with Supabase directly from browser
@@ -112,7 +145,8 @@ export async function logout() {
 
 // ─── Check existing session (called on app load) ──────────────────────────────
 export async function checkSession() {
-  const { ok, data } = await gatewayRequest('/api/account/status');
+  const { ok, status, data } = await gatewayRequest('/api/account/status');
+
   if (ok && data.authenticated) {
     _account = {
       email: data.email,
@@ -122,6 +156,17 @@ export async function checkSession() {
     };
     return true;
   }
+
+  // Only clear persisted hint on a definitive auth rejection.
+  // Timeout or network failure (status 0) keeps the hint so the next
+  // load can retry rather than forcing a login screen.
+  const isDefiniteRejection = status === 401 || status === 403 ||
+    (ok && data.authenticated === false);
+  if (isDefiniteRejection) {
+    _account = null;
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  }
+
   return false;
 }
 

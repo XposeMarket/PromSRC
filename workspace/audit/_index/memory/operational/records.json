@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-16T14:10:41.944Z",
+  "updatedAt": "2026-04-17T20:42:32.973Z",
   "records": {
     "opr_00884f2763d18bdc": {
       "id": "opr_00884f2763d18bdc",
@@ -6366,9 +6366,9 @@
       "title": "15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus",
       "summary": "15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus",
       "body": "Task 15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus — unknown. Goal: 15c097e7-00e5-4c52-8b18-5eaf6f0cc89e.bus.",
-      "createdAt": "2026-04-16T14:10:41.982Z",
-      "updatedAt": "2026-04-16T14:10:41.982Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.268Z",
+      "updatedAt": "2026-04-17T20:42:36.268Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -6462,9 +6462,9 @@
       "title": "1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus",
       "summary": "1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus",
       "body": "Task 1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus — unknown. Goal: 1663fb9d-7065-4b7e-8ee9-d90b26b8371b.bus.",
-      "createdAt": "2026-04-16T14:10:41.983Z",
-      "updatedAt": "2026-04-16T14:10:41.983Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.278Z",
+      "updatedAt": "2026-04-17T20:42:36.278Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -7653,9 +7653,9 @@
       "title": "3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus",
       "summary": "3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus",
       "body": "Task 3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus — unknown. Goal: 3c73e89a-7f0a-44f9-b3e7-a9797506b646.bus.",
-      "createdAt": "2026-04-16T14:10:41.988Z",
-      "updatedAt": "2026-04-16T14:10:41.988Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.508Z",
+      "updatedAt": "2026-04-17T20:42:36.508Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -7905,9 +7905,9 @@
       "title": "4313771d-46c9-4c73-893c-9c73916b9a07.bus",
       "summary": "4313771d-46c9-4c73-893c-9c73916b9a07.bus",
       "body": "Task 4313771d-46c9-4c73-893c-9c73916b9a07.bus — unknown. Goal: 4313771d-46c9-4c73-893c-9c73916b9a07.bus.",
-      "createdAt": "2026-04-16T14:10:41.990Z",
-      "updatedAt": "2026-04-16T14:10:41.990Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.541Z",
+      "updatedAt": "2026-04-17T20:42:36.541Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -7949,9 +7949,9 @@
       "title": "452a4f75-e50e-42d2-bc10-981d82c7de48.bus",
       "summary": "452a4f75-e50e-42d2-bc10-981d82c7de48.bus",
       "body": "Task 452a4f75-e50e-42d2-bc10-981d82c7de48.bus — unknown. Goal: 452a4f75-e50e-42d2-bc10-981d82c7de48.bus.",
-      "createdAt": "2026-04-16T14:10:41.990Z",
-      "updatedAt": "2026-04-16T14:10:41.990Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.542Z",
+      "updatedAt": "2026-04-17T20:42:36.542Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -8041,9 +8041,9 @@
       "title": "45cc6e38-3874-425a-bbc0-2724cc139f26.bus",
       "summary": "45cc6e38-3874-425a-bbc0-2724cc139f26.bus",
       "body": "Task 45cc6e38-3874-425a-bbc0-2724cc139f26.bus — unknown. Goal: 45cc6e38-3874-425a-bbc0-2724cc139f26.bus.",
-      "createdAt": "2026-04-16T14:10:41.990Z",
-      "updatedAt": "2026-04-16T14:10:41.990Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.558Z",
+      "updatedAt": "2026-04-17T20:42:36.558Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -8183,9 +8183,9 @@
       "title": "47f959f9-b154-4100-9b45-670e43999177.bus",
       "summary": "47f959f9-b154-4100-9b45-670e43999177.bus",
       "body": "Task 47f959f9-b154-4100-9b45-670e43999177.bus — unknown. Goal: 47f959f9-b154-4100-9b45-670e43999177.bus.",
-      "createdAt": "2026-04-16T14:10:41.991Z",
-      "updatedAt": "2026-04-16T14:10:41.991Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.583Z",
+      "updatedAt": "2026-04-17T20:42:36.583Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -9058,9 +9058,9 @@
       "title": "5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus",
       "summary": "5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus",
       "body": "Task 5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus — unknown. Goal: 5f7a9527-8239-4cbe-b988-6865ef2fd01a.bus.",
-      "createdAt": "2026-04-16T14:10:41.995Z",
-      "updatedAt": "2026-04-16T14:10:41.995Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.678Z",
+      "updatedAt": "2026-04-17T20:42:36.678Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -10259,9 +10259,9 @@
       "title": "896dd068-a988-4ff6-8d11-e513489d4769.bus",
       "summary": "896dd068-a988-4ff6-8d11-e513489d4769.bus",
       "body": "Task 896dd068-a988-4ff6-8d11-e513489d4769.bus — unknown. Goal: 896dd068-a988-4ff6-8d11-e513489d4769.bus.",
-      "createdAt": "2026-04-16T14:10:42.001Z",
-      "updatedAt": "2026-04-16T14:10:42.001Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.897Z",
+      "updatedAt": "2026-04-17T20:42:36.897Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -10351,9 +10351,9 @@
       "title": "8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus",
       "summary": "8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus",
       "body": "Task 8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus — unknown. Goal: 8f164f65-e5f7-4fe3-bd0f-9978078e7409.bus.",
-      "createdAt": "2026-04-16T14:10:42.001Z",
-      "updatedAt": "2026-04-16T14:10:42.001Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.901Z",
+      "updatedAt": "2026-04-17T20:42:36.901Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -10553,9 +10553,9 @@
       "title": "936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus",
       "summary": "936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus",
       "body": "Task 936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus — unknown. Goal: 936ff5ab-f9b4-48aa-8016-0e0a583b029a.bus.",
-      "createdAt": "2026-04-16T14:10:42.002Z",
-      "updatedAt": "2026-04-16T14:10:42.002Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:36.925Z",
+      "updatedAt": "2026-04-17T20:42:36.925Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -10958,9 +10958,9 @@
       "title": "9c0354be-02fb-40d9-a602-ba99d661471d.bus",
       "summary": "9c0354be-02fb-40d9-a602-ba99d661471d.bus",
       "body": "Task 9c0354be-02fb-40d9-a602-ba99d661471d.bus — unknown. Goal: 9c0354be-02fb-40d9-a602-ba99d661471d.bus.",
-      "createdAt": "2026-04-16T14:10:42.004Z",
-      "updatedAt": "2026-04-16T14:10:42.004Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.006Z",
+      "updatedAt": "2026-04-17T20:42:37.006Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -11107,9 +11107,9 @@
       "title": "a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus",
       "summary": "a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus",
       "body": "Task a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus — unknown. Goal: a23d64b3-0fca-4b84-a2ec-ba5c78caeb9d.bus.",
-      "createdAt": "2026-04-16T14:10:42.005Z",
-      "updatedAt": "2026-04-16T14:10:42.005Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.032Z",
+      "updatedAt": "2026-04-17T20:42:37.032Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -12080,9 +12080,9 @@
       "title": "c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus",
       "summary": "c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus",
       "body": "Task c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus — unknown. Goal: c61012bc-fa51-4558-9d8d-2d80a9b428ef.bus.",
-      "createdAt": "2026-04-16T14:10:42.010Z",
-      "updatedAt": "2026-04-16T14:10:42.010Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.242Z",
+      "updatedAt": "2026-04-17T20:42:37.242Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -12172,9 +12172,9 @@
       "title": "c639ae91-95c9-4654-8faf-92b4d164a80f.bus",
       "summary": "c639ae91-95c9-4654-8faf-92b4d164a80f.bus",
       "body": "Task c639ae91-95c9-4654-8faf-92b4d164a80f.bus — unknown. Goal: c639ae91-95c9-4654-8faf-92b4d164a80f.bus.",
-      "createdAt": "2026-04-16T14:10:42.010Z",
-      "updatedAt": "2026-04-16T14:10:42.010Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.254Z",
+      "updatedAt": "2026-04-17T20:42:37.254Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -12844,9 +12844,9 @@
       "title": "da561990-95c0-418f-8c5a-8208129a794a.bus",
       "summary": "da561990-95c0-418f-8c5a-8208129a794a.bus",
       "body": "Task da561990-95c0-418f-8c5a-8208129a794a.bus — unknown. Goal: da561990-95c0-418f-8c5a-8208129a794a.bus.",
-      "createdAt": "2026-04-16T14:10:42.013Z",
-      "updatedAt": "2026-04-16T14:10:42.013Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.352Z",
+      "updatedAt": "2026-04-17T20:42:37.352Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -13043,9 +13043,9 @@
       "title": "e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus",
       "summary": "e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus",
       "body": "Task e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus — unknown. Goal: e08fb3b4-8fd2-438d-9ffa-e95ecae8c52f.bus.",
-      "createdAt": "2026-04-16T14:10:42.014Z",
-      "updatedAt": "2026-04-16T14:10:42.014Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.372Z",
+      "updatedAt": "2026-04-17T20:42:37.372Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -13184,9 +13184,9 @@
       "title": "ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus",
       "summary": "ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus",
       "body": "Task ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus — unknown. Goal: ea08b87c-5c4f-41c5-b366-db95ebafd77b.bus.",
-      "createdAt": "2026-04-16T14:10:42.015Z",
-      "updatedAt": "2026-04-16T14:10:42.015Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.382Z",
+      "updatedAt": "2026-04-17T20:42:37.382Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -14007,9 +14007,9 @@
       "title": "ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus",
       "summary": "ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus",
       "body": "Task ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus — unknown. Goal: ff74f321-1fd2-4d53-81fe-814549d1f6b0.bus.",
-      "createdAt": "2026-04-16T14:10:42.018Z",
-      "updatedAt": "2026-04-16T14:10:42.018Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.543Z",
+      "updatedAt": "2026-04-17T20:42:37.543Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",
@@ -14101,9 +14101,9 @@
       "title": "_index",
       "summary": "_index",
       "body": "Task _index — unknown. Goal: _index.",
-      "createdAt": "2026-04-16T14:10:42.019Z",
-      "updatedAt": "2026-04-16T14:10:42.019Z",
-      "day": "2026-04-16",
+      "createdAt": "2026-04-17T20:42:37.564Z",
+      "updatedAt": "2026-04-17T20:42:37.564Z",
+      "day": "2026-04-17",
       "sourceRefs": [
         {
           "sourceType": "task_state",

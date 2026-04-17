@@ -1,12 +1,23 @@
 # Chats Index
 
-Generated: 2026-04-16T14:10:47.904Z
+Generated: 2026-04-17T20:57:37.750Z
 
-- Sessions mirrored: 1551
-- Transcript files: 448
+- Sessions mirrored: 1534
+- Transcript files: 470
 - Compaction artifacts: 8
 
 ## Recent Sessions
+- startup_connection_probe_1776459157685 | messages=2 | lastActive=2026-04-17T20:52:40.042Z | summary=no
+- brain_thought_2026-04-17_04-25 | messages=2 | lastActive=2026-04-17T20:25:14.335Z | summary=no
+- startup_connection_probe_1776456613712 | messages=1 | lastActive=2026-04-17T20:10:13.745Z | summary=no
+- startup_connection_probe_1776456420240 | messages=1 | lastActive=2026-04-17T20:07:00.269Z | summary=no
+- startup_connection_probe_1776455901095 | messages=2 | lastActive=2026-04-17T19:58:23.586Z | summary=no
+- startup_connection_probe_1776455665682 | messages=2 | lastActive=2026-04-17T19:54:28.666Z | summary=no
+- brain_thought_2026-04-17_03-36 | messages=2 | lastActive=2026-04-17T19:36:31.686Z | summary=no
+- startup_connection_probe_1776453692348 | messages=2 | lastActive=2026-04-17T19:21:34.848Z | summary=no
+- brain_thought_2026-04-17_03-20 | messages=1 | lastActive=2026-04-17T19:20:52.746Z | summary=no
+- auto_boot_1776452755152 | messages=1 | lastActive=2026-04-17T19:07:10.709Z | summary=no
+- startup_connection_probe_1776452757191 | messages=2 | lastActive=2026-04-17T19:06:01.470Z | summary=no
 - d03e2a51-b1d9-48cf-8ef3-8f5d460a5883 | messages=2 | lastActive=2026-04-16T14:08:39.225Z | summary=no
 - brain_thought_2026-04-16_21-47 | messages=2 | lastActive=2026-04-16T13:48:46.118Z | summary=no
 - d6a3cf82-e2e7-483e-a992-835bd28062c9 | messages=2 | lastActive=2026-04-16T13:48:11.387Z | summary=no
@@ -76,14 +87,3 @@ Generated: 2026-04-16T14:10:47.904Z
 - brain_thought_2026-04-14_16-41 | messages=2 | lastActive=2026-04-14T08:41:03.865Z | summary=no
 - brain_thought_2026-04-14_16-11 | messages=2 | lastActive=2026-04-14T08:11:03.958Z | summary=no
 - brain_thought_2026-04-14_15-41 | messages=2 | lastActive=2026-04-14T07:41:04.251Z | summary=no
-- brain_thought_2026-04-14_15-11 | messages=2 | lastActive=2026-04-14T07:11:02.543Z | summary=no
-- brain_thought_2026-04-14_14-41 | messages=2 | lastActive=2026-04-14T06:41:03.133Z | summary=no
-- cron_job_1775950457845_00ezm_1776147569689 | messages=0 | lastActive=2026-04-14T06:19:31.950Z | summary=no
-- brain_thought_2026-04-14_14-11 | messages=2 | lastActive=2026-04-14T06:11:01.416Z | summary=no
-- brain_thought_2026-04-14_13-40 | messages=2 | lastActive=2026-04-14T05:41:00.753Z | summary=no
-- brain_thought_2026-04-14_13-10 | messages=2 | lastActive=2026-04-14T05:10:59.604Z | summary=no
-- brain_thought_2026-04-14_12-40 | messages=2 | lastActive=2026-04-14T04:40:59.641Z | summary=no
-- brain_thought_2026-04-14_12-10 | messages=2 | lastActive=2026-04-14T04:10:53.770Z | summary=no
-- brain_dream_2026-04-13 | messages=2 | lastActive=2026-04-14T03:40:54.462Z | summary=no
-- cron_job_1775950457845_00ezm_1776133157098 | messages=0 | lastActive=2026-04-14T02:19:19.305Z | summary=no
-- brain_thought_2026-04-13_09-55 | messages=2 | lastActive=2026-04-14T01:55:48.786Z | summary=no

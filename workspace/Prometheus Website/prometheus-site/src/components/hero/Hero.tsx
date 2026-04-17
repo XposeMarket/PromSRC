@@ -28,7 +28,7 @@ export function Hero() {
           transition={{ duration: 0.8, delay: 0.2 }}
         >
           <p className="text-sm font-medium text-ember tracking-widest uppercase mb-6">
-            Worlds First Everything AI
+            The World&apos;s First Everything AI
           </p>
         </motion.div>
 

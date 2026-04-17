@@ -73,7 +73,7 @@ export function isGreetingLikeMessage(text: string): boolean {
   const raw = String(text || '').trim();
   if (!raw || raw.length > 120) return false;
   if (/\b(search|open|read|write|file|code|task|build|fix|debug|run|install|http|www\.|\\.com|please|could you|can you)\b/i.test(raw)) return false;
-  return /^(hi|hello|hey|yo|sup|howdy|good (morning|afternoon|evening)|hey (claw|prom|prometheus|smallclaw)|hello (claw|prom|prometheus|smallclaw)|hi (claw|prom|prometheus|smallclaw)|how are you)[!.?\s]*$/i.test(raw);
+  return /^(hi|hello|hey|yo|sup|howdy|good (morning|afternoon|evening)|hey (claw|prom|prometheus)|hello (claw|prom|prometheus)|hi (claw|prom|prometheus)|how are you)[!.?\s]*$/i.test(raw);
 }
 
 export function sanitizeFinalReply(

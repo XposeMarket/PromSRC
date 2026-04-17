@@ -1177,6 +1177,69 @@ export class BackgroundTaskRunner {
       return;
     }
 
+    // Standalone subagent path: deliver the response into the originating main
+    // chat as durable context, not as a floating notification. The readable
+    // assistant message is for the user; the structured user message gives the
+    // next main-agent turn exact context it can reason over and follow up on.
+    if (task.originatingSessionId && task.subagentProfile && !task.parentTaskId) {
+      const agentId = String(task.subagentProfile || 'subagent');
+      const title = String(task.title || agentId).replace(/^\[Subagent\]\s*/i, '').trim() || agentId;
+      const clipped = String(message || '').trim();
+
+      if (task.suppressOriginDelivery === true) {
+        appendJournal(task.id, {
+          type: 'status_push',
+          content: `Standalone subagent "${title}" finished; result kept in the subagent task panel.`,
+        });
+        this._broadcast('task_panel_update', { taskId: task.id });
+        this._broadcast('agent_completed', {
+          taskId: task.id,
+          serverAgentId: task.id,
+          agentId,
+          title,
+          message: clipped.slice(0, 500),
+        });
+        return;
+      }
+
+      const contextMessage = [
+        `[SUBAGENT_RESPONSE agent_id="${agentId}" task_id="${task.id}" title="${title}"]`,
+        clipped.slice(0, 8000),
+        `[/SUBAGENT_RESPONSE]`,
+        ``,
+        `Main chat note: This response came from standalone subagent "${title}". You can continue the conversation with message_subagent(agent_id: "${agentId}", message: "...") if a follow-up is needed.`,
+      ].join('\n');
+      const userNotice = [
+        `Also, your subagent ${title} finished.`,
+        ``,
+        clipped || '(No response text returned.)',
+      ].join('\n');
+
+      try {
+        addMessage(task.originatingSessionId, {
+          role: 'user',
+          content: contextMessage,
+          timestamp: Date.now() - 1,
+        } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+        addMessage(task.originatingSessionId, {
+          role: 'assistant',
+          content: userNotice,
+          timestamp: Date.now(),
+        } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+      } catch (e) {
+        console.warn('[SubAgent] addMessage to originating session failed:', e);
+      }
+
+      this._broadcast('task_notification', {
+        taskId: task.id,
+        sessionId: task.originatingSessionId,
+        channel: task.channel,
+        agentId,
+        message: userNotice,
+      });
+      return;
+    }
+
     // Normal task path (scheduled, background_spawn spawned, subagent, etc.)
     try {
       addMessage(task.sessionId, { role: 'user', content: `[BACKGROUND_TASK_RESULT task_id=${task.id}]`, timestamp: Date.now() - 1 });

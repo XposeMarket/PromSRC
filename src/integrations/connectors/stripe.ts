@@ -25,27 +25,43 @@ export class StripeConnector extends OAuthConnector {
     super(cfg, configDir);
   }
 
-  isConnected(): boolean {
+  private getApiKey(): string {
     const envKey = process.env.STRIPE_SECRET_KEY || '';
-    if (envKey) return true;
-    return super.isConnected();
+    if (envKey) return envKey;
+    // Try vault credentials (user entered key via UI)
+    if (this.hasCredentials()) {
+      // The clientId field is reused to store the API key
+      return this.cfg.clientId || '';
+    }
+    const tokens = this.loadTokens();
+    return tokens?.access_token || '';
+  }
+
+  isConnected(): boolean {
+    return !!this.getApiKey();
+  }
+
+  hasCredentials(): boolean {
+    if (process.env.STRIPE_SECRET_KEY) return true;
+    return super.hasCredentials();
   }
 
   async getValidAccessToken(): Promise<string> {
-    const envKey = process.env.STRIPE_SECRET_KEY || '';
-    if (envKey) return envKey;
-    const tokens = this.loadTokens();
-    if (tokens?.access_token) return tokens.access_token;
-    throw new Error('Stripe not configured. Set STRIPE_SECRET_KEY environment variable.');
+    const key = this.getApiKey();
+    if (key) return key;
+    throw new Error('Stripe not configured. Enter your Stripe Secret Key in the Connections panel.');
   }
 
-  // Stripe doesn't use OAuth — override startFlow to save the env key
+  // Stripe uses API key not OAuth — startFlow saves the key and returns dashboard URL
   startFlow(): OAuthStartResult {
-    const envKey = process.env.STRIPE_SECRET_KEY || '';
-    if (envKey) {
-      this.saveTokens({ access_token: envKey, expires_at: Date.now() + 365 * 24 * 3600 * 1000, account_email: 'stripe-key' });
-    }
     return { success: false, authUrl: 'https://dashboard.stripe.com/apikeys', flowId: 'stripe' };
+  }
+
+  // When user saves Stripe key via saveCredentials(), store it as a token so isConnected() works
+  saveCredentials(apiKey: string, _unused?: string): void {
+    // Store as both credential (for hasCredentials()) and token (for isConnected())
+    super.saveCredentials(apiKey, '');
+    this.saveTokens({ access_token: apiKey, expires_at: Date.now() + 365 * 24 * 3600 * 1000, account_email: 'stripe-key' });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

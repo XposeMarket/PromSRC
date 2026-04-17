@@ -49,7 +49,6 @@ win:
       arch:
         - x64
   icon: assets/Prometheus.ico
-  signAndEditExecutable: false
   verifyUpdateCodeSignature: false
 
 nsis:

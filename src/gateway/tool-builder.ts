@@ -11,7 +11,7 @@ import { registerAgentBuilderTools } from './agents-runtime/agent-builder-integr
 import { getFileWebMemoryTools } from './tools/defs/file-web-memory';
 import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
 import { getCisSystemTools } from './tools/defs/cis-system';
-import { getCompositeDefs, getCompositeManagementTools } from './tools/composite-tools';
+import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
 import { getConnectorToolDefs, buildConnectorStatus } from './tools/defs/connector-tools';
 import { getPublicBuildAllowedCategories } from '../runtime/distribution.js';
 
@@ -20,10 +20,10 @@ export interface BuildToolsDeps {
 }
 
 // ─── Tool Category System ─────────────────────────────────────────────────────
-// Tools split into: core (always injected) + 6 on-demand categories.
+// Tools split into: core (always injected) + on-demand categories.
 // Categories are activated per-session via request_tool_category tool.
 
-export const ALL_TOOL_CATEGORIES = ['browser', 'desktop', 'team_ops', 'source_write', 'integrations', 'connectors'] as const;
+export const ALL_TOOL_CATEGORIES = ['browser', 'desktop', 'team_ops', 'source_write', 'integrations', 'connectors', 'composites'] as const;
 export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
 
 export { buildConnectorStatus };
@@ -36,7 +36,7 @@ export function getRuntimeToolCategories(): ToolCategory[] {
 const TEAM_OPS_TOOL_NAMES = new Set([
   'spawn_subagent', 'delegate_to_specialist',
   'agent_list', 'agent_info', 'delete_agent',
-  'talk_to_subagent', 'talk_to_manager', 'talk_to_teammate',
+  'message_subagent', 'talk_to_subagent', 'talk_to_manager', 'talk_to_teammate',
   'update_my_status', 'update_team_goal', 'team_manage',
   'dispatch_to_agent', 'dispatch_team_agent', 'get_agent_result',
   'post_to_team_chat', 'message_main_agent', 'reply_to_team',
@@ -61,6 +61,22 @@ const INTEGRATIONS_TOOL_NAMES = new Set([
   'social_intel', 'edit_proposal',
 ]);
 
+const COMPOSITE_MANAGEMENT_TOOL_NAMES = new Set([
+  'create_composite',
+  'get_composite',
+  'edit_composite',
+  'delete_composite',
+  'list_composites',
+]);
+
+function isSavedCompositeToolName(name: string): boolean {
+  try {
+    return loadComposites().has(name);
+  } catch {
+    return false;
+  }
+}
+
 export function getToolCategory(name: string): ToolCategory | null {
   // Keep these always available as core runtime tools.
   if (name === 'browser_send_to_telegram') return null;
@@ -71,6 +87,7 @@ export function getToolCategory(name: string): ToolCategory | null {
   if (TEAM_OPS_TOOL_NAMES.has(name)) return 'team_ops';
   if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'source_write';
   if (INTEGRATIONS_TOOL_NAMES.has(name)) return 'integrations';
+  if (COMPOSITE_MANAGEMENT_TOOL_NAMES.has(name) || isSavedCompositeToolName(name)) return 'composites';
   return null; // null = core tool, always included
 }
 
@@ -327,7 +344,7 @@ export function normalizeToolArgsForTool(toolName: string, rawArgs: any): any {
     const raw = String(value || '').trim().toLowerCase();
     if (!raw) return '';
     if (categories.includes(raw as ToolCategory)) return raw;
-    const match = raw.match(/\b(browser|desktop|team_ops|source_write|integrations|connectors)\b/);
+    const match = raw.match(/\b(browser|desktop|team_ops|source_write|integrations|connectors|composites)\b/);
     return match && categories.includes(match[1] as ToolCategory) ? match[1] : '';
   };
 

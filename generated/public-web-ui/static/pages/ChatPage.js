@@ -58,6 +58,10 @@ if (window.contextPinnedIndices === undefined) window.contextPinnedIndices = [];
 if (window.terminalSessions === undefined) window.terminalSessions = [];
 window.terminalSessionRefreshTimer = null;
 
+// Per-session streaming state — allows concurrent independent sessions
+if (window._sessionThinking === undefined) window._sessionThinking = {};
+if (window._sessionAbortControllers === undefined) window._sessionAbortControllers = {};
+
 
 function generateSessionId() {
   return (crypto?.randomUUID?.() || ('sess_' + Math.random().toString(36).slice(2)));
@@ -270,6 +274,12 @@ function syncActiveChat() {
   }
   // Instantly refresh pending actions for the new session
   if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
+  // Sync button/input state for the newly active session
+  const activeSessThinking = !!(window._sessionThinking && window._sessionThinking[window.activeChatSessionId]);
+  window.isThinking = activeSessThinking;
+  currentAbortController = (window._sessionAbortControllers && window._sessionAbortControllers[window.activeChatSessionId]) || null;
+  setButtonState(activeSessThinking);
+  updateQueuedPromptUI();
 }
 
 function persistActiveChat() {
@@ -390,6 +400,7 @@ async function deleteChatSession(id, ev) {
 }
 
 async function openSession(id) {
+  if (window.currentMode !== 'chat') setMode('chat');
   window.activeChatSessionId = id;
   setAgentSessionId(id);
   const sess = window.chatSessions.find(s => s.id === id);
@@ -1278,6 +1289,20 @@ function isFailedTurnReply(text) {
   return false;
 }
 
+// Persist a specific session by ID (used by SSE handler to target the right session even after a switch)
+function persistSession(id) {
+  const idx = window.chatSessions.findIndex(s => s.id === id);
+  if (idx === -1) return;
+  const s = window.chatSessions[idx];
+  s.title = makeSessionTitle(s.history);
+  s.updatedAt = Date.now();
+  saveChatSessions();
+  renderSessionsList();
+  updateStats([]);
+  // Re-render messages only if user is currently viewing this session
+  if (window.activeChatSessionId === id) renderChatMessages();
+}
+
 // ---- Send chat (SSE version) ----
 async function sendChat(queuedMessage = null) {
   const input = document.getElementById('chat-input');
@@ -1285,7 +1310,9 @@ async function sendChat(queuedMessage = null) {
   const raw = typeof queuedMessage === 'string' ? queuedMessage : input.value;
   const message = String(raw || '').trim();
   if (!message) return;
-  if (window.isThinking) {
+  const thisSessionId = window.activeChatSessionId; // capture at send time — stable through async closure
+  const sessionHistoryRef = window.chatHistory; // same array reference as sess.history
+  if (window._sessionThinking?.[thisSessionId]) {
     if (typeof queuedMessage === 'string') return;
     if (window.queuedPrompts.length >= MAX_QUEUED_PROMPTS) {
       addProcessEntry('warn', `Queue full (${MAX_QUEUED_PROMPTS}). Wait for current run to finish.`);
@@ -1323,6 +1350,7 @@ async function sendChat(queuedMessage = null) {
     input.style.height = 'auto';
   }
 	  window.isThinking = true;
+	  window._sessionThinking[thisSessionId] = true;
 	  window.streamingSessionId = window.activeChatSessionId; // lock bubble to this session
 	  window.streamingAIText = ''; // reset token stream buffer
 	  window.streamingThinkingText = ''; // reset visible reasoning/thinking stream
@@ -1376,6 +1404,7 @@ async function sendChat(queuedMessage = null) {
   try {
     // Use SSE fetch — stream steps live as they arrive
     currentAbortController = new AbortController();
+    window._sessionAbortControllers[thisSessionId] = currentAbortController;
     let partialContent = '';
 
     const res = await fetch('/api/chat', {
@@ -1455,9 +1484,7 @@ async function sendChat(queuedMessage = null) {
 	            const chunk = String(event.thinking || event.text || '');
 	            if (chunk) {
 	              window.streamingThinkingText = (window.streamingThinkingText || '') + chunk;
-	              const preview = window.streamingThinkingText.slice(0, 80).replace(/\n/g, ' ');
-	              const suffix = window.streamingThinkingText.length > 80 ? '...' : '';
-	              const thinkLine = `Thinking: ${preview}${suffix}`;
+	              const thinkLine = `Thinking: ${window.streamingThinkingText.replace(/\n/g, ' ')}`;
 	              const lastIdx = window.currentProgressLines.length - 1;
 	              if (lastIdx >= 0 && window.currentProgressLines[lastIdx].startsWith('Thinking:')) {
 	                window.currentProgressLines[lastIdx] = thinkLine;
@@ -1892,7 +1919,7 @@ async function sendChat(queuedMessage = null) {
 	      const mergedThinking = (window.streamingThinkingText || turnThinkingBuffer.join('\n\n')).trim();
 	      const shouldAttachThinkingPanel = sawExecuteModeThisTurn || sawToolActivityThisTurn;
       const turnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
-      window.chatHistory.push({
+      sessionHistoryRef.push({
         role: 'ai',
         content: finalReply,
         artifacts: finalArtifacts,
@@ -1904,9 +1931,9 @@ async function sendChat(queuedMessage = null) {
       });
     } else {
       const turnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
-      window.chatHistory.push({ role: 'ai', content: 'No response received.', processEntries: turnEntries });
+      sessionHistoryRef.push({ role: 'ai', content: 'No response received.', processEntries: turnEntries });
     }
-    persistActiveChat();
+    persistSession(thisSessionId);
 
   } catch (err) {
     const turnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
@@ -1914,20 +1941,26 @@ async function sendChat(queuedMessage = null) {
       addProcessEntry('warn', 'Generation stopped by user.');
       const content = partialContent ||
         (allSteps.length ? `[Stopped — ${allSteps.length} step${allSteps.length !== 1 ? 's' : ''} completed]` : '[Generation stopped]');
-      window.chatHistory.push({ role: 'ai', content, steps: allSteps, mode: window.useAgentMode ? 'agentic' : 'chat', processEntries: turnEntries });
+      sessionHistoryRef.push({ role: 'ai', content, steps: allSteps, mode: window.useAgentMode ? 'agentic' : 'chat', processEntries: turnEntries });
     } else {
       window.lastHeartbeat = { ...lastHeartbeat, state: 'stalled', level: 'hard', message: String(err.message || 'connection_error'), current_step: 'error' };
       updateHeartbeatUI();
       addProcessEntry('error', err.message);
-      window.chatHistory.push({ role: 'ai', content: `Connection error: ${err.message}`, processEntries: turnEntries });
+      sessionHistoryRef.push({ role: 'ai', content: `Connection error: ${err.message}`, processEntries: turnEntries });
     }
-    persistActiveChat();
+    persistSession(thisSessionId);
   }
 
-  window.isThinking = false;
-  window.streamingSessionId = null; // release session lock
-  currentAbortController = null;
-  setButtonState(false);
+  // Per-session cleanup
+  delete window._sessionThinking[thisSessionId];
+  delete window._sessionAbortControllers[thisSessionId];
+  window.isThinking = Object.values(window._sessionThinking || {}).some(Boolean);
+  window.streamingSessionId = null;
+  currentAbortController = (window._sessionAbortControllers && window._sessionAbortControllers[window.activeChatSessionId]) || null;
+  const isViewingThisSession = window.activeChatSessionId === thisSessionId;
+  if (isViewingThisSession) {
+    setButtonState(false);
+  }
   window.currentPreflightStatus = '';
   window.currentProgressLines = [];
   window.lastHeartbeat = { ...lastHeartbeat, state: 'idle', level: '', message: '', current_step: 'done' };
@@ -1937,14 +1970,16 @@ async function sendChat(queuedMessage = null) {
   renderChatMessages();
   updateQueuedPromptUI();
 
-  const shouldPauseQueue = isFailedTurnReply(finalReply || (window.chatHistory[window.chatHistory.length - 1]?.content || ''));
-  if (window.queuedPrompts.length > 0 && shouldPauseQueue) {
-    addProcessEntry('warn', 'Queue paused because the previous turn failed/blocked. Press Send to resume queued prompts.');
-  } else if (window.queuedPrompts.length > 0) {
-    const next = window.queuedPrompts.shift();
-    updateQueuedPromptUI();
-    addProcessEntry('info', `Auto-running queued prompt${window.queuedPrompts.length ? ` (${window.queuedPrompts.length} remaining)` : ''}.`);
-    setTimeout(() => { sendChat(next); }, 0);
+  if (isViewingThisSession) {
+    const shouldPauseQueue = isFailedTurnReply(finalReply || (sessionHistoryRef[sessionHistoryRef.length - 1]?.content || ''));
+    if (window.queuedPrompts.length > 0 && shouldPauseQueue) {
+      addProcessEntry('warn', 'Queue paused because the previous turn failed/blocked. Press Send to resume queued prompts.');
+    } else if (window.queuedPrompts.length > 0) {
+      const next = window.queuedPrompts.shift();
+      updateQueuedPromptUI();
+      addProcessEntry('info', `Auto-running queued prompt${window.queuedPrompts.length ? ` (${window.queuedPrompts.length} remaining)` : ''}.`);
+      setTimeout(() => { sendChat(next); }, 0);
+    }
   }
 }
 

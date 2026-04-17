@@ -276,6 +276,11 @@ function _resolveSchedulePattern() {
     const [hh, mm] = t.split(':');
     return `${parseInt(mm||0)} ${parseInt(hh||9)} * * *`;
   }
+  if (occ === 'weekday') {
+    const t = document.getElementById('schedule-time').value || '09:00';
+    const [hh, mm] = t.split(':');
+    return `${parseInt(mm||0)} ${parseInt(hh||9)} * * 1-5`;
+  }
   if (occ === 'every48') {
     const t = document.getElementById('schedule-time').value || '09:00';
     const [hh, mm] = t.split(':');
@@ -289,7 +294,7 @@ function _resolveSchedulePattern() {
 
 function onScheduleOccurrenceChange() {
   const occ = document.getElementById('schedule-occurrence').value;
-  const needsTime = occ === 'daily' || occ === 'every48';
+  const needsTime = occ === 'daily' || occ === 'weekday' || occ === 'every48';
   const isCustom = occ === 'custom';
   document.getElementById('schedule-time-row').style.display = needsTime ? '' : 'none';
   document.getElementById('schedule-custom-cron-row').style.display = isCustom ? '' : 'none';
@@ -423,7 +428,12 @@ function editSchedule(jobId) {
   const knownCrons = ['0 * * * *','0 */3 * * *','0 */6 * * *','0 */8 * * *','0 */12 * * *'];
   if (!cron) { occSel.value = 'manual'; }
   else if (knownCrons.includes(cron)) { occSel.value = cron; }
-  else if (/^\d+ \d+ \* \* \*$/.test(cron)) {
+  else if (/^\d+ \d+ \* \* 1-5$/.test(cron)) {
+    occSel.value = 'weekday';
+    const parts = cron.split(' ');
+    document.getElementById('schedule-time').value = `${String(parts[1]).padStart(2,'0')}:${String(parts[0]).padStart(2,'0')}`;
+    document.getElementById('schedule-time-row').style.display = '';
+  } else if (/^\d+ \d+ \* \* \*$/.test(cron)) {
     occSel.value = 'daily';
     const parts = cron.split(' ');
     document.getElementById('schedule-time').value = `${String(parts[1]).padStart(2,'0')}:${String(parts[0]).padStart(2,'0')}`;

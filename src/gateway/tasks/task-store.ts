@@ -189,6 +189,8 @@ export interface TaskRecord {
   taskKind?: 'scheduled' | 'run_once';
   /** Session that called run_task_now — verification result is delivered here */
   originatingSessionId?: string;
+  /** If true, keep completion/results out of originating chat and only update task UI. */
+  suppressOriginDelivery?: boolean;
   /** Tracks the silent verification phase for run_once tasks */
   verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
 
@@ -315,6 +317,7 @@ export function createTask(params: {
   // run_task_now fields
   taskKind?: 'scheduled' | 'run_once';
   originatingSessionId?: string;
+  suppressOriginDelivery?: boolean;
 }): TaskRecord {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -342,6 +345,7 @@ export function createTask(params: {
     // run_task_now linkage
     taskKind: params.taskKind,
     originatingSessionId: params.originatingSessionId,
+    suppressOriginDelivery: params.suppressOriginDelivery,
     verificationStatus: params.taskKind === 'run_once' ? 'pending' : undefined,
 
     plan: params.plan,

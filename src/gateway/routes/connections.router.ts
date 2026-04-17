@@ -70,9 +70,30 @@ function readConnectionActivity(id: string, limit = 50): any[] {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-// GET /api/connections — list all connection states
+// GET /api/connections — list all connection states + credential/setup status per connector
 router.get('/api/connections', (_req: any, res: any) => {
-  res.json({ connections: loadConnections() });
+  try {
+    const { getConnectorStatuses } = require('../integrations/connector-registry.js') as any;
+    const statuses = getConnectorStatuses();
+    res.json({ connections: loadConnections(), statuses });
+  } catch {
+    res.json({ connections: loadConnections(), statuses: {} });
+  }
+});
+
+// POST /api/connections/credentials — save OAuth client credentials (or API key) to vault
+router.post('/api/connections/credentials', async (req: any, res: any) => {
+  const { id, clientId, clientSecret, apiKey } = req.body || {};
+  if (!id) { res.status(400).json({ error: 'id required' }); return; }
+  const credKey = apiKey || clientId; // apiKey for Stripe, clientId for OAuth connectors
+  if (!credKey) { res.status(400).json({ error: 'clientId or apiKey required' }); return; }
+  try {
+    const { saveConnectorCredentials } = require('../integrations/connector-registry.js') as any;
+    saveConnectorCredentials(id, credKey, clientSecret || '');
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // POST /api/connections/save — mark a connector as connected (browser-login flow)
@@ -100,17 +121,15 @@ router.post('/api/connections/oauth/start', async (req: any, res: any) => {
   const { id } = req.body || {};
   if (!id) { res.status(400).json({ error: 'id required' }); return; }
   try {
-    const { startOAuthFlowForConnector } = require('../integrations/connector-registry.js') as any;
+    const { startOAuthFlowForConnector, getConnector } = require('../integrations/connector-registry.js') as any;
     const result = startOAuthFlowForConnector(id);
     if ('error' in result) {
-      // Unknown connector — check if it needs env var config
-      res.json({ url: null, needsSetup: true, message: result.error });
+      res.json({ url: null, needsSetup: true, needsCredentials: true, message: result.error });
       return;
     }
-    // result.authUrl is the Google/Slack/GitHub auth URL — send it to the UI
-    // Check if clientId is blank (env vars not set)
+    // Check if clientId is blank (no env var and no vault credentials saved)
     if (!result.authUrl || result.authUrl.includes('client_id=&')) {
-      res.json({ url: null, needsSetup: true, message: `${id} OAuth credentials are not configured yet. Add the connector credentials in Settings before starting OAuth.` });
+      res.json({ url: null, needsCredentials: true, message: `${id} OAuth credentials are not configured. Enter your Client ID and Client Secret.` });
       return;
     }
     res.json({ url: result.authUrl });

@@ -854,9 +854,9 @@ async function handleChat(
         // background_spawn agents: prefer dedicated key, fall back to background_task
         ? (defaults?.background_agent ? 'background_agent' : 'background_task')
         : executionMode === 'team_manager'
-          ? (defaults?.team_manager ? 'team_manager' : defaults?.manager ? 'manager' : 'background_task')
+          ? 'manager'
         : executionMode === 'team_subagent'
-          ? (defaults?.team_subagent ? 'team_subagent' : defaults?.subagent ? 'subagent' : 'background_task')
+          ? ''
         : (executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'cron')
           ? 'background_task'
           : '';

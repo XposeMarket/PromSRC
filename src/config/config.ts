@@ -40,7 +40,7 @@ function migrateLegacyData(): void {
   // Prefer project-local migration when this repo has (or previously had)
   // project-scoped state; otherwise migrate home-scoped state.
   const hasProjectScopedState = fs.existsSync(projectLegacy) || fs.existsSync(projectTarget) ||
-    fs.existsSync(path.join(__dirname, '..', '..', '.smallclaw'));
+    false;
   if (hasProjectScopedState) {
     migrateLegacyDir(projectLegacy, projectTarget);
     return;
@@ -57,17 +57,14 @@ migrateLegacyData();
 //   2. .prometheus/ next to the project root
 //   3. ~/.prometheus in the user's home directory
 const PROJECT_CONFIG_NEW = path.join(__dirname, '..', '..', '.prometheus');
-const PROJECT_CONFIG_OLD = path.join(__dirname, '..', '..', '.smallclaw');
-const PROJECT_CONFIG = fs.existsSync(PROJECT_CONFIG_NEW) ? PROJECT_CONFIG_NEW : PROJECT_CONFIG_OLD;
+const PROJECT_CONFIG = PROJECT_CONFIG_NEW;
 const HOME_CONFIG    = path.join(os.homedir(), '.prometheus');
 const CONFIG_DIR =
   process.env.PROMETHEUS_DATA_DIR
     ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
     : fs.existsSync(PROJECT_CONFIG_NEW)
       ? PROJECT_CONFIG_NEW
-      : fs.existsSync(PROJECT_CONFIG_OLD)
-        ? PROJECT_CONFIG_OLD
-        : HOME_CONFIG;
+      : HOME_CONFIG;
 
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
