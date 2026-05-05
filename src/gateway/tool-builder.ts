@@ -11,6 +11,7 @@ import { registerAgentBuilderTools } from './agents-runtime/agent-builder-integr
 import { getFileWebMemoryTools } from './tools/defs/file-web-memory';
 import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
 import { getCisSystemTools } from './tools/defs/cis-system';
+import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
 import { getConnectorToolDefs, buildConnectorStatus } from './tools/defs/connector-tools';
 import { getPublicBuildAllowedCategories } from '../runtime/distribution.js';
@@ -23,8 +24,27 @@ export interface BuildToolsDeps {
 // Tools split into: core (always injected) + on-demand categories.
 // Categories are activated per-session via request_tool_category tool.
 
-export const ALL_TOOL_CATEGORIES = ['browser', 'desktop', 'team_ops', 'source_write', 'integrations', 'connectors', 'composites'] as const;
+export const ALL_TOOL_CATEGORIES = [
+  'browser_automation',
+  'desktop_automation',
+  'agents_and_teams',
+  'prometheus_source_read',
+  'prometheus_source_write',
+  'workspace_write',
+  'advanced_memory',
+  'media_assets',
+  'media_quality',
+  'automations',
+  'external_apps',
+  'integration_admin',
+  'social_intelligence',
+  'proposal_admin',
+  'mcp_server_tools',
+  'composite_tools',
+  'creative_mode',
+] as const;
 export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
+type InternalToolCategory = ToolCategory | 'creative_runtime';
 
 export { buildConnectorStatus };
 
@@ -32,13 +52,59 @@ export function getRuntimeToolCategories(): ToolCategory[] {
   return getPublicBuildAllowedCategories(ALL_TOOL_CATEGORIES) as ToolCategory[];
 }
 
+const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
+  browser: 'browser_automation',
+  browser_automation: 'browser_automation',
+  desktop: 'desktop_automation',
+  desktop_automation: 'desktop_automation',
+  team_ops: 'agents_and_teams',
+  teams: 'agents_and_teams',
+  agents: 'agents_and_teams',
+  agents_and_teams: 'agents_and_teams',
+  source_read: 'prometheus_source_read',
+  prometheus_source_read: 'prometheus_source_read',
+  source_write: 'prometheus_source_write',
+  prometheus_source_write: 'prometheus_source_write',
+  file_ops: 'workspace_write',
+  files: 'workspace_write',
+  workspace_write: 'workspace_write',
+  memory: 'advanced_memory',
+  advanced_memory: 'advanced_memory',
+  media: 'media_assets',
+  media_assets: 'media_assets',
+  media_quality: 'media_quality',
+  schedule: 'automations',
+  scheduling: 'automations',
+  automations: 'automations',
+  connectors: 'external_apps',
+  external_apps: 'external_apps',
+  integrations: 'integration_admin',
+  integration_admin: 'integration_admin',
+  social_intelligence: 'social_intelligence',
+  proposal_admin: 'proposal_admin',
+  mcp: 'mcp_server_tools',
+  mcp_server_tools: 'mcp_server_tools',
+  composites: 'composite_tools',
+  composite_tools: 'composite_tools',
+  creative_mode: 'creative_mode',
+};
+
+export function normalizeToolCategory(raw: unknown): ToolCategory | null {
+  const key = String(raw || '').trim().toLowerCase();
+  if (!key) return null;
+  const normalized = TOOL_CATEGORY_ALIASES[key];
+  if (!normalized) return null;
+  return getRuntimeToolCategories().includes(normalized) ? normalized : null;
+}
+
 // Explicit name lists for non-prefix categories
 const TEAM_OPS_TOOL_NAMES = new Set([
-  'spawn_subagent', 'delegate_to_specialist',
-  'agent_list', 'agent_info', 'delete_agent',
+  'spawn_subagent',
+  'agent_list', 'agent_info', 'agent_update', 'delete_agent',
   'message_subagent', 'talk_to_subagent', 'talk_to_manager', 'talk_to_teammate',
-  'update_my_status', 'update_team_goal', 'team_manage',
-  'dispatch_to_agent', 'dispatch_team_agent', 'get_agent_result',
+  'request_context', 'request_manager_help',
+  'update_my_status', 'update_team_goal', 'share_artifact', 'team_manage',
+  'dispatch_to_agent', 'dispatch_team_agent', 'request_team_member_turn', 'get_agent_result',
   'post_to_team_chat', 'message_main_agent', 'reply_to_team',
   'manage_team_goal',
   // ask_team_coordinator intentionally excluded — it's a core tool (always available)
@@ -50,16 +116,87 @@ const TEAM_OPS_TOOL_NAMES = new Set([
 // background_spawn/status/progress/join are also CORE — always injected.
 
 const SOURCE_WRITE_TOOL_NAMES = new Set([
-  'find_replace_source', 'replace_lines_source', 'insert_after_source',
-  'delete_lines_source', 'write_source',
-  'find_replace_webui_source', 'replace_lines_webui_source', 'insert_after_webui_source',
-  'delete_lines_webui_source', 'write_webui_source',
+	  'find_replace_source', 'replace_lines_source', 'insert_after_source',
+	  'delete_lines_source', 'write_source', 'delete_source',
+	  'find_replace_webui_source', 'replace_lines_webui_source', 'insert_after_webui_source',
+	  'delete_lines_webui_source', 'write_webui_source', 'delete_webui_source',
+	  'find_replace_prom', 'replace_lines_prom', 'insert_after_prom',
+	  'delete_lines_prom', 'write_prom_file', 'delete_prom_file',
+	]);
+
+const DEV_ONLY_SOURCE_READ_TOOL_NAMES = new Set([
+  'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
+  'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
+  'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',
 ]);
 
-const INTEGRATIONS_TOOL_NAMES = new Set([
-  'mcp_server_manage', 'webhook_manage', 'integration_quick_setup',
-  'social_intel', 'edit_proposal',
+const FILE_OPS_TOOL_NAMES = new Set([
+  'create_file',
+  'replace_lines',
+  'insert_after',
+  'delete_lines',
+  'find_replace',
+  'delete_file',
+  'write_file',
+  'rename_file',
 ]);
+
+const MEMORY_TOOL_NAMES = new Set([
+  'memory_read_record',
+  'memory_search_project',
+  'memory_search_timeline',
+  'memory_get_related',
+  'memory_graph_snapshot',
+  'memory_index_refresh',
+]);
+
+const MEDIA_TOOL_NAMES = new Set([
+  'download_url',
+  'download_media',
+  'analyze_image',
+  'analyze_video',
+]);
+
+const MEDIA_QUALITY_TOOL_NAMES = new Set([
+  'image_check_contrast',
+  'image_check_text_overflow',
+  'image_detect_empty_regions',
+  'image_get_bounds_summary',
+  'image_get_element_at_point',
+  'image_get_overlaps',
+  'video_render_contact_sheet',
+  'video_render_frame',
+  'video_check_audio_sync',
+  'video_check_caption_timing',
+]);
+
+const AUTOMATION_TOOL_NAMES = new Set([
+  'schedule_job',
+  'schedule_job_detail',
+  'schedule_job_history',
+  'schedule_job_log_search',
+  'schedule_job_outputs',
+  'schedule_job_patch',
+  'schedule_job_stuck_control',
+]);
+
+const CREATIVE_MODE_TOOL_NAMES = new Set([
+  'enter_creative_mode',
+  'exit_creative_mode',
+]);
+
+const CORE_CREATIVE_CONTROL_TOOL_NAMES = new Set([
+  'get_creative_mode',
+  'switch_creative_mode',
+]);
+
+const INTEGRATION_ADMIN_TOOL_NAMES = new Set([
+  'mcp_server_manage', 'webhook_manage', 'integration_quick_setup',
+]);
+
+const SOCIAL_INTELLIGENCE_TOOL_NAMES = new Set(['social_intel']);
+
+const PROPOSAL_ADMIN_TOOL_NAMES = new Set(['edit_proposal']);
 
 const COMPOSITE_MANAGEMENT_TOOL_NAMES = new Set([
   'create_composite',
@@ -77,22 +214,37 @@ function isSavedCompositeToolName(name: string): boolean {
   }
 }
 
-export function getToolCategory(name: string): ToolCategory | null {
+export function getToolCategory(name: string): InternalToolCategory | null {
   // Keep these always available as core runtime tools.
   if (name === 'browser_send_to_telegram') return null;
   if (name === 'connector_list') return null; // core tool — always available
-  if (name.startsWith('browser_')) return 'browser';
-  if (name.startsWith('desktop_')) return 'desktop';
-  if (name.startsWith('connector_')) return 'connectors';
-  if (TEAM_OPS_TOOL_NAMES.has(name)) return 'team_ops';
-  if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'source_write';
-  if (INTEGRATIONS_TOOL_NAMES.has(name)) return 'integrations';
-  if (COMPOSITE_MANAGEMENT_TOOL_NAMES.has(name) || isSavedCompositeToolName(name)) return 'composites';
+  if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return null;
+  if (name === 'save_site_shortcut') return 'browser_automation';
+  if (CREATIVE_MODE_TOOL_NAMES.has(name)) return 'creative_mode';
+  if (name.startsWith('browser_')) return 'browser_automation';
+  if (name.startsWith('desktop_')) return 'desktop_automation';
+  if (name.startsWith('connector_')) return 'external_apps';
+  if (name.startsWith('mcp__')) return 'mcp_server_tools';
+  if (name.startsWith('vercel_')) return 'integration_admin';
+  if (TEAM_OPS_TOOL_NAMES.has(name)) return 'agents_and_teams';
+  if (DEV_ONLY_SOURCE_READ_TOOL_NAMES.has(name)) return 'prometheus_source_read';
+  if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'prometheus_source_write';
+  if (FILE_OPS_TOOL_NAMES.has(name)) return 'workspace_write';
+  if (MEMORY_TOOL_NAMES.has(name)) return 'advanced_memory';
+  if (MEDIA_TOOL_NAMES.has(name)) return 'media_assets';
+  if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return 'media_quality';
+  if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
+  if (name.startsWith('creative_')) return 'creative_runtime';
+  if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
+  if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';
+  if (PROPOSAL_ADMIN_TOOL_NAMES.has(name)) return 'proposal_admin';
+  if (COMPOSITE_MANAGEMENT_TOOL_NAMES.has(name) || isSavedCompositeToolName(name)) return 'composite_tools';
   return null; // null = core tool, always included
 }
 
 export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>) {
   const { getMCPManager } = deps;
+  const isPublicBuild = getPublicBuildAllowedCategories(['prometheus_source_write'] as const).length === 0;
 
   const toolDefs = [
     // ── File, Web, and Memory tools ──────────────────────────────────────────
@@ -125,6 +277,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           type: 'object', required: ['command'],
           properties: {
             command: { type: 'string', description: 'Examples: "notepad", "git init", "npm install", "npm run build", "git push origin main", "code D:\\project", "git -C workspace/xposemarket-site status", "git status". **CRITICAL FOR GIT**: (1) Submodule at workspace/xposemarket-site — NEVER use `cd xposemarket-site` alone. Use `git -C workspace/xposemarket-site status` instead. (2) Do NOT use "chrome" or "msedge" — use browser_open instead.' },
+            cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute path inside it. Use this for repo folders with spaces, e.g. "Prometheus Website/prometheus-site".' },
             visible: { type: 'boolean', description: 'If true, opens a visible terminal window instead of capturing output. Default: false (captured).' },
           },
         },
@@ -163,35 +316,14 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           },
         }];
       }
-      return [{
-        type: 'function' as const,
-        function: {
-          name: 'delegate_to_specialist',
-          description:
-            'Delegate a focused, self-contained subtask to a specialist sub-agent. ' +
-            'Use for file edits, research lookups, or shell commands that are narrow and well-scoped. ' +
-            'The current task pauses until the specialist completes.',
-          parameters: {
-            type: 'object',
-            required: ['type', 'input'],
-            properties: {
-              type: {
-                type: 'string',
-                enum: ['file_editor', 'researcher', 'shell_runner', 'reader_only'],
-                description: 'Specialist role',
-              },
-              input: { type: 'string', description: 'Precise instruction for the specialist' },
-              context_snippet: { type: 'string', description: 'Relevant context the specialist needs (file content, URL, etc.)' },
-              target_file: { type: 'string', description: 'File to operate on (for file_editor)' },
-            },
-          },
-        },
-      }];
+      return [];
     })(),
     // ── Agent, Team, and Schedule tools ──────────────────────────────────────
     ...getAgentTeamScheduleTools(),
     // ── CIS, System, and Self-improvement tools ───────────────────────────────
     ...getCisSystemTools(),
+    // ── Creative runtime tools ────────────────────────────────────────────────
+    ...getCreativeToolDefs(),
     // ── Agent Builder Integration Tools (only when enabled in config) ─────────
   ] as any[];
 
@@ -208,7 +340,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       description:
         'List all available connectors (Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, Google Analytics) and their connection status. ' +
         'Shows which connectors are connected and what tools are available for each. ' +
-        'Use this before activating the connectors category to check what\'s available.',
+        'Use this before activating the external_apps category to check what\'s available.',
       parameters: { type: 'object', required: [], properties: {} },
     },
   });
@@ -240,19 +372,26 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     toolDefs.push(...getCompositeManagementTools());
   } catch { /* composites dir may not exist yet — skip silently */ }
 
+  const runtimeToolDefs = isPublicBuild
+    ? toolDefs.filter((t: any) => !DEV_ONLY_SOURCE_READ_TOOL_NAMES.has(String(t?.function?.name || '')))
+    : toolDefs;
+
   // ── Filter to core + activated categories ──────────────────────────────────
   // When activatedCategories is provided, only return core tools + those in active categories.
-  // MCP tools (mcp__*) are always included since they're dynamically connected.
   if (activatedCategories !== undefined) {
-    return toolDefs.filter((t: any) => {
+    const normalizedActiveCategories = new Set<string>();
+    for (const category of activatedCategories) {
+      const normalized = normalizeToolCategory(category);
+      if (normalized) normalizedActiveCategories.add(normalized);
+    }
+    return runtimeToolDefs.filter((t: any) => {
       const name = String(t?.function?.name || '');
-      if (name.startsWith('mcp__')) return true;
       const cat = getToolCategory(name);
-      return cat === null || activatedCategories.has(cat);
+      return cat === null || normalizedActiveCategories.has(cat);
     });
   }
 
-  return toolDefs;
+  return runtimeToolDefs;
 }
 
 // ─── Tool Execution Helpers ────────────────────────────────────────────────────
@@ -262,6 +401,9 @@ export interface ToolResult {
   args: any;
   result: string;
   error: boolean;
+  extra?: any;
+  data?: any;
+  artifacts?: any[];
 }
 
 export interface TaskControlResponse {
@@ -343,9 +485,11 @@ export function normalizeToolArgsForTool(toolName: string, rawArgs: any): any {
   const readCategory = (value: unknown): string => {
     const raw = String(value || '').trim().toLowerCase();
     if (!raw) return '';
-    if (categories.includes(raw as ToolCategory)) return raw;
-    const match = raw.match(/\b(browser|desktop|team_ops|source_write|integrations|connectors|composites)\b/);
-    return match && categories.includes(match[1] as ToolCategory) ? match[1] : '';
+    const direct = normalizeToolCategory(raw);
+    if (direct && categories.includes(direct)) return direct;
+    const match = raw.match(/\b(browser_automation|desktop_automation|agents_and_teams|prometheus_source_read|prometheus_source_write|workspace_write|advanced_memory|media_assets|media_quality|automations|external_apps|integration_admin|social_intelligence|proposal_admin|mcp_server_tools|composite_tools|creative_mode|browser|desktop|team_ops|source_read|source_write|file_ops|memory|media|integrations|connectors|mcp|composites)\b/);
+    const matched = match ? normalizeToolCategory(match[1]) : null;
+    return matched && categories.includes(matched) ? matched : '';
   };
 
   if (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)) {

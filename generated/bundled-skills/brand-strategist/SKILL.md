@@ -1,14 +1,8 @@
 ---
 name: brand-strategist
-description: >
-  Expert brand strategy and positioning skill. Use this whenever someone needs help with: brand
-  positioning, value proposition design, messaging hierarchy, competitive differentiation, brand
-  voice and tone, naming, tagline creation, ICP and audience definition, brand story, mission/vision/
-  values, brand brief creation, rebranding strategy, or any question about "who we are" and "how
-  we talk about what we do". Triggers on: "help us define our brand", "how should we position this",
-  "write our messaging", "what makes us different", "help with our pitch", "define our voice",
-  "we're rebranding", or any identity/positioning request. Replaces a brand consultant or strategist.
-  Use proactively when any foundational "what are we and who are we for" question comes up.
+description: Brand Strategist Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Brand Strategist Skill

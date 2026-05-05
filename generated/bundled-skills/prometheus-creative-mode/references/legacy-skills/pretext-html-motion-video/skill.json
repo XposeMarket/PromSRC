@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "pretext-html-motion-video",
+  "name": "Pretext HTML Motion Video",
+  "description": "Adapt @chenglou/pretext typographic layout demos into Prometheus Creative Video / HTML Motion clips with deterministic text flow, kinetic typography, frame QA, and MP4 export.",
+  "emoji": "✒️",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "pretext video",
+    "pretext creative",
+    "text flowing around shape",
+    "text around orb",
+    "kinetic typography pretext",
+    "text as geometry",
+    "glyph particles",
+    "ascii text motion",
+    "typographic flow video",
+    "create pretext clip",
+    "pretext html motion",
+    "text layout animation"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "typography",
+    "canvas",
+    "generative"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "skills",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/pattern-map.md",
+      "type": "doc",
+      "description": "Prometheus-native mapping from upstream Pretext patterns to Creative Video / HTML Motion outputs."
+    },
+    {
+      "path": "templates/orb-reflow-vertical.html",
+      "type": "template",
+      "description": "Starter self-contained HTML Motion document for a vertical Pretext orb reflow clip."
+    }
+  ]
+}

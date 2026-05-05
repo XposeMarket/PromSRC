@@ -16,7 +16,7 @@ Always show a higher price first. The first number seen becomes the reference po
 Add a third option that makes your preferred option look like the obvious choice.
 Example:
 - Small: $5 (low anchor)
-- Medium: $8 ← decoy (bad value vs. large)  
+- Medium: $8 ← decoy (bad value vs. large)
 - Large: $9 ← target (feels like a steal vs. medium)
 
 ## Bundle Pricing

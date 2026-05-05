@@ -16,9 +16,10 @@
 
 import fs from 'fs';
 import path from 'path';
-import { listTasks } from '../tasks/task-store';
+import { listTaskSummaries } from '../tasks/task-store';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { pruneHeartbeatOneOffTasks } from '../teams/managed-teams';
+import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -400,7 +401,7 @@ export class SubagentHeartbeatManager {
 
   private _resumePausedTasks(): void {
     try {
-      const allTasks = listTasks();
+      const allTasks = listTaskSummaries();
       const paused = allTasks.filter(
         t => t.status === 'paused' && (t as any).pausedByScheduleId && (t as any).shouldResumeAfterSchedule,
       );
@@ -443,6 +444,16 @@ export class SubagentHeartbeatManager {
 
     const prompt = rawMd!.trim();
     const sessionId = `heartbeat_${entry.agentId}`;
+    const abortSignal = { aborted: false };
+    const runtimeId = registerLiveRuntime({
+      kind: 'heartbeat',
+      label: `Heartbeat - ${entry.agentId}`,
+      sessionId,
+      agentId: entry.agentId,
+      source: 'system',
+      detail: prompt.slice(0, 160),
+      abortSignal,
+    });
 
     // Effective model: per-agent override → main agent model → default
     const modelOverride =
@@ -466,11 +477,15 @@ export class SubagentHeartbeatManager {
         sessionId,
         sendSSE,
         undefined,
-        undefined,
+        abortSignal,
         `CONTEXT: Internal HEARTBEAT tick for agent "${entry.agentId}". Read HEARTBEAT.md instructions and execute them. If nothing is actionable, reply HEARTBEAT_OK.`,
         modelOverride,
         'heartbeat',
       );
+      if (abortSignal.aborted) {
+        entry.lastResult = 'error';
+        return;
+      }
 
       const rawText = String(result?.text || '').trim();
       const isOk = /^\s*HEARTBEAT_OK\s*$/i.test(rawText || 'HEARTBEAT_OK');
@@ -532,6 +547,7 @@ export class SubagentHeartbeatManager {
       entry.lastResult = 'error';
       console.warn(`[HeartbeatRunner] Heartbeat failed for "${entry.agentId}":`, err?.message);
     } finally {
+      finishLiveRuntime(runtimeId);
       entry.running = false;
       this._scheduleNext(entry);
     }

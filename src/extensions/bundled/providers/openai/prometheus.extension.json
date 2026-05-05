@@ -1,0 +1,73 @@
+{
+  "id": "openai",
+  "kind": "provider",
+  "name": "OpenAI API",
+  "description": "Direct OpenAI API access using a standard API key.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://platform.openai.com/",
+  "tags": ["openai", "api", "hosted"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "staticModels": ["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o4-mini", "o3", "o1"],
+      "supportsReasoningEffort": true,
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#111827"
+  },
+  "ownership": {
+    "providerIds": ["openai"],
+    "modelPrefixes": ["gpt-", "o1", "o3", "o4"],
+    "capabilities": ["llm", "api_key_auth", "image_generation"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["OPENAI_API_KEY", "OPENAI_MODEL"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "sk-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "gpt-4o"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.openai.com",
+      "model": "gpt-4o"
+    },
+    "schema": {
+      "api_key": "string",
+      "model": "string",
+      "reasoning_effort": "none|minimal|low|medium|high|xhigh?"
+    },
+    "uiHints": {
+      "api_key": {
+        "label": "API Key",
+        "help": "Can be a raw key, vault reference, or env:OPENAI_API_KEY."
+      },
+      "model": {
+        "label": "Model",
+        "help": "Default model for OpenAI API calls."
+      },
+      "reasoning_effort": {
+        "label": "Reasoning Effort",
+        "help": "Optional reasoning level for supported models."
+      }
+    }
+  }
+}

@@ -30,6 +30,14 @@ export function getAgentTeamScheduleTools(): any[] {
               type: 'string',
               description: 'Concrete standalone specialization when using from_role. If the agent is later added to a team, this can become its team role. E.g. "Prospect Researcher: finds local small-business leads for Xpose Market from maps/directories/search."',
             },
+            personality_style: {
+              type: 'string',
+              description: 'Optional personality preset for newly created agents: steady, spark, austere, mentor, operator, critic, creative. Leave blank to let Prometheus choose from role and assignment.',
+            },
+            name_style: {
+              type: 'string',
+              description: 'Optional naming hint for newly created agents. Use natural, grounded human-like names; avoid gimmicks.',
+            },
             task_prompt: {
               type: 'string',
               description: 'The specific task for this subagent to complete. Required when run_now=true.',
@@ -48,7 +56,19 @@ export function getAgentTeamScheduleTools(): any[] {
               properties: {
                 name: {
                   type: 'string',
-                  description: 'Display name shown in the Agents panel and Teams UI (e.g., "Intel Manager", "Feature Scout")',
+                  description: 'Optional display name shown in the Agents panel and Teams UI. If omitted, Prometheus generates a tasteful human name for the agent.',
+                },
+                identity: {
+                  type: 'object',
+                  description: 'Optional explicit name/personality identity block. If omitted, Prometheus generates one from role, specialization, and assignment.',
+                },
+                personality_style: {
+                  type: 'string',
+                  description: 'Optional personality preset: steady, spark, austere, mentor, operator, critic, creative.',
+                },
+                name_style: {
+                  type: 'string',
+                  description: 'Optional naming hint. Keep names grounded and non-gimmicky.',
                 },
                 description: {
                   type: 'string',
@@ -62,18 +82,28 @@ export function getAgentTeamScheduleTools(): any[] {
                   type: 'string',
                   description: 'Optional team-specific mission. Leave blank for standalone one-off subagents; use system_instructions/description for normal standalone identity.',
                 },
-                allowed_categories: {
+                executionWorkspace: {
+                  type: 'string',
+                  description: 'Optional default working directory for this agent. Relative paths resolve inside the main workspace. Must be inside allowedWorkPaths.',
+                },
+                execution_workspace: {
+                  type: 'string',
+                  description: 'Alias for executionWorkspace.',
+                },
+                allowedWorkPaths: {
                   type: 'array',
-                  items: {
-                    type: 'string',
-                    enum: ['browser', 'desktop', 'team_ops', 'source_write', 'integrations', 'connectors'],
-                  },
-                  description: 'Tool categories to pre-activate for this subagent. Core tools (file ops, web search/fetch, run_command, send_telegram, memory) are ALWAYS available regardless. request_tool_category is always available as a last-resort escape hatch. Use this instead of listing individual tools.',
+                  items: { type: 'string' },
+                  description: 'Workspace roots this agent may read/write/run commands in. Defaults to the main workspace. Relative paths resolve inside the main workspace; absolute paths are allowed when intentionally granted.',
+                },
+                allowed_work_paths: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Alias for allowedWorkPaths.',
                 },
                 allowed_tools: {
                   type: 'array',
                   items: { type: 'string' },
-                  description: 'Legacy: individual tool names. Prefer allowed_categories instead.',
+                  description: 'Legacy metadata only. Subagents receive the full standard tool surface at runtime.',
                 },
                 forbidden_tools: {
                   type: 'array',
@@ -150,6 +180,43 @@ export function getAgentTeamScheduleTools(): any[] {
     {
       type: 'function' as const,
       function: {
+        name: 'agent_update',
+        description:
+          'Directly update a configured spawn_subagent profile without asking the agent to edit files itself. ' +
+              'Use agent_list first to get the exact agent_id. Supports renaming, description/instruction updates, model/max-step settings, and heartbeat instructions. ' +
+          'This keeps config.json, system_prompt.md, and the Agents UI in sync for dynamic subagents.',
+        parameters: {
+          type: 'object',
+          required: ['agent_id'],
+          properties: {
+            agent_id: { type: 'string', description: 'The dynamic subagent ID to update (get IDs from agent_list first)' },
+            name: { type: 'string', description: 'New display name shown in Agents and Teams UI' },
+            description: { type: 'string', description: 'New short description / specialty summary' },
+            system_instructions: { type: 'string', description: 'Full replacement instructions for system_prompt.md' },
+            heartbeat_instructions: { type: 'string', description: 'Full replacement content for HEARTBEAT.md' },
+            executionWorkspace: { type: 'string', description: 'Default working directory for this agent. Must be inside allowedWorkPaths.' },
+            execution_workspace: { type: 'string', description: 'Alias for executionWorkspace.' },
+            allowedWorkPaths: { type: 'array', items: { type: 'string' }, description: 'Full replacement allowed work roots. Defaults include the main workspace; relative paths resolve inside it.' },
+            allowed_work_paths: { type: 'array', items: { type: 'string' }, description: 'Alias for allowedWorkPaths.' },
+            constraints: { type: 'array', items: { type: 'string' }, description: 'Full replacement constraints list' },
+            success_criteria: { type: 'string', description: 'Full replacement success criteria' },
+            allowed_tools: { type: 'array', items: { type: 'string' }, description: 'Legacy full replacement individual tool names' },
+            forbidden_tools: { type: 'array', items: { type: 'string' }, description: 'Full replacement explicit blacklist' },
+            model: { type: 'string', description: 'Optional model override; pass an empty string to clear' },
+            max_steps: { type: 'number', description: 'Maximum tool calls before stopping' },
+            timeout_ms: { type: 'number', description: 'Max milliseconds to wait' },
+            teamRole: { type: 'string', description: 'Team-specific role title' },
+            teamAssignment: { type: 'string', description: 'Team-specific assignment / mission' },
+            identity: { type: 'object', description: 'Full or partial replacement identity/personality block' },
+            personality_style: { type: 'string', description: 'Regenerate personality from preset: steady, spark, austere, mentor, operator, critic, creative' },
+            name_style: { type: 'string', description: 'Naming hint used when regenerating identity' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function' as const,
+      function: {
         name: 'delete_agent',
         description:
           'Permanently delete a subagent from the system. Removes the agent from config, cleans up its workspace directory, ' +
@@ -218,6 +285,40 @@ export function getAgentTeamScheduleTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'request_context',
+        description:
+          'Ask the team manager for missing context needed to continue. ' +
+          'This posts a manager-visible blocker/context request, updates the shared room, and can pause your task until the manager replies. Only works inside team subagent sessions.',
+        parameters: {
+          type: 'object',
+          required: ['question'],
+          properties: {
+            question: { type: 'string', description: 'The specific context, decision, credential, file, or clarification you need.' },
+            wait_for_reply: { type: 'boolean', description: 'If true, pause after asking. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'request_manager_help',
+        description:
+          'Escalate a blocker to the team manager and ask for help. ' +
+          'Use when you are stuck, need a decision, or need another teammate assigned. Only works inside team subagent sessions.',
+        parameters: {
+          type: 'object',
+          required: ['message'],
+          properties: {
+            message: { type: 'string', description: 'What is blocked, what you already tried, and what help you need.' },
+            wait_for_reply: { type: 'boolean', description: 'If true, pause after escalating. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'talk_to_teammate',
         description:
           'Send a message to a teammate agent or the whole team. ' +
@@ -236,6 +337,26 @@ export function getAgentTeamScheduleTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'share_artifact',
+        description:
+          'Share an output, file, data object, or important finding with the whole team. ' +
+          'Artifacts are added to shared team state so the manager and teammates can see them in future room snapshots. Only works inside team subagent sessions.',
+        parameters: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', description: 'Short artifact name, e.g. "lead-list.csv" or "pricing-analysis".' },
+            type: { type: 'string', description: 'Artifact kind, e.g. file, note, data, report, image, code.' },
+            description: { type: 'string', description: 'What this artifact contains and why it matters.' },
+            content: { type: 'string', description: 'Optional inline content or summary.' },
+            path: { type: 'string', description: 'Optional path in the team workspace.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'update_my_status',
         description:
           'Update your status on the team\'s shared status board. ' +
@@ -244,7 +365,11 @@ export function getAgentTeamScheduleTools(): any[] {
         parameters: {
           type: 'object', required: ['phase'],
           properties: {
-            phase: { type: 'string', enum: ['planning', 'executing', 'blocked', 'done'], description: 'Your current phase.' },
+            phase: {
+              type: 'string',
+              enum: ['idle', 'planning', 'ready', 'waiting_for_context', 'executing', 'running', 'blocked', 'reviewing', 'done'],
+              description: 'Your current team-room state. Legacy values like executing/done are still accepted.',
+            },
             current_task: { type: 'string', description: 'What you\'re working on right now.' },
             blocked_reason: { type: 'string', description: 'Why you\'re blocked (if phase=blocked).' },
             result: { type: 'string', description: 'Summary of what you accomplished (if phase=done).' },
@@ -327,11 +452,84 @@ export function getAgentTeamScheduleTools(): any[] {
 	        },
 	      },
     },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'timer',
+	        description: 'Create, list, or cancel one-off main-chat timers. A timer fires later as a regular user-like message in the SAME chat session. Use for requests like "check this in 5 minutes" or "remind/follow up in 30 minutes". Main chat only; do not use for recurring automation.',
+	        parameters: {
+	          type: 'object',
+	          required: ['action'],
+	          properties: {
+	            action: { type: 'string', description: 'One of: create, list, cancel' },
+	            instruction: { type: 'string', description: 'Required for create. The exact task Prometheus should perform when the timer fires.' },
+	            delay_seconds: { type: 'number', description: 'For create: relative delay in seconds. Minimum 5 seconds.' },
+	            due_at: { type: 'string', description: 'For create: ISO timestamp when the timer should fire. Use instead of delay_seconds when the user gives a specific date/time.' },
+	            label: { type: 'string', description: 'Optional short label for the timer.' },
+	            timer_id: { type: 'string', description: 'Required for cancel.' },
+	            include_done: { type: 'boolean', description: 'For list: include completed/cancelled timers.' },
+	          },
+	        },
+	      },
+	    },
     {
       type: 'function',
       function: {
-        name: 'schedule_job',
-        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). Use this for recurring or time-based automation, including any subagent cron by setting subagent_id.',
+        name: 'internal_watch',
+        description:
+          'Create, list, or cancel bounded internal watches that ping/resume this chat when an internal condition changes. ' +
+          'Use after triggering background work, schedule_job(run_now), collectors, build/restart checks, or file-producing jobs so Prometheus does not have to manually poll. ' +
+          'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', description: 'One of: create, list, cancel' },
+            id: { type: 'string', description: 'Optional stable watch id. Existing active watch with same id is reused.' },
+            label: { type: 'string', description: 'Short operator-readable label.' },
+            ttl_ms: { type: 'number', description: 'Required-ish for create. Defaults to 20 minutes, min 5s, max 24h.' },
+            target: {
+              type: 'object',
+              description: 'Typed target config. file requires path; task requires task_id/taskId; scheduled_job requires job_id/jobId; event_queue watches workspace/events/pending.json.',
+              properties: {
+                type: { type: 'string', enum: ['file', 'task', 'scheduled_job', 'event_queue'] },
+                path: { type: 'string', description: 'Workspace-relative file path for file watches.' },
+                task_id: { type: 'string', description: 'Task id for task watches.' },
+                job_id: { type: 'string', description: 'Scheduled job id for scheduled_job watches.' },
+                match: { type: 'object', description: 'For event_queue: key/value fields that must match an event.' },
+              },
+            },
+            condition: {
+              type: 'object',
+              description: 'Condition options. File modes: exists, appears, changes, appears_or_changes. Scheduled job modes: latest_result, ran, terminal. Task defaults to terminal statuses.',
+              properties: {
+                mode: { type: 'string' },
+                terminalStatuses: { type: 'array', items: { type: 'string' } },
+                requireText: { type: 'string', description: 'Optional text that must appear in file/result/event payload.' },
+                absentText: { type: 'string', description: 'Optional text that must not appear in file/result/event payload.' },
+                match: { type: 'object', description: 'Event queue key/value match config.' },
+              },
+            },
+            on_match: {
+              type: 'string',
+              description: 'Instruction to run in the originating chat when the watch matches. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
+            },
+            on_timeout: {
+              type: 'string',
+              description: 'Optional instruction to run in the originating chat if TTL expires before matching.',
+            },
+            max_firings: { type: 'number', description: 'Default 1. Keep 1 unless explicitly watching multiple changes.' },
+            watch_id: { type: 'string', description: 'Required for cancel. Alias of id.' },
+            include_done: { type: 'boolean', description: 'For list: include matched/timed_out/cancelled/failed watches.' },
+          },
+        },
+      },
+    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'schedule_job',
+	        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). Use this for recurring or time-based automation, including any subagent cron by setting subagent_id.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -402,6 +600,165 @@ export function getAgentTeamScheduleTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'schedule_job_history',
+        description: 'Get recent execution history for a scheduled job, including status, duration, errors, output summary, task/subagent linkage, retry count, and blocker reason when detectable.',
+        parameters: {
+          type: 'object',
+          required: ['job_id'],
+          properties: {
+            job_id: { type: 'string', description: 'Scheduled job id or exact job name.' },
+            limit: { type: 'number', description: 'Number of recent run records to return. Default 10.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'schedule_job_detail',
+        description: 'Open a scheduled job detail snapshot: config, prompt, schedule, latest result, recent errors, linked tasks, internal watches, event queue entries, output checks, and schedule memory.',
+        parameters: {
+          type: 'object',
+          required: ['job_id'],
+          properties: {
+            job_id: { type: 'string', description: 'Scheduled job id or exact job name.' },
+            limit: { type: 'number', description: 'Recent run count to include. Default 10.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'schedule_job_log_search',
+        description: 'Search scheduled-job run logs by job, text, status, output content, error text, blocker text, or date range.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            query: { type: 'string', description: 'Text to search for in run output, errors, job config, or blocker fields.' },
+            job_id: { type: 'string', description: 'Optional scheduled job id or exact job name to restrict the search.' },
+            status: { type: 'string', description: 'Optional exact run status filter, e.g. success, error, complete, failed, running.' },
+            date_from: { type: 'string', description: 'Optional ISO date/time lower bound.' },
+            date_to: { type: 'string', description: 'Optional ISO date/time upper bound.' },
+            limit: { type: 'number', description: 'Max matches to return. Default 25.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'schedule_job_patch',
+        description: 'Safely preview or apply a targeted scheduled-job edit. Use action=preview first to see field-level diffs; apply requires confirm=true.',
+        parameters: {
+          type: 'object',
+          required: ['job_id'],
+          properties: {
+            action: { type: 'string', description: 'preview or apply. Default preview.' },
+            job_id: { type: 'string', description: 'Scheduled job id or exact job name.' },
+            name: { type: 'string', description: 'New job name.' },
+            instruction_prompt: { type: 'string', description: 'Full replacement job prompt/instructions.' },
+            schedule: {
+              type: 'object',
+              description: 'Schedule patch: {kind:"recurring", cron:"0 9 * * *"} or {kind:"one_shot", run_at:"..."}',
+            },
+            timezone: { type: 'string', description: 'IANA timezone such as America/New_York.' },
+            delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web and session_target:main|isolated.' },
+            model_override: { type: 'string', description: 'Optional model override; empty string clears.' },
+            enabled: { type: 'boolean', description: 'Enable or pause the job.' },
+            expected_outputs: {
+              type: 'array',
+              description: 'Expected output specs: strings or {path, requiredText, absentText} objects.',
+              items: {
+                anyOf: [
+                  { type: 'string' },
+                  {
+                    type: 'object',
+                    properties: {
+                      path: { type: 'string' },
+                      requiredText: { type: 'string' },
+                      absentText: { type: 'string' },
+                    },
+                    required: ['path'],
+                  },
+                ],
+              },
+            },
+            confirm: { type: 'boolean', description: 'Required true for action=apply after previewing.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'schedule_job_outputs',
+        description: 'Manage and check expected outputs for a scheduled job. Alerts when expected files are missing, stale, or fail required/absent text checks.',
+        parameters: {
+          type: 'object',
+          required: ['job_id', 'action'],
+          properties: {
+            action: { type: 'string', description: 'get, set, or check.' },
+            job_id: { type: 'string', description: 'Scheduled job id or exact job name.' },
+            expected_outputs: {
+              type: 'array',
+              description: 'For set: strings or {path, requiredText, absentText} objects. Paths must be workspace-relative.',
+              items: {
+                anyOf: [
+                  { type: 'string' },
+                  {
+                    type: 'object',
+                    properties: {
+                      path: { type: 'string' },
+                      requiredText: { type: 'string' },
+                      absentText: { type: 'string' },
+                    },
+                    required: ['path'],
+                  },
+                ],
+              },
+            },
+            confirm: { type: 'boolean', description: 'Required true for set.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'schedule_job_stuck_control',
+        description: 'Operator controls for stuck scheduled jobs: clear blocked/error state, mark handled, cancel retry backoff, or reset and rerun clean. Mutating actions require confirm=true.',
+        parameters: {
+          type: 'object',
+          required: ['job_id', 'action'],
+          properties: {
+            action: { type: 'string', description: 'clear_blocked, mark_handled, cancel_retry_loop, or rerun_clean.' },
+            job_id: { type: 'string', description: 'Scheduled job id or exact job name.' },
+            note: { type: 'string', description: 'Optional operator note, especially for mark_handled.' },
+            confirm: { type: 'boolean', description: 'Required true for all actions.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'automation_dashboard',
+        description: 'Return one unified automation snapshot: scheduled jobs with health, recent tasks, internal watches, pending event queue, and aggregate counts.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            limit: { type: 'number', description: 'Max jobs/tasks/watches/events to return. Default 25.' },
+            include_done: { type: 'boolean', description: 'Include completed/cancelled internal watches, not just active watches.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'background_spawn',
         description:
           'Spawn a one-time ephemeral background agent (full tool-capable LLM call) to run a task in parallel while you continue your primary work. ' +
@@ -422,10 +779,31 @@ export function getAgentTeamScheduleTools(): any[] {
             join_policy: {
               type: 'string',
               enum: ['wait_all', 'wait_until_timeout', 'best_effort_merge'],
-              description: 'Auto-merge policy at turn-end. Default: wait_until_timeout (15s). Use wait_all for multi-step bg agent tasks.',
+              description: 'Auto-merge policy at turn-end. Default: wait_all.',
             },
-            timeout_ms: { type: 'number', description: 'Auto-merge wait window ms. Default 15000. Set higher for multi-step bg agent tasks.' },
+            timeout_ms: { type: 'number', description: 'Optional wait cap used by timeout-based policies. Default 120000.' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags for tracking/grouping.' },
+            model_override: { type: 'string', description: 'Optional explicit model override for this background run.' },
+            provider_override: { type: 'string', description: 'Optional explicit provider override for this background run.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'background_wait',
+        description:
+          'Pause this foreground turn briefly while background agents work. Use after background_spawn when you want to give workers time before continuing reasoning, e.g. wait_ms/timeout_ms=30000. ' +
+          'If background_id/background_ids are omitted, waits on active background agents spawned by this chat session. This does not merge results; the finalization gate still merges all same-turn background results before the final reply.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            background_id: { type: 'string', description: 'Optional single background agent ID returned by background_spawn.' },
+            background_ids: { type: 'array', items: { type: 'string' }, description: 'Optional list of background agent IDs returned by background_spawn.' },
+            wait_ms: { type: 'number', description: 'How long to wait in milliseconds. Example: 30000.' },
+            timeout_ms: { type: 'number', description: 'Alias for wait_ms.' },
           },
         },
       },
@@ -605,12 +983,14 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'run_task_now',
-        description:
+        legacy_description:
           'Run a task immediately in the background — silently, with no logs or tool calls shown. ' +
-          'Both the task execution and a verification pass run fully in the background while you continue chatting. ' +
-          'Once the task is verified complete, a single final response is delivered directly into this chat session. ' +
-          'Use this for work that may take a while and that you want to confirm was done correctly before reporting back. ' +
-          'Unlike background_spawn (ephemeral, 15s cap), this is fully persisted, survives restart, and visible in the Tasks panel.',
+          'Continue executing the task here in this same conversation while progress mirrors into the Tasks panel. ' +
+          'Tool calls, plan steps, errors, and final output stay visible live in chat and are also persisted on the task card. ' +
+          'Use this when the user wants the work tracked as a task/run while still seeing the live chat stream. ' +
+          'This does not launch a silent detached background runner; for short ephemeral parallel work, use background_spawn instead.',
+        description:
+          'Start a persisted task card for the current live chat turn. Continue executing the task here in this same conversation; tool calls, plan steps, errors, and final output are mirrored into the Tasks panel. This does not launch a silent detached background runner.',
         parameters: {
           type: 'object',
           required: ['title', 'prompt'],

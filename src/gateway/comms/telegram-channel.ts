@@ -22,13 +22,43 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { getConfig } from '../../config/config';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
-import { getLinkedSession, unlinkTelegramSession, getLastMainSessionId, linkTelegramSession, setSessionChannelHint } from './broadcaster';
+import { resolveGatewayAuthToken } from '../gateway-auth';
+import { getLinkedSession, unlinkTelegramSession, getLastMainSessionId, linkTelegramSession, setSessionChannelHint, getSessionChannelHint } from './broadcaster';
+import { getCreativeMode, getSession, sessionExists, type Session } from '../session';
+import { getProject, listProjects, type Project } from '../projects/project-store.js';
 import {
-  formatTelegramAiTextFromMarkdown,
-  formatTelegramProgressState,
-  formatTelegramToolCall,
-  formatTelegramToolError,
-} from './telegram-tool-log';
+  registerLiveRuntime,
+  finishLiveRuntime,
+  listLiveRuntimes,
+  getLiveRuntime,
+  abortLiveRuntime,
+  type LiveRuntimeSnapshot,
+} from '../live-runtime-registry';
+import {
+	  formatTelegramAiTextFromMarkdown,
+			  formatTelegramProgressState,
+		  formatTelegramToolCall,
+		  formatTelegramToolError,
+	  formatTelegramToolResult,
+	} from './telegram-tool-log';
+import { sanitizeFinalReply, stripInternalToolNotes } from './reply-processor';
+
+const CREATIVE_TELEGRAM_PROGRESS_INTERVAL = 10;
+const CREATIVE_TELEGRAM_PROGRESS_MIN_INTERVAL_MS = 1500;
+const CREATIVE_TELEGRAM_PROGRESS_MESSAGES = [
+  'Working...',
+  'Still working...',
+  'Editing text...',
+  'Analyzing image...',
+  'Adding elements...',
+  'Adjusting layout...',
+  'Rendering preview...',
+  'Checking frames...',
+  'Polishing details...',
+  'Compositing scene...',
+  'Reviewing snapshot...',
+  'Exporting result...',
+];
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -74,6 +104,54 @@ interface PendingChatEntry {
   agentName?: string;
   teamName?: string;
 }
+
+interface StopTargetEntry {
+  sourceType: 'runtime' | 'task';
+  id: string;
+  kind: string;
+  label: string;
+  icon: string;
+  startedAt: number;
+  status: string;
+  sessionId?: string;
+  taskId?: string;
+  teamId?: string;
+  agentId?: string;
+  scheduleId?: string;
+  detail?: string;
+}
+
+type ResumeChannelKey = 'telegram' | 'discord' | 'whatsapp' | 'terminal';
+
+type ResumeScope = 'all' | 'ch' | 'pr' | 'channel' | 'project';
+
+interface ResumeSessionSummary {
+  sessionId: string;
+  title: string;
+  firstMessage: string;
+  messageCount: number;
+  lastActiveAt: number;
+  createdAt: number;
+  projectId?: string | null;
+  projectName?: string | null;
+  channelKey?: ResumeChannelKey | null;
+  isLinked: boolean;
+}
+
+interface ResumeProjectSummary {
+  id: string;
+  name: string;
+  sessionCount: number;
+  updatedAt: number;
+}
+
+const RESUME_PAGE_SIZE = 6;
+const RESUME_CHANNEL_DEFS: Array<{ key: ResumeChannelKey; label: string; icon: string; emptyLabel: string }> = [
+  { key: 'telegram', label: 'Telegram', icon: '💬', emptyLabel: 'Telegram bot chats' },
+  { key: 'discord', label: 'Discord', icon: '🎮', emptyLabel: 'Discord chats' },
+  { key: 'whatsapp', label: 'WhatsApp', icon: '🟢', emptyLabel: 'WhatsApp chats' },
+  { key: 'terminal', label: 'CLI', icon: '🖥️', emptyLabel: 'Terminal sessions' },
+];
 
 function getSelfRepairApi(): null | typeof import('../../tools/self-repair') {
   if (isPublicDistributionBuild()) return null;
@@ -158,6 +236,55 @@ function idResolve(key: string): string | null {
   return _idKeyMap.get(key) || null;
 }
 
+const TELEGRAM_REASONING_EFFORTS: Record<string, Array<{ key: string; value: string; label: string }>> = {
+  openai: [
+    { key: 'off', value: '', label: 'Off' },
+    { key: 'minimal', value: 'minimal', label: 'Minimal' },
+    { key: 'low', value: 'low', label: 'Low' },
+    { key: 'medium', value: 'medium', label: 'Medium' },
+    { key: 'high', value: 'high', label: 'High' },
+  ],
+  openai_codex: [
+    { key: 'off', value: '', label: 'Off' },
+    { key: 'minimal', value: 'minimal', label: 'Minimal' },
+    { key: 'low', value: 'low', label: 'Low' },
+    { key: 'medium', value: 'medium', label: 'Medium' },
+    { key: 'high', value: 'high', label: 'High' },
+    { key: 'xhigh', value: 'xhigh', label: 'XHigh' },
+  ],
+  perplexity: [
+    { key: 'off', value: '', label: 'Off' },
+    { key: 'minimal', value: 'minimal', label: 'Minimal' },
+    { key: 'low', value: 'low', label: 'Low' },
+    { key: 'medium', value: 'medium', label: 'Medium' },
+    { key: 'high', value: 'high', label: 'High' },
+  ],
+};
+
+const TELEGRAM_ANTHROPIC_BUDGETS = [2048, 5000, 10000, 16000, 24000, 32000];
+
+function escHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getTelegramCommandName(text: string, botUsername?: string | null): string | null {
+  const firstToken = String(text || '').trim().split(/\s+/, 1)[0] || '';
+  const match = firstToken.match(/^\/([A-Za-z0-9_]+)(?:@([A-Za-z0-9_]+))?$/);
+  if (!match) return null;
+
+  const targetBot = match[2];
+  if (targetBot && botUsername && targetBot.toLowerCase() !== botUsername.toLowerCase()) {
+    return null;
+  }
+
+  return match[1].toLowerCase();
+}
+
 // ─── File path key map — keeps callback_data under 64 bytes ──────────────────
 // File paths can be long (e.g. D:\Prometheus\workspace\skills\web-researcher\skill.md)
 // which would exceed Telegram's 64-byte callback_data limit when base64-encoded.
@@ -199,7 +326,9 @@ interface TelegramDeps {
     pinnedMessages?: Array<{ role: string; content: string }>,
     abortSignal?: { aborted: boolean },
     callerContext?: string,
+    reasoningOptions?: any,
     attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+    modelOverride?: string,
   ) => Promise<{ type: string; text: string; thinking?: string; toolResults?: any[] }>;
   addMessage: (
     sessionId: string,
@@ -227,6 +356,33 @@ interface TelegramUpdate {
       mime_type?: string;
       file_size?: number;
     };
+    video?: {
+      file_id: string;
+      file_unique_id?: string;
+      file_name?: string;
+      mime_type?: string;
+      file_size?: number;
+      duration?: number;
+      width?: number;
+      height?: number;
+    };
+    animation?: {
+      file_id: string;
+      file_unique_id?: string;
+      file_name?: string;
+      mime_type?: string;
+      file_size?: number;
+      duration?: number;
+      width?: number;
+      height?: number;
+    };
+    video_note?: {
+      file_id: string;
+      file_unique_id?: string;
+      file_size?: number;
+      duration?: number;
+      length?: number;
+    };
     date: number;
   };
   callback_query?: {
@@ -242,6 +398,7 @@ interface TelegramUpdate {
 const BROWSER_MAX_BUTTONS_PER_ROW = 2;
 const BROWSER_MAX_BUTTONS_TOTAL = 40;
 const BROWSER_MAX_TEXT_PREVIEW = 2500; // bytes per page
+const TELEGRAM_ALLOWED_UPDATES = ['message', 'callback_query'];
 
 // callback_data prefix scheme (all path keys are 8-char hashes stored in _pathKeyMap):
 //   fb:dir:<pathKey>       — navigate into a directory
@@ -265,6 +422,9 @@ export class TelegramChannel {
   private abortController: AbortController | null = null;
   private workspaceRoot: string = process.env.PROMETHEUS_WORKSPACE_DIR || process.cwd();
   private progressMessageQueues = new Map<number, Promise<void>>();
+  private creativeProgressCounters = new Map<string, number>();
+  private creativeProgressStarted = new Set<string>();
+  private creativeProgressLastSentAt = new Map<string, number>();
 
   private getTelegramSessionId(userId: number, chatId?: number): string {
     const linked = getLinkedSession(userId);
@@ -274,15 +434,18 @@ export class TelegramChannel {
       }
       return linked;
     }
-    const latestMain = String(getLastMainSessionId() || '').trim();
-    if (latestMain && latestMain !== 'default') {
-      linkTelegramSession(userId, latestMain);
+
+    const latestTelegram = this.listResumeSessionsByChannel('telegram', userId)[0]?.sessionId;
+    if (latestTelegram) {
+      linkTelegramSession(userId, latestTelegram);
       if (typeof chatId === 'number' && Number.isFinite(chatId)) {
-        setSessionChannelHint(latestMain, { channel: 'telegram', chatId, userId, timestamp: Date.now() });
+        setSessionChannelHint(latestTelegram, { channel: 'telegram', chatId, userId, timestamp: Date.now() });
       }
-      return latestMain;
+      return latestTelegram;
     }
+
     const fallback = `telegram_${userId}`;
+    linkTelegramSession(userId, fallback);
     if (typeof chatId === 'number' && Number.isFinite(chatId)) {
       setSessionChannelHint(fallback, { channel: 'telegram', chatId, userId, timestamp: Date.now() });
     }
@@ -519,14 +682,20 @@ export class TelegramChannel {
     });
   }
 
-  private async sendPhotoToChat(chatId: number, imageData: Buffer | string, caption: string = ''): Promise<void> {
+  private async sendPhotoToChat(
+    chatId: number,
+    imageData: Buffer | string,
+    caption: string = '',
+    fileName: string = 'screenshot.png',
+    mimeType: string = 'image/png',
+  ): Promise<void> {
     if (!this.config.enabled || !this.config.botToken) return;
     const buf = typeof imageData === 'string'
       ? Buffer.from(imageData, 'base64')
       : imageData;
     const form = new FormData();
     form.append('chat_id', String(chatId));
-    form.append('photo', new Blob([buf], { type: 'image/png' }), 'screenshot.png');
+    form.append('photo', new Blob([buf], { type: mimeType || 'image/png' }), fileName || 'image.png');
     if (caption) {
       form.append('caption', caption.slice(0, 1024));
       form.append('parse_mode', 'HTML');
@@ -535,6 +704,142 @@ export class TelegramChannel {
     const data: any = await resp.json();
     if (!data.ok) {
       throw new Error(data.description || 'Telegram sendPhoto failed');
+    }
+  }
+
+  async sendFileToChat(chatId: number, filePath: string, caption: string = ''): Promise<void> {
+    if (!this.config.enabled || !this.config.botToken) return;
+    const resolved = path.resolve(String(filePath || ''));
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+    const ext = path.extname(resolved).toLowerCase();
+    const fileName = path.basename(resolved);
+    const fileBuffer = fs.readFileSync(resolved);
+    const imageMime: Record<string, string> = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+    };
+    const videoMime: Record<string, string> = {
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.m4v': 'video/x-m4v',
+      '.webm': 'video/webm',
+    };
+    if (imageMime[ext]) {
+      await this.sendPhotoToChat(chatId, fileBuffer, caption, fileName, imageMime[ext]);
+      return;
+    }
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    if (caption) {
+      form.append('caption', caption.slice(0, 1024));
+      form.append('parse_mode', 'HTML');
+    }
+    if (videoMime[ext]) {
+      form.append('video', new Blob([fileBuffer], { type: videoMime[ext] }), fileName);
+      const resp = await fetch(`${this.apiBase}/sendVideo`, { method: 'POST', body: form });
+      const data: any = await resp.json();
+      if (data.ok) return;
+      console.warn(`[Telegram] sendVideo failed for ${fileName}; retrying as document: ${data.description || 'unknown error'}`);
+      const docForm = new FormData();
+      docForm.append('chat_id', String(chatId));
+      if (caption) {
+        docForm.append('caption', caption.slice(0, 1024));
+        docForm.append('parse_mode', 'HTML');
+      }
+      docForm.append('document', new Blob([fileBuffer], { type: videoMime[ext] }), fileName);
+      const docResp = await fetch(`${this.apiBase}/sendDocument`, { method: 'POST', body: docForm });
+      const docData: any = await docResp.json();
+      if (!docData.ok) throw new Error(docData.description || data.description || 'Telegram video upload failed');
+      return;
+    }
+    form.append('document', new Blob([fileBuffer]), fileName);
+    const resp = await fetch(`${this.apiBase}/sendDocument`, { method: 'POST', body: form });
+    const data: any = await resp.json();
+    if (!data.ok) throw new Error(data.description || 'Telegram sendDocument failed');
+  }
+
+  private async sendGeneratedImagesToChat(chatId: number, generatedImages: any[]): Promise<void> {
+    if (!this.config.enabled || !this.config.botToken) return;
+    const fsLocal = require('fs') as typeof import('fs');
+    const pathLocal = require('path') as typeof import('path');
+    const inferMimeType = (filePath: string, hintedMimeType?: string): string => {
+      const hinted = String(hintedMimeType || '').trim().toLowerCase();
+      if (hinted.startsWith('image/')) return hinted;
+      switch (pathLocal.extname(String(filePath || '')).toLowerCase()) {
+        case '.jpg':
+        case '.jpeg':
+          return 'image/jpeg';
+        case '.webp':
+          return 'image/webp';
+        case '.gif':
+          return 'image/gif';
+        case '.png':
+        default:
+          return 'image/png';
+      }
+    };
+
+    const files = generatedImages
+      .map((image) => {
+        const rawPath = String(image?.path || image?.rel_path || '').trim();
+        if (!rawPath) return null;
+        const absPath = pathLocal.isAbsolute(rawPath)
+          ? rawPath
+          : pathLocal.join(this.workspaceRoot, rawPath);
+        if (!fsLocal.existsSync(absPath)) return null;
+        return {
+          absPath,
+          fileName: String(image?.file_name || pathLocal.basename(absPath) || 'generated-image.png').trim() || 'generated-image.png',
+          mimeType: inferMimeType(absPath, image?.mime_type),
+        };
+      })
+      .filter(Boolean) as Array<{ absPath: string; fileName: string; mimeType: string }>;
+
+    if (!files.length) return;
+
+    const caption = files.length === 1
+      ? '🖼️ <b>Generated image</b>'
+      : `🖼️ <b>Generated ${files.length} images</b>`;
+
+    if (files.length === 1) {
+      const file = files[0];
+      await this.sendPhotoToChat(chatId, fsLocal.readFileSync(file.absPath), caption, file.fileName, file.mimeType);
+      return;
+    }
+
+    try {
+      const mediaItems = files.slice(0, 10).map((file, index) => (
+        index === 0
+          ? { type: 'photo', media: `attach://generated_${index}`, caption, parse_mode: 'HTML' }
+          : { type: 'photo', media: `attach://generated_${index}` }
+      ));
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      form.append('media', JSON.stringify(mediaItems));
+      files.slice(0, 10).forEach((file, index) => {
+        const buf = fsLocal.readFileSync(file.absPath);
+        form.append(`generated_${index}`, new Blob([buf], { type: file.mimeType || 'image/png' }), file.fileName);
+      });
+      const resp = await fetch(`${this.apiBase}/sendMediaGroup`, { method: 'POST', body: form });
+      const data: any = await resp.json();
+      if (!data.ok) throw new Error(data.description || 'Telegram sendMediaGroup failed');
+    } catch (err) {
+      console.warn(`[Telegram] sendGeneratedImagesToChat media group failed: ${String((err as any)?.message || err)}`);
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        await this.sendPhotoToChat(
+          chatId,
+          fsLocal.readFileSync(file.absPath),
+          index === 0 ? caption : '',
+          file.fileName,
+          file.mimeType,
+        );
+      }
     }
   }
 
@@ -585,7 +890,10 @@ export class TelegramChannel {
       `💬 <b>Chat</b>`,
       `/status — bot &amp; model status`,
       `/clear — clear history  /new — new session`,
+      `/resume — reopen an older chat`,
       `/cancel — cancel pending flow`,
+      `/stop_now — abort current main chat turn`,
+      `/stop — inspect and abort any live AI flow`,
       ``,
       `📁 <b>Workspace</b>`,
       `/browse [path] — file browser`,
@@ -600,9 +908,10 @@ export class TelegramChannel {
       `/tasks — background tasks &amp; controls`,
       `/schedule — schedules &amp; controls`,
       ``,
-      `⚡ <b>Models</b>`,
-      `/models — provider &amp; model picker`,
-      ``,
+	      `⚡ <b>Models</b>`,
+	      `/models — provider &amp; model picker`,
+	      `/reasoning — current provider reasoning controls`,
+	      ``,
       `📋 <b>Proposals &amp; Repairs</b>`,
       `/proposals [pending|done|id] — inbox`,
       `/repairs — pending repairs`,
@@ -613,11 +922,939 @@ export class TelegramChannel {
       `/mcp-status — MCP server status`,
       `/setup &lt;service&gt; — connect a service`,
       ``,
-      `🎯 <b>Goals &amp; Performance</b>`,
+      `🎯 <b>Goals</b>`,
       `/approve_goal &lt;id&gt; · /reject_goal &lt;id&gt;`,
-      `/approve_skill &lt;id&gt; — approve skill evolution`,
-      `/perf — latest performance report`,
     ].join('\n');
+  }
+
+  private getActiveReasoningContext(): { cfg: any; llm: any; provider: string; providerCfg: any; model: string } {
+    const cfg = getConfig().getConfig() as any;
+    const llm = cfg?.llm || {};
+    const provider = String(llm.provider || 'ollama').trim() || 'ollama';
+    const providerCfg = llm?.providers?.[provider] || {};
+    const model = String(providerCfg?.model || cfg?.models?.primary || 'unknown').trim() || 'unknown';
+    return { cfg, llm, provider, providerCfg, model };
+  }
+
+  private getReasoningProviderLabel(provider: string): string {
+    return ({
+      anthropic: 'Anthropic Claude',
+      openai: 'OpenAI API',
+      openai_codex: 'OpenAI Codex',
+      perplexity: 'Perplexity',
+      ollama: 'Ollama',
+      llama_cpp: 'llama.cpp',
+      lm_studio: 'LM Studio',
+      gemini: 'Google Gemini',
+    } as Record<string, string>)[provider] || provider;
+  }
+
+  private buildReasoningMenu(): { text: string; keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+    const { provider, providerCfg, model } = this.getActiveReasoningContext();
+    const providerLabel = this.getReasoningProviderLabel(provider);
+    const footer = [[
+      { text: '🔄 Refresh', callback_data: 'rg:list' },
+      { text: '🤖 Models', callback_data: 'md:list' },
+    ]];
+
+    if (provider === 'anthropic') {
+      const enabled = providerCfg?.extended_thinking === true;
+      const rawBudget = Number(providerCfg?.thinking_budget);
+      const budget = Number.isFinite(rawBudget) && rawBudget >= 1024 ? Math.floor(rawBudget) : 10000;
+      const keyboard: Array<Array<{ text: string; callback_data: string }>> = [[
+        { text: enabled ? '✅ On' : 'On', callback_data: 'rg:ath:on' },
+        { text: !enabled ? '✅ Off' : 'Off', callback_data: 'rg:ath:off' },
+      ]];
+      for (let i = 0; i < TELEGRAM_ANTHROPIC_BUDGETS.length; i += 3) {
+        const row = TELEGRAM_ANTHROPIC_BUDGETS.slice(i, i + 3).map((value) => ({
+          text: `${value === budget ? '✅ ' : ''}${Math.round(value / 1000)}k`,
+          callback_data: `rg:bud:${value}`,
+        }));
+        keyboard.push(row);
+      }
+      keyboard.push(...footer);
+      return {
+        text: [
+          '🧠 <b>Reasoning Controls</b>',
+          '',
+          `<b>Provider:</b> ${escHtml(providerLabel)} (<code>${escHtml(provider)}</code>)`,
+          `<b>Model:</b> <code>${escHtml(model)}</code>`,
+          `<b>Current reasoning:</b> ${enabled ? 'extended thinking enabled' : 'extended thinking disabled'}`,
+          `<b>Budget:</b> <code>${budget.toLocaleString('en-US')}</code> tokens`,
+          '',
+          '<i>Tap a budget to enable extended thinking at that level.</i>',
+        ].join('\n'),
+        keyboard,
+      };
+    }
+
+    const effortOptions = TELEGRAM_REASONING_EFFORTS[provider];
+    if (Array.isArray(effortOptions) && effortOptions.length) {
+      const currentEffort = typeof providerCfg?.reasoning_effort === 'string'
+        ? providerCfg.reasoning_effort.trim()
+        : '';
+      const keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+      for (let i = 0; i < effortOptions.length; i += 3) {
+        const row = effortOptions.slice(i, i + 3).map((opt) => ({
+          text: `${opt.value === currentEffort ? '✅ ' : ''}${opt.label}`,
+          callback_data: `rg:eff:${provider}:${opt.key}`,
+        }));
+        keyboard.push(row);
+      }
+      keyboard.push(...footer);
+      return {
+        text: [
+          '🧠 <b>Reasoning Controls</b>',
+          '',
+          `<b>Provider:</b> ${escHtml(providerLabel)} (<code>${escHtml(provider)}</code>)`,
+          `<b>Model:</b> <code>${escHtml(model)}</code>`,
+          `<b>Current reasoning:</b> <code>${escHtml(currentEffort || 'disabled')}</code>`,
+          '',
+          '<i>Pick the saved reasoning level for this provider.</i>',
+        ].join('\n'),
+        keyboard,
+      };
+    }
+
+    return {
+      text: [
+        '🧠 <b>Reasoning Controls</b>',
+        '',
+        `<b>Provider:</b> ${escHtml(providerLabel)} (<code>${escHtml(provider)}</code>)`,
+        `<b>Model:</b> <code>${escHtml(model)}</code>`,
+        '<b>Current reasoning:</b> not configurable for this provider in Telegram.',
+      ].join('\n'),
+      keyboard: footer,
+    };
+  }
+
+  private maybeQueueCreativeProgressPlaceholder(chatId: number, sessionId: string, type: string, data: any): boolean {
+    const creativeMode = getCreativeMode(sessionId);
+    if (!creativeMode || creativeMode === 'design') return false;
+
+    const isToolStreamEvent =
+      type === 'tool_call'
+      || type === 'tool_result'
+      || type === 'progress_state'
+      || type === 'info'
+      || type === 'orchestration';
+    if (!isToolStreamEvent) return false;
+
+    if (!this.creativeProgressStarted.has(sessionId)) {
+      this.creativeProgressStarted.add(sessionId);
+      this.creativeProgressLastSentAt.set(sessionId, Date.now());
+      this.enqueueProgressMessage(chatId, CREATIVE_TELEGRAM_PROGRESS_MESSAGES[0]);
+    }
+
+    const shouldCountEvent =
+      type === 'tool_call'
+      || type === 'tool_result'
+      || type === 'info'
+      || type === 'progress_state'
+      || type === 'orchestration';
+    if (shouldCountEvent) {
+      const nextStep = (this.creativeProgressCounters.get(sessionId) || 0) + 1;
+      this.creativeProgressCounters.set(sessionId, nextStep);
+      const now = Date.now();
+      const lastSentAt = this.creativeProgressLastSentAt.get(sessionId) || 0;
+      if (
+        nextStep > 0
+        && nextStep % CREATIVE_TELEGRAM_PROGRESS_INTERVAL === 0
+        && now - lastSentAt >= CREATIVE_TELEGRAM_PROGRESS_MIN_INTERVAL_MS
+      ) {
+        const index = Math.floor(nextStep / CREATIVE_TELEGRAM_PROGRESS_INTERVAL) - 1;
+        const message = CREATIVE_TELEGRAM_PROGRESS_MESSAGES[index % CREATIVE_TELEGRAM_PROGRESS_MESSAGES.length];
+        this.creativeProgressLastSentAt.set(sessionId, now);
+        this.enqueueProgressMessage(chatId, message);
+      }
+    }
+
+    return true;
+  }
+
+  private async persistReasoningConfig(
+    provider: string,
+    patch: { reasoning_effort?: string; extended_thinking?: boolean; thinking_budget?: number },
+  ): Promise<void> {
+    const cm = getConfig();
+    const current = cm.getConfig() as any;
+    const currentLlm = current?.llm || {};
+    const currentProviders = currentLlm?.providers || {};
+    const nextProviderCfg = { ...(currentProviders?.[provider] || {}) };
+
+    if (provider === 'anthropic') {
+      if (Object.prototype.hasOwnProperty.call(patch, 'extended_thinking')) {
+        nextProviderCfg.extended_thinking = patch.extended_thinking === true;
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'thinking_budget')) {
+        const budget = Number(patch.thinking_budget);
+        if (Number.isFinite(budget) && budget >= 1024) {
+          nextProviderCfg.thinking_budget = Math.floor(budget);
+        }
+      }
+    } else if (Object.prototype.hasOwnProperty.call(patch, 'reasoning_effort')) {
+      const effort = typeof patch.reasoning_effort === 'string' ? patch.reasoning_effort.trim() : '';
+      if (effort) nextProviderCfg.reasoning_effort = effort;
+      else delete nextProviderCfg.reasoning_effort;
+    }
+
+    cm.updateConfig({
+      llm: {
+        ...currentLlm,
+        providers: {
+          ...currentProviders,
+          [provider]: nextProviderCfg,
+        },
+      },
+    } as any);
+
+    try {
+      const { resetProvider } = require('../../providers/factory.js');
+      if (typeof resetProvider === 'function') resetProvider();
+    } catch {}
+  }
+
+  private async runTelegramMainChatTurn(params: {
+    chatId: number;
+    sessionId: string;
+    message: string;
+    sendSSE: (event: string, data: any) => void;
+    callerContext?: string;
+    attachments?: Array<{ base64: string; mimeType: string; name: string }>;
+  }): Promise<{ aborted: boolean; result: { type: string; text: string; thinking?: string; toolResults?: any[] } }> {
+    const abortSignal = { aborted: false };
+    const runtimeId = registerLiveRuntime({
+      kind: 'main_chat',
+      label: 'Main chat',
+      sessionId: params.sessionId,
+      source: 'telegram',
+      chatId: params.chatId,
+      detail: String(params.message || '').slice(0, 160),
+      abortSignal,
+    });
+    try {
+      const result = this.deps.runInteractiveTurn
+        ? await this.deps.runInteractiveTurn(
+            params.message,
+            params.sessionId,
+            params.sendSSE,
+            undefined,
+            abortSignal,
+            params.callerContext,
+            undefined,
+            params.attachments,
+          )
+        : await this.deps.handleChat(
+            params.message,
+            params.sessionId,
+            params.sendSSE,
+            undefined,
+            abortSignal,
+            params.callerContext,
+            undefined,
+            undefined,
+            undefined,
+            params.attachments,
+          );
+      return { aborted: abortSignal.aborted, result };
+    } finally {
+      finishLiveRuntime(runtimeId);
+    }
+  }
+
+  private getStopKindMeta(kind: string): { icon: string; label: string } {
+    switch (kind) {
+      case 'main_chat':
+        return { icon: '🧠', label: 'Main Chat' };
+      case 'team_manager':
+        return { icon: '👥', label: 'Manager' };
+      case 'team_subagent':
+        return { icon: '🤖', label: 'Team Subagent' };
+      case 'proposal_execution':
+        return { icon: '📋', label: 'Proposal' };
+      case 'subagent':
+        return { icon: '🤖', label: 'Subagent' };
+      case 'scheduled_task':
+      case 'cron':
+        return { icon: '🗓️', label: 'Scheduled Task' };
+      case 'heartbeat':
+        return { icon: '💓', label: 'Heartbeat' };
+      case 'brain_thought':
+        return { icon: '🧠', label: 'Brain Thought' };
+      case 'brain_dream':
+        return { icon: '🌙', label: 'Brain Dream' };
+      default:
+        return { icon: '🧵', label: 'Background Task' };
+    }
+  }
+
+  private buildStopTargetFromRuntime(runtime: LiveRuntimeSnapshot): StopTargetEntry {
+    const meta = this.getStopKindMeta(runtime.kind);
+    return {
+      sourceType: 'runtime',
+      id: runtime.id,
+      kind: runtime.kind,
+      label: runtime.label || meta.label,
+      icon: meta.icon,
+      startedAt: runtime.startedAt,
+      status: runtime.abortRequestedAt ? 'abort_requested' : 'running',
+      sessionId: runtime.sessionId,
+      taskId: runtime.taskId,
+      teamId: runtime.teamId,
+      agentId: runtime.agentId,
+      scheduleId: runtime.scheduleId,
+      detail: runtime.detail,
+    };
+  }
+
+  private buildStopTargetFromTask(task: any): StopTargetEntry {
+    const sessionId = String(task?.sessionId || '');
+    const isProposal = sessionId.startsWith('proposal_');
+    const isTeamSubagent = !!task?.teamSubagent;
+    const isScheduled = !!task?.scheduleId || String(task?.taskKind || '') === 'scheduled' || sessionId.startsWith('cron_');
+    const isSubagent = !isTeamSubagent && (sessionId.startsWith('subagent_') || !!task?.subagentProfile);
+    const kind = isTeamSubagent
+      ? 'team_subagent'
+      : isProposal
+        ? 'proposal_execution'
+        : isScheduled
+          ? 'scheduled_task'
+          : isSubagent
+            ? 'subagent'
+            : 'background_task';
+    const meta = this.getStopKindMeta(kind);
+    const currentStep = Array.isArray(task?.plan) ? task.plan[task.currentStepIndex] : null;
+    const label = isTeamSubagent
+      ? `${meta.label} - ${task?.teamSubagent?.agentName || task?.teamSubagent?.agentId || task?.title || task?.id}`
+      : `${meta.label} - ${String(task?.title || task?.id || 'Task').slice(0, 80)}`;
+    return {
+      sourceType: 'task',
+      id: String(task?.id || ''),
+      kind,
+      label,
+      icon: meta.icon,
+      startedAt: Number(task?.startedAt || Date.now()),
+      status: String(task?.status || 'running'),
+      sessionId: sessionId || undefined,
+      taskId: String(task?.id || ''),
+      teamId: task?.teamSubagent?.teamId,
+      agentId: task?.teamSubagent?.agentId || task?.subagentProfile,
+      scheduleId: task?.scheduleId,
+      detail: currentStep?.description || String(task?.prompt || '').slice(0, 160),
+    };
+  }
+
+  private listStopTargets(): StopTargetEntry[] {
+    const targets: StopTargetEntry[] = listLiveRuntimes().map((runtime) => this.buildStopTargetFromRuntime(runtime));
+    try {
+      const { BackgroundTaskRunner } = require('../tasks/background-task-runner.js');
+      const { loadTask } = require('../tasks/task-store.js');
+      for (const taskId of BackgroundTaskRunner.getRunningTasks()) {
+        const task = loadTask(taskId);
+        if (!task) continue;
+        targets.push(this.buildStopTargetFromTask(task));
+      }
+    } catch (err: any) {
+      console.warn('[Telegram] Could not enumerate running background tasks:', err?.message || err);
+    }
+    return targets.sort((a, b) => b.startedAt - a.startedAt);
+  }
+
+  private getStopTarget(sourceType: 'runtime' | 'task', id: string): StopTargetEntry | null {
+    if (sourceType === 'runtime') {
+      const runtime = getLiveRuntime(id);
+      return runtime ? this.buildStopTargetFromRuntime(runtime) : null;
+    }
+    try {
+      const { loadTask } = require('../tasks/task-store.js');
+      const task = loadTask(id);
+      if (!task) return null;
+      return this.buildStopTargetFromTask(task);
+    } catch {
+      return null;
+    }
+  }
+
+  private formatStopTargetDetail(target: StopTargetEntry): string {
+    const lines = [
+      `${target.icon} <b>${target.label}</b>`,
+      `Type: <code>${target.kind}</code>`,
+      `Status: <code>${target.status}</code>`,
+      `Started: ${new Date(target.startedAt).toLocaleString()}`,
+      target.sessionId ? `Session: <code>${target.sessionId}</code>` : '',
+      target.taskId ? `Task: <code>${target.taskId}</code>` : '',
+      target.teamId ? `Team: <code>${target.teamId}</code>` : '',
+      target.agentId ? `Agent: <code>${target.agentId}</code>` : '',
+      target.scheduleId ? `Schedule: <code>${target.scheduleId}</code>` : '',
+      target.detail ? `\n${formatTelegramAiTextFromMarkdown(String(target.detail).slice(0, 1200))}` : '',
+    ].filter(Boolean);
+    return lines.join('\n');
+  }
+
+  private async handleStopCallback(chatId: number, messageId: number, data: string): Promise<void> {
+    const edit = async (text: string, kb: any[][]) => {
+      try {
+        await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: messageId,
+          text: text.slice(0, 4000),
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: kb },
+        });
+      } catch (err: any) {
+        if (!err.message?.includes('message is not modified')) {
+          console.error('[STOP] edit error:', err.message);
+        }
+      }
+    };
+
+    if (data === 'stop:list') {
+      const targets = this.listStopTargets();
+      if (targets.length === 0) {
+        await edit('🛑 No live AI flows are running right now.', []);
+        return;
+      }
+      const rows = targets.slice(0, 30).map((target) => [{
+        text: `${target.icon} ${target.label.slice(0, 34)}`,
+        callback_data: `stop:view:${target.sourceType === 'runtime' ? 'r' : 't'}:${idKey(target.id)}`,
+      }]);
+      await edit(`🛑 <b>Live AI Flows (${targets.length})</b>\nTap one to inspect it, then use Abort if needed.`, rows);
+      return;
+    }
+
+    if (data.startsWith('stop:view:')) {
+      const parts = data.split(':');
+      const sourceType = parts[2] === 'r' ? 'runtime' : 'task';
+      const resolvedId = idResolve(parts[3] || '');
+      if (!resolvedId) {
+        await edit('❌ Session expired. Use /stop again.', [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
+        return;
+      }
+      const target = this.getStopTarget(sourceType, resolvedId);
+      if (!target) {
+        await edit('❌ That flow is no longer running.', [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
+        return;
+      }
+      await edit(this.formatStopTargetDetail(target), [
+        [{ text: '🛑 Abort', callback_data: `stop:abort:${parts[2]}:${idKey(target.id)}` }],
+        [{ text: '⬅️ Back', callback_data: 'stop:list' }],
+      ]);
+      return;
+    }
+
+    if (data.startsWith('stop:abort:')) {
+      const parts = data.split(':');
+      const sourceType = parts[2] === 'r' ? 'runtime' : 'task';
+      const resolvedId = idResolve(parts[3] || '');
+      if (!resolvedId) {
+        await edit('❌ Session expired. Use /stop again.', [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
+        return;
+      }
+      if (sourceType === 'runtime') {
+        const result = abortLiveRuntime(resolvedId);
+        await edit(
+          result.ok ? '🛑 Abort requested.' : `❌ ${result.error || 'Abort failed.'}`,
+          [[{ text: '⬅️ Back', callback_data: 'stop:list' }]],
+        );
+        return;
+      }
+
+      try {
+        const { BackgroundTaskRunner } = require('../tasks/background-task-runner.js');
+        const ok = BackgroundTaskRunner.cancelTask(resolvedId, 'Aborted via Telegram /stop.');
+        await edit(ok ? '🛑 Task abort requested.' : '❌ Task not found.', [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
+      } catch (err: any) {
+        await edit(`❌ ${String(err?.message || err)}`, [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
+      }
+    }
+  }
+
+  private formatResumeTime(ts: number): string {
+    const value = Number(ts || 0);
+    if (!Number.isFinite(value) || value <= 0) return 'Unknown';
+    return new Date(value).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
+  private clampResumeOffset(offset: number, total: number): number {
+    if (total <= 0) return 0;
+    const raw = Number.isFinite(Number(offset)) ? Math.max(0, Math.floor(Number(offset))) : 0;
+    if (raw >= total) return Math.max(0, Math.floor((total - 1) / RESUME_PAGE_SIZE) * RESUME_PAGE_SIZE);
+    return raw;
+  }
+
+  private shortenResumeText(value: string, maxLen: number): string {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return '(empty)';
+    return text.length > maxLen ? `${text.slice(0, Math.max(0, maxLen - 3)).trimEnd()}...` : text;
+  }
+
+  private getResumeSessionTitle(session: Session): string {
+    const firstUser = session.history?.find((msg) => msg.role === 'user' && String(msg.content || '').trim());
+    const fallback = session.history?.find((msg) => String(msg.content || '').trim());
+    const base = firstUser?.content || fallback?.content || session.id;
+    return this.shortenResumeText(base, 60);
+  }
+
+  private getResumeSessionFirstMessage(session: Session): string {
+    const firstMessage = session.history?.find((msg) => String(msg.content || '').trim());
+    return this.shortenResumeText(firstMessage?.content || '', 140);
+  }
+
+  private getResumeSessionChannel(session: Session): ResumeChannelKey | null {
+    const hint = getSessionChannelHint(session.id);
+    if (hint?.channel === 'telegram' || hint?.channel === 'discord' || hint?.channel === 'whatsapp' || hint?.channel === 'terminal') {
+      return hint.channel;
+    }
+    if (session.channel === 'telegram' || session.id.startsWith('telegram_')) return 'telegram';
+    if (session.channel === 'terminal' || session.id.startsWith('cli_') || session.id.startsWith('terminal_')) return 'terminal';
+    if (session.id.startsWith('discord_')) return 'discord';
+    if (session.id.startsWith('whatsapp_')) return 'whatsapp';
+
+    const messageChannel = session.history
+      ?.map((msg) => String(msg.channel || '').toLowerCase())
+      .find((ch) => ch === 'telegram' || ch === 'discord' || ch === 'whatsapp' || ch === 'terminal');
+    if (messageChannel === 'telegram' || messageChannel === 'discord' || messageChannel === 'whatsapp' || messageChannel === 'terminal') {
+      return messageChannel;
+    }
+    return null;
+  }
+
+  private isResumeSessionVisibleToUser(session: Session, userId: number): boolean {
+    const channelKey = this.getResumeSessionChannel(session);
+    if (channelKey !== 'telegram') return true;
+
+    const idMatch = String(session.id || '').match(/^telegram_(\d+)(?:_|$)/);
+    if (idMatch) {
+      return Number(idMatch[1]) === userId;
+    }
+
+    const hint = getSessionChannelHint(session.id);
+    if (hint?.channel === 'telegram' && Number.isFinite(Number(hint.userId))) {
+      return Number(hint.userId) === userId;
+    }
+
+    return true;
+  }
+
+  // Only surface user-facing chats here; background/system sessions create too much noise.
+  private isResumeCandidateSession(session: Session, userId: number): boolean {
+    const sessionId = String(session.id || '').trim();
+    if (!sessionId) return false;
+    if (!Array.isArray(session.history) || session.history.length === 0) return false;
+    if (!session.history.some((msg) => msg.role === 'user' && String(msg.content || '').trim())) return false;
+    if (!this.isResumeSessionVisibleToUser(session, userId)) return false;
+
+    const lowerId = sessionId.toLowerCase();
+    if (session.channel === 'system') return false;
+    if (lowerId === 'default' || lowerId === 'boot-startup' || lowerId === 'telegram-bootstrap') return false;
+    if (
+      lowerId.startsWith('task_')
+      || lowerId.startsWith('cron_')
+      || lowerId.startsWith('auto_')
+      || lowerId.startsWith('background_')
+      || lowerId.startsWith('webhook_')
+      || lowerId.startsWith('brain_')
+      || lowerId.startsWith('startup_')
+      || lowerId.startsWith('subagent_')
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private buildResumeProjectLookup(): Map<string, { projectId: string; projectName: string }> {
+    const projectMap = new Map<string, { projectId: string; projectName: string }>();
+    for (const project of listProjects()) {
+      for (const entry of project.sessions || []) {
+        const sessionId = String(entry?.id || '').trim();
+        if (!sessionId) continue;
+        projectMap.set(sessionId, { projectId: project.id, projectName: project.name });
+      }
+    }
+    return projectMap;
+  }
+
+  private buildResumeSessionSummary(
+    session: Session,
+    linkedSessionId: string | null,
+    projectInfo?: { projectId: string; projectName: string } | null,
+  ): ResumeSessionSummary {
+    return {
+      sessionId: session.id,
+      title: this.getResumeSessionTitle(session),
+      firstMessage: this.getResumeSessionFirstMessage(session),
+      messageCount: Array.isArray(session.history) ? session.history.length : 0,
+      lastActiveAt: Number(session.lastActiveAt || session.createdAt || Date.now()),
+      createdAt: Number(session.createdAt || session.lastActiveAt || Date.now()),
+      projectId: projectInfo?.projectId || null,
+      projectName: projectInfo?.projectName || null,
+      channelKey: this.getResumeSessionChannel(session),
+      isLinked: linkedSessionId === session.id,
+    };
+  }
+
+  private listResumeSessions(userId: number): ResumeSessionSummary[] {
+    const sessionsDir = path.join(getConfig().getConfigDir(), 'sessions');
+    if (!fs.existsSync(sessionsDir)) return [];
+
+    const linkedSessionId = getLinkedSession(userId);
+    const projectLookup = this.buildResumeProjectLookup();
+    const summaries: ResumeSessionSummary[] = [];
+    const files = fs.readdirSync(sessionsDir).filter((file) => file.endsWith('.json'));
+
+    for (const file of files) {
+      const sessionId = file.slice(0, -5);
+      try {
+        const session = getSession(sessionId);
+        if (!this.isResumeCandidateSession(session, userId)) continue;
+        summaries.push(this.buildResumeSessionSummary(session, linkedSessionId, projectLookup.get(sessionId) || null));
+      } catch {
+        // Skip unreadable sessions.
+      }
+    }
+
+    return summaries.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  }
+
+  private listResumeSessionsByChannel(channelKey: ResumeChannelKey, userId: number): ResumeSessionSummary[] {
+    return this.listResumeSessions(userId).filter((session) => session.channelKey === channelKey);
+  }
+
+  private listResumeProjectSessions(project: Project, userId: number): ResumeSessionSummary[] {
+    const linkedSessionId = getLinkedSession(userId);
+    const sessions: ResumeSessionSummary[] = [];
+
+    for (const entry of project.sessions || []) {
+      const sessionId = String(entry?.id || '').trim();
+      if (!sessionId || !sessionExists(sessionId)) continue;
+      try {
+        const session = getSession(sessionId);
+        if (!this.isResumeCandidateSession(session, userId)) continue;
+        sessions.push(this.buildResumeSessionSummary(session, linkedSessionId, { projectId: project.id, projectName: project.name }));
+      } catch {
+        // Ignore corrupt or missing project session records.
+      }
+    }
+
+    return sessions.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  }
+
+  private listResumeProjects(userId: number): ResumeProjectSummary[] {
+    return listProjects()
+      .map((project) => {
+        const sessions = this.listResumeProjectSessions(project, userId);
+        return {
+          id: project.id,
+          name: project.name,
+          sessionCount: sessions.length,
+          updatedAt: Math.max(project.updatedAt || 0, sessions[0]?.lastActiveAt || 0),
+        };
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  private buildResumeRootPayload(userId: number): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    const sessions = this.listResumeSessions(userId);
+    const projects = this.listResumeProjects(userId);
+    const counts = RESUME_CHANNEL_DEFS.map((def) => {
+      const count = sessions.filter((session) => session.channelKey === def.key).length;
+      return `${def.icon} ${def.label}: ${count}`;
+    });
+    const linkedSessionId = getLinkedSession(userId);
+    let linkedLine = '';
+    if (linkedSessionId && sessionExists(linkedSessionId)) {
+      try {
+        linkedLine = `Current Telegram link: <b>${this.tgEscape(this.getResumeSessionTitle(getSession(linkedSessionId)))}</b>`;
+      } catch {
+        linkedLine = `Current Telegram link: <code>${this.tgEscape(linkedSessionId)}</code>`;
+      }
+    }
+
+    const text = [
+      '🔁 <b>Resume a Conversation</b>',
+      '',
+      linkedLine,
+      `Chats: <code>${sessions.length}</code>`,
+      `Projects: <code>${projects.length}</code>`,
+      counts.join('  •  '),
+      '',
+      'Choose how you want to browse old conversations:',
+    ].filter(Boolean).join('\n');
+
+    return {
+      text,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '💬 Chats', callback_data: 'rsm:list:all:0' },
+            { text: '📡 Channels', callback_data: 'rsm:channels' },
+          ],
+          [
+            { text: '🗂 Projects', callback_data: 'rsm:projects:0' },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ],
+        ],
+      },
+    };
+  }
+
+  private buildResumeChannelsPayload(userId: number): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    const sessions = this.listResumeSessions(userId);
+    const counts = new Map<ResumeChannelKey, number>();
+    for (const def of RESUME_CHANNEL_DEFS) counts.set(def.key, 0);
+    for (const session of sessions) {
+      if (session.channelKey) counts.set(session.channelKey, (counts.get(session.channelKey) || 0) + 1);
+    }
+
+    const lines = RESUME_CHANNEL_DEFS.map((def) => {
+      const count = counts.get(def.key) || 0;
+      return `${def.icon} <b>${def.label}</b> — ${count > 0 ? `${count} chat${count === 1 ? '' : 's'}` : def.emptyLabel}`;
+    });
+
+    return {
+      text: [
+        '📡 <b>Resume by Channel</b>',
+        '',
+        'Pick one of the four channel buckets, then choose a chat to preview:',
+        '',
+        ...lines,
+      ].join('\n'),
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: `💬 Telegram (${counts.get('telegram') || 0})`, callback_data: 'rsm:list:ch:telegram:0' },
+            { text: `🎮 Discord (${counts.get('discord') || 0})`, callback_data: 'rsm:list:ch:discord:0' },
+          ],
+          [
+            { text: `🟢 WhatsApp (${counts.get('whatsapp') || 0})`, callback_data: 'rsm:list:ch:whatsapp:0' },
+            { text: `🖥️ CLI (${counts.get('terminal') || 0})`, callback_data: 'rsm:list:ch:terminal:0' },
+          ],
+          [
+            { text: '⬅️ Back', callback_data: 'rsm:menu' },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ],
+        ],
+      },
+    };
+  }
+
+  private buildResumeSessionListPayload(params: {
+    header: string;
+    emptyText: string;
+    sessions: ResumeSessionSummary[];
+    offset: number;
+    backCallback: string;
+    pageCallback: (offset: number) => string;
+    detailCallback: (sessionKey: string) => string;
+  }): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    const total = params.sessions.length;
+    const safeOffset = this.clampResumeOffset(params.offset, total);
+    const pageSessions = params.sessions.slice(safeOffset, safeOffset + RESUME_PAGE_SIZE);
+
+    if (pageSessions.length === 0) {
+      return {
+        text: `${params.header}\n\n${params.emptyText}`,
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '⬅️ Back', callback_data: params.backCallback },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ]],
+        },
+      };
+    }
+
+    const lines = [
+      params.header,
+      '',
+      `Showing <code>${safeOffset + 1}-${safeOffset + pageSessions.length}</code> of <code>${total}</code>.`,
+      '',
+    ];
+
+    pageSessions.forEach((session, index) => {
+      const channelLabel = RESUME_CHANNEL_DEFS.find((def) => def.key === session.channelKey)?.label || 'Web';
+      const tags = [
+        `${session.messageCount} msgs`,
+        this.formatResumeTime(session.lastActiveAt),
+        channelLabel,
+        session.projectName ? `Project: ${session.projectName}` : '',
+        session.isLinked ? 'Currently linked' : '',
+      ].filter(Boolean);
+
+      lines.push(
+        `<b>${safeOffset + index + 1}. ${this.tgEscape(session.title)}</b>${session.isLinked ? ' 🔗' : ''}`,
+        `First message: ${this.tgEscape(session.firstMessage)}`,
+        `<i>${this.tgEscape(tags.join(' • '))}</i>`,
+        '',
+      );
+    });
+
+    const keyboard: Array<Array<{ text: string; callback_data: string }>> = pageSessions.map((session, index) => [{
+      text: `${safeOffset + index + 1}. ${session.isLinked ? '🔗 ' : ''}${this.shortenResumeText(session.title, 28)}`,
+      callback_data: params.detailCallback(idKey(session.sessionId)),
+    }]);
+
+    const navRow: Array<{ text: string; callback_data: string }> = [];
+    if (safeOffset > 0) navRow.push({ text: '◀️ Newer', callback_data: params.pageCallback(Math.max(0, safeOffset - RESUME_PAGE_SIZE)) });
+    if (safeOffset + pageSessions.length < total) navRow.push({ text: 'Show More ▶️', callback_data: params.pageCallback(safeOffset + RESUME_PAGE_SIZE) });
+    if (navRow.length > 0) keyboard.push(navRow);
+    keyboard.push([
+      { text: '⬅️ Back', callback_data: params.backCallback },
+      { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+    ]);
+
+    return {
+      text: lines.join('\n').trim(),
+      reply_markup: { inline_keyboard: keyboard },
+    };
+  }
+
+  private buildResumeProjectsPayload(userId: number, offset: number): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    const projects = this.listResumeProjects(userId);
+    const total = projects.length;
+    const safeOffset = this.clampResumeOffset(offset, total);
+    const pageProjects = projects.slice(safeOffset, safeOffset + RESUME_PAGE_SIZE);
+
+    if (pageProjects.length === 0) {
+      return {
+        text: '🗂 <b>Projects</b>\n\nNo projects found.',
+        reply_markup: { inline_keyboard: [[
+          { text: '⬅️ Back', callback_data: 'rsm:menu' },
+          { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+        ]] },
+      };
+    }
+
+    const lines = [
+      '🗂 <b>Projects</b>',
+      '',
+      `Showing <code>${safeOffset + 1}-${safeOffset + pageProjects.length}</code> of <code>${total}</code>.`,
+      '',
+    ];
+
+    pageProjects.forEach((project, index) => {
+      lines.push(
+        `<b>${safeOffset + index + 1}. ${this.tgEscape(this.shortenResumeText(project.name, 52))}</b>`,
+        `<i>${project.sessionCount} project chat${project.sessionCount === 1 ? '' : 's'} • ${this.tgEscape(this.formatResumeTime(project.updatedAt))}</i>`,
+        '',
+      );
+    });
+
+    const keyboard: Array<Array<{ text: string; callback_data: string }>> = pageProjects.map((project, index) => [{
+      text: `${safeOffset + index + 1}. ${this.shortenResumeText(project.name, 28)}`,
+      callback_data: `rsm:list:pr:${idKey(project.id)}:0`,
+    }]);
+
+    const navRow: Array<{ text: string; callback_data: string }> = [];
+    if (safeOffset > 0) navRow.push({ text: '◀️ Newer', callback_data: `rsm:projects:${Math.max(0, safeOffset - RESUME_PAGE_SIZE)}` });
+    if (safeOffset + pageProjects.length < total) navRow.push({ text: 'Show More ▶️', callback_data: `rsm:projects:${safeOffset + RESUME_PAGE_SIZE}` });
+    if (navRow.length > 0) keyboard.push(navRow);
+    keyboard.push([
+      { text: '⬅️ Back', callback_data: 'rsm:menu' },
+      { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+    ]);
+
+    return {
+      text: lines.join('\n').trim(),
+      reply_markup: { inline_keyboard: keyboard },
+    };
+  }
+
+  private buildResumeProjectSessionsPayload(projectId: string, userId: number, offset: number): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    const project = getProject(projectId);
+    if (!project) {
+      return {
+        text: '❌ Project not found.',
+        reply_markup: { inline_keyboard: [[
+          { text: '⬅️ Projects', callback_data: 'rsm:projects:0' },
+          { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+        ]] },
+      };
+    }
+
+    return this.buildResumeSessionListPayload({
+      header: `🗂 <b>${this.tgEscape(this.shortenResumeText(project.name, 72))}</b>\nProject chats`,
+      emptyText: 'No chats in this project yet.',
+      sessions: this.listResumeProjectSessions(project, userId),
+      offset,
+      backCallback: 'rsm:projects:0',
+      pageCallback: (nextOffset) => `rsm:list:pr:${idKey(project.id)}:${nextOffset}`,
+      detailCallback: (sessionKey) => `rsm:view:${sessionKey}:pr:${idKey(project.id)}:${offset}`,
+    });
+  }
+
+  private buildResumeRecentMessages(session: Session): string {
+    const recent = (session.history || [])
+      .filter((msg) => msg.role === 'user' || msg.role === 'assistant')
+      .slice(-6);
+    if (recent.length === 0) return '<i>No recent messages stored for this chat.</i>';
+
+    return recent.map((msg) => {
+      const speaker = msg.role === 'user' ? 'You' : 'Prometheus';
+      return `<b>${speaker}:</b> ${this.tgEscape(this.shortenResumeText(String(msg.content || ''), 240))}`;
+    }).join('\n\n');
+  }
+
+  private buildResumeSessionDetailPayload(
+    sessionId: string,
+    userId: number,
+    backCallback: string,
+  ): { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } } {
+    if (!sessionExists(sessionId)) {
+      return {
+        text: '❌ Chat session not found.',
+        reply_markup: { inline_keyboard: [[
+          { text: '⬅️ Back', callback_data: backCallback },
+          { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+        ]] },
+      };
+    }
+
+    const projectLookup = this.buildResumeProjectLookup();
+    const session = getSession(sessionId);
+    if (!this.isResumeCandidateSession(session, userId)) {
+      return {
+        text: '❌ This chat is not available to resume from Telegram.',
+        reply_markup: { inline_keyboard: [[
+          { text: '⬅️ Back', callback_data: backCallback },
+          { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+        ]] },
+      };
+    }
+
+    const summary = this.buildResumeSessionSummary(session, getLinkedSession(userId), projectLookup.get(sessionId) || null);
+    const channelLabel = RESUME_CHANNEL_DEFS.find((def) => def.key === summary.channelKey)?.label || 'Web';
+
+    return {
+      text: [
+        '🔁 <b>Resume Chat</b>',
+        '',
+        `<b>${this.tgEscape(summary.title)}</b>${summary.isLinked ? ' 🔗' : ''}`,
+        `<code>${this.tgEscape(summary.sessionId)}</code>`,
+        '',
+        `<b>First message:</b> ${this.tgEscape(summary.firstMessage)}`,
+        `<b>Messages:</b> <code>${summary.messageCount}</code>`,
+        `<b>Last active:</b> ${this.tgEscape(this.formatResumeTime(summary.lastActiveAt))}`,
+        `<b>Channel:</b> ${this.tgEscape(channelLabel)}`,
+        summary.projectName ? `<b>Project:</b> ${this.tgEscape(summary.projectName)}` : '',
+        '',
+        '<b>Recent messages</b>',
+        this.buildResumeRecentMessages(session),
+      ].filter(Boolean).join('\n'),
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '▶️ Resume', callback_data: `rsm:link:${idKey(summary.sessionId)}` }],
+          [
+            { text: '⬅️ Back', callback_data: backCallback },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ],
+        ],
+      },
+    };
   }
 
   /** Inject team management deps after boot (called from server-v2) */
@@ -676,24 +1913,27 @@ export class TelegramChannel {
     // Register commands in Telegram's command menu
     try {
       await this.apiCall('setMyCommands', {
-        commands: [
-          { command: 'status',       description: 'Check connection and model status' },
-          { command: 'new',          description: 'Start a new chat session' },
-          { command: 'clear',        description: 'Reset chat history' },
-          { command: 'browse',       description: 'Browse workspace files' },
-          { command: 'teams',        description: 'View and manage agent teams' },
+	        commands: [
+	          { command: 'status',       description: 'Check connection and model status' },
+	          { command: 'new',          description: 'Start a new chat session' },
+		          { command: 'resume',       description: 'Resume an older conversation' },
+		          { command: 'clear',        description: 'Reset chat history' },
+		          { command: 'stop_now',     description: 'Abort the current main chat turn' },
+		          { command: 'stop',         description: 'Inspect and abort live AI flows' },
+		          { command: 'browse',       description: 'Browse workspace files' },
+	          { command: 'teams',        description: 'View and manage agent teams' },
           { command: 'agents',       description: 'Browse and dispatch agents' },
-          { command: 'tasks',        description: 'List background tasks' },
-          { command: 'schedule',     description: 'Manage scheduled jobs' },
-          { command: 'models',       description: 'Switch provider / model' },
-          { command: 'screenshot',   description: 'Take a browser or desktop screenshot' },
-          { command: 'download',     description: 'Download a workspace file' },
+	          { command: 'tasks',        description: 'List background tasks' },
+	          { command: 'schedule',     description: 'Manage scheduled jobs' },
+	          { command: 'models',       description: 'Switch provider / model' },
+	          { command: 'reasoning',    description: 'Adjust current provider reasoning' },
+	          { command: 'screenshot',   description: 'Take a browser or desktop screenshot' },
+	          { command: 'download',     description: 'Download a workspace file' },
           { command: 'proposals',    description: 'List pending code proposals' },
           { command: 'repairs',      description: 'List self-repair items' },
           { command: 'integrations', description: 'Show configured integrations' },
           { command: 'mcp_status',   description: 'Show MCP server status' },
           { command: 'setup',        description: 'Connect a service (github, slack, …)' },
-          { command: 'perf',         description: 'Performance metrics' },
           { command: 'restart',      description: 'Restart the gateway' },
           { command: 'update',       description: 'Check and apply updates' },
           { command: 'commands',     description: 'Full command catalog' },
@@ -793,8 +2033,10 @@ export class TelegramChannel {
 
   /** Send a single message */
   async sendMessage(chatId: number, text: string): Promise<void> {
+    const outbound = stripInternalToolNotes(text) || String(text || '').trim();
+    if (!outbound) return;
     // Telegram messages max 4096 chars — split if needed
-    const chunks = this.splitMessage(text, 4000);
+    const chunks = this.splitMessage(outbound, 4000);
     for (const chunk of chunks) {
       await this.apiCall('sendMessage', {
         chat_id: chatId,
@@ -814,6 +2056,110 @@ export class TelegramChannel {
         return this.apiCall('sendMessage', { chat_id: chatId, text: plain }).catch((err: any) => {
           console.error(`[Telegram] sendMessage failed even as plain text: ${err?.message}`);
         });
+      });
+    }
+  }
+
+  private tgEscape(value: any): string {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  private getCommandApprovalOrigin(record: {
+    sessionId?: string;
+    taskId?: string;
+    agentId?: string;
+    originLabel?: string;
+    originType?: string;
+    toolArgs?: Record<string, any>;
+  }): string {
+    const explicit = String(record.originLabel || '').trim();
+    if (explicit) return explicit;
+
+    const sid = String(record.sessionId || '').trim();
+    const taskId = String(record.taskId || '').trim();
+    let task: any = null;
+    if (taskId || sid.startsWith('task_')) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { loadTask } = require('../tasks/task-store');
+        task = loadTask(taskId || sid.replace(/^task_/, ''));
+      } catch {}
+    }
+
+    if (sid.startsWith('proposal_') || sid.startsWith('code_exec') || String(task?.sessionId || '').startsWith('proposal_')) {
+      return 'Proposal';
+    }
+    if (sid.startsWith('cron_job_') || sid.startsWith('schedule_') || task?.taskKind === 'scheduled' || task?.scheduleId) {
+      const title = String(task?.title || task?.scheduleId || '').trim();
+      return title ? `Scheduled Task (${title})` : 'Scheduled Task';
+    }
+    const teamAgentName = String(task?.teamSubagent?.agentName || task?.teamSubagent?.agentId || '').trim();
+    const subagentName = teamAgentName || String(task?.subagentProfile || record.agentId || record.toolArgs?.agent_id || '').trim();
+    if (sid.startsWith('team_dispatch_') || sid.startsWith('subagent_') || task?.teamSubagent || task?.subagentProfile || task?.parentTaskId) {
+      return subagentName ? `Subagent (${subagentName})` : 'Subagent';
+    }
+    if (sid.startsWith('task_') || sid.startsWith('bg_') || sid.startsWith('background_') || task?.taskKind === 'run_once') {
+      const title = String(task?.title || '').trim();
+      return title ? `Background Task (${title})` : 'Background Task';
+    }
+    if (sid === 'default' || sid.startsWith('telegram_') || sid.startsWith('chat_') || sid) return 'Main Chat';
+    return 'Unknown';
+  }
+
+  async sendCommandApproval(record: {
+	    id: string;
+	    action?: string;
+	    toolName?: string;
+	    toolArgs?: Record<string, any>;
+	    reason?: string;
+	    riskScore?: number;
+	    sessionId?: string;
+	    taskId?: string;
+	    agentId?: string;
+	    originLabel?: string;
+	    originType?: string;
+	    affectedSystems?: string[];
+	    status?: string;
+	  }): Promise<void> {
+	    if (!this.config.enabled || !this.config.botToken) return;
+	    const command = String(record.toolArgs?.command || '');
+	    const systems = Array.isArray(record.affectedSystems) && record.affectedSystems.length
+	      ? record.affectedSystems.join(', ')
+	      : 'shell';
+    const body = [
+      `⏳ <b>Command Approval Required</b>`,
+      ``,
+	      `<b>ID:</b> <code>${this.tgEscape(record.id)}</code>`,
+	      `<b>Status:</b> ${this.tgEscape(record.status || 'pending')}`,
+	      `<b>Origin:</b> ${this.tgEscape(this.getCommandApprovalOrigin(record))}`,
+	      `<b>Risk:</b> ${Number(record.riskScore || 0)}/10`,
+	      `<b>Session:</b> <code>${this.tgEscape(record.sessionId || 'unknown')}</code>`,
+	      `<b>Systems:</b> ${this.tgEscape(systems)}`,
+	      ``,
+	      `<b>Reason:</b> ${this.tgEscape(record.reason || record.action || 'User approval required.')}`,
+	      `<b>Command:</b>`,
+	      `<code>${this.tgEscape(command.slice(0, 700))}</code>`,
+	    ].join('\n');
+    const replyMarkup = {
+      inline_keyboard: [[
+        { text: '✅ Approve', callback_data: `ca:ap:${record.id}` },
+        { text: '❌ Reject', callback_data: `ca:rj:${record.id}` },
+      ], [
+        { text: '📋 Pending', callback_data: 'ca:list:pending' },
+      ]],
+    };
+    for (const userId of this.config.allowedUserIds) {
+      await this.apiCall('sendMessage', {
+        chat_id: userId,
+        text: body.slice(0, 4000),
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup,
+      }).catch((err: any) => {
+        console.error(`[Telegram] Failed to send command approval ${record.id} to ${userId}: ${err?.message}`);
       });
     }
   }
@@ -911,16 +2257,28 @@ export class TelegramChannel {
 
   private async pollLoop(): Promise<void> {
     console.log('[Telegram] Starting long poll loop...');
+    console.log(`[Telegram] Subscribed update types: ${TELEGRAM_ALLOWED_UPDATES.join(', ')}`);
 
     while (this.polling) {
       try {
         this.abortController = new AbortController();
-        const resp = await fetch(`${this.apiBase}/getUpdates?offset=${this.lastUpdateId + 1}&timeout=30`, {
+        const resp = await fetch(`${this.apiBase}/getUpdates`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            offset: this.lastUpdateId + 1,
+            timeout: 30,
+            allowed_updates: TELEGRAM_ALLOWED_UPDATES,
+          }),
           signal: this.abortController.signal,
         });
         const data: any = await resp.json();
 
-        if (!data.ok || !Array.isArray(data.result)) continue;
+        if (!data.ok || !Array.isArray(data.result)) {
+          console.error('[Telegram] getUpdates failed:', data?.description || 'unknown error');
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
 
         for (const update of data.result as TelegramUpdate[]) {
           this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
@@ -928,7 +2286,15 @@ export class TelegramChannel {
             this.handleCallbackQuery(update.callback_query).catch(err =>
               console.error('[Telegram] Callback query error:', err.message)
             );
-          } else if (update.message?.text || update.message?.caption || update.message?.photo || update.message?.document) {
+          } else if (
+            update.message?.text
+            || update.message?.caption
+            || update.message?.photo
+            || update.message?.document
+            || update.message?.video
+            || update.message?.animation
+            || update.message?.video_note
+          ) {
             this.handleIncomingMessage(update.message).catch(err =>
               console.error('[Telegram] Message handling error:', err.message)
             );
@@ -1126,6 +2492,8 @@ export class TelegramChannel {
     // Allowlist check
     if (this.config.allowedUserIds.length > 0 && !this.config.allowedUserIds.includes(userId)) return;
 
+    console.log(`[Telegram] Callback from ${cq.from.username || cq.from.first_name || userId}: ${String(data || '').slice(0, 120)}`);
+
     // ── pr: proposal approve/reject/list buttons ─────────────────────────────────
     if (data.startsWith('pr:')) {
       const parts = data.split(':');
@@ -1288,10 +2656,148 @@ export class TelegramChannel {
         }
       }
       return;
-    }
+	    }
 
-    // ── rp: repair approve/reject buttons ──────────────────────────────────
-    if (data.startsWith('rp:')) {
+	    // ── ca: command approval approve/reject/list buttons ───────────────────────
+		    if (data.startsWith('ca:')) {
+		      const parts = data.split(':');
+		      const action = parts[1];
+		      const approvalId = parts[2];
+
+		      if (action === 'list') {
+		        const { getApprovalQueue } = await import('../verification-flow');
+		        const queue = getApprovalQueue();
+		        const showDone = approvalId === 'done';
+		        const approvals = queue.listAll().filter((item: any) => showDone ? item.status !== 'pending' : item.status === 'pending');
+		        if (approvals.length === 0) {
+		          await this.apiCall('editMessageText', {
+		            chat_id: chatId,
+		            message_id: messageId,
+		            text: `📋 No command approvals ${showDone ? 'completed' : 'pending'}.`,
+		            reply_markup: { inline_keyboard: [[{ text: showDone ? '⏳ View pending' : '✅ View done', callback_data: `ca:list:${showDone ? 'pending' : 'done'}` }]] },
+		          }).catch(() => {});
+		          return;
+		        }
+		        const statusEmoji: Record<string, string> = { pending: '⏳', approved: '✅', rejected: '❌' };
+		        const lines = approvals.slice(0, 15).map((a: any) =>
+		          `${statusEmoji[a.status] || '❓'} <code>#${a.id}</code> <b>${this.tgEscape(String(a.toolArgs?.command || '').slice(0, 42))}</b>\n   Origin: ${this.tgEscape(this.getCommandApprovalOrigin(a))} · Risk: ${Number(a.riskScore || 0)}/10`
+		        );
+		        const kb = approvals.slice(0, 15).map((a: any) => [{ text: String(a.toolArgs?.command || '').slice(0, 28) || a.id, callback_data: `ca:detail:${a.id}` }]);
+		        kb.push([{ text: showDone ? '⏳ View pending' : '✅ View done', callback_data: `ca:list:${showDone ? 'pending' : 'done'}` }]);
+		        await this.apiCall('editMessageText', {
+		          chat_id: chatId,
+		          message_id: messageId,
+		          text: `📋 <b>Command Approvals (${showDone ? 'DONE' : 'PENDING'})</b>\n\n${lines.join('\n\n')}`.slice(0, 4000),
+		          parse_mode: 'HTML',
+		          reply_markup: { inline_keyboard: kb },
+		        }).catch(() => {});
+		        return;
+		      }
+
+		      if (action === 'detail') {
+		        const { getApprovalQueue } = await import('../verification-flow');
+		        const approval = getApprovalQueue().get(String(approvalId || '').trim());
+		        if (!approval) {
+	          await this.apiCall('editMessageText', {
+	            chat_id: chatId,
+	            message_id: messageId,
+	            text: `❌ Command approval <code>#${this.tgEscape(approvalId)}</code> not found.`,
+	            reply_markup: { inline_keyboard: [[{ text: '📋 Back', callback_data: 'ca:list:pending' }]] },
+	          }).catch(() => {});
+	          return;
+	        }
+		        const statusEmoji: Record<string, string> = { pending: '⏳', approved: '✅', rejected: '❌' };
+		        const detail = [
+		          `${statusEmoji[approval.status] || '❓'} <b>Command Approval</b>`,
+		          ``,
+		          `<b>ID:</b> <code>${this.tgEscape(approval.id)}</code>`,
+		          `<b>Status:</b> ${this.tgEscape(approval.status)}`,
+		          `<b>Origin:</b> ${this.tgEscape(this.getCommandApprovalOrigin(approval))}`,
+		          `<b>Risk:</b> ${Number(approval.riskScore || 0)}/10`,
+		          `<b>Session:</b> <code>${this.tgEscape(approval.sessionId || 'unknown')}</code>`,
+		          `<b>Reason:</b> ${this.tgEscape(approval.reason || approval.action || '')}`,
+		          ``,
+		          `<b>Command:</b>`,
+		          `<code>${this.tgEscape(String(approval.toolArgs?.command || '').slice(0, 1200))}</code>`,
+		        ].filter(Boolean).join('\n');
+	        const kb: any[][] = [];
+	        if (approval.status === 'pending') {
+	          kb.push([{ text: '✅ Approve', callback_data: `ca:ap:${approval.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${approval.id}` }]);
+	        }
+	        kb.push([{ text: '📋 Back to list', callback_data: 'ca:list:pending' }]);
+	        await this.apiCall('editMessageText', {
+	          chat_id: chatId,
+	          message_id: messageId,
+	          text: detail.slice(0, 4000),
+	          parse_mode: 'HTML',
+	          reply_markup: { inline_keyboard: kb },
+	        }).catch(() => {});
+	        return;
+	      }
+
+	      if (!approvalId) {
+	        await this.apiCall('editMessageText', {
+	          chat_id: chatId, message_id: messageId,
+	          text: '❌ Invalid command approval button — no approval ID.',
+	          reply_markup: { inline_keyboard: [] },
+	        }).catch(() => {});
+	        return;
+	      }
+
+		      if (action === 'ap') {
+		        const { getApprovalQueue } = await import('../verification-flow');
+		        const queue = getApprovalQueue();
+		        const existing = queue.get(approvalId);
+		        if (!existing) {
+		          await this.sendMessage(chatId, `❌ Command approval <code>#${approvalId}</code> not found.`);
+		          return;
+	        }
+	        await this.apiCall('editMessageReplyMarkup', {
+	          chat_id: chatId,
+	          message_id: messageId,
+	          reply_markup: { inline_keyboard: [[{ text: '⏳ Approving...', callback_data: 'noop' }]] },
+		        }).catch(() => {});
+		        try {
+		          const approved = queue.resolve(approvalId, true, 'telegram');
+		          if (!approved) throw new Error('Approval is no longer pending.');
+		          await this.apiCall('editMessageReplyMarkup', {
+		            chat_id: chatId,
+		            message_id: messageId,
+		            reply_markup: { inline_keyboard: [[{ text: '✅ Approved', callback_data: 'noop' }, { text: '📋 List', callback_data: 'ca:list:pending' }]] },
+		          }).catch(() => {});
+		          await this.sendMessage(chatId, `✅ Command approval <code>#${approvalId}</code> approved. The paused run will continue now.`);
+		        } catch (err: any) {
+		          await this.sendMessage(chatId, `❌ Approval error: ${err.message}`);
+		        }
+	        return;
+	      }
+
+		      if (action === 'rj') {
+		        const { getApprovalQueue } = await import('../verification-flow');
+		        const queue = getApprovalQueue();
+		        const existing = queue.get(approvalId);
+		        if (!existing) {
+		          await this.sendMessage(chatId, `❌ Command approval <code>#${approvalId}</code> not found.`);
+		          return;
+	        }
+	        await this.apiCall('editMessageReplyMarkup', {
+	          chat_id: chatId,
+	          message_id: messageId,
+	          reply_markup: { inline_keyboard: [[{ text: '❌ Rejected', callback_data: 'noop' }, { text: '📋 List', callback_data: 'ca:list:pending' }]] },
+		        }).catch(() => {});
+		        try {
+		          const denied = queue.resolve(approvalId, false, 'telegram');
+		          if (!denied) throw new Error('Approval is no longer pending.');
+		          await this.sendMessage(chatId, `🗑️ Command approval <code>#${approvalId}</code> rejected.`);
+		        } catch (err: any) {
+		          await this.sendMessage(chatId, `❌ Rejection error: ${err.message}`);
+	        }
+	        return;
+	      }
+	    }
+
+	    // ── rp: repair approve/reject buttons ──────────────────────────────────
+	    if (data.startsWith('rp:')) {
       const parts = data.split(':');
       const action = parts[1]; // 'ap' or 'rj'
       const repairId = parts[2];
@@ -1339,11 +2845,15 @@ export class TelegramChannel {
       return;
     }
 
-    // Route team callbacks to the team handler
-    if (data.startsWith('tm:')) {
-      await this.handleTeamCallback(chatId, messageId, data, userId);
-      return;
-    }
+	    // Route team callbacks to the team handler
+	    if (data.startsWith('rsm:')) {
+	      await this.handleResumeCallback(chatId, messageId, data, userId);
+	      return;
+	    }
+	    if (data.startsWith('tm:')) {
+	      await this.handleTeamCallback(chatId, messageId, data, userId);
+	      return;
+	    }
     if (data.startsWith('ag:')) {
       await this.handleAgentsCallback(chatId, messageId, data, userId);
       return;
@@ -1357,12 +2867,17 @@ export class TelegramChannel {
       return;
     }
 
-    if (data.startsWith('md:')) {
-      await this.handleModelCallback(chatId, messageId, data, userId);
-      return;
-    }
+	    if (data.startsWith('md:')) {
+	      await this.handleModelCallback(chatId, messageId, data, userId);
+	      return;
+	    }
 
-    if (data.startsWith('ss:')) {
+	    if (data.startsWith('rg:')) {
+	      await this.handleReasoningCallback(chatId, messageId, data, userId);
+	      return;
+	    }
+
+	    if (data.startsWith('ss:')) {
       const action = data.slice('ss:'.length).trim().toLowerCase();
       const monitorMatch = action.match(/^desktop:m:(\d+)$/);
       if (action === 'menu') {
@@ -1601,6 +3116,11 @@ export class TelegramChannel {
       return;
     }
 
+    if (data.startsWith('stop:')) {
+      await this.handleStopCallback(chatId, messageId, data);
+      return;
+    }
+
     // Only handle file browser callbacks
     if (!data.startsWith('fb:')) return;
 
@@ -1651,7 +3171,7 @@ export class TelegramChannel {
       // 2. Call the screenshot route
       try {
         const cfg = (await import('../../config/config.js')).getConfig().getConfig() as any;
-        const token = String(cfg?.gateway?.auth_token || '').trim();
+        const token = resolveGatewayAuthToken();
         const port = Number(cfg?.gateway?.port || 18789);
         const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
         const screenshotUrl = `http://127.0.0.1:${port}/api/preview/screenshot?path=${encodeURIComponent(relPath)}${tokenParam}`;
@@ -1742,6 +3262,208 @@ export class TelegramChannel {
       if (!err.message?.includes('message is not modified')) {
         console.error('[Telegram] editMessageText error:', err.message);
       }
+    }
+  }
+
+  private async handleResumeCallback(chatId: number, messageId: number, data: string, userId: number): Promise<void> {
+    const edit = async (payload: { text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } }) => {
+      try {
+        await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: messageId,
+          text: payload.text.slice(0, 4000),
+          parse_mode: 'HTML',
+          reply_markup: payload.reply_markup,
+        });
+      } catch (err: any) {
+        if (err?.message?.includes('message is not modified')) return;
+        await this.apiCall('sendMessage', {
+          chat_id: chatId,
+          text: payload.text.slice(0, 4000),
+          parse_mode: 'HTML',
+          reply_markup: payload.reply_markup,
+        }).catch(() => {});
+      }
+    };
+
+    if (data === 'rsm:menu') {
+      await edit(this.buildResumeRootPayload(userId));
+      return;
+    }
+
+    if (data === 'rsm:cancel') {
+      await edit({
+        text: '❌ Resume picker closed.',
+        reply_markup: { inline_keyboard: [] },
+      });
+      return;
+    }
+
+    if (data === 'rsm:channels') {
+      await edit(this.buildResumeChannelsPayload(userId));
+      return;
+    }
+
+    if (data.startsWith('rsm:projects:')) {
+      const offset = Number.parseInt(data.slice('rsm:projects:'.length), 10) || 0;
+      await edit(this.buildResumeProjectsPayload(userId, offset));
+      return;
+    }
+
+    if (data.startsWith('rsm:list:all:')) {
+      const offset = Number.parseInt(data.slice('rsm:list:all:'.length), 10) || 0;
+      await edit(this.buildResumeSessionListPayload({
+        header: '💬 <b>Chats</b>',
+        emptyText: 'No resumable chats found.',
+        sessions: this.listResumeSessions(userId),
+        offset,
+        backCallback: 'rsm:menu',
+        pageCallback: (nextOffset) => `rsm:list:all:${nextOffset}`,
+        detailCallback: (sessionKey) => `rsm:view:${sessionKey}:all:${offset}`,
+      }));
+      return;
+    }
+
+    if (data.startsWith('rsm:list:ch:')) {
+      const parts = data.split(':');
+      const channelKey = parts[3] as ResumeChannelKey;
+      const offset = Number.parseInt(parts[4] || '0', 10) || 0;
+      if (!RESUME_CHANNEL_DEFS.some((def) => def.key === channelKey)) {
+        await edit({
+          text: '❌ Unknown channel.',
+          reply_markup: { inline_keyboard: [[
+            { text: '⬅️ Back', callback_data: 'rsm:channels' },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ]] },
+        });
+        return;
+      }
+      const channelDef = RESUME_CHANNEL_DEFS.find((def) => def.key === channelKey)!;
+      await edit(this.buildResumeSessionListPayload({
+        header: `${channelDef.icon} <b>${this.tgEscape(channelDef.label)}</b>\nChannel chats`,
+        emptyText: `No ${channelDef.label} chats found.`,
+        sessions: this.listResumeSessionsByChannel(channelKey, userId),
+        offset,
+        backCallback: 'rsm:channels',
+        pageCallback: (nextOffset) => `rsm:list:ch:${channelKey}:${nextOffset}`,
+        detailCallback: (sessionKey) => `rsm:view:${sessionKey}:ch:${channelKey}:${offset}`,
+      }));
+      return;
+    }
+
+    if (data.startsWith('rsm:list:pr:')) {
+      const parts = data.split(':');
+      const projectId = idResolve(parts[3] || '');
+      const offset = Number.parseInt(parts[4] || '0', 10) || 0;
+      if (!projectId) {
+        await edit({
+          text: '❌ Project list expired. Use /resume again.',
+          reply_markup: { inline_keyboard: [[
+            { text: '⬅️ Projects', callback_data: 'rsm:projects:0' },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ]] },
+        });
+        return;
+      }
+      await edit(this.buildResumeProjectSessionsPayload(projectId, userId, offset));
+      return;
+    }
+
+    if (data.startsWith('rsm:view:')) {
+      const parts = data.split(':');
+      const sessionId = idResolve(parts[2] || '');
+      const scope = parts[3] as ResumeScope;
+      if (!sessionId) {
+        await edit({
+          text: '❌ Chat list expired. Use /resume again.',
+          reply_markup: { inline_keyboard: [[
+            { text: '⬅️ Back', callback_data: 'rsm:menu' },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ]] },
+        });
+        return;
+      }
+
+      let backCallback = 'rsm:menu';
+      if (scope === 'all') {
+        const offset = Number.parseInt(parts[4] || '0', 10) || 0;
+        backCallback = `rsm:list:all:${offset}`;
+      } else if (scope === 'channel') {
+        const channelKey = parts[4] as ResumeChannelKey;
+        const offset = Number.parseInt(parts[5] || '0', 10) || 0;
+        backCallback = `rsm:list:ch:${channelKey}:${offset}`;
+      } else if (scope === 'project') {
+        const projectId = idResolve(parts[4] || '');
+        const offset = Number.parseInt(parts[5] || '0', 10) || 0;
+        backCallback = projectId ? `rsm:list:pr:${idKey(projectId)}:${offset}` : 'rsm:projects:0';
+      } else if (scope === 'ch') {
+        const channelKey = parts[4] as ResumeChannelKey;
+        const offset = Number.parseInt(parts[5] || '0', 10) || 0;
+        backCallback = `rsm:list:ch:${channelKey}:${offset}`;
+      } else if (scope === 'pr') {
+        const projectId = idResolve(parts[4] || '');
+        const offset = Number.parseInt(parts[5] || '0', 10) || 0;
+        backCallback = projectId ? `rsm:list:pr:${idKey(projectId)}:${offset}` : 'rsm:projects:0';
+      }
+
+      await edit(this.buildResumeSessionDetailPayload(sessionId, userId, backCallback));
+      return;
+    }
+
+    if (data.startsWith('rsm:link:')) {
+      const sessionId = idResolve(data.slice('rsm:link:'.length));
+      if (!sessionId || !sessionExists(sessionId)) {
+        await edit({
+          text: '❌ Chat session not found. Use /resume again.',
+          reply_markup: { inline_keyboard: [[
+            { text: '🔁 Resume Menu', callback_data: 'rsm:menu' },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ]] },
+        });
+        return;
+      }
+
+      const session = getSession(sessionId);
+      if (!this.isResumeCandidateSession(session, userId)) {
+        await edit({
+          text: '❌ This chat is not available to resume from Telegram.',
+          reply_markup: { inline_keyboard: [[
+            { text: '🔁 Resume Menu', callback_data: 'rsm:menu' },
+            { text: '❌ Cancel', callback_data: 'rsm:cancel' },
+          ]] },
+        });
+        return;
+      }
+
+      linkTelegramSession(userId, sessionId);
+      setSessionChannelHint(sessionId, { channel: 'telegram', chatId, userId, timestamp: Date.now() });
+
+      const projectInfo = this.buildResumeProjectLookup().get(sessionId);
+      const summary = this.buildResumeSessionSummary(session, sessionId, projectInfo || null);
+      const contextBits = [
+        `${summary.messageCount} msgs`,
+        this.formatResumeTime(summary.lastActiveAt),
+        summary.projectName ? `Project: ${summary.projectName}` : '',
+      ].filter(Boolean);
+
+      await edit({
+        text: [
+          '✅ <b>Telegram is now linked to this chat.</b>',
+          '',
+          `<b>${this.tgEscape(summary.title)}</b>`,
+          this.tgEscape(summary.firstMessage),
+          '',
+          `<i>${this.tgEscape(contextBits.join(' • '))}</i>`,
+          '',
+          'Your next Telegram message will continue this exact conversation with its full session context.',
+        ].join('\n'),
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔁 Resume Another', callback_data: 'rsm:menu' }],
+            [{ text: '❌ Close', callback_data: 'rsm:cancel' }],
+          ],
+        },
+      });
     }
   }
 
@@ -2516,7 +4238,7 @@ export class TelegramChannel {
     if (data === 'bg:list') {
       const { taskStore } = loadModules();
       const statuses = ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'waiting_subagent'];
-      const tasks = taskStore.listTasks({ status: statuses }).slice(0, 25);
+      const tasks = taskStore.listTaskSummaries({ status: statuses }).slice(0, 25);
       if (tasks.length === 0) { await edit('🧵 No queued/paused/stalled tasks.', []); return; }
       const rows = tasks.map((t: any) => [{
         text: `${t.status === 'running' ? '🔄' : t.status === 'queued' ? '⏳' : t.status === 'paused' ? '⏸️' : '⚠️'} ${String(t.title || '').slice(0, 28)}`,
@@ -2599,9 +4321,7 @@ export class TelegramChannel {
       const { taskStore, BackgroundTaskRunner } = loadModules();
       const task = taskStore.loadTask(taskId);
       if (!task) { await edit('❌ Task not found.', [[{ text: '⬅️ Tasks', callback_data: 'bg:list' }]]); return; }
-      BackgroundTaskRunner.requestPause(taskId);
-      taskStore.updateTaskStatus(taskId, 'failed', { finalSummary: 'Cancelled by user via Telegram.' });
-      taskStore.appendJournal(taskId, { type: 'status_push', content: 'Cancelled by user via Telegram.' });
+      BackgroundTaskRunner.cancelTask(taskId, 'Cancelled by user via Telegram.');
       await edit('🛑 Task cancelled.', [[{ text: '⬅️ Tasks', callback_data: 'bg:list' }]]);
       return;
     }
@@ -2713,6 +4433,85 @@ export class TelegramChannel {
 
   // ─── Message Handler ─────────────────────────────────────────────────────────
 
+  private async handleReasoningCallback(chatId: number, messageId: number, data: string, _userId: number): Promise<void> {
+    const edit = async (text: string, kb: any[][]) => {
+      try {
+        await this.apiCall('editMessageText', {
+          chat_id: chatId,
+          message_id: messageId,
+          text: text.slice(0, 4000),
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: kb },
+        });
+      } catch (e: any) {
+        if (!e.message?.includes('message is not modified')) console.error('[RG] edit error:', e.message);
+      }
+    };
+
+    const refresh = async (note?: string) => {
+      const payload = this.buildReasoningMenu();
+      const text = note ? `${payload.text}\n\n<i>${escHtml(note)}</i>` : payload.text;
+      await edit(text, payload.keyboard);
+    };
+
+    if (data === 'rg:list') {
+      await refresh();
+      return;
+    }
+
+    if (data.startsWith('rg:eff:')) {
+      const parts = data.split(':');
+      const provider = String(parts[2] || '').trim();
+      const levelKey = String(parts[3] || '').trim();
+      const activeProvider = this.getActiveReasoningContext().provider;
+      if (!provider || provider !== activeProvider) {
+        await refresh('The active provider changed, so this menu was refreshed.');
+        return;
+      }
+      const options = TELEGRAM_REASONING_EFFORTS[provider] || [];
+      const selected = options.find((opt) => opt.key === levelKey);
+      if (!selected) {
+        await refresh('That reasoning option is not valid for the active provider.');
+        return;
+      }
+      await this.persistReasoningConfig(provider, { reasoning_effort: selected.value });
+      await refresh();
+      return;
+    }
+
+    if (data === 'rg:ath:on' || data === 'rg:ath:off') {
+      const activeProvider = this.getActiveReasoningContext().provider;
+      if (activeProvider !== 'anthropic') {
+        await refresh('The active provider changed, so this menu was refreshed.');
+        return;
+      }
+      await this.persistReasoningConfig('anthropic', { extended_thinking: data === 'rg:ath:on' });
+      await refresh();
+      return;
+    }
+
+    if (data.startsWith('rg:bud:')) {
+      const activeProvider = this.getActiveReasoningContext().provider;
+      if (activeProvider !== 'anthropic') {
+        await refresh('The active provider changed, so this menu was refreshed.');
+        return;
+      }
+      const budget = Number(data.slice('rg:bud:'.length));
+      if (!Number.isFinite(budget) || budget < 1024) {
+        await refresh('That Anthropic thinking budget is invalid.');
+        return;
+      }
+      await this.persistReasoningConfig('anthropic', {
+        extended_thinking: true,
+        thinking_budget: Math.floor(budget),
+      });
+      await refresh();
+      return;
+    }
+
+    await refresh('Unknown reasoning action. Use /reasoning to reopen the menu.');
+  }
+
   private async handleModelCallback(chatId: number, messageId: number, data: string, _userId: number): Promise<void> {
     const cfg = getConfig().getConfig() as any;
     const edit = async (text: string, kb: any[][]) => {
@@ -2766,7 +4565,7 @@ export class TelegramChannel {
       const modelsByProvider: Record<string, string[]> = {
         anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
         openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-        openai_codex: ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
+        openai_codex: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
         ollama: [],
         llama_cpp: [],
         lm_studio: [],
@@ -2966,13 +4765,180 @@ export class TelegramChannel {
     }
   }
 
+  private sanitizeTelegramFilename(input: string, fallbackStem: string, fallbackExt: string = ''): string {
+    const raw = path.basename(String(input || '').trim());
+    const cleaned = raw
+      .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '_')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    const fallback = `${fallbackStem}${fallbackExt || ''}`;
+    const candidate = cleaned || fallback;
+    return candidate.slice(0, 120) || fallback;
+  }
+
+  private extensionFromMimeType(mimeType?: string): string {
+    const normalized = String(mimeType || '').trim().toLowerCase();
+    switch (normalized) {
+      case 'video/mp4': return '.mp4';
+      case 'video/quicktime': return '.mov';
+      case 'video/webm': return '.webm';
+      case 'video/x-matroska': return '.mkv';
+      case 'video/x-msvideo': return '.avi';
+      case 'video/mpeg': return '.mpeg';
+      case 'video/3gpp': return '.3gp';
+      case 'video/x-ms-wmv': return '.wmv';
+      case 'image/png': return '.png';
+      case 'image/jpeg': return '.jpg';
+      case 'image/webp': return '.webp';
+      case 'image/gif': return '.gif';
+      default: return '';
+    }
+  }
+
+  private inferMimeTypeFromFilePath(filePath: string, hintedMimeType?: string): string {
+    const hinted = String(hintedMimeType || '').trim().toLowerCase();
+    if (hinted) return hinted;
+    switch (path.extname(String(filePath || '')).toLowerCase()) {
+      case '.mp4': return 'video/mp4';
+      case '.mov': return 'video/quicktime';
+      case '.webm': return 'video/webm';
+      case '.mkv': return 'video/x-matroska';
+      case '.avi': return 'video/x-msvideo';
+      case '.mpeg':
+      case '.mpg': return 'video/mpeg';
+      case '.3gp': return 'video/3gpp';
+      case '.wmv': return 'video/x-ms-wmv';
+      case '.gif': return 'image/gif';
+      default: return 'application/octet-stream';
+    }
+  }
+
+  private isVideoMimeType(mimeType?: string): boolean {
+    const normalized = String(mimeType || '').trim().toLowerCase();
+    return normalized.startsWith('video/') || normalized === 'image/gif';
+  }
+
+  private isTelegramVideoDocument(doc?: NonNullable<TelegramUpdate['message']>['document']): boolean {
+    if (!doc?.file_id) return false;
+    if (this.isVideoMimeType(doc.mime_type)) return true;
+    const ext = path.extname(String(doc.file_name || '')).toLowerCase();
+    return ['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi', '.mpeg', '.mpg', '.wmv', '.3gp', '.gif'].includes(ext);
+  }
+
+  private getWorkspaceRootForSession(sessionId?: string): string {
+    const hinted = sessionId && typeof this.deps.getWorkspace === 'function'
+      ? String(this.deps.getWorkspace(sessionId) || '').trim()
+      : '';
+    const candidate = path.resolve(hinted || this.workspaceRoot);
+    return fs.existsSync(candidate) ? candidate : path.resolve(this.workspaceRoot);
+  }
+
+  private buildUniqueWorkspacePath(targetDir: string, fileName: string): string {
+    const ext = path.extname(fileName);
+    const stem = path.basename(fileName, ext);
+    let candidate = path.join(targetDir, fileName);
+    let counter = 2;
+    while (fs.existsSync(candidate)) {
+      candidate = path.join(targetDir, `${stem}-${counter}${ext}`);
+      counter += 1;
+    }
+    return candidate;
+  }
+
+  private async downloadTelegramFileToWorkspace(
+    fileId: string,
+    options?: {
+      sessionId?: string;
+      fileName?: string;
+      hintedMimeType?: string;
+      fallbackStem?: string;
+      subdir?: string;
+    },
+  ): Promise<{ absPath: string; relPath: string; fileName: string; mimeType: string; sizeBytes: number } | null> {
+    try {
+      const fileInfo = await this.apiCall('getFile', { file_id: fileId });
+      const telegramFilePath = String(fileInfo?.file_path || '').trim();
+      if (!telegramFilePath) return null;
+
+      const workspaceRoot = this.getWorkspaceRootForSession(options?.sessionId);
+      const hintedMimeType = String(options?.hintedMimeType || '').trim().toLowerCase();
+      const inferredExt = path.extname(telegramFilePath).toLowerCase() || this.extensionFromMimeType(hintedMimeType);
+      const requestedName = String(options?.fileName || '').trim()
+        || path.basename(telegramFilePath)
+        || `${String(options?.fallbackStem || 'telegram-file').trim() || 'telegram-file'}${inferredExt || ''}`;
+      const safeName = this.sanitizeTelegramFilename(
+        requestedName,
+        String(options?.fallbackStem || 'telegram-file').trim() || 'telegram-file',
+        inferredExt,
+      );
+      const dayStamp = new Date().toISOString().slice(0, 10);
+      const targetDir = path.join(workspaceRoot, options?.subdir || 'uploads', 'telegram', dayStamp);
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const url = `https://api.telegram.org/file/bot${this.config.botToken}/${telegramFilePath}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return null;
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const targetPath = this.buildUniqueWorkspacePath(targetDir, safeName);
+      fs.writeFileSync(targetPath, buf);
+
+      return {
+        absPath: targetPath,
+        relPath: path.relative(workspaceRoot, targetPath).replace(/\\/g, '/'),
+        fileName: path.basename(targetPath),
+        mimeType: this.inferMimeTypeFromFilePath(telegramFilePath, hintedMimeType),
+        sizeBytes: buf.length,
+      };
+    } catch (err: any) {
+      console.error('[Telegram] Failed to download file to workspace:', err.message);
+      return null;
+    }
+  }
+
+  private saveTelegramImageAttachmentToWorkspace(
+    attachment: { base64: string; mimeType: string; name: string },
+    options?: { sessionId?: string; fallbackStem?: string },
+  ): { absPath: string; relPath: string; fileName: string; mimeType: string; sizeBytes: number } | null {
+    try {
+      const workspaceRoot = this.getWorkspaceRootForSession(options?.sessionId);
+      const ext = path.extname(String(attachment.name || ''))
+        || this.extensionFromMimeType(attachment.mimeType)
+        || '.png';
+      const safeName = this.sanitizeTelegramFilename(
+        attachment.name,
+        String(options?.fallbackStem || 'telegram-image').trim() || 'telegram-image',
+        ext,
+      );
+      const dayStamp = new Date().toISOString().slice(0, 10);
+      const targetDir = path.join(workspaceRoot, 'uploads', 'telegram', dayStamp);
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const targetPath = this.buildUniqueWorkspacePath(targetDir, safeName);
+      const buf = Buffer.from(String(attachment.base64 || '').replace(/^data:.*?;base64,/, ''), 'base64');
+      fs.writeFileSync(targetPath, buf);
+
+      return {
+        absPath: targetPath,
+        relPath: path.relative(workspaceRoot, targetPath).replace(/\\/g, '/'),
+        fileName: path.basename(targetPath),
+        mimeType: attachment.mimeType,
+        sizeBytes: buf.length,
+      };
+    } catch (err: any) {
+      console.error('[Telegram] Failed to save image attachment to workspace:', err.message);
+      return null;
+    }
+  }
+
   private async handleIncomingMessage(msg: TelegramUpdate['message']): Promise<void> {
-    if (!msg || (!msg.text && !msg.caption && !msg.photo && !msg.document)) return;
+    if (!msg || (!msg.text && !msg.caption && !msg.photo && !msg.document && !msg.video && !msg.animation && !msg.video_note)) return;
 
     const userId = msg.from.id;
     const chatId = msg.chat.id;
     // For photo messages, use the caption as text (or empty string so AI still fires)
     const text = (msg.text || msg.caption || '').trim();
+    const commandName = getTelegramCommandName(text, this.botInfo?.username);
     const userName = msg.from.first_name || msg.from.username || 'Unknown';
 
     console.log(`[Telegram] Message from ${userName} (${userId}): ${text.slice(0, 80)}`);
@@ -2985,7 +4951,7 @@ export class TelegramChannel {
     }
 
     // ── /cancel — clear pending chat ─────────────────────────────────────────
-    if (text === '/cancel') {
+    if (commandName === 'cancel') {
       if (this.pendingChat.has(userId)) {
         this.pendingChat.delete(userId);
         await this.sendMessage(chatId, '❌ Cancelled. Back to normal chat.');
@@ -3217,9 +5183,9 @@ export class TelegramChannel {
     // ── /tasks command — list queued/paused/stalled tasks ─────────────────────
     if (text === '/tasks' || text === '/tasks ') {
       try {
-        const { listTasks } = require('../tasks/task-store.js');
+        const { listTaskSummaries } = require('../tasks/task-store.js');
         const statuses = ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'waiting_subagent'];
-        const tasks = listTasks({ status: statuses }).slice(0, 25);
+        const tasks = listTaskSummaries({ status: statuses }).slice(0, 25);
         if (tasks.length === 0) {
           await this.sendMessage(chatId, '🧵 No queued/paused/stalled tasks.');
           return;
@@ -3264,7 +5230,22 @@ export class TelegramChannel {
       return;
     }
 
-    // ── /download command ──────────────────────────────────────────────────────
+    // ── /models + /reasoning commands ─────────────────────────────────────────
+    if (text === '/reasoning' || text === '/reasoning ') {
+      try {
+        const payload = this.buildReasoningMenu();
+        await this.apiCall('sendMessage', {
+          chat_id: chatId,
+          text: payload.text,
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: payload.keyboard },
+        });
+      } catch (err: any) {
+        await this.sendMessage(chatId, `❌ Failed to load reasoning controls: ${String(err?.message || err)}`);
+      }
+      return;
+    }
+
     if (text === '/models' || text === '/models ' || text === '/model' || text === '/model ') {
       try {
         const cfg = getConfig().getConfig() as any;
@@ -3311,7 +5292,7 @@ export class TelegramChannel {
       return;
     }
 
-    if (text === '/new' || text === '/new ') {
+    if (commandName === 'new') {
       const sessionId = `telegram_${userId}_${Date.now()}`;
       const now = Date.now();
       const responseText = '✅ Started a new Telegram chat session. This thread is now linked to the new channel session.';
@@ -3326,6 +5307,19 @@ export class TelegramChannel {
         userId,
         message: { role: 'user', content: '/new', timestamp: now },
         responseMessage: { role: 'assistant', content: responseText, timestamp: now },
+      });
+      return;
+    }
+
+    if (text === '/resume' || text === '/resume ') {
+      const payload = this.buildResumeRootPayload(userId);
+      await this.apiCall('sendMessage', {
+        chat_id: chatId,
+        text: payload.text,
+        parse_mode: 'HTML',
+        reply_markup: payload.reply_markup,
+      }).catch(async (err: any) => {
+        await this.sendMessage(chatId, `❌ Could not open resume menu: ${String(err?.message || err)}`);
       });
       return;
     }
@@ -3387,12 +5381,12 @@ export class TelegramChannel {
       return;
     }
 
-    // ── Built-in commands ──────────────────────────────────────────────────────
-    if (text === '/start') {
-      await this.sendMessage(chatId, `🔥 <b>Prometheus connected!</b>\n\nYour Telegram user ID: <code>${userId}</code>\n\nJust send me a message and I'll respond using your local LLM.\n\nUse <code>/commands</code> any time for the full command catalog.\n\n<b>Core Commands:</b>\n/status — check connection\n/clear — reset chat history\n/new — start a new Telegram channel session\n/browse — browse workspace files\n/download &lt;path&gt; — download a file\n/teams — view and manage agent teams\n/agents — browse all agents (chat/dispatch/edit prompt/model)\n/tasks — list queued/paused/stalled tasks (chat/resume/cancel/delete)\n/schedule — list schedules (run now/edit/delete)\n/models — switch provider/model\n/screenshot — browser screenshot or per-monitor desktop screenshot\n/restart — choose full or quick gateway restart\n/update — check and apply updates (with confirmation)\n\n<b>Integrations:</b>\n/integrations — list configured integrations\n/mcp-status — show MCP server status\n/setup &lt;service&gt; — connect any service (github, slack, jira, etc.)\n\n<b>Proposals:</b>\n/proposals — list pending proposals (pending/done)
+	    // ── Built-in commands ──────────────────────────────────────────────────────
+	    if (text === '/start') {
+	      await this.sendMessage(chatId, `🔥 <b>Prometheus connected!</b>\n\nYour Telegram user ID: <code>${userId}</code>\n\nJust send me a message and I'll respond using your local LLM.\n\nUse <code>/commands</code> any time for the full command catalog.\n\n<b>Core Commands:</b>\n/status — check connection\n/clear — reset chat history\n/new — start a new Telegram channel session\n/resume — browse older chats, channels, and projects\n/stop_now — abort current main chat turn\n/stop — inspect and abort live AI flows\n/browse — browse workspace files\n/download &lt;path&gt; — download a file\n/teams — view and manage agent teams\n/agents — browse all agents (chat/dispatch/edit prompt/model)\n/tasks — list queued/paused/stalled tasks (chat/resume/cancel/delete)\n/schedule — list schedules (run now/edit/delete)\n/models — switch provider/model\n/reasoning — adjust the active provider reasoning settings\n/screenshot — browser screenshot or per-monitor desktop screenshot\n/restart — choose full or quick gateway restart\n/update — check and apply updates (with confirmation)\n\n<b>Integrations:</b>\n/integrations — list configured integrations\n/mcp-status — show MCP server status\n/setup &lt;service&gt; — connect any service (github, slack, jira, etc.)\n\n<b>Proposals:</b>\n/proposals — list pending proposals (pending/done)
 /proposals [id] — show proposal details\n\n<b>Self-Repair:</b>\n/repairs — list pending repair proposals\n/repair &lt;id&gt; — show full details of a repair\n/approve &lt;id&gt; — apply a repair, rebuild &amp; restart\n/reject &lt;id&gt; — discard a repair`);
-      return;
-    }
+	      return;
+	    }
     if (text === '/commands' || text === '/commands ' || text === '/help' || text === '/help ') {
       await this.sendMessage(chatId, this.buildTelegramCommandsMessage(userId));
       return;
@@ -3417,8 +5411,55 @@ export class TelegramChannel {
       return;
     }
 
-    // ── /proposals — list and manage proposals ────────────────────────────────────
-    if (text === '/proposals' || text.startsWith('/proposals ')) {
+    if (text === '/stop_now') {
+      const candidateSessionIds = new Set(
+        [
+          getLinkedSession(userId),
+          getLastMainSessionId(),
+          `telegram_${userId}`,
+        ]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      );
+      const activeMain = listLiveRuntimes().find((runtime) =>
+        runtime.kind === 'main_chat'
+          && (
+            candidateSessionIds.has(String(runtime.sessionId || '').trim())
+            || runtime.chatId === chatId
+          ),
+      );
+      if (!activeMain) {
+        await this.sendMessage(chatId, '🛑 No main chat turn is currently running for this session.');
+        return;
+      }
+      const result = abortLiveRuntime(activeMain.id);
+      await this.sendMessage(chatId, result.ok ? '🛑 Main chat abort requested.' : `❌ ${result.error || 'Abort failed.'}`);
+      return;
+    }
+
+    if (text === '/stop') {
+      const targets = this.listStopTargets();
+      if (targets.length === 0) {
+        await this.sendMessage(chatId, '🛑 No live AI flows are running right now.');
+        return;
+      }
+      const rows = targets.slice(0, 30).map((target) => [{
+        text: `${target.icon} ${target.label.slice(0, 34)}`,
+        callback_data: `stop:view:${target.sourceType === 'runtime' ? 'r' : 't'}:${idKey(target.id)}`,
+      }]);
+      await this.apiCall('sendMessage', {
+        chat_id: chatId,
+        text: `🛑 <b>Live AI Flows (${targets.length})</b>\nTap one to inspect it, then use Abort if needed.`,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: rows },
+      }).catch(async (err: any) => {
+        await this.sendMessage(chatId, `❌ Could not open stop menu: ${String(err?.message || err)}`);
+      });
+      return;
+    }
+
+	    // ── /proposals — list and manage proposals ────────────────────────────────────
+	    if (text === '/proposals' || text.startsWith('/proposals ')) {
       const { listProposals } = await import('../proposals/proposal-store');
       const arg = text.slice('/proposals'.length).trim().toLowerCase();
       const showStatus: 'pending' | 'done' | 'id' = arg === 'done' ? 'done' : 
@@ -3486,11 +5527,71 @@ export class TelegramChannel {
       } catch (e: any) {
         await this.sendMessage(chatId, `💼 <b>Proposals (${statusLabel})</b>\n\n${lines.join('\n\n')}`);
       }
-      return;
-    }
+	      return;
+	    }
 
-    // ── /repairs — list pending self-repair proposals ───────────────────────────
-    if (text === '/repairs') {
+		    if (text === '/approvals' || text.startsWith('/approvals ')) {
+		      const { getApprovalQueue } = await import('../verification-flow');
+		      const queue = getApprovalQueue();
+		      const arg = text.slice('/approvals'.length).trim().toLowerCase();
+		      const showStatus: 'pending' | 'done' | 'id' = arg === 'done' ? 'done'
+		        : arg === 'pending' ? 'pending'
+		        : arg ? 'id' : 'pending';
+
+		      let approvals: any[] = [];
+		      if (showStatus === 'id') {
+		        const a = queue.get(arg);
+		        if (a) approvals = [a];
+		      } else {
+		        approvals = queue.listAll().filter((item: any) => showStatus === 'done' ? item.status !== 'pending' : item.status === 'pending');
+		      }
+
+	      if (approvals.length === 0) {
+	        await this.sendMessage(chatId, `⏳ No command approvals ${showStatus === 'id' ? 'found' : `in ${showStatus}`}.`);
+	        return;
+	      }
+
+	      if (approvals.length === 1 && showStatus === 'id') {
+	        const a = approvals[0];
+	        const textBody = [
+		          `⏳ <b>Command Approval</b>`,
+		          ``,
+		          `<b>ID:</b> <code>${this.tgEscape(a.id)}</code>`,
+		          `<b>Status:</b> ${this.tgEscape(a.status)}`,
+		          `<b>Origin:</b> ${this.tgEscape(this.getCommandApprovalOrigin(a))}`,
+		          `<b>Risk:</b> ${Number(a.riskScore || 0)}/10`,
+		          `<b>Reason:</b> ${this.tgEscape(a.reason || a.action || '')}`,
+		          ``,
+		          `<code>${this.tgEscape(String(a.toolArgs?.command || '').slice(0, 1200))}</code>`,
+		        ].join('\n');
+	        const kb: any[][] = [];
+	        if (a.status === 'pending') kb.push([{ text: '✅ Approve', callback_data: `ca:ap:${a.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${a.id}` }]);
+	        kb.push([{ text: '📋 Back to list', callback_data: 'ca:list:pending' }]);
+	        await this.apiCall('sendMessage', {
+	          chat_id: chatId,
+	          text: textBody.slice(0, 4000),
+	          parse_mode: 'HTML',
+	          reply_markup: { inline_keyboard: kb },
+	        }).catch(() => this.sendMessage(chatId, textBody));
+	        return;
+	      }
+
+		      const lines = approvals.slice(0, 15).map(a =>
+		        `⏳ <code>#${a.id}</code> <b>${this.tgEscape(String(a.toolArgs?.command || '').slice(0, 40))}</b>\n   Origin: ${this.tgEscape(this.getCommandApprovalOrigin(a))} | Status: ${this.tgEscape(a.status)} | Risk: ${Number(a.riskScore || 0)}/10`
+		      );
+		      const kb = approvals.slice(0, 15).map(a => [{ text: String(a.toolArgs?.command || '').slice(0, 30) || a.id, callback_data: `ca:detail:${a.id}` }]);
+	      kb.push([{ text: showStatus === 'done' ? '⏳ View pending' : '✅ View completed', callback_data: `ca:list:${showStatus === 'done' ? 'pending' : 'done'}` }]);
+	      await this.apiCall('sendMessage', {
+	        chat_id: chatId,
+	        text: `⏳ <b>Command Approvals (${showStatus === 'done' ? 'DONE' : 'PENDING'})</b>\n\n${lines.join('\n\n')}`.slice(0, 4000),
+	        parse_mode: 'HTML',
+	        reply_markup: { inline_keyboard: kb },
+	      }).catch(() => this.sendMessage(chatId, lines.join('\n\n')));
+	      return;
+	    }
+
+	    // ── /repairs — list pending self-repair proposals ───────────────────────────
+	    if (text === '/repairs') {
       const pending = listPendingRepairsSafe();
       if (pending.length === 0) {
         await this.sendMessage(chatId, '🔥 No pending repairs.');
@@ -3630,14 +5731,20 @@ export class TelegramChannel {
           setupPresentedFiles.push({ path: String(data.path), trigger: 'created' });
         }
       };
-      const setupPrompt = `The user wants to set up the ${serviceName} integration via Telegram. Use the integration-setup skill. Check workspace/integrations/${serviceName}.md first — if it has a full definition use it, otherwise research the ${serviceName} MCP server or webhook setup yourself (web_search), build the definition file, then guide the user through setup step by step.`;
-      const setupContext = `CONTEXT: You are responding via Telegram via a direct interactive session. You have FULL ACCESS to all tools including workspace file access (read_file, list_files, list_directory). The user triggered /setup ${serviceName}. You are running a guided integration setup flow using the integration-setup skill. You can connect to any service — research and build the definition if it does not already exist.`;
-      try {
-        const result = this.deps.runInteractiveTurn
-          ? await this.deps.runInteractiveTurn(setupPrompt, sessionId, sendSSE, undefined, undefined, setupContext)
-          : await this.deps.handleChat(setupPrompt, sessionId, sendSSE, undefined, undefined, setupContext);
-        const responseText = result.text || 'Unable to start setup. Make sure the integration-setup skill is enabled.';
-        await this.sendAiMessage(chatId, responseText);
+	      const setupPrompt = `The user wants to set up the ${serviceName} integration via Telegram. Use the integration-setup skill. Check workspace/integrations/${serviceName}.md first — if it has a full definition use it, otherwise research the ${serviceName} MCP server or webhook setup yourself (web_search), build the definition file, then guide the user through setup step by step.`;
+	      const setupContext = `CONTEXT: You are responding via Telegram via a direct interactive session. You have FULL ACCESS to all tools including workspace file access (read_file, list_files, list_directory). The user triggered /setup ${serviceName}. You are running a guided integration setup flow using the integration-setup skill. You can connect to any service — research and build the definition if it does not already exist.`;
+	      try {
+	        const turn = await this.runTelegramMainChatTurn({
+	          chatId,
+	          sessionId,
+	          message: setupPrompt,
+	          sendSSE,
+	          callerContext: setupContext,
+	        });
+	        if (turn.aborted) return;
+	        const result = turn.result;
+	        const responseText = result.text || 'Unable to start setup. Make sure the integration-setup skill is enabled.';
+	        await this.sendAiMessage(chatId, responseText);
         // Present any files created during setup (e.g. integrations/<service>.md)
         this.filePresented.clear();
         for (const { path: fp, trigger } of setupPresentedFiles) {
@@ -3694,41 +5801,6 @@ export class TelegramChannel {
       return;
     }
 
-    // ── /approve_skill <id> — approve a skill evolution ──────────────────────────
-    if (text.startsWith('/approve_skill ')) {
-      const evolutionId = text.slice('/approve_skill '.length).trim();
-      try {
-        const { approveSkillEvolution } = await import('../scheduling/self-improvement-engine.js');
-        const result = approveSkillEvolution(evolutionId);
-        if (result.success) {
-          await this.sendMessage(chatId, `✅ Skill evolution approved and written to: <code>${result.skillPath}</code>`);
-        } else {
-          await this.sendMessage(chatId, `❌ Failed to approve skill evolution <code>${evolutionId}</code> — check the ID.`);
-        }
-      } catch (err: any) {
-        await this.sendMessage(chatId, `❌ Skill approval error: ${err.message}`);
-      }
-      return;
-    }
-
-    // ── /perf — show latest performance report summary ───────────────────────────
-    if (text === '/perf' || text === '/performance') {
-      try {
-        const { loadSelfImprovementStore } = await import('../scheduling/self-improvement-engine.js');
-        const store = loadSelfImprovementStore();
-        if (store.reports.length === 0) {
-          await this.sendMessage(chatId, '📊 No performance reports yet. The weekly review runs every Sunday at 9am.');
-          return;
-        }
-        const latest = store.reports[store.reports.length - 1];
-        const { formatPerformanceReport } = await import('../scheduling/self-improvement-engine.js');
-        await this.sendMessage(chatId, formatPerformanceReport(latest));
-      } catch (err: any) {
-        await this.sendMessage(chatId, `❌ Performance report error: ${err.message}`);
-      }
-      return;
-    }
-
     // ── /repair <id> — show full details of a pending repair ────────────────────
     if (text.startsWith('/repair ')) {
       const repairId = text.slice('/repair '.length).trim();
@@ -3759,13 +5831,19 @@ export class TelegramChannel {
     if (getLinkedSession(userId)) {
       console.log(`[Telegram] Routing user ${userId} through linked session: ${sessionId}`);
     }
-    const events: Array<{ type: string; data: any }> = [];
-    // Collect files to present: canvas_present events + edit/apply_patch results
-    const presentedFiles: Array<{ path: string; trigger: string }> = [];
-    let lastProgressSignature = '';
-    const sendSSE = (type: string, data: any) => {
+	    this.creativeProgressCounters.set(sessionId, 0);
+	    this.creativeProgressStarted.delete(sessionId);
+	    this.creativeProgressLastSentAt.delete(sessionId);
+	    const events: Array<{ type: string; data: any }> = [];
+	    // Collect files to present: canvas_present events + edit/apply_patch results
+	    const presentedFiles: Array<{ path: string; trigger: string }> = [];
+	    const generatedImages: any[] = [];
+	    const generatedImageKeys = new Set<string>();
+	    let lastProgressSignature = '';
+	    const sendSSE = (type: string, data: any) => {
       events.push({ type, data });
-      if (type === 'tool_call') {
+      const suppressTelegramProgress = this.maybeQueueCreativeProgressPlaceholder(chatId, sessionId, type, data);
+      if (!suppressTelegramProgress && type === 'tool_call') {
         const toolName = String(data?.action || data?.name || 'unknown_tool');
         if (toolName === 'context_compaction') {
           const threshold = Number(data?.args?.threshold_messages || 0);
@@ -3798,14 +5876,26 @@ export class TelegramChannel {
           totalSteps: data?.totalSteps != null ? Number(data.totalSteps) : undefined,
         });
         this.enqueueProgressMessage(chatId, logMsg);
-      } else if (type === 'tool_result' && data?.error) {
-        const errMsg = formatTelegramToolError({
-          actor: 'main_chat',
-          toolName: String(data?.action || 'unknown_tool'),
-          errorText: String(data?.result || 'Unknown tool error'),
-        });
-        this.enqueueProgressMessage(chatId, errMsg);
-      } else if (type === 'tool_result' && !data?.error && String(data?.action || '') === 'context_compaction') {
+	      } else if (!suppressTelegramProgress && type === 'tool_result' && String(data?.action || '') !== 'context_compaction') {
+		        const resultMsg = formatTelegramToolResult({
+		          actor: 'main_chat',
+		          toolName: String(data?.action || 'unknown_tool'),
+		          args: data?.args,
+		          result: String(data?.result || ''),
+		          error: data?.error === true,
+		          forceShow: data?.show_result === true,
+		        });
+	        if (resultMsg) {
+	          this.enqueueProgressMessage(chatId, resultMsg);
+	        } else if (data?.error) {
+	          const errMsg = formatTelegramToolError({
+	            actor: 'main_chat',
+	            toolName: String(data?.action || 'unknown_tool'),
+	            errorText: String(data?.result || 'Unknown tool error'),
+	          });
+	          this.enqueueProgressMessage(chatId, errMsg);
+	        }
+	      } else if (!suppressTelegramProgress && type === 'tool_result' && !data?.error && String(data?.action || '') === 'context_compaction') {
         const status = String(data?.extra?.status || '').toLowerCase();
         const mode = String(data?.extra?.mode || '').trim();
         const summary = String(data?.extra?.summary || '').trim();
@@ -3818,7 +5908,7 @@ export class TelegramChannel {
           preview ? `<b>Summary Preview</b>\n${preview}` : '',
         ].filter(Boolean);
         this.enqueueProgressMessage(chatId, lines.join('\n\n'));
-      } else if (type === 'progress_state') {
+      } else if (!suppressTelegramProgress && type === 'progress_state') {
         // Only stream plan progress when a plan was explicitly declared (source='declared')
         // or preflight-seeded. Skip auto-inferred tool_sequence plans to avoid noise.
         const progressSource = String(data?.source || 'none');
@@ -3841,11 +5931,22 @@ export class TelegramChannel {
         presentedFiles.push({ path: String(data.path), trigger: 'created' });
       }
       // Catch edit and apply_patch successes — extract path from result
-      if (type === 'tool_result' && !data?.error) {
-        const action = String(data?.action || '');
-        if (action === 'edit' || action === 'find_replace' || action === 'replace_lines') {
-          // Tool result typically contains "path: /abs/path" — extract it
-          const resultStr = String(data?.result || '');
+	      if (type === 'tool_result' && !data?.error) {
+	        const action = String(data?.action || '');
+	        if (action === 'generate_image') {
+	          const imageRows = Array.isArray(data?.extra?.generated_images)
+	            ? data.extra.generated_images
+	            : (data?.extra?.generated_image ? [data.extra.generated_image] : []);
+	          for (const image of imageRows) {
+	            const key = String(image?.path || image?.rel_path || '').trim().toLowerCase();
+	            if (!key || generatedImageKeys.has(key)) continue;
+	            generatedImageKeys.add(key);
+	            generatedImages.push(image);
+	          }
+	        }
+	        if (action === 'edit' || action === 'find_replace' || action === 'replace_lines') {
+	          // Tool result typically contains "path: /abs/path" — extract it
+	          const resultStr = String(data?.result || '');
           const pathMatch = resultStr.match(/path[:\s]+([^\s,\n]+)/i);
           if (pathMatch?.[1]) presentedFiles.push({ path: pathMatch[1], trigger: 'edit' });
         }
@@ -3860,6 +5961,12 @@ export class TelegramChannel {
     // Download image attachment if present.
     // Prefer photo payloads; also support images sent as document.
     let imageAttachment: { base64: string; mimeType: string; name: string } | undefined;
+    let savedImageAttachment:
+      | { absPath: string; relPath: string; fileName: string; mimeType: string; sizeBytes: number }
+      | undefined;
+    let videoAttachment:
+      | { absPath: string; relPath: string; fileName: string; mimeType: string; sizeBytes: number }
+      | undefined;
     if (msg!.photo && msg!.photo.length > 0) {
       const largest = msg!.photo[msg!.photo.length - 1];
       const downloaded = await this.downloadTelegramPhoto(largest.file_id);
@@ -3868,58 +5975,126 @@ export class TelegramChannel {
         imageAttachment = { ...downloaded, name: `photo.${ext}` };
         console.log(`[Telegram] Downloaded photo (${Math.round(downloaded.base64.length * 0.75 / 1024)}KB)`);
       }
+    } else if (msg!.video?.file_id) {
+      videoAttachment = await this.downloadTelegramFileToWorkspace(msg!.video.file_id, {
+        sessionId,
+        fileName: msg!.video.file_name,
+        hintedMimeType: msg!.video.mime_type,
+        fallbackStem: 'telegram-video',
+      }) || undefined;
+    } else if (msg!.animation?.file_id) {
+      videoAttachment = await this.downloadTelegramFileToWorkspace(msg!.animation.file_id, {
+        sessionId,
+        fileName: msg!.animation.file_name,
+        hintedMimeType: msg!.animation.mime_type,
+        fallbackStem: 'telegram-animation',
+      }) || undefined;
+    } else if (msg!.video_note?.file_id) {
+      videoAttachment = await this.downloadTelegramFileToWorkspace(msg!.video_note.file_id, {
+        sessionId,
+        hintedMimeType: 'video/mp4',
+        fallbackStem: 'telegram-video-note',
+      }) || undefined;
     } else if (msg!.document?.file_id) {
-      const downloaded = await this.downloadTelegramImageDocument(
-        msg!.document.file_id,
-        msg!.document.mime_type,
-      );
-      if (downloaded) {
-        const ext = downloaded.mimeType.split('/')[1] || 'png';
-        const rawName = String(msg!.document.file_name || '').trim();
-        const safeName = rawName || `image.${ext}`;
-        imageAttachment = { ...downloaded, name: safeName };
-        console.log(`[Telegram] Downloaded image document (${Math.round(downloaded.base64.length * 0.75 / 1024)}KB)`);
+      if (this.isTelegramVideoDocument(msg!.document)) {
+        videoAttachment = await this.downloadTelegramFileToWorkspace(msg!.document.file_id, {
+          sessionId,
+          fileName: msg!.document.file_name,
+          hintedMimeType: msg!.document.mime_type,
+          fallbackStem: 'telegram-video',
+        }) || undefined;
+      } else {
+        const downloaded = await this.downloadTelegramImageDocument(
+          msg!.document.file_id,
+          msg!.document.mime_type,
+        );
+        if (downloaded) {
+          const ext = downloaded.mimeType.split('/')[1] || 'png';
+          const rawName = String(msg!.document.file_name || '').trim();
+          const safeName = rawName || `image.${ext}`;
+          imageAttachment = { ...downloaded, name: safeName };
+          console.log(`[Telegram] Downloaded image document (${Math.round(downloaded.base64.length * 0.75 / 1024)}KB)`);
+        }
       }
     }
 
-    // For photo-only messages (no caption), supply a neutral prompt so the AI knows to look at it
-    const effectiveText = text || (imageAttachment ? '(Image attached — please analyze it)' : '');
+    if (imageAttachment) {
+      savedImageAttachment = this.saveTelegramImageAttachmentToWorkspace(imageAttachment, {
+        sessionId,
+        fallbackStem: 'telegram-image',
+      }) || undefined;
+      if (savedImageAttachment) {
+        console.log(
+          `[Telegram] Saved image attachment to ${savedImageAttachment.relPath} (${Math.round(savedImageAttachment.sizeBytes / 1024)}KB)`,
+        );
+      }
+    }
 
-    try {
-      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_close, desktop_screenshot, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
+    if (videoAttachment) {
+      console.log(
+        `[Telegram] Downloaded video attachment to ${videoAttachment.relPath} (${Math.round(videoAttachment.sizeBytes / 1024)}KB)`,
+      );
+    }
+
+    // For media-only messages (no caption), supply a neutral prompt so the AI knows to inspect the attachment.
+    const effectiveText = text
+      || (videoAttachment
+        ? '(Video attached via Telegram — please analyze it)'
+        : imageAttachment
+          ? '(Image attached — please analyze it)'
+          : '');
+    const messageForModel = videoAttachment
+      ? `${effectiveText}${effectiveText ? '\n\n' : ''}Telegram video attachment saved at: ${videoAttachment.relPath}\nUse analyze_video on that local file when the user is asking what is in the clip.`
+      : savedImageAttachment
+        ? `${effectiveText}${effectiveText ? '\n\n' : ''}Telegram image attachment saved at: ${savedImageAttachment.relPath}\nAbsolute path: ${savedImageAttachment.absPath}\nThe image is also attached directly for vision. Use the saved path when you need to reference, edit, place, or process the file.`
+      : effectiveText;
+
+	    try {
+	      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_close, desktop_screenshot, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
       const isDesktopStatusCheck =
-        /\b(vs code|vscode|codex)\b/i.test(text)
-        && /\b(done|finished|complete|completed|responded)\b/i.test(text);
-      const statusContext = isDesktopStatusCheck
-        ? 'CONTEXT: This Telegram request is a desktop status check. First action should be desktop_screenshot (then desktop advisor flow), not browser tools.'
+	        /\b(vs code|vscode|codex)\b/i.test(text)
+	        && /\b(done|finished|complete|completed|responded)\b/i.test(text);
+	      const statusContext = isDesktopStatusCheck
+	        ? 'CONTEXT: This Telegram request is a desktop status check. First action should be desktop_screenshot (then desktop advisor flow), not browser tools.'
+	        : '';
+      const videoContext = videoAttachment
+	        ? `CONTEXT: A Telegram video attachment for this turn has already been downloaded into the workspace.\nLocal video path: ${videoAttachment.relPath}\nAbsolute path: ${videoAttachment.absPath}\nMime type: ${videoAttachment.mimeType}\nIf the user wants the clip analyzed, call analyze_video on this path before answering. Do not claim to have watched the video unless you actually ran analyze_video.`
+	        : '';
+      const imageContext = savedImageAttachment
+        ? `CONTEXT: A Telegram image attachment for this turn has already been saved into the workspace.\nLocal image path: ${savedImageAttachment.relPath}\nAbsolute path: ${savedImageAttachment.absPath}\nMime type: ${savedImageAttachment.mimeType}\nThe image is also attached as a vision payload, so you can inspect it visually and use this path for file/tool operations.`
         : '';
-      const callerContext = statusContext ? `${telegramContext}\n${statusContext}` : telegramContext;
-      const result = this.deps.runInteractiveTurn
-        ? await this.deps.runInteractiveTurn(
-            effectiveText,
-            sessionId,
-            sendSSE,
-            undefined,
-            undefined,
-            callerContext,
-            imageAttachment ? [imageAttachment] : undefined,
-          )
-        : await this.deps.handleChat(
-            effectiveText, sessionId, sendSSE,
-            undefined, undefined, callerContext,
-            undefined, undefined, undefined,
-            imageAttachment ? [imageAttachment] : undefined,
-          );
-      const responseText = result.text || 'No response generated.';
+	      const callerContext = [telegramContext, statusContext || '', videoContext || '', imageContext || ''].filter(Boolean).join('\n');
+	      const turn = await this.runTelegramMainChatTurn({
+		        chatId,
+		        sessionId,
+		        message: messageForModel,
+		        sendSSE,
+		        callerContext,
+		        attachments: imageAttachment ? [imageAttachment] : undefined,
+		      });
+		      if (turn.aborted) return;
+	      const result = turn.result;
+	      const responseText = sanitizeFinalReply(result.text || '') || 'No response generated.';
       const now = Date.now();
 
-      const userContent = imageAttachment
-        ? `${text ? text + ' ' : ''}[Image attached via Telegram]`
-        : effectiveText;
+	      const userContent = videoAttachment
+	        ? `${text ? `${text} ` : ''}[Video attached via Telegram: ${videoAttachment.relPath}]`
+	        : savedImageAttachment
+	          ? `${text ? text + ' ' : ''}[Image attached via Telegram: ${savedImageAttachment.relPath}]`
+	        : imageAttachment
+	          ? `${text ? text + ' ' : ''}[Image attached via Telegram]`
+	          : effectiveText;
 
-      await this.sendAiMessage(chatId, responseText);
+	      await this.sendAiMessage(chatId, responseText);
+	      if (generatedImages.length) {
+	        try {
+	          await this.sendGeneratedImagesToChat(chatId, generatedImages);
+	        } catch (err: any) {
+	          console.warn(`[Telegram] Generated image delivery failed: ${err?.message}`);
+	        }
+	      }
 
-      // ── Present any files the AI created or edited ──────────────────────────
+	      // ── Present any files the AI created or edited ──────────────────────────
       // Reset per-turn dedup set, then send each unique file
       this.filePresented.clear();
       for (const { path: filePath, trigger } of presentedFiles) {
@@ -3931,17 +6106,28 @@ export class TelegramChannel {
       }
 
       // Broadcast to web UI that a Telegram message was processed
-      this.deps.broadcast({
-        type: 'telegram_message',
-        sessionId,
-        from: userName,
-        userId,
-        message: { role: 'user', content: userContent, timestamp: now },
-        responseMessage: { role: 'assistant', content: responseText, timestamp: now },
+	      this.deps.broadcast({
+	        type: 'telegram_message',
+	        sessionId,
+	        from: userName,
+	        userId,
+	        message: { role: 'user', content: userContent, timestamp: now },
+	        responseMessage: {
+	          role: 'assistant',
+	          content: responseText,
+	          timestamp: now,
+	          generatedImages: generatedImages.length ? generatedImages : undefined,
+	        },
       });
 
+      this.creativeProgressCounters.delete(sessionId);
+      this.creativeProgressStarted.delete(sessionId);
+      this.creativeProgressLastSentAt.delete(sessionId);
       console.log(`[Telegram] Replied to ${userName}: ${responseText.slice(0, 80)}`);
     } catch (err: any) {
+      this.creativeProgressCounters.delete(sessionId);
+      this.creativeProgressStarted.delete(sessionId);
+      this.creativeProgressLastSentAt.delete(sessionId);
       console.error(`[Telegram] handleChat error:`, err.message);
       await this.sendMessage(chatId, `🔥 Error: ${err.message}`);
     }

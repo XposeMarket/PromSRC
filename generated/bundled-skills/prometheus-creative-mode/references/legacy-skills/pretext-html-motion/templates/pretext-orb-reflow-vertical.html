@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1080,height=1920,initial-scale=1" />
+<style>
+  html, body { margin:0; width:1080px; height:1920px; overflow:hidden; background:#050402; }
+  #stage { position:relative; width:1080px; height:1920px; background: radial-gradient(circle at 52% 38%, rgba(255,176,0,.14), transparent 24%), #050402; }
+  canvas { position:absolute; inset:0; width:1080px; height:1920px; }
+  .label { position:absolute; left:72px; top:92px; font:700 28px system-ui; letter-spacing:.12em; color:#ffb000; text-transform:uppercase; }
+  .cta { position:absolute; left:72px; bottom:118px; color:#fff2ce; font:700 54px Georgia, serif; opacity:0; animation: cta 8s ease both; }
+  @keyframes cta { 0%,68%{opacity:0; transform:translateY(28px)} 78%,100%{opacity:1; transform:none} }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="pretextCanvas" width="1080" height="1920"></canvas>
+  <div class="label">PRETEXT / PROMETHEUS</div>
+  <div class="cta">The text knows where it belongs.</div>
+</div>
+<script>
+const canvas = document.getElementById('pretextCanvas');
+const ctx = canvas.getContext('2d');
+const W = 1080, H = 1920;
+const copy = `It is 2026 and our interfaces should feel alive. Information should move around the work, not bury it. Prometheus turns text, tools, memory, and motion into one surface — measured before it moves, composed before it renders, ready before it ships.`;
+function nextLine(text, startIndex, maxWidth) {
+  let end = startIndex, lastSpace = -1;
+  while (end < text.length) {
+    const test = text.slice(startIndex, end + 1);
+    if (/\s/.test(text[end])) lastSpace = end;
+    if (ctx.measureText(test).width > maxWidth) break;
+    end++;
+  }
+  if (end >= text.length) return { text: text.slice(startIndex).trim(), end: text.length };
+  const cut = lastSpace > startIndex ? lastSpace : Math.max(startIndex + 1, end - 1);
+  return { text: text.slice(startIndex, cut).trim(), end: cut + 1 };
+}
+function render(ms) {
+  const t = ms / 1000;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = '#050402'; ctx.fillRect(0,0,W,H);
+  ctx.globalAlpha = 0.32;
+  for (let i=0;i<120;i++) { ctx.fillStyle = `rgba(255,176,0,${Math.random()*0.04})`; ctx.fillRect(Math.random()*W, Math.random()*H, 1.4, 1.4); }
+  ctx.globalAlpha = 1;
+  const orb = { x: 540 + Math.sin(t*.9)*220, y: 820 + Math.cos(t*.7)*210, r: 185 + Math.sin(t*1.6)*22 };
+  const g = ctx.createRadialGradient(orb.x, orb.y, 10, orb.x, orb.y, orb.r);
+  g.addColorStop(0, 'rgba(255,176,0,.98)'); g.addColorStop(.42, 'rgba(255,91,31,.58)'); g.addColorStop(1, 'rgba(255,91,31,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(orb.x, orb.y, orb.r, 0, Math.PI*2); ctx.fill();
+  ctx.font = '500 43px Georgia, serif'; ctx.textBaseline = 'top'; ctx.fillStyle = '#fff2ce';
+  const lineHeight = 61; let y = 260; let index = 0;
+  while (y < 1510 && index < copy.length) {
+    const dy = Math.abs(y + lineHeight/2 - orb.y);
+    let left = 96, width = 888;
+    if (dy < orb.r + 42) {
+      const chord = Math.sqrt(Math.max(0, (orb.r+42)**2 - dy**2));
+      if (orb.x < W/2) { left = Math.min(960, orb.x + chord + 36); width = 980 - left; }
+      else { width = Math.max(120, orb.x - chord - 132); }
+    }
+    if (width < 140) { y += lineHeight; continue; }
+    const line = nextLine(copy, index, width);
+    ctx.fillText(line.text, left, y);
+    index = line.end; y += lineHeight;
+  }
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+</script>
+</body>
+</html>

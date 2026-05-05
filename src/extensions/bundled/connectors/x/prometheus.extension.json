@@ -1,0 +1,32 @@
+{
+  "id": "x",
+  "kind": "connector",
+  "name": "X / Twitter",
+  "description": "Connect X through the Prometheus browser session for timeline reads, mentions, analytics, and posting flows.",
+  "category": "Social",
+  "enabledByDefault": true,
+  "docsUrl": "https://x.com/",
+  "tags": ["x", "twitter", "browser session"],
+  "runtime": {
+    "binding": "gateway/connections/browser-session:x"
+  },
+  "ui": {
+    "color": "#000000",
+    "permissions": [
+      { "icon": "@", "label": "Read timeline and mentions" },
+      { "icon": "=", "label": "Read tweet analytics and impressions" },
+      { "icon": "->", "label": "Post and reply with approval" }
+    ]
+  },
+  "ownership": {
+    "capabilities": ["social", "publishing", "browser_session"]
+  },
+  "setup": {
+    "authType": "browser_session",
+    "statusMode": "generic",
+    "browserLogin": {
+      "url": "https://x.com/i/flow/login",
+      "checkUrl": "https://x.com/home"
+    }
+  }
+}

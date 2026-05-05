@@ -1,0 +1,66 @@
+{
+  "id": "nvidia",
+  "kind": "provider",
+  "name": "NVIDIA NIM",
+  "description": "NVIDIA hosted inference models via the integrate API.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://build.nvidia.com/",
+  "tags": ["nvidia", "nim", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-nano-30b-a3b", "deepseek-ai/deepseek-v3.2", "moonshotai/kimi-k2.6", "openai/gpt-oss-120b"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#76B900"
+  },
+  "ownership": {
+    "providerIds": ["nvidia"],
+    "modelPrefixes": ["nvidia/", "deepseek-ai/", "moonshotai/", "openai/"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["NVIDIA_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "nvapi-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "nvidia/nemotron-3-super-120b-a12b"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://integrate.api.nvidia.com/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://integrate.api.nvidia.com/v1",
+      "model": "nvidia/nemotron-3-super-120b-a12b"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

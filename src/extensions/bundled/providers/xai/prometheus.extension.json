@@ -1,0 +1,66 @@
+{
+  "id": "xai",
+  "kind": "provider",
+  "name": "xAI",
+  "description": "xAI Grok models via the xAI API.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://docs.x.ai/",
+  "tags": ["xai", "grok", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["grok-4.20-reasoning", "grok-4-1-fast-reasoning"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#111827"
+  },
+  "ownership": {
+    "providerIds": ["xai"],
+    "modelPrefixes": ["grok-"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["XAI_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "xai-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "grok-4.20-reasoning"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.x.ai/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.x.ai/v1",
+      "model": "grok-4.20-reasoning"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

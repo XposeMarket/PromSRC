@@ -254,7 +254,7 @@ function normalizeWorkspacePathAliases(rawCmd: string, workspacePath: string): s
   return rawCmd.replace(/cd\s+(?:\/d\s+)?(["']?)\/workspace\1/ig, `cd /d "${workspacePath}"`);
 }
 
-function isAllowedShellSegment(segment: string): boolean {
+export function isAllowedShellSegment(segment: string): boolean {
   const cleaned = segment.trim().replace(/^\(+/, '');
   if (!cleaned) return true;
   const token = (cleaned.match(/^[^\s]+/)?.[0] || '').toLowerCase();
@@ -262,14 +262,14 @@ function isAllowedShellSegment(segment: string): boolean {
     'cd', 'if', 'set', 'echo', 'dir', 'ls', 'pwd', 'cat', 'type', 'more', 'find', 'findstr', 'where', 'whoami',
     'rg', 'grep', 'egrep', 'fgrep', 'wc', 'cut', 'tr', 'sort', 'uniq', 'head', 'tail', 'tee',
     'basename', 'dirname', 'realpath', 'stat', 'du', 'df', 'date', 'uname', 'env', 'printenv', 'which',
-    'git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'python', 'python3', 'pip', 'pip3', 'tsc', 'ts-node',
-    'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'dotnet', 'docker', 'kubectl', 'az', 'aws',
-    'curl', 'wget', 'cmd', 'powershell', 'pwsh', 'vercel',
-  ]);
+	    'git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'python', 'python3', 'pip', 'pip3', 'tsc', 'ts-node',
+	    'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'dotnet', 'docker', 'kubectl', 'az', 'aws',
+	    'curl', 'wget', 'cmd', 'powershell', 'pwsh', 'vercel', 'ffmpeg', 'ffprobe', 'magick',
+	  ]);
   return allowed.has(token);
 }
 
-function isAllowedShellCommand(rawCmd: string): boolean {
+export function isAllowedShellCommand(rawCmd: string): boolean {
   const segments = rawCmd.split(/&&|\|\||\||;/g).map(s => s.trim()).filter(Boolean);
   return segments.length > 0 && segments.every(isAllowedShellSegment);
 }
@@ -280,11 +280,12 @@ async function runCommandCaptured(
   timeoutMs = 120000,
 ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   const { spawn } = await import('child_process');
+  const resolvedCwd = path.resolve(String(cwd || getConfig().getWorkspacePath() || process.cwd()));
   return await new Promise(resolve => {
     const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/bash');
     const shellArgs = isWindows ? ['/d', '/s', '/c', command] : ['-lc', command];
     const child = spawn(shell, shellArgs, {
-      cwd,
+      cwd: resolvedCwd,
       env: process.env,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -432,17 +433,13 @@ export function initChatHelpers(deps: {
 
 // --- Hook: gateway:startup -> run BOOT.md ------------------------------------
 // buildBootStartupSnapshot is imported from prompt-context.ts.
-// This wrapper binds the local listTasks dependency.
 function buildBootStartupSnapshot(workspacePath: string): string {
-  return _buildBootStartupSnapshot(
-    workspacePath,
-    (opts: { status: string[] }) => listTasks({ status: opts.status as any }),
-  );
+  return _buildBootStartupSnapshot(workspacePath);
 }
 
 hookBus.register('gateway:startup', async ({ workspacePath }) => {
   const startupSnapshot = buildBootStartupSnapshot(workspacePath);
-  const bootResult = await runBootMd(workspacePath, async (message, sessionId, sendSSE) => {
+  const bootResult = await runBootMd(workspacePath, async (message, sessionId, sendSSE, callerContext) => {
     const bootContext = [
       'CONTEXT: Internal startup BOOT.md turn. All data has been pre-fetched and is in the snapshot below.',
       'Do NOT call any tools. Read the snapshot and write a 2-3 sentence startup summary.',
@@ -450,28 +447,30 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
       startupSnapshot,
       '[/BOOT STARTUP SNAPSHOT]',
     ].join('\n\n');
+    const effectiveCallerContext = callerContext || bootContext;
     const effectiveSessionId = sessionId || `auto_boot_${Date.now()}`;
     setWorkspace(effectiveSessionId, workspacePath);
     clearHistory(effectiveSessionId);
-    const result = await _handleChat(message, effectiveSessionId, sendSSE, undefined, undefined, bootContext);
-    if (result?.text) {
+    const result = await _handleChat(message, effectiveSessionId, sendSSE, undefined, undefined, effectiveCallerContext);
+    if (result?.text && !callerContext) {
       // Backward-compatible fallback for old clients still listening for boot_greeting.
       broadcastWS({ type: 'boot_greeting', text: result.text, sessionId: effectiveSessionId });
     }
     return { text: result.text };
   });
 
-	if (bootResult?.status === 'ran' && bootResult.automatedSession) {
-	    broadcastWS({
-	      type: 'session_notification',
-	      notificationId: bootResult.notificationId,
-	      sessionId: bootResult.sessionId,
-	      text: bootResult.reply,
-      title: bootResult.title,
-      source: bootResult.source,
-      automatedSession: bootResult.automatedSession,
-    });
-  }
+		if (bootResult?.status === 'ran' && bootResult.automatedSession) {
+		    broadcastWS({
+		      type: 'session_notification',
+		      notificationId: bootResult.notificationId,
+		      sessionId: bootResult.sessionId,
+		      text: bootResult.reply,
+	      title: bootResult.title,
+	      source: bootResult.source,
+	      automatedSession: bootResult.automatedSession,
+	      previousSessionId: bootResult.automatedSession.previousSessionId,
+	    });
+	  }
 });
 
 // --- Hook: command:new -> snapshot session before reset -----------------------
@@ -508,7 +507,7 @@ export async function buildPersonalityContext(
   historyLength: number,
   skillsManager: any,
   extraCats?: Set<string>,
-  options?: { profile?: 'default' | 'switch_model' | 'local_llm' },
+  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'creative_design' | 'creative_image' | 'creative_canvas' | 'creative_video' | 'teach_mode' },
 ): Promise<string> {
   return _buildPersonalityContext(
     sessionId,
@@ -546,13 +545,20 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
   void historyLength; // retained for call-site compatibility
   const cats = detectToolCategories(message);
   const catMap: Partial<Record<string, string>> = {
-    browser: 'browser',
-    desktop: 'desktop',
-    teams: 'team_ops',
-    agents: 'team_ops',
-    routing: 'team_ops',
-    integrations: 'integrations',
-    // 'files' → not needed; file tools are core
+    browser: 'browser_automation',
+    desktop: 'desktop_automation',
+    teams: 'agents_and_teams',
+    agents: 'agents_and_teams',
+    routing: 'agents_and_teams',
+    integrations: 'integration_admin',
+    files: 'workspace_write',
+    memory: 'advanced_memory',
+    media: 'media_assets',
+    media_quality: 'media_quality',
+    automations: 'automations',
+    schedule: 'automations',
+    external_apps: 'external_apps',
+    creative_mode: 'creative_mode',
     // 'schedule' → not needed; schedule_job is now core
     // 'source_write' requires explicit activation (code editing)
   };
@@ -727,11 +733,11 @@ export function hasConcreteCompletion(text: string): boolean {
 }
 
 export function isBrowserToolName(name: string): boolean {
-  return /^browser_(open|snapshot|click|fill|press_key|wait|scroll|scroll_collect|close|get_focused_item|get_page_text|vision_screenshot|vision_click|vision_type|send_to_telegram)$/i.test(String(name || ''));
+  return /^browser_(open|snapshot|click|fill|upload_file|press_key|wait|scroll|scroll_collect|click_and_download|close|get_focused_item|get_page_text|vision_screenshot|vision_click|vision_type|send_to_telegram)$/i.test(String(name || ''));
 }
 
 export function isDesktopToolName(name: string): boolean {
-  return /^desktop_(screenshot|get_monitors|window_screenshot|find_window|focus_window|click|drag|wait|type|type_raw|press_key|get_clipboard|set_clipboard|launch_app|close_app|get_process_list|wait_for_change|diff_screenshot|scroll|send_to_telegram)$/i.test(String(name || ''));
+  return /^desktop_(screenshot|get_monitors|window_screenshot|window_control|find_window|focus_window|click|drag|wait|type|type_raw|press_key|get_clipboard|set_clipboard|list_installed_apps|find_installed_app|launch_app|close_app|get_process_list|wait_for_change|diff_screenshot|scroll|send_to_telegram)$/i.test(String(name || ''));
 }
 
 export function isHighStakesFile(filename: string): boolean {
@@ -816,6 +822,10 @@ export function collectFileSnapshots(
 // Short acknowledgments keep token use down; full snapshot/vision context is injected separately.
 export function buildBrowserAck(toolName: string, result: ToolResult): string {
   const raw = String(result.result || '');
+  const looksVerbose = /\bSITE SHORTCUTS FOR\b|\bBROWSER MEMORY FOR\b|(^|\n)Page:\s|(^|\n)Elements\s*\(\d+\):|(^|\n)@\d+\s/.test(raw);
+  if (!result.error && !looksVerbose && raw.trim().length > 0 && raw.length <= 500) {
+    return raw;
+  }
   const shortcutIdx = raw.indexOf('SITE SHORTCUTS FOR');
   const shortcutHint = shortcutIdx >= 0
     ? raw.slice(shortcutIdx).split('\n').slice(0, 6).join('\n')
@@ -838,6 +848,10 @@ export function buildBrowserAck(toolName: string, result: ToolResult): string {
       return withShortcutHint('Clicked. Check snapshot or vision for the new state.');
     case 'browser_fill':
       return withShortcutHint('Input filled.');
+    case 'browser_upload_file':
+      return withShortcutHint(raw.slice(0, 2500) || 'Upload complete.');
+    case 'browser_click_and_download':
+      return withShortcutHint(raw.slice(0, 600) || `${toolName} complete.`);
     case 'browser_get_focused_item':
       return withShortcutHint('Focus checked.');
     default:
@@ -859,6 +873,8 @@ export function buildDesktopAck(toolName: string, result: ToolResult): string {
       return result.result;
     case 'desktop_focus_window':
       return result.result;
+    case 'desktop_window_control':
+      return result.result;
     case 'desktop_click':
       return result.result;
     case 'desktop_drag':
@@ -872,6 +888,10 @@ export function buildDesktopAck(toolName: string, result: ToolResult): string {
     case 'desktop_get_clipboard':
       return result.result;
     case 'desktop_set_clipboard':
+      return result.result;
+    case 'desktop_list_installed_apps':
+      return result.result;
+    case 'desktop_find_installed_app':
       return result.result;
     case 'desktop_launch_app':
       return result.result;
@@ -1092,6 +1112,7 @@ export interface HandleChatResult {
   text: string;
   thinking?: string;
   toolResults?: ToolResult[];
+  artifacts?: any[];
 }
 
 // ─── Orchestration session stats stubs (multi-agent system removed) ───────────
@@ -1112,4 +1133,3 @@ export function recordOrchestrationEvent(
 export function ensureMultiAgentSkill(): void {
   // no-op: multi-agent skill system removed
 }
-

@@ -1,0 +1,44 @@
+{
+  "id": "ollama",
+  "kind": "provider",
+  "name": "Ollama",
+  "description": "Local Ollama runtime for on-device models and offline-first chat.",
+  "category": "Local",
+  "enabledByDefault": true,
+  "docsUrl": "https://ollama.com/",
+  "tags": ["local", "ollama", "offline"],
+  "runtime": {
+    "binding": "providers/ollama-adapter"
+  },
+  "ui": {
+    "color": "#111827"
+  },
+  "ownership": {
+    "providerIds": ["ollama"],
+    "capabilities": ["llm", "local_inference"]
+  },
+  "setup": {
+    "authType": "none",
+    "statusMode": "generic"
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "http://localhost:11434",
+      "model": "qwen3:4b"
+    },
+    "schema": {
+      "endpoint": "string",
+      "model": "string"
+    },
+    "uiHints": {
+      "endpoint": {
+        "label": "Endpoint",
+        "help": "Local Ollama server URL."
+      },
+      "model": {
+        "label": "Default Model",
+        "help": "Primary Ollama model Prometheus should use."
+      }
+    }
+  }
+}

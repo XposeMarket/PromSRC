@@ -10,6 +10,7 @@
 
 
 :root {
+  --native-color-scheme: light;
   --bg: #2e2e2e;
   --bg-soft: #363636;
   --panel: rgba(216,214,210,0.96);
@@ -81,6 +82,7 @@
 }
 
 :root[data-theme="dark"] {
+  --native-color-scheme: dark;
   --bg: #1a1a1a;
   --bg-soft: #222222;
   --panel: #2a2a2a;
@@ -230,6 +232,19 @@ body {
 .status-pill.stat-compact {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10px;
+}
+
+body.right-canvas-open #model-pill,
+body.right-canvas-open #system-pill {
+  display: none !important;
+}
+
+body.right-canvas-open .sidebar:not(.collapsed) ~ .workspace .page-title {
+  display: none !important;
+}
+
+body.right-creative-canvas-open .page-title {
+  display: none !important;
 }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #a9b4c5; }
@@ -624,6 +639,10 @@ body {
   overflow: hidden;
 }
 
+body.immersive-center-hidden .center-col {
+  display: none;
+}
+
 /* Main shell wrap (the light grey panel) */
 .main-shell-wrap {
   min-height: 0;
@@ -713,6 +732,12 @@ main,
   min-width: var(--right-w);
   overflow-y: auto;
   overflow-x: hidden;
+}
+.right-panel.open.canvas-open {
+  overflow: hidden;
+}
+.right-panel.open.canvas-open > *:not(#canvas-panel):not(.rp-resize-handle) {
+  display: none !important;
 }
 
 /* Right panel resize handle */
@@ -1016,7 +1041,7 @@ body.left-collapsed .sidebar-inner {
 }
 
 /* Right panel content fade when collapsed */
-body.right-collapsed .right-panel > *:not(.panel-collapse-btn) {
+.right-panel:not(.open) > *:not(.panel-collapse-btn) {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease;

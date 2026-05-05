@@ -1,9 +1,8 @@
 ---
-name: Embedding Search
-description: Build semantic retrieval systems over text using embeddings and a vector index. Use for document similarity search, retrieval pipelines for RAG, and question answering over indexed corpora. Do not use for one-off keyword grep, structured SQL lookups, or raw document ingestion-only tasks.
-emoji: 🔎
-version: 1.1.0
-triggers: embedding, embeddings, semantic search, vector search, similarity search, nearest neighbor, ANN, cosine similarity, retrieval, RAG, retrieval augmented generation, document q&a, knowledge base search, semantic lookup, vector index, vector database, chunk documents, chunking strategy, rerank, recall@k, hybrid retrieval, chroma, chromadb, faiss, qdrant, pgvector
+name: embedding-search
+description: Build semantic retrieval workflows that help Prometheus (or a user system) find meaning-based matches across documents.
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Embedding Search

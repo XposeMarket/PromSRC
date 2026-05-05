@@ -1,12 +1,13 @@
 // src/gateway/routes/account.router.ts
 // Supabase account auth: login, status, logout, token refresh, subscription check.
-// Session is kept in-memory and persisted to {dataDir}/auth-session.json so it
-// survives gateway restarts without requiring re-login.
+// Session is kept in-memory and persisted encrypted in the vault so it survives
+// gateway restarts without requiring re-login.
 
 import { Router } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfig } from '../../config/config';
+import { getVault } from '../../security/vault';
 
 export const router = Router();
 
@@ -33,7 +34,16 @@ interface AuthSession {
 
 let _session: AuthSession | null = null;
 const SUBSCRIPTION_REFRESH_TTL_MS = 5 * 60 * 1000;
+const AUTH_SESSION_VAULT_KEY = 'account.supabase.session';
 type SubscriptionRefreshResult = 'active' | 'inactive' | 'unknown';
+
+function getConfigDir(): string {
+  return getConfig().getConfigDir();
+}
+
+function getSessionVault() {
+  return getVault(getConfigDir());
+}
 
 function sessionFilePath(): string {
   const dataDir = (getConfig() as any).getDataDir?.() ||
@@ -42,10 +52,75 @@ function sessionFilePath(): string {
   return path.join(dataDir, 'auth-session.json');
 }
 
+function decodeJwtClaims(token: string): Record<string, any> | null {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length < 2) return null;
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = payload + '='.repeat((4 - (payload.length % 4 || 4)) % 4);
+    const raw = Buffer.from(padded, 'base64').toString('utf-8');
+    return JSON.parse(raw) as Record<string, any>;
+  } catch {
+    return null;
+  }
+}
+
+function deriveAccessTokenExpiry(accessToken: string): number {
+  const exp = Number(decodeJwtClaims(accessToken)?.exp);
+  if (Number.isFinite(exp) && exp > 0) return Math.floor(exp);
+  return Math.floor(Date.now() / 1000) + 3600;
+}
+
+function normalizeSession(input: any): AuthSession | null {
+  const userId = String(input?.userId || '').trim();
+  const email = String(input?.email || '').trim();
+  const accessToken = String(input?.accessToken || '').trim();
+  if (!userId || !email || !accessToken) return null;
+  const expiresAtRaw = Number(input?.expiresAt);
+  const subscriptionCheckedAtRaw = Number(input?.subscriptionCheckedAt);
+  return {
+    userId,
+    email,
+    accessToken,
+    refreshToken: String(input?.refreshToken || ''),
+    expiresAt: Number.isFinite(expiresAtRaw) && expiresAtRaw > 0
+      ? Math.floor(expiresAtRaw)
+      : deriveAccessTokenExpiry(accessToken),
+    isAdmin: input?.isAdmin === true,
+    subscriptionActive: input?.subscriptionActive === true,
+    subscriptionCheckedAt: Number.isFinite(subscriptionCheckedAtRaw)
+      ? subscriptionCheckedAtRaw
+      : undefined,
+  };
+}
+
+function migrateLegacySession(): void {
+  const legacyPath = sessionFilePath();
+  if (!fs.existsSync(legacyPath)) return;
+  try {
+    const raw = fs.readFileSync(legacyPath, 'utf-8');
+    const parsed = normalizeSession(JSON.parse(raw));
+    if (!parsed) return;
+    getSessionVault().set(AUTH_SESSION_VAULT_KEY, JSON.stringify(parsed), 'migration:account_session');
+    fs.unlinkSync(legacyPath);
+  } catch {}
+}
+
 function loadPersistedSession(): void {
   try {
-    const raw = fs.readFileSync(sessionFilePath(), 'utf-8');
-    _session = JSON.parse(raw) as AuthSession;
+    migrateLegacySession();
+    const secret = getSessionVault().get(AUTH_SESSION_VAULT_KEY, 'account:load');
+    if (!secret) {
+      _session = null;
+      return;
+    }
+    const parsed = normalizeSession(JSON.parse(secret.expose()));
+    if (!parsed) {
+      getSessionVault().delete(AUTH_SESSION_VAULT_KEY, 'account:invalid');
+      _session = null;
+      return;
+    }
+    _session = parsed;
   } catch {
     _session = null;
   }
@@ -53,12 +128,15 @@ function loadPersistedSession(): void {
 
 function persistSession(): void {
   try {
-    const file = sessionFilePath();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const vault = getSessionVault();
     if (_session) {
-      fs.writeFileSync(file, JSON.stringify(_session, null, 2), 'utf-8');
-    } else if (fs.existsSync(file)) {
-      fs.unlinkSync(file);
+      vault.set(AUTH_SESSION_VAULT_KEY, JSON.stringify(_session), 'account:save');
+    } else {
+      vault.delete(AUTH_SESSION_VAULT_KEY, 'account:clear');
+    }
+    const legacyPath = sessionFilePath();
+    if (fs.existsSync(legacyPath)) {
+      fs.unlinkSync(legacyPath);
     }
   } catch {}
 }
@@ -126,6 +204,77 @@ async function checkIsAdmin(userId: string, accessToken: string): Promise<boolea
   }
 }
 
+async function getAuthenticatedUser(accessToken: string): Promise<{ userId: string; email: string }> {
+  const data = await sbFetch('/auth/v1/user', {}, accessToken);
+  const userId = String(data?.id || '').trim();
+  const email = String(data?.email || data?.user_metadata?.email || '').trim();
+  if (!userId || !email) {
+    throw new Error('Authenticated user record incomplete');
+  }
+  return { userId, email };
+}
+
+function hasAccountAccess(session: AuthSession): boolean {
+  return session.isAdmin || session.subscriptionActive;
+}
+
+function buildAuthenticatedResponse(session: AuthSession, extras: Record<string, any> = {}) {
+  return {
+    authenticated: true,
+    email: session.email,
+    userId: session.userId,
+    isAdmin: session.isAdmin,
+    subscriptionActive: session.subscriptionActive,
+    expiresAt: session.expiresAt,
+    ...extras,
+  };
+}
+
+function buildInactiveSubscriptionResponse(session: AuthSession) {
+  return {
+    authenticated: false,
+    email: session.email,
+    userId: session.userId,
+    isAdmin: false,
+    subscriptionActive: false,
+    reason: 'subscription_inactive',
+  };
+}
+
+function buildRetryableAuthenticatedResponse(
+  session: AuthSession,
+  reason = 'session_verification_failed',
+  extras: Record<string, any> = {},
+) {
+  return buildAuthenticatedResponse(session, {
+    verified: false,
+    retryable: true,
+    reason,
+    ...extras,
+  });
+}
+
+async function buildVerifiedSession(accessToken: string, refreshToken: string = ''): Promise<AuthSession> {
+  const cleanAccessToken = String(accessToken || '').trim();
+  if (!cleanAccessToken) {
+    throw new Error('Access token is required');
+  }
+  const cleanRefreshToken = String(refreshToken || '').trim();
+  const { userId, email } = await getAuthenticatedUser(cleanAccessToken);
+  const isAdmin = await checkIsAdmin(userId, cleanAccessToken);
+  const subscriptionActive = Boolean(await checkSubscription(userId, cleanAccessToken, isAdmin, 10000));
+  return {
+    userId,
+    email,
+    accessToken: cleanAccessToken,
+    refreshToken: cleanRefreshToken,
+    expiresAt: deriveAccessTokenExpiry(cleanAccessToken),
+    isAdmin,
+    subscriptionActive,
+    subscriptionCheckedAt: Date.now(),
+  };
+}
+
 async function refreshAccessToken(refreshToken: string, timeoutMs = 10000): Promise<{ accessToken: string; refreshToken: string; expiresAt: number } | null> {
   try {
     const data = await sbFetch('/auth/v1/token?grant_type=refresh_token', {
@@ -137,6 +286,16 @@ async function refreshAccessToken(refreshToken: string, timeoutMs = 10000): Prom
       refreshToken: data.refresh_token || refreshToken,
       expiresAt: Math.floor(Date.now() / 1000) + (data.expires_in || 3600),
     };
+  } catch {
+    return null;
+  }
+}
+
+async function refreshVerifiedSession(refreshToken: string): Promise<AuthSession | null> {
+  const refreshed = await refreshAccessToken(refreshToken);
+  if (!refreshed) return null;
+  try {
+    return await buildVerifiedSession(refreshed.accessToken, refreshed.refreshToken);
   } catch {
     return null;
   }
@@ -170,6 +329,54 @@ async function refreshSubscriptionIfNeeded(force: boolean = false, timeoutMs = 1
   return subscriptionActive ? 'active' : 'inactive';
 }
 
+async function resolveStrictSessionStatus(timeoutMs = 10000): Promise<Record<string, any>> {
+  if (!_session) {
+    return { authenticated: false, reason: 'not_authenticated' };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (_session.expiresAt < now) {
+    if (!_session.refreshToken) {
+      return buildRetryableAuthenticatedResponse(_session, 'session_refresh_unavailable');
+    }
+
+    const refreshed = await refreshVerifiedSession(_session.refreshToken);
+    if (!refreshed) {
+      return buildRetryableAuthenticatedResponse(_session, 'session_refresh_failed');
+    }
+
+    _session = refreshed;
+    persistSession();
+    if (!hasAccountAccess(_session)) {
+      const response = buildInactiveSubscriptionResponse(_session);
+      clearSession();
+      return response;
+    }
+  }
+
+  const subscriptionState = await refreshSubscriptionIfNeeded(true, timeoutMs);
+  const activeSession = _session;
+  if (!activeSession) {
+    return { authenticated: false, reason: 'not_authenticated' };
+  }
+
+  if (subscriptionState === 'inactive') {
+    const response = buildInactiveSubscriptionResponse(activeSession);
+    clearSession();
+    return response;
+  }
+  if (subscriptionState === 'unknown') {
+    return buildRetryableAuthenticatedResponse(activeSession);
+  }
+
+  return buildAuthenticatedResponse(activeSession, { verified: true });
+}
+
+function isTruthyQueryValue(value: any): boolean {
+  const normalized = String(Array.isArray(value) ? value[0] : value || '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
 // ─── Startup refresh ──────────────────────────────────────────────────────────
 // Called at gateway start to silently refresh an expired persisted session.
 export async function refreshPersistedSession(): Promise<void> {
@@ -178,15 +385,25 @@ export async function refreshPersistedSession(): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const expiresSoon = _session.expiresAt - now < 300; // refresh if < 5 min remaining
 
-  if (expiresSoon) {
-    const refreshed = await refreshAccessToken(_session.refreshToken);
+  if (expiresSoon && _session.refreshToken) {
+    const refreshed = await refreshVerifiedSession(_session.refreshToken);
     if (refreshed) {
-      _session = { ..._session, ...refreshed };
+      _session = refreshed;
+      persistSession();
+      if (!hasAccountAccess(_session)) {
+        clearSession();
+        return;
+      }
     } else {
-      // Refresh failed — clear session, user must log in again
-      clearSession();
+      // Keep the persisted session on transient refresh failures.
+      // The user should only be logged out for a manual logout or a
+      // definitive inactive-subscription result.
       return;
     }
+  }
+
+  if (_session.expiresAt < now && !_session.refreshToken) {
+    return;
   }
 
   const subscriptionState = await refreshSubscriptionIfNeeded(true);
@@ -201,92 +418,77 @@ router.get('/api/account/config', (_req, res) => {
   res.json({ supabaseUrl: SUPABASE_URL, supabaseAnonKey: SUPABASE_ANON_KEY });
 });
 
-// GET /api/account/status — return cached auth state instantly (no blocking Supabase calls).
-// Token refresh and subscription checks happen in the background so this endpoint
-// always responds in <1ms regardless of Supabase latency.
-router.get('/api/account/status', (_req, res) => {
+// GET /api/account/status — return cached auth state instantly by default.
+// Pass ?strict=1 for a boot-time entitlement check that blocks on refresh.
+router.get('/api/account/status', async (req, res) => {
+  if (isTruthyQueryValue(req.query?.strict)) {
+    try {
+      return res.json(await resolveStrictSessionStatus());
+    } catch {
+      if (_session) return res.json(buildRetryableAuthenticatedResponse(_session));
+      return res.json({ authenticated: false, reason: 'session_verification_failed', retryable: true });
+    }
+  }
+
   if (!_session) {
     return res.json({ authenticated: false });
   }
 
   const now = Math.floor(Date.now() / 1000);
 
-  // No refresh token and token expired — definitively logged out
+  // Keep the cached authenticated session even if refresh is unavailable.
+  // We only clear it on a manual logout or a definitive inactive-subscription
+  // check.
   if (_session.expiresAt < now && !_session.refreshToken) {
-    clearSession();
-    return res.json({ authenticated: false });
+    return res.json(buildRetryableAuthenticatedResponse(_session, 'session_refresh_unavailable'));
   }
 
   // Token expired but refresh token exists — kick off background refresh,
   // return optimistic authenticated state (next request will use fresh token)
   if (_session.expiresAt < now) {
-    refreshAccessToken(_session.refreshToken).then(refreshed => {
-      if (refreshed && _session) {
-        _session = { ..._session, ...refreshed };
+    refreshVerifiedSession(_session.refreshToken).then(refreshed => {
+      if (refreshed) {
+        _session = refreshed;
         persistSession();
-      } else {
-        clearSession();
+        if (!hasAccountAccess(_session)) {
+          clearSession();
+        }
       }
-    }).catch(() => clearSession());
+    }).catch(() => {});
+    return res.json(buildRetryableAuthenticatedResponse(_session, 'session_refresh_pending'));
   } else {
     // Token valid — background-refresh subscription if TTL lapsed
-    refreshSubscriptionIfNeeded(false).catch(() => {});
+    refreshSubscriptionIfNeeded(false).then((subscriptionState) => {
+      if (subscriptionState === 'inactive') clearSession();
+    }).catch(() => {});
   }
 
-  res.json({
-    authenticated: true,
-    email: _session.email,
-    userId: _session.userId,
-    isAdmin: _session.isAdmin,
-    subscriptionActive: _session.subscriptionActive,
-    expiresAt: _session.expiresAt,
-  });
+  res.json(buildAuthenticatedResponse(_session));
 });
 
-// POST /api/account/login — accepts pre-verified session from the browser.
-// The browser calls Supabase directly (bypassing gateway firewall restrictions),
-// then passes the verified session here for server-side storage.
-// Body: { accessToken, refreshToken, email, userId, isAdmin, subscriptionActive, expiresAt }
-router.post('/api/account/login', (req, res) => {
-  const { accessToken, refreshToken, email, userId, isAdmin, subscriptionActive, expiresAt } = req.body || {};
+// POST /api/account/login — accepts browser-acquired Supabase tokens, then
+// validates them server-side before persisting an authenticated session.
+// Body: { accessToken, refreshToken }
+router.post('/api/account/login', async (req, res) => {
+  const accessToken = String(req.body?.accessToken || '').trim();
+  const refreshToken = String(req.body?.refreshToken || '').trim();
 
-  if (!accessToken || !email || !userId) {
-    return res.status(400).json({ error: 'accessToken, email, and userId are required' });
+  if (!accessToken) {
+    return res.status(400).json({ error: 'accessToken is required' });
   }
 
-  const nextSession: AuthSession = {
-    userId: String(userId),
-    email: String(email),
-    accessToken: String(accessToken),
-    refreshToken: String(refreshToken || ''),
-    expiresAt: Number(expiresAt) || Math.floor(Date.now() / 1000) + 3600,
-    isAdmin: Boolean(isAdmin),
-    subscriptionActive: Boolean(subscriptionActive),
-    subscriptionCheckedAt: Date.now(),
-  };
-
-  if (!nextSession.isAdmin && !nextSession.subscriptionActive) {
-    clearSession();
-    return res.json({
-      authenticated: false,
-      email: nextSession.email,
-      userId: nextSession.userId,
-      isAdmin: false,
-      subscriptionActive: false,
-      reason: 'subscription_inactive',
-    });
+  try {
+    const nextSession = await buildVerifiedSession(accessToken, refreshToken);
+    if (!hasAccountAccess(nextSession)) {
+      clearSession();
+      return res.json(buildInactiveSubscriptionResponse(nextSession));
+    }
+    _session = nextSession;
+    persistSession();
+    return res.json(buildAuthenticatedResponse(_session));
+  } catch (err: any) {
+    return res.status(401).json({ error: err?.message || 'Session validation failed' });
   }
-
-  _session = nextSession;
-  persistSession();
-
-  res.json({
-    authenticated: true,
-    email: _session.email,
-    userId: _session.userId,
-    isAdmin: _session.isAdmin,
-    subscriptionActive: _session.subscriptionActive,
-  });
 });
 
 // POST /api/account/login/password - authenticate through the gateway.
@@ -307,51 +509,24 @@ router.post('/api/account/login/password', async (req, res) => {
       body: JSON.stringify({ email: normalizedEmail, password: normalizedPassword }),
     }, undefined, 15000);
 
-    const userId = auth?.user?.id;
     const accessToken = auth?.access_token;
     const refreshToken = auth?.refresh_token || '';
-    const expiresAt = Math.floor(Date.now() / 1000) + (auth?.expires_in || 3600);
 
-    if (!userId || !accessToken) {
+    if (!accessToken) {
       return res.status(401).json({ error: 'Authentication failed - no token returned' });
     }
 
-    const isAdmin = await checkIsAdmin(userId, accessToken);
-    const subscriptionActive = Boolean(await checkSubscription(userId, accessToken, isAdmin, 10000));
+    const nextSession = await buildVerifiedSession(accessToken, refreshToken);
 
-    const nextSession: AuthSession = {
-      userId: String(userId),
-      email: normalizedEmail,
-      accessToken: String(accessToken),
-      refreshToken: String(refreshToken),
-      expiresAt,
-      isAdmin,
-      subscriptionActive,
-      subscriptionCheckedAt: Date.now(),
-    };
-
-    if (!nextSession.isAdmin && !nextSession.subscriptionActive) {
+    if (!hasAccountAccess(nextSession)) {
       clearSession();
-      return res.json({
-        authenticated: false,
-        email: nextSession.email,
-        userId: nextSession.userId,
-        isAdmin: false,
-        subscriptionActive: false,
-        reason: 'subscription_inactive',
-      });
+      return res.json(buildInactiveSubscriptionResponse(nextSession));
     }
 
     _session = nextSession;
     persistSession();
 
-    return res.json({
-      authenticated: true,
-      email: _session.email,
-      userId: _session.userId,
-      isAdmin: _session.isAdmin,
-      subscriptionActive: _session.subscriptionActive,
-    });
+    return res.json(buildAuthenticatedResponse(_session));
   } catch (err: any) {
     return res.status(401).json({ error: err?.message || 'Login failed' });
   }
@@ -369,26 +544,19 @@ router.post('/api/account/refresh', async (_req, res) => {
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  const refreshed = await refreshAccessToken(_session.refreshToken);
+  const refreshed = await refreshVerifiedSession(_session.refreshToken);
   if (!refreshed) {
-    clearSession();
-    return res.status(401).json({ error: 'Session expired — please log in again' });
+    return res.status(503).json({ error: 'Session refresh failed', retryable: true });
   }
 
-  _session = { ..._session, ...refreshed };
-  const subscriptionState = await refreshSubscriptionIfNeeded(true);
-  if (subscriptionState === 'inactive') {
+  _session = refreshed;
+  persistSession();
+  if (!hasAccountAccess(_session)) {
     clearSession();
     return res.status(401).json({ error: 'No active subscription found' });
   }
 
-  res.json({
-    authenticated: true,
-    email: _session.email,
-    userId: _session.userId,
-    isAdmin: _session.isAdmin,
-    subscriptionActive: _session.subscriptionActive,
-  });
+  res.json(buildAuthenticatedResponse(_session));
 });
 
 // Helper for other routes to check if current session has an active subscription
@@ -401,4 +569,17 @@ export function getSessionStatus(): { authenticated: boolean; subscriptionActive
     subscriptionActive: _session.subscriptionActive,
     isAdmin: _session.isAdmin,
   };
+}
+
+export function requireAccountAccess(_req: any, res: any, next: any): void {
+  const status = getSessionStatus();
+  if (!status.authenticated) {
+    res.status(401).json({ error: 'Account login required', reason: 'not_authenticated' });
+    return;
+  }
+  if (!status.subscriptionActive && !status.isAdmin) {
+    res.status(402).json({ error: 'Active subscription required', reason: 'subscription_inactive' });
+    return;
+  }
+  next();
 }

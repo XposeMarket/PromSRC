@@ -1,24 +1,134 @@
-// src/tools/deploy-analysis-team.ts
-// CIS Phase 2 — Website Intelligence Team.
-//
-// Runs entirely in the main chat context — no teams infrastructure.
-// Spawns 5 specialist agents in parallel via backgroundSpawn(), waits for all,
-// then runs the compiler agent, reads the report, and returns it.
-// Each agent is fully self-contained and writes findings files to sharedDir.
-
 import fs from 'fs';
 import path from 'path';
 import type { ToolResult } from '../types.js';
+import { getConfig } from '../config/config.js';
+import { parseProviderModelRef } from '../agents/model-routing.js';
 import {
-  backgroundSpawn,
   backgroundJoin,
+  backgroundSpawn,
 } from '../gateway/tasks/task-runner.js';
 
-// ─── Dependency injection ─────────────────────────────────────────────────────
-// Only workspacePath and broadcast needed — backgroundSpawn uses bgDeps.handleChat
-// which is already injected at server boot via setBackgroundAgentDeps().
+type BackgroundJoinLike = {
+  state?: string;
+  result?: string;
+  error?: string;
+  timedOut?: boolean;
+} | null;
 
-let _workspacePath: string = '';
+type Severity = 'critical' | 'high' | 'medium' | 'low';
+type Priority = 'now' | 'next' | 'later';
+
+type SpecialistStrength = {
+  title: string;
+  evidence: string;
+  impact: string;
+};
+
+type SpecialistFinding = {
+  severity: Severity;
+  priority: Priority;
+  category: string;
+  title: string;
+  why_it_matters: string;
+  evidence: string;
+  recommendation: string;
+  impact: string;
+};
+
+type SpecialistOpportunity = {
+  title: string;
+  channel: string;
+  rationale: string;
+  test: string;
+  priority: Priority;
+};
+
+type SpecialistEvidence = {
+  kind: string;
+  label: string;
+  url: string;
+  detail: string;
+};
+
+type SpecialistQuery = {
+  query: string;
+  outcome: string;
+  notes: string;
+};
+
+type SpecialistPageReview = {
+  url: string;
+  purpose: string;
+  notes: string;
+};
+
+type BusinessSnapshot = {
+  brand: string;
+  company_name: string;
+  what_it_is: string;
+  offers: string[];
+  target_customers: string[];
+  pricing_signals: string[];
+  trust_signals: string[];
+  cta_paths: string[];
+  contact_points: string[];
+  location_signals: string[];
+  notable_pages: string[];
+};
+
+type SpecialistPayload = {
+  specialty: string;
+  specialty_label: string;
+  status: 'ok' | 'partial' | 'failed';
+  summary: string;
+  score: number;
+  sub_scores: Record<string, number>;
+  business_snapshot: BusinessSnapshot;
+  strengths: SpecialistStrength[];
+  findings: SpecialistFinding[];
+  opportunities: SpecialistOpportunity[];
+  evidence: SpecialistEvidence[];
+  queries: SpecialistQuery[];
+  pages_reviewed: SpecialistPageReview[];
+  sales_angles: string[];
+  marketing_angles: string[];
+  limitations: string[];
+  background_state: string;
+  timed_out: boolean;
+};
+
+type SpecialistSpec = {
+  id: string;
+  label: string;
+  timeoutMs: number;
+  buildPrompt: (url: string) => string;
+};
+
+type DeployAnalysisArtifact = {
+  type: string;
+  title: string;
+  path?: string;
+  status?: string;
+  summary?: string;
+};
+
+const ANALYSIS_JSON_START = 'ANALYSIS_JSON_START';
+const ANALYSIS_JSON_END = 'ANALYSIS_JSON_END';
+
+const severityWeight: Record<Severity, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+const priorityWeight: Record<Priority, number> = {
+  now: 3,
+  next: 2,
+  later: 1,
+};
+
+let _workspacePath = '';
 let _broadcastFn: ((data: object) => void) | null = null;
 
 export function injectAnalysisTeamDeps(deps: {
@@ -29,324 +139,839 @@ export function injectAnalysisTeamDeps(deps: {
   _broadcastFn = deps.broadcast ?? null;
 }
 
-// ─── Agent Prompts ────────────────────────────────────────────────────────────
+function slugifyUrl(url: string): string {
+  return url
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/$/, '')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
+    .toLowerCase() || 'site';
+}
 
-function buildAnalystPrompts(url: string, sharedDir: string, workspacePath: string) {
-  // Use workspace-relative paths so create_file/read_file resolve correctly
-  const rel = path.relative(workspacePath, sharedDir).replace(/\\/g, '/');
-  const su = url.replace(/https?:\/\//, '').replace(/\/$/, '');
+function getDomain(url: string): string {
+  return url.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').trim();
+}
 
+function safeString(value: any, fallback = ''): string {
+  if (typeof value === 'string') return value.trim();
+  if (value == null) return fallback;
+  return String(value).trim();
+}
+
+function toStringList(value: any, limit = 8): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    const str = safeString(item);
+    if (!str) continue;
+    const key = str.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(str);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function clampScore(value: any): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(10, Math.round(num * 10) / 10));
+}
+
+function normalizePriority(value: any): Priority {
+  const raw = safeString(value).toLowerCase();
+  if (raw === 'now' || raw === 'critical' || raw === 'urgent' || raw === 'high') return 'now';
+  if (raw === 'later' || raw === 'low') return 'later';
+  return 'next';
+}
+
+function normalizeSeverity(value: any): Severity {
+  const raw = safeString(value).toLowerCase();
+  if (raw === 'critical') return 'critical';
+  if (raw === 'high') return 'high';
+  if (raw === 'low') return 'low';
+  return 'medium';
+}
+
+function normalizeSubScores(value: any): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const cleanedKey = safeString(key).replace(/[^a-z0-9_ -]/gi, '').trim();
+    if (!cleanedKey) continue;
+    out[cleanedKey] = clampScore(raw);
+  }
+  return out;
+}
+
+function normalizeBusinessSnapshot(value: any): BusinessSnapshot {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    brand: safeString(raw.brand),
+    company_name: safeString(raw.company_name || raw.company || raw.name),
+    what_it_is: safeString(raw.what_it_is || raw.description || raw.summary),
+    offers: toStringList(raw.offers, 8),
+    target_customers: toStringList(raw.target_customers || raw.icp || raw.audience, 8),
+    pricing_signals: toStringList(raw.pricing_signals, 8),
+    trust_signals: toStringList(raw.trust_signals, 8),
+    cta_paths: toStringList(raw.cta_paths, 8),
+    contact_points: toStringList(raw.contact_points, 8),
+    location_signals: toStringList(raw.location_signals, 8),
+    notable_pages: toStringList(raw.notable_pages || raw.pages, 10),
+  };
+}
+
+function normalizeStrengths(value: any): SpecialistStrength[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 5)
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      return {
+        title: safeString(raw.title),
+        evidence: safeString(raw.evidence),
+        impact: safeString(raw.impact),
+      };
+    })
+    .filter((item) => item.title || item.evidence);
+}
+
+function normalizeFindings(value: any): SpecialistFinding[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 6)
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      return {
+        severity: normalizeSeverity(raw.severity),
+        priority: normalizePriority(raw.priority),
+        category: safeString(raw.category),
+        title: safeString(raw.title),
+        why_it_matters: safeString(raw.why_it_matters || raw.why),
+        evidence: safeString(raw.evidence),
+        recommendation: safeString(raw.recommendation || raw.fix),
+        impact: safeString(raw.impact),
+      };
+    })
+    .filter((item) => item.title || item.recommendation || item.evidence);
+}
+
+function normalizeOpportunities(value: any): SpecialistOpportunity[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 6)
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      return {
+        title: safeString(raw.title),
+        channel: safeString(raw.channel),
+        rationale: safeString(raw.rationale),
+        test: safeString(raw.test || raw.action),
+        priority: normalizePriority(raw.priority),
+      };
+    })
+    .filter((item) => item.title || item.test);
+}
+
+function normalizeEvidence(value: any): SpecialistEvidence[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 8)
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      return {
+        kind: safeString(raw.kind || raw.type, 'note'),
+        label: safeString(raw.label || raw.title),
+        url: safeString(raw.url),
+        detail: safeString(raw.detail || raw.notes),
+      };
+    })
+    .filter((item) => item.label || item.url || item.detail);
+}
+
+function normalizeQueries(value: any): SpecialistQuery[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 8)
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      return {
+        query: safeString(raw.query),
+        outcome: safeString(raw.outcome),
+        notes: safeString(raw.notes),
+      };
+    })
+    .filter((item) => item.query || item.outcome);
+}
+
+function normalizePagesReviewed(value: any): SpecialistPageReview[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 8)
+    .map((item) => {
+      const raw = item && typeof item === 'object' ? item : {};
+      return {
+        url: safeString(raw.url),
+        purpose: safeString(raw.purpose),
+        notes: safeString(raw.notes),
+      };
+    })
+    .filter((item) => item.url || item.notes);
+}
+
+function trimText(value: any, max = 1000): string {
+  const text = safeString(value);
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+function stripToolSummary(text: string): string {
+  const marker = '\n\n---\n**Tool calls made:**';
+  const idx = text.indexOf(marker);
+  return idx >= 0 ? text.slice(0, idx).trim() : text.trim();
+}
+
+function extractJsonBlock(text: string): any | null {
+  const body = stripToolSummary(String(text || ''));
+  const start = body.indexOf(ANALYSIS_JSON_START);
+  const end = body.indexOf(ANALYSIS_JSON_END);
+  const marked = start >= 0 && end > start
+    ? body.slice(start + ANALYSIS_JSON_START.length, end).trim()
+    : '';
+  const candidates = [marked, body];
+
+  for (const candidate of candidates) {
+    const trimmed = String(candidate || '').trim();
+    if (!trimmed) continue;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      const firstBrace = trimmed.indexOf('{');
+      const lastBrace = trimmed.lastIndexOf('}');
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        try {
+          return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+        } catch {
+          // continue
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeSpecialistPayload(spec: SpecialistSpec, join: BackgroundJoinLike): SpecialistPayload {
+  const rawText = trimText(join?.result || join?.error || '');
+  const parsed = extractJsonBlock(join?.result || '');
+  const state = safeString(join?.state || 'unknown');
+  const timedOut = join?.timedOut === true;
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      specialty: spec.id,
+      specialty_label: spec.label,
+      status: state === 'completed' ? 'partial' : 'failed',
+      summary: `${spec.label} did not return a structured payload.`,
+      score: 0,
+      sub_scores: {},
+      business_snapshot: normalizeBusinessSnapshot({}),
+      strengths: [],
+      findings: [
+        {
+          severity: 'high',
+          priority: 'next',
+          category: 'tooling',
+          title: `${spec.label} could not complete normally`,
+          why_it_matters: 'This leaves a gap in the audit and reduces confidence in the final GTM readout.',
+          evidence: rawText || `Background state: ${state}${timedOut ? ' (timed out)' : ''}`,
+          recommendation: 'Rerun this specialist after resolving the model or tool issue that interrupted it.',
+          impact: 'Missing evidence for this audit area can hide real risks or opportunities.',
+        },
+      ],
+      opportunities: [],
+      evidence: rawText ? [{ kind: 'tooling', label: `${spec.label} execution note`, url: '', detail: rawText }] : [],
+      queries: [],
+      pages_reviewed: [],
+      sales_angles: [],
+      marketing_angles: [],
+      limitations: [
+        `Specialist state: ${state}${timedOut ? ' (timed out)' : ''}`,
+        rawText ? `Execution output: ${rawText}` : 'No structured specialist output was captured.',
+      ],
+      background_state: state,
+      timed_out: timedOut,
+    };
+  }
+
+  const payload = parsed as Record<string, any>;
+  const normalized: SpecialistPayload = {
+    specialty: safeString(payload.specialty, spec.id) || spec.id,
+    specialty_label: safeString(payload.specialty_label, spec.label) || spec.label,
+    status: state === 'completed' ? 'ok' : 'partial',
+    summary: safeString(payload.summary, `${spec.label} completed without a summary.`),
+    score: clampScore(payload.score),
+    sub_scores: normalizeSubScores(payload.sub_scores),
+    business_snapshot: normalizeBusinessSnapshot(payload.business_snapshot),
+    strengths: normalizeStrengths(payload.strengths),
+    findings: normalizeFindings(payload.findings),
+    opportunities: normalizeOpportunities(payload.opportunities),
+    evidence: normalizeEvidence(payload.evidence),
+    queries: normalizeQueries(payload.queries),
+    pages_reviewed: normalizePagesReviewed(payload.pages_reviewed),
+    sales_angles: toStringList(payload.sales_angles, 8),
+    marketing_angles: toStringList(payload.marketing_angles, 8),
+    limitations: toStringList(payload.limitations, 8),
+    background_state: state,
+    timed_out: timedOut,
+  };
+
+  if (!normalized.findings.length && normalized.status !== 'ok') {
+    normalized.findings.push({
+      severity: 'medium',
+      priority: 'next',
+      category: 'tooling',
+      title: `${normalized.specialty_label} completed with an incomplete state`,
+      why_it_matters: 'Partial execution may have limited the depth of evidence gathered.',
+      evidence: rawText || `Background state: ${state}${timedOut ? ' (timed out)' : ''}`,
+      recommendation: 'Treat this section as directional and rerun it if the final strategy depends on deeper evidence.',
+      impact: 'Recommendations from this specialist may be less complete than intended.',
+    });
+  }
+
+  return normalized;
+}
+
+function appendUnique(list: string[], value: string): void {
+  const clean = safeString(value);
+  if (!clean) return;
+  const key = clean.toLowerCase();
+  if (list.some((item) => item.toLowerCase() === key)) return;
+  list.push(clean);
+}
+
+function mergeBusinessSnapshots(payloads: SpecialistPayload[]): BusinessSnapshot {
+  const merged: BusinessSnapshot = normalizeBusinessSnapshot({});
+
+  for (const payload of payloads) {
+    const snap = payload.business_snapshot;
+
+    if (!merged.brand) merged.brand = snap.brand;
+    if (!merged.company_name) merged.company_name = snap.company_name;
+    if (!merged.what_it_is) merged.what_it_is = snap.what_it_is;
+
+    for (const item of snap.offers) appendUnique(merged.offers, item);
+    for (const item of snap.target_customers) appendUnique(merged.target_customers, item);
+    for (const item of snap.pricing_signals) appendUnique(merged.pricing_signals, item);
+    for (const item of snap.trust_signals) appendUnique(merged.trust_signals, item);
+    for (const item of snap.cta_paths) appendUnique(merged.cta_paths, item);
+    for (const item of snap.contact_points) appendUnique(merged.contact_points, item);
+    for (const item of snap.location_signals) appendUnique(merged.location_signals, item);
+    for (const item of snap.notable_pages) appendUnique(merged.notable_pages, item);
+  }
+
+  return merged;
+}
+
+function averageScores(values: Array<number | undefined>): number {
+  const clean = values.filter((value) => Number.isFinite(value)) as number[];
+  if (!clean.length) return 0;
+  return Math.round((clean.reduce((sum, value) => sum + value, 0) / clean.length) * 10) / 10;
+}
+
+function pickScore(payloads: SpecialistPayload[], specialty: string): number {
+  return payloads.find((payload) => payload.specialty === specialty)?.score ?? 0;
+}
+
+function buildScorecard(payloads: SpecialistPayload[]) {
+  const business = pickScore(payloads, 'business_intelligence');
+  const seo = pickScore(payloads, 'seo_discovery');
+  const social = pickScore(payloads, 'social_reputation');
+  const browser = pickScore(payloads, 'browser_funnel');
+  const cro = pickScore(payloads, 'cro_messaging');
+  const technical = pickScore(payloads, 'technical_auditor');
+  const competitive = pickScore(payloads, 'competitive_positioning');
+
+  return {
+    brand_clarity: averageScores([business, cro]),
+    offer_strength: averageScores([business, cro, competitive]),
+    trust_credibility: averageScores([cro, social, browser]),
+    conversion_readiness: averageScores([browser, cro]),
+    seo_discoverability: averageScores([seo, technical]),
+    social_presence: averageScores([social]),
+    competitive_positioning: averageScores([competitive, business]),
+    sales_readiness: averageScores([business, cro, competitive]),
+    overall_gtm_health: averageScores(payloads.map((payload) => payload.score)),
+  };
+}
+
+function collectTopFindings(payloads: SpecialistPayload[]) {
+  return payloads
+    .flatMap((payload) =>
+      payload.findings.map((finding) => ({
+        ...finding,
+        specialty: payload.specialty,
+        specialty_label: payload.specialty_label,
+        specialist_score: payload.score,
+      })),
+    )
+    .sort((a, b) => {
+      const severityDelta = severityWeight[b.severity] - severityWeight[a.severity];
+      if (severityDelta !== 0) return severityDelta;
+      const priorityDelta = priorityWeight[b.priority] - priorityWeight[a.priority];
+      if (priorityDelta !== 0) return priorityDelta;
+      return a.specialist_score - b.specialist_score;
+    })
+    .slice(0, 12);
+}
+
+function collectTopStrengths(payloads: SpecialistPayload[]) {
+  return payloads
+    .flatMap((payload) =>
+      payload.strengths.map((strength) => ({
+        ...strength,
+        specialty: payload.specialty,
+        specialty_label: payload.specialty_label,
+        specialist_score: payload.score,
+      })),
+    )
+    .sort((a, b) => b.specialist_score - a.specialist_score)
+    .slice(0, 10);
+}
+
+function collectPriorityActions(payloads: SpecialistPayload[]) {
+  const actions = [
+    ...payloads.flatMap((payload) =>
+      payload.findings.map((finding) => ({
+        title: finding.title,
+        priority: finding.priority,
+        severity: finding.severity,
+        owner: payload.specialty_label,
+        rationale: finding.why_it_matters,
+        action: finding.recommendation,
+        impact: finding.impact,
+        source_type: 'finding',
+      })),
+    ),
+    ...payloads.flatMap((payload) =>
+      payload.opportunities.map((opportunity) => ({
+        title: opportunity.title,
+        priority: opportunity.priority,
+        severity: 'medium' as Severity,
+        owner: payload.specialty_label,
+        rationale: opportunity.rationale,
+        action: opportunity.test || opportunity.rationale,
+        impact: opportunity.channel,
+        source_type: 'opportunity',
+      })),
+    ),
+  ];
+
+  return actions
+    .sort((a, b) => {
+      const priorityDelta = priorityWeight[b.priority] - priorityWeight[a.priority];
+      if (priorityDelta !== 0) return priorityDelta;
+      return severityWeight[b.severity] - severityWeight[a.severity];
+    })
+    .slice(0, 12);
+}
+
+function collectPlaybook(payloads: SpecialistPayload[], specialties: string[]) {
+  return payloads
+    .filter((payload) => specialties.includes(payload.specialty))
+    .flatMap((payload) => {
+      const lines = [
+        ...payload.marketing_angles.map((angle) => ({
+          type: 'angle',
+          specialty: payload.specialty_label,
+          text: angle,
+        })),
+        ...payload.sales_angles.map((angle) => ({
+          type: 'angle',
+          specialty: payload.specialty_label,
+          text: angle,
+        })),
+        ...payload.opportunities.map((item) => ({
+          type: 'opportunity',
+          specialty: payload.specialty_label,
+          title: item.title,
+          priority: item.priority,
+          channel: item.channel,
+          text: item.test || item.rationale,
+        })),
+      ];
+      return lines;
+    })
+    .slice(0, 12);
+}
+
+function buildExecutiveSummary(
+  url: string,
+  snapshot: BusinessSnapshot,
+  topFindings: ReturnType<typeof collectTopFindings>,
+  topStrengths: ReturnType<typeof collectTopStrengths>,
+  scorecard: ReturnType<typeof buildScorecard>,
+): string {
+  const parts: string[] = [];
+  const offer = snapshot.what_it_is || (snapshot.offers.length ? snapshot.offers[0] : '');
+  const audience = snapshot.target_customers.length ? snapshot.target_customers[0] : '';
+
+  if (offer && audience) {
+    parts.push(`The site appears to position itself as ${offer} for ${audience}.`);
+  } else if (offer) {
+    parts.push(`The site appears to position itself as ${offer}.`);
+  } else {
+    parts.push(`The business positioning on ${url} is not fully clear from the public site signals alone.`);
+  }
+
+  if (topStrengths[0]) {
+    parts.push(`The strongest visible signal is ${topStrengths[0].title.toLowerCase()} from ${topStrengths[0].specialty_label}.`);
+  }
+
+  if (topFindings[0]) {
+    parts.push(`The biggest GTM risk is ${topFindings[0].title.toLowerCase()}, which ${topFindings[0].specialty_label} flagged as ${topFindings[0].severity}.`);
+  }
+
+  parts.push(
+    `Overall GTM health scored ${scorecard.overall_gtm_health}/10, with conversion readiness at ${scorecard.conversion_readiness}/10 and SEO discoverability at ${scorecard.seo_discoverability}/10.`,
+  );
+
+  return parts.join(' ');
+}
+
+function buildCompactBundle(bundle: any): any {
+  return {
+    run_id: bundle.run_id,
+    analyzed_at: bundle.analyzed_at,
+    url: bundle.url,
+    domain: bundle.domain,
+    artifact_path: bundle.artifact_path,
+    debug_path: bundle.debug_path,
+    business_snapshot: bundle.business_snapshot,
+    scorecard: bundle.scorecard,
+    executive_summary: bundle.executive_summary,
+    specialist_overview: bundle.specialist_overview,
+    top_strengths: bundle.top_strengths,
+    top_findings: bundle.top_findings,
+    priority_actions: bundle.priority_actions,
+    marketing_playbook: bundle.marketing_playbook,
+    sales_playbook: bundle.sales_playbook,
+    specialists: bundle.specialists,
+    limitations: bundle.limitations,
+  };
+}
+
+function resolveAnalysisModelOverride(): { provider?: string; model?: string; source: string } {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const defaults = cfg?.agent_model_defaults || {};
+    const candidates = [
+      ['subagent_analyst', defaults.subagent_analyst],
+      ['subagent_researcher', defaults.subagent_researcher],
+      ['background_task', defaults.background_task],
+      ['manager', defaults.manager],
+      ['main_chat', defaults.main_chat],
+    ] as Array<[string, any]>;
+
+    for (const [key, ref] of candidates) {
+      const raw = safeString(ref);
+      if (!raw) continue;
+      const parsed = parseProviderModelRef(raw);
+      if (parsed) {
+        return {
+          provider: parsed.providerId,
+          model: parsed.model,
+          source: `agent_model_defaults.${key}`,
+        };
+      }
+      return {
+        model: raw,
+        source: `agent_model_defaults.${key}`,
+      };
+    }
+  } catch {
+    // Fall back to normal background routing.
+  }
+
+  return { source: 'background_agent_default' };
+}
+
+function buildJsonContract(specialty: string, label: string): string {
+  return [
+    `Return only one JSON object between ${ANALYSIS_JSON_START} and ${ANALYSIS_JSON_END}.`,
+    'Do not write files. Do not ask follow-up questions. Use only evidence you actually observed.',
+    'Keep it concise: max 5 findings, 5 strengths, 5 opportunities, 8 evidence items, 8 queries/pages.',
+    'If something is unclear, say so in limitations instead of guessing.',
+    'Use this exact schema:',
+    JSON.stringify(
+      {
+        specialty,
+        specialty_label: label,
+        summary: '1-3 sentence summary',
+        score: 0,
+        sub_scores: {
+          clarity: 0,
+          trust: 0,
+          discoverability: 0,
+          conversion: 0,
+        },
+        business_snapshot: {
+          brand: '',
+          company_name: '',
+          what_it_is: '',
+          offers: [],
+          target_customers: [],
+          pricing_signals: [],
+          trust_signals: [],
+          cta_paths: [],
+          contact_points: [],
+          location_signals: [],
+          notable_pages: [],
+        },
+        strengths: [
+          { title: '', evidence: '', impact: '' },
+        ],
+        findings: [
+          {
+            severity: 'high',
+            priority: 'now',
+            category: '',
+            title: '',
+            why_it_matters: '',
+            evidence: '',
+            recommendation: '',
+            impact: '',
+          },
+        ],
+        opportunities: [
+          { title: '', channel: '', rationale: '', test: '', priority: 'next' },
+        ],
+        evidence: [
+          { kind: 'page', label: '', url: '', detail: '' },
+        ],
+        queries: [
+          { query: '', outcome: '', notes: '' },
+        ],
+        pages_reviewed: [
+          { url: '', purpose: '', notes: '' },
+        ],
+        sales_angles: [''],
+        marketing_angles: [''],
+        limitations: [''],
+      },
+      null,
+      2,
+    ),
+  ].join('\n');
+}
+
+function buildSpecialistSpecs(): SpecialistSpec[] {
   return [
     {
-      id: 'seo',
-      prompt: `You are a focused SEO Scanner. Analyze ${url} for SEO quality and write your findings to a file.
-
-STEPS:
-1. web_fetch("${url}") — check: title tag, meta description, h1/h2/h3 hierarchy, image alt text, canonical tag, robots meta, Open Graph tags, schema markup
-2. web_search("site:${su}") — count indexed pages
-3. web_search("${su} SEO") — find any external SEO data
-
-Score each area 1-10. List top 3 issues with specific evidence.
-
-WRITE to: ${rel}/findings-seo.md
-Format:
-## SEO Audit — ${su}
-### Score: X/10
-### Findings
-[detailed observations with actual tag content found]
-### Top Issues
-1. [specific issue with evidence]
-2. [specific issue]
-3. [specific issue]`,
+      id: 'business_intelligence',
+      label: 'Business Intelligence',
+      timeoutMs: 90_000,
+      buildPrompt: (url: string) => [
+        `You are the Business Intelligence specialist for a full GTM website audit of ${url}.`,
+        'Goal: determine what the company is, what it offers, who it serves, what business facts are visible, and how clear the value proposition is.',
+        'Use web_fetch on the homepage first, then fetch up to 2 additional internal pages such as about, services, pricing, features, or contact if they are obvious.',
+        'Run branded and business-identification web_search queries for the company/domain, services, location, and pricing/review signals.',
+        'Capture real business details only: offer, ICP, trust signals, contact points, pricing signals, CTA paths, and overall positioning clarity.',
+        buildJsonContract('business_intelligence', 'Business Intelligence'),
+        ANALYSIS_JSON_START,
+        '{...}',
+        ANALYSIS_JSON_END,
+      ].join('\n\n'),
     },
     {
-      id: 'perf',
-      prompt: `You are a Performance & Stack Detective. Analyze ${url} and write findings to a file.
-
-STEPS:
-1. web_fetch("${url}") — inspect HTML for: framework/CMS (Next.js, WordPress, Shopify etc), JS bundle names, render-blocking resources, viewport meta tag, lazy loading
-2. web_search("${su} tech stack builtwith OR wappalyzer") — confirm stack
-3. Note performance red flags
-
-WRITE to: ${rel}/findings-performance.md
-Format:
-## Performance & Stack — ${su}
-### Detected Stack
-[framework, CMS, CDN, key libraries]
-### Performance Signals
-[specific observations from the HTML]
-### Issues
-[numbered list of problems]`,
+      id: 'seo_discovery',
+      label: 'SEO Discovery',
+      timeoutMs: 90_000,
+      buildPrompt: (url: string) => {
+        const domain = getDomain(url);
+        return [
+          `You are the SEO Discovery specialist for ${url}.`,
+          'Goal: audit discoverability, search intent coverage, branded presence, and query gaps that affect organic growth.',
+          `Use web_fetch on ${url}. Then run web_search for branded, non-branded, and problem-intent queries including:`,
+          `- site:${domain}`,
+          `- ${domain}`,
+          `- ${domain} reviews`,
+          '- core category or service terms inferred from the site',
+          '- comparison or alternative intent if the offer suggests it',
+          'Record whether the site appears, what outranks it, and what content or keyword gaps seem obvious.',
+          buildJsonContract('seo_discovery', 'SEO Discovery'),
+          ANALYSIS_JSON_START,
+          '{...}',
+          ANALYSIS_JSON_END,
+        ].join('\n\n');
+      },
     },
     {
-      id: 'geo',
-      prompt: `You are an AI Visibility (GEO) Analyst. Check how visible ${url}'s brand is in AI answers and write findings to a file.
-
-STEPS:
-1. web_fetch("${url}") — extract brand name and product category
-2. web_search("[brand] reviews")
-3. web_search("best [product category] tools OR software")
-4. web_search("[brand] featured OR mentioned")
-5. Score visibility: High / Medium / Low / Invisible
-
-WRITE to: ${rel}/findings-geo.md
-Format:
-## AI Visibility (GEO) — ${su}
-### Brand: [name]
-### Product Category: [what they sell]
-### Visibility Score: High/Medium/Low/Invisible
-### Evidence
-[specific search results]
-### Recommendations
-[numbered list]`,
+      id: 'social_reputation',
+      label: 'Social Reputation',
+      timeoutMs: 90_000,
+      buildPrompt: (url: string) => {
+        const domain = getDomain(url);
+        return [
+          `You are the Social Reputation specialist for ${url}.`,
+          'Goal: understand social discoverability, public discussion, sentiment, proof, and trust signals around the business.',
+          'Use web_fetch on the site to infer brand name and offer, then run web_search queries for brand mentions and related pain-point queries.',
+          `You must check discussion-style searches including site:reddit.com ${domain}, site:reddit.com [brand], site:x.com [brand], and related query combinations that potential buyers might search.`,
+          'Look for praise, complaints, missing presence, UGC, testimonials, objections, or credibility gaps.',
+          buildJsonContract('social_reputation', 'Social Reputation'),
+          ANALYSIS_JSON_START,
+          '{...}',
+          ANALYSIS_JSON_END,
+        ].join('\n\n');
+      },
     },
     {
-      id: 'links',
-      prompt: `You are a Backlinks & SERP Analyst. Assess ${url}'s authority and write findings to a file.
-
-STEPS:
-1. web_search("site:${su}") — count indexed pages
-2. web_search("link:${su}") — find referring domains
-3. Identify the site's main keyword, search it, check if ${su} appears in top 10
-4. Identify 2-3 competitors that outrank it
-5. Estimate authority: Strong / Moderate / Weak / Unknown
-
-WRITE to: ${rel}/findings-backlinks.md
-Format:
-## Backlinks & SERP — ${su}
-### Indexed Pages: [count]
-### Authority Estimate: Strong/Moderate/Weak/Unknown
-### Referring Domain Signals
-[what link: search found]
-### SERP Position
-[does the site rank for its main keywords?]
-### Top Competitors
-[2-3 names and why they outrank]`,
+      id: 'browser_funnel',
+      label: 'Browser Funnel Audit',
+      timeoutMs: 110_000,
+      buildPrompt: (url: string) => [
+        `You are the Browser Funnel Audit specialist for ${url}.`,
+        'Goal: browse the site like a real prospect, click through the core navigation, inspect CTA paths, and confirm usability, polish, and friction.',
+        'Use browser_open on the homepage, then browser_snapshot. Browse intentionally: header nav, primary CTA, footer links, contact/demo/signup/book/login flows if present, and one secondary content page if useful.',
+        'Use browser_click, browser_wait, browser_snapshot, browser_get_page_text, and browser_snapshot_delta as needed. Stop before external auth or payment steps.',
+        'Record what worked, what was confusing, what broke, what felt polished, and what the conversion journey looked like.',
+        'You are the only browser-heavy specialist. Do not spend time on search strategy beyond what is needed to understand the on-site funnel.',
+        buildJsonContract('browser_funnel', 'Browser Funnel Audit'),
+        ANALYSIS_JSON_START,
+        '{...}',
+        ANALYSIS_JSON_END,
+      ].join('\n\n'),
     },
     {
-      id: 'content',
-      prompt: `You are a Content Quality Auditor. Evaluate ${url}'s content and write findings to a file.
-
-STEPS:
-1. web_fetch("${url}") — analyze: word count estimate, readability, value proposition clarity, CTA quality, topical authority signals
-2. web_fetch 1-2 additional pages if linked (About, Product, Blog)
-3. Identify content gaps vs a market leader
-
-WRITE to: ${rel}/findings-content.md
-Format:
-## Content Audit — ${su}
-### Primary Topic: [main subject]
-### Depth Score: X/10
-### Strengths
-[specific strengths]
-### Gaps
-[what's missing]
-### Recommendations
-[numbered list of improvements]`,
+      id: 'cro_messaging',
+      label: 'CRO and Messaging',
+      timeoutMs: 90_000,
+      buildPrompt: (url: string) => [
+        `You are the CRO and Messaging specialist for ${url}.`,
+        'Goal: critique clarity, persuasion, professionalism, UX polish, trust, copywriting, CTA quality, and sales psychology.',
+        'Use web_fetch on the homepage and up to 2 relevant internal pages. Focus on hero copy, proof, objections, CTA framing, friction, ROI communication, urgency, and whether the site sounds valuable instead of just descriptive.',
+        'Call out what is good, what is weak, and what should be rewritten or restructured to lift conversion.',
+        buildJsonContract('cro_messaging', 'CRO and Messaging'),
+        ANALYSIS_JSON_START,
+        '{...}',
+        ANALYSIS_JSON_END,
+      ].join('\n\n'),
+    },
+    {
+      id: 'technical_auditor',
+      label: 'Technical Auditor',
+      timeoutMs: 90_000,
+      buildPrompt: (url: string) => [
+        `You are the Technical Auditor for ${url}.`,
+        'Goal: inspect technical SEO, crawlability, metadata, basic performance signals, and fetchability issues that could hurt growth.',
+        'Use web_fetch first. Check titles, meta description, headings, canonical, robots, Open Graph, schema, internal links, viewport, obvious asset bloat signals, and any rendering/fetch issues.',
+        'You can run a small number of supporting web_search queries if needed, but stay focused on technical growth blockers.',
+        buildJsonContract('technical_auditor', 'Technical Auditor'),
+        ANALYSIS_JSON_START,
+        '{...}',
+        ANALYSIS_JSON_END,
+      ].join('\n\n'),
+    },
+    {
+      id: 'competitive_positioning',
+      label: 'Competitive Positioning',
+      timeoutMs: 90_000,
+      buildPrompt: (url: string) => [
+        `You are the Competitive Positioning specialist for ${url}.`,
+        'Goal: infer likely competitors, differentiation gaps, messaging whitespace, and how this site could win more of the market conversation.',
+        'Use web_fetch to identify the offer and target market. Then run web_search for category terms, alternatives, comparisons, and competitors that appear to outrank or out-position the site.',
+        'Explain what this business seems to emphasize, what competitors likely emphasize better, and what positioning or offer angles could improve marketing and sales performance.',
+        buildJsonContract('competitive_positioning', 'Competitive Positioning'),
+        ANALYSIS_JSON_START,
+        '{...}',
+        ANALYSIS_JSON_END,
+      ].join('\n\n'),
     },
   ];
 }
 
-function buildCompilerPrompt(url: string, sharedDir: string, workspacePath: string): string {
-  const rel = path.relative(workspacePath, sharedDir).replace(/\\/g, '/');
-  const domain = url.replace(/https?:\/\//, '').replace(/\/$/, '');
-  const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-  return `You are the Report Compiler for a website analysis of ${url}.
+function buildEntitySummary(bundle: any): string {
+  const topActions = Array.isArray(bundle?.priority_actions)
+    ? bundle.priority_actions.slice(0, 3).map((item: any) => safeString(item?.title || item?.action)).filter(Boolean)
+    : [];
+  const actionLines = topActions.length
+    ? topActions.map((item: string) => `- ${item}`).join('\n')
+    : '- Review the JSON bundle for next actions';
 
-STEP 1 — Read each findings file using read_file:
-- ${rel}/findings-seo.md
-- ${rel}/findings-performance.md
-- ${rel}/findings-geo.md
-- ${rel}/findings-backlinks.md
-- ${rel}/findings-content.md
-
-If any file is missing or empty, use "Data unavailable" for that section.
-
-STEP 2 — Write a FULL STANDALONE HTML REPORT to: ${rel}/full-report.html
-
-The file must be a complete self-contained HTML page. Use this exact template, filling in all [PLACEHOLDER] values with real data from the findings files:
-
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Website Intelligence Report — ${domain}</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d0d14;color:#e2e8f0;min-height:100vh;padding:0}
-.topbar{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-bottom:1px solid rgba(99,102,241,0.3);padding:20px 32px;display:flex;align-items:center;justify-content:space-between}
-.topbar-left h1{font-size:22px;font-weight:700;color:#fff;margin-bottom:4px}
-.topbar-left p{font-size:13px;color:rgba(255,255,255,0.45)}
-.badge{background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:#818cf8;font-size:12px;font-weight:600;padding:5px 12px;border-radius:20px;letter-spacing:0.5px}
-.container{max-width:1100px;margin:0 auto;padding:32px 24px}
-.section-title{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,0.35);margin-bottom:16px}
-.scores{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:36px}
-.score-card{background:#1a1a2e;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:18px 14px;text-align:center;position:relative;overflow:hidden}
-.score-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
-.score-card.green::before{background:#4ade80}
-.score-card.yellow::before{background:#facc15}
-.score-card.red::before{background:#f87171}
-.score-card.green{border-top-color:#4ade80}
-.score-card.yellow{border-top-color:#facc15}
-.score-card.red{border-top-color:#f87171}
-.score-num{font-size:30px;font-weight:800;line-height:1;margin-bottom:6px}
-.score-card.green .score-num{color:#4ade80}
-.score-card.yellow .score-num{color:#facc15}
-.score-card.red .score-num{color:#f87171}
-.score-label{font-size:11px;color:rgba(255,255,255,0.45);font-weight:500;text-transform:uppercase;letter-spacing:0.5px}
-.exec-summary{background:#1a1a2e;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:24px;margin-bottom:36px;line-height:1.8;font-size:15px;color:#cbd5e1}
-.actions{margin-bottom:36px}
-.action-item{display:flex;gap:16px;align-items:flex-start;background:#1a1a2e;border:1px solid rgba(255,255,255,0.07);border-radius:12px;padding:16px 20px;margin-bottom:10px;transition:border-color 0.2s}
-.action-item:hover{border-color:rgba(99,102,241,0.3)}
-.action-num{width:28px;height:28px;border-radius:50%;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#818cf8;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.action-text{font-size:14px;color:#e2e8f0;line-height:1.6}
-.action-text strong{color:#c7d2fe;display:block;margin-bottom:2px}
-.findings{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:36px}
-.finding-card{background:#1a1a2e;border:1px solid rgba(255,255,255,0.07);border-radius:12px;overflow:hidden}
-.finding-card.full-width{grid-column:1/-1}
-.finding-header{padding:14px 20px;background:rgba(255,255,255,0.03);border-bottom:1px solid rgba(255,255,255,0.06);display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
-.finding-header:hover{background:rgba(255,255,255,0.05)}
-.finding-icon{font-size:16px}
-.finding-title{font-size:14px;font-weight:600;color:#e2e8f0;flex:1}
-.finding-score{font-size:12px;font-weight:700;padding:2px 8px;border-radius:10px}
-.finding-score.green{background:rgba(74,222,128,0.15);color:#4ade80}
-.finding-score.yellow{background:rgba(250,204,21,0.15);color:#facc15}
-.finding-score.red{background:rgba(248,113,113,0.15);color:#f87171}
-.chevron{color:rgba(255,255,255,0.3);font-size:12px;transition:transform 0.2s}
-.finding-body{padding:20px;font-size:13px;line-height:1.8;color:#94a3b8;display:none}
-.finding-body.open{display:block}
-.finding-body h3{color:#c7d2fe;font-size:12px;text-transform:uppercase;letter-spacing:0.8px;margin:14px 0 6px;font-weight:600}
-.finding-body h3:first-child{margin-top:0}
-.finding-body ul{padding-left:16px}
-.finding-body li{margin-bottom:4px}
-.finding-body strong{color:#e2e8f0}
-.footer{text-align:center;padding:20px;font-size:12px;color:rgba(255,255,255,0.2);border-top:1px solid rgba(255,255,255,0.06)}
-</style>
-</head>
-<body>
-<div class="topbar">
-  <div class="topbar-left">
-    <h1>${domain}</h1>
-    <p>Website Intelligence Report &nbsp;·&nbsp; ${dateStr}</p>
-  </div>
-  <div class="badge">PROMETHEUS INTELLIGENCE</div>
-</div>
-<div class="container">
-
-  <div class="section-title">Overall Scores</div>
-  <div class="scores">
-    <!-- For each card: use class "green" if score ≥7 or High/Strong, "yellow" if 4-6 or Medium/Moderate, "red" if ≤3 or Low/Weak -->
-    <div class="score-card [COLOR_SEO]">
-      <div class="score-num">[SEO_SCORE]/10</div>
-      <div class="score-label">SEO</div>
-    </div>
-    <div class="score-card [COLOR_PERF]">
-      <div class="score-num">[PERF_SCORE]/10</div>
-      <div class="score-label">Performance</div>
-    </div>
-    <div class="score-card [COLOR_GEO]">
-      <div class="score-num">[GEO_SCORE]</div>
-      <div class="score-label">AI Visibility</div>
-    </div>
-    <div class="score-card [COLOR_LINKS]">
-      <div class="score-num">[LINKS_SCORE]</div>
-      <div class="score-label">Backlinks</div>
-    </div>
-    <div class="score-card [COLOR_CONTENT]">
-      <div class="score-num">[CONTENT_SCORE]/10</div>
-      <div class="score-label">Content</div>
-    </div>
-  </div>
-
-  <div class="section-title">Executive Summary</div>
-  <div class="exec-summary">
-    [EXECUTIVE_SUMMARY_3_TO_5_SENTENCES]
-  </div>
-
-  <div class="section-title">Top 5 Priority Actions</div>
-  <div class="actions">
-    <div class="action-item"><div class="action-num">1</div><div class="action-text"><strong>[ACTION_1_TITLE]</strong>[ACTION_1_DETAIL]</div></div>
-    <div class="action-item"><div class="action-num">2</div><div class="action-text"><strong>[ACTION_2_TITLE]</strong>[ACTION_2_DETAIL]</div></div>
-    <div class="action-item"><div class="action-num">3</div><div class="action-text"><strong>[ACTION_3_TITLE]</strong>[ACTION_3_DETAIL]</div></div>
-    <div class="action-item"><div class="action-num">4</div><div class="action-text"><strong>[ACTION_4_TITLE]</strong>[ACTION_4_DETAIL]</div></div>
-    <div class="action-item"><div class="action-num">5</div><div class="action-text"><strong>[ACTION_5_TITLE]</strong>[ACTION_5_DETAIL]</div></div>
-  </div>
-
-  <div class="section-title">Detailed Findings</div>
-  <div class="findings">
-    <div class="finding-card">
-      <div class="finding-header" onclick="toggle(this)">
-        <span class="finding-icon">🔍</span>
-        <span class="finding-title">SEO Analysis</span>
-        <span class="finding-score [COLOR_SEO]">[SEO_SCORE]/10</span>
-        <span class="chevron">▼</span>
-      </div>
-      <div class="finding-body open">[SEO_FULL_FINDINGS_AS_HTML — convert markdown headings to h3, lists to ul/li, bold to strong]</div>
-    </div>
-    <div class="finding-card">
-      <div class="finding-header" onclick="toggle(this)">
-        <span class="finding-icon">⚡</span>
-        <span class="finding-title">Performance &amp; Stack</span>
-        <span class="finding-score [COLOR_PERF]">[PERF_SCORE]/10</span>
-        <span class="chevron">▼</span>
-      </div>
-      <div class="finding-body open">[PERF_FULL_FINDINGS_AS_HTML]</div>
-    </div>
-    <div class="finding-card">
-      <div class="finding-header" onclick="toggle(this)">
-        <span class="finding-icon">🤖</span>
-        <span class="finding-title">AI Visibility (GEO)</span>
-        <span class="finding-score [COLOR_GEO]">[GEO_SCORE]</span>
-        <span class="chevron">▼</span>
-      </div>
-      <div class="finding-body open">[GEO_FULL_FINDINGS_AS_HTML]</div>
-    </div>
-    <div class="finding-card">
-      <div class="finding-header" onclick="toggle(this)">
-        <span class="finding-icon">🔗</span>
-        <span class="finding-title">Backlinks &amp; SERP</span>
-        <span class="finding-score [COLOR_LINKS]">[LINKS_SCORE]</span>
-        <span class="chevron">▼</span>
-      </div>
-      <div class="finding-body open">[BACKLINKS_FULL_FINDINGS_AS_HTML]</div>
-    </div>
-    <div class="finding-card full-width">
-      <div class="finding-header" onclick="toggle(this)">
-        <span class="finding-icon">✍️</span>
-        <span class="finding-title">Content Quality</span>
-        <span class="finding-score [COLOR_CONTENT]">[CONTENT_SCORE]/10</span>
-        <span class="chevron">▼</span>
-      </div>
-      <div class="finding-body open">[CONTENT_FULL_FINDINGS_AS_HTML]</div>
-    </div>
-  </div>
-
-</div>
-<div class="footer">Generated by Prometheus Intelligence · ${dateStr} · ${url}</div>
-<script>
-function toggle(header) {
-  const body = header.nextElementSibling;
-  const chevron = header.querySelector('.chevron');
-  const isOpen = body.classList.contains('open');
-  body.classList.toggle('open', !isOpen);
-  chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
-}
-</script>
-</body>
-</html>
-
-IMPORTANT INSTRUCTIONS:
-- Replace ALL [PLACEHOLDER] values with real data extracted from the findings files
-- Replace [COLOR_X] with: "green" if score ≥7/High/Strong, "yellow" if 4-6/Medium/Moderate, "red" if ≤3/Low/Weak
-- For finding body sections: convert the markdown content to simple HTML (## → <h3>, - items → <ul><li>, **bold** → <strong>)
-- Keep the complete CSS and JS intact — do not remove any styles
-- The output file must be valid HTML that renders correctly in a browser
-
-STEP 3 — After writing the file, output: REPORT_COMPLETE`;
+  return [
+    '',
+    '## Deploy Analysis',
+    `*${new Date().toISOString().slice(0, 10)}*`,
+    safeString(bundle?.executive_summary),
+    '',
+    `Overall GTM health: ${safeString(bundle?.scorecard?.overall_gtm_health, '0')}/10`,
+    'Top priorities:',
+    actionLines,
+    bundle?.artifact_path ? `Bundle: ${bundle.artifact_path}` : '',
+    '',
+  ].filter(Boolean).join('\n');
 }
 
-// ─── Tool ─────────────────────────────────────────────────────────────────────
+async function runSpecialists(
+  url: string,
+  teamId: string,
+  modelOverride?: string,
+  providerOverride?: string,
+): Promise<Array<{ spec: SpecialistSpec; join: BackgroundJoinLike; payload: SpecialistPayload }>> {
+  const specs = buildSpecialistSpecs();
+  const spawns = specs.map((spec) => ({
+    spec,
+    status: backgroundSpawn({
+      prompt: spec.buildPrompt(url),
+      joinPolicy: 'wait_all',
+      timeoutMs: spec.timeoutMs,
+      tags: ['deploy_analysis', spec.id, teamId],
+      modelOverride,
+      providerOverride,
+    }),
+  }));
+
+  const joins = await Promise.all(
+    spawns.map(async ({ spec, status }) => {
+      try {
+        const join = await backgroundJoin({
+          backgroundId: status.id,
+          joinPolicy: 'wait_all',
+          timeoutMs: spec.timeoutMs,
+        });
+        const payload = normalizeSpecialistPayload(spec, join);
+        _broadcastFn?.({
+          type: 'analysis_specialist_complete',
+          url,
+          teamId,
+          specialty: spec.id,
+          score: payload.score,
+          status: payload.status,
+        });
+        return { spec, join, payload };
+      } catch (err: any) {
+        const join: BackgroundJoinLike = {
+          state: 'failed',
+          error: safeString(err?.message || err || 'backgroundJoin failed'),
+        };
+        const payload = normalizeSpecialistPayload(spec, join);
+        _broadcastFn?.({
+          type: 'analysis_specialist_complete',
+          url,
+          teamId,
+          specialty: spec.id,
+          score: payload.score,
+          status: payload.status,
+        });
+        return { spec, join, payload };
+      }
+    }),
+  );
+
+  return joins;
+}
 
 export const deployAnalysisTeamTool = {
   name: 'deploy_analysis_team',
@@ -355,14 +980,11 @@ export const deployAnalysisTeamTool = {
     save_to_entity: 'Optional: entity slug to save report summary to',
   },
   description:
-    'Deploy a one-shot website intelligence analysis for any URL. ' +
-    'Spawns 5 specialist agents in parallel via background_spawn (SEO, performance/stack, ' +
-    'AI visibility/GEO, backlinks/SERP, content audit), waits for all to complete, ' +
-    'compiles a comprehensive report, and delivers it. ' +
-    'After completion, ALWAYS present results using the html-interactive skill to build an ' +
-    'interactive analysis dashboard (score KPI cards, priority actions, findings table), ' +
-    'followed by a written executive summary and top recommendations. ' +
-    'Use when the user asks to analyze, audit, or investigate any website.',
+    'Run a full multi-specialist go-to-market website analysis for a URL. ' +
+    'This deploys background specialists for business profiling, SEO discovery, social reputation, browser funnel testing, CRO and messaging critique, technical auditing, and competitive positioning. ' +
+    'It returns a structured GTM intelligence bundle for the main agent to compile into an inline interactive HTML dashboard plus a written marketing, sales, and website improvement plan. ' +
+    'This tool is collector-first, not file-first: do not call present_file after it returns. ' +
+    'The final response should use a single inline html block with download controls and then a natural-language breakdown.',
   jsonSchema: {
     type: 'object',
     required: ['url'],
@@ -370,160 +992,160 @@ export const deployAnalysisTeamTool = {
       url: { type: 'string', description: 'Full URL to analyze including https://' },
       save_to_entity: {
         type: 'string',
-        description: 'Optional: entity slug to append report summary to (e.g. "acme-corp")',
+        description: 'Optional: entity slug to append a short deploy-analysis summary to.',
       },
     },
     additionalProperties: false,
   },
 
   execute: async (args: any): Promise<ToolResult> => {
-    const url = String(args?.url || '').trim();
-    if (!url || !url.startsWith('http')) {
+    const url = safeString(args?.url);
+    if (!url || !/^https?:\/\//i.test(url)) {
       return { success: false, error: 'url is required and must start with http:// or https://' };
     }
+
     if (!_workspacePath) {
       return { success: false, error: 'deploy_analysis_team: workspacePath not injected. Check server boot.' };
     }
 
-    const teamId = `analysis_${Date.now().toString(36)}`;
-    const sharedDir = path.join(_workspacePath, '.prometheus', 'analysis', teamId);
-    fs.mkdirSync(sharedDir, { recursive: true });
+    const runId = `analysis_${Date.now().toString(36)}`;
+    const slug = slugifyUrl(url);
+    const debugPath = path.join(_workspacePath, '.prometheus', 'analysis', runId);
+    fs.mkdirSync(debugPath, { recursive: true });
 
-    const sanitizedSlug = url
-      .replace(/https?:\/\//, '')
-      .replace(/\/$/, '')
-      .replace(/[^a-z0-9]/gi, '-')
-      .replace(/-+/g, '-')
-      .toLowerCase();
+    const modelRouting = resolveAnalysisModelOverride();
+    console.log(`[deploy-analysis-team] Starting ${url} with ${modelRouting.source}`);
+    _broadcastFn?.({
+      type: 'analysis_started',
+      url,
+      teamId: runId,
+      mode: 'gtm_collector',
+      modelSource: modelRouting.source,
+    });
 
-    console.log(`[deploy-analysis-team] Starting: ${url} → ${sharedDir}`);
-    _broadcastFn?.({ type: 'analysis_started', url, teamId });
-
-    const analysts = buildAnalystPrompts(url, sharedDir, _workspacePath);
-    const ANALYST_TIMEOUT = 180_000;
-    const COMPILER_TIMEOUT = 120_000;
-
-    // ── Phase 1: Spawn all 5 analysts as true background agents, in parallel ──
-    const bgIds = analysts.map(({ id, prompt }) => ({
-      id,
-      bgId: backgroundSpawn({
-        prompt,
-        joinPolicy: 'wait_all',
-        timeoutMs: ANALYST_TIMEOUT,
-        tags: [`analysis`, id, teamId],
-      }).id,
+    const specialists = await runSpecialists(url, runId, modelRouting.model, modelRouting.provider);
+    const payloads = specialists.map((item) => item.payload);
+    const businessSnapshot = mergeBusinessSnapshots(payloads);
+    const scorecard = buildScorecard(payloads);
+    const topFindings = collectTopFindings(payloads);
+    const topStrengths = collectTopStrengths(payloads);
+    const priorityActions = collectPriorityActions(payloads);
+    const marketingPlaybook = collectPlaybook(payloads, [
+      'seo_discovery',
+      'social_reputation',
+      'technical_auditor',
+      'competitive_positioning',
+    ]);
+    const salesPlaybook = collectPlaybook(payloads, [
+      'business_intelligence',
+      'browser_funnel',
+      'cro_messaging',
+      'competitive_positioning',
+    ]);
+    const limitations = payloads.flatMap((payload) => payload.limitations).filter(Boolean).slice(0, 16);
+    const specialistOverview = payloads.map((payload) => ({
+      specialty: payload.specialty,
+      specialty_label: payload.specialty_label,
+      status: payload.status,
+      score: payload.score,
+      summary: payload.summary,
     }));
+    const executiveSummary = buildExecutiveSummary(url, businessSnapshot, topFindings, topStrengths, scorecard);
 
-    // Wait for all 5 to complete
-    await Promise.allSettled(
-      bgIds.map(({ id, bgId }) =>
-        backgroundJoin({ backgroundId: bgId, joinPolicy: 'wait_all', timeoutMs: ANALYST_TIMEOUT })
-          .catch((err: any) =>
-            console.warn(`[deploy-analysis-team] ${id} agent join error:`, err?.message ?? err),
-          ),
+    const bundle: any = {
+      run_id: runId,
+      analyzed_at: new Date().toISOString(),
+      report_type: 'deploy_analysis_gtm_bundle',
+      url,
+      domain: getDomain(url),
+      business_snapshot: businessSnapshot,
+      scorecard,
+      executive_summary: executiveSummary,
+      specialist_overview: specialistOverview,
+      top_strengths: topStrengths,
+      top_findings: topFindings,
+      priority_actions: priorityActions,
+      marketing_playbook: marketingPlaybook,
+      sales_playbook: salesPlaybook,
+      specialists: payloads,
+      limitations,
+      model_routing: modelRouting,
+      debug_path: debugPath,
+    };
+
+    fs.writeFileSync(
+      path.join(debugPath, 'specialists.json'),
+      JSON.stringify(
+        specialists.map((item) => ({
+          specialty: item.spec.id,
+          label: item.spec.label,
+          join: item.join,
+          payload: item.payload,
+        })),
+        null,
+        2,
       ),
+      'utf-8',
     );
 
-    // ── Phase 2: Spawn compiler as a background agent, wait for it ────────────
-    const compilerBgId = backgroundSpawn({
-      prompt: buildCompilerPrompt(url, sharedDir, _workspacePath),
-      joinPolicy: 'wait_all',
-      timeoutMs: COMPILER_TIMEOUT,
-      tags: ['analysis', 'compiler', teamId],
-    }).id;
-
-    await backgroundJoin({
-      backgroundId: compilerBgId,
-      joinPolicy: 'wait_all',
-      timeoutMs: COMPILER_TIMEOUT,
-    }).catch((err: any) =>
-      console.warn('[deploy-analysis-team] Compiler join error:', err?.message ?? err),
+    const bundlePath = path.join(
+      _workspacePath,
+      `site-analysis-${slug}-bundle-${Date.now().toString(36)}.json`,
     );
+    bundle['artifact_path'] = bundlePath;
+    fs.writeFileSync(bundlePath, JSON.stringify(bundle, null, 2), 'utf-8');
 
-    // ── Read compiled report ──────────────────────────────────────────────────
-    const reportPath = path.join(sharedDir, 'full-report.html');
-    let reportContent = '';
-    let destPath = '';
+    const artifact: DeployAnalysisArtifact = {
+      type: 'report',
+      title: 'Deploy Analysis Bundle',
+      path: bundlePath,
+      status: 'ok',
+      summary: 'Structured GTM analysis bundle used to build the inline dashboard and written growth plan.',
+    };
 
-    if (fs.existsSync(reportPath)) {
-      destPath = path.join(
-        _workspacePath,
-        `site-analysis-${sanitizedSlug}-${Date.now().toString(36)}.html`,
-      );
-      fs.copyFileSync(reportPath, destPath);
-      reportContent = fs.readFileSync(reportPath, 'utf-8');
-    } else {
-      // Fallback: collect any partial findings and wrap in minimal HTML
-      const parts: string[] = [];
-      for (const f of [
-        'findings-seo.md',
-        'findings-performance.md',
-        'findings-geo.md',
-        'findings-backlinks.md',
-        'findings-content.md',
-      ]) {
-        const fp = path.join(sharedDir, f);
-        if (fs.existsSync(fp)) parts.push(fs.readFileSync(fp, 'utf-8'));
-      }
-      if (parts.length > 0) {
-        const escaped = parts.join('\n\n---\n\n').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        reportContent = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Partial Report — ${url}</title><style>body{font-family:sans-serif;background:#0d0d14;color:#e2e8f0;padding:32px;max-width:900px;margin:0 auto}pre{white-space:pre-wrap;line-height:1.7;font-size:14px}</style></head><body><h2 style="color:#f87171">Partial Findings (compiler did not complete)</h2><pre>${escaped}</pre></body></html>`;
-        destPath = path.join(
-          _workspacePath,
-          `site-analysis-${sanitizedSlug}-partial-${Date.now().toString(36)}.html`,
-        );
-        fs.writeFileSync(destPath, reportContent, 'utf-8');
-      }
-    }
-
-    // ── Cleanup temp analysis dir ─────────────────────────────────────────────
-    try { fs.rmSync(sharedDir, { recursive: true, force: true }); } catch {}
-
-    _broadcastFn?.({ type: 'analysis_complete', url, reportPath: destPath });
-
-    if (!reportContent) {
-      return {
-        success: false,
-        error:
-          `Analysis of ${url} produced no output. ` +
-          `Specialist agents may have failed to fetch the site or write their findings.`,
-      };
-    }
-
-    // ── Save to entity if requested ───────────────────────────────────────────
     if (args?.save_to_entity) {
       try {
-        const ep = path.join(_workspacePath, 'entities', 'clients', `${args.save_to_entity}.md`);
-        if (fs.existsSync(ep)) {
-          fs.appendFileSync(
-            ep,
-            `\n## Website Analysis\n*${new Date().toISOString().slice(0, 10)}*\nFull report: ${destPath}\n`,
-            'utf-8',
-          );
+        const entityPath = path.join(_workspacePath, 'entities', 'clients', `${args.save_to_entity}.md`);
+        if (fs.existsSync(entityPath)) {
+          fs.appendFileSync(entityPath, buildEntitySummary(bundle), 'utf-8');
         }
-      } catch {}
+      } catch {
+        // Best-effort only.
+      }
     }
 
-    // ── Return ────────────────────────────────────────────────────────────────
+    _broadcastFn?.({
+      type: 'analysis_complete',
+      url,
+      teamId: runId,
+      artifactPath: bundlePath,
+      score: scorecard.overall_gtm_health,
+    });
+
+    const compactBundle = buildCompactBundle(bundle);
+    const instructions = [
+      `DEPLOY_ANALYSIS_TEAM_COMPLETE for ${url}`,
+      '',
+      'Do not call present_file. This tool already returned the analysis bundle you need.',
+      'Your next response must do the following in order:',
+      '1. Output exactly one inline fenced ```html dashboard that visualizes this bundle.',
+      '2. The dashboard must include scorecards, strengths, findings, marketing playbook, sales playbook, and priority actions.',
+      '3. The dashboard must include download controls that let the user save either the dashboard HTML itself or the embedded JSON bundle.',
+      '4. After the HTML block, write a natural-language executive rundown, then a full breakdown of what is good, what is wrong, and a prioritized plan to improve the site.',
+      '5. Include specific marketing strategy and sales tactic recommendations, not just UX notes.',
+      '',
+      `Artifact bundle saved at: ${bundlePath}`,
+      '',
+      'DEPLOY_ANALYSIS_BUNDLE_START',
+      JSON.stringify(compactBundle, null, 2),
+      'DEPLOY_ANALYSIS_BUNDLE_END',
+    ].join('\n');
+
     return {
       success: true,
-      stdout: [
-        `✅ Website analysis complete for: ${url}`,
-        destPath ? `reportPath: ${destPath}` : '',
-        ``,
-        `[NEXT STEPS — do these in order]`,
-        `1. Call present_file({ path: "${destPath}" }) to open the HTML dashboard in the canvas`,
-        `2. Write a concise executive summary (3-5 sentences) covering overall health, biggest strength, biggest weakness`,
-        `3. List the top 3 actionable recommendations`,
-        ``,
-        `--- REPORT SUMMARY (for your reference) ---`,
-        reportContent.slice(0, 3000),
-        reportContent.length > 3000 ? `\n[... report truncated, full content in file ...]` : '',
-        `--- END SUMMARY ---`,
-      ]
-        .filter(s => s !== null && s !== undefined)
-        .join('\n'),
-      data: { url, reportPath: destPath },
+      stdout: instructions,
+      data: bundle,
+      artifacts: [artifact],
     };
   },
 };

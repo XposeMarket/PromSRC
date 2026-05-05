@@ -1,0 +1,27 @@
+{
+  "id": "windows",
+  "kind": "mcp_preset",
+  "name": "Windows MCP",
+  "description": "MCP preset for native Windows desktop automation.",
+  "category": "Desktop",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/microsoft/windows-mcp",
+  "tags": ["mcp", "windows", "desktop"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/windows"
+  },
+  "ui": {
+    "color": "#2563EB"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "desktop_automation"]
+  },
+  "setup": {
+    "authType": "none"
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "uvx",
+    "args": ["windows-mcp"]
+  }
+}

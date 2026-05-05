@@ -25,6 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { containsObsoleteProductBrand } from '../scheduled-output-guard';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -291,15 +292,22 @@ export function formatScheduleMemoryForPrompt(mem: ScheduleAgentMemory | null): 
 
   // Learned context — insights from prior runs
   if (mem.learnedContext.length > 0) {
-    const ctxLines = mem.learnedContext.map(c => `  - ${c}`).join('\n');
-    sections.push('Learned from prior runs:\n' + ctxLines);
+    const ctxLines = mem.learnedContext
+      .filter(c => !containsObsoleteProductBrand(c))
+      .map(c => `  - ${c}`)
+      .join('\n');
+    if (ctxLines) sections.push('Learned from prior runs:\n' + ctxLines);
   }
 
   // Notes — custom key/value written by the agent
   const noteKeys = Object.keys(mem.notes);
   if (noteKeys.length > 0) {
-    const noteLines = noteKeys.slice(0, 10).map(k => `  ${k}: ${mem.notes[k]}`).join('\n');
-    sections.push('Persistent notes:\n' + noteLines);
+    const noteLines = noteKeys
+      .slice(0, 10)
+      .map(k => `  ${k}: ${mem.notes[k]}`)
+      .filter(line => !containsObsoleteProductBrand(line))
+      .join('\n');
+    if (noteLines) sections.push('Persistent notes:\n' + noteLines);
   }
 
   if (sections.length === 0) return '';

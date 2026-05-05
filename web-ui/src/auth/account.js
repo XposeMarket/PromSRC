@@ -12,9 +12,57 @@ const STORAGE_KEY = 'prometheus_account';
 let _account = null; // { email, userId, isAdmin, subscriptionActive }
 
 export function getAccount() { return _account; }
+export function getPersistedAccount() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.email) return null;
+    return {
+      email: String(parsed.email || ''),
+      userId: parsed.userId ? String(parsed.userId) : undefined,
+      isAdmin: Boolean(parsed.isAdmin),
+      subscriptionActive: Boolean(parsed.subscriptionActive),
+    };
+  } catch {
+    return null;
+  }
+}
 export function isAuthenticated() { return !!_account; }
 export function hasActiveSubscription() {
   return _account?.subscriptionActive || _account?.isAdmin;
+}
+
+function persistAccount(account) {
+  try {
+    if (!account?.email) {
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      email: account.email,
+      userId: account.userId,
+      isAdmin: Boolean(account.isAdmin),
+      subscriptionActive: Boolean(account.subscriptionActive),
+      cachedAt: Date.now(),
+    }));
+  } catch {}
+}
+
+function applyAccountStatus(data) {
+  _account = {
+    email: data.email,
+    userId: data.userId,
+    isAdmin: Boolean(data.isAdmin),
+    subscriptionActive: Boolean(data.subscriptionActive),
+  };
+  persistAccount(_account);
+  return _account;
+}
+
+function clearAccountState() {
+  _account = null;
+  persistAccount(null);
 }
 
 // ─── Gateway calls ────────────────────────────────────────────────────────────
@@ -85,7 +133,7 @@ export async function login(email, password) {
     isAdmin: Boolean(data.isAdmin),
     subscriptionActive: Boolean(data.subscriptionActive),
   };
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ email })); } catch {}
+  persistAccount(_account);
   return _account;
 }
 
@@ -127,47 +175,83 @@ export async function loginLegacyBrowser(email, password) {
   // 4. Store verified session in gateway
   const { ok, data } = await gatewayRequest('/api/account/login', {
     method: 'POST',
-    body: JSON.stringify({ accessToken, refreshToken, email, userId, isAdmin, subscriptionActive, expiresAt }),
+    body: JSON.stringify({ accessToken, refreshToken }),
   });
   if (!ok) throw new Error(data.error || 'Session storage failed');
 
-  _account = { email, userId, isAdmin, subscriptionActive };
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ email })); } catch {}
+  _account = {
+    email: data.email || email,
+    userId: data.userId,
+    isAdmin: Boolean(data.isAdmin),
+    subscriptionActive: Boolean(data.subscriptionActive),
+  };
+  persistAccount(_account);
   return _account;
 }
 
 // ─── Logout ───────────────────────────────────────────────────────────────────
 export async function logout() {
   await gatewayRequest('/api/account/logout', { method: 'POST' });
-  _account = null;
-  try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  clearAccountState();
 }
 
 // ─── Check existing session (called on app load) ──────────────────────────────
-export async function checkSession() {
-  const { ok, status, data } = await gatewayRequest('/api/account/status');
+export async function checkSessionDetailed(opts = {}) {
+  const { timeoutMs = 0, strict = false } = opts;
+  const path = strict ? '/api/account/status?strict=1' : '/api/account/status';
+  let response;
+  try {
+    response = await gatewayRequest(path, { timeoutMs });
+  } catch {
+    response = { ok: false, status: 0, data: { reason: 'status_unreachable', retryable: true } };
+  }
+  const { ok, status, data } = response;
+  const retryable = status === 0 || data.retryable === true;
 
   if (ok && data.authenticated) {
-    _account = {
-      email: data.email,
-      userId: data.userId,
-      isAdmin: data.isAdmin,
-      subscriptionActive: data.subscriptionActive,
+    return {
+      authenticated: true,
+      definitive: !retryable,
+      reason: data.reason || null,
+      retryable,
+      account: applyAccountStatus(data),
     };
-    return true;
   }
 
-  // Only clear persisted hint on a definitive auth rejection.
-  // Timeout or network failure (status 0) keeps the hint so the next
-  // load can retry rather than forcing a login screen.
+  const persisted = getPersistedAccount();
+  if (retryable && persisted && (persisted.subscriptionActive || persisted.isAdmin)) {
+    return {
+      authenticated: true,
+      definitive: false,
+      reason: data.reason || 'session_verification_failed',
+      retryable: true,
+      status,
+      account: applyAccountStatus(persisted),
+    };
+  }
+
+  // Only clear persisted hints on definitive auth rejection.
+  // Retryable verification failures keep the local hint so the next
+  // boot can reuse the stored vault session if the network recovers.
   const isDefiniteRejection = status === 401 || status === 403 ||
-    (ok && data.authenticated === false);
+    (ok && data.authenticated === false && retryable !== true);
   if (isDefiniteRejection) {
-    _account = null;
-    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    clearAccountState();
   }
 
-  return false;
+  return {
+    authenticated: false,
+    definitive: isDefiniteRejection,
+    reason: data.reason || null,
+    retryable,
+    status,
+    account: null,
+  };
+}
+
+export async function checkSession(opts = {}) {
+  const result = await checkSessionDetailed(opts);
+  return result.authenticated;
 }
 
 // ─── Login UI ─────────────────────────────────────────────────────────────────

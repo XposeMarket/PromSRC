@@ -1,210 +1,283 @@
 ---
-name: DOCX Reader
-description: Read, extract, and analyze Word documents (.docx files). Use whenever a user uploads or references a .docx file and wants to know what's in it — summarize, extract tables, find action items, pull contact info, read contracts, analyze proposals. Uses the mammoth npm package (pure Node, no Python). DEPENDENCY CHECK: before first use, verify mammoth is installed by running: node -e "require('mammoth')" from D:\Prometheus. If it fails, run the setup script at workspace/doc-skills-setup.js. Triggers on: read this doc, summarize this Word file, extract tables, what does this contract say, find action items, analyze this document, .docx uploaded.
-emoji: "📄"
-version: 1.0.0
-triggers: read this doc, summarize word file, extract tables, what does contract say, find action items, analyze document, docx, word document, read document, extract text, document summary, contract review, proposal review
+name: docx-reader
+description: Read, extract, and summarize `.docx` Word documents using Node.js and the `mammoth` package. Use this when the user uploads a Word file and wants it read, summarized, outlined, searched, cleaned into markdown, or converted into usable text/table output. Triggers on requests like: read this docx, summarize this Word document, extract the text from this .docx, what does this document say, pull tables from this Word file, search this uploaded document, or turn this docx into markdown. Best for direct document-reading tasks where Prometheus should take the shortest reliable path instead of doing multi-step guesswork.
+emoji: "🧩"
+version: 2.0.0
+triggers: read this docx, read this word document, summarize this docx, summarize this word file, extract this docx, extract text from this word document, what does this document say, pull tables from this docx, search this docx, convert this docx to markdown, analyze this uploaded word file
 ---
 
 # DOCX Reader
 
-Extract and analyze Word documents using the `mammoth` npm package. Runs entirely in Node.js — no Python, no LibreOffice needed.
+Fast, direct Word-document reading for Prometheus.
 
-## DEPENDENCY CHECK — Run First Time Only
-
-Before using this skill, verify mammoth is installed:
-```
-node -e "require('mammoth'); console.log('OK')"
-```
-Run from `D:\Prometheus`. If it fails: `node workspace\doc-skills-setup.js`
+**Default rule:** for normal `.docx` reading, use **one temp script, one `run_command`, one result parse, one cleanup**. Do not overcomplicate it.
 
 ---
 
-## How It Works
+## When to Use This
 
-Write a small Node script to the workspace, run it with `shell()`, read the output. The script never needs to persist — write it, run it, delete it.
+Use this skill when the user provides a `.docx` file and wants any of the following:
+- a summary
+- a section outline
+- key points
+- text extraction
+- table extraction
+- keyword search
+- markdown conversion / cleanup
 
-**The pattern for every document task:**
-1. Write a `_tmp_docread.js` script into `workspace/`
-2. Run it with `shell({ command: "node _tmp_docread.js", cwd: "D:\\Prometheus\\workspace" })`
-3. Read the output
-4. Delete the temp script
+**Do not use this** for:
+- PDFs → use `pdf-reader`
+- spreadsheets → use `xlsx-reader`
+- legacy `.doc` files → ask the user to resave as `.docx`
 
 ---
 
-## Core Extraction Script
+## The Fast Path — Default Workflow
 
-This extracts full text + basic structure from any .docx:
+For almost all requests, do exactly this:
+
+1. Use the uploaded file path exactly as given by the user.
+2. Write a single temp script in `workspace/_tmp_docread.js`.
+3. Run it once with `run_command`.
+4. Parse the JSON result.
+5. Answer the user directly.
+6. Delete the temp script.
+
+**Do not** do extra dependency checks, extra file hunting, or multiple experimental scripts unless the first run fails.
+
+---
+
+## Default Temp Script
+
+Use this as the standard script for nearly every `.docx` request:
 
 ```javascript
-// _tmp_docread.js
-const mammoth = require('../node_modules/mammoth');
-const fs = require('fs');
-const path = require('path');
-
-const filePath = process.argv[2] || 'document.docx';
-const absPath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
-
-async function main() {
-  // Extract as plain text
-  const textResult = await mammoth.extractRawText({ path: absPath });
-  const text = textResult.value;
-
-  // Extract as HTML (preserves structure — headings, tables, lists)
-  const htmlResult = await mammoth.convertToHtml({ path: absPath });
-  const html = htmlResult.value;
-
-  // Basic structure analysis
-  const lines = text.split('\n').filter(l => l.trim());
-  const wordCount = text.split(/\s+/).filter(Boolean).length;
-  const paragraphs = text.split(/\n\n+/).filter(p => p.trim()).length;
-
-  // Detect headings from HTML
-  const headings = [];
-  const hMatches = html.matchAll(/<h([1-6])[^>]*>(.*?)<\/h\1>/gi);
-  for (const m of hMatches) {
-    headings.push({ level: m[1], text: m[2].replace(/<[^>]+>/g, '').trim() });
-  }
-
-  // Detect tables
-  const tableCount = (html.match(/<table/gi) || []).length;
-
-  // Output structured result
-  const result = {
-    file: path.basename(absPath),
-    wordCount,
-    paragraphs,
-    headings,
-    tableCount,
-    text: text.slice(0, 8000), // first 8000 chars for context
-    warnings: textResult.messages.filter(m => m.type === 'warning').map(m => m.message)
-  };
-
-  console.log(JSON.stringify(result, null, 2));
-}
-
-main().catch(e => { console.error('ERROR:', e.message); process.exit(1); });
-```
-
-**Run it:**
-```
-node _tmp_docread.js "D:\path\to\document.docx"
-```
-
----
-
-## Table Extraction Script
-
-When the user wants tables pulled out specifically:
-
-```javascript
-// _tmp_docread.js
 const mammoth = require('../node_modules/mammoth');
 const path = require('path');
 
 const filePath = process.argv[2];
-const absPath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
+if (!filePath) {
+  console.error('ERROR: Missing .docx path');
+  process.exit(1);
+}
+
+const absPath = path.isAbsolute(filePath)
+  ? filePath
+  : path.join(__dirname, filePath);
+
+function stripHtml(html) {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 async function main() {
-  const { value: html } = await mammoth.convertToHtml({ path: absPath });
+  const textResult = await mammoth.extractRawText({ path: absPath });
+  const htmlResult = await mammoth.convertToHtml({ path: absPath });
 
-  // Extract all tables as arrays
+  const text = (textResult.value || '').replace(/\r/g, '');
+  const html = htmlResult.value || '';
+
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const headings = [];
+  for (const match of html.matchAll(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi)) {
+    headings.push({
+      level: Number(match[1]),
+      text: stripHtml(match[2]),
+    });
+  }
+
   const tables = [];
-  const tableMatches = html.matchAll(/<table[^>]*>([\s\S]*?)<\/table>/gi);
-
-  for (const tableMatch of tableMatches) {
+  for (const tableMatch of html.matchAll(/<table[^>]*>([\s\S]*?)<\/table>/gi)) {
     const rows = [];
-    const rowMatches = tableMatch[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi);
-    for (const row of rowMatches) {
+    for (const rowMatch of tableMatch[1].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
       const cells = [];
-      const cellMatches = row[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi);
-      for (const cell of cellMatches) {
-        cells.push(cell[1].replace(/<[^>]+>/g, '').trim());
+      for (const cellMatch of rowMatch[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)) {
+        cells.push(stripHtml(cellMatch[1]));
       }
       if (cells.length) rows.push(cells);
     }
     if (rows.length) tables.push(rows);
   }
 
-  console.log(JSON.stringify({ tableCount: tables.length, tables }, null, 2));
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const result = {
+    file: path.basename(absPath),
+    wordCount: text.split(/\s+/).filter(Boolean).length,
+    paragraphCount: paragraphs.length,
+    lineCount: lines.length,
+    headingCount: headings.length,
+    headings,
+    tableCount: tables.length,
+    tables,
+    preview: text.slice(0, 12000),
+    warnings: (textResult.messages || []).map((m) => m.message || String(m)),
+  };
+
+  console.log(JSON.stringify(result, null, 2));
 }
 
-main().catch(e => { console.error('ERROR:', e.message); process.exit(1); });
+main().catch((e) => {
+  console.error('ERROR:', e && e.message ? e.message : String(e));
+  process.exit(1);
+});
+```
+
+Run it with the exact uploaded path, for example:
+
+```powershell
+node workspace\_tmp_docread.js "D:\Prometheus\workspace\uploads\example.docx"
 ```
 
 ---
 
-## Section / Heading-Based Extraction
+## Direct Response Format
 
-When the user wants a specific section (e.g. "find the payment terms"):
+After extraction, answer in this structure unless the user asked for something else:
+
+- **File**
+- **Quick stats**: words, paragraphs, tables, headings
+- **What it is**: 1-3 sentence plain-English description
+- **Main sections**: if headings exist, list them; if not, infer structure from repeated patterns
+- **Key takeaways**: concise bullets
+
+If the user asked something narrow like **"read this"**, give the useful summary directly. Do not dump raw JSON unless they explicitly want it.
+
+---
+
+## Common Follow-Up Modes
+
+### 1) Full summary
+Use the default script, then summarize the `preview`, headings, and tables.
+
+### 2) Section outline
+Prefer `headings` if present. If no headings exist, infer sections from repeated labels, numbering, or grouped phrases in the extracted text.
+
+### 3) Pull all tables
+Use the `tables` array from the default script. No second script is needed unless parsing failed.
+
+### 4) Search for a term
+If the user asks for a keyword/section search, use this focused script:
 
 ```javascript
-// _tmp_docread.js
 const mammoth = require('../node_modules/mammoth');
 const path = require('path');
 
 const filePath = process.argv[2];
-const searchTerm = process.argv[3] || '';
+const searchTerm = (process.argv[3] || '').toLowerCase();
 const absPath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
 
 async function main() {
-  const { value: text } = await mammoth.extractRawText({ path: absPath });
-  const lines = text.split('\n');
-
-  // Find lines containing the search term and surrounding context
+  const { value } = await mammoth.extractRawText({ path: absPath });
+  const lines = value.replace(/\r/g, '').split('\n');
   const results = [];
+
   lines.forEach((line, i) => {
-    if (line.toLowerCase().includes(searchTerm.toLowerCase())) {
-      const context = lines.slice(Math.max(0, i-1), i+6).join('\n');
-      results.push({ lineNumber: i+1, match: line.trim(), context });
+    if (line.toLowerCase().includes(searchTerm)) {
+      results.push({
+        lineNumber: i + 1,
+        match: line.trim(),
+        context: lines.slice(Math.max(0, i - 2), i + 4).join('\n').trim(),
+      });
     }
   });
 
   console.log(JSON.stringify({ searchTerm, matchCount: results.length, results }, null, 2));
 }
 
-main().catch(e => { console.error('ERROR:', e.message); process.exit(1); });
+main().catch((e) => {
+  console.error('ERROR:', e.message);
+  process.exit(1);
+});
 ```
 
----
-
-## Finding Document Paths
-
-When a user uploads a file, it typically lands in one of these locations. Check in order:
-1. `D:\Prometheus\workspace\` (if they explicitly placed it there)
-2. Ask the user where the file is — they may need to move it to the workspace folder, or provide the full path
-
-**Always use absolute paths in the script** to avoid confusion with cwd.
+### 5) Convert to markdown-ish cleaned text
+Use the default script output and rewrite the content cleanly in chat or into a file if asked. Do not build a separate conversion pipeline unless the user specifically wants a saved `.md` file.
 
 ---
 
-## Output Interpretation
+## Uploaded File Path Rules
 
-After running, parse the JSON output and present to the user as:
+When the user gives an upload path, trust it.
 
-- **Summary**: word count, heading structure, table count
-- **Key content**: surface headings as section outline
-- **Extracted tables**: render as markdown tables in chat
-- **Full text**: use for answering specific questions about the document
+Example:
+- `D:\Prometheus\workspace\uploads\my-file.docx`
+
+**Do not** waste time re-discovering the file if the exact path is already in chat.
+
+Only search for the file if the user did **not** provide a usable path.
 
 ---
 
-## What to Do With Extracted Content
+## Failure Recovery — Only If the Fast Path Fails
 
-After extraction, you can:
-- Answer specific questions about the document content
-- Feed key facts into `BUSINESS.md` or entity files (use `doc-ingestion` skill for this)
-- Summarize sections on request
-- Find specific clauses, names, dates, or numbers
-- Compare multiple documents by running extraction on each
+If the default script fails, use this order:
+
+1. Check whether `mammoth` is available.
+2. Confirm the file path exists and ends in `.docx`.
+3. Check whether the file is actually a valid DOCX/ZIP container.
+4. Only then try a narrower fallback script.
+
+### Dependency check script
+
+```javascript
+try {
+  require('../node_modules/mammoth');
+  console.log('OK');
+} catch (e) {
+  console.error('ERROR:', e.message);
+  process.exit(1);
+}
+```
+
+Run:
+
+```powershell
+node workspace\_tmp_docx_check.js
+```
+
+If that fails, run:
+
+```powershell
+node workspace\doc-skills-setup.js
+```
 
 ---
 
 ## Error Handling
 
-| Error | Fix |
-|---|---|
-| `Cannot find module 'mammoth'` | Run `node workspace\doc-skills-setup.js` from `D:\Prometheus` |
-| `ENOENT: no such file` | File path is wrong — confirm location with user |
-| `InvalidZip` | File is not a valid .docx (may be .doc — legacy format not supported by mammoth directly) |
-| `.doc file` | mammoth only supports .docx. Ask user to save as .docx from Word first |
+| Error | Meaning | Fix |
+|---|---|---|
+| `Cannot find module 'mammoth'` | Dependency missing | Run `node workspace\doc-skills-setup.js` |
+| `ENOENT` | Wrong file path | Use the exact uploaded path from chat |
+| `InvalidZip` | File is not a valid `.docx` | Ask user to re-upload/export as proper `.docx` |
+| missing path | Script called without file argument | Re-run with the exact path |
+| `.doc` file | Old Word format | Ask user to save/export as `.docx` |
+
+---
+
+## Anti-Patterns
+
+Do **not**:
+- do multiple temp-script experiments before trying the default script
+- perform dependency checks first on every run
+- re-search the workspace when the upload path is already provided
+- dump raw extraction JSON to the user unless requested
+- claim the doc has no structure just because formal headings are absent
+
+---
+
+## Success Standard
+
+A successful run should feel simple:
+- Prometheus reads the `.docx` in one pass
+- gives a clean summary quickly
+- surfaces section structure when possible
+- extracts tables when helpful
+- only falls back to extra steps if something actually breaks

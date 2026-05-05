@@ -58,6 +58,10 @@ export function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   window.ws = new WebSocket(`${proto}://${location.host}/ws`);
 
+  window.ws.onopen = () => {
+    wsEventBus._dispatch({ type: 'ws:open', timestamp: Date.now() });
+  };
+
   window.ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);

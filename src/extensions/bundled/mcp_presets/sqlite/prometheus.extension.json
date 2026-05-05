@@ -1,0 +1,36 @@
+{
+  "id": "sqlite",
+  "kind": "mcp_preset",
+  "name": "SQLite",
+  "description": "MCP preset for local SQLite databases.",
+  "category": "Database",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite",
+  "tags": ["mcp", "sqlite", "database"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/sqlite"
+  },
+  "ui": {
+    "color": "#1D4ED8"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "database", "sql"]
+  },
+  "setup": {
+    "authType": "none",
+    "fields": [
+      {
+        "key": "dbPath",
+        "label": "Database Path",
+        "input": "text",
+        "required": true,
+        "placeholder": "C:\\path\\to\\db.sqlite"
+      }
+    ]
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sqlite", "--db-path", "C:\\path\\to\\db.sqlite"]
+  }
+}

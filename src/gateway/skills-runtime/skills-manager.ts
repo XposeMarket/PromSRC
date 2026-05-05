@@ -1,22 +1,25 @@
 /**
  * skills-manager.ts
  *
- * Skills are SKILL.md files in <workspace>/skills/<id>/SKILL.md.
- * The AI reads them directly — no enable/disable ceremony needed.
- *
- * How it works:
- *   1. Skills are scanned from disk and exposed via skill_list / skill_read.
- *   2. Each turn: inject a short skills policy (no catalog, no full skill bodies)
- *      telling the model when to use skill_list and skill_read (required for execution-like turns).
- *   3. AI creates skills with skill_create → writes SKILL.md → appears next turn.
- *
- * No session windows, no activation turns, no prompt-time catalog injection.
+ * Skills are either simple SKILL.md playbooks or bundled skill packages with
+ * skill.json, an entrypoint markdown file, and optional static resources.
  */
 
 import fs from 'fs';
 import path from 'path';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import {
+  getSkillOverlayPath,
+  getSkillProvenancePath,
+  loadSkillPackage,
+  normalizeSkillRelativePathForWrite,
+  readSkillResourceText,
+  resolveSkillRelativePath,
+  sanitizeSkillId,
+  canReadSkillResource,
+  type LoadedSkillPackage,
+  type SkillPermissions,
+  type SkillResource,
+} from './skill-package';
 
 export interface Skill {
   id: string;
@@ -24,82 +27,69 @@ export interface Skill {
   description: string;
   emoji: string;
   version: string;
-  /** Comma-separated keywords — if any match a tool name or message, auto-enable */
+  kind: 'simple' | 'bundle';
   triggers: string[];
-  enabled: boolean;
+  categories: string[];
+  requiredTools: string[];
+  permissions: SkillPermissions;
+  resources: SkillResource[];
+  status: 'ready' | 'needs_setup' | 'blocked';
+  executionEnabled: boolean;
+  riskLevel?: string;
   instructions: string;
   filePath: string;
+  rootDir: string;
+  entrypoint: string;
+  promptPath?: string;
+  validation: LoadedSkillPackage['validation'];
+  manifest: LoadedSkillPackage['manifest'];
+  manifestSource: LoadedSkillPackage['manifestSource'];
+  manifestPath?: string;
+  overlayPath?: string;
+  provenancePath?: string;
+  provenance?: Record<string, unknown>;
 }
 
-// ─── Frontmatter parser ───────────────────────────────────────────────────────
+function normalizeSkillMatchText(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-function parseFrontmatter(content: string): { fm: Record<string, string>; body: string } {
-  const raw = content.trim();
-  if (!raw.startsWith('---')) return { fm: {}, body: raw };
-  const end = raw.indexOf('---', 3);
-  if (end === -1) return { fm: {}, body: raw };
-
-  const fm: Record<string, string> = {};
-  for (const line of raw.slice(3, end).split('\n')) {
-    const m = line.match(/^(\w[\w-]*)\s*:\s*(.+)$/);
-    if (!m) continue;
-    let val = m[2].trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
-    }
-    fm[m[1].trim()] = val;
+function skillTriggerMatchesText(trigger: string, rawText: string, words: string[]): boolean {
+  const normalizedTrigger = normalizeSkillMatchText(trigger);
+  if (!normalizedTrigger) return false;
+  const normalizedText = normalizeSkillMatchText(rawText);
+  if (normalizedTrigger.includes(' ')) {
+    return normalizedText.includes(normalizedTrigger);
   }
-  return { fm, body: raw.slice(end + 3).trim() };
+  return words.some((word) => {
+    const normalizedWord = normalizeSkillMatchText(word);
+    if (normalizedWord === normalizedTrigger) return true;
+    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
+    return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
+  });
 }
-
-// ─── SkillsManager ────────────────────────────────────────────────────────────
 
 export class SkillsManager {
   private skillsDir: string;
   private skills: Map<string, Skill> = new Map();
-  /** id → enabled. Persisted to skills_state.json next to the skills dir */
-  private enabledState: Record<string, boolean> = {};
 
   constructor(workspaceOrSkillsDir: string) {
-    // Accept either a workspace path (will append /skills) or a direct skills dir
     this.skillsDir = workspaceOrSkillsDir.endsWith('skills')
       ? workspaceOrSkillsDir
       : path.join(workspaceOrSkillsDir, 'skills');
 
     fs.mkdirSync(this.skillsDir, { recursive: true });
-    this.loadState();
     this.scanSkills();
   }
 
-  /** Directory where skills live */
   getSkillsDir(): string { return this.skillsDir; }
 
-  // ── Persistence ─────────────────────────────────────────────────────────────
-
-  private statePath(): string {
-    return path.join(this.skillsDir, '_state.json');
-  }
-
-  private loadState(): void {
-    try {
-      if (fs.existsSync(this.statePath())) {
-        this.enabledState = JSON.parse(fs.readFileSync(this.statePath(), 'utf-8'));
-      }
-    } catch { this.enabledState = {}; }
-  }
-
-  private saveState(): void {
-    try {
-      fs.writeFileSync(this.statePath(), JSON.stringify(this.enabledState, null, 2));
-    } catch (e) { console.error('[Skills] Failed to save state:', e); }
-  }
-
-  persistState(): void { this.saveState(); }
-
-  // ── Scanning ─────────────────────────────────────────────────────────────────
-
   scanSkills(): void {
-    this.loadState();
     this.skills.clear();
 
     if (!fs.existsSync(this.skillsDir)) return;
@@ -108,93 +98,120 @@ export class SkillsManager {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
 
-      const skillMd = path.join(this.skillsDir, entry.name, 'SKILL.md');
-      if (!fs.existsSync(skillMd)) continue;
-
       try {
-        const { fm, body } = parseFrontmatter(fs.readFileSync(skillMd, 'utf-8'));
-        this.skills.set(entry.name, {
-          id: entry.name,
-          name: fm.name || entry.name,
-          description: fm.description || '',
-          emoji: fm.emoji || '🧩',
-          version: fm.version || '1.0.0',
-          triggers: fm.triggers
-            ? fm.triggers.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
-            : [],
-          enabled: this.enabledState[entry.name] ?? false,
-          instructions: body,
-          filePath: skillMd,
-        });
+        const pkg = loadSkillPackage(path.join(this.skillsDir, entry.name), entry.name);
+        if (!pkg) continue;
+        this.skills.set(pkg.id, pkg);
       } catch (e) {
         console.error(`[Skills] Failed to load ${entry.name}:`, e);
       }
     }
 
-    console.log(`[Skills] ${this.skills.size} skills in ${this.skillsDir} (${this.getEnabledSkills().length} enabled)`);
+    console.log(`[Skills] ${this.skills.size} skills in ${this.skillsDir}`);
   }
-
-  // ── Accessors ────────────────────────────────────────────────────────────────
 
   getAll(): Skill[] {
     return Array.from(this.skills.values()).sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  getEnabledSkills(): Skill[] {
-    return this.getAll().filter(s => s.enabled);
+  /** Compatibility shim for shutdown hooks. Skills are filesystem-backed. */
+  persistState(): void {}
+
+  get(id: string): Skill | undefined {
+    return this.skills.get(id) || this.skills.get(sanitizeSkillId(id));
   }
 
-  get(id: string): Skill | undefined { return this.skills.get(id); }
+  listResources(id: string): SkillResource[] {
+    return this.get(id)?.resources || [];
+  }
 
-  // ── Enable / Disable ─────────────────────────────────────────────────────────
+  readResource(
+    id: string,
+    relPath: string,
+    maxChars?: number,
+  ): { ok: true; path: string; content: string; truncated: boolean } | { ok: false; error: string } {
+    const skill = this.get(id);
+    if (!skill) return { ok: false, error: `Skill "${id}" not found.` };
+    return readSkillResourceText(skill, relPath, maxChars);
+  }
 
-  setEnabled(id: string, enabled: boolean): Skill | null {
-    const skill = this.skills.get(id);
+  inspect(id: string): any {
+    const skill = this.get(id);
     if (!skill) return null;
-    skill.enabled = enabled;
-    this.enabledState[id] = enabled;
-    this.saveState();
-    return skill;
+    return {
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      emoji: skill.emoji,
+      version: skill.version,
+      kind: skill.kind,
+      manifestSource: skill.manifestSource,
+      manifestPath: skill.manifestPath,
+      overlayPath: skill.overlayPath,
+      provenancePath: skill.provenancePath,
+      provenance: skill.provenance,
+      rootDir: skill.rootDir,
+      entrypoint: skill.entrypoint,
+      filePath: skill.filePath,
+      promptPath: skill.promptPath,
+      triggers: skill.triggers,
+      categories: skill.categories,
+      requiredTools: skill.requiredTools,
+      permissions: skill.permissions,
+      status: skill.status,
+      executionEnabled: skill.executionEnabled,
+      riskLevel: skill.riskLevel,
+      resources: skill.resources,
+      validation: skill.validation,
+      manifest: skill.manifest,
+    };
   }
 
-  // ── Auto-match: check if any skill triggers match a message or tool name ────
+  writeManifestOverlay(id: string, manifest: Record<string, unknown>): Skill {
+    const existing = this.get(id);
+    const skillId = sanitizeSkillId(String(manifest?.id || existing?.id || id));
+    const rootDir = existing?.rootDir || path.join(this.skillsDir, skillId);
+    if (!fs.existsSync(rootDir)) throw new Error(`Skill "${id}" not found`);
+    const overlayPath = getSkillOverlayPath(rootDir, skillId);
+    fs.mkdirSync(path.dirname(overlayPath), { recursive: true });
+    const normalized = {
+      schemaVersion: 'prometheus-skill-bundle-v1',
+      entrypoint: 'SKILL.md',
+      ...manifest,
+      id: skillId,
+    };
+    fs.writeFileSync(overlayPath, JSON.stringify(normalized, null, 2) + '\n', 'utf-8');
+    this.scanSkills();
+    const updated = this.get(skillId);
+    if (!updated) throw new Error(`Manifest written but skill "${skillId}" could not be loaded`);
+    return updated;
+  }
 
-  /**
-   * Returns skills whose triggers overlap with the message text or tool name.
-   * These get their full SKILL.md injected into the prompt for this turn.
-   */
   findMatchingSkills(toolName: string, messageText?: string): string[] {
-    const words = [
-      ...toolName.toLowerCase().split(/\W+/),
-      ...(messageText || '').toLowerCase().split(/\W+/),
-    ].filter(Boolean);
+    const text = `${toolName || ''} ${messageText || ''}`.toLowerCase();
+    const words = text.split(/\W+/).filter(Boolean);
     const matches: string[] = [];
     for (const skill of this.skills.values()) {
       if (skill.triggers.length === 0) continue;
-      if (skill.triggers.some(t => words.some(w => w.includes(t) || t.includes(w)))) {
+      if (skill.triggers.some(t => skillTriggerMatchesText(t, text, words))) {
         matches.push(skill.id);
       }
     }
     return matches;
   }
 
-  /**
-   * Match skills against a user message only (no tool name).
-   * Used at the start of each turn before any tool calls happen.
-   */
   findMatchingSkillsForMessage(messageText: string): string[] {
-    const words = messageText.toLowerCase().split(/\W+/).filter(w => w.length > 2);
+    const text = String(messageText || '').toLowerCase();
+    const words = text.split(/\W+/).filter(w => w.length > 2);
     const matches: string[] = [];
     for (const skill of this.skills.values()) {
       if (skill.triggers.length === 0) continue;
-      if (skill.triggers.some(t => words.some(w => w.includes(t) || t.includes(w)))) {
+      if (skill.triggers.some(t => skillTriggerMatchesText(t, text, words))) {
         matches.push(skill.id);
       }
     }
     return matches;
   }
-
-  // ── Create ───────────────────────────────────────────────────────────────────
 
   createSkill(data: {
     id: string;
@@ -204,11 +221,7 @@ export class SkillsManager {
     triggers?: string[];
     instructions: string;
   }): Skill {
-    const id = data.id
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
+    const id = sanitizeSkillId(data.id);
     if (!id) throw new Error('Invalid skill ID');
 
     const skillDir = path.join(this.skillsDir, id);
@@ -219,7 +232,7 @@ export class SkillsManager {
       `name: ${data.name}`,
       `description: ${data.description}`,
       `emoji: "${data.emoji || '🧩'}"`,
-      `version: 1.0.0`,
+      'version: 1.0.0',
     ];
     if (data.triggers?.length) {
       lines.push(`triggers: ${data.triggers.join(', ')}`);
@@ -228,8 +241,6 @@ export class SkillsManager {
     const content = lines.join('\n') + '\n\n' + data.instructions;
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf-8');
 
-    this.enabledState[id] = false; // created but not auto-enabled
-    this.saveState();
     this.scanSkills();
 
     const skill = this.skills.get(id);
@@ -238,62 +249,448 @@ export class SkillsManager {
     return skill;
   }
 
-  // ── Delete ───────────────────────────────────────────────────────────────────
+  createBundle(data: {
+    id: string;
+    name: string;
+    description: string;
+    instructions: string;
+    emoji?: string;
+    version?: string;
+    triggers?: string[];
+    categories?: string[];
+    requiredTools?: string[];
+    permissions?: SkillPermissions;
+    resources?: Array<{ path: string; content: string; type?: string; description?: string }>;
+    overwrite?: boolean;
+  }): Skill {
+    const id = sanitizeSkillId(data.id);
+    if (!id) throw new Error('Invalid skill ID');
+    const skillDir = path.join(this.skillsDir, id);
+    if (fs.existsSync(skillDir)) {
+      if (!data.overwrite) throw new Error(`Skill "${id}" already exists. Pass overwrite:true to replace it.`);
+      fs.rmSync(skillDir, { recursive: true, force: true });
+    }
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), String(data.instructions || '').trim() + '\n', 'utf-8');
+    const manifest = {
+      schemaVersion: 'prometheus-skill-bundle-v1',
+      id,
+      name: data.name,
+      description: data.description || '',
+      emoji: data.emoji || '🧩',
+      version: data.version || '1.0.0',
+      entrypoint: 'SKILL.md',
+      triggers: data.triggers || [],
+      categories: data.categories || [],
+      requiredTools: data.requiredTools || [],
+      permissions: data.permissions || {
+        workspaceRead: true,
+        workspaceWrite: true,
+        shell: false,
+        externalSideEffects: false,
+      },
+      resources: (data.resources || []).map((resource) => ({
+        path: normalizeSkillRelativePathForWrite(resource.path) || resource.path,
+        type: resource.type || inferResourceTypeForWrite(resource.path),
+        description: resource.description || undefined,
+      })),
+    };
+    fs.writeFileSync(path.join(skillDir, 'skill.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
+
+    for (const resource of data.resources || []) {
+      this.writeResourceFile(skillDir, resource.path, resource.content);
+    }
+
+    this.writeProvenance(skillDir, id, {
+      sourceType: 'prometheus-created',
+      source: 'skill_create_bundle',
+      createdAt: new Date().toISOString(),
+      prometheusCreatedVersion: 1,
+    });
+    this.scanSkills();
+    const skill = this.get(id);
+    if (!skill) throw new Error('Bundle creation failed');
+    return skill;
+  }
+
+  writeResource(
+    id: string,
+    relPath: string,
+    content: string,
+    options?: { type?: string; description?: string; addToManifest?: boolean },
+  ): Skill {
+    const skill = this.get(id);
+    if (!skill) throw new Error(`Skill "${id}" not found`);
+    this.writeResourceFile(skill.rootDir, relPath, content);
+    if (options?.addToManifest !== false) {
+      this.upsertNativeManifestResource(skill, relPath, options?.type, options?.description);
+    }
+    this.scanSkills();
+    const updated = this.get(skill.id);
+    if (!updated) throw new Error(`Resource written but skill "${skill.id}" could not be loaded`);
+    return updated;
+  }
+
+  deleteResource(id: string, relPath: string, options?: { removeFromManifest?: boolean }): Skill {
+    const skill = this.get(id);
+    if (!skill) throw new Error(`Skill "${id}" not found`);
+    const safeRel = normalizeSkillRelativePathForWrite(relPath);
+    if (!safeRel) throw new Error('Invalid resource path');
+    const abs = resolveSkillRelativePath(skill.rootDir, safeRel);
+    if (!abs) throw new Error('Resource path escapes the skill folder');
+    if (fs.existsSync(abs)) fs.rmSync(abs, { force: true });
+    if (options?.removeFromManifest !== false) this.removeNativeManifestResource(skill, safeRel);
+    this.scanSkills();
+    const updated = this.get(skill.id);
+    if (!updated) throw new Error(`Resource deleted but skill "${skill.id}" could not be loaded`);
+    return updated;
+  }
+
+  async exportBundle(id: string, outputPath?: string): Promise<{ path: string; bytes: number }> {
+    const skill = this.get(id);
+    if (!skill) throw new Error(`Skill "${id}" not found`);
+    const JSZip = require('jszip');
+    const zip = new JSZip();
+    const root = path.resolve(skill.rootDir);
+    const stack = [root];
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current) continue;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const abs = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(abs);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        const rel = path.relative(root, abs).replace(/\\/g, '/');
+        zip.file(`${skill.id}/${rel}`, fs.readFileSync(abs));
+      }
+    }
+    if (skill.manifestSource === 'overlay' && skill.manifestPath && fs.existsSync(skill.manifestPath)) {
+      zip.file(`${skill.id}/skill.json`, fs.readFileSync(skill.manifestPath));
+    }
+    const buffer: Buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    const out = outputPath
+      ? path.resolve(outputPath)
+      : path.join(this.skillsDir, 'exports', `${skill.id}.skill.zip`);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, buffer);
+    return { path: out, bytes: buffer.length };
+  }
+
+  async updateFromSource(id: string, options?: { overwrite?: boolean }): Promise<Skill[]> {
+    const skill = this.get(id);
+    if (!skill) throw new Error(`Skill "${id}" not found`);
+    const source = String(skill.provenance?.source || '').trim();
+    if (!source) throw new Error(`Skill "${id}" has no provenance source`);
+    return this.importBundles(source, { overwrite: options?.overwrite !== false });
+  }
+
+  async importBundle(source: string, options?: { id?: string; overwrite?: boolean }): Promise<Skill> {
+    const installed = await this.importBundles(source, options);
+    if (installed.length !== 1) {
+      throw new Error(`Expected one skill bundle but found ${installed.length}. Leave id unset and use collection import semantics.`);
+    }
+    return installed[0];
+  }
+
+  async importBundles(source: string, options?: { id?: string; overwrite?: boolean }): Promise<Skill[]> {
+    const sourceText = String(source || '').trim();
+    if (!sourceText) throw new Error('source is required');
+    const overwrite = options?.overwrite === true;
+    const tempRoot = fs.mkdtempSync(path.join(this.skillsDir, '.import-'));
+
+    try {
+      const staged = await stageSkillBundleSource(sourceText, tempRoot);
+      const roots = findBundleRoots(staged);
+      if (!roots.length) throw new Error('No skill.json or SKILL.md found in bundle source');
+      if (options?.id && roots.length !== 1) throw new Error('id override can only be used when importing a single skill bundle');
+
+      const installed: Skill[] = [];
+      for (const root of roots) {
+        const pkg = loadSkillPackage(root, options?.id || path.basename(root));
+        if (!pkg) continue;
+        if (!pkg.validation.ok) throw new Error(`Invalid skill bundle "${pkg.id}": ${pkg.validation.errors.join('; ')}`);
+
+        const id = sanitizeSkillId(options?.id || pkg.id);
+        const targetDir = path.join(this.skillsDir, id);
+        if (fs.existsSync(targetDir)) {
+          if (!overwrite) throw new Error(`Skill "${id}" already exists. Pass overwrite:true to replace it.`);
+          fs.rmSync(targetDir, { recursive: true, force: true });
+        }
+        fs.cpSync(root, targetDir, { recursive: true, force: false });
+        this.writeProvenance(targetDir, id, {
+          sourceType: classifyImportSource(sourceText),
+          source: sourceText,
+          importedAt: new Date().toISOString(),
+          upstreamFolder: path.basename(root),
+          prometheusImportedVersion: 1,
+        });
+        this.scanSkills();
+        const loaded = this.get(id);
+        if (!loaded) throw new Error(`Bundle import completed but skill "${id}" could not be loaded`);
+        installed.push(loaded);
+      }
+      return installed;
+    } finally {
+      try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
+    }
+  }
+
+  private writeProvenance(rootDir: string, id: string, provenance: Record<string, unknown>): void {
+    try {
+      const p = getSkillProvenancePath(rootDir, id);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, JSON.stringify(provenance, null, 2) + '\n', 'utf-8');
+    } catch (err: any) {
+      console.warn(`[Skills] Failed to write provenance for ${id}: ${err?.message || err}`);
+    }
+  }
+
+  private writeResourceFile(rootDir: string, relPath: string, content: string): void {
+    const safeRel = normalizeSkillRelativePathForWrite(relPath);
+    if (!safeRel) throw new Error('Invalid resource path');
+    if (!canReadSkillResource(safeRel)) throw new Error(`Resource extension is not allowed for text resource authoring: ${path.extname(safeRel) || '(none)'}`);
+    const abs = resolveSkillRelativePath(rootDir, safeRel);
+    if (!abs) throw new Error('Resource path escapes the skill folder');
+    const bytes = Buffer.byteLength(String(content || ''), 'utf-8');
+    if (bytes > 1_000_000) throw new Error('Resource content is too large for V1 authoring (max 1MB)');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, String(content || ''), 'utf-8');
+  }
+
+  private upsertNativeManifestResource(skill: Skill, relPath: string, type?: string, description?: string): void {
+    const safeRel = normalizeSkillRelativePathForWrite(relPath);
+    if (!safeRel) throw new Error('Invalid resource path');
+    const manifestPath = path.join(skill.rootDir, 'skill.json');
+    const manifest = readJsonObject(manifestPath) || {
+      schemaVersion: 'prometheus-skill-bundle-v1',
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      emoji: skill.emoji,
+      version: skill.version || '1.0.0',
+      entrypoint: skill.entrypoint || 'SKILL.md',
+      triggers: skill.triggers || [],
+      categories: skill.categories || [],
+      requiredTools: skill.requiredTools || [],
+      permissions: skill.permissions || {},
+    };
+    const resources = Array.isArray((manifest as any).resources) ? [...(manifest as any).resources] : [];
+    const idx = resources.findIndex((r: any) => String(r?.path || '') === safeRel);
+    const entry = {
+      path: safeRel,
+      type: type || inferResourceTypeForWrite(safeRel),
+      ...(description ? { description } : {}),
+    };
+    if (idx >= 0) resources[idx] = { ...resources[idx], ...entry };
+    else resources.push(entry);
+    (manifest as any).resources = resources;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
+  }
+
+  private removeNativeManifestResource(skill: Skill, relPath: string): void {
+    const manifestPath = path.join(skill.rootDir, 'skill.json');
+    const manifest = readJsonObject(manifestPath);
+    if (!manifest || !Array.isArray((manifest as any).resources)) return;
+    (manifest as any).resources = (manifest as any).resources.filter((r: any) => String(r?.path || '') !== relPath);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
+  }
 
   deleteSkill(id: string): boolean {
-    if (!this.skills.has(id)) return false;
+    const skill = this.get(id);
+    if (!skill) return false;
     try {
-      fs.rmSync(path.join(this.skillsDir, id), { recursive: true, force: true });
-      this.skills.delete(id);
-      delete this.enabledState[id];
-      this.saveState();
+      fs.rmSync(skill.rootDir, { recursive: true, force: true });
+      this.skills.delete(skill.id);
       return true;
     } catch { return false; }
   }
 
-  // ── Compact index ─────────────────────────────────────────────────────────────
-
   getCompactList(): string {
     const all = this.getAll();
     if (!all.length) return 'No skills installed.';
-    return all.map(s =>
-      `${s.id} ${s.emoji} ${s.name}${s.triggers.length ? ` [triggers: ${s.triggers.join(',')}]` : ' [pinned]'} — ${s.description.slice(0, 80)}`
-    ).join('\n');
+    return all.map(s => {
+      const parts = [
+        `${s.emoji} ${s.id}`,
+        s.kind === 'bundle' ? `v${s.version} [bundle: ${s.resources.length} resources]` : '[simple]',
+        s.requiredTools.length ? `[tools: ${s.requiredTools.join(',')}]` : '',
+        s.triggers.length ? `[triggers: ${s.triggers.join(',')}]` : '',
+        `- ${s.description.slice(0, 100) || '(no description)'}`,
+      ].filter(Boolean);
+      return parts.join(' ');
+    }).join('\n');
   }
 
-  // ── Prompt context ────────────────────────────────────────────────────────────
-
-  /**
-   * Main entry point — call once per turn.
-   *
-   * Inject a compact policy reminder only.
-   * Skill discovery/reading happens through skill_list + skill_read tools.
-   */
   buildTurnContext(_messageText: string, _maxCharsPerSkill = 3000): string {
     const all = this.getAll();
     if (!all.length) return '';
 
-    const parts: string[] = [];
-
-    parts.push(
+    return (
       `[SKILLS] You have ${all.length} reusable skill playbook${all.length !== 1 ? 's' : ''}.\n` +
-      `For greetings, small talk, quick Q&A, or confirmations: respond directly — do NOT call skill_list.\n` +
+      `For greetings, small talk, quick Q&A, or confirmations: respond directly - do NOT call skill_list.\n` +
       `Before browser/desktop automation, file edits, or other execution-heavy work: call skill_list first.\n` +
       `If a relevant skill exists, call skill_read(id) and follow it before acting.\n` +
-      `skill_list, skill_read, and skill_create are core tools (always available).\n` +
-      `Save new reusable workflows with skill_create().`
+      `For bundled skill templates/examples/schemas/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed.\n` +
+      `Use skill_inspect(id) for normalized metadata/provenance, and skill_manifest_write(id,manifest) to enrich imported skills with overlays.\n` +
+      `Use skill_import_bundle(source) for directory/zip/GitHub skill bundles; skill_update_from_source(id) to refresh imported bundles; skill_export_bundle(id) to package one.\n` +
+      `Use skill_create_bundle for reusable workflows that need templates/schemas/examples/references; skill_resource_write/delete to maintain bundle resources; use skill_create only for simple one-file playbooks.\n` +
+      `skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create are core tools.\n` +
+      `Save new reusable workflows with skill_create_bundle when resources or rich metadata would help.`
     );
-
-    return parts.join('\n\n');
   }
 
-  /**
-   * Legacy compat shim.
-   */
   buildPromptContext(options?: {
     maxCharsPerSkill?: number;
     reassessSkills?: Array<{ id: string; name: string; emoji: string; turnsActive: number }>;
   }): string {
     return this.buildTurnContext('', options?.maxCharsPerSkill ?? 3000);
   }
+}
+
+async function stageSkillBundleSource(source: string, tempRoot: string): Promise<string> {
+  const githubTree = parseGitHubTreeUrl(source);
+  if (githubTree) {
+    const zipUrl = `https://codeload.github.com/${githubTree.owner}/${githubTree.repo}/zip/refs/heads/${githubTree.ref}`;
+    const response = await fetch(zipUrl);
+    if (!response.ok) throw new Error(`GitHub download failed (${response.status} ${response.statusText})`);
+    await extractZipBuffer(Buffer.from(await response.arrayBuffer()), tempRoot);
+    const extractedRoot = findSingleExtractedRoot(tempRoot);
+    const subdir = path.resolve(extractedRoot, githubTree.subpath);
+    const root = path.resolve(extractedRoot);
+    if (subdir !== root && !subdir.startsWith(root + path.sep)) throw new Error('GitHub tree path escapes repository root');
+    if (!fs.existsSync(subdir) || !fs.statSync(subdir).isDirectory()) throw new Error(`GitHub tree path not found: ${githubTree.subpath}`);
+    return subdir;
+  }
+
+  if (/^https?:\/\//i.test(source)) {
+    const response = await fetch(source);
+    if (!response.ok) throw new Error(`Download failed (${response.status} ${response.statusText})`);
+    const arrayBuffer = await response.arrayBuffer();
+    const filename = source.split('/').pop()?.split('?')[0] || 'bundle.zip';
+    const buffer = Buffer.from(arrayBuffer);
+    if (filename.toLowerCase().endsWith('.zip')) return extractZipBuffer(buffer, tempRoot);
+    const target = path.join(tempRoot, filename);
+    fs.writeFileSync(target, buffer);
+    throw new Error('Downloaded source is not a .zip bundle');
+  }
+
+  const resolved = path.resolve(source);
+  if (!fs.existsSync(resolved)) throw new Error(`Source not found: ${source}`);
+  const stat = fs.statSync(resolved);
+  if (stat.isDirectory()) {
+    const target = path.join(tempRoot, path.basename(resolved));
+    fs.cpSync(resolved, target, { recursive: true, force: false });
+    return findBundleRoot(target);
+  }
+  if (stat.isFile() && resolved.toLowerCase().endsWith('.zip')) {
+    return extractZipBuffer(fs.readFileSync(resolved), tempRoot);
+  }
+  throw new Error('Bundle source must be a directory, .zip file, or https URL to a .zip file');
+}
+
+async function extractZipBuffer(buffer: Buffer, tempRoot: string): Promise<string> {
+  const JSZip = require('jszip');
+  const zip = await JSZip.loadAsync(buffer);
+  const writes: Array<Promise<void>> = [];
+  const root = path.resolve(tempRoot);
+
+  zip.forEach((relativePath: string, file: any) => {
+    const normalized = relativePath.replace(/\\/g, '/');
+    if (!normalized || normalized.startsWith('/') || normalized.includes('../')) return;
+    const target = path.resolve(tempRoot, normalized);
+    if (target !== root && !target.startsWith(root + path.sep)) return;
+    if (file.dir) {
+      fs.mkdirSync(target, { recursive: true });
+      return;
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    writes.push(file.async('nodebuffer').then((content: Buffer) => {
+      fs.writeFileSync(target, content);
+    }));
+  });
+
+  await Promise.all(writes);
+  return findBundleRoot(tempRoot);
+}
+
+function findBundleRoot(root: string): string {
+  const candidates = findBundleRoots(root);
+  if (!candidates.length) throw new Error('No skill.json or SKILL.md found in bundle');
+  return candidates.sort((a, b) => a.length - b.length)[0];
+}
+
+function findBundleRoots(root: string): string[] {
+  const candidates: string[] = [];
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) continue;
+    if (
+      fs.existsSync(path.join(current, 'skill.json')) ||
+      fs.existsSync(path.join(current, 'SKILL.md')) ||
+      fs.existsSync(path.join(current, 'skill.md'))
+    ) {
+      candidates.push(current);
+    }
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith('__MACOSX')) stack.push(path.join(current, entry.name));
+    }
+  }
+  return candidates
+    .sort((a, b) => a.length - b.length || a.localeCompare(b))
+    .filter((candidate, index, all) => {
+      const parent = all.find((other, otherIndex) => otherIndex < index && candidate.startsWith(other + path.sep));
+      return !parent;
+    });
+}
+
+function findSingleExtractedRoot(tempRoot: string): string {
+  const dirs = fs.readdirSync(tempRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('__MACOSX'))
+    .map((entry) => path.join(tempRoot, entry.name));
+  return dirs.length === 1 ? dirs[0] : tempRoot;
+}
+
+function parseGitHubTreeUrl(source: string): { owner: string; repo: string; ref: string; subpath: string } | null {
+  const match = String(source || '').match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/(.+)$/i);
+  if (!match) return null;
+  return {
+    owner: match[1],
+    repo: match[2].replace(/\.git$/i, ''),
+    ref: match[3],
+    subpath: match[4].replace(/^\/+/, ''),
+  };
+}
+
+function classifyImportSource(source: string): string {
+  if (parseGitHubTreeUrl(source)) return 'github-tree';
+  if (/^https?:\/\//i.test(source)) return source.toLowerCase().split('?')[0].endsWith('.zip') ? 'zip-url' : 'url';
+  if (source.toLowerCase().endsWith('.zip')) return 'zip-file';
+  return 'directory';
+}
+
+function readJsonObject(filePath: string): Record<string, unknown> | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function inferResourceTypeForWrite(relPath: string): string {
+  const top = String(relPath || '').replace(/\\/g, '/').split('/')[0]?.toLowerCase();
+  if (top === 'templates') return 'template';
+  if (top === 'schemas') return 'schema';
+  if (top === 'examples') return 'example';
+  if (top === 'assets') return 'asset';
+  if (top === 'prompts' || top === 'prompt-fragments') return 'prompt-fragment';
+  if (top === 'data' || top === 'fixtures') return 'data';
+  return 'doc';
 }

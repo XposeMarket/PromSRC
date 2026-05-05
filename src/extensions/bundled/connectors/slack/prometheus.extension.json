@@ -1,0 +1,59 @@
+{
+  "id": "slack",
+  "kind": "connector",
+  "name": "Slack",
+  "description": "Connect Slack so Prometheus can read channels, search history, and send messages with approval.",
+  "category": "Messaging",
+  "enabledByDefault": true,
+  "docsUrl": "https://api.slack.com/apps",
+  "tags": ["slack", "messaging", "oauth"],
+  "runtime": {
+    "binding": "integrations/connectors/slack"
+  },
+  "ui": {
+    "color": "#4A154B",
+    "permissions": [
+      { "icon": "#", "label": "Read public and private channel messages" },
+      { "icon": "->", "label": "Post messages with approval" },
+      { "icon": "@", "label": "Monitor mentions and direct messages" },
+      { "icon": "?", "label": "Search message history" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_slack"],
+    "capabilities": ["messaging", "chat_history", "notifications"],
+    "tools": [
+      "connector_slack_list_channels",
+      "connector_slack_send_message",
+      "connector_slack_get_history",
+      "connector_slack_search"
+    ]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://api.slack.com/apps",
+    "docsHint": "Slack API -> Create app -> OAuth & Permissions -> Redirect URL: http://localhost:19421/auth/callback/slack",
+    "callback": {
+      "port": 19421,
+      "path": "/auth/callback/slack"
+    },
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "Client ID",
+        "input": "text",
+        "required": true,
+        "placeholder": "1234567890.1234567890"
+      },
+      {
+        "key": "clientSecret",
+        "label": "Client Secret",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "abc123..."
+      }
+    ]
+  }
+}

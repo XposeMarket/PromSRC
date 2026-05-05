@@ -9,10 +9,6 @@ import { getAllShortcuts, saveSiteShortcut, deleteSiteShortcut } from '../site-s
 import {
   goalDecomposeTool, approveGoal, listGoals, loadGoal,
 } from '../goal-decomposer';
-import {
-  runWeeklyPerformanceReview, loadSelfImprovementStore,
-  approveSkillEvolution, formatPerformanceReport,
-} from '../scheduling/self-improvement-engine';
 import { analyzeRunForImprovement, applyPromptMutation } from '../scheduling/prompt-mutation';
 import { hookBus } from '../hooks';
 import { isModelBusy } from '../comms/broadcaster';
@@ -100,64 +96,6 @@ hookBus.register('gateway:approve_goal', ({ goalId, chatId }: any) => {
     _telegramChannel.sendToAllowed(`✅ Goal approved: "${result.goal.title}"\n${result.createdJobs.length} scheduled task(s) created and queued.`).catch(() => {});
   } catch (err: any) {
     _telegramChannel.sendToAllowed(`❌ Goal approval failed: ${err.message}`).catch(() => {});
-  }
-});
-
-// ─── Self-Improvement API (Phase 7: Continuous Self-Improvement Engine) ──────
-
-router.get('/api/performance', (_req, res) => {
-  try {
-    const store = loadSelfImprovementStore();
-    res.json({ success: true, store });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.get('/api/performance/latest', (_req, res) => {
-  try {
-    const store = loadSelfImprovementStore();
-    if (!store.reports.length) { res.json({ success: true, report: null }); return; }
-    const latest = store.reports[store.reports.length - 1];
-    res.json({ success: true, report: latest, formatted: formatPerformanceReport(latest) });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post('/api/performance/review', requireGatewayAuth, async (req, res) => {
-  try {
-    res.json({ success: true, message: 'Weekly performance review triggered in background' });
-    // Run in background so the HTTP response doesn't time out
-    setImmediate(async () => {
-      try {
-        const jobs = _cronScheduler.getJobs();
-        const report = await runWeeklyPerformanceReview(
-          jobs,
-          _handleChat,
-          (r) => {
-            broadcastWS({ type: 'performance_report_ready', reportId: r.id, weekOf: r.periodEnd, score: r.overallSuccessRate });
-            _telegramChannel.sendToAllowed(formatPerformanceReport(r)).catch(() => {});
-          },
-        );
-      } catch (reviewErr: any) {
-        console.error('[Performance] Manual review failed:', reviewErr.message);
-      }
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post('/api/performance/approve-skill/:id', requireGatewayAuth, (req, res) => {
-  try {
-    const result = approveSkillEvolution(req.params.id);
-    if (result.success) {
-      broadcastWS({ type: 'skill_evolution_approved', evolutionId: req.params.id, skillPath: result.skillPath });
-    }
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -312,4 +250,3 @@ router.delete('/api/shortcuts', (req: any, res: any) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-

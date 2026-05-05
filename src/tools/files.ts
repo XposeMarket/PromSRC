@@ -5,7 +5,7 @@ import os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getConfig } from '../config/config.js';
-import { getActiveWorkspace, isPathInWorkspace } from './workspace-context.js';
+import { getActiveWorkspace, getActiveAllowedWorkspaces, hasActiveWorkspaceScope, isPathInAnyWorkspace } from './workspace-context.js';
 import { ToolResult } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -45,16 +45,17 @@ function isPathAllowed(targetPath: string): { allowed: boolean; reason?: string 
   // When running as a subagent or team member the AsyncLocalStorage context
   // will carry the agent-specific workspace root; otherwise we use global.
   const activeWorkspace = getActiveWorkspace(globalWorkspace);
-  const isScopedRun = activeWorkspace !== path.resolve(globalWorkspace);
+  const activeAllowedWorkspaces = getActiveAllowedWorkspaces(globalWorkspace, permissions.allowed_paths || []);
+  const isScopedRun = hasActiveWorkspaceScope();
 
   // ── Workspace-scoped enforcement (subagents / team members) ──────────────
   // When running inside a scoped workspace, ONLY allow paths inside it.
   // This prevents any agent from escaping its own workspace directory.
   if (isScopedRun) {
-    if (!isPathInWorkspace(activeWorkspace, absPath)) {
+    if (!isPathInAnyWorkspace(activeAllowedWorkspaces, absPath)) {
       return {
         allowed: false,
-        reason: `[WORKSPACE ISOLATION] Path "${absPath}" is outside this agent's workspace (${activeWorkspace}). Agents may only read/write within their own workspace.`
+        reason: `[WORKSPACE ISOLATION] Path "${absPath}" is outside this agent's allowed work paths (${activeAllowedWorkspaces.join(', ')}).`
       };
     }
     return { allowed: true };
@@ -466,6 +467,8 @@ import { rmSync, existsSync } from 'fs';
 async function executeDelete(args: { path: string; recursive?: boolean }): Promise<ToolResult> {
   if (!args.path?.trim()) return { success: false, error: 'path is required' };
   const absPath = resolveWorkspacePath(args.path);
+  const pathCheck = isPathAllowed(absPath);
+  if (!pathCheck.allowed) return { success: false, error: pathCheck.reason };
   if (!existsSync(absPath)) return { success: false, error: `Path does not exist: ${absPath}` };
   try {
     rmSync(absPath, { recursive: args.recursive ?? false, force: true });

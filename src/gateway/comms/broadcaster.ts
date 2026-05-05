@@ -82,6 +82,15 @@ export function getSessionChannelHint(sessionId: string): {
 export let wss: WebSocketServer | undefined;
 export function setWss(instance: WebSocketServer): void { wss = instance; }
 
+export function getWebSocketClientCount(): number {
+  if (!wss) return 0;
+  let count = 0;
+  wss.clients.forEach((client: any) => {
+    if (client.readyState === 1) count += 1;
+  });
+  return count;
+}
+
 export function broadcastWS(data: object): void {
   if (!wss) return;
   const msg = JSON.stringify(data);
@@ -307,8 +316,12 @@ function formatTeamEventNotification(data: any): string | null {
     return `⏸️ Team paused: ${teamName || teamId}${reason ? `\nReason: ${reason}` : ''}`;
   }
   if (type === 'team_resumed') return `▶️ Team resumed: ${teamName || teamId}`;
-  if (type === 'team_chat_message' && typeof (data as any).message === 'string') {
-    const msg = String((data as any).message || '').trim();
+  if (type === 'team_chat_message') {
+    const msg = String(
+      typeof (data as any).message === 'string'
+        ? (data as any).message
+        : (data as any).text || (data as any).chatMessage?.content || '',
+    ).trim();
     if (!msg) return null;
     return `💬 Team update (${teamName || teamId}): ${msg.slice(0, 500)}`;
   }

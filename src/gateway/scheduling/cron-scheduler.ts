@@ -13,10 +13,13 @@ import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { clearHistory } from '../session';
-import { getAgentById, getConfig } from '../../config/config';
+import { addMessage, clearHistory, getSession, setWorkspace } from '../session';
+import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
+import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
 import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, addLearnedContext, setNote } from './schedule-memory';
+import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
+import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   createTask,
   loadTask,
@@ -27,17 +30,26 @@ import {
   appendJournal,
   writeToEvidenceBus,
   mutatePlan,
+  type TaskPlanStep,
 } from '../tasks/task-store';
 import {
   getAgentTeamId,
   appendTeamChat,
   getManagedTeam,
-  recordTeamRun,
   saveManagedTeam,
   type ManagedTeam,
 } from '../teams/managed-teams';
+import { runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
 import { triggerManagerReview } from '../teams/team-manager-runner';
 import { broadcastTeamEvent } from '../comms/broadcaster';
+import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
+import {
+  buildMissingSourceBlockMessage,
+  buildObsoleteBrandBlockMessage,
+  containsObsoleteProductBrand,
+  extractPromptRequiredWorkspaceReads,
+  normalizeWorkspaceAliasPath,
+} from '../scheduled-output-guard';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,6 +78,11 @@ export interface CronJob {
   status: 'scheduled' | 'queued' | 'running' | 'completed' | 'paused';
   pausedReason?: 'manual' | 'interrupted_by_schedule';
   lastOutputSessionId: string | null;  // last auto-created session containing output
+  expectedOutputs?: Array<{
+    path: string;
+    requiredText?: string;
+    absentText?: string;
+  }>;
   createdAt: string;
 }
 
@@ -107,9 +124,255 @@ export interface RunJobNowOptions {
   respectActiveHours?: boolean;
 }
 
+function buildScheduledTaskPlan(job: CronJob): TaskPlanStep[] {
+  const prompt = String(job.prompt || '');
+  const lower = prompt.toLowerCase();
+  const descriptions: string[] = ['Prepare scheduled run context and activate required tools'];
+
+  if (lower.includes('source-preferences.md') || lower.includes('read first')) {
+    descriptions.push('Read or seed required workspace source files');
+  }
+  if (lower.includes('x.com/home') || lower.includes('browser') || lower.includes('collect')) {
+    descriptions.push('Collect the bounded browser/source sample without side effects');
+  }
+  if (lower.includes('search') || lower.includes('targeted')) {
+    descriptions.push('Run targeted searches and extract concrete signals');
+  }
+  if (lower.includes('output files') || lower.includes('write workspace') || lower.includes('save both')) {
+    descriptions.push('Write the required workspace output files');
+  }
+  if (lower.includes('verify') || lower.includes('read_file') || lower.includes('completion')) {
+    descriptions.push('Verify outputs and record completion or blockers');
+  }
+
+  if (descriptions.length < 3) {
+    descriptions.push('Execute the scheduled prompt');
+    descriptions.push('Deliver the final scheduled-task result');
+  }
+
+  return Array.from(new Set(descriptions)).slice(0, 8).map((description, index) => ({
+    index,
+    description,
+    status: 'pending',
+  }));
+}
+
 type JobRunStatus = 'ok' | 'success' | 'error';
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
+const SUBAGENT_SCHEDULE_TIMEOUT_MS = 5 * 60 * 1000;
+const TASK_TERMINAL_STATUSES = new Set(['complete', 'failed', 'needs_assistance', 'awaiting_user_input', 'paused', 'stalled']);
+const RUN_HISTORY_COMPACTION_DELAY_MS = 15 * 1000;
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function sanitizeAgentIdForSession(agentId: string): string {
+  return String(agentId || '').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'agent';
+}
+
+function getSubagentChatSessionId(agentId: string): string {
+  return `subagent_chat_${sanitizeAgentIdForSession(agentId)}`;
+}
+
+function loadAgentIdentityPrompt(agentWorkspace: string): string {
+  const candidates = [
+    path.join(agentWorkspace, 'system_prompt.md'),
+    path.join(agentWorkspace, 'AGENTS.md'),
+    path.join(agentWorkspace, 'HEARTBEAT.md'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const content = fs.readFileSync(candidate, 'utf-8').trim();
+      if (content) return content;
+    } catch {
+      // Keep falling back when a prompt file is unreadable.
+    }
+  }
+  return '';
+}
+
+function buildScheduleOwnerCallerContext(agentId: string, agent: any, mainWorkspace: string, artifactWorkspace: string, job: CronJob, taskId: string, runId: string): string {
+  const identityPrompt = loadAgentIdentityPrompt(artifactWorkspace);
+  return [
+    '[SUBAGENT CHAT CONTEXT]',
+    `You are running as the scheduled-job owner agent "${agent?.name || agentId}" (id: ${agentId}).`,
+    'This scheduled run is a normal chat turn with a linked task card. Work live in this conversation; the task card is only the operational mirror.',
+    `Schedule ID: ${job.id}`,
+    `Schedule name: ${job.name}`,
+    `Task card ID: ${taskId}`,
+    `Schedule run ID: ${runId}`,
+    `Main workspace: ${mainWorkspace}`,
+    `Subagent artifact workspace: ${artifactWorkspace}`,
+    'Use your prior chat history, schedule memory, and runtime files for continuity. Keep blockers and fixes explicit so future runs can build on them.',
+    identityPrompt
+      ? ['', 'Your configured identity prompt follows. Keep this role and scope during the scheduled run.', '', identityPrompt].join('\n')
+      : 'No subagent identity file was found. Use the schedule prompt and current run context as your guide.',
+    '[/SUBAGENT CHAT CONTEXT]',
+  ].join('\n');
+}
+
+function seedSubagentChatSessionFromStore(agentId: string, sessionId: string, workspacePath: string): void {
+  setWorkspace(sessionId, workspacePath);
+  const session = getSession(sessionId);
+  if (Array.isArray(session.history) && session.history.length > 0) return;
+
+  const prior = getSubagentChatHistory(agentId, 80);
+  for (const msg of prior) {
+    if (msg.role !== 'user' && msg.role !== 'agent') continue;
+    addMessage(sessionId, {
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: String(msg.content || ''),
+      timestamp: Number(msg.ts || Date.now()) || Date.now(),
+      channel: 'web',
+    }, {
+      disableCompactionCheck: true,
+      disableMemoryFlushCheck: true,
+      maxMessages: 120,
+    });
+  }
+}
+
+function setTaskPlanFromProgress(taskId: string, data: any): void {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  if (!items.length) return;
+  const task = loadTask(taskId);
+  if (!task) return;
+  const toPlanStatus = (status: any): TaskPlanStep['status'] => {
+    const value = String(status || '').toLowerCase();
+    if (value === 'in_progress' || value === 'running') return 'running';
+    if (value === 'done' || value === 'complete') return 'done';
+    if (value === 'failed') return 'failed';
+    if (value === 'skipped') return 'skipped';
+    return 'pending';
+  };
+  task.plan = items.slice(0, task.maxPlanDepth || 20).map((item: any, index: number) => ({
+    index,
+    description: String(item?.text || `Step ${index + 1}`).slice(0, 240),
+    status: toPlanStatus(item?.status),
+  }));
+  const activeIndex = Number(data?.activeIndex);
+  task.currentStepIndex = Number.isFinite(activeIndex) && activeIndex >= 0
+    ? Math.min(activeIndex, Math.max(0, task.plan.length - 1))
+    : task.currentStepIndex;
+  task.lastProgressAt = Date.now();
+  saveTask(task);
+}
+
+function setTaskPlanFromDeclaredSteps(taskId: string, steps: any[]): void {
+  const cleanSteps = Array.isArray(steps)
+    ? steps.map((step) => String(step || '').trim()).filter(Boolean).slice(0, 8)
+    : [];
+  if (!cleanSteps.length) return;
+  const task = loadTask(taskId);
+  if (!task) return;
+  task.plan = cleanSteps.map((description, index) => ({
+    index,
+    description: description.slice(0, 240),
+    status: index === 0 ? 'running' : 'pending',
+  }));
+  task.currentStepIndex = 0;
+  task.lastProgressAt = Date.now();
+  saveTask(task);
+}
+
+function mirrorChatEventToTask(
+  taskId: string,
+  event: string,
+  data: any,
+  broadcast: (data: any) => void,
+  opts?: { scheduleId?: string; scheduleName?: string },
+): void {
+  try {
+    if (event === 'tool_call') {
+      const action = String(data?.action || 'unknown');
+      appendJournal(taskId, {
+        type: 'tool_call',
+        content: `${action}(${JSON.stringify(data?.args || {}).slice(0, 120)})`,
+      });
+      if (action === 'declare_plan') {
+        setTaskPlanFromDeclaredSteps(taskId, Array.isArray(data?.args?.steps) ? data.args.steps : []);
+      }
+      broadcast({ type: 'task_tool_call', taskId, tool: action, args: data?.args, scheduleId: opts?.scheduleId });
+      broadcast({ type: 'task_panel_update', taskId });
+      return;
+    }
+
+    if (event === 'tool_result') {
+      const action = String(data?.action || 'unknown');
+      const result = String(data?.result || '');
+      appendJournal(taskId, {
+        type: data?.error ? 'error' : 'tool_result',
+        content: `${action}: ${result.slice(0, 220)}`,
+        detail: result.length > 220 ? result.slice(0, 2000) : undefined,
+      });
+      broadcast({ type: 'task_panel_update', taskId });
+      return;
+    }
+
+    if (event === 'progress_state') {
+      updateTaskRuntimeProgress(taskId, {
+        source: data?.source,
+        activeIndex: Number(data?.activeIndex ?? -1),
+        items: Array.isArray(data?.items)
+          ? data.items.map((item: any, idx: number) => ({
+            id: String(item?.id || `p${idx + 1}`),
+            text: String(item?.text || ''),
+            status: String(item?.status || 'pending') as any,
+          }))
+          : [],
+      });
+      setTaskPlanFromProgress(taskId, data);
+      broadcast({ type: 'task_panel_update', taskId });
+      return;
+    }
+
+    if (event === 'info' || event === 'warning' || event === 'error') {
+      appendJournal(taskId, {
+        type: event === 'error' ? 'error' : 'status_push',
+        content: String(data?.message || data?.text || event).slice(0, 500),
+      });
+      broadcast({ type: 'task_panel_update', taskId });
+      return;
+    }
+
+    if (event === 'final' || event === 'done') {
+      const finalText = String(data?.reply || data?.text || '').trim();
+      if (finalText) {
+        appendJournal(taskId, {
+          type: 'status_push',
+          content: `Final: ${finalText.slice(0, 240)}`,
+          detail: finalText.slice(0, 2000),
+        });
+        broadcast({ type: 'task_panel_update', taskId });
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[CronScheduler] Failed to mirror ${event} into task ${taskId}:`, err?.message || err);
+  }
+}
+
+function resolveMaxRunHistory(): number {
+  let maxRunHistory = 200;
+  try {
+    const raw = Number((getConfig().getConfig() as any)?.tasks?.maxRunHistory);
+    if (Number.isFinite(raw) && raw >= 10) maxRunHistory = Math.floor(raw);
+  } catch {
+    // keep default
+  }
+  return maxRunHistory;
+}
+
+async function waitForTaskTerminal(taskId: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const task = loadTask(taskId);
+    if (!task) return null;
+    if (TASK_TERMINAL_STATUSES.has(String(task.status))) return task;
+    await delay(1000);
+  }
+  return loadTask(taskId);
+}
 
 function isTopOfHourExpr(expr: string): boolean {
   const parts = expr.trim().split(/\s+/);
@@ -296,6 +559,7 @@ export class CronScheduler {
   private tickInterval: NodeJS.Timeout | null = null;
   private runningJobId: string | null = null;
   private interruptedTasksBySchedule: Map<string, string[]> = new Map(); // scheduleId -> [taskIds]
+  private pendingRunHistoryCompactions: Map<string, NodeJS.Timeout> = new Map();
 
   private defaultStore(): CronStore {
     return {
@@ -352,6 +616,33 @@ export class CronScheduler {
     }
   }
 
+  private compactRunHistory(jobId: string, filePath: string): void {
+    try {
+      if (!fs.existsSync(filePath)) return;
+      const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean);
+      const maxRunHistory = resolveMaxRunHistory();
+      if (lines.length <= maxRunHistory) return;
+      const trimmed = lines.slice(-maxRunHistory);
+      const tmp = `${filePath}.tmp-${Date.now()}`;
+      fs.writeFileSync(tmp, trimmed.join('\n') + '\n', 'utf-8');
+      fs.renameSync(tmp, filePath);
+    } catch (err: any) {
+      console.error(`[CronScheduler] Failed to compact run history for ${jobId}:`, err?.message || err);
+    }
+  }
+
+  private scheduleRunHistoryCompaction(jobId: string, filePath: string): void {
+    if (this.pendingRunHistoryCompactions.has(jobId)) return;
+    const timer = setTimeout(() => {
+      this.pendingRunHistoryCompactions.delete(jobId);
+      this.compactRunHistory(jobId, filePath);
+    }, RUN_HISTORY_COMPACTION_DELAY_MS);
+    if (typeof (timer as any)?.unref === 'function') {
+      (timer as any).unref();
+    }
+    this.pendingRunHistoryCompactions.set(jobId, timer);
+  }
+
   private appendRunHistory(jobId: string, entry: { t: string; status: JobRunStatus; duration: number; result_excerpt: string }): void {
     try {
       const baseDir = path.dirname(this.storePath);
@@ -359,20 +650,8 @@ export class CronScheduler {
       if (!fs.existsSync(runsDir)) fs.mkdirSync(runsDir, { recursive: true });
       const safeId = String(jobId || '').replace(/[^a-zA-Z0-9._-]/g, '_');
       const filePath = path.join(runsDir, `${safeId}.jsonl`);
-
-      const lines = fs.existsSync(filePath)
-        ? fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean)
-        : [];
-      lines.push(JSON.stringify(entry));
-      let maxRunHistory = 200;
-      try {
-        const raw = Number((getConfig().getConfig() as any)?.tasks?.maxRunHistory);
-        if (Number.isFinite(raw) && raw >= 10) maxRunHistory = Math.floor(raw);
-      } catch {
-        // keep default
-      }
-      const trimmed = lines.slice(-maxRunHistory);
-      fs.writeFileSync(filePath, trimmed.join('\n') + '\n', 'utf-8');
+      fs.appendFileSync(filePath, JSON.stringify(entry) + '\n', 'utf-8');
+      this.scheduleRunHistoryCompaction(jobId, filePath);
     } catch (err: any) {
       console.error(`[CronScheduler] Failed to append run history for ${jobId}:`, err?.message || err);
     }
@@ -466,6 +745,11 @@ export class CronScheduler {
     const before = this.store.jobs.length;
     this.store.jobs = this.store.jobs.filter(j => j.id !== id);
     if (this.store.jobs.length === before) return false;
+    const pendingCompaction = this.pendingRunHistoryCompactions.get(id);
+    if (pendingCompaction) {
+      clearTimeout(pendingCompaction);
+      this.pendingRunHistoryCompactions.delete(id);
+    }
     this.saveStore();
     this.broadcastUpdate();
     return true;
@@ -488,6 +772,12 @@ export class CronScheduler {
     if (job.type === 'heartbeat') {
       console.log(`[CronScheduler] runJobNow ignored for legacy heartbeat job "${job.name}"`);
       return;
+    }
+    if (this.runningJobId) {
+      throw new Error(`Another schedule is already running (${this.runningJobId}). Try again after it finishes.`);
+    }
+    if (job.status === 'running') {
+      throw new Error(`Schedule "${job.name}" is already running.`);
     }
     // Run outside the normal tick: ignore model-busy guard (user explicitly requested).
     if (options.respectActiveHours && !this.isWithinActiveHours()) {
@@ -611,7 +901,24 @@ export class CronScheduler {
       ? mainSessionId
       : `cron_${job.id}_${Date.now()}`;
     const isolatedRunSession = job.sessionTarget !== 'main';
-    const teamSubagentId = String(job.subagent_id || '').trim();
+    let teamSubagentId = String(job.subagent_id || '').trim();
+    if (!teamSubagentId) {
+      try {
+        const owner = ensureScheduleOwnerAgent({
+          scheduleId: job.id,
+          scheduleName: job.name,
+          prompt: job.prompt,
+          model: job.model,
+        });
+        job.subagent_id = owner.agentId;
+        teamSubagentId = owner.agentId;
+        this.saveStore();
+        this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });
+        console.log(`[CronScheduler] Assigned schedule "${job.name}" to owner subagent ${owner.agentId}`);
+      } catch (err: any) {
+        console.warn(`[CronScheduler] Failed to create schedule owner for "${job.name}":`, err?.message || err);
+      }
+    }
     let teamId = teamSubagentId ? getAgentTeamId(teamSubagentId) : null;
     let team = teamId ? getManagedTeam(teamId) : null;
     if (!team && teamSubagentId) {
@@ -638,6 +945,10 @@ export class CronScheduler {
 
     let resultText = '';
     let duration = 0;
+    let scheduledSubagentTaskId: string | undefined;
+    let activeCronTaskId: string | undefined;
+    let activeRunId: string | undefined;
+    let activeScheduledAt: number | undefined;
 
     try {
       if (job.payloadKind === 'systemEvent') {
@@ -668,6 +979,269 @@ export class CronScheduler {
           effectivePrompt = effectivePrompt + selfLearnInstruction;
         }
 
+        if (teamSubagentId) {
+          const scheduledAt = Date.now();
+          const agentDef = getAgentById(teamSubagentId);
+          let runId = '';
+          let taskSuccess = false;
+          let stepCount = 1;
+
+          if (teamId) {
+            const teamResult = await runTeamAgentViaChat(
+              teamSubagentId,
+              effectivePrompt,
+              teamId,
+              SUBAGENT_SCHEDULE_TIMEOUT_MS,
+              'cron'
+            );
+            scheduledSubagentTaskId = teamResult.taskId;
+            if (scheduledSubagentTaskId) {
+              runId = startRunLogEntry({ scheduleId: job.id, taskId: scheduledSubagentTaskId, scheduledAt });
+            }
+            resultText = teamResult.success
+              ? String(teamResult.result || '').trim()
+              : `ERROR: ${String(teamResult.error || teamResult.result || 'Scheduled team subagent failed').trim()}`;
+            taskSuccess = teamResult.success && !/^\s*ERROR:/i.test(resultText);
+            stepCount = teamResult.stepCount || 1;
+          } else {
+            ensureScheduleRuntimeForAgent(teamSubagentId, {
+              scheduleId: job.id,
+              scheduleName: job.name,
+              prompt: effectivePrompt,
+              model: job.model,
+            });
+            const agentWorkspace = agentDef ? ensureAgentWorkspace(agentDef as any) : getConfig().getWorkspacePath();
+            const chatSessionId = getSubagentChatSessionId(teamSubagentId);
+            seedSubagentChatSessionFromStore(teamSubagentId, chatSessionId, getConfig().getWorkspacePath());
+
+            const cronTask = createTask({
+              title: job.name,
+              prompt: effectivePrompt,
+              sessionId: chatSessionId,
+              channel: 'web',
+              scheduleId: job.id,
+              taskKind: 'scheduled',
+              subagentProfile: teamSubagentId,
+              agentWorkspace: getConfig().getWorkspacePath(),
+              plan: buildScheduledTaskPlan(job),
+            });
+            scheduledSubagentTaskId = cronTask.id;
+            activeCronTaskId = cronTask.id;
+            updateTaskStatus(cronTask.id, 'running');
+            setTaskStepRunning(cronTask.id, 0);
+            runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt });
+            activeRunId = runId;
+            activeScheduledAt = scheduledAt;
+            try {
+              const linkedTask = loadTask(cronTask.id);
+              if (linkedTask) {
+                linkedTask.scheduleRunId = runId;
+                saveTask(linkedTask);
+              }
+            } catch {}
+            this.deps.broadcast({ type: 'task_running', taskId: cronTask.id, jobId: job.id, jobName: job.name });
+            this.deps.broadcast({
+              type: 'cron_task_spawned',
+              jobId: job.id,
+              jobName: job.name,
+              taskId: cronTask.id,
+              agentId: teamSubagentId,
+            });
+
+            const scheduledUserMessage = appendSubagentChatMessage(teamSubagentId, {
+              role: 'user',
+              content: `[Scheduled task: ${job.name}]\n\n${job.prompt}`,
+              metadata: {
+                source: 'schedule',
+                scheduleId: job.id,
+                scheduleName: job.name,
+                taskId: cronTask.id,
+                runId,
+              },
+            });
+            this.deps.broadcast({
+              type: 'subagent_chat_message',
+              agentId: teamSubagentId,
+              message: scheduledUserMessage,
+            });
+
+            const abortSignal = { aborted: false };
+            const runtimeId = registerLiveRuntime({
+              kind: 'cron',
+              label: `Scheduled owner chat - ${job.name}`,
+              sessionId: chatSessionId,
+              taskId: cronTask.id,
+              scheduleId: job.id,
+              source: 'scheduler',
+              detail: effectivePrompt.slice(0, 160),
+              abortSignal,
+              onAbort: () => {
+                updateTaskStatus(cronTask.id, 'failed', { finalSummary: 'Aborted via Telegram /stop.' });
+                appendJournal(cronTask.id, { type: 'status_push', content: 'Aborted via Telegram /stop.' });
+              },
+            });
+            const taskSendSSE = (event: string, data: any) => {
+              sendSSE(event, data);
+              this.deps.broadcast({
+                type: 'subagent_chat_stream_event',
+                agentId: teamSubagentId,
+                taskId: cronTask.id,
+                scheduleId: job.id,
+                scheduleName: job.name,
+                event,
+                data,
+              });
+              mirrorChatEventToTask(cronTask.id, event, data, this.deps.broadcast, {
+                scheduleId: job.id,
+                scheduleName: job.name,
+              });
+
+              if (event === 'tool_call' && data?.action === 'write_note') {
+                const noteArgs = data.args || {};
+                const noteScope = String(noteArgs.scope || '').toLowerCase();
+                const noteKey = String(noteArgs.key || noteArgs.tag || 'insight').trim();
+                const noteValue = String(noteArgs.value || noteArgs.content || '').trim();
+                if (noteValue) {
+                  writeToEvidenceBus(cronTask.id, {
+                    stepIndex: Math.max(0, Number(loadTask(cronTask.id)?.currentStepIndex || 0)),
+                    category: 'finding',
+                    key: noteKey,
+                    value: noteValue,
+                  });
+                  if (noteScope === 'schedule' || noteKey === 'last_run_insight') {
+                    addLearnedContext(job.id, noteValue);
+                  } else if (noteScope === 'note') {
+                    setNote(job.id, noteKey, noteValue);
+                  }
+                }
+              }
+            };
+
+            try {
+              const requiredReads = extractPromptRequiredWorkspaceReads(effectivePrompt);
+              if (requiredReads.length) {
+                const workspaceRoot = getConfig().getWorkspacePath();
+                const missing = requiredReads.filter((p) => {
+                  const abs = path.join(workspaceRoot, normalizeWorkspaceAliasPath(p, workspaceRoot));
+                  return !fs.existsSync(abs) || !fs.statSync(abs).isFile();
+                });
+                if (missing.length) {
+                  throw new Error(buildMissingSourceBlockMessage(missing));
+                }
+              }
+
+              const ownerResult = await this.deps.handleChat(
+                effectivePrompt,
+                chatSessionId,
+                taskSendSSE,
+                undefined,
+                abortSignal,
+                buildScheduleOwnerCallerContext(
+                  teamSubagentId,
+                  agentDef,
+                  getConfig().getWorkspacePath(),
+                  agentWorkspace,
+                  job,
+                  cronTask.id,
+                  runId,
+                ),
+                modelOverride || String((agentDef as any)?.model || '').trim() || undefined,
+                'interactive'
+              );
+              resultText = abortSignal.aborted
+                ? 'ERROR: Run aborted by operator.'
+                : String(ownerResult?.text || '').trim();
+            } finally {
+              finishLiveRuntime(runtimeId);
+            }
+
+            if (!resultText) resultText = 'Scheduled subagent task completed.';
+            if (containsObsoleteProductBrand(resultText)) {
+              resultText = `ERROR: ${buildObsoleteBrandBlockMessage('Cron final output')}`;
+            }
+            const finalStatus = /^\s*ERROR:/i.test(resultText) ? 'failed' : 'complete';
+            const finalTask = loadTask(cronTask.id);
+            const lastOpenStep = finalTask?.plan?.findIndex((step) => step.status === 'running' || step.status === 'pending') ?? -1;
+            if (lastOpenStep >= 0 && finalStatus === 'complete') {
+              mutatePlan(cronTask.id, [{
+                op: 'complete',
+                step_index: lastOpenStep,
+                notes: resultText.slice(0, 200),
+              }]);
+            }
+            updateTaskStatus(cronTask.id, finalStatus, { finalSummary: resultText });
+            appendJournal(cronTask.id, {
+              type: finalStatus === 'complete' ? 'status_push' : 'error',
+              content: finalStatus === 'complete'
+                ? `Done: ${resultText.slice(0, 240)}`
+                : `Failed: ${resultText.slice(0, 240)}`,
+              detail: resultText.slice(0, 2000),
+            });
+            this.deps.broadcast({ type: 'task_complete', taskId: cronTask.id, summary: resultText });
+            this.deps.broadcast({ type: 'task_panel_update', taskId: cronTask.id });
+            const scheduledAgentMessage = appendSubagentChatMessage(teamSubagentId, {
+              role: 'agent',
+              content: resultText,
+              metadata: {
+                source: 'schedule',
+                scheduleId: job.id,
+                scheduleName: job.name,
+                taskId: cronTask.id,
+                runId,
+                success: finalStatus === 'complete',
+              },
+            });
+            this.deps.broadcast({
+              type: 'subagent_chat_message',
+              agentId: teamSubagentId,
+              message: scheduledAgentMessage,
+            });
+            taskSuccess = finalStatus === 'complete' && !/^\s*ERROR:/i.test(resultText);
+            const doneTask = loadTask(cronTask.id);
+            stepCount = Array.isArray((doneTask as any)?.journal)
+              ? Math.max(1, (doneTask as any).journal.filter((j: any) => j?.type === 'tool_call' || j?.type === 'status_push').length)
+              : 1;
+
+            try {
+              const finishedAt = Date.now();
+              recordAgentRun({
+                agentId: teamSubagentId,
+                agentName: agentDef?.name || teamSubagentId,
+                trigger: 'cron',
+                taskId: scheduledSubagentTaskId,
+                success: taskSuccess,
+                startedAt: start,
+                finishedAt,
+                durationMs: finishedAt - start,
+                stepCount,
+                error: taskSuccess ? undefined : resultText.slice(0, 300),
+                resultPreview: taskSuccess ? resultText.slice(0, 1000) : undefined,
+              });
+            } catch (agentRunErr: any) {
+              console.warn(`[CronScheduler] Failed to record subagent run for "${job.name}":`, agentRunErr?.message || agentRunErr);
+            }
+          }
+
+          try {
+            if (!runId) {
+              runId = startRunLogEntry({
+                scheduleId: job.id,
+                taskId: scheduledSubagentTaskId || `schedule_${job.id}`,
+                scheduledAt,
+              });
+            }
+            completeScheduledRun({
+              scheduleId: job.id,
+              runId,
+              taskId: scheduledSubagentTaskId || `schedule_${job.id}`,
+              success: taskSuccess,
+              summary: resultText.slice(0, 400),
+              stepCount,
+              errorIfAny: !taskSuccess ? resultText.slice(0, 200) : undefined,
+              scheduledAt,
+            });
+          } catch { /* best effort */ }
+        } else {
         // Create a TaskRecord so the kanban/background-tasks page can show live progress
         const cronTask = createTask({
           title: job.name,
@@ -675,16 +1249,9 @@ export class CronScheduler {
           sessionId: targetSessionId,
           channel: 'web',
           scheduleId: job.id,
-          plan: [{ index: 0, description: job.prompt.slice(0, 120), status: 'pending' }],
+          plan: buildScheduledTaskPlan(job),
         });
-        if (teamId && teamSubagentId) {
-          cronTask.teamSubagent = {
-            teamId,
-            agentId: teamSubagentId,
-            agentName: teamAgentName,
-          };
-          saveTask(cronTask);
-        }
+        activeCronTaskId = cronTask.id;
         updateTaskStatus(cronTask.id, 'running');
         setTaskStepRunning(cronTask.id, 0);
         this.deps.broadcast({ type: 'task_running', taskId: cronTask.id, jobId: job.id, jobName: job.name });
@@ -750,18 +1317,49 @@ export class CronScheduler {
         // Log this run start
         const scheduledAt = Date.now();
         const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt });
+        activeRunId = runId;
+        activeScheduledAt = scheduledAt;
+        const abortSignal = { aborted: false };
+        const runtimeId = registerLiveRuntime({
+          kind: 'cron',
+          label: `Scheduled task - ${job.name}`,
+          sessionId: targetSessionId,
+          taskId: cronTask.id,
+          scheduleId: job.id,
+          source: 'scheduler',
+          detail: effectivePrompt.slice(0, 160),
+          abortSignal,
+          onAbort: () => {
+            updateTaskStatus(cronTask.id, 'failed', { finalSummary: 'Aborted via Telegram /stop.' });
+            appendJournal(cronTask.id, { type: 'status_push', content: 'Aborted via Telegram /stop.' });
+          },
+        });
 
+        try {
+        const requiredReads = extractPromptRequiredWorkspaceReads(effectivePrompt);
+        if (requiredReads.length) {
+          const workspaceRoot = getConfig().getWorkspacePath();
+          const missing = requiredReads.filter((p) => {
+            const abs = path.join(workspaceRoot, normalizeWorkspaceAliasPath(p, workspaceRoot));
+            return !fs.existsSync(abs) || !fs.statSync(abs).isFile();
+          });
+          if (missing.length) {
+            throw new Error(buildMissingSourceBlockMessage(missing));
+          }
+        }
         const result = await this.deps.handleChat(
           effectivePrompt,
           targetSessionId,
           taskSendSSE,
           undefined,
-          undefined,
+          abortSignal,
           undefined,
           modelOverride,
           'cron'
         );
-        resultText = result.text || '';
+        resultText = abortSignal.aborted
+          ? 'ERROR: Run aborted by operator.'
+          : (result.text || '');
 
         // ── Synthesis round: if the AI did real work but returned a vague/short response ──
         // (e.g. "Done.", "Task complete.") run one follow-up round in the same session so it
@@ -770,7 +1368,7 @@ export class CronScheduler {
         const isVagueResult =
           resultText.trim().length < 300 ||
           /^(done\.?|complete\.?|ok\.?|finished\.?|task complete\.?|step complete\.?|all steps complete\.?|all done\.?)$/i.test(resultText.trim());
-        if (hadToolCalls && isVagueResult) {
+        if (!abortSignal.aborted && hadToolCalls && isVagueResult) {
           console.log(`[CronScheduler] Job "${job.name}" returned vague response (${resultText.length} chars) — running synthesis round.`);
           try {
             const synthResult = await this.deps.handleChat(
@@ -780,7 +1378,7 @@ export class CronScheduler {
               targetSessionId,
               taskSendSSE,
               undefined,
-              undefined,
+              abortSignal,
               undefined,
               modelOverride,
               'cron'
@@ -792,6 +1390,10 @@ export class CronScheduler {
           } catch (synthErr: any) {
             console.warn(`[CronScheduler] Synthesis round failed for "${job.name}":`, synthErr.message);
           }
+        }
+
+        if (containsObsoleteProductBrand(resultText)) {
+          resultText = `ERROR: ${buildObsoleteBrandBlockMessage('Cron final output')}`;
         }
 
         // Mark the single plan step as done so progress bar fills to 100%
@@ -826,27 +1428,10 @@ export class CronScheduler {
             scheduledAt,
           });
         } catch { /* best effort */ }
+        } finally {
+          finishLiveRuntime(runtimeId);
+        }
 
-        if (teamId && teamSubagentId) {
-          const finishedAt = Date.now();
-          try {
-            recordTeamRun(teamId, {
-              agentId: teamSubagentId,
-              agentName: teamAgentName,
-              trigger: 'cron',
-              taskId: cronTask.id,
-              success: taskSuccess,
-              startedAt: start,
-              finishedAt,
-              durationMs: finishedAt - start,
-              stepCount: 1,
-              zeroToolCalls: !events.some(e => e.type === 'tool_call'),
-              error: taskSuccess ? undefined : resultText.slice(0, 300),
-              resultPreview: taskSuccess ? resultText : undefined,
-            });
-          } catch (teamRunErr: any) {
-            console.warn(`[CronScheduler] Failed to record team run for "${job.name}":`, teamRunErr?.message || teamRunErr);
-          }
         }
       }
       duration = Date.now() - start;
@@ -854,10 +1439,66 @@ export class CronScheduler {
       resultText = `ERROR: ${err.message}`;
       duration = Date.now() - start;
       console.error(`[CronScheduler] Job "${job.name}" error:`, err.message);
+      if (activeCronTaskId) {
+        updateTaskStatus(activeCronTaskId, 'failed', { finalSummary: resultText });
+        appendJournal(activeCronTaskId, {
+          type: 'status_push',
+          content: `Failed: ${resultText.slice(0, 200)}`,
+        });
+        if (activeRunId) {
+          try {
+            completeScheduledRun({
+              scheduleId: job.id,
+              runId: activeRunId,
+              taskId: activeCronTaskId,
+              success: false,
+              summary: resultText.slice(0, 400),
+              stepCount: 1,
+              errorIfAny: resultText.slice(0, 200),
+              scheduledAt: activeScheduledAt || start,
+            });
+          } catch {
+            // best effort only
+          }
+        }
+        this.deps.broadcast({ type: 'task_complete', taskId: activeCronTaskId, summary: resultText });
+        this.deps.broadcast({ type: 'task_panel_update', taskId: activeCronTaskId });
+        if (teamSubagentId && !teamId) {
+          try {
+            const errorMessage = appendSubagentChatMessage(teamSubagentId, {
+              role: 'agent',
+              content: resultText,
+              metadata: {
+                source: 'schedule',
+                scheduleId: job.id,
+                scheduleName: job.name,
+                taskId: activeCronTaskId,
+                runId: activeRunId,
+                success: false,
+              },
+            });
+            this.deps.broadcast({
+              type: 'subagent_chat_stream_event',
+              agentId: teamSubagentId,
+              taskId: activeCronTaskId,
+              scheduleId: job.id,
+              scheduleName: job.name,
+              event: 'error',
+              data: { message: resultText },
+            });
+            this.deps.broadcast({
+              type: 'subagent_chat_message',
+              agentId: teamSubagentId,
+              message: errorMessage,
+            });
+          } catch {}
+        }
+      }
     }
 
     // Determine if this is a silent OK or real output
     const isOk = /^\s*HEARTBEAT_OK\s*$/i.test(resultText);
+    const isBlockedMissingSource = /^\s*ERROR:\s*BLOCKED: required scheduled-job source file is missing\./i.test(resultText);
     const runStatus: JobRunStatus = isOk
       ? 'ok'
       : (/^\s*ERROR:/i.test(resultText) ? 'error' : 'success');
@@ -870,7 +1511,7 @@ export class CronScheduler {
       this.store.jobs = this.store.jobs.filter(j => j.id !== job.id);
     } else {
       job.status = 'scheduled';
-      if (runStatus === 'error') {
+      if (runStatus === 'error' && !isBlockedMissingSource) {
         job.consecutiveErrors = (job.consecutiveErrors || 0) + 1;
         const backoffMs = Math.min(
           Math.pow(2, job.consecutiveErrors - 1) * 60_000,
@@ -878,7 +1519,11 @@ export class CronScheduler {
         );
         job.nextRun = new Date(Date.now() + backoffMs).toISOString();
       } else {
-        job.consecutiveErrors = 0;
+        if (isBlockedMissingSource) {
+          job.consecutiveErrors = 0;
+        } else {
+          job.consecutiveErrors = 0;
+        }
         job.nextRun = applyDeterministicStagger(
           getNextRun(job.schedule, new Date(), job.tz).toISOString(),
           job.id,
@@ -890,6 +1535,7 @@ export class CronScheduler {
     let automatedSession: AutomatedSession | null = null;
 
     const shouldRouteToTeam = !!(teamId && teamSubagentId);
+    const shouldRouteToStandaloneSubagent = !!(teamSubagentId && !teamId);
 
     if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToTeam) {
       try {
@@ -918,7 +1564,7 @@ export class CronScheduler {
           teamName: team?.name || teamId,
           agentId: teamSubagentId,
           agentName: teamAgentName,
-          taskId: undefined,
+          taskId: scheduledSubagentTaskId,
           success,
           resultPreview: resultText.slice(0, 800),
           trigger: 'cron',
@@ -928,6 +1574,9 @@ export class CronScheduler {
       } catch (teamRouteErr: any) {
         console.error(`[CronScheduler] Failed to route "${job.name}" output to team chat:`, teamRouteErr?.message || teamRouteErr);
       }
+    } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToStandaloneSubagent) {
+      job.lastOutputSessionId = null;
+      console.log(`[CronScheduler] Job "${job.name}" produced output -> routed to subagent ${teamSubagentId} task ${scheduledSubagentTaskId || 'unknown'}`);
     } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent') {
       // Create an automated chat session with the output
       const sessionId = `auto_${job.id}_${Date.now()}`;
@@ -952,9 +1601,13 @@ export class CronScheduler {
       // Deliver to Telegram if available
       if (this.deps.deliverTelegram) {
         const tgMsg = `\ud83d\udd50 <b>${job.name}</b>\n\n${resultText}`;
-        this.deps.deliverTelegram(tgMsg).catch(err =>
-          console.error(`[CronScheduler] Telegram delivery failed:`, err.message)
-        );
+        if (containsObsoleteProductBrand(tgMsg)) {
+          console.error(`[CronScheduler] Telegram delivery blocked: ${buildObsoleteBrandBlockMessage('Cron delivery payload')}`);
+        } else {
+          this.deps.deliverTelegram(tgMsg).catch(err =>
+            console.error(`[CronScheduler] Telegram delivery failed:`, err.message)
+          );
+        }
       }
     } else {
       console.log(`[CronScheduler] Job "${job.name}" → HEARTBEAT_OK (suppressed)`);

@@ -1,0 +1,66 @@
+{
+  "id": "arcee",
+  "kind": "provider",
+  "name": "Arcee AI",
+  "description": "Arcee AI hosted models through the Arcee compatible API.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://www.arcee.ai/",
+  "tags": ["arcee", "trinity", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["trinity-large-thinking", "trinity-large-preview", "trinity-mini"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#9333EA"
+  },
+  "ownership": {
+    "providerIds": ["arcee"],
+    "modelPrefixes": ["trinity-"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["ARCEEAI_API_KEY", "ARCEE_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "arcee_..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "trinity-large-thinking"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.arcee.ai/api/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.arcee.ai/api/v1",
+      "model": "trinity-large-thinking"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

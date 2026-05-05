@@ -9,7 +9,7 @@ deprecation: "Marked optional-pack / deprecated from core catalog. Do not hard-d
 
 > **Optional Pack Notice**
 > This skill has been conservatively deprecated from the core catalog and is now treated as an optional pack. It remains fully intact for compatibility and discoverability.
-> 
+>
 > **Removal gate:** any future hard removal must wait until usage telemetry has been reviewed across one full quarterly cycle and shows sustained minimal usage.
 
 # Day Trading Skill — MNQ & MGC Futures

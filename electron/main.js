@@ -536,6 +536,18 @@ function createLoadingWindow() {
 // ─── IPC Handlers ──────────────────────────────────────────────────────────
 ipcMain.handle('get-app-version', () => CURRENT_VERSION);
 
+ipcMain.handle('select-canvas-paths', async (_event, options = {}) => {
+  const mode = options && options.mode === 'folder' ? 'folder' : 'files';
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: mode === 'folder' ? 'Add Folder to Canvas' : 'Add Files to Canvas',
+    properties: mode === 'folder'
+      ? ['openDirectory']
+      : ['openFile', 'multiSelections'],
+  });
+  if (result.canceled) return [];
+  return Array.isArray(result.filePaths) ? result.filePaths : [];
+});
+
 ipcMain.on('install-update', () => {
   if (autoUpdater && pendingUpdate) {
     isQuitting = true;

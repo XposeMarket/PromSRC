@@ -15,7 +15,7 @@ import { z } from 'zod';
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
-const ProviderIDSchema = z.enum(['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini']);
+const ProviderIDSchema = z.string().min(1);
 
 // ─── LLM Providers ──────────────────────────────────────────────────────────
 
@@ -68,18 +68,19 @@ const GeminiProviderSchema = z.object({
   model: z.string(),
 });
 
+const ProviderConfigValueSchema = z.record(z.unknown());
+
 const LLMConfigSchema = z.object({
   provider: ProviderIDSchema,
-  providers: z.object({
-    ollama:        OllamaProviderSchema.optional(),
-    llama_cpp:     LlamaCppProviderSchema.optional(),
-    lm_studio:     LMStudioProviderSchema.optional(),
-    openai:        OpenAIProviderSchema.optional(),
-    openai_codex:  OpenAICodexProviderSchema.optional(),
-    anthropic:     AnthropicProviderSchema_LLM.optional(),
-    perplexity:    PerplexityProviderSchema.optional(),
-    gemini:        GeminiProviderSchema.optional(),
-  }),
+  providers: z.record(ProviderConfigValueSchema),
+});
+
+const ImageGenerationConfigSchema = z.object({
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  save_to_workspace: z.boolean().optional(),
+  default_output_dir: z.string().optional(),
+  providers: z.record(z.record(z.unknown())).optional(),
 });
 
 // ─── Tool Permissions ────────────────────────────────────────────────────────
@@ -108,15 +109,41 @@ const AgentToolPolicySchema = z.object({
   profile: z.enum(['minimal', 'coding', 'web', 'full']).optional(),
 });
 
+const AgentPersonalitySchema = z.object({
+  archetype: z.string().min(1),
+  tone: z.string().min(1),
+  humor: z.enum(['none', 'dry', 'light', 'playful', 'sharp']),
+  seriousness: z.enum(['low', 'balanced', 'high']),
+  warmth: z.enum(['reserved', 'steady', 'warm']),
+  directness: z.enum(['gentle', 'balanced', 'blunt']),
+  quirks: z.array(z.string()).optional(),
+  avoid: z.array(z.string()).optional(),
+});
+
+const AgentIdentitySchema = z.object({
+  displayName: z.string().min(1),
+  shortName: z.string().optional(),
+  namingRationale: z.string().optional(),
+  personality: AgentPersonalitySchema.optional(),
+  voiceGuidelines: z.string().optional(),
+}).passthrough();
+
 const AgentDefinitionSchema = z.object({
   id:          z.string().min(1),
   name:        z.string().min(1),
   description: z.string().optional(),
   emoji:       z.string().optional(),
+  identity:    AgentIdentitySchema.optional(),
+  roleType:    z.string().optional(),
+  teamRole:    z.string().optional(),
+  teamAssignment: z.string().optional(),
   workspace:   z.string().optional(),
+  executionWorkspace: z.string().optional(),
+  allowedWorkPaths: z.array(z.string()).optional(),
   model:       z.string().optional(),
   tools:       AgentToolPolicySchema.optional(),
   default:     z.boolean().optional(),
+  isTeamManager: z.boolean().optional(),
   bindings: z.array(z.object({
     channel:   z.enum(['telegram', 'discord', 'whatsapp']),
     accountId: z.string().optional(),
@@ -279,6 +306,7 @@ export const PrometheusConfigSchema = z.object({
   }).optional(),
 
   llm: LLMConfigSchema.optional(),
+  image_generation: ImageGenerationConfigSchema.optional(),
 
   hooks: z.object({
     enabled: z.boolean(),

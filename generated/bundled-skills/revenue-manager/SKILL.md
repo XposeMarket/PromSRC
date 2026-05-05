@@ -1,13 +1,8 @@
 ---
 name: revenue-manager
-description: >
-  Expert revenue management, pricing strategy, and yield optimization skill. Use this whenever someone
-  needs help with: pricing decisions, rate strategy, competitor price analysis, demand forecasting,
-  discount strategy, packaging/tier design, yield optimization, RevPAR/ARR/MRR analysis, seasonal
-  pricing, dynamic pricing models, or revenue per unit optimization. Triggers for hotels, SaaS,
-  e-commerce, rentals, events, agencies, or any business asking "what should I charge" or "how do
-  I maximize revenue". Replaces a dedicated revenue manager. Always use this skill proactively when
-  pricing or revenue strategy is even loosely mentioned.
+description: # Revenue Manager Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Revenue Manager Skill

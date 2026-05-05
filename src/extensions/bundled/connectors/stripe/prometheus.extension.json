@@ -1,0 +1,47 @@
+{
+  "id": "stripe",
+  "kind": "connector",
+  "name": "Stripe",
+  "description": "Connect Stripe so Prometheus can read revenue, subscriptions, invoices, and customer billing data.",
+  "category": "Finance",
+  "enabledByDefault": true,
+  "docsUrl": "https://dashboard.stripe.com/apikeys",
+  "tags": ["stripe", "payments", "api key"],
+  "runtime": {
+    "binding": "integrations/connectors/stripe"
+  },
+  "ui": {
+    "color": "#635BFF",
+    "permissions": [
+      { "icon": "$", "label": "Read revenue, invoices, and subscriptions" },
+      { "icon": "=", "label": "Read MRR, churn, and customer data" },
+      { "icon": "!", "label": "Read-only access for analytics" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_stripe"],
+    "capabilities": ["billing", "subscriptions", "finance"],
+    "tools": [
+      "connector_stripe_get_balance",
+      "connector_stripe_list_customers",
+      "connector_stripe_list_charges",
+      "connector_stripe_list_products"
+    ]
+  },
+  "setup": {
+    "authType": "api_key",
+    "statusMode": "generic",
+    "docsUrl": "https://dashboard.stripe.com/apikeys",
+    "docsHint": "Stripe Dashboard -> Developers -> API Keys -> Reveal or create a restricted secret key.",
+    "fields": [
+      {
+        "key": "apiKey",
+        "label": "Secret Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "sk_live_... or sk_test_..."
+      }
+    ]
+  }
+}

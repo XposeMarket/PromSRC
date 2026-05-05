@@ -76,6 +76,38 @@ window.normalizeProgressStatus = normalizeProgressStatus;
 
 let bgtTasks = [];           // all task records from server
 let bgtOpenTaskId = null;    // currently open panel task id
+window.bgtOpenTaskId = null;
+let bgtEditMode = false;
+
+const BGT_HIDDEN_KEY = 'prom_hidden_tasks';
+
+function bgtGetHidden() {
+  try { return new Set(JSON.parse(localStorage.getItem(BGT_HIDDEN_KEY) || '[]')); } catch { return new Set(); }
+}
+
+function bgtSaveHidden(set) {
+  localStorage.setItem(BGT_HIDDEN_KEY, JSON.stringify([...set]));
+}
+
+function bgtHideTask(taskId) {
+  const hidden = bgtGetHidden();
+  hidden.add(taskId);
+  bgtSaveHidden(hidden);
+  if (bgtOpenTaskId === taskId) closeBgtPanel();
+  renderBgTasks();
+}
+
+function toggleBgtEditMode() {
+  bgtEditMode = !bgtEditMode;
+  const btn = document.getElementById('bgt-edit-btn');
+  if (btn) {
+    btn.textContent = bgtEditMode ? 'Done' : 'Edit';
+    btn.style.background = bgtEditMode ? 'var(--brand)' : 'var(--panel)';
+    btn.style.color = bgtEditMode ? '#fff' : 'var(--muted)';
+    btn.style.borderColor = bgtEditMode ? 'var(--brand)' : 'var(--line)';
+  }
+  renderBgTasks();
+}
 
 // --- Columns config ---------------------------------------------------------
 const BGT_COLUMNS = [
@@ -113,7 +145,7 @@ function bgtNormalizeStatus(rawStatus) {
 // --- Fetch & Render ----------------------------------------------------------
 async function refreshBgTasks() {
   try {
-    const data = await api('/api/bg-tasks');
+    const data = await api('/api/bg-tasks', { timeoutMs: 8000 });
     if (data.success) {
       bgtTasks = data.tasks || [];
     }
@@ -124,6 +156,17 @@ async function refreshBgTasks() {
   renderBgTasks();
 }
 
+async function loadTaskApprovals(taskId) {
+  if (!taskId) return [];
+  try {
+    const data = await api(`/api/approvals?status=pending&taskId=${encodeURIComponent(taskId)}`);
+    return Array.isArray(data?.approvals) ? data.approvals : [];
+  } catch (err) {
+    console.error('[BGT] loadTaskApprovals error:', err);
+    return [];
+  }
+}
+
 function renderBgTasks() {
   const board = document.getElementById('bgt-board');
   if (!board) return;
@@ -131,7 +174,9 @@ function renderBgTasks() {
   // Update count badge
   const countEl = document.getElementById('bgt-count');
   if (countEl) {
+    const _hidden = bgtGetHidden();
     const active = bgtTasks.filter(t => {
+      if (_hidden.has(t.id)) return false;
       const status = bgtNormalizeStatus(t.status);
       return status !== 'complete' && status !== 'failed';
     }).length;
@@ -141,9 +186,11 @@ function renderBgTasks() {
   updateBgtHeartbeatLabel();
 
   // Only render non-empty columns
+  const hidden = bgtGetHidden();
+  const visibleTasks = bgtTasks.filter(t => !hidden.has(t.id));
   const byStatus = {};
   for (const col of BGT_COLUMNS) byStatus[col.key] = [];
-  for (const t of bgtTasks) {
+  for (const t of visibleTasks) {
     const normalizedStatus = bgtNormalizeStatus(t.status);
     if (byStatus[normalizedStatus]) byStatus[normalizedStatus].push(t);
     else if (byStatus['stalled']) byStatus['stalled'].push(t);
@@ -175,7 +222,7 @@ function renderBgTasks() {
   }
 
   // If no tasks at all
-  if (bgtTasks.length === 0) {
+  if (visibleTasks.length === 0) {
     board.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--muted);font-size:13px;flex:1">
       <div style="font-size:36px;margin-bottom:12px">Tasks</div>
       <div style="font-weight:700;margin-bottom:4px">No background tasks yet</div>
@@ -207,11 +254,11 @@ function bgtCardHTML(t, col) {
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
       <span style="font-size:13px;font-weight:700;line-height:1.3;flex:1;min-width:0">${escHtml(t.title || 'Untitled Task')}</span>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-        <button
-          onclick="event.stopPropagation(); bgtDeleteTask('${escHtml(t.id)}', '${escHtml(displayStatus)}')"
-          title="Remove task"
-          style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:7px;padding:1px 6px;font-size:11px;font-weight:700;cursor:pointer"
-        >✕</button>
+        ${bgtEditMode ? `<button
+          onclick="event.stopPropagation(); bgtHideTask('${escHtml(t.id)}')"
+          title="Hide task"
+          style="border:none;background:none;color:#9c1a1a;font-size:15px;cursor:pointer;padding:0 2px;line-height:1;opacity:0.85"
+        >🗑</button>` : ''}
         <span style="font-size:14px;flex-shrink:0">${STATUS_ICON[displayStatus] || '●'}</span>
       </div>
     </div>
@@ -231,6 +278,7 @@ function bgtCardHTML(t, col) {
 // --- Side Panel --------------------------------------------------------------
 async function openBgtPanel(taskId) {
   bgtOpenTaskId = taskId;
+  window.bgtOpenTaskId = taskId;
   const panel = document.getElementById('bgt-panel');
   if (panel) panel.style.display = 'flex';
   // Clear chat input when switching tasks
@@ -243,6 +291,7 @@ async function openBgtPanel(taskId) {
 
 function closeBgtPanel() {
   bgtOpenTaskId = null;
+  window.bgtOpenTaskId = null;
   const panel = document.getElementById('bgt-panel');
   if (panel) panel.style.display = 'none';
   renderBgTasks();
@@ -257,6 +306,7 @@ async function bgtRefreshOpenPanel() {
   } catch {}
   if (!task) { task = bgtTasks.find(t => t.id === bgtOpenTaskId); }
   if (!task) return;
+  const pendingApprovals = await loadTaskApprovals(task.id);
 
   const titleEl = document.getElementById('bgt-panel-title');
   if (titleEl) titleEl.textContent = task.title || 'Task Details';
@@ -308,25 +358,78 @@ async function bgtRefreshOpenPanel() {
   // Build assistance block outside template literal to avoid backtick nesting issues
   let assistanceHTML = '';
   const taskStatusNorm = String(task.status || '').trim().toLowerCase();
+  const isCommandApprovalPause = task.pauseReason === 'awaiting_command_approval' || pendingApprovals.length > 0;
+  const pauseAnalysisHtml = task.pauseAnalysis?.message
+    ? `<div style="margin-top:10px;background:#fff;border:1px solid #e9d8ff;border-radius:10px;padding:10px 12px;color:#3d1a6e">
+        <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#6d2d9e;margin-bottom:6px">AI Recovery Plan</div>
+        <div style="font-size:12px;line-height:1.6">${renderMd(task.pauseAnalysis.message)}</div>
+      </div>`
+    : '';
+  const recoveryTurns = Array.isArray(task.recoveryConversation)
+    ? task.recoveryConversation.filter(turn => turn).slice(-16)
+    : [];
+  const canChatWithTask = ['needs_assistance', 'paused', 'stalled', 'awaiting_user_input', 'failed'].includes(taskStatusNorm);
+  const recoveryConversationHtml = (recoveryTurns.length > 0 || canChatWithTask)
+    ? `<div style="border:1px solid #e9d8ff;border-radius:10px;background:#fff;overflow:hidden">
+        <div style="padding:8px 12px;font-size:11px;font-weight:800;color:#6d2d9e;border-bottom:1px solid #f0e7ff">Task Chat & Recovery Trail</div>
+        <div style="display:flex;flex-direction:column;gap:8px;padding:10px 12px">
+          ${recoveryTurns.length > 0 ? recoveryTurns.map((turn) => {
+            const isUser = turn.role === 'user';
+            const bg = isUser ? '#efe5ff' : '#f8f5ff';
+            const color = isUser ? '#4c1d95' : '#3d1a6e';
+            const source = String(turn.source || '');
+            const label = source === 'team_manager'
+              ? 'Manager Response to Proposal Executor'
+              : source === 'pause_analysis'
+                ? 'Pause Analysis'
+                : isUser ? 'You' : 'Prometheus';
+            const body = isUser ? escHtml(turn.content || '') : renderMd(turn.content || '');
+            return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:92%;background:${bg};border:1px solid #e9d8ff;border-radius:10px;padding:8px 10px;color:${color};font-size:12px;line-height:1.55">
+              <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;opacity:0.7;margin-bottom:4px">${label}</div>
+              <div>${body}</div>
+            </div>`;
+          }).join('') : '<div style="color:var(--muted);font-size:12px">No recovery messages yet.</div>'}
+	          ${canChatWithTask ? `<div style="display:flex;gap:8px;border-top:1px solid #f0e7ff;padding-top:10px">
+            <textarea id="task-reply-input" rows="2" placeholder="Type your reply - the agent will see this and continue..." style="flex:1;resize:none;border:1px solid #cba8f5;border-radius:8px;padding:8px;font-size:12px;font-family:inherit;background:#fff;color:var(--text)"></textarea>
+            <button id="task-reply-send" data-taskid="${escHtml(task.id)}" style="background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;align-self:flex-end">Send</button>
+	          </div>` : ''}
+        </div>
+      </div>`
+    : '';
   console.log('[BGT panel] task.status =', JSON.stringify(task.status), 'norm =', taskStatusNorm);
-  if (taskStatusNorm === 'needs_assistance' || taskStatusNorm === 'paused' || taskStatusNorm === 'stalled' || taskStatusNorm === 'failed') {
+  if (taskStatusNorm === 'needs_assistance' || taskStatusNorm === 'paused' || taskStatusNorm === 'stalled' || taskStatusNorm === 'failed' || taskStatusNorm === 'awaiting_user_input') {
     const lastPause = [...journal].reverse().find(e => e.type === 'pause' || e.type === 'error');
     const lastStatusPush = [...journal].reverse().find(e => e.type === 'status_push' && e.content);
     const pauseMsg = escHtml((lastPause?.content || lastStatusPush?.content || 'Task paused and waiting for input.').replace(/^Task paused for assistance:\s*/i, ''));
     const pauseDetail = lastPause?.detail ? escHtml(lastPause.detail.slice(0, 300)) : '';
-    const tid = escHtml(task.id);
+    const clarificationMsg = task.pendingClarificationQuestion
+      ? '<div style="font-size:11px;color:#6d2d9e;margin-top:6px"><strong>Pending question:</strong> ' + escHtml(task.pendingClarificationQuestion) + '</div>'
+      : '';
     assistanceHTML = '<div style="background:#f5eeff;border:1px solid #cba8f5;border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#6d2d9e">'
       + '<div style="font-weight:800;margin-bottom:6px">⚠️ Task needs your input</div>'
       + '<div style="color:#3d1a6e;margin-bottom:' + (pauseDetail ? '6px' : '0') + '">' + pauseMsg + '</div>'
       + (pauseDetail ? '<div style="font-size:11px;color:#6d2d9e;opacity:0.8;margin-bottom:4px">' + pauseDetail + '</div>' : '')
-      + '</div>'
-      + '<div style="border:1px solid #cba8f5;border-radius:10px;overflow:hidden;background:#faf5ff;margin-top:8px">'
-      + '<div style="padding:8px 12px;font-size:11px;font-weight:700;color:#6d2d9e;border-bottom:1px solid #e9d8ff">💬 Reply to agent</div>'
-      + '<div style="display:flex;gap:8px;padding:8px">'
-      + '<textarea id="task-reply-input" rows="2" placeholder="Type your reply — the agent will see this and continue..." style="flex:1;resize:none;border:1px solid #cba8f5;border-radius:8px;padding:8px;font-size:12px;font-family:inherit;background:#fff;color:var(--text)"></textarea>'
-      + '<button id="task-reply-send" data-taskid="' + tid + '" style="background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;align-self:flex-end">Send</button>'
-      + '</div></div>';
+      + clarificationMsg
+      + pauseAnalysisHtml
+      + '</div>';
   }
+
+  const approvalHTML = pendingApprovals.length > 0
+    ? `<div style="display:flex;flex-direction:column;gap:10px">${pendingApprovals.map((approval) => `
+      <div style="background:#fff8e8;border:1px solid #f3c677;border-radius:12px;padding:12px 14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px">
+          <div style="font-size:12px;font-weight:800;color:#7c4d00">Command approval required</div>
+          <div style="font-size:10px;background:#fff1cc;color:#7c4d00;border-radius:999px;padding:2px 8px;font-weight:700">risk ${Math.round(Number(approval.riskScore || 0))}</div>
+        </div>
+        <div style="font-size:11px;color:#7c4d00;line-height:1.5;margin-bottom:8px">${escHtml(approval.action || 'Run command')}</div>
+        ${approval.reason ? `<div style="font-size:11px;color:#8a5a00;line-height:1.5;margin-bottom:8px">${escHtml(approval.reason)}</div>` : ''}
+        <pre style="margin:0 0 10px 0;padding:10px 12px;background:#1c1f26;color:#f8fafc;border-radius:10px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escHtml(approval.command || '')}</pre>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button onclick="bgtResolveApproval('${escHtml(approval.id)}','deny')" style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">Reject</button>
+          <button onclick="bgtResolveApproval('${escHtml(approval.id)}','approve')" style="border:none;background:#7c4d00;color:#fff;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
+        </div>
+      </div>`).join('')}</div>`
+    : '';
 
   body.innerHTML = `
     <!-- Status row -->
@@ -342,10 +445,16 @@ async function bgtRefreshOpenPanel() {
       ${renderMd(task.finalSummary)}
     </div>` : ''}
 
-    <!-- Needs assistance -->
-    ${assistanceHTML}
+	    <!-- Needs assistance -->
+	    ${assistanceHTML}
 
-    <!-- Stats row -->
+		    <!-- Approval cards -->
+		    ${approvalHTML}
+
+        <!-- Completed/read-only recovery trail -->
+        ${!assistanceHTML ? recoveryConversationHtml : ''}
+
+		    <!-- Stats row -->
     <div style="display:flex;gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:100px;background:var(--panel-2);border-radius:10px;padding:10px 12px">
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:700;margin-bottom:2px">Progress</div>
@@ -445,6 +554,26 @@ async function bgtPauseResume() {
   }
   await refreshBgTasks();
   await bgtRefreshOpenPanel();
+}
+
+async function bgtResolveApproval(approvalId, action) {
+  if (!approvalId || !action) return;
+  const endpoint = action === 'approve'
+    ? `/api/approvals/${approvalId}/approve`
+    : `/api/approvals/${approvalId}/deny`;
+  try {
+    const result = await api(endpoint, { method: 'POST' });
+    if (!result?.success) {
+      showToast(result?.error || 'Could not resolve approval');
+      return;
+    }
+    bgtToast(action === 'approve' ? 'Command approved' : 'Command rejected', 'Task updated');
+    await refreshBgTasks();
+    await bgtRefreshOpenPanel();
+  } catch (err) {
+    console.error('[BGT] resolve approval error:', err);
+    showToast(err?.message || 'Could not resolve approval');
+  }
 }
 
 async function bgtSendReply(taskId) {
@@ -895,10 +1024,13 @@ function handleErrorResponseWsEvent(e) {
 
 // ─── Expose on window for HTML onclick handlers ────────────────
 window.refreshBgTasks = refreshBgTasks;
+window.toggleBgtEditMode = toggleBgtEditMode;
+window.bgtHideTask = bgtHideTask;
 window.openBgtPanel = openBgtPanel;
 window.closeBgtPanel = closeBgtPanel;
 window.bgtRefreshOpenPanel = bgtRefreshOpenPanel;
 window.bgtPauseResume = bgtPauseResume;
+window.bgtResolveApproval = bgtResolveApproval;
 window.bgtSendReply = bgtSendReply;
 window.bgtChatSend = bgtChatSend;
 window.bgtDeleteTask = bgtDeleteTask;
@@ -936,6 +1068,12 @@ _taskEvents.forEach(evt => {
 
 wsEventBus.on('task_panel_update', (msg) => {
   if (window.bgtOpenTaskId && msg.taskId === window.bgtOpenTaskId) bgtRefreshOpenPanel();
+});
+['approval_created', 'approval_approved', 'approval_denied'].forEach((eventName) => {
+  wsEventBus.on(eventName, (msg) => {
+    if (window.currentMode === 'bgtasks') refreshBgTasks();
+    if (window.bgtOpenTaskId && (!msg.taskId || msg.taskId === window.bgtOpenTaskId)) bgtRefreshOpenPanel();
+  });
 });
 wsEventBus.on('task_manager_briefing', (msg) => {
   if (window.bgtOpenTaskId === msg.taskId) updateManagerStatusBar(`\uD83E\uDDED Manager briefing step ${(msg.stepIndex||0)+1}...`, '#7c4d00');

@@ -1,0 +1,36 @@
+{
+  "id": "postgres",
+  "kind": "mcp_preset",
+  "name": "PostgreSQL",
+  "description": "MCP preset for PostgreSQL database access.",
+  "category": "Database",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
+  "tags": ["mcp", "postgres", "database"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/postgres"
+  },
+  "ui": {
+    "color": "#336791"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "database", "sql"]
+  },
+  "setup": {
+    "authType": "none",
+    "fields": [
+      {
+        "key": "connectionString",
+        "label": "Connection String",
+        "input": "text",
+        "required": true,
+        "placeholder": "postgresql://localhost/mydb"
+      }
+    ]
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+  }
+}

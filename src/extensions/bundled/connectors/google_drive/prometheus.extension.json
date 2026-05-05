@@ -1,0 +1,58 @@
+{
+  "id": "google_drive",
+  "kind": "connector",
+  "name": "Google Drive",
+  "description": "Connect Google Drive so Prometheus can read files, docs, folders, and spreadsheets across your workspace.",
+  "category": "Storage",
+  "enabledByDefault": true,
+  "docsUrl": "https://console.cloud.google.com/",
+  "tags": ["google drive", "storage", "oauth"],
+  "runtime": {
+    "binding": "integrations/connectors/google-drive"
+  },
+  "ui": {
+    "color": "#0F9D58",
+    "permissions": [
+      { "icon": "[]", "label": "Read files, folders, and docs" },
+      { "icon": "+", "label": "Create and update files with approval" },
+      { "icon": "?", "label": "Search across Drive" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_gdrive"],
+    "capabilities": ["documents", "storage", "files"],
+    "tools": [
+      "connector_gdrive_list_files",
+      "connector_gdrive_get_file",
+      "connector_gdrive_read_file",
+      "connector_gdrive_search"
+    ]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://console.cloud.google.com/",
+    "docsHint": "Google Cloud Console -> Enable Drive API -> Use the same desktop OAuth credentials as Gmail if desired.",
+    "callback": {
+      "port": 19425,
+      "path": "/auth/callback/google_drive"
+    },
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "Client ID",
+        "input": "text",
+        "required": true,
+        "placeholder": "123456789-abc.apps.googleusercontent.com"
+      },
+      {
+        "key": "clientSecret",
+        "label": "Client Secret",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "GOCSPX-..."
+      }
+    ]
+  }
+}

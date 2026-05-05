@@ -91,6 +91,16 @@ export async function handleConnectorTool(toolName: string, args: any): Promise<
         return ok(`Issue created: #${issue.number} — ${issue.html_url}`);
       }
 
+      if (toolName === 'connector_github_create_repo') {
+        const repo = await gh.createRepo(args.name, {
+          description: args.description || '',
+          private: args.private !== false,
+          autoInit: args.auto_init === true,
+          homepage: args.homepage || '',
+        });
+        return ok(`Repository created: ${repo.full_name} - ${repo.html_url}`);
+      }
+
       if (toolName === 'connector_github_list_prs') {
         const prs = await gh.listPRs(args.owner, args.repo, args.state || 'open', args.per_page || 30);
         if (!prs.length) return ok('No pull requests found.');

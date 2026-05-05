@@ -1,9 +1,8 @@
 ---
-name: Windows Shell Playbook
-description: Windows 11 / PowerShell equivalents for common shell operations in the Prometheus workspace. Use for all shell commands on Windows machines. Prevents silent failures from Linux/bash patterns. Includes non-Windows fallback guidance.
-emoji: "🪟"
-version: 1.1.0
-triggers: shell, run command, powershell, cmd, list files, check path, environment variable, kill process, find process, disk space, check if file exists, read json, windows command, terminal
+name: windows-shell-playbook
+description: # Windows Shell Playbook
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Windows Shell Playbook

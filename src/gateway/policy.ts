@@ -81,15 +81,22 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'integrations-write',
     description: 'Outbound integration writes require approval',
-    toolPattern: 'gmail_send|slack_post|github_create|notion_update|hubspot_write|salesforce_write|stripe_write',
+    toolPattern: 'gmail_send|slack_post|github_create|connector_github_create|notion_update|hubspot_write|salesforce_write|stripe_write',
     tier: 'commit',
     riskScore: 9,
   },
   // Vercel / deploy tooling → COMMIT
   {
+    id: 'mcp-integrations-write',
+    description: 'MCP GitHub/Vercel write operations require approval',
+    toolPattern: 'mcp__github__create|mcp__github__update|mcp__github__delete|mcp__github__merge|mcp__github__push|mcp__vercel__deploy|mcp__vercel__create|mcp__vercel__update|mcp__vercel__delete',
+    tier: 'commit',
+    riskScore: 10,
+  },
+  {
     id: 'deploy-ops',
     description: 'Deployment operations require approval',
-    toolPattern: 'vercel_deploy|vercel_env',
+    toolPattern: 'vercel_deploy|vercel_env|vercel_create|vercel_project',
     tier: 'commit',
     riskScore: 10,
   },

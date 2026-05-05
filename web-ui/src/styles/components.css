@@ -30,14 +30,113 @@
   padding: 12px;
   margin-bottom: 8px;
   cursor: pointer;
+  color: var(--text);
 }
 
-.job-item:hover { border-color: #c2d6f4; box-shadow: 0 4px 12px rgba(15, 60, 120, 0.08); }
-.job-item.active { border-color: #9fbef1; background: #f1f6ff; }
-.job-item.unread { background: linear-gradient(135deg, #f0f8ff 0%, #e8f4ff 100%); border-color: #8ec4f8; }
-.job-item.unread.active { background: #f1f6ff; border-color: #5ca9f0; }
+.job-item:hover {
+  border-color: var(--line-strong);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+.job-item.active {
+  border-color: var(--flame-border);
+  background: color-mix(in srgb, var(--flame-glow) 50%, var(--panel) 50%);
+  color: var(--text);
+}
+.job-item.unread {
+  background: color-mix(in srgb, var(--flame-glow) 34%, var(--panel) 66%);
+  border-color: rgba(249,115,22,0.28);
+  color: var(--text);
+}
+.job-item.unread.active {
+  background: color-mix(in srgb, var(--flame-glow) 58%, var(--panel) 42%);
+  border-color: var(--flame-border);
+}
 
-.job-item-title { font-size: 12px; font-weight: 700; }
+#channels-list .job-item.channel-chat-item:not(.active) {
+  background: color-mix(in srgb, var(--flame-glow) 50%, var(--panel) 50%);
+  border-color: var(--flame-border);
+  color: var(--text);
+}
+
+#channels-list .job-item.channel-chat-item:not(.active):hover {
+  background: color-mix(in srgb, var(--flame-glow) 58%, var(--panel) 42%);
+  border-color: var(--flame);
+}
+
+#channels-list .job-item.channel-chat-item.active,
+#channels-list .job-item.channel-chat-item.unread.active {
+  background: #fff;
+  border-color: rgba(249,115,22,0.28);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
+.job-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.job-item-head--pinned {
+  padding-right: 24px;
+}
+
+.job-item-title-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.job-item-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: inherit;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.session-search-preview {
+  margin-top: 7px;
+  color: var(--sidebar-muted, var(--muted));
+  font-size: 10.5px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.session-search-preview span {
+  color: var(--sidebar-text, var(--text));
+  font-weight: 800;
+}
+
+.session-search-highlight {
+  background: rgba(249, 115, 22, 0.26);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.session-search-error {
+  margin: 8px 2px 0;
+  color: #fca5a5;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.job-item-action {
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
 
 .sessions-section-header {
   font-size: 11px;
@@ -438,7 +537,7 @@ main {
   color: #6f7f95;
   opacity: 0.82;
 }
-.msg-content { line-height: 1.7; font-size: 14px; white-space: pre-wrap; word-break: break-word; color: #17243b; }
+.msg-content { line-height: 1.7; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #17243b; }
 .msg.user .msg-content { color: #ffffff; }
 .msg-content.markdown-body { white-space: normal; }
 .markdown-body p { margin-bottom: 8px; line-height: 1.7; }
@@ -726,6 +825,35 @@ main {
 .btn-sm { padding: 6px 10px; font-size: 11px; border-radius: 10px; }
 .btn-green { background: var(--ok); }
 .btn-red { background: var(--err); }
+
+.process-pill-btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(225,223,218,0.88);
+  color: #4f617b;
+  cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 9px;
+  box-shadow: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.process-pill-btn:hover {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+  color: #17243b;
+}
+:root[data-theme="dark"] .process-pill-btn {
+  background: rgba(90,90,90,0.6);
+  border-color: var(--line);
+  color: #e8edf6;
+}
+:root[data-theme="dark"] .process-pill-btn:hover {
+  background: rgba(105,105,105,0.72);
+  border-color: var(--line-strong);
+  color: #ffffff;
+}
 
 .settings-input {
   width: 100%;

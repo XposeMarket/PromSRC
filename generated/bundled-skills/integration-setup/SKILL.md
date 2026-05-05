@@ -1,9 +1,8 @@
 ---
 name: integration-setup
-description: Enables Prometheus to connect to ANY external service — MCP servers, webhooks, APIs — by researching the service autonomously and executing setup end-to-end.
-emoji: 🔌
-version: 2.0.0
-triggers: connect, integrate, mcp, webhook, set up, hook up, api key, token, github, slack, jira, discord, notion, linear, integration, service, oauth
+description: You can connect Prometheus to any external service. There are hundreds of MCP servers and webhook-capable services. You do not have a pre-built list — you research and build the integration definition yourself when asked.
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Integration Setup Skill

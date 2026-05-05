@@ -1,0 +1,62 @@
+{
+  "id": "perplexity",
+  "kind": "provider",
+  "name": "Perplexity",
+  "description": "Perplexity Sonar models with API key authentication.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://docs.perplexity.ai/",
+  "tags": ["perplexity", "sonar", "api"],
+  "runtime": {
+    "binding": "providers/perplexity-adapter"
+  },
+  "ui": {
+    "color": "#1D4ED8"
+  },
+  "ownership": {
+    "providerIds": ["perplexity"],
+    "modelPrefixes": ["sonar"],
+    "capabilities": ["llm", "api_key_auth"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "pplx-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "sonar-pro"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "model": "sonar-pro"
+    },
+    "schema": {
+      "api_key": "string",
+      "model": "string",
+      "reasoning_effort": "none|minimal|low|medium|high|xhigh?"
+    },
+    "uiHints": {
+      "api_key": {
+        "label": "API Key",
+        "help": "Perplexity API key."
+      },
+      "model": {
+        "label": "Model",
+        "help": "Default Sonar model."
+      }
+    }
+  }
+}

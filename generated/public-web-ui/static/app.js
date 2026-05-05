@@ -64,6 +64,9 @@ function _syncPageViewPositions() {
   });
   const cv = document.getElementById('connector-view');
   if (cv) { cv.style.left = left; cv.style.right = right; }
+  if (typeof window.syncCenterColumnVisibility === 'function') {
+    window.syncCenterColumnVisibility();
+  }
 }
 
 export function toggleRightPanel() {
@@ -74,6 +77,7 @@ export function toggleRightPanel() {
   // Check current state before toggle
   const wasOpen = panel.classList.contains('open');
   const isOpen = panel.classList.toggle('open');
+  document.body.classList.toggle('right-collapsed', !isOpen);
   if (toggleBtn) toggleBtn.classList.toggle('active', isOpen);
 
   // Closing: force clear inline resize styles to allow CSS width: 0 to take effect
@@ -149,6 +153,8 @@ export function setSidebarSegTab(tab) {
   // Load content for the selected tab
   if (tab === 'channels' && typeof window.renderChannelsList === 'function') {
     window.renderChannelsList();
+  } else if (tab === 'projects' && typeof window.loadProjects === 'function') {
+    window.loadProjects();
   } else if (tab === 'projects' && typeof window.renderProjectsList === 'function') {
     window.renderProjectsList();
   } else if (tab === 'skills' && typeof window.loadInstalledSkills === 'function') {
@@ -157,7 +163,7 @@ export function setSidebarSegTab(tab) {
 }
 
 // ── Page mode ─────────────────────────────────────────────────
-const VALID_MODES = ['chat', 'bgtasks', 'schedule', 'teams', 'subagents', 'proposals', 'audit', 'memory'];
+const VALID_MODES = ['chat', 'bgtasks', 'schedule', 'teams', 'subagents', 'proposals', 'audit', 'memory', 'hub'];
 
 const PAGE_TITLES = {
   chat: ['Chat', 'Prometheus operator workspace'],
@@ -168,6 +174,7 @@ const PAGE_TITLES = {
   proposals: ['Proposals', 'Agent-generated proposals awaiting approval'],
   audit: ['Audit Log', 'Non-main agent runs'],
   memory: ['Memory Graph', 'Knowledge web across sessions'],
+  hub: ['Hub', 'Skill usage, achievements, and tool activity'],
 };
 
 export function setMode(mode) {
@@ -181,12 +188,12 @@ export function setMode(mode) {
     if (el) el.classList.toggle('active', m === mode);
   });
   // "More" popover items
-  ['audit', 'memory'].forEach(m => {
+  ['audit', 'memory', 'hub'].forEach(m => {
     const el = document.getElementById(`nav-${m}`);
     if (el) el.classList.toggle('active', m === mode);
   });
   const moreBtn = document.getElementById('moreNavBtn');
-  if (moreBtn) moreBtn.classList.toggle('active', mode === 'audit' || mode === 'memory');
+  if (moreBtn) moreBtn.classList.toggle('active', mode === 'audit' || mode === 'memory' || mode === 'hub');
   closeMorePopover();
 
   // Update page title
@@ -206,6 +213,7 @@ export function setMode(mode) {
     proposals: 'proposals-view',
     audit: 'audit-view',
     memory: 'memory-view',
+    hub: 'hub-view',
   };
   Object.entries(viewMap).forEach(([m, viewId]) => {
     const el = document.getElementById(viewId);
@@ -218,11 +226,22 @@ export function setMode(mode) {
 
   // Right panel stays unless you close it manually (or hide for non-chat)
   const rightPanel = document.getElementById('right-panel');
-  if (rightPanel && mode !== 'chat') rightPanel.classList.remove('open');
+  if (rightPanel && mode !== 'chat') {
+    rightPanel.classList.remove('open');
+    rightPanel.style.removeProperty('width');
+    rightPanel.style.removeProperty('min-width');
+    rightPanel.style.removeProperty('max-width');
+    document.body.classList.add('right-collapsed');
+    _syncPageViewPositions();
+  }
   const toggleBtn = document.getElementById('drawerToggle');
   if (toggleBtn) {
     toggleBtn.classList.remove('active');
     toggleBtn.style.display = mode === 'chat' ? '' : 'none';
+  }
+  if (mode === 'chat' && rightPanel) {
+    document.body.classList.toggle('right-collapsed', !rightPanel.classList.contains('open'));
+    _syncPageViewPositions();
   }
 
   if (mode === 'bgtasks' && typeof window.refreshBgTasks === 'function') window.refreshBgTasks();
@@ -245,6 +264,7 @@ export function setMode(mode) {
   }
   if (mode === 'audit' && typeof window.loadAuditLog === 'function') window.loadAuditLog();
   if (mode === 'memory' && typeof window.memoryPageActivate === 'function') window.memoryPageActivate();
+  if (mode === 'hub' && typeof window.hubPageActivate === 'function') window.hubPageActivate();
 }
 
 // Legacy compatibility: old header buttons still broadcast to setMode via onclick
@@ -270,6 +290,10 @@ document.addEventListener('click', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeMorePopover();
+});
+
+window.addEventListener('resize', () => {
+  _syncPageViewPositions();
 });
 
 // Restore sidebar collapse state

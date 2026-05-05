@@ -11,6 +11,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import type { ProposalRepairContext } from '../proposals/repair-context.js';
+import type { ProposalTeamExecution } from '../proposals/proposal-store.js';
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Evidence Bus Types Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
@@ -62,7 +64,9 @@ export type PauseReason =
   | 'max_steps'
   | 'interrupted_by_schedule'
   | 'awaiting_user_input'  // task paused because it needs clarification from the user
-  | 'recovering_from_build_error';  // agent is recovering from a build error
+  | 'awaiting_command_approval'  // task is waiting on a run_command approval card
+  | 'recovering_from_build_error'  // agent is recovering from a build error
+  | 'blocked_on_repair';  // waiting for a linked repair proposal/task to finish
 
 export type JournalEntryType =
   | 'tool_call'
@@ -106,6 +110,54 @@ export interface TaskJournalEntry {
   detail?: string;      // full data if needed
 }
 
+export interface TaskRecoveryConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  source?: 'pause_analysis' | 'chat' | 'task_panel' | 'team_manager' | 'system';
+}
+
+export interface TaskPauseSnapshotStep {
+  index: number;
+  description: string;
+  status: TaskPlanStep['status'];
+  notes?: string;
+}
+
+export interface TaskPauseSnapshot {
+  createdAt: number;
+  taskId: string;
+  taskTitle: string;
+  taskStatus: TaskStatus;
+  pauseReason?: PauseReason;
+  originalRequest: string;
+  currentStepIndex: number;
+  currentStepDescription?: string;
+  completedSteps: number;
+  totalSteps: number;
+  pendingClarificationQuestion?: string;
+  lastToolCall?: string;
+  lastToolCallAt?: number;
+  planState: TaskPauseSnapshotStep[];
+  journalLog: TaskJournalEntry[];
+  executionTranscript: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: number;
+  }>;
+}
+
+export interface TaskPauseAnalysis {
+  createdAt: number;
+  message: string;
+}
+
+export interface TaskResumeBrief {
+  createdAt: number;
+  content: string;
+  approvedAction?: 'resume' | 'rerun';
+}
+
 export interface TaskResumeContext {
   messages: any[];                   // full messages[] array compressed
   browserSessionActive: boolean;
@@ -122,6 +174,56 @@ export interface TaskResumeContext {
 
 export type SubagentProfile = 'file_editor' | 'researcher' | 'shell_runner' | 'reader_only';
 
+export interface TaskMutationScope {
+  allowedFiles: string[];
+  allowedDirs?: string[];
+}
+
+export type ProposalExecutionMode = 'standard' | 'dev_src_self_edit' | 'dev_src_self_edit_repair';
+
+export interface ProposalExecutionPromotionState {
+  status: 'pending' | 'promoted' | 'failed';
+  promotedAt?: number;
+  promotedFiles?: string[];
+  deletedFiles?: string[];
+  error?: string;
+}
+
+export interface ProposalFileBaseline {
+  exists: boolean;
+  sha256?: string;
+}
+
+export interface ProposalExecutionState {
+  proposalId?: string;
+  mode?: ProposalExecutionMode;
+  projectRoot?: string;
+  liveProjectRoot?: string;
+  buildRequired?: boolean;
+  buildVerifiedAt?: number;
+  buildVerifiedCommand?: string;
+  liveFileBaselines?: Record<string, ProposalFileBaseline>;
+  promotion?: ProposalExecutionPromotionState;
+  mutationScope?: TaskMutationScope;
+  repairContext?: ProposalRepairContext;
+  teamExecution?: ProposalTeamExecution;
+  buildFailure?: {
+    status?: 'blocked' | 'repairing' | 'resolved';
+    failedAt: number;
+    command: string;
+    output: string;
+    repairProposalId?: string;
+    repairTaskId?: string;
+    allowWriteProposal?: boolean;
+    blockedAtStepIndex?: number;
+    blockedStepDescription?: string;
+    resolutionSummary?: string;
+    resolvedAt?: number;
+    resolvedByProposalId?: string;
+    resolvedByTaskId?: string;
+  };
+}
+
 export interface TaskRecord {
   id: string;
   title: string;
@@ -135,6 +237,7 @@ export interface TaskRecord {
   pendingSubagentIds?: string[];     // child task IDs the parent is waiting on
   subagentProfile?: SubagentProfile; // restricts tool access for this child task
   agentWorkspace?: string;           // absolute workspace path Ã¢â‚¬â€ scopes ALL file tool access for this task
+  agentAllowedWorkPaths?: string[];  // absolute workspace roots allowed for this task
 
   teamSubagent?: {
     teamId: string;
@@ -177,6 +280,10 @@ export interface TaskRecord {
    * Cleared when the user replies and the task resumes.
    */
   pendingClarificationQuestion?: string;
+  pauseSnapshot?: TaskPauseSnapshot;
+  pauseAnalysis?: TaskPauseAnalysis;
+  recoveryConversation?: TaskRecoveryConversationTurn[];
+  resumeBrief?: TaskResumeBrief;
 
   // Ã¢â€â‚¬Ã¢â€â‚¬ Schedule linkage Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
   /** Set when this task was spawned by a scheduled job. Used for schedule memory. */
@@ -208,18 +315,50 @@ export interface TaskRecord {
     success_signals: string[];
     forward_context?: string;
   };
+  /** Extra state used by approved proposal execution tasks. */
+  proposalExecution?: ProposalExecutionState;
+}
+
+export interface TaskSummary {
+  id: string;
+  title: string;
+  prompt: string;
+  sessionId: string;
+  channel: 'web' | 'telegram';
+  telegramChatId?: number;
+  teamSubagent?: TaskRecord['teamSubagent'];
+  status: TaskStatus;
+  pauseReason?: PauseReason;
+  pausedByScheduleId?: string;
+  shouldResumeAfterSchedule?: boolean;
+  plan: TaskPlanStep[];
+  currentStepIndex: number;
+  runtimeProgress?: TaskRuntimeProgressState;
+  lastProgressAt: number;
+  startedAt: number;
+  completedAt?: number;
+  finalSummary?: string;
+  pendingClarificationQuestion?: string;
+  scheduleId?: string;
+  taskKind?: 'scheduled' | 'run_once';
+  verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
+  managerEnabled?: boolean;
+  executorProvider?: string;
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Index Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 interface TaskIndex {
   ids: string[];
+  summaries: Record<string, TaskSummary>;
   updatedAt: number;
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Store Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const TASKS_DIR_NAME = 'tasks';
+let taskIndexCache: TaskIndex | null = null;
+let taskIndexWriteCounter = 0;
 
 function getStateBaseDir(): string {
   try {
@@ -243,42 +382,205 @@ function indexFilePath(): string {
   return path.join(getTasksDir(), '_index.json');
 }
 
+function defaultTaskIndex(): TaskIndex {
+  return { ids: [], summaries: {}, updatedAt: Date.now() };
+}
+
+function normalizeTaskPlanStep(step: any, fallbackIndex: number): TaskPlanStep {
+  const rawStatus = String(step?.status || 'pending').toLowerCase();
+  const status: TaskPlanStep['status'] =
+    rawStatus === 'running' || rawStatus === 'done' || rawStatus === 'failed' || rawStatus === 'skipped'
+      ? rawStatus
+      : 'pending';
+  return {
+    index: Number.isFinite(Number(step?.index)) ? Math.max(0, Math.floor(Number(step.index))) : fallbackIndex,
+    description: String(step?.description || `Step ${fallbackIndex + 1}`).slice(0, 240),
+    status,
+    completedAt: Number.isFinite(Number(step?.completedAt)) ? Number(step.completedAt) : undefined,
+    notes: typeof step?.notes === 'string' && step.notes.trim() ? step.notes.slice(0, 500) : undefined,
+  };
+}
+
+function normalizeTaskRuntimeProgress(input: any): TaskRuntimeProgressState | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const rawSource = String(input?.source || '').toLowerCase();
+  const source: TaskRuntimeProgressState['source'] =
+    rawSource === 'preflight' || rawSource === 'tool_sequence'
+      ? rawSource
+      : 'none';
+  const items = Array.isArray(input?.items)
+    ? input.items.slice(0, 12).map((item: any, idx: number) => {
+        const rawStatus = String(item?.status || 'pending').toLowerCase();
+        const status: TaskProgressStatus =
+          rawStatus === 'in_progress' || rawStatus === 'done' || rawStatus === 'failed' || rawStatus === 'skipped'
+            ? rawStatus
+            : 'pending';
+        return {
+          id: String(item?.id || `p${idx + 1}`),
+          text: String(item?.text || `Step ${idx + 1}`).slice(0, 160),
+          status,
+        };
+      })
+    : [];
+  return {
+    source,
+    activeIndex: Number.isFinite(Number(input?.activeIndex)) ? Number(input.activeIndex) : -1,
+    items,
+    updatedAt: Number.isFinite(Number(input?.updatedAt)) ? Number(input.updatedAt) : Date.now(),
+  };
+}
+
+function normalizeTaskSummary(input: any): TaskSummary | null {
+  const id = String(input?.id || '').trim();
+  if (!id) return null;
+  const rawStatus = String(input?.status || '').toLowerCase();
+  const status: TaskStatus =
+    rawStatus === 'queued'
+      || rawStatus === 'running'
+      || rawStatus === 'paused'
+      || rawStatus === 'stalled'
+      || rawStatus === 'needs_assistance'
+      || rawStatus === 'awaiting_user_input'
+      || rawStatus === 'complete'
+      || rawStatus === 'failed'
+      || rawStatus === 'waiting_subagent'
+      ? rawStatus
+      : 'queued';
+  const plan = Array.isArray(input?.plan)
+    ? input.plan.slice(0, 20).map((step: any, idx: number) => normalizeTaskPlanStep(step, idx))
+    : [];
+  return {
+    id,
+    title: String(input?.title || 'Untitled Task').slice(0, 200),
+    prompt: String(input?.prompt || '').slice(0, 500),
+    sessionId: String(input?.sessionId || '').trim(),
+    channel: input?.channel === 'telegram' ? 'telegram' : 'web',
+    telegramChatId: Number.isFinite(Number(input?.telegramChatId)) ? Number(input.telegramChatId) : undefined,
+    teamSubagent: input?.teamSubagent && typeof input.teamSubagent === 'object'
+      ? {
+          teamId: String(input.teamSubagent.teamId || '').trim(),
+          agentId: String(input.teamSubagent.agentId || '').trim(),
+          agentName: typeof input.teamSubagent.agentName === 'string' ? input.teamSubagent.agentName.slice(0, 120) : undefined,
+          callerContext: typeof input.teamSubagent.callerContext === 'string' ? input.teamSubagent.callerContext.slice(0, 500) : undefined,
+        }
+      : undefined,
+    status,
+    pauseReason: input?.pauseReason,
+    pausedByScheduleId: typeof input?.pausedByScheduleId === 'string' && input.pausedByScheduleId.trim()
+      ? input.pausedByScheduleId
+      : undefined,
+    shouldResumeAfterSchedule: input?.shouldResumeAfterSchedule === true,
+    plan,
+    currentStepIndex: Number.isFinite(Number(input?.currentStepIndex)) ? Number(input.currentStepIndex) : 0,
+    runtimeProgress: normalizeTaskRuntimeProgress(input?.runtimeProgress),
+    lastProgressAt: Number.isFinite(Number(input?.lastProgressAt)) ? Number(input.lastProgressAt) : Date.now(),
+    startedAt: Number.isFinite(Number(input?.startedAt)) ? Number(input.startedAt) : Date.now(),
+    completedAt: Number.isFinite(Number(input?.completedAt)) ? Number(input.completedAt) : undefined,
+    finalSummary: typeof input?.finalSummary === 'string' && input.finalSummary.trim()
+      ? input.finalSummary.slice(0, 2000)
+      : undefined,
+    pendingClarificationQuestion: typeof input?.pendingClarificationQuestion === 'string' && input.pendingClarificationQuestion.trim()
+      ? input.pendingClarificationQuestion.slice(0, 500)
+      : undefined,
+    scheduleId: typeof input?.scheduleId === 'string' && input.scheduleId.trim()
+      ? input.scheduleId
+      : undefined,
+    taskKind: input?.taskKind === 'run_once' ? 'run_once' : input?.taskKind === 'scheduled' ? 'scheduled' : undefined,
+    verificationStatus: input?.verificationStatus === 'pending'
+      || input?.verificationStatus === 'running'
+      || input?.verificationStatus === 'complete'
+      || input?.verificationStatus === 'skipped'
+      ? input.verificationStatus
+      : undefined,
+    managerEnabled: input?.managerEnabled === true,
+    executorProvider: typeof input?.executorProvider === 'string' && input.executorProvider.trim()
+      ? input.executorProvider.slice(0, 200)
+      : undefined,
+  };
+}
+
 function loadIndex(): TaskIndex {
+  if (taskIndexCache) return taskIndexCache;
   const p = indexFilePath();
-  if (!fs.existsSync(p)) return { ids: [], updatedAt: Date.now() };
+  if (!fs.existsSync(p)) {
+    taskIndexCache = defaultTaskIndex();
+    return taskIndexCache;
+  }
   try {
     const parsed = JSON.parse(fs.readFileSync(p, 'utf-8')) as unknown;
 
     // Backward compatibility: older builds persisted the index as string[].
     if (Array.isArray(parsed)) {
       const ids = parsed.filter((v): v is string => typeof v === 'string');
-      return { ids: Array.from(new Set(ids)), updatedAt: Date.now() };
+      taskIndexCache = { ids: Array.from(new Set(ids)), summaries: {}, updatedAt: Date.now() };
+      return taskIndexCache;
     }
 
     if (parsed && typeof parsed === 'object') {
-      const record = parsed as { ids?: unknown; updatedAt?: unknown };
+      const record = parsed as { ids?: unknown; summaries?: unknown; updatedAt?: unknown };
       const ids = Array.isArray(record.ids)
         ? record.ids.filter((v): v is string => typeof v === 'string')
         : [];
+      const summaries: Record<string, TaskSummary> = {};
+      if (record.summaries && typeof record.summaries === 'object') {
+        for (const [id, raw] of Object.entries(record.summaries)) {
+          const normalized = normalizeTaskSummary({ ...(raw as any), id });
+          if (normalized) summaries[normalized.id] = normalized;
+        }
+      }
       const updatedAt = typeof record.updatedAt === 'number' ? record.updatedAt : Date.now();
-      return { ids: Array.from(new Set(ids)), updatedAt };
+      taskIndexCache = {
+        ids: Array.from(new Set([...ids, ...Object.keys(summaries)])),
+        summaries,
+        updatedAt,
+      };
+      return taskIndexCache;
     }
 
-    return { ids: [], updatedAt: Date.now() };
+    taskIndexCache = defaultTaskIndex();
+    return taskIndexCache;
   } catch {
-    return { ids: [], updatedAt: Date.now() };
+    taskIndexCache = defaultTaskIndex();
+    return taskIndexCache;
   }
 }
 
 function saveIndex(index: TaskIndex): void {
-  fs.writeFileSync(indexFilePath(), JSON.stringify(index, null, 2), 'utf-8');
+  index.updatedAt = Date.now();
+  taskIndexCache = index;
+  const target = indexFilePath();
+  const dir = path.dirname(target);
+  const payload = JSON.stringify(index, null, 2);
+  let lastError: any;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const tmp = path.join(
+      dir,
+      `._index.${process.pid}.${Date.now()}.${taskIndexWriteCounter++}.tmp`,
+    );
+    try {
+      fs.writeFileSync(tmp, payload, 'utf-8');
+      fs.renameSync(tmp, target);
+      return;
+    } catch (err: any) {
+      lastError = err;
+      try {
+        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+      } catch {
+        // best effort cleanup only
+      }
+      if (!['EBUSY', 'EPERM', 'EACCES', 'UNKNOWN'].includes(String(err?.code || ''))) {
+        throw err;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 function addToIndex(id: string): void {
   const idx = loadIndex();
   if (!idx.ids.includes(id)) {
     idx.ids.push(id);
-    idx.updatedAt = Date.now();
     saveIndex(idx);
   }
 }
@@ -286,8 +588,96 @@ function addToIndex(id: string): void {
 function removeFromIndex(id: string): void {
   const idx = loadIndex();
   idx.ids = idx.ids.filter(i => i !== id);
-  idx.updatedAt = Date.now();
+  delete idx.summaries[id];
   saveIndex(idx);
+}
+
+function buildTaskSummary(task: TaskRecord): TaskSummary {
+  return {
+    id: task.id,
+    title: String(task.title || 'Untitled Task').slice(0, 200),
+    prompt: String(task.prompt || '').slice(0, 500),
+    sessionId: task.sessionId,
+    channel: task.channel,
+    telegramChatId: task.telegramChatId,
+    teamSubagent: task.teamSubagent ? { ...task.teamSubagent } : undefined,
+    status: task.status,
+    pauseReason: task.pauseReason,
+    pausedByScheduleId: task.pausedByScheduleId,
+    shouldResumeAfterSchedule: task.shouldResumeAfterSchedule === true,
+    plan: Array.isArray(task.plan)
+      ? task.plan.slice(0, 20).map((step, idx) => normalizeTaskPlanStep(step, idx))
+      : [],
+    currentStepIndex: Number.isFinite(Number(task.currentStepIndex)) ? Number(task.currentStepIndex) : 0,
+    runtimeProgress: normalizeTaskRuntimeProgress(task.runtimeProgress),
+    lastProgressAt: Number.isFinite(Number(task.lastProgressAt)) ? Number(task.lastProgressAt) : Date.now(),
+    startedAt: Number.isFinite(Number(task.startedAt)) ? Number(task.startedAt) : Date.now(),
+    completedAt: Number.isFinite(Number(task.completedAt)) ? Number(task.completedAt) : undefined,
+    finalSummary: typeof task.finalSummary === 'string' && task.finalSummary.trim()
+      ? task.finalSummary.slice(0, 2000)
+      : undefined,
+    pendingClarificationQuestion: typeof task.pendingClarificationQuestion === 'string' && task.pendingClarificationQuestion.trim()
+      ? task.pendingClarificationQuestion.slice(0, 500)
+      : undefined,
+    scheduleId: typeof task.scheduleId === 'string' && task.scheduleId.trim()
+      ? task.scheduleId
+      : undefined,
+    taskKind: task.taskKind,
+    verificationStatus: task.verificationStatus,
+    managerEnabled: task.managerEnabled === true,
+    executorProvider: typeof task.executorProvider === 'string' && task.executorProvider.trim()
+      ? task.executorProvider.slice(0, 200)
+      : undefined,
+  };
+}
+
+function upsertTaskSummary(task: TaskRecord): void {
+  const idx = loadIndex();
+  if (!idx.ids.includes(task.id)) idx.ids.push(task.id);
+  idx.summaries[task.id] = buildTaskSummary(task);
+  saveIndex(idx);
+}
+
+function buildTaskSummaryFromFile(id: string): TaskSummary | null {
+  const task = loadTask(id);
+  return task ? buildTaskSummary(task) : null;
+}
+
+function rebuildTaskIndex(): TaskIndex {
+  const idx = defaultTaskIndex();
+  const files = fs.readdirSync(getTasksDir())
+    .filter((f) => f.endsWith('.json') && f !== '_index.json' && !f.endsWith('.bus.json'));
+  for (const file of files) {
+    const id = file.slice(0, -5);
+    const summary = buildTaskSummaryFromFile(id);
+    if (!summary) continue;
+    idx.ids.push(summary.id);
+    idx.summaries[summary.id] = summary;
+  }
+  idx.ids = Array.from(new Set(idx.ids));
+  saveIndex(idx);
+  return idx;
+}
+
+export function listTaskSummaries(filter?: { status?: TaskStatus[] }): TaskSummary[] {
+  let idx = loadIndex();
+  const summaryIds = Object.keys(idx.summaries);
+  let hasTaskFiles = false;
+  if ((idx.ids.length === 0 && summaryIds.length === 0) || (idx.ids.length > 0 && summaryIds.length === 0)) {
+    hasTaskFiles = fs.readdirSync(getTasksDir())
+      .some((f) => f.endsWith('.json') && f !== '_index.json' && !f.endsWith('.bus.json'));
+  }
+  const needsRebuild = (
+    (idx.ids.length > 0 && summaryIds.length === 0)
+    || idx.ids.some((id) => !idx.summaries[id])
+    || (idx.ids.length === 0 && summaryIds.length === 0 && hasTaskFiles)
+  );
+  if (needsRebuild) {
+    idx = rebuildTaskIndex();
+  }
+  return Object.values(idx.summaries)
+    .filter((task) => !filter?.status || filter.status.includes(task.status))
+    .sort((a, b) => b.startedAt - a.startedAt);
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ CRUD Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -303,6 +693,7 @@ export function createTask(params: {
   parentTaskId?: string;
   subagentProfile?: string;
   agentWorkspace?: string;   // locks file tools to this path for the task's lifetime
+  agentAllowedWorkPaths?: string[];
   teamSubagent?: {
     teamId: string;
     agentId: string;
@@ -314,6 +705,7 @@ export function createTask(params: {
   scheduleId?: string;
   /** Executor model assignment: "providerId/model", e.g. "anthropic/claude-haiku-4-5-20251001". Set by proposal dispatch for risk_tier-aware execution. */
   executorProvider?: string;
+  proposalExecution?: ProposalExecutionState;
   // run_task_now fields
   taskKind?: 'scheduled' | 'run_once';
   originatingSessionId?: string;
@@ -337,11 +729,13 @@ export function createTask(params: {
     pendingSubagentIds: [],
     subagentProfile: params.subagentProfile as SubagentProfile | undefined,
     agentWorkspace: params.agentWorkspace,
+    agentAllowedWorkPaths: params.agentAllowedWorkPaths,
     teamSubagent: params.teamSubagent,
     // Schedule linkage
     scheduleId: params.scheduleId,
     // Executor model override
     executorProvider: params.executorProvider,
+    proposalExecution: params.proposalExecution,
     // run_task_now linkage
     taskKind: params.taskKind,
     originatingSessionId: params.originatingSessionId,
@@ -390,6 +784,7 @@ export function saveTask(task: TaskRecord): void {
     task.journal = task.journal.slice(-500);
   }
   fs.writeFileSync(taskFilePath(task.id), JSON.stringify(task, null, 2), 'utf-8');
+  upsertTaskSummary(task);
 }
 
 export function updateTaskStatus(

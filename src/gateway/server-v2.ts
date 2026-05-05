@@ -9,7 +9,6 @@
  * B6 Refactor: handleChat + /api/chat + /api/status extracted to routes/chat.router.ts
  */
 
-import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -56,6 +55,8 @@ import {
 } from './desktop-tools';
 import { CronScheduler, setCronSchedulerInstance } from './scheduling/cron-scheduler';
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
+import { MainChatTimerRunner } from './timers/timer-runner';
+import { InternalWatchRunner } from './internal-watch/internal-watch-runner';
 import { BrainRunner, setBrainRunnerInstance } from './brain/brain-runner';
 import {
   getAgentRunHistory, getAgentLastRun, recordAgentRun,
@@ -87,7 +88,6 @@ import {
 import { triggerManagerReview, handleManagerConversation, setTeamRunAgentFn } from './teams/team-manager-runner';
 import { buildTeamDispatchTask } from './teams/team-dispatch-runtime';
 import { checkForTeamSuggestion } from './teams/team-detector';
-import { runWeeklyPerformanceReview, formatPerformanceReport, loadSelfImprovementStore, approveSkillEvolution, getWeeklyReviewJobDefinition } from './scheduling/self-improvement-engine';
 import { SubagentManager } from './agents-runtime/subagent-manager';
 
 import { webSearch, webFetch } from '../tools/web';
@@ -130,14 +130,16 @@ import {
 } from './routes/teams.router';
 import { runTeamAgentViaChat as _runTeamAgentViaChat2, setDispatchDeps } from './teams/team-dispatch-runtime';
 import { router as settingsRouter, initSettingsRouter } from './routes/settings.router';
-import { router as accountRouter, refreshPersistedSession } from './routes/account.router';
+import { router as accountRouter, refreshPersistedSession, requireAccountAccess } from './routes/account.router';
 import { router as goalsRouter, initGoalsRouter } from './routes/goals.router';
 import { router as proposalsRouter, setProposalsBroadcast, broadcastProposalCreated } from './routes/proposals.router';
 import { router as auditLogRouter } from './routes/audit-log.router';
 import { router as connectionsRouter } from './routes/connections.router';
+import { router as extensionsRouter } from './routes/extensions.router';
 import { router as canvasRouter, initCanvasRouter } from './routes/canvas.router';
 import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
+import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
 import { addCanvasFile, getCanvasContextBlock } from './routes/canvas-state';
 import { getMCPManager } from './mcp-manager';
 import {
@@ -158,6 +160,8 @@ import {
 import { createApp } from './core/app';
 import { createServer } from './core/server';
 import { runStartup } from './core/startup';
+import { scheduleMemoryIndexRefresh } from './memory-index/index';
+import { requireGatewayAuth } from './gateway-auth';
 import {
   buildBootStartupSnapshot as _buildBootStartupSnapshot, loadWorkspaceFile,
   readDailyMemoryContext, detectToolCategories, readMemoryCategories, readMemorySnippets,
@@ -180,10 +184,15 @@ import { setNotifyBroadcastFn } from './teams/notify-bridge';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
-const config = getConfig().getConfig();
-const CONFIG_DIR_PATH = getConfig().getConfigDir();
+const configManager = getConfig();
+const config = configManager.getConfig();
+const CONFIG_DIR_PATH = configManager.getConfigDir();
 const PORT = config.gateway.port || (process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789);
 const HOST = config.gateway.host || process.env.GATEWAY_HOST || (process.env.DOCKER_CONTAINER ? '0.0.0.0' : '127.0.0.1');
+
+// Electron starts the gateway directly, so we need to create the workspace/config
+// scaffold here rather than relying on the CLI onboarding flow.
+configManager.ensureDirectories();
 
 {
   const cleaned = cleanupSessions();
@@ -374,8 +383,8 @@ const telegramChannel = new TelegramChannel(
   {
     handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments) =>
       handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments),
-	    runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, attachments) =>
-	      runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, undefined, attachments),
+    runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
+      runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
     addMessage,
     getIsModelBusy: isModelBusy,
     broadcast: broadcastWS,
@@ -484,6 +493,20 @@ setBrainRunnerInstance(brainRunner);
 // ─── B6: Wire chat router ──────────────────────────────────────────────────────
 initChatRouter({ cronScheduler, telegramChannel, skillsManager });
 
+const mainChatTimerRunner = new MainChatTimerRunner({
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
+});
+mainChatTimerRunner.start();
+
+const internalWatchRunner = new InternalWatchRunner({
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
+  broadcast: broadcastWS,
+  cronScheduler,
+});
+internalWatchRunner.start();
+
 // ─── A2 + A5: CIS tool dependency injection ────────────────────────────────
 injectAnalysisTeamDeps({ workspacePath: getConfig().getWorkspacePath(), broadcast: broadcastWS });
 injectSocialScraperDeps({ workspacePath: getConfig().getWorkspacePath(), broadcast: broadcastWS });
@@ -495,27 +518,17 @@ const app = createApp();
 
 // ─── Router Registrations ────────────────────────────────────────────────────
 
-function requireGatewayAuth(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  const cfg = getConfig().getConfig() as any;
-  const configuredToken = String(cfg?.gateway?.auth_token || '').trim();
-  if (!configuredToken) {
-    const remoteIp = String(req.ip || req.socket?.remoteAddress || '');
-    const isLocal = remoteIp === '127.0.0.1' || remoteIp === '::1' || remoteIp === '::ffff:127.0.0.1';
-    if (isLocal) { next(); return; }
-    res.status(401).json({ error: 'Unauthorized: configure gateway.auth_token to enable remote access.' });
-    return;
-  }
-  const authHeader = String(req.headers['authorization'] || '');
-  const xToken = String(req.headers['x-gateway-token'] || '');
-  const provided = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : xToken.trim();
-  if (!provided || provided !== configuredToken) { res.status(401).json({ error: 'Unauthorized' }); return; }
-  next();
-}
-
 // Wire deps into routers
 setSkillsRouterManager(skillsManager);
+setHubRouterDeps({ skillsManager });
 initTasksRouter({ cronScheduler, telegramChannel, handleChat, heartbeatRunner, configDirPath: CONFIG_DIR_PATH });
-initChannelsRouter({ cronScheduler, telegramChannel, dispatchToAgent: _dispatchToAgent });
+initChannelsRouter({
+  cronScheduler,
+  telegramChannel,
+  dispatchToAgent: _dispatchToAgent,
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
+});
 initTeamsRouter({
   cronScheduler, handleChat, telegramChannel,
   sanitizeAgentId, normalizeAgentsForSave,
@@ -525,21 +538,25 @@ initCanvasRouter({ requireGatewayAuth, broadcastWS });
 initSettingsRouter({ requireGatewayAuth });
 initGoalsRouter({ requireGatewayAuth, cronScheduler, telegramChannel, handleChat });
 
-// Mount routers
-app.use('/', skillsRouter);
-app.use('/', tasksRouter);
-app.use('/', channelsRouter);
-app.use('/', teamsRouter);
-app.use('/', settingsRouter);
-app.use('/', goalsRouter);
-app.use('/', proposalsRouter);
-app.use('/', auditLogRouter);
-app.use('/', connectionsRouter);
-app.use('/', canvasRouter);
-app.use('/', projectsRouter);
-app.use('/', memoryRouter);
-app.use('/', accountRouter);
-app.use('/', chatRouter);
+// Mount routers. Account auth endpoints stay available after gateway auth so
+// users can log in, refresh status, or recover from an expired subscription.
+// Everything else requires an active account/subscription on the server side.
+app.use('/', requireGatewayAuth, accountRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, skillsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, tasksRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, channelsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, teamsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, settingsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, goalsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, proposalsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, auditLogRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, connectionsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, extensionsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, canvasRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, projectsRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, memoryRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, hubRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, chatRouter);
 
 // ─── Server ────────────────────────────────────────────────────────────────────
 const { server, wss } = createServer(app, PORT, HOST);
@@ -551,6 +568,8 @@ setupErrorResponseEndpoint(app);
 setShutdownHooks({
   stopTelegram: () => telegramChannel.stop(),
   stopCron: () => { cronScheduler.stop(); stopAgentSchedules(); },
+  stopTimers: () => mainChatTimerRunner.stop(),
+  stopInternalWatches: () => internalWatchRunner.stop(),
   stopHeartbeat: () => heartbeatRunner.stop(),
   stopBrain: () => brainRunner.stop(),
   closeWebSocket: () => { try { wss.close(); } catch {} },
@@ -585,6 +604,9 @@ try { seedDefaultShortcuts(); console.log('[SiteShortcuts] Default shortcuts see
 server.listen(PORT, HOST, () => {
   // Silently refresh persisted Supabase session so users stay logged in
   refreshPersistedSession().catch(() => {});
+  try {
+    scheduleMemoryIndexRefresh(getConfig().getWorkspacePath(), { minIntervalMs: 0, maxChangedFiles: 500 });
+  } catch {}
   runStartup({
     HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
     handleChat, buildTools, runTeamAgentViaChat,
@@ -603,6 +625,8 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   try { telegramChannel.stop(); } catch {}
   try { getMCPManager().disconnectAll(); } catch {}
   try { cronScheduler.stop(); } catch {}
+  try { mainChatTimerRunner.stop(); } catch {}
+  try { internalWatchRunner.stop(); } catch {}
   try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop(); } catch {}

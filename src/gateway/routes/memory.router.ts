@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { getConfig } from '../../config/config';
 import {
   getMemoryGraphSnapshot,
@@ -8,6 +9,7 @@ import {
   getRelatedMemory,
   refreshMemoryIndexFromAudit,
 } from '../memory-index';
+import { buildMemoryNoteDocument, parseMemoryNoteDocument, type MemoryNoteAttachment } from '../memory-index/memory-note.js';
 
 type StoreChunk = { id: string; recordId: string; index: number; text: string };
 type StoreRecord = {
@@ -22,6 +24,13 @@ type StoreRecord = {
 type StoreData = {
   records: Record<string, StoreRecord>;
   chunks: Record<string, StoreChunk>;
+};
+
+type CreateMemoryAttachmentInput = {
+  name?: string;
+  filename?: string;
+  base64?: string;
+  mimeType?: string;
 };
 
 const router = Router();
@@ -52,6 +61,64 @@ function sourceTypeLabel(sourceType: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function slugify(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+function sanitizeFilename(value: string): string {
+  return path.basename(String(value || '').trim()).replace(/[^a-zA-Z0-9._\-() ]/g, '_');
+}
+
+function ensureUniqueFilename(existing: Set<string>, filename: string): string {
+  let next = filename;
+  let counter = 1;
+  const ext = path.extname(filename);
+  const stem = ext ? filename.slice(0, -ext.length) : filename;
+  while (existing.has(next)) {
+    counter += 1;
+    next = `${stem}_${counter}${ext}`;
+  }
+  existing.add(next);
+  return next;
+}
+
+function inferAttachmentKind(mimeType: string, filename: string): 'image' | 'file' {
+  const lowerMime = String(mimeType || '').toLowerCase();
+  const lowerName = String(filename || '').toLowerCase();
+  if (lowerMime.startsWith('image/')) return 'image';
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(lowerName)) return 'image';
+  return 'file';
+}
+
+function attachmentWithAbsPath(workspacePath: string, attachment: MemoryNoteAttachment) {
+  return {
+    ...attachment,
+    absPath: path.join(workspacePath, attachment.path.replace(/\//g, path.sep)),
+  };
+}
+
+function readMemoryNoteMetadata(workspacePath: string, sourcePath: string) {
+  if (!sourcePath || !sourcePath.startsWith('memory/files/')) return null;
+  const absPath = path.join(workspacePath, 'audit', sourcePath.replace(/\//g, path.sep));
+  if (!fs.existsSync(absPath)) return null;
+  try {
+    const raw = fs.readFileSync(absPath, 'utf-8');
+    const parsed = parseMemoryNoteDocument(raw);
+    return {
+      ...parsed.meta,
+      attachments: Array.isArray(parsed.meta.attachments)
+        ? parsed.meta.attachments.map((attachment) => attachmentWithAbsPath(workspacePath, attachment))
+        : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 router.get('/api/memory/graph', (_req: Request, res: Response) => {
@@ -121,17 +188,25 @@ router.get('/api/memory/record/:recordId', (req: Request, res: Response) => {
       return;
     }
     const payload = readMemoryRecord(workspacePath, recordId);
-    const related = getRelatedMemory(workspacePath, recordId, 10);
     if (!payload.record) {
       res.status(404).json({ success: false, error: 'Record not found' });
       return;
     }
+    const resolvedRecordId = String(payload.record?.id || recordId);
+    const related = getRelatedMemory(workspacePath, resolvedRecordId, 10);
+    const resolvedTimestamp = payload.record?.timestamp
+      || (payload.record?.timestampMs ? new Date(payload.record.timestampMs).toISOString() : '')
+      || payload.record?.updatedAt
+      || payload.record?.createdAt
+      || '';
     res.json({
       success: true,
+      layer: payload.layer,
       record: {
         ...payload.record,
-        timestamp: payload.record?.timestampMs ? new Date(payload.record.timestampMs).toISOString() : '',
+        timestamp: resolvedTimestamp,
       },
+      noteMeta: readMemoryNoteMetadata(workspacePath, String(payload.record?.sourcePath || '')),
       chunks: (payload.chunks || []).map((chunk: any) => ({
         id: chunk.id,
         index: chunk.index,
@@ -141,6 +216,83 @@ router.get('/api/memory/record/:recordId', (req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to load memory record' });
+  }
+});
+
+router.post('/api/memory/create', (req: Request, res: Response) => {
+  try {
+    const workspacePath = getWorkspacePath();
+    const title = String(req.body?.title || '').trim();
+    const description = String(req.body?.description || '').trim();
+    const content = String(req.body?.content || '').trim();
+    const attachmentsInput = Array.isArray(req.body?.attachments) ? req.body.attachments as CreateMemoryAttachmentInput[] : [];
+
+    if (!title) {
+      res.status(400).json({ success: false, error: 'title is required' });
+      return;
+    }
+    if (!content && !description && attachmentsInput.length === 0) {
+      res.status(400).json({ success: false, error: 'Provide memory text, a description, or at least one attachment.' });
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const noteId = `mem_${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
+    const day = createdAt.slice(0, 10);
+    const slug = slugify(title) || noteId;
+    const sourcePath = `memory/files/${day}/${slug}--${noteId}.md`;
+    const noteAbsPath = path.join(workspacePath, 'audit', sourcePath.replace(/\//g, path.sep));
+    const attachmentsDir = path.join(workspacePath, 'uploads', 'memory', day, noteId);
+    const seenNames = new Set<string>();
+    const attachments: MemoryNoteAttachment[] = [];
+
+    for (const item of attachmentsInput) {
+      const rawName = sanitizeFilename(String(item?.name || item?.filename || ''));
+      const base64 = String(item?.base64 || '').trim();
+      if (!rawName || !base64) {
+        res.status(400).json({ success: false, error: 'Each attachment requires a filename and base64 payload.' });
+        return;
+      }
+      const finalName = ensureUniqueFilename(seenNames, rawName);
+      const pureBase64 = base64.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(pureBase64, 'base64');
+      fs.mkdirSync(attachmentsDir, { recursive: true });
+      const absPath = path.join(attachmentsDir, finalName);
+      fs.writeFileSync(absPath, buffer);
+      attachments.push({
+        name: finalName,
+        path: path.relative(workspacePath, absPath).replace(/\\/g, '/'),
+        kind: inferAttachmentKind(String(item?.mimeType || ''), finalName),
+        mimeType: item?.mimeType ? String(item.mimeType).trim() : undefined,
+        sizeBytes: buffer.length,
+      });
+    }
+
+    fs.mkdirSync(path.dirname(noteAbsPath), { recursive: true });
+    fs.writeFileSync(noteAbsPath, buildMemoryNoteDocument({
+      id: noteId,
+      title,
+      description,
+      createdAt,
+      attachments,
+      body: content,
+    }), 'utf-8');
+
+    refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500 });
+    const store = readIndexStore(workspacePath);
+    const record = Object.values(store.records || {}).find((item) => item.sourcePath === sourcePath) || null;
+
+    res.status(201).json({
+      success: true,
+      noteId,
+      recordId: record?.id || null,
+      sourcePath,
+      absPath: noteAbsPath,
+      title,
+      attachments: attachments.map((attachment) => attachmentWithAbsPath(workspacePath, attachment)),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to create memory note' });
   }
 });
 

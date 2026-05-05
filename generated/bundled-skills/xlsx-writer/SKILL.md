@@ -1,9 +1,9 @@
 ---
-name: XLSX Writer
-description: Generate Excel spreadsheets (.xlsx files) with formatted data, multiple sheets, formula columns, and styled headers. Use when the user wants to export data as a downloadable Excel file — financial models, data exports, reports, trackers, invoices. Uses xlsx (SheetJS) npm package — pure Node. DEPENDENCY CHECK: run node -e "require('xlsx')" from D:\Prometheus. If missing run workspace/doc-skills-setup.js. Triggers on: create spreadsheet, export to Excel, generate xlsx, make an Excel file, export data as Excel, financial model, data export, create tracker, xlsx output.
-emoji: "📈"
+name: xlsx-writer
+description: Generate Excel spreadsheets using `xlsx` (SheetJS). Pure Node — works on Windows.
+emoji: "🧩"
 version: 1.0.0
-triggers: create spreadsheet, export excel, generate xlsx, make excel file, export data excel, financial model, data export, create tracker, xlsx output, build spreadsheet, export table, download as excel, write excel
+triggers: create excel, create spreadsheet, generate xlsx, generate excel, export xlsx, export excel, make workbook, spreadsheet report, xls, xlsx, workbook
 ---
 
 # XLSX Writer

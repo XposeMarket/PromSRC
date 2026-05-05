@@ -10,6 +10,9 @@ import { allDesktopTools } from './desktop.js';
 import { scheduleMemoryTool } from './schedule-memory-tool.js';
 import { talkToManagerTool, getTeamLogsTool, scheduleJobTool, manageTeamGoalTool, manageTeamContextRefTool } from './team-tools.js';
 import { uploadImageTool, fetchImageTool } from './image-tools.js';
+import { downloadUrlTool, downloadMediaTool } from './download-tools.js';
+import { analyzeImageTool, analyzeVideoTool } from './media-analysis.js';
+import { generateImageTool } from './generate-image.js';
 import { vercelDeployTool, vercelEnvTool } from './vercel-tools.js';
 import { writeNoteTool } from './write-note.js';
 import { deployAnalysisTeamTool, injectAnalysisTeamDeps } from './deploy-analysis-team.js';
@@ -75,6 +78,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines',
     'find_replace', 'delete_file', 'list_files', 'list_directory', 'mkdir',
     'run_command', 'web_search', 'web_fetch', 'write_note',
+    'generate_image',
     'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'memory_index_refresh', 'task_control', 'grep_files', 'grep_file', 'search_files', 'file_stats', 'source_stats', 'webui_source_stats',
   ],
   // Data analyst: read files + web, no writes or shell mutations.
@@ -85,19 +89,25 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
   // Browser automation agent: full browser + file access, no desktop.
   web_agent: [
     'browser_open', 'browser_snapshot', 'browser_click', 'browser_fill',
-    'browser_press_key', 'browser_wait', 'browser_scroll', 'browser_close',
+    'browser_drag', 'browser_upload_file', 'browser_press_key', 'browser_wait',
+    'browser_scroll', 'browser_click_and_download', 'browser_close',
     'browser_get_focused_item', 'browser_get_page_text',
+    'browser_scroll_collect', 'browser_scroll_collect_v2', 'browser_snapshot_delta',
+    'browser_extract_structured', 'browser_element_watch',
     'browser_vision_screenshot', 'browser_vision_click', 'browser_vision_type',
     'browser_send_to_telegram',
-    'web_search', 'web_fetch', 'read_file', 'create_file', 'list_files',
+    'web_search', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
   // Scraper: browser + write output files.
   scraper: [
     'browser_open', 'browser_snapshot', 'browser_click', 'browser_fill',
-    'browser_press_key', 'browser_wait', 'browser_scroll', 'browser_close',
+    'browser_drag', 'browser_upload_file', 'browser_press_key', 'browser_wait',
+    'browser_scroll', 'browser_click_and_download', 'browser_close',
     'browser_get_focused_item', 'browser_get_page_text', 'browser_send_to_telegram',
-    'web_search', 'web_fetch', 'create_file', 'read_file', 'list_files',
+    'browser_scroll_collect', 'browser_scroll_collect_v2', 'browser_snapshot_delta',
+    'browser_extract_structured', 'browser_element_watch',
+    'web_search', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
 };
@@ -120,11 +130,15 @@ const TOOL_PROFILE_TOOL_NAMES: Record<Exclude<ToolProfile, 'full'>, ReadonlySet<
     'desktop_focus_window',
     'desktop_click',
     'desktop_drag',
+    'desktop_scroll',
     'desktop_wait',
     'desktop_type',
+    'desktop_type_raw',
     'desktop_press_key',
     'desktop_get_clipboard',
     'desktop_set_clipboard',
+    'desktop_list_installed_apps',
+    'desktop_find_installed_app',
     'desktop_launch_app',
     'desktop_close_app',
     'desktop_get_process_list',
@@ -260,6 +274,11 @@ class ToolRegistry {
     // Image tools (Supabase Storage upload)
     this.registerSafe(uploadImageTool);
     this.registerSafe(fetchImageTool);
+    this.registerSafe(downloadUrlTool);
+    this.registerSafe(downloadMediaTool);
+    this.registerSafe(generateImageTool);
+    this.registerSafe(analyzeImageTool);
+    this.registerSafe(analyzeVideoTool);
     // Vercel deployment tools
     this.registerSafe(vercelDeployTool);
     this.registerSafe(vercelEnvTool);

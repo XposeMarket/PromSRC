@@ -18,7 +18,7 @@
 
 import type {
   LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult,
-  GenerateOptions, GenerateResult, ModelInfo,
+  GenerateOptions, GenerateResult, ModelInfo, ToolCall,
 } from './LLMProvider';
 import {
   buildAuthHeaders, getValidToken, loadTokens,
@@ -26,8 +26,6 @@ import {
 } from '../auth/anthropic-oauth';
 import { contentToString } from './content-utils';
 import { getConfig } from '../config/config';
-
-const MESSAGES_ENDPOINT = `${ANTHROPIC_API_BASE}/v1/messages`;
 
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
@@ -38,12 +36,164 @@ export const ANTHROPIC_MODELS = [
   'claude-sonnet-4-20250514',
 ];
 
-export class AnthropicAdapter implements LLMProvider {
-  readonly id = 'anthropic' as const;
-  private configDir: string;
+export interface AnthropicDirectConfig {
+  providerId: string;
+  apiKey: string;
+  baseUrl?: string;
+  authHeader?: 'bearer' | 'x-api-key';
+  staticModels?: string[];
+  defaultHeaders?: Record<string, string>;
+}
 
-  constructor(configDir: string) {
-    this.configDir = configDir;
+export class AnthropicAdapter implements LLMProvider {
+  readonly id: string;
+  private configDir?: string;
+  private directConfig?: AnthropicDirectConfig;
+
+  constructor(config: string | AnthropicDirectConfig) {
+    if (typeof config === 'string') {
+      this.id = 'anthropic';
+      this.configDir = config;
+      return;
+    }
+    this.id = config.providerId;
+    this.directConfig = config;
+  }
+
+  private getMessagesEndpoint(): string {
+    const baseUrl = String(this.directConfig?.baseUrl || ANTHROPIC_API_BASE).trim().replace(/\/$/, '');
+    return `${baseUrl}/v1/messages`;
+  }
+
+  private isAssistantToolTurn(message: ChatMessage | undefined): boolean {
+    return !!(message && message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0);
+  }
+
+  private normalizeToolCallInput(value: unknown): any {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return {};
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return {};
+      }
+    }
+    if (value && typeof value === 'object') {
+      return value;
+    }
+    return {};
+  }
+
+  private normalizeToolMessageContent(message: ChatMessage): string {
+    const text = contentToString(message.content).trim();
+    if (text) return text;
+    return Array.isArray(message.content)
+      ? '[non-text tool output omitted]'
+      : '';
+  }
+
+  private buildToolNoteMessage(message: ChatMessage): ChatMessage {
+    const toolName = String((message as any).tool_name || message.name || 'tool').trim() || 'tool';
+    const content = this.normalizeToolMessageContent(message) || '[no tool output captured]';
+    return {
+      role: 'user',
+      content: `[tool-note:${toolName}] ${content}`.slice(0, 12000),
+    };
+  }
+
+  private buildMissingToolResultMessage(toolCallId: string, toolName: string): ChatMessage {
+    return {
+      role: 'tool',
+      tool_call_id: toolCallId,
+      name: toolName,
+      content: `ERROR: Prometheus did not record a tool result for "${toolName || 'tool'}". Treat this tool call as interrupted and continue safely.`,
+    };
+  }
+
+  private repairMessagesForAnthropic(messages: ChatMessage[]): ChatMessage[] {
+    const repaired: ChatMessage[] = [];
+    let fallbackSeq = 0;
+    const nextFallbackToolUseId = () => `autocall_${Date.now()}_${++fallbackSeq}`;
+
+    for (let i = 0; i < messages.length; i++) {
+      const current = messages[i];
+      if (!current) continue;
+
+      if (!this.isAssistantToolTurn(current)) {
+        repaired.push(current.role === 'tool' ? this.buildToolNoteMessage(current) : current);
+        continue;
+      }
+
+      let assistantChanged = false;
+      const normalizedToolCalls = (current.tool_calls || []).map((toolCall: ToolCall) => {
+        const normalizedId = String(toolCall?.id || '').trim() || nextFallbackToolUseId();
+        if (normalizedId !== String(toolCall?.id || '').trim()) assistantChanged = true;
+        return {
+          ...toolCall,
+          id: normalizedId,
+        };
+      });
+      const assistantMessage = assistantChanged
+        ? { ...current, tool_calls: normalizedToolCalls }
+        : current;
+
+      const pendingIds = normalizedToolCalls.map((toolCall) => toolCall.id);
+      const unresolved = new Set(pendingIds);
+      const matchedResults = new Map<string, ChatMessage>();
+      const remainder: ChatMessage[] = [];
+
+      let j = i + 1;
+      for (; j < messages.length; j++) {
+        const next = messages[j];
+        if (!next) continue;
+        if (this.isAssistantToolTurn(next)) break;
+
+        if (next.role !== 'tool') {
+          remainder.push(next);
+          continue;
+        }
+
+        const content = this.normalizeToolMessageContent(next) || '[no tool output captured]';
+        const explicitId = String(next.tool_call_id || '').trim();
+
+        if (explicitId) {
+          if (!unresolved.has(explicitId) || matchedResults.has(explicitId)) {
+            remainder.push(this.buildToolNoteMessage({ ...next, content }));
+            continue;
+          }
+          unresolved.delete(explicitId);
+          matchedResults.set(explicitId, { ...next, tool_call_id: explicitId, content });
+          continue;
+        }
+
+        const observedToolName = String((next as any).tool_name || next.name || '').trim();
+        const fallbackId = pendingIds.find((id) => {
+          if (!unresolved.has(id) || matchedResults.has(id)) return false;
+          if (!observedToolName) return true;
+          const pendingToolCall = normalizedToolCalls.find((toolCall) => toolCall.id === id);
+          return String(pendingToolCall?.function?.name || '').trim() === observedToolName;
+        });
+        if (!fallbackId) {
+          remainder.push(this.buildToolNoteMessage({ ...next, content }));
+          continue;
+        }
+        unresolved.delete(fallbackId);
+        matchedResults.set(fallbackId, { ...next, tool_call_id: fallbackId, content });
+      }
+
+      repaired.push(assistantMessage);
+      for (const toolCall of normalizedToolCalls) {
+        repaired.push(
+          matchedResults.get(toolCall.id)
+          || this.buildMissingToolResultMessage(toolCall.id, String(toolCall.function?.name || 'tool')),
+        );
+      }
+      repaired.push(...remainder);
+      i = j - 1;
+    }
+
+    return repaired;
   }
 
   // ─── Convert Prometheus ChatMessage[] → Anthropic messages format ────────────
@@ -54,8 +204,7 @@ export class AnthropicAdapter implements LLMProvider {
     const pendingToolUseIds: string[] = [];
     const knownToolUseIds = new Set<string>();
     const consumedToolUseIds = new Set<string>();
-    let fallbackSeq = 0;
-    const nextFallbackToolUseId = () => `autocall_${Date.now()}_${++fallbackSeq}`;
+    const repairedMessages = this.repairMessagesForAnthropic(messages);
 
     // Pending tool_result blocks for batching — Anthropic requires all tool results
     // from a single assistant turn to be in ONE user message (not separate messages).
@@ -67,7 +216,7 @@ export class AnthropicAdapter implements LLMProvider {
       pendingToolResults = [];
     };
 
-    for (const m of messages) {
+    for (const m of repairedMessages) {
       if (m.role === 'system') {
         // Anthropic uses a top-level `system` param, not a system message in the array
         systemPrompt += (systemPrompt ? '\n\n' : '') + contentToString(m.content);
@@ -90,15 +239,8 @@ export class AnthropicAdapter implements LLMProvider {
         }
 
         for (const tc of m.tool_calls) {
-          let parsedInput: any = {};
-          try {
-            parsedInput = JSON.parse(tc.function.arguments || '{}');
-          } catch {
-            parsedInput = {};
-          }
-
-          const explicitId = String(tc?.id || '').trim();
-          const callId = explicitId || nextFallbackToolUseId();
+          const parsedInput = this.normalizeToolCallInput(tc?.function?.arguments);
+          const callId = String(tc?.id || '').trim();
           pendingToolUseIds.push(callId);
           knownToolUseIds.add(callId);
 
@@ -116,8 +258,7 @@ export class AnthropicAdapter implements LLMProvider {
 
       if (m.role === 'tool') {
         // Tool result message - validate content is non-empty
-        const toolContent = typeof m.content === 'string' ? m.content.trim() : '';
-        if (!toolContent) continue;  // Skip empty tool results
+        const toolContent = this.normalizeToolMessageContent(m) || '[no tool output captured]';
 
         const explicitToolCallId = String(m.tool_call_id || '').trim();
         let resolvedToolUseId = '';
@@ -125,6 +266,8 @@ export class AnthropicAdapter implements LLMProvider {
         if (explicitToolCallId && knownToolUseIds.has(explicitToolCallId)) {
           // Use explicit ID if it matches a known tool_use
           resolvedToolUseId = explicitToolCallId;
+          const idx = pendingToolUseIds.indexOf(explicitToolCallId);
+          if (idx !== -1) pendingToolUseIds.splice(idx, 1);
         } else if (explicitToolCallId) {
           // Explicit ID provided but not in known set — still use it (may be from previous turn)
           // The API will ignore tool_results for unknown tool_use IDs, which is safe.
@@ -141,11 +284,15 @@ export class AnthropicAdapter implements LLMProvider {
           consumedToolUseIds.add(resolvedToolUseId);
           // Accumulate into pending batch instead of pushing immediately —
           // will be flushed as a single user message when a non-tool message arrives.
-          pendingToolResults.push({
+          const toolResultBlock: any = {
             type: 'tool_result',
             tool_use_id: resolvedToolUseId,
             content: toolContent,
-          });
+          };
+          if ((m as any).error === true || /^ERROR[:\s]/i.test(toolContent)) {
+            toolResultBlock.is_error = true;
+          }
+          pendingToolResults.push(toolResultBlock);
           continue;
         }
 
@@ -295,7 +442,9 @@ export class AnthropicAdapter implements LLMProvider {
   // Only add interleaved-thinking beta when extended thinking is actually enabled.
   // Adding it unconditionally causes 429s on OAuth tokens.
   private buildHeaders(model: string, extendedThinkingEnabled = false): Record<string, string> {
-    const headers = buildAuthHeaders(this.configDir);
+    const headers = this.directConfig
+      ? this.buildDirectHeaders()
+      : buildAuthHeaders(this.configDir!);
     const isThinkingGeneration = /claude-(sonnet|opus)-4-6/.test(model);
     if (isThinkingGeneration && extendedThinkingEnabled) {
       const existing = headers['anthropic-beta'];
@@ -308,9 +457,26 @@ export class AnthropicAdapter implements LLMProvider {
     return headers;
   }
 
+  private buildDirectHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      ...(this.directConfig?.defaultHeaders || {}),
+    };
+    const apiKey = String(this.directConfig?.apiKey || '').trim();
+    if (apiKey) {
+      if (this.directConfig?.authHeader === 'bearer') {
+        headers['authorization'] = `Bearer ${apiKey}`;
+      } else {
+        headers['x-api-key'] = apiKey;
+      }
+    }
+    return headers;
+  }
+
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
     const raw = getConfig().getConfig() as any;
-    const anthropicCfg = raw.llm?.providers?.anthropic || {};
+    const anthropicCfg = raw.llm?.providers?.[this.id] || raw.llm?.providers?.anthropic || {};
     const extendedThinkingEnabled = options?.think !== false
       && options?.think !== 'none'
       && (anthropicCfg.extended_thinking === true || !!options?.think);
@@ -344,7 +510,7 @@ export class AnthropicAdapter implements LLMProvider {
     // If onToken callback provided, use streaming mode
     if (options?.onToken) {
       body.stream = true;
-      const response = await fetch(MESSAGES_ENDPOINT, {
+      const response = await fetch(this.getMessagesEndpoint(), {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -352,12 +518,12 @@ export class AnthropicAdapter implements LLMProvider {
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Anthropic API error ${response.status}: ${text.slice(0, 500)}`);
+        throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 500)}`);
       }
       return this.parseStreamingResponse(response, options.onToken, options.onThinking);
     }
 
-    const response = await fetch(MESSAGES_ENDPOINT, {
+    const response = await fetch(this.getMessagesEndpoint(), {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -366,7 +532,7 @@ export class AnthropicAdapter implements LLMProvider {
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new Error(`Anthropic API error ${response.status}: ${text.slice(0, 500)}`);
+      throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 500)}`);
     }
 
     const data = await response.json() as any;
@@ -519,21 +685,23 @@ export class AnthropicAdapter implements LLMProvider {
   async listModels(): Promise<ModelInfo[]> {
     // Anthropic doesn't have a public model listing endpoint for OAuth tokens.
     // Return the known set.
-    return ANTHROPIC_MODELS.map(name => ({ name }));
+    const models = this.directConfig?.staticModels?.length ? this.directConfig.staticModels : ANTHROPIC_MODELS;
+    return models.map(name => ({ name }));
   }
 
   // ─── Test Connection ─────────────────────────────────────────────────────────
 
   async testConnection(): Promise<boolean> {
     try {
-      getValidToken(this.configDir);
-      // Optionally do a lightweight API call to verify the token works
-      const headers = buildAuthHeaders(this.configDir);
-      const response = await fetch(MESSAGES_ENDPOINT, {
+      if (!this.directConfig) {
+        getValidToken(this.configDir!);
+      }
+      const headers = this.buildHeaders('claude-haiku-4-5-20251001', false);
+      const response = await fetch(this.getMessagesEndpoint(), {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          model:      'claude-haiku-4-5-20251001',
+          model:      this.directConfig?.staticModels?.[0] || 'claude-haiku-4-5-20251001',
           max_tokens: 10,
           messages:   [{ role: 'user', content: 'hi' }],
         }),

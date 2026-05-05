@@ -1,15 +1,8 @@
 ---
-name: MCP Ops Troubleshooting
-description: >
-  Diagnose and recover MCP server failures in Prometheus with transport-aware triage
-  for stdio, sse, and http configurations. Use when MCP tools are missing, servers
-  fail to connect, namespaces disappear, tool discovery is empty, integrations become
-  unstable after config edits, or credentials/env vars may be malformed. Includes
-  config validation, environment sanitization, safe log redaction, deterministic
-  rollback, and post-fix verification.
-emoji: 🧰
+name: mcp-ops-troubleshooting
+description: Transport-aware MCP diagnostics and safe recovery playbook for Prometheus.
+emoji: "🧩"
 version: 1.0.0
-triggers: mcp troubleshooting, mcp server failed, mcp connect error, tool discovery failed, namespace missing, stdio transport error, sse transport error, http transport error, mcp config validation, sanitize env vars, mcp rollback, mcp diagnostics, mcp tools not showing, reconnect mcp server, mcp server manage
 ---
 
 # MCP Ops Troubleshooting

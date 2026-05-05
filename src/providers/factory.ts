@@ -2,16 +2,6 @@
  * factory.ts
  * Returns the active LLMProvider based on config.
  * All code that needs to talk to an LLM goes through here.
- *
- * Supported providers:
- *   ollama       - Ollama SDK (default, localhost:11434)
- *   llama_cpp    - llama-server OpenAI-compat (localhost:8080)
- *   lm_studio    - LM Studio OpenAI-compat (localhost:1234)
- *   openai       - OpenAI API key (api.openai.com)
- *   openai_codex - OpenAI OAuth / GPT Plus subscription
- *   anthropic    - Anthropic Claude (setup-token or API key)
- *   perplexity   - Perplexity AI (sonar family, API key)
- *   gemini       - Google Gemini via OpenAI-compat endpoint (API key)
  */
 
 import { getConfig } from '../config/config';
@@ -23,25 +13,26 @@ import { OpenAICodexAdapter } from './openai-codex-adapter';
 import { AnthropicAdapter } from './anthropic-adapter';
 import { PerplexityAdapter } from './perplexity-adapter';
 import { GeminiAdapter } from './gemini-adapter';
+import {
+  getProviderDefaultConfig,
+  getProviderDescriptor,
+  getProviderRuntimeOptions,
+} from './provider-registry.js';
 
 const LEGACY_BLOCKED_MODELS = new Set(['codex-davinci-002']);
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
-const DEFAULT_OPENAI_CODEX_MODEL = 'gpt-5.4-codex';
+const DEFAULT_OPENAI_CODEX_MODEL = 'gpt-5.4';
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PERPLEXITY_MODEL = 'sonar-pro';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-pro';
 
-// ─── Config Resolution ─────────────────────────────────────────────────────────
-
 function getProviderConfig(): { active: ProviderID; providers: any } {
   const raw = getConfig().getConfig() as any;
 
-  // New-style config
   if (raw.llm?.provider) {
     return { active: raw.llm.provider, providers: raw.llm.providers || {} };
   }
 
-  // Legacy Ollama-only config — migrate transparently
   return {
     active: 'ollama',
     providers: {
@@ -57,128 +48,133 @@ function getConfigDir(): string {
   return getConfig().getConfigDir();
 }
 
-// ─── Factory ───────────────────────────────────────────────────────────────────
+function getProviderSettings(id: string, providers: any): Record<string, unknown> {
+  const configured = providers?.[id];
+  return {
+    ...getProviderDefaultConfig(id),
+    ...(configured && typeof configured === 'object' && !Array.isArray(configured) ? configured : {}),
+  };
+}
+
+function getProviderDisplayName(id: string): string {
+  return getProviderDescriptor(id)?.name || id;
+}
+
+function readStringSetting(obj: Record<string, unknown>, key: string): string {
+  const value = obj[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function requireApiKey(id: string, cfg: Record<string, unknown>): string {
+  const apiKey = resolveSecretKey(readStringSetting(cfg, 'api_key'));
+  if (!apiKey) {
+    throw new Error(`${getProviderDisplayName(id)} API key not configured. Add it in Settings -> Models.`);
+  }
+  return apiKey;
+}
 
 let cachedProvider: LLMProvider | null = null;
 let cachedProviderId: ProviderID | null = null;
 
-/**
- * Returns the active provider. Re-creates it if the config changed.
- */
 export function getProvider(): LLMProvider {
   const { active, providers } = getProviderConfig();
 
   if (cachedProvider && cachedProviderId === active) {
-    // For Ollama, update endpoint in case it changed in settings
     if (active === 'ollama' && cachedProvider instanceof OllamaAdapter) {
-      cachedProvider.updateEndpoint(providers.ollama?.endpoint || 'http://localhost:11434');
+      const cfg = getProviderSettings('ollama', providers);
+      cachedProvider.updateEndpoint(readStringSetting(cfg, 'endpoint') || 'http://localhost:11434');
     }
     return cachedProvider;
   }
 
   cachedProviderId = active;
-  cachedProvider   = buildProvider(active, providers);
+  cachedProvider = buildProvider(active, providers);
   return cachedProvider;
 }
 
-/** Force a fresh provider instance (call after settings change). */
 export function resetProvider(): void {
-  cachedProvider   = null;
+  cachedProvider = null;
   cachedProviderId = null;
 }
 
-/**
- * Build a provider instance for any provider ID without affecting the cached primary.
- * Used by the orchestration layer for the secondary model.
- */
 export function buildProviderById(providerId: string): LLMProvider {
   const raw = getConfig().getConfig() as any;
   const providers = raw.llm?.providers || {};
-  return buildProvider(providerId as ProviderID, providers);
+  return buildProvider(providerId, providers);
 }
 
-/**
- * Build a provider instance from an arbitrary llm config payload
- * (e.g. unsaved Settings UI values) without mutating global config.
- */
 export function buildProviderForLLM(llm: any): LLMProvider {
-  const active = (llm?.provider || 'ollama') as ProviderID;
+  const active = String(llm?.provider || 'ollama');
   const providers = llm?.providers || {};
   return buildProvider(active, providers);
 }
 
-
 function buildProvider(id: ProviderID, providers: any): LLMProvider {
-  switch (id) {
+  const descriptor = getProviderDescriptor(id);
+  if (!descriptor) {
+    log.warn(`[Provider] Unknown provider "${id}", falling back to Ollama`);
+    return new OllamaAdapter('http://localhost:11434');
+  }
 
-    case 'ollama': {
-      const cfg = providers.ollama || {};
-      return new OllamaAdapter(cfg.endpoint || 'http://localhost:11434');
+  const cfg = getProviderSettings(id, providers);
+  const runtime = getProviderRuntimeOptions(id);
+
+  switch (descriptor.runtime.binding) {
+    case 'providers/ollama-adapter': {
+      return new OllamaAdapter(readStringSetting(cfg, 'endpoint') || 'http://localhost:11434');
     }
 
-    case 'llama_cpp': {
-      const cfg = providers.llama_cpp || {};
+    case 'providers/openai-compat-adapter': {
+      const authType = descriptor.setup?.authType || 'none';
+      const apiKey = authType === 'api_key'
+        ? requireApiKey(id, cfg)
+        : resolveSecretKey(readStringSetting(cfg, 'api_key'));
+      const endpoint = readStringSetting(cfg, 'endpoint') || runtime.endpoint || 'http://localhost:11434';
       return new OpenAICompatAdapter({
-        endpoint:   cfg.endpoint || 'http://localhost:8080',
-        apiKey:     cfg.api_key,   // usually not needed for local
-        providerId: 'llama_cpp',
-      });
-    }
-
-    case 'lm_studio': {
-      const cfg = providers.lm_studio || {};
-      return new OpenAICompatAdapter({
-        endpoint:   cfg.endpoint || 'http://localhost:1234',
-        apiKey:     resolveSecretKey(cfg.api_key),   // LM Studio has optional key support
-        providerId: 'lm_studio',
-      });
-    }
-
-    case 'openai': {
-      const cfg = providers.openai || {};
-      const apiKey = resolveSecretKey(cfg.api_key);
-      if (!apiKey) throw new Error('OpenAI API key not configured. Add it in Settings -> Models.');
-      return new OpenAICompatAdapter({
-        endpoint:   'https://api.openai.com',
+        endpoint,
         apiKey,
-        providerId: 'openai',
+        providerId: id,
+        chatCompletionsPath: runtime.chatCompletionsPath,
+        modelsPath: runtime.modelsPath,
+        defaultHeaders: runtime.defaultHeaders,
+        staticModels: runtime.staticModels,
+        supportsReasoningEffort: runtime.supportsReasoningEffort,
       });
     }
 
-    case 'openai_codex': {
-      const configDir = getConfigDir();
-      return new OpenAICodexAdapter(configDir);
+    case 'providers/openai-codex-adapter': {
+      return new OpenAICodexAdapter(getConfigDir());
     }
 
-    case 'anthropic': {
-      const configDir = getConfigDir();
-      return new AnthropicAdapter(configDir);
+    case 'providers/anthropic-adapter': {
+      if (id === 'anthropic') {
+        return new AnthropicAdapter(getConfigDir());
+      }
+      return new AnthropicAdapter({
+        providerId: id,
+        apiKey: requireApiKey(id, cfg),
+        baseUrl: readStringSetting(cfg, 'endpoint') || runtime.endpoint || '',
+        authHeader: runtime.authHeader,
+        staticModels: runtime.staticModels,
+        defaultHeaders: runtime.defaultHeaders,
+      });
     }
 
-    case 'perplexity': {
-      const cfg = providers.perplexity || {};
-      const apiKey = resolveSecretKey(cfg.api_key);
-      if (!apiKey) throw new Error('Perplexity API key not configured. Add it in Settings → Models.');
-      return new PerplexityAdapter(apiKey);
+    case 'providers/perplexity-adapter': {
+      return new PerplexityAdapter(requireApiKey(id, cfg));
     }
 
-    case 'gemini': {
-      const cfg = providers.gemini || {};
-      const apiKey = resolveSecretKey(cfg.api_key);
-      if (!apiKey) throw new Error('Gemini API key not configured. Add it in Settings → Models.');
-      return new GeminiAdapter(apiKey);
+    case 'providers/gemini-adapter': {
+      return new GeminiAdapter(requireApiKey(id, cfg));
     }
 
-    default:
-      log.warn(`[Provider] Unknown provider "${id}", falling back to Ollama`);
+    default: {
+      log.warn(`[Provider] Unsupported binding "${descriptor.runtime.binding}" for "${id}", falling back to Ollama`);
       return new OllamaAdapter('http://localhost:11434');
+    }
   }
 }
 
-/**
- * Supports env-var references in config values.
- * e.g. api_key: "env:OPENAI_API_KEY" -> reads process.env.OPENAI_API_KEY
- */
 function resolveEnvKey(value: string | undefined): string | undefined {
   if (!value) return undefined;
   if (value.startsWith('env:')) {
@@ -195,17 +191,21 @@ function resolveSecretKey(value: string | undefined): string | undefined {
   return getConfig().resolveSecret(value);
 }
 
-/** Convenience: get the active model name for a given role. */
 export function getModelForRole(role: 'manager' | 'executor' | 'verifier'): string {
   const raw = getConfig().getConfig() as any;
-
-  // New-style per-provider model
   const { active, providers } = getProviderConfig();
-  const providerCfg = providers[active] || {};
+  const providerCfg = getProviderSettings(active, providers);
+
   if (providerCfg.model) {
     const model = String(providerCfg.model).trim();
     if (active === 'openai_codex' && LEGACY_BLOCKED_MODELS.has(model)) return DEFAULT_OPENAI_CODEX_MODEL;
     return model;
+  }
+
+  const defaultModel = String(getProviderDefaultConfig(active).model || '').trim();
+  if (defaultModel) {
+    if (active === 'openai_codex' && LEGACY_BLOCKED_MODELS.has(defaultModel)) return DEFAULT_OPENAI_CODEX_MODEL;
+    return defaultModel;
   }
 
   if (active === 'openai_codex') return DEFAULT_OPENAI_CODEX_MODEL;
@@ -214,7 +214,6 @@ export function getModelForRole(role: 'manager' | 'executor' | 'verifier'): stri
   if (active === 'perplexity') return DEFAULT_PERPLEXITY_MODEL;
   if (active === 'gemini') return DEFAULT_GEMINI_MODEL;
 
-  // Legacy
   return raw.models?.roles?.[role] || raw.models?.primary || 'qwen3:4b';
 }
 

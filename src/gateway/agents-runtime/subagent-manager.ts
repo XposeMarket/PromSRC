@@ -13,6 +13,9 @@ import path from 'path';
 import { TaskRecord, createTask, loadTask } from '../tasks/task-store';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config.js';
+import { appendSubagentChatMessage } from './subagent-chat-store';
+import type { AgentIdentity, AgentPersonality } from '../../types.js';
+import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
 
 export interface SubagentDefinition {
   id: string;
@@ -23,14 +26,12 @@ export interface SubagentDefinition {
   max_steps: number;
   timeout_ms: number;
   model?: string;  // Override from main config
+  executionWorkspace?: string;
+  allowedWorkPaths?: string[];
   
   // Capabilities
-  // Preferred: category-based access — pre-activates full tool categories on the session.
-  // Valid values: 'browser' | 'desktop' | 'team_ops' | 'source_write' | 'integrations'
-  // Core tools (file ops, web, shell, memory, send_telegram) are always available regardless.
-  // request_tool_category is always available as a last-resort escape hatch.
-  allowed_categories?: string[];
-  // Legacy: individual tool names — still supported but superseded by allowed_categories.
+  // Runtime access is full standard core + category tool access.
+  // The remaining lists are legacy metadata only.
   allowed_tools: string[];  // Legacy metadata only. Team dispatch runtime does not restrict by this list.
   forbidden_tools: string[];  // Explicit blacklist
   mcp_servers?: string[];    // Piece 4: MCP server IDs this subagent can use
@@ -43,6 +44,7 @@ export interface SubagentDefinition {
   teamRole?: string;              // Team-specific role title, e.g. Website/SEO Qualifier
   teamAssignment?: string;        // Team-specific job/mission for this agent
   baseRolePrompt?: string;        // Original preset prompt used to create this agent
+  identity?: AgentIdentity;        // Name/personality layer used in prompts and UI
   
   // Metadata
   created_at: number;
@@ -66,11 +68,13 @@ export interface SubagentCallRequest {
   create_if_missing?: {
     name?: string;              // Display name (falls back to first line of description)
     description: string;
-    // Preferred: category names to pre-activate ('browser', 'desktop', 'team_ops', etc.)
-    allowed_categories?: string[];
-    // Legacy: individual tool names (still supported)
+    // Legacy: individual tool names (metadata only)
     allowed_tools?: string[];
     forbidden_tools?: string[];
+    executionWorkspace?: string;
+    execution_workspace?: string;
+    allowedWorkPaths?: string[];
+    allowed_work_paths?: string[];
     mcp_servers?: string[];  // Piece 4
     system_instructions: string;
     heartbeat_instructions?: string;  // Written to HEARTBEAT.md
@@ -83,6 +87,9 @@ export interface SubagentCallRequest {
     teamRole?: string;
     teamAssignment?: string;
     baseRolePrompt?: string;
+    identity?: Partial<AgentIdentity> & { personality?: Partial<AgentPersonality> };
+    personality_style?: string;
+    name_style?: string;
     is_team_manager?: boolean;  // If true, marks as team manager in config.json
   };
 }
@@ -97,6 +104,19 @@ export interface SubagentResult {
 }
 
 const SUBAGENT_STORE_DIR = '.prometheus/subagents';
+
+function normalizePathForCompare(p: string): string {
+  const resolved = path.resolve(String(p || ''));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const base = normalizePathForCompare(basePath);
+  const target = normalizePathForCompare(targetPath);
+  if (!base || !target) return false;
+  const rel = path.relative(base, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
 
 export class SubagentManager {
   private workspacePath: string;
@@ -120,6 +140,36 @@ export class SubagentManager {
     if (!fs.existsSync(this.storePath)) {
       fs.mkdirSync(this.storePath, { recursive: true });
     }
+  }
+
+  private normalizeWorkPath(raw: unknown): string {
+    const value = String(raw || '').trim();
+    if (!value) return '';
+    return path.resolve(path.isAbsolute(value) ? value : path.join(this.workspacePath, value));
+  }
+
+  private normalizeAllowedWorkPaths(rawPaths?: unknown): string[] {
+    const values = Array.isArray(rawPaths) ? rawPaths : [];
+    const roots = [path.resolve(this.workspacePath)];
+    for (const raw of values) {
+      const resolved = this.normalizeWorkPath(raw);
+      if (resolved) roots.push(resolved);
+    }
+    const seen = new Set<string>();
+    return roots.filter((resolved) => {
+      const key = normalizePathForCompare(resolved);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private normalizeExecutionWorkspace(rawPath: unknown, allowedWorkPaths: string[]): string {
+    const resolved = this.normalizeWorkPath(rawPath) || path.resolve(this.workspacePath);
+    if (!allowedWorkPaths.some((allowed) => isPathInside(allowed, resolved))) {
+      throw new Error(`executionWorkspace must be inside allowedWorkPaths. Requested: ${resolved}. Allowed: ${allowedWorkPaths.join(', ')}`);
+    }
+    return resolved;
   }
 
   /**
@@ -167,14 +217,18 @@ export class SubagentManager {
       agentArtifactWorkspace = path.join(this.storePath, subagentId);
     }
 
-    // Build task for this subagent. Standalone subagents keep main workspace
-    // access for project edits, while their own subagent directory is the
+    const allowedWorkPaths = this.normalizeAllowedWorkPaths(definition.allowedWorkPaths);
+    const executionWorkspace = this.normalizeExecutionWorkspace(definition.executionWorkspace, allowedWorkPaths);
+
+    // Build task for this subagent. Standalone subagents use a declared
+    // allowlist for project edits, while their own subagent directory is the
     // artifact/memory/log home.
     const subagentPrompt = this.buildSubagentPrompt(definition, taskPrompt, request.context_data, {
-      mainWorkspace: this.workspacePath,
+      mainWorkspace: executionWorkspace,
       artifactWorkspace: agentArtifactWorkspace,
+      allowedWorkPaths,
     });
-    const agentWorkspace = this.workspacePath;
+    const agentWorkspace = executionWorkspace;
     const parentTask = loadTask(parentTaskId);
     const parentTaskLink = parentTask ? parentTaskId : undefined;
     const originatingSessionId = parentTask ? undefined : parentTaskId;
@@ -185,29 +239,34 @@ export class SubagentManager {
       prompt: subagentPrompt,
       sessionId: subagentSessionId,
       channel: 'web',
-      subagentProfile: definition.id,  // Mark as subagent with restrictions
+      subagentProfile: definition.id,  // Mark as a standalone subagent runtime.
       parentTaskId: parentTaskLink,
       originatingSessionId,
       suppressOriginDelivery: request.delivery_mode === 'task_panel_only',
       agentWorkspace,
+      agentAllowedWorkPaths: allowedWorkPaths,
       plan: this.buildDefaultPlan(definition),
     });
 
-    // Pre-activate tool categories on this session so the subagent sees them from turn 1.
-    // Core tools (file ops, web, shell, send_telegram) are always available.
-    // request_tool_category remains available as last-resort escape hatch.
-    const cats: string[] = Array.isArray((definition as any).allowed_categories)
-      ? (definition as any).allowed_categories
-      : [];
-    if (cats.length > 0) {
+    const shouldMirrorPromptToChat = String((request.context_data as any)?.trigger || '').toLowerCase() !== 'cron';
+    if (shouldMirrorPromptToChat) {
+      const chatMessage = appendSubagentChatMessage(subagentId, {
+        role: 'user',
+        content: taskPrompt,
+        metadata: {
+          source: 'main_agent_dispatch',
+          taskId: subagentTask.id,
+          parentTaskId: parentTaskLink,
+          originatingSessionId,
+        },
+      });
       try {
-        const { activateToolCategory } = require('../session');
-        for (const cat of cats) {
-          activateToolCategory(subagentSessionId, cat);
-        }
-      } catch (err: any) {
-        console.warn(`[SubagentManager] Failed to pre-activate categories: ${err?.message}`);
-      }
+        this.broadcastFn?.({
+          type: 'subagent_chat_message',
+          agentId: subagentId,
+          message: chatMessage,
+        });
+      } catch {}
     }
 
     // Broadcast agent_spawned event to UI
@@ -272,15 +331,30 @@ export class SubagentManager {
    */
   private createSubagent(id: string, params: SubagentCallRequest['create_if_missing']): SubagentDefinition {
     if (!params) throw new Error('create_if_missing required');
+    const allowedWorkPaths = this.normalizeAllowedWorkPaths(params.allowedWorkPaths ?? params.allowed_work_paths);
+    const executionWorkspace = this.normalizeExecutionWorkspace(params.executionWorkspace ?? params.execution_workspace, allowedWorkPaths);
+
+    const identity = buildAgentIdentity({
+      id,
+      explicitName: params.name,
+      description: params.description,
+      roleType: params.roleType,
+      teamRole: params.teamRole,
+      teamAssignment: params.teamAssignment,
+      identity: params.identity,
+      personalityStyle: params.personality_style,
+      nameStyle: params.name_style,
+    });
 
     const definition: SubagentDefinition = {
       id,
-      name: params.name ? String(params.name).slice(0, 80) : params.description.split('\n')[0].slice(0, 80),
+      name: identity.displayName,
       description: params.description,
       max_steps: params.max_steps ?? 20,
       timeout_ms: params.timeout_ms ?? 300_000,
       model: params.model,
-      allowed_categories: params.allowed_categories ?? [],
+      executionWorkspace,
+      allowedWorkPaths,
       allowed_tools: params.allowed_tools ?? [],
       forbidden_tools: params.forbidden_tools ?? [],
       mcp_servers: params.mcp_servers ?? [],
@@ -291,6 +365,7 @@ export class SubagentManager {
       teamRole: params.teamRole,
       teamAssignment: params.teamAssignment,
       baseRolePrompt: params.baseRolePrompt,
+      identity,
       created_at: Date.now(),
       modified_at: Date.now(),
       created_by: 'ai',
@@ -369,6 +444,8 @@ export class SubagentManager {
       ``,
       def.description,
       ``,
+      renderIdentityPrompt(def.identity),
+      ``,
       `## Base Preset Role`,
       def.roleType ? `Role: ${def.roleType}` : '(not recorded)',
       def.baseRolePrompt ? `\nPreset prompt:\n${def.baseRolePrompt}` : '',
@@ -384,12 +461,8 @@ export class SubagentManager {
       `## Success Criteria`,
       def.success_criteria,
       ``,
-      `## Tool Access`,
-      (def as any).allowed_categories?.length
-        ? `Categories: ${(def as any).allowed_categories.join(', ')} (+ core tools always available)`
-        : def.allowed_tools?.length
-          ? def.allowed_tools.map((t: string) => `- ${t}`).join('\n')
-          : '(core tools only)',
+	      `## Tool Access`,
+	      `Full standard core + category tool access. Commit-tier actions still require approval.`,
       ``,
       `## Forbidden Tools`,
       def.forbidden_tools?.map((t: string) => `- ${t}`).join('\n') || '(none)',
@@ -411,7 +484,7 @@ export class SubagentManager {
     def: SubagentDefinition,
     taskPrompt: string,
     contextData?: Record<string, any>,
-    workspaceInfo?: { mainWorkspace: string; artifactWorkspace: string },
+    workspaceInfo?: { mainWorkspace: string; artifactWorkspace: string; allowedWorkPaths?: string[] },
   ): string {
     const contextSection = contextData
       ? `\n\nCONTEXT DATA:\n${JSON.stringify(contextData, null, 2)}`
@@ -421,6 +494,7 @@ export class SubagentManager {
       `[SUBAGENT: ${def.name}]`,
       ``,
       `IDENTITY: You are a standalone subagent unless this prompt explicitly says you are serving inside a managed team. You keep your own artifacts and MEMORY.md in your subagent workspace, but you may read/edit project files in the main workspace when the task requires it.`,
+      def.identity ? `\n${renderIdentityPrompt(def.identity)}` : '',
       ``,
       `SYSTEM INSTRUCTIONS:`,
       def.system_instructions,
@@ -428,9 +502,11 @@ export class SubagentManager {
       workspaceInfo
         ? [
             `WORKSPACE RULES:`,
-            `- Main workspace for project files and edits: ${workspaceInfo.mainWorkspace}`,
+            `- Default execution workspace: ${workspaceInfo.mainWorkspace}`,
+            `- Allowed work paths:`,
+            ...(workspaceInfo.allowedWorkPaths || [workspaceInfo.mainWorkspace]).map((p) => `  - ${p}`),
             `- Subagent artifact workspace for your own outputs, notes, logs, scratch files, and MEMORY.md updates: ${workspaceInfo.artifactWorkspace}`,
-            `- Do not treat the artifact workspace as a restriction on project edits.`,
+            `- File tools and run_command must stay inside the allowed work paths.`,
             ``,
           ].join('\n')
         : '',
@@ -451,7 +527,7 @@ export class SubagentManager {
     return [
       {
         index: 0,
-        description: `Execute ${def.name}${(def as any).allowed_categories?.length ? ` [categories: ${(def as any).allowed_categories.join(', ')}]` : def.allowed_tools?.length ? ` [tools: ${def.allowed_tools.join(', ')}]` : ''}`,
+	        description: `Execute ${def.name}`,
         status: 'pending',
       },
       {
@@ -485,6 +561,8 @@ export class SubagentManager {
         name: def.name,
         description: def.description,
         workspace: path.join(this.storePath, def.id),
+        executionWorkspace: def.executionWorkspace || this.workspacePath,
+        allowedWorkPaths: this.normalizeAllowedWorkPaths(def.allowedWorkPaths),
         model: def.model,
         maxSteps: def.max_steps,
         subagentType: 'dynamic',
@@ -496,14 +574,163 @@ export class SubagentManager {
       if (def.roleType) entry.roleType = def.roleType;
       if (def.teamRole) entry.teamRole = def.teamRole;
       if (def.teamAssignment) entry.teamAssignment = def.teamAssignment;
-      if ((def as any).allowed_categories) entry.allowed_categories = (def as any).allowed_categories;
-
-      agents.push(entry);
+      if (def.identity) entry.identity = def.identity;
+	      agents.push(entry);
       configManager.updateConfig({ agents } as any);
       console.log(`[SubagentManager] Registered "${def.id}" into config.json (isTeamManager=${!!opts.isTeamManager})`);
     } catch (err: any) {
       console.warn(`[SubagentManager] Could not register "${def.id}" in config:`, err?.message ?? err);
     }
+  }
+
+  /**
+   * Directly update a dynamic subagent profile and keep its persisted files plus
+   * global config entry in sync. This is the API counterpart to spawn_subagent.
+   */
+  updateSubagent(id: string, patch: Record<string, any>): SubagentDefinition {
+    const safeId = String(id || '').trim();
+    if (!/^[a-zA-Z0-9_-]+$/.test(safeId)) {
+      throw new Error('agent_id must contain only letters, numbers, underscores, or hyphens');
+    }
+
+    const existing = this.loadSubagent(safeId);
+    if (!existing) {
+      throw new Error(`Dynamic subagent "${safeId}" not found. Call agent_list first to confirm the ID.`);
+    }
+
+    const next: SubagentDefinition = { ...existing };
+    const stringFields: Array<keyof SubagentDefinition> = [
+      'description',
+      'system_instructions',
+      'success_criteria',
+      'teamRole',
+      'teamAssignment',
+      'model',
+      'executionWorkspace',
+    ];
+
+    if (patch.name !== undefined) {
+      const newName = String(patch.name || '').trim();
+      if (!newName) throw new Error('name cannot be empty');
+      next.name = newName.slice(0, 80);
+    }
+
+    for (const field of stringFields) {
+      if (patch[field] !== undefined) {
+        const value = String(patch[field] ?? '').trim();
+        if (field === 'model' && !value) {
+          delete (next as any).model;
+        } else {
+          (next as any)[field] = value;
+        }
+      }
+    }
+
+	    const arrayFields = ['allowed_tools', 'forbidden_tools', 'constraints'] as const;
+    for (const field of arrayFields) {
+      if (patch[field] !== undefined) {
+        if (!Array.isArray(patch[field])) throw new Error(`${field} must be an array`);
+        (next as any)[field] = patch[field].map((v: any) => String(v).trim()).filter(Boolean);
+      }
+    }
+
+    if (patch.max_steps !== undefined) {
+      const value = Math.max(1, Math.min(200, Math.floor(Number(patch.max_steps) || 0)));
+      if (!value) throw new Error('max_steps must be a positive number');
+      next.max_steps = value;
+    }
+
+    if (patch.timeout_ms !== undefined) {
+      const value = Math.max(1_000, Math.min(86_400_000, Math.floor(Number(patch.timeout_ms) || 0)));
+      if (!value) throw new Error('timeout_ms must be a positive number');
+      next.timeout_ms = value;
+    }
+
+    const identityPatch = patch.identity && typeof patch.identity === 'object' ? patch.identity : undefined;
+    const shouldRefreshIdentity = !!identityPatch
+      || patch.personality_style !== undefined
+      || patch.name_style !== undefined
+      || patch.name !== undefined
+      || patch.description !== undefined
+      || patch.teamRole !== undefined
+      || patch.teamAssignment !== undefined;
+    if (shouldRefreshIdentity) {
+      const mergedIdentity: any = identityPatch ? { ...(next.identity || {}), ...identityPatch } : { ...(next.identity || {}) };
+      if (patch.name !== undefined && !identityPatch?.displayName) {
+        mergedIdentity.displayName = next.name;
+        mergedIdentity.shortName = next.name;
+      }
+      next.identity = buildAgentIdentity({
+        id: next.id,
+        explicitName: next.name,
+        description: next.description,
+        roleType: next.roleType,
+        teamRole: next.teamRole,
+        teamAssignment: next.teamAssignment,
+        identity: mergedIdentity,
+        personalityStyle: patch.personality_style,
+        nameStyle: patch.name_style,
+      });
+      next.name = next.identity.displayName;
+    }
+
+    if (patch.allowedWorkPaths !== undefined || patch.allowed_work_paths !== undefined) {
+      next.allowedWorkPaths = this.normalizeAllowedWorkPaths(patch.allowedWorkPaths ?? patch.allowed_work_paths);
+    } else {
+      next.allowedWorkPaths = this.normalizeAllowedWorkPaths(next.allowedWorkPaths);
+    }
+    if (patch.executionWorkspace !== undefined || patch.execution_workspace !== undefined || !next.executionWorkspace) {
+      next.executionWorkspace = this.normalizeExecutionWorkspace(patch.executionWorkspace ?? patch.execution_workspace ?? next.executionWorkspace, next.allowedWorkPaths);
+    } else {
+      next.executionWorkspace = this.normalizeExecutionWorkspace(next.executionWorkspace, next.allowedWorkPaths);
+    }
+
+    next.modified_at = Date.now();
+
+    const agentDir = path.join(this.storePath, safeId);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify(next, null, 2), 'utf-8');
+    fs.writeFileSync(path.join(agentDir, 'system_prompt.md'), this.buildSystemPromptFile(next), 'utf-8');
+
+    if (patch.heartbeat_instructions !== undefined) {
+      const heartbeat = String(patch.heartbeat_instructions || '').trim();
+      fs.writeFileSync(path.join(agentDir, 'HEARTBEAT.md'), heartbeat || `# HEARTBEAT.md - ${next.name}\n`, 'utf-8');
+    }
+
+    const configManager = getConfig();
+    const config = configManager.getConfig();
+    const agents: any[] = Array.isArray(config.agents) ? [...config.agents] : [];
+    const idx = agents.findIndex((a: any) => a.id === safeId);
+    const entryPatch: any = {
+      name: next.name,
+      description: next.description,
+      model: next.model,
+      maxSteps: next.max_steps,
+      subagentType: 'dynamic',
+      executionWorkspace: next.executionWorkspace,
+      allowedWorkPaths: next.allowedWorkPaths,
+      modifiedAt: next.modified_at,
+	      teamRole: next.teamRole,
+      teamAssignment: next.teamAssignment,
+      identity: next.identity,
+    };
+    if (idx >= 0) {
+      agents[idx] = { ...agents[idx], ...entryPatch };
+    } else {
+      agents.push({
+        id: next.id,
+        workspace: path.join(this.storePath, next.id),
+        executionWorkspace: next.executionWorkspace,
+        allowedWorkPaths: next.allowedWorkPaths,
+        createdAt: next.created_at,
+        createdBy: next.created_by,
+        ...entryPatch,
+      });
+    }
+    configManager.updateConfig({ agents } as any);
+
+    console.log(`[SubagentManager] Updated subagent: ${safeId}`);
+    return next;
   }
 
   /**
@@ -614,6 +841,14 @@ export const subagentSpawnTool = {
         type: 'boolean',
         description: 'If false, only create/ensure the subagent definition and do not execute a task (default true).',
       },
+      personality_style: {
+        type: 'string',
+        description: 'Optional personality preset for newly created agents: steady, spark, austere, mentor, operator, critic, creative.',
+      },
+      name_style: {
+        type: 'string',
+        description: 'Optional naming hint for newly created agents. Keep names grounded and non-gimmicky.',
+      },
       context_data: {
         type: 'object',
         description: 'Optional data to pass: snapshots, URLs, extracted text, etc.',
@@ -626,6 +861,22 @@ export const subagentSpawnTool = {
             type: 'string',
             description: 'What this subagent does',
           },
+          name: {
+            type: 'string',
+            description: 'Optional display name. If omitted, Prometheus generates a tasteful human name.',
+          },
+          identity: {
+            type: 'object',
+            description: 'Optional explicit name/personality identity block.',
+          },
+          personality_style: {
+            type: 'string',
+            description: 'Optional personality preset: steady, spark, austere, mentor, operator, critic, creative.',
+          },
+          name_style: {
+            type: 'string',
+            description: 'Optional naming hint. Keep names grounded and non-gimmicky.',
+          },
           teamRole: {
             type: 'string',
             description: 'Team-specific role title, e.g. "Website/SEO Qualifier" or "Lead Enricher".',
@@ -637,7 +888,7 @@ export const subagentSpawnTool = {
           allowed_tools: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Legacy metadata only. Prefer allowed_categories; team dispatches no longer restrict runtime access by this list.',
+            description: 'Legacy metadata only. Subagents receive the full standard tool surface at runtime.',
           },
           mcp_servers: {
             type: 'array',

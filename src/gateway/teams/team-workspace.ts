@@ -23,6 +23,7 @@ import crypto from 'crypto';
 import { getConfig } from '../../config/config';
 import { getAgentById } from '../../config/config';
 import type { ManagedTeam } from './managed-teams';
+import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -152,6 +153,15 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
   const description = String(agent?.description || 'No description set.');
   const teamRole = String(agent?.teamRole || displayName);
   const teamAssignment = String(agent?.teamAssignment || description);
+  const identity = buildAgentIdentity({
+    id: agentId,
+    explicitName: agent?.identity?.displayName || displayName,
+    description,
+    roleType: agent?.roleType,
+    teamRole,
+    teamAssignment,
+    identity: agent?.identity,
+  });
 
   const agentsMd = path.join(identityPath, 'AGENTS.md');
   if (!fs.existsSync(agentsMd)) {
@@ -164,6 +174,8 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
       '## Team Assignment',
       teamAssignment,
       '',
+      renderIdentityPrompt(identity),
+      '',
       '## Output Format',
       'Return a concise summary of what was accomplished.',
     ].join('\n'), 'utf-8');
@@ -175,6 +187,8 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
       `# ${displayName}`,
       '',
       description,
+      '',
+      renderIdentityPrompt(identity),
       '',
       '## Team-Specific Role',
       teamRole,
@@ -205,6 +219,7 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
       description,
       teamRole,
       teamAssignment,
+      identity,
       teamScoped: true,
       createdAt: Date.now(),
     }, null, 2), 'utf-8');

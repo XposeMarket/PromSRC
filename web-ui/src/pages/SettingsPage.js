@@ -13,6 +13,94 @@
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
 
+const SETTINGS_ICON_PATHS = {
+  keyboard: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 9h.01"></path><path d="M10 9h.01"></path><path d="M13 9h.01"></path><path d="M16 9h.01"></path><path d="M7 13h.01"></path><path d="M10 13h.01"></path><path d="M13 13h4"></path><path d="M7 17h10"></path>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 2 2"></path><path d="m18 5 2 2"></path>',
+  messageSquare: '<path d="M7 17H4a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v11a1 1 0 0 1-1 1H9l-5 4v-4Z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path>',
+  alertTriangle: '<path d="M12 3 2 20h20L12 3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>',
+  shieldCheck: '<path d="m12 3 7 3v5c0 5-3.4 8.4-7 10-3.6-1.6-7-5-7-10V6l7-3Z"></path><path d="m9.5 12 1.7 1.7 3.3-3.3"></path>',
+  eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle>',
+  eyeOff: '<path d="M3 3 21 21"></path><path d="M10.6 10.7A3 3 0 0 0 12 15a3 3 0 0 0 2.3-1.1"></path><path d="M6.7 6.8A17.7 17.7 0 0 1 12 6c6.5 0 10 6 10 6a18.6 18.6 0 0 1-4.2 4.8"></path><path d="M4.1 9.6A18.2 18.2 0 0 0 2 12s3.5 6 10 6c1.6 0 3-.4 4.3-1"></path>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 1 1 8 0v3"></path>',
+  home: '<path d="M3 11.5 12 4l9 7.5"></path><path d="M5 10.5V20h14v-9.5"></path>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="10" cy="7" r="4"></circle><path d="M20 21v-2a4 4 0 0 0-3-3.9"></path><path d="M16 3.1a4 4 0 0 1 0 7.8"></path>',
+  briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"></rect><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M3 12h18"></path>',
+  activity: '<path d="M22 12h-4l-2.5 5-4-10-2.5 5H2"></path>',
+  clock: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 3"></path>',
+  clipboard: '<rect x="8" y="3" width="8" height="4" rx="1"></rect><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"></path><path d="M9 12h6"></path><path d="M9 16h6"></path>',
+  search: '<circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect>',
+  chart: '<path d="M4 19h16"></path><path d="M7 16V9"></path><path d="M12 16V5"></path><path d="M17 16v-4"></path>',
+  hammer: '<path d="m14 7 3-3 3 3-3 3"></path><path d="M13 8 5 16"></path><path d="M6 15 9 18"></path><path d="M4 17 7 20"></path>',
+  sliders: '<path d="M4 21v-7"></path><path d="M4 10V3"></path><path d="M12 21v-12"></path><path d="M12 5V3"></path><path d="M20 21v-4"></path><path d="M20 13V3"></path><path d="M2 14h4"></path><path d="M10 9h4"></path><path d="M18 17h4"></path>',
+  checkCircle: '<circle cx="12" cy="12" r="9"></circle><path d="m9 12 2 2 4-4"></path>',
+  xCircle: '<circle cx="12" cy="12" r="9"></circle><path d="m9 9 6 6"></path><path d="m15 9-6 6"></path>',
+  infoCircle: '<circle cx="12" cy="12" r="9"></circle><path d="M12 10v5"></path><path d="M12 7h.01"></path>',
+  zap: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"></path>',
+  send: '<path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4 20-7Z"></path>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"></path>',
+};
+
+function renderSettingsIcon(name, size = 14) {
+  const paths = SETTINGS_ICON_PATHS[name];
+  if (!paths) return '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+function applySettingsIcon(target, name, size = 14) {
+  const el = typeof target === 'string' ? document.getElementById(target) : target;
+  if (!el) return;
+  el.innerHTML = renderSettingsIcon(name, size);
+}
+
+function setSettingsStatus(statusEl, type, text) {
+  if (!statusEl) return;
+  if (!text) {
+    statusEl.innerHTML = '';
+    return;
+  }
+  const iconName = type === 'success' ? 'checkCircle' : type === 'error' ? 'xCircle' : 'infoCircle';
+  statusEl.style.display = 'inline-flex';
+  statusEl.style.alignItems = 'center';
+  statusEl.style.gap = '6px';
+  statusEl.innerHTML = `${renderSettingsIcon(iconName, 14)}<span>${escHtml(text)}</span>`;
+}
+
+function setCredentialToggleIcon(btn, isVisible) {
+  if (!btn) return;
+  btn.innerHTML = renderSettingsIcon(isVisible ? 'eyeOff' : 'eye', 16);
+  btn.title = isVisible ? 'Hide value' : 'Show value';
+  btn.setAttribute('aria-label', isVisible ? 'Hide value' : 'Show value');
+}
+
+function initSettingsIconLabels() {
+  document.querySelectorAll('[data-settings-icon-label]').forEach((el) => {
+    if (el.dataset.settingsIconReady === 'true') return;
+    const iconName = el.getAttribute('data-settings-icon-label');
+    const size = Number(el.getAttribute('data-settings-icon-size') || 14);
+    const text = (el.getAttribute('data-settings-icon-text') || el.textContent || '').trim();
+    if (!iconName || !text) return;
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.gap = '6px';
+    el.innerHTML = `${renderSettingsIcon(iconName, size)}<span>${escHtml(text)}</span>`;
+    el.dataset.settingsIconReady = 'true';
+  });
+}
+
+function initSettingsStaticIcons() {
+  applySettingsIcon('settings-apps-tab-icon', 'grid', 14);
+  applySettingsIcon('settings-shortcuts-tab-icon', 'keyboard', 14);
+  applySettingsIcon('settings-search-callout-icon', 'key', 14);
+  applySettingsIcon('settings-cred-info-icon', 'lock', 14);
+  applySettingsIcon('agent-md-team-badge-icon', 'home', 12);
+  applySettingsIcon('agent-hb-title-icon', 'activity', 14);
+  initSettingsIconLabels();
+  setCredentialToggleIcon(document.getElementById('cred-tavily-visibility-toggle'), false);
+  setCredentialToggleIcon(document.getElementById('cred-google-visibility-toggle'), false);
+  setCredentialToggleIcon(document.getElementById('cred-brave-visibility-toggle'), false);
+}
+
 async function loadSearchSettingsSummary() {
   try {
     const s = await api('/api/settings/search');
@@ -89,7 +177,7 @@ function setQuickThinkingEffort(level) {
 
 function setSettingsTab(tab) {
   window.settingsTab = tab;
-  const tabs = ['system', 'heartbeat', 'search', 'credentials', 'policy', 'security', 'models', 'agents', 'channels', 'integrations', 'shortcuts'];
+  const tabs = ['system', 'heartbeat', 'search', 'credentials', 'policy', 'security', 'models', 'agents', 'channels', 'integrations', 'apps', 'shortcuts'];
 
   tabs.forEach(t => {
     const btn = document.getElementById(`settings-tab-${t}`);
@@ -114,6 +202,7 @@ function setSettingsTab(tab) {
         });
         if (t === 'integrations') loadIntegrationsTab();
         if (t === 'credentials') loadCredentialsTab();
+        if (t === 'apps') loadInstalledAppsPanel();
         if (t === 'shortcuts') loadShortcutsPanel();
       } else {
         panel.style.display = 'none';
@@ -416,7 +505,13 @@ async function loadCredFields() {
     setField('cred-google-key',  s.google_api_key);
     setField('cred-brave-key',   s.brave_api_key);
     const cxEl = document.getElementById('cred-google-cx');
-    if (cxEl) cxEl.value = s.google_cx || '';
+    if (cxEl) {
+      cxEl.value = s.google_cx || '';
+      const labelEl = cxEl.previousElementSibling;
+      if (labelEl?.tagName === 'LABEL') {
+        labelEl.innerHTML = 'Google CSE ID <span style="font-weight:400;color:var(--muted)">(stored in vault for persistence)</span>';
+      }
+    }
   } catch(e) {
     console.warn('loadCredFields:', e);
   }
@@ -436,6 +531,7 @@ async function loadCredVaultStatus() {
       const label = {
         'search.tavily_api_key':  'Tavily API Key',
         'search.google_api_key':  'Google API Key',
+        'search.google_cx':       'Google CSE ID',
         'search.brave_api_key':   'Brave API Key',
         'llm.openai.api_key':     'OpenAI API Key',
         'hooks.token':            'Webhook Token',
@@ -473,64 +569,442 @@ async function loadCredVaultLog() {
 function toggleCredVis(inputId, btn) {
   const el = document.getElementById(inputId);
   if (!el) return;
+  const rehideTimerId = Number(btn?.dataset?.rehideTimerId || 0);
+  if (rehideTimerId) {
+    clearTimeout(rehideTimerId);
+    delete btn.dataset.rehideTimerId;
+  }
   if (el.type === 'password') {
     el.type = 'text';
-    btn.textContent = '🙈';
+    setCredentialToggleIcon(btn, true);
     // Auto-rehide after 8s
-    setTimeout(() => { el.type = 'password'; btn.textContent = '👁'; }, 8000);
+    const timerId = window.setTimeout(() => {
+      el.type = 'password';
+      setCredentialToggleIcon(btn, false);
+      delete btn.dataset.rehideTimerId;
+    }, 8000);
+    if (btn) btn.dataset.rehideTimerId = String(timerId);
   } else {
     el.type = 'password';
-    btn.textContent = '👁';
+    setCredentialToggleIcon(btn, false);
   }
 }
 
 // --- Provider-aware Model Settings ------------------------------------------
 
-const PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini'];
+const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini'];
+const BUILTIN_STATIC_MODEL_FALLBACKS = {
+  openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+};
+let providerCatalogCache = null;
+let providerCatalogPromise = null;
+
+function providerSortRank(providerId) {
+  const idx = BUILTIN_PROVIDER_IDS.indexOf(providerId);
+  return idx >= 0 ? idx : BUILTIN_PROVIDER_IDS.length + 100;
+}
+
+function sanitizeProviderDomId(providerId) {
+  return String(providerId || '').replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+function getProviderPanelId(providerId) {
+  if (BUILTIN_PROVIDER_IDS.includes(providerId)) return 'prov-fields-' + providerId;
+  return 'prov-fields-dynamic-' + sanitizeProviderDomId(providerId);
+}
+
+function getProviderStatusElementId(providerId) {
+  const builtins = {
+    ollama: 'provider-status-msg',
+    llama_cpp: 'provider-status-msg-llamacpp',
+    lm_studio: 'provider-status-msg-lmstudio',
+    openai: 'provider-status-msg-openai',
+    openai_codex: 'codex-oauth-status',
+    anthropic: 'anthropic-oauth-status',
+    perplexity: 'provider-status-msg-perplexity',
+    gemini: 'provider-status-msg-gemini',
+  };
+  return builtins[providerId] || `provider-status-msg-${sanitizeProviderDomId(providerId)}`;
+}
+
+function getProviderSettingsFieldId(providerId, fieldKey) {
+  return `settings-provider-${sanitizeProviderDomId(providerId)}-${sanitizeProviderDomId(fieldKey)}`;
+}
+
+function getProviderCatalogItems() {
+  return Array.isArray(providerCatalogCache) ? providerCatalogCache : [];
+}
+
+function getKnownProviderIds() {
+  const items = getProviderCatalogItems();
+  return items.length ? items.map(item => item.id) : [...BUILTIN_PROVIDER_IDS];
+}
+
+function getProviderCatalogItem(providerId) {
+  return getProviderCatalogItems().find(item => item.id === providerId) || null;
+}
+
+function getProviderStaticModels(providerId) {
+  return Array.isArray(getProviderCatalogItem(providerId)?.runtime?.options?.staticModels)
+    ? [...getProviderCatalogItem(providerId).runtime.options.staticModels]
+    : [];
+}
+
+function getProviderDefaultConfig(providerId) {
+  const defaults = getProviderCatalogItem(providerId)?.config?.defaults;
+  return defaults && typeof defaults === 'object' ? { ...defaults } : {};
+}
+
+function readProviderFieldElementValue(providerId, fieldKey) {
+  const el = document.getElementById(getProviderSettingsFieldId(providerId, fieldKey));
+  if (!el) return undefined;
+  if (el.type === 'checkbox') return !!el.checked;
+  return el.value;
+}
+
+function writeProviderFieldElementValue(providerId, fieldKey, value) {
+  const el = document.getElementById(getProviderSettingsFieldId(providerId, fieldKey));
+  if (!el) return;
+  if (el.type === 'checkbox') {
+    el.checked = !!value;
+    return;
+  }
+  if (value !== undefined && value !== null) {
+    el.value = String(value);
+  }
+}
+
+function getProviderModelControl(providerId) {
+  const builtinIds = {
+    ollama: 'settings-primary-model',
+    openai: 'settings-openai-model',
+    openai_codex: 'settings-codex-model',
+    anthropic: 'settings-anthropic-model',
+    perplexity: 'settings-perplexity-model',
+    gemini: 'settings-gemini-model',
+    llama_cpp: 'settings-llamacpp-model',
+    lm_studio: 'settings-lmstudio-model',
+  };
+  const builtinId = builtinIds[providerId];
+  if (builtinId) return document.getElementById(builtinId);
+  return document.getElementById(getProviderSettingsFieldId(providerId, 'model'));
+}
+
+function uniqueStrings(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [values])
+    .map(value => String(value || '').trim())
+    .filter(Boolean)));
+}
+
+function getSelectOptionValues(selectOrId) {
+  const select = typeof selectOrId === 'string' ? document.getElementById(selectOrId) : selectOrId;
+  if (!select || select.tagName !== 'SELECT') return [];
+  return Array.from(select.options || []).map(option => String(option.value || '').trim()).filter(Boolean);
+}
+
+function ensureSelectOption(selectOrId, value) {
+  const select = typeof selectOrId === 'string' ? document.getElementById(selectOrId) : selectOrId;
+  const normalized = String(value || '').trim();
+  if (!select || select.tagName !== 'SELECT' || !normalized) return;
+  if (getSelectOptionValues(select).includes(normalized)) return;
+  const option = document.createElement('option');
+  option.value = normalized;
+  option.textContent = normalized;
+  select.appendChild(option);
+}
+
+function getProviderSelectPlaceholder(selectId) {
+  if (selectId === 'agent-edit-provider') return 'use effective default';
+  if (selectId === 'amd-background-agent-prov') return 'inherit from Background Task';
+  if (selectId === 'amd-switch-model-low-prov' || selectId === 'amd-switch-model-medium-prov') return 'disabled';
+  if (/^amd-subagent-.*-prov$/.test(selectId)) return 'inherit';
+  if (/^amd-.*-prov$/.test(selectId) || /^brain-.*-prov$/.test(selectId)) return 'use primary';
+  return 'inherit / use primary';
+}
+
+function setProviderStatusMessage(providerId, type, text) {
+  setSettingsStatus(document.getElementById(getProviderStatusElementId(providerId)), type, text);
+}
+
+function normalizeModelList(models) {
+  return uniqueStrings((Array.isArray(models) ? models : []).map(model => (
+    typeof model === 'string' ? model : (model?.name || String(model || ''))
+  )));
+}
+
+function getProviderModelFallbacks(providerId) {
+  return uniqueStrings([...(BUILTIN_STATIC_MODEL_FALLBACKS[providerId] || []), ...getProviderStaticModels(providerId)]);
+}
+
+function applyDynamicProviderConfig(providerId, providerConfig) {
+  const provider = getProviderCatalogItem(providerId);
+  const fields = Array.isArray(provider?.setup?.fields) ? provider.setup.fields : [];
+  if (!fields.length) return;
+  const merged = {
+    ...getProviderDefaultConfig(providerId),
+    ...((providerConfig && typeof providerConfig === 'object') ? providerConfig : {}),
+  };
+  for (const field of fields) {
+    const control = document.getElementById(getProviderSettingsFieldId(providerId, field.key));
+    if (!control) continue;
+    if (field.key === 'model' && control.tagName === 'SELECT') ensureSelectOption(control, merged[field.key]);
+    writeProviderFieldElementValue(providerId, field.key, merged[field.key]);
+  }
+}
+
+function collectDynamicProviderConfig(providerId, activeProviderId) {
+  const provider = getProviderCatalogItem(providerId);
+  const fields = Array.isArray(provider?.setup?.fields) ? provider.setup.fields : [];
+  if (!fields.length) return null;
+
+  const defaults = getProviderDefaultConfig(providerId);
+  const savedProviders = window._llmSettingsCache?.providers && typeof window._llmSettingsCache.providers === 'object'
+    ? window._llmSettingsCache.providers
+    : {};
+  const savedConfig = savedProviders[providerId] && typeof savedProviders[providerId] === 'object'
+    ? savedProviders[providerId]
+    : null;
+  const hasSavedConfig = !!(savedConfig && Object.keys(savedConfig).length);
+
+  let hasNonDefaultValue = false;
+  for (const field of fields) {
+    const rawValue = readProviderFieldElementValue(providerId, field.key);
+    if (field.input === 'checkbox') {
+      const normalized = !!rawValue;
+      const baseline = savedConfig?.[field.key] ?? defaults[field.key] ?? false;
+      if (normalized !== !!baseline) hasNonDefaultValue = true;
+      continue;
+    }
+    const normalized = String(rawValue || '').trim();
+    const baseline = String(savedConfig?.[field.key] ?? defaults[field.key] ?? '').trim();
+    if (normalized !== baseline && (normalized || baseline)) hasNonDefaultValue = true;
+  }
+
+  const shouldInclude = providerId === activeProviderId || hasSavedConfig || hasNonDefaultValue;
+  if (!shouldInclude) return null;
+
+  const config = {};
+  for (const field of fields) {
+    const rawValue = readProviderFieldElementValue(providerId, field.key);
+    if (field.input === 'checkbox') {
+      config[field.key] = !!rawValue;
+      continue;
+    }
+    const normalized = String(rawValue || '').trim();
+    if (normalized) {
+      config[field.key] = normalized;
+    } else if (field.secret) {
+      config[field.key] = '';
+    } else if (Object.prototype.hasOwnProperty.call(defaults, field.key)) {
+      config[field.key] = defaults[field.key];
+    } else {
+      config[field.key] = '';
+    }
+  }
+  return config;
+}
+
+async function fetchProviderModelsForPicker(providerId, options = {}) {
+  const {
+    refreshOpenAI = true,
+    includeLive = true,
+  } = options;
+
+  let models = uniqueStrings([...getProviderModelFallbacks(providerId), ...getProviderModelsFromUI(providerId)]);
+
+  if (providerId === 'openai' && refreshOpenAI) {
+    try {
+      await refreshOpenAIModels(true);
+      models = uniqueStrings([...models, ...getProviderModelsFromUI(providerId)]);
+    } catch {}
+  }
+
+  if (includeLive) {
+    try {
+      const llm = buildProviderPayload();
+      llm.provider = providerId;
+      const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
+      models = uniqueStrings([...models, ...normalizeModelList(data?.models)]);
+    } catch {}
+  }
+
+  return models;
+}
+
+function setProviderModelOptions(providerId, models) {
+  const control = getProviderModelControl(providerId);
+  if (!control || !Array.isArray(models) || !models.length) return;
+  const unique = Array.from(new Set(models.map(v => String(v || '').trim()).filter(Boolean)));
+  if (!unique.length) return;
+  const current = String(control.value || '').trim();
+  if (control.tagName === 'SELECT') {
+    control.innerHTML = unique.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
+    if (current && unique.includes(current)) control.value = current;
+    else control.value = unique[0];
+  } else if (!current) {
+    control.value = unique[0];
+  }
+}
+
+function getProviderModelsFromUI(providerId) {
+  const control = getProviderModelControl(providerId);
+  const controlModels = control?.tagName === 'SELECT'
+    ? Array.from(control.options || []).map(o => o.value).filter(Boolean)
+    : (control?.value ? [String(control.value).trim()] : []);
+  return uniqueStrings([...getProviderStaticModels(providerId), ...controlModels]);
+}
+
+function renderProviderField(provider, field) {
+  const fieldId = getProviderSettingsFieldId(provider.id, field.key);
+  const staticModels = field.key === 'model' ? getProviderStaticModels(provider.id) : [];
+  const help = field.help || provider.config?.uiHints?.[field.key]?.help || '';
+  const label = escHtml(field.label || field.key);
+  const helpHtml = help
+    ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">${escHtml(help)}</div>`
+    : '';
+  if (field.key === 'model' && staticModels.length) {
+    return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><select id="${fieldId}" class="settings-input" style="font-size:13px">${staticModels.map(model => `<option value="${escHtml(model)}">${escHtml(model)}</option>`).join('')}</select>${helpHtml}`;
+  }
+  if (field.input === 'textarea') {
+    return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><textarea id="${fieldId}" style="width:100%;min-height:90px;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace"></textarea>${helpHtml}`;
+  }
+  if (field.input === 'checkbox') {
+    return `<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);margin-top:10px;cursor:pointer"><input id="${fieldId}" type="checkbox" /><span>${label}</span></label>${helpHtml}`;
+  }
+  if (field.input === 'select' && Array.isArray(field.options) && field.options.length) {
+    return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><select id="${fieldId}" class="settings-input" style="font-size:13px">${field.options.map(option => `<option value="${escHtml(option)}">${escHtml(option)}</option>`).join('')}</select>${helpHtml}`;
+  }
+  const inputType = field.input === 'password' ? 'password' : 'text';
+  const placeholder = field.placeholder ? ` placeholder="${escHtml(field.placeholder)}"` : '';
+  return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><input id="${fieldId}" type="${inputType}"${placeholder} style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />${helpHtml}`;
+}
+
+function renderDynamicProviderPanel(provider) {
+  const panelId = getProviderPanelId(provider.id);
+  const statusId = getProviderStatusElementId(provider.id);
+  const fields = Array.isArray(provider.setup?.fields) ? provider.setup.fields : [];
+  const description = provider.description
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">${escHtml(provider.description)}</div>`
+    : '';
+  const refreshButton = provider.runtime?.options?.supportsLiveModelDiscovery
+    ? `<button class="btn btn-sm" onclick="refreshProviderModels('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>`
+    : '';
+  return `<div id="${panelId}" style="display:none"><div class="right-section-title" style="margin-bottom:8px">${escHtml(provider.name)}</div>${description}${fields.map(field => renderProviderField(provider, field)).join('')}<div style="display:flex;gap:8px;margin-top:10px">${refreshButton}<button class="btn btn-sm" onclick="testProviderConnection('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button></div><div id="${statusId}" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>`;
+}
+
+function renderProviderSelectors() {
+  const providers = getProviderCatalogItems();
+  if (!providers.length) return;
+  const providerOptionsHtml = providers.map(provider => `<option value="${escHtml(provider.id)}">${escHtml(provider.name)}</option>`).join('');
+  const primarySelect = document.getElementById('settings-llm-provider');
+  if (primarySelect) {
+    const current = primarySelect.value;
+    primarySelect.innerHTML = providerOptionsHtml;
+    if (current && providers.some(provider => provider.id === current)) primarySelect.value = current;
+  }
+  const sharedSelects = [
+    document.getElementById('agent-edit-provider'),
+    ...document.querySelectorAll('select[id^="amd-"][id$="-prov"]'),
+    ...document.querySelectorAll('select[id^="brain-"][id$="-prov"]'),
+  ].filter(Boolean);
+  sharedSelects.forEach((select) => {
+    const current = select.value;
+    select.innerHTML = `<option value="">— inherit / use primary —</option>${providers.map(provider => `<option value="${escHtml(provider.id)}">${escHtml(provider.name)}</option>`).join('')}`;
+    if (current && providers.some(provider => provider.id === current)) select.value = current;
+  });
+}
+
+function renderDynamicProviderPanels() {
+  const host = document.getElementById('prov-fields-dynamic');
+  if (!host) return;
+  const dynamicProviders = getProviderCatalogItems().filter(provider => !BUILTIN_PROVIDER_IDS.includes(provider.id));
+  host.innerHTML = dynamicProviders.map(provider => renderDynamicProviderPanel(provider)).join('');
+}
+
+async function ensureProviderCatalogUIReady() {
+  if (providerCatalogCache) return providerCatalogCache;
+  if (!providerCatalogPromise) {
+    providerCatalogPromise = api('/api/extensions/catalog?kind=provider')
+      .then((data) => {
+        const items = Array.isArray(data?.items) ? [...data.items] : [];
+        items.sort((a, b) => {
+          const rankDiff = providerSortRank(a.id) - providerSortRank(b.id);
+          if (rankDiff !== 0) return rankDiff;
+          return String(a.name || a.id).localeCompare(String(b.name || b.id));
+        });
+        providerCatalogCache = items;
+        renderProviderSelectors();
+        renderDynamicProviderPanels();
+        return items;
+      })
+      .catch((err) => {
+        console.warn('Failed to load provider catalog:', err);
+        providerCatalogCache = BUILTIN_PROVIDER_IDS.map(id => ({ id, name: id, setup: {}, runtime: {}, config: {} }));
+        renderProviderSelectors();
+        renderDynamicProviderPanels();
+        return providerCatalogCache;
+      });
+  }
+  return providerCatalogPromise;
+}
 
 function onProviderChange() {
   const provider = document.getElementById('settings-llm-provider').value;
-  // Show only the matching fields panel
-  PROVIDER_IDS.forEach(id => {
-    const el = document.getElementById('prov-fields-' + id);
+  getKnownProviderIds().forEach(id => {
+    const el = document.getElementById(getProviderPanelId(id));
     if (el) el.style.display = id === provider ? 'block' : 'none';
   });
   if (provider === 'openai') {
     refreshOpenAIModels(true).catch(() => {});
   } else if (provider === 'anthropic') {
     refreshAnthropicStatus().catch(() => {});
-  } else if (['ollama', 'lm_studio', 'llama_cpp'].includes(provider)) {
-    refreshProviderModels().catch(() => {});
+  } else if (provider !== 'openai_codex') {
+    refreshProviderModels(provider).catch(() => {});
   }
 }
 
 async function loadModelSettings() {
   try {
-    const data = await api('/api/settings/provider');
+    await ensureProviderCatalogUIReady();
+    const data = await api('/api/settings/provider', { timeoutMs: 8000 });
     const llm = data?.llm || { provider: 'ollama', providers: {} };
     const prov = llm.provider || 'ollama';
+    window._llmSettingsCache = llm;
+    window._llmSettingsLoadedToUI = true;
     const provSel = document.getElementById('settings-llm-provider');
     if (provSel) provSel.value = prov;
-    onProviderChange();
 
     const pc = llm.providers || {};
 
     // Populate each provider's fields from saved config
     const v = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
     v('settings-ollama-endpoint',  pc.ollama?.endpoint);
+    const primaryModelSel = document.getElementById('settings-primary-model');
+    const savedOllamaModel = String(pc.ollama?.model || '').trim();
+    if (primaryModelSel) {
+      primaryModelSel.dataset.savedValue = savedOllamaModel;
+      if (savedOllamaModel && !Array.from(primaryModelSel.options || []).find(o => o.value === savedOllamaModel)) {
+        primaryModelSel.innerHTML = `<option value="${escHtml(savedOllamaModel)}">${escHtml(savedOllamaModel)}</option>${primaryModelSel.innerHTML}`;
+      }
+      if (savedOllamaModel) primaryModelSel.value = savedOllamaModel;
+    }
     v('settings-llamacpp-endpoint', pc.llama_cpp?.endpoint);
     v('settings-llamacpp-model',    pc.llama_cpp?.model);
     v('settings-lmstudio-endpoint', pc.lm_studio?.endpoint);
     v('settings-lmstudio-model',    pc.lm_studio?.model);
     v('settings-openai-key',        pc.openai?.api_key);
     if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
-    if (pc.openai?.reasoning_effort) { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai.reasoning_effort; }
+    { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
     if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
-    if (pc.openai_codex?.reasoning_effort) { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex.reasoning_effort; }
+    { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex?.reasoning_effort || ''; }
     if (pc.anthropic?.model) { const s = document.getElementById('settings-anthropic-model'); if (s) s.value = pc.anthropic.model; }
     v('settings-perplexity-key',    pc.perplexity?.api_key);
     if (pc.perplexity?.model) { const s = document.getElementById('settings-perplexity-model'); if (s) s.value = pc.perplexity.model; }
-    if (pc.perplexity?.reasoning_effort) { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity.reasoning_effort; }
+    { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity?.reasoning_effort || ''; }
     v('settings-gemini-key',        pc.gemini?.api_key);
     if (pc.gemini?.model) { const s = document.getElementById('settings-gemini-model'); if (s) s.value = pc.gemini.model; }
     if (pc.anthropic) {
@@ -546,19 +1020,28 @@ async function loadModelSettings() {
       }
     }
 
-    // Check Codex OAuth status
-    await refreshCodexStatus();
-    // Check Anthropic auth status
-    await refreshAnthropicStatus();
+    getProviderCatalogItems()
+      .filter(item => !BUILTIN_PROVIDER_IDS.includes(item.id))
+      .forEach(item => applyDynamicProviderConfig(item.id, pc[item.id]));
 
-    // Refresh OpenAI model dropdown from current key when applicable
-    if (prov === 'openai') await refreshOpenAIModels(true);
+    // Auth/model probes can be slow on cold startup. Populate saved settings first,
+    // then let live status/model lists settle without blocking the Settings modal.
+    Promise.allSettled([
+      refreshCodexStatus(),
+      refreshAnthropicStatus(),
+      prov === 'openai' ? refreshOpenAIModels(true) : Promise.resolve(),
+    ]).catch(() => {});
 
-    // Auto-load model list for list-capable providers
-    if (['ollama', 'lm_studio', 'llama_cpp'].includes(prov)) await refreshProviderModels();
-    await loadAgentModelDefaults();
-    await loadBrainModelConfig();
-    await loadSessionCompactionSettings();
+    // Auto-load model list for list-capable providers in the background.
+    setTimeout(() => onProviderChange(), 0);
+    if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
+      window.applyReasoningPrefsFromProviderConfig(llm, prov);
+    }
+    Promise.allSettled([
+      loadAgentModelDefaults(),
+      loadBrainModelConfig(),
+      loadSessionCompactionSettings(),
+    ]).catch(() => {});
   } catch (e) {
     console.warn('loadModelSettings error:', e);
   }
@@ -584,50 +1067,70 @@ async function loadSessionCompactionSettings() {
   }
 }
 
-async function refreshProviderModels() {
-  const provider = document.getElementById('settings-llm-provider')?.value || 'ollama';
-  const msg = document.getElementById('provider-status-msg');
-  if (msg) msg.textContent = 'Loading models…';
+async function refreshProviderModels(providerOverride) {
+  const provider = providerOverride || document.getElementById('settings-llm-provider')?.value || 'ollama';
+  setProviderStatusMessage(provider, 'info', 'Loading models...');
   try {
+    if (!BUILTIN_PROVIDER_IDS.includes(provider)) {
+      const models = await fetchProviderModelsForPicker(provider, { refreshOpenAI: provider === 'openai', includeLive: true });
+      setProviderModelOptions(provider, models);
+      setProviderStatusMessage(
+        provider,
+        models.length ? 'success' : 'info',
+        models.length ? `${models.length} model(s) found.` : 'No models found. Check the provider connection and endpoint.'
+      );
+      return;
+    }
     const llm = buildProviderPayload();
     if (llm.provider !== provider) llm.provider = provider;
     const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
-    const models = (data?.models || []).map(m => typeof m === 'string' ? m : (m.name || String(m)));
-    const selects = ['settings-primary-model'];
-    selects.forEach((selId, i) => {
-      const sel = document.getElementById(selId);
-      if (!sel) return;
-      if (i === 0) {
-        sel.innerHTML = models.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
-        if (models.length) sel.value = models[0];
-      }
-    });
-    if (msg) msg.textContent = models.length ? `${models.length} model(s) found.` : 'No models found — is the server running?';
+    let models = (data?.models || []).map(m => typeof m === 'string' ? m : (m.name || String(m))).filter(Boolean);
+    const primarySel = document.getElementById('settings-primary-model');
+    if (provider === 'ollama' && primarySel) {
+      const preferredValue = String(primarySel.dataset.savedValue || primarySel.value || '').trim();
+      if (preferredValue && !models.includes(preferredValue)) models = [preferredValue, ...models];
+      primarySel.innerHTML = models.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
+      if (preferredValue && models.includes(preferredValue)) primarySel.value = preferredValue;
+      else if (models.length) primarySel.value = models[0];
+      delete primarySel.dataset.savedValue;
+    }
+    setProviderStatusMessage(
+      provider,
+      models.length ? 'success' : 'info',
+      models.length ? `${models.length} model(s) found.` : 'No models found. Check the provider connection and endpoint.'
+    );
   } catch (e) {
-    if (msg) msg.textContent = 'Failed to fetch models.';
+    setProviderStatusMessage(provider, 'error', e?.message || 'Failed to fetch models.');
   }
 }
 
-async function testProviderConnection() {
-  const provider = document.getElementById('settings-llm-provider').value;
-  const statusIds = { ollama: 'provider-status-msg', llama_cpp: 'provider-status-msg-llamacpp', lm_studio: 'provider-status-msg-lmstudio', openai: 'provider-status-msg-openai', openai_codex: 'codex-oauth-status', anthropic: 'anthropic-oauth-status', perplexity: 'provider-status-msg-perplexity', gemini: 'provider-status-msg-gemini' };
-  const msgId = statusIds[provider] || 'provider-status-msg';
-  const msg = document.getElementById(msgId);
-  if (msg) msg.textContent = 'Testing…';
+async function testProviderConnection(providerOverride) {
+  const provider = providerOverride || document.getElementById('settings-llm-provider').value;
+  setProviderStatusMessage(provider, 'info', 'Testing...');
 
   if (provider === 'openai') {
     const ok = await refreshOpenAIModels(false);
-    if (msg) msg.textContent = ok ? '? Connected' : (msg.textContent || '? Connection failed');
+    setProviderStatusMessage(provider, ok ? 'success' : 'error', ok ? 'Connected' : 'Connection failed');
     return;
   }
 
   try {
+    if (!BUILTIN_PROVIDER_IDS.includes(provider)) {
+      const llm = buildProviderPayload();
+      llm.provider = provider;
+      const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
+      if (!data?.success) throw new Error(data?.error || 'Connection failed');
+      const models = normalizeModelList(data?.models);
+      if (models.length) setProviderModelOptions(provider, uniqueStrings([...getProviderModelFallbacks(provider), ...models]));
+      setProviderStatusMessage(provider, 'success', models.length ? `Connected (${models.length} models available)` : 'Connected');
+      return;
+    }
     const llm = buildProviderPayload();
     if (llm.provider !== provider) llm.provider = provider;
     const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
-    if (msg) msg.textContent = data?.success ? '? Connected' : '? ' + (data?.error || 'Connection failed');
+    setProviderStatusMessage(provider, data?.success ? 'success' : 'error', data?.success ? 'Connected' : (data?.error || 'Connection failed'));
   } catch (e) {
-    if (msg) msg.textContent = '? ' + e.message;
+    setProviderStatusMessage(provider, 'error', e?.message || 'Connection failed');
   }
 }
 
@@ -646,29 +1149,29 @@ async function refreshOpenAIModels(silent = false) {
   const statusEl = document.getElementById('provider-status-msg-openai');
   const apiKey = document.getElementById('settings-openai-key')?.value?.trim() || '';
   if (!apiKey) {
-    if (!silent && statusEl) statusEl.textContent = 'Enter API key first.';
+    if (!silent) setSettingsStatus(statusEl, 'info', 'Enter API key first.');
     return false;
   }
-  if (!silent && statusEl) statusEl.textContent = 'Fetching model list…';
+  if (!silent) setSettingsStatus(statusEl, 'info', 'Fetching model list…');
   try {
     const data = await api('/api/openai/models', { method: 'POST', body: JSON.stringify({ api_key: apiKey }) });
     if (!data?.success) {
-      if (statusEl) statusEl.textContent = '? ' + (data?.error || 'Failed to fetch models');
+      setSettingsStatus(statusEl, 'error', data?.error || 'Failed to fetch models');
       return false;
     }
     const models = (data?.models || []).map(m => typeof m === 'string' ? m : (m.name || String(m)));
     updateOpenAIModelDropdown(models);
-    if (statusEl) statusEl.textContent = models.length ? `? ${models.length} model(s) available` : '? Connected';
+    setSettingsStatus(statusEl, models.length ? 'success' : 'info', models.length ? `${models.length} model(s) available` : 'Connected');
     return true;
   } catch (e) {
-    if (statusEl) statusEl.textContent = '? ' + e.message;
+    setSettingsStatus(statusEl, 'error', e.message);
     return false;
   }
 }
 
 // Build the llm config object from current UI state
-function buildProviderPayload() {
-  const provider = document.getElementById('settings-llm-provider')?.value || 'ollama';
+function buildProviderPayload(providerOverride) {
+  const provider = providerOverride || document.getElementById('settings-llm-provider')?.value || 'ollama';
   const providers = {};
   providers.ollama    = { endpoint: document.getElementById('settings-ollama-endpoint')?.value  || 'http://localhost:11434', model: document.getElementById('settings-primary-model')?.value || 'qwen3:4b' };
   providers.llama_cpp = { endpoint: document.getElementById('settings-llamacpp-endpoint')?.value || 'http://localhost:8080',  model: document.getElementById('settings-llamacpp-model')?.value  || '' };
@@ -696,6 +1199,11 @@ function buildProviderPayload() {
     api_key: document.getElementById('settings-gemini-key')?.value || '',
     model: document.getElementById('settings-gemini-model')?.value || 'gemini-2.5-pro',
   };
+  for (const item of getProviderCatalogItems()) {
+    if (BUILTIN_PROVIDER_IDS.includes(item.id)) continue;
+    const config = collectDynamicProviderConfig(item.id, provider);
+    if (config) providers[item.id] = config;
+  }
   return { provider, providers };
 }
 
@@ -722,24 +1230,24 @@ let _codexPollTimer = null;
 
 async function startCodexOAuth() {
   const statusEl = document.getElementById('codex-oauth-status');
-  if (statusEl) statusEl.textContent = 'Starting…';
+  setSettingsStatus(statusEl, 'info', 'Starting…');
   if (_codexPollTimer) { clearTimeout(_codexPollTimer); _codexPollTimer = null; }
   try {
     const data = await api('/api/auth/openai/start', { method: 'POST', body: '{}' });
     if (data?.error) {
-      if (statusEl) statusEl.textContent = '✗ ' + data.error;
+      setSettingsStatus(statusEl, 'error', data.error);
       return;
     }
     if (data?.authUrl) {
       // Open in system browser — Electron routes window.open via shell.openExternal
       window.open(data.authUrl, '_blank');
-      if (statusEl) statusEl.textContent = 'Waiting for browser authorization…';
+      setSettingsStatus(statusEl, 'info', 'Waiting for browser authorization…');
       _codexPollTimer = setTimeout(_pollCodexOAuth, 2000);
     } else {
-      if (statusEl) statusEl.textContent = '✗ No auth URL returned';
+      setSettingsStatus(statusEl, 'error', 'No auth URL returned');
     }
   } catch (e) {
-    if (statusEl) statusEl.textContent = '✗ ' + e.message;
+    setSettingsStatus(statusEl, 'error', e.message);
   }
 }
 
@@ -750,10 +1258,10 @@ async function _pollCodexOAuth() {
     const data = await api('/api/auth/openai/poll');
     if (data?.done) {
       if (data.success) {
-        if (statusEl) statusEl.textContent = '';
+        setSettingsStatus(statusEl, 'info', '');
         await refreshCodexStatus();
       } else {
-        if (statusEl) statusEl.textContent = '✗ ' + (data.error || 'OAuth failed');
+        setSettingsStatus(statusEl, 'error', data.error || 'OAuth failed');
       }
     } else {
       // Still waiting — poll again
@@ -769,17 +1277,17 @@ async function submitManualCodexUrl() {
   const url = document.getElementById('codex-manual-url')?.value?.trim();
   if (!url) return;
   const statusEl = document.getElementById('codex-oauth-status');
-  if (statusEl) statusEl.textContent = 'Exchanging token…';
+  setSettingsStatus(statusEl, 'info', 'Exchanging token…');
   try {
     const data = await api('/api/auth/openai/manual', { method: 'POST', body: JSON.stringify({ url }) });
     if (data?.success) {
-      if (statusEl) statusEl.textContent = '';
+      setSettingsStatus(statusEl, 'info', '');
       await refreshCodexStatus();
     } else {
-      if (statusEl) statusEl.textContent = '? ' + (data?.error || 'Failed');
+      setSettingsStatus(statusEl, 'error', data?.error || 'Failed');
     }
   } catch (e) {
-    if (statusEl) statusEl.textContent = '? ' + e.message;
+    setSettingsStatus(statusEl, 'error', e.message);
   }
 }
 
@@ -816,42 +1324,49 @@ async function connectAnthropic() {
   const tokenInput = document.getElementById('settings-anthropic-token');
   const token = (tokenInput?.value || '').trim();
   if (!token) {
-    if (statusEl) statusEl.textContent = 'Paste your setup-token first. Run `claude setup-token` in your terminal.';
+    setSettingsStatus(statusEl, 'info', 'Paste your setup-token first. Run `claude setup-token` in your terminal.');
     return;
   }
-  if (statusEl) statusEl.textContent = 'Connecting…';
+  setSettingsStatus(statusEl, 'info', 'Connecting…');
   try {
     const data = await api('/api/auth/anthropic/setup-token', {
       method: 'POST',
       body: JSON.stringify({ token }),
     });
     if (data?.success) {
-      if (statusEl) statusEl.textContent = '';
+      setSettingsStatus(statusEl, 'info', '');
       if (tokenInput) tokenInput.value = '';
       await refreshAnthropicStatus();
       addProcessEntry('final', 'Anthropic connected.');
     } else {
-      if (statusEl) statusEl.textContent = '✗ ' + (data?.error || 'Invalid token');
+      setSettingsStatus(statusEl, 'error', data?.error || 'Invalid token');
     }
   } catch (e) {
-    if (statusEl) statusEl.textContent = '✗ ' + e.message;
+    setSettingsStatus(statusEl, 'error', e.message);
   }
 }
 
 async function testAnthropicConnection() {
   const statusEl = document.getElementById('anthropic-oauth-status');
-  if (statusEl) statusEl.textContent = 'Testing…';
+  setSettingsStatus(statusEl, 'info', 'Testing…');
   try {
     const data = await api('/api/auth/anthropic/test', { method: 'POST', body: '{}' });
     if (data?.success) {
-      if (statusEl) statusEl.textContent = '✓ Connected — API responded successfully';
-      statusEl.style.color = '#166534';
-      setTimeout(() => { if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; } }, 4000);
+      if (statusEl) statusEl.style.color = '#166534';
+      setSettingsStatus(statusEl, 'success', 'Connected — API responded successfully');
+      setTimeout(() => {
+        if (statusEl) {
+          setSettingsStatus(statusEl, 'info', '');
+          statusEl.style.color = '';
+        }
+      }, 4000);
     } else {
-      if (statusEl) { statusEl.textContent = '✗ ' + (data?.error || 'Connection failed'); statusEl.style.color = '#991b1b'; }
+      if (statusEl) statusEl.style.color = '#991b1b';
+      setSettingsStatus(statusEl, 'error', data?.error || 'Connection failed');
     }
   } catch (e) {
-    if (statusEl) { statusEl.textContent = '✗ ' + e.message; statusEl.style.color = '#991b1b'; }
+    if (statusEl) statusEl.style.color = '#991b1b';
+    setSettingsStatus(statusEl, 'error', e.message);
   }
 }
 
@@ -871,27 +1386,32 @@ async function refreshOllamaModels() { await refreshProviderModels(); }
 
 async function openSettings(tab) {
   document.getElementById('settings-modal').style.display = 'flex';
+  const saveBtn = document.getElementById('settings-save-btn');
+  if (saveBtn) {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save';
+  }
   setSettingsTab(tab || window.settingsTab || 'system');
   try {
-    const status = await api('/api/status');
+    const status = await api('/api/status', { timeoutMs: 5000 });
     document.getElementById('settings-runtime-model').textContent = status.currentModel || '-';
     document.getElementById('settings-runtime-gateway').textContent = status.gateway || '-';
     document.getElementById('settings-runtime-ollama').textContent = status.ollama ? 'Online' : 'Offline';
   } catch {}
   try {
-    const paths = await api('/api/settings/paths');
+    const paths = await api('/api/settings/paths', { timeoutMs: 5000 });
     document.getElementById('settings-workspace-path').value = paths.workspace_path || '';
     document.getElementById('settings-allowed-paths').value = (paths.allowed_paths || []).join('\n');
     document.getElementById('settings-blocked-paths').value = (paths.blocked_paths || []).join('\n');
   } catch {}
   try {
-    const s = await api('/api/settings/search');
+    const s = await api('/api/settings/search', { timeoutMs: 5000 });
     document.getElementById('settings-provider').value = s.preferred_provider || 'tavily';
     document.getElementById('settings-search-rigor').value = s.search_rigor || 'verified';
     // Keys are loaded via the Credentials tab — not here
   } catch {}
   try {
-    const p = await api('/api/settings/agent');
+    const p = await api('/api/settings/agent', { timeoutMs: 5000 });
     document.getElementById('settings-force-web-fresh').checked = p.force_web_for_fresh !== false;
     document.getElementById('settings-memory-fallback').checked = p.memory_fallback_on_search_failure !== false;
     document.getElementById('settings-auto-store-web-facts').checked = p.auto_store_web_facts !== false;
@@ -902,8 +1422,172 @@ async function openSettings(tab) {
 }
 
 function closeSettings() {
+  const saveBtn = document.getElementById('settings-save-btn');
+  if (saveBtn) {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save';
+  }
   document.getElementById('settings-modal').style.display = 'none';
   channelsStatusLoaded = false;
+}
+
+// -- Installed Apps panel --------------------------------------------------------------------------------------------------------
+let _installedAppsData = [];
+let _installedAppsGeneratedAt = 0;
+let _installedAppsQuery = '';
+let _installedAppsTotal = 0;
+
+function setInstalledAppsStatus(text, color) {
+  const el = document.getElementById('installed-apps-status');
+  if (!el) return;
+  el.style.color = color || 'var(--muted)';
+  el.textContent = text || '';
+}
+
+function updateInstalledAppsMeta() {
+  const meta = document.getElementById('installed-apps-meta');
+  const count = document.getElementById('installed-apps-count');
+  if (meta) {
+    const scanned = _installedAppsGeneratedAt ? new Date(_installedAppsGeneratedAt).toLocaleString() : '—';
+    meta.textContent = `Last scan: ${scanned}${_installedAppsQuery ? ` • query: ${_installedAppsQuery}` : ''}`;
+  }
+  if (count) {
+    count.textContent = `${_installedAppsData.length} shown${_installedAppsTotal ? ` of ${_installedAppsTotal}` : ''}`;
+  }
+}
+
+function refreshInstalledAppAliasOptions() {
+  const sel = document.getElementById('installed-app-alias-app');
+  if (!sel) return;
+  const previous = sel.value;
+  sel.innerHTML = '<option value="">Select an app…</option>';
+  _installedAppsData
+    .slice()
+    .sort((a, b) => String(a.displayName || '').localeCompare(String(b.displayName || '')))
+    .forEach((app) => {
+      const opt = document.createElement('option');
+      opt.value = app.id;
+      opt.textContent = `${app.displayName} (${app.id})`;
+      sel.appendChild(opt);
+    });
+  sel.value = previous;
+}
+
+function renderInstalledAppsList() {
+  const container = document.getElementById('installed-apps-list');
+  if (!container) return;
+  if (!_installedAppsData.length) {
+    container.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No installed apps found for the current filter.</div>';
+    updateInstalledAppsMeta();
+    refreshInstalledAppAliasOptions();
+    return;
+  }
+
+  const html = _installedAppsData.map((app) => {
+    const methods = (app.launchMethods || []).map((method) => method.type).join(', ') || '—';
+    const aliases = (app.aliases || []).slice(0, 10).map((alias) =>
+      `<span style="display:inline-flex;align-items:center;padding:2px 7px;border-radius:999px;background:var(--bg-soft);border:1px solid var(--line);font-size:11px;color:var(--text)">${escHtml(alias)}</span>`
+    ).join(' ');
+    const processHints = (app.processNameHints || []).slice(0, 6).join(', ');
+    const windowHints = (app.windowTitleHints || []).slice(0, 4).join(', ');
+    const sources = (app.installSources || []).join(', ');
+    return `
+      <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#fff">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(app.displayName || 'Unnamed App')}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px"><code>${escHtml(app.id || '')}</code></div>
+          </div>
+          <div style="font-size:11px;color:var(--muted)">Launch: ${escHtml(methods)}</div>
+        </div>
+        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">${aliases || '<span style="font-size:11px;color:var(--muted)">No aliases</span>'}</div>
+        ${processHints ? `<div style="margin-top:8px;font-size:11px;color:var(--muted)">Process hints: ${escHtml(processHints)}</div>` : ''}
+        ${windowHints ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">Window hints: ${escHtml(windowHints)}</div>` : ''}
+        ${sources ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">Sources: ${escHtml(sources)}</div>` : ''}
+        ${app.executablePath ? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">Exe: <code>${escHtml(app.executablePath)}</code></div>` : ''}
+        ${app.shortcutPath ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">Shortcut: <code>${escHtml(app.shortcutPath)}</code></div>` : ''}
+        ${app.appUserModelId ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">AppUserModelID: <code>${escHtml(app.appUserModelId)}</code></div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  container.innerHTML = html;
+  updateInstalledAppsMeta();
+  refreshInstalledAppAliasOptions();
+}
+
+async function loadInstalledAppsPanel(opts = {}) {
+  const refresh = !!opts.refresh;
+  const queryInput = document.getElementById('installed-apps-query');
+  const query = String(opts.query !== undefined ? opts.query : (queryInput?.value || '')).trim();
+  _installedAppsQuery = query;
+  setInstalledAppsStatus(refresh ? 'Rescanning installed apps…' : 'Loading installed apps…', 'var(--muted)');
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', query ? '100' : '400');
+    if (query) params.set('filter', query);
+    if (refresh) params.set('refresh', '1');
+    const data = await api(`/api/installed-apps?${params.toString()}`);
+    _installedAppsData = data.apps || [];
+    _installedAppsGeneratedAt = Number(data.generatedAt || 0);
+    _installedAppsTotal = Number(data.total || _installedAppsData.length || 0);
+    renderInstalledAppsList();
+    setInstalledAppsStatus(refresh ? 'Scan complete.' : '', refresh ? 'var(--ok)' : 'var(--muted)');
+  } catch (err) {
+    const container = document.getElementById('installed-apps-list');
+    if (container) container.innerHTML = `<div style="color:var(--err);font-size:12px;padding:8px 0">${escHtml(err.message || 'Failed to load installed apps.')}</div>`;
+    setInstalledAppsStatus('Failed to load apps.', 'var(--err)');
+  }
+}
+
+async function searchInstalledAppsUI() {
+  await loadInstalledAppsPanel({ query: document.getElementById('installed-apps-query')?.value || '' });
+}
+
+async function clearInstalledAppsSearch() {
+  const input = document.getElementById('installed-apps-query');
+  if (input) input.value = '';
+  await loadInstalledAppsPanel({ query: '' });
+}
+
+async function addInstalledAppAliasUI() {
+  const appId = document.getElementById('installed-app-alias-app')?.value?.trim();
+  const alias = document.getElementById('installed-app-alias-input')?.value?.trim();
+  if (!appId || !alias) {
+    setInstalledAppsStatus('Pick an app and enter an alias first.', 'var(--err)');
+    return;
+  }
+  try {
+    await api('/api/installed-apps/aliases', {
+      method: 'POST',
+      body: JSON.stringify({ app_id: appId, alias }),
+    });
+    setInstalledAppsStatus('Alias saved.', 'var(--ok)');
+    document.getElementById('installed-app-alias-input').value = '';
+    await loadInstalledAppsPanel({ query: _installedAppsQuery });
+  } catch (err) {
+    setInstalledAppsStatus(err.message || 'Failed to save alias.', 'var(--err)');
+  }
+}
+
+async function deleteInstalledAppAliasUI() {
+  const appId = document.getElementById('installed-app-alias-app')?.value?.trim();
+  const alias = document.getElementById('installed-app-alias-input')?.value?.trim();
+  if (!appId || !alias) {
+    setInstalledAppsStatus('Pick an app and enter the alias to remove.', 'var(--err)');
+    return;
+  }
+  try {
+    await api('/api/installed-apps/aliases', {
+      method: 'DELETE',
+      body: JSON.stringify({ app_id: appId, alias }),
+    });
+    setInstalledAppsStatus('Alias removed.', 'var(--ok)');
+    document.getElementById('installed-app-alias-input').value = '';
+    await loadInstalledAppsPanel({ query: _installedAppsQuery });
+  } catch (err) {
+    setInstalledAppsStatus(err.message || 'Failed to remove alias.', 'var(--err)');
+  }
 }
 
 // -- Keyboard Shortcuts panel ---------------------------------------------------------------------------------------------------
@@ -1060,7 +1744,7 @@ function getAgentFromForm() {
       if (!prov) return mdl; // bare model, use global provider
       return mdl ? `${prov}/${mdl}` : ''; // must include model when provider is selected
     })(),
-    default: document.getElementById('agent-edit-default').checked,
+    default: document.getElementById('agent-edit-id').value.trim() === 'main',
   };
   if (workspaceValue && !isTeamScoped) agent.workspace = workspaceValue;
   if (Number.isFinite(maxSteps) && maxSteps > 0) agent.maxSteps = Math.floor(maxSteps);
@@ -1095,7 +1779,14 @@ function setAgentForm(agent) {
     }
   })();
   document.getElementById('agent-edit-max-steps').value = (a.maxSteps || '') + '';
-  document.getElementById('agent-edit-default').checked = a.default === true;
+  const defaultInput = document.getElementById('agent-edit-default');
+  if (defaultInput) {
+    defaultInput.checked = String(a.id || '') === 'main';
+    defaultInput.disabled = true;
+    defaultInput.title = String(a.id || '') === 'main'
+      ? 'Main agent is always the default.'
+      : 'Only the main agent can be the default.';
+  }
   const modelStatus = document.getElementById('agent-model-status');
   if (modelStatus) {
     const source = String(a.effectiveModelSource || '').replace(/^agent_model_defaults\./, 'default: ');
@@ -1128,7 +1819,7 @@ function renderAgentsList() {
   }
 
   // -- Categorise agents ------------------------------------------------------
-  const mainAgent = window.agentsConfigList.find(a => a.id === 'main') || window.agentsConfigList.find(a => a.default === true) || window.agentsConfigList[0];
+  const mainAgent = window.agentsConfigList.find(a => a.id === 'main') || window.agentsConfigList[0];
 
   // Build agent lookup by id
   const agentById = {};
@@ -1217,7 +1908,7 @@ function renderAgentsList() {
     const selected = a.id === window.selectedAgentId;
     const lastRun = a.lastRun?.finishedAt ? new Date(a.lastRun.finishedAt).toLocaleString() : 'never';
     const heartbeat = a.lastHeartbeatAt ? new Date(a.lastHeartbeatAt).toLocaleString() : 'never';
-    const defaultBadge = a.default ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#eaf2ff;color:#0d4faf;border:1px solid #bdd3f6">default</span>' : '';
+    const defaultBadge = isMainAgentEntry(a) ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#eaf2ff;color:#0d4faf;border:1px solid #bdd3f6">default</span>' : '';
     const dynamicBadge = a.subagentType === 'dynamic' ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0">dynamic</span>' : '';
     const managerBadge = a.isTeamManager ? '<span style="font-size:10px;padding:2px 5px;border-radius:999px;background:#fffbeb;color:#92400e;border:1px solid #fde68a">manager</span>' : '';
     const modelSource = String(a.effectiveModelSource || '').replace(/^agent_model_defaults\./, 'default: ');
@@ -1274,6 +1965,10 @@ function findSelectedAgent() {
   return window.agentsConfigList.find(a => a.id === window.selectedAgentId) || null;
 }
 
+function isMainAgentEntry(agent) {
+  return String(agent?.id || '') === 'main';
+}
+
 function agentFormNew() {
   window.selectedAgentId = '';
   setAgentForm({
@@ -1297,14 +1992,14 @@ async function selectAgent(id) {
   window.selectedAgentId = id;
   const selected = findSelectedAgent();
   setAgentForm(selected);
-  // Show/hide Delete button — default agent is protected
+  // Show/hide Delete button — main agent is protected
   const deleteBtn = document.getElementById('agent-delete-btn');
   if (deleteBtn) {
-    const isDefault = selected?.default === true;
-    deleteBtn.disabled = isDefault;
-    deleteBtn.title = isDefault ? 'Cannot delete the default agent' : '';
-    deleteBtn.style.opacity = isDefault ? '0.4' : '1';
-    deleteBtn.style.cursor = isDefault ? 'not-allowed' : 'pointer';
+    const isProtected = isMainAgentEntry(selected);
+    deleteBtn.disabled = isProtected;
+    deleteBtn.title = isProtected ? 'Cannot delete the main agent' : '';
+    deleteBtn.style.opacity = isProtected ? '0.4' : '1';
+    deleteBtn.style.cursor = isProtected ? 'not-allowed' : 'pointer';
   }
   renderAgentsList();
   // Force CodeMirror refresh on every agent switch — fixes blank editor for sub-agents
@@ -1367,7 +2062,7 @@ async function loadAgentModelOptions(preserveSelected = false) {
   // Static fallback model lists per provider (used when live fetch returns nothing)
   const STATIC_MODEL_FALLBACKS = {
     openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-    openai_codex: ['gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+    openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
     anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -1489,12 +2184,12 @@ async function loadAgentsTab() {
   // teams-view canvas appear while the Settings modal is open.
   if (!Array.isArray(window.teamsData) || window.teamsData.length === 0) {
     try {
-      const _td = await api('/api/teams');
+      const _td = await api('/api/teams', { timeoutMs: 5000 });
       window.teamsData = (_td.teams || []);
     } catch {}
   }
   try {
-    const data = await api('/api/agents');
+    const data = await api('/api/agents', { timeoutMs: 8000 });
     window.agentsConfigList = Array.isArray(data?.agents) ? data.agents : [];
     // Prefer selecting main agent so newly-created subagents do not steal focus
     const defaultAgentId = window.agentsConfigList.find(a => a.id === 'main')?.id
@@ -1510,20 +2205,21 @@ async function loadAgentsTab() {
     // Sync delete button protection state
     const deleteBtn = document.getElementById('agent-delete-btn');
     if (deleteBtn) {
-      const isDefault = selected?.default === true;
-      deleteBtn.disabled = isDefault;
-      deleteBtn.title = isDefault ? 'Cannot delete the default agent' : '';
-      deleteBtn.style.opacity = isDefault ? '0.4' : '1';
-      deleteBtn.style.cursor = isDefault ? 'not-allowed' : 'pointer';
+      const isProtected = isMainAgentEntry(selected);
+      deleteBtn.disabled = isProtected;
+      deleteBtn.title = isProtected ? 'Cannot delete the main agent' : '';
+      deleteBtn.style.opacity = isProtected ? '0.4' : '1';
+      deleteBtn.style.cursor = isProtected ? 'not-allowed' : 'pointer';
     }
     if (selected) {
     // Refresh CodeMirror so it doesn't show blank on tab re-open
     if (window.agentMdEditor) { window.agentMdEditor.setValue(''); window.agentMdEditor.refresh(); }
     // Load model options for the selected agent's provider
     const provEl = document.getElementById('agent-edit-provider');
-    if (provEl && provEl.value) await loadAgentModelOptions(true);
-    await loadSelectedAgentMd();
-      await loadAgentRunHistory();
+    if (provEl && provEl.value) loadAgentModelOptions(true).catch(() => {});
+    loadSelectedAgentMd().catch(() => {});
+    loadAgentRunHistory().catch(() => {});
+    if (!isSelectedMainAgent()) loadAgentHeartbeat().catch(() => {});
     } else {
       agentFormNew();
     }
@@ -1570,10 +2266,10 @@ async function saveAgentFromForm() {
 
 async function deleteSelectedAgent() {
   if (!window.selectedAgentId) return;
-  // Guard: default agent is protected
+  // Guard: main agent is protected
   const current = window.agentsConfigList.find(a => a.id === window.selectedAgentId);
-  if (current?.default === true) {
-    alert('The default agent cannot be deleted. To remove it, first mark another agent as default and save.');
+  if (isMainAgentEntry(current)) {
+    alert('The main agent cannot be deleted.');
     return;
   }
   if (!confirm(`Delete agent "${window.selectedAgentId}"?`)) return;
@@ -1606,7 +2302,8 @@ function applyAgentEditorLayout() {
   const noteEl = document.getElementById('agent-md-team-note');
   const badgeEl = document.getElementById('agent-md-team-badge');
 
-  if (heartbeatCard) heartbeatCard.style.display = 'none';
+  // Show heartbeat card for non-main subagents; hide for main agent
+  if (heartbeatCard) heartbeatCard.style.display = isMain ? 'none' : '';
   if (promptCard) promptCard.style.order = '1';
 
   if (isMain) {
@@ -1623,7 +2320,7 @@ function applyAgentEditorLayout() {
       noteEl.style.display = 'block';
       noteEl.innerHTML = 'This subagent prompt comes from <strong>system_prompt.md</strong>. Recurring work is configured from Scheduled Tasks by assigning this subagent.';
     }
-    if (badgeEl) badgeEl.style.display = 'inline-block';
+    if (badgeEl) badgeEl.style.display = 'inline-flex';
   }
 }
 
@@ -1650,7 +2347,7 @@ async function loadSelectedAgentMd() {
   const noteEl = document.getElementById('agent-md-team-note');
   const saveBtn = document.getElementById('agent-md-save-btn');
   if (titleEl) titleEl.textContent = label;
-  if (badgeEl) badgeEl.style.display = 'inline-block';
+  if (badgeEl) badgeEl.style.display = 'inline-flex';
   if (noteEl) noteEl.style.display = 'block';
   if (saveBtn) saveBtn.textContent = saveLabel;
 
@@ -1957,58 +2654,66 @@ async function saveSettings() {
   if (btn?.disabled) return; // prevent double-submit
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
-  const workspace_path = document.getElementById('settings-workspace-path').value.trim();
-  const allowed_paths = document.getElementById('settings-allowed-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
-  const blocked_paths = document.getElementById('settings-blocked-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
-  const payload = {
-    preferred_provider: document.getElementById('settings-provider')?.value || '',
-    search_rigor: document.getElementById('settings-search-rigor')?.value || 'verified',
-    tavily_api_key: document.getElementById('cred-tavily-key')?.value.trim() || '',
-    google_api_key: document.getElementById('cred-google-key')?.value.trim() || '',
-    google_cx: document.getElementById('cred-google-cx')?.value.trim() || '',
-    brave_api_key: document.getElementById('cred-brave-key')?.value.trim() || '',
-  };
-  const policyPayload = {
-    force_web_for_fresh: document.getElementById('settings-force-web-fresh')?.checked ?? true,
-    memory_fallback_on_search_failure: document.getElementById('settings-memory-fallback')?.checked ?? true,
-    auto_store_web_facts: document.getElementById('settings-auto-store-web-facts')?.checked ?? true,
-    natural_language_tool_router: document.getElementById('settings-nl-tool-router')?.checked ?? true,
-    retrieval_mode: document.getElementById('settings-retrieval-mode')?.value || 'standard',
-  };
-  const primaryModel = (document.getElementById('settings-primary-model') || {}).value || '';
-  const modelPayload = {
-    ollama_endpoint: (document.getElementById('settings-ollama-endpoint') || {}).value || 'http://localhost:11434',
-    primary: primaryModel,
-    roles: {
-      manager: primaryModel,
-      executor: primaryModel,
-      verifier: primaryModel,
-    }
-  };
-  const providerPayload = buildProviderPayload();
-  const sessionPayload = {
-    rollingCompactionEnabled: document.getElementById('settings-rolling-compaction-enabled')?.checked !== false,
-    rollingCompactionMessageCount: Number(document.getElementById('settings-rolling-compaction-count')?.value || 20),
-    rollingCompactionToolTurns: Number(document.getElementById('settings-rolling-compaction-tools')?.value || 5),
-    rollingCompactionSummaryMaxWords: Number(document.getElementById('settings-rolling-compaction-words')?.value || 220),
-    rollingCompactionModel: (document.getElementById('settings-rolling-compaction-model')?.value || '').trim(),
-  };
   const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save'; } };
   // Safety valve — re-enable button after 15s no matter what
   const safetyTimer = setTimeout(resetBtn, 15000);
   try {
-    await Promise.all([
-      api('/api/settings/paths',    { method: 'POST', body: JSON.stringify({ workspace_path, allowed_paths, blocked_paths }) }),
-      api('/api/settings/search',   { method: 'POST', body: JSON.stringify(payload) }),
-      api('/api/settings/agent',    { method: 'POST', body: JSON.stringify(policyPayload) }),
-      api('/api/settings/model',    { method: 'POST', body: JSON.stringify(modelPayload) }),
-      api('/api/settings/provider', { method: 'POST', body: JSON.stringify({ llm: providerPayload }) }),
-      api('/api/settings/session',  { method: 'POST', body: JSON.stringify(sessionPayload) }),
-    ]);
+    const workspace_path = document.getElementById('settings-workspace-path').value.trim();
+    const allowed_paths = document.getElementById('settings-allowed-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const blocked_paths = document.getElementById('settings-blocked-paths').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const payload = {
+      preferred_provider: document.getElementById('settings-provider')?.value || '',
+      search_rigor: document.getElementById('settings-search-rigor')?.value || 'verified',
+      tavily_api_key: document.getElementById('cred-tavily-key')?.value.trim() || '',
+      google_api_key: document.getElementById('cred-google-key')?.value.trim() || '',
+      google_cx: document.getElementById('cred-google-cx')?.value.trim() || '',
+      brave_api_key: document.getElementById('cred-brave-key')?.value.trim() || '',
+    };
+    const policyPayload = {
+      force_web_for_fresh: document.getElementById('settings-force-web-fresh')?.checked ?? true,
+      memory_fallback_on_search_failure: document.getElementById('settings-memory-fallback')?.checked ?? true,
+      auto_store_web_facts: document.getElementById('settings-auto-store-web-facts')?.checked ?? true,
+      natural_language_tool_router: document.getElementById('settings-nl-tool-router')?.checked ?? true,
+      retrieval_mode: document.getElementById('settings-retrieval-mode')?.value || 'standard',
+    };
+    const primaryModel = (document.getElementById('settings-primary-model') || {}).value || '';
+    const modelPayload = {
+      ollama_endpoint: (document.getElementById('settings-ollama-endpoint') || {}).value || 'http://localhost:11434',
+      primary: primaryModel,
+      roles: {
+        manager: primaryModel,
+        executor: primaryModel,
+        verifier: primaryModel,
+      }
+    };
+    const providerPayload = buildProviderPayload();
+    const sessionPayload = {
+      rollingCompactionEnabled: document.getElementById('settings-rolling-compaction-enabled')?.checked !== false,
+      rollingCompactionMessageCount: Number(document.getElementById('settings-rolling-compaction-count')?.value || 20),
+      rollingCompactionToolTurns: Number(document.getElementById('settings-rolling-compaction-tools')?.value || 5),
+      rollingCompactionSummaryMaxWords: Number(document.getElementById('settings-rolling-compaction-words')?.value || 220),
+      rollingCompactionModel: (document.getElementById('settings-rolling-compaction-model')?.value || '').trim(),
+    };
+    await api('/api/settings/bulk', {
+      method: 'POST',
+      body: JSON.stringify({
+        paths: { workspace_path, allowed_paths, blocked_paths },
+        search: payload,
+        agent_policy: policyPayload,
+        model: modelPayload,
+        llm: providerPayload,
+        session: sessionPayload,
+      }),
+    });
+    if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
+      window.applyReasoningPrefsFromProviderConfig(providerPayload, providerPayload.provider);
+    }
     loadSearchSettingsSummary().catch(() => {});
+    loadCredFields().catch(() => {});
     quickSearchRigor = payload.search_rigor || quickSearchRigor;
     updateQuickModeUI();
     addProcessEntry('final', 'Settings saved.');
+    resetBtn();
     closeSettings();
   } catch (err) {
     addProcessEntry('error', `Failed to save settings: ${err.message}`);
@@ -2428,6 +3133,7 @@ function showIntegMsg(msg, color, bg) {
 
 // ─── Expose on window for HTML onclick handlers ────────────────
 window._updateHeartbeatMdPreview = _updateHeartbeatMdPreview;
+window.addInstalledAppAliasUI = addInstalledAppAliasUI;
 window.addSiteShortcut = addSiteShortcut;
 window.agentFormNew = agentFormNew;
 window.applyHeartbeatSettingsToForm = applyHeartbeatSettingsToForm;
@@ -2436,6 +3142,7 @@ window.closeSettings = closeSettings;
 window.confirmMemory = confirmMemory;
 window.connectMCPServer = connectMCPServer;
 window.copyWebhookCurl = copyWebhookCurl;
+window.deleteInstalledAppAliasUI = deleteInstalledAppAliasUI;
 window.deleteMCPServer = deleteMCPServer;
 window.deleteSelectedAgent = deleteSelectedAgent;
 window.deleteSiteShortcutUI = deleteSiteShortcutUI;
@@ -2481,7 +3188,7 @@ const AMD_SLOTS = {
 
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -2533,6 +3240,12 @@ async function loadAgentModelDefaults() {
   try {
     const data = await api('/api/settings/agent-model-defaults');
     const d = data?.defaults || {};
+    for (const slotId of Object.keys(AMD_SLOTS)) {
+      const provSel  = document.getElementById('amd-' + slotId + '-prov');
+      const modelSel = document.getElementById('amd-' + slotId + '-model');
+      if (provSel) provSel.value = '';
+      if (modelSel) modelSel.innerHTML = '<option value="">select provider first</option>';
+    }
     for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
       const val = d[field] || '';
       if (!val) continue;
@@ -2561,7 +3274,7 @@ async function saveAgentModelDefaults() {
   for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
     const prov  = document.getElementById('amd-' + slotId + '-prov')?.value?.trim()  || '';
     const model = document.getElementById('amd-' + slotId + '-model')?.value?.trim() || '';
-    if (prov && model) payload[field] = prov + '/' + model;
+    payload[field] = (prov && model) ? `${prov}/${model}` : '';
   }
   const status = document.getElementById('amd-status');
   const btn = document.querySelector('[onclick="saveAgentModelDefaults()"]');
@@ -2571,10 +3284,17 @@ async function saveAgentModelDefaults() {
   const safetyTimer = setTimeout(resetBtn, 15000);
   try {
     await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify(payload) });
-    if (status) { status.style.color='var(--ok)'; status.textContent='✓ Saved'; setTimeout(()=>{status.textContent='';},2500); }
+    if (status) {
+      status.style.color = 'var(--ok)';
+      setSettingsStatus(status, 'success', 'Saved');
+      setTimeout(() => { setSettingsStatus(status, 'info', ''); }, 2500);
+    }
     resetBtn();
   } catch(e) {
-    if (status) { status.style.color='var(--err)'; status.textContent='✗ '+e.message; }
+    if (status) {
+      status.style.color = 'var(--err)';
+      setSettingsStatus(status, 'error', e.message);
+    }
     resetBtn();
   } finally {
     clearTimeout(safetyTimer);
@@ -2598,7 +3318,7 @@ async function brainProviderChange(type) {
       models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
       if (!models.length) models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
     } else if (prov === 'openai_codex') {
-      models = ['gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'];
+      models = ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'];
     } else if (prov === 'perplexity') {
       models = ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'];
     } else if (prov === 'gemini') {
@@ -2620,7 +3340,9 @@ async function loadBrainModelConfig() {
   try {
     const data = await api('/api/brain/status');
     for (const type of ['thought', 'dream']) {
-      const raw = type === 'thought' ? (data?.thoughtModel || '') : (data?.dreamModel || '');
+      const raw = type === 'thought'
+        ? (data?.thoughtModel || data?.thought?.model || data?.thought?.thoughtModel || '')
+        : (data?.dreamModel || data?.dream?.model || data?.dream?.dreamModel || '');
       const slashIdx = raw.indexOf('/');
       const prov  = slashIdx > 0 ? raw.slice(0, slashIdx) : '';
       const model = slashIdx > 0 ? raw.slice(slashIdx + 1) : raw;
@@ -2653,11 +3375,19 @@ async function saveBrainModelConfig() {
   const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save Brain Models'; } };
   const safetyTimer = setTimeout(resetBtn, 15000);
   try {
-    await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(payload) });
-    if (status) { status.style.color = 'var(--ok)'; status.textContent = '✓ Saved'; setTimeout(() => { status.textContent = ''; }, 2500); }
+    const result = await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(payload) });
+    if (result?.success === false) throw new Error(result.error || 'Failed to save brain models');
+    if (status) {
+      status.style.color = 'var(--ok)';
+      setSettingsStatus(status, 'success', 'Saved');
+      setTimeout(() => { setSettingsStatus(status, 'info', ''); }, 2500);
+    }
     resetBtn();
   } catch (e) {
-    if (status) { status.style.color = 'var(--err)'; status.textContent = '✗ ' + e.message; }
+    if (status) {
+      status.style.color = 'var(--err)';
+      setSettingsStatus(status, 'error', e.message);
+    }
     resetBtn();
   } finally {
     clearTimeout(safetyTimer);
@@ -2679,6 +3409,7 @@ window.loadCredVaultLog = loadCredVaultLog;
 window.loadCredVaultStatus = loadCredVaultStatus;
 window.loadCredentialsTab = loadCredentialsTab;
 window.loadHeartbeatSettings = loadHeartbeatSettings;
+window.loadInstalledAppsPanel = loadInstalledAppsPanel;
 window.loadIntegrationsTab = loadIntegrationsTab;
 window.loadMCPServers = loadMCPServers;
 window.loadModelSettings = loadModelSettings;
@@ -2704,8 +3435,11 @@ window.refreshOpenAIModels = refreshOpenAIModels;
 window.refreshProviderModels = refreshProviderModels;
 window.rejectMemory = rejectMemory;
 window.renderAgentsList = renderAgentsList;
+window.renderInstalledAppsList = renderInstalledAppsList;
 window.renderShortcutsList = renderShortcutsList;
 window.runMission = runMission;
+window.searchInstalledAppsUI = searchInstalledAppsUI;
+window.clearInstalledAppsSearch = clearInstalledAppsSearch;
 window.runSelectedAgentOnce = runSelectedAgentOnce;
 window.saveAgentFromForm = saveAgentFromForm;
 window.saveAgentHeartbeatConfig = saveAgentHeartbeatConfig;
@@ -2747,3 +3481,5 @@ window.updateQuickModeUI = updateQuickModeUI;
 window.updateSubagentHb = updateSubagentHb;
 window.updateWebhookStatus = updateWebhookStatus;
 window.updateWebhookUrlDisplay = updateWebhookUrlDisplay;
+
+initSettingsStaticIcons();

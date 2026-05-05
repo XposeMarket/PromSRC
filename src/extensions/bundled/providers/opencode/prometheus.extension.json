@@ -1,0 +1,66 @@
+{
+  "id": "opencode",
+  "kind": "provider",
+  "name": "OpenCode Zen",
+  "description": "OpenCode Zen hosted model gateway.",
+  "category": "Gateway",
+  "enabledByDefault": true,
+  "docsUrl": "https://opencode.ai/auth",
+  "tags": ["opencode", "gateway", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["claude-opus-4-6", "claude-sonnet-4-6", "gpt-5.4", "gpt-5.3-codex", "gemini-3-flash", "glm-5", "kimi-k2.5"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#111827"
+  },
+  "ownership": {
+    "providerIds": ["opencode"],
+    "modelPrefixes": ["claude-", "gpt-", "gemini-", "glm-", "kimi-"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "open_..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "claude-opus-4-6"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://opencode.ai/zen/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://opencode.ai/zen/v1",
+      "model": "claude-opus-4-6"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

@@ -27,10 +27,26 @@ export interface TeamChatMessage {
   fromAgentId?: string;
   content: string;
   threadId?: string;       // groups messages from a single manager review cycle
-  metadata?: {
-    runId?: string;
+	  metadata?: {
+    source?: string;
+    proposalId?: string;
+	    runId?: string;
     agentId?: string;
     runSuccess?: boolean;
+    taskId?: string;
+    targetType?: 'room' | 'team' | 'manager' | 'member' | 'user';
+    targetId?: string;
+    targetLabel?: string;
+    stepCount?: number;
+    durationMs?: number;
+    thinking?: string;
+    processEntries?: Array<{
+      ts?: string;
+      type?: string;
+      content?: string;
+      actor?: string;
+      [key: string]: any;
+    }>;
   };
 }
 
@@ -103,6 +119,146 @@ export interface MainAgentThreadMessage {
   type: 'planning' | 'error' | 'status' | 'reply';
 }
 
+export type TeamRoomActorType = 'manager' | 'member' | 'user' | 'system' | 'main_agent';
+export type TeamRoomMessageCategory =
+  | 'chat'
+  | 'feedback'
+  | 'blocker'
+  | 'plan'
+  | 'result'
+  | 'status'
+  | 'goal_update'
+  | 'artifact'
+  | 'dispatch'
+  | 'system';
+export type TeamMemberPresenceState =
+  | 'idle'
+  | 'planning'
+  | 'ready'
+  | 'waiting_for_context'
+  | 'running'
+  | 'blocked'
+  | 'reviewing';
+export type TeamPlanPriority = 'high' | 'medium' | 'low';
+export type TeamPlanStatus = 'pending' | 'active' | 'completed' | 'blocked' | 'dropped';
+export type TeamDispatchStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface TeamRoomMessage {
+  id: string;
+  timestamp: number;
+  actorType: TeamRoomActorType;
+  actorName: string;
+  actorId?: string;
+  content: string;
+  category: TeamRoomMessageCategory;
+  target?: string;
+  threadId?: string;
+  metadata?: {
+    runId?: string;
+    agentId?: string;
+    dispatchId?: string;
+    runSuccess?: boolean;
+    source?: string;
+  };
+}
+
+export interface TeamMemberState {
+  agentId: string;
+  status: TeamMemberPresenceState;
+  currentTask?: string;
+  blockedReason?: string;
+  lastResult?: string;
+  lastUpdateAt: number;
+  lastRoomEventSeenAt?: number;
+}
+
+export interface TeamPlanItem {
+  id: string;
+  description: string;
+  priority: TeamPlanPriority;
+  status: TeamPlanStatus;
+  ownerAgentId?: string;
+  reason?: string;
+  createdBy?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TeamDispatchRecord {
+  id: string;
+  agentId: string;
+  agentName: string;
+  taskSummary: string;
+  status: TeamDispatchStatus;
+  requestedBy?: string;
+  taskId?: string;
+  createdAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  resultPreview?: string;
+}
+
+export interface TeamSharedArtifact {
+  id: string;
+  name: string;
+  type: string;
+  description?: string;
+  content?: string;
+  path?: string;
+  createdBy: string;
+  createdAt: number;
+}
+
+export interface TeamRoomBlocker {
+  id: string;
+  content: string;
+  fromAgentId?: string;
+  createdAt: number;
+  resolvedAt?: number;
+}
+
+export interface TeamManagerInboxEntry {
+  id: string;
+  fromAgentId?: string;
+  fromName: string;
+  content: string;
+  createdAt: number;
+  drainedAt?: number;
+}
+
+export interface TeamDirectThreadPendingMessage {
+  id: string;
+  content: string;
+  createdAt: number;
+  chatMessageId?: string;
+}
+
+export interface TeamDirectThread {
+  id: string;
+  participantType: 'manager' | 'member';
+  participantId: string;
+  participantLabel: string;
+  sessionId: string;
+  createdAt: number;
+  lastMessageAt: number;
+  lastParticipantReplyAt?: number;
+  leaseExpiresAt: number;
+  pendingUserMessages: TeamDirectThreadPendingMessage[];
+}
+
+export interface TeamRoomState {
+  purpose: string;
+  runGoal: string;
+  plan: TeamPlanItem[];
+  roomMessages: TeamRoomMessage[];
+  memberStates: Record<string, TeamMemberState>;
+  dispatches: TeamDispatchRecord[];
+  sharedArtifacts: TeamSharedArtifact[];
+  blockers: TeamRoomBlocker[];
+  managerInbox: TeamManagerInboxEntry[];
+  directThreads: Record<string, TeamDirectThread>;
+}
+
 // ─── Per-Agent Pause State ──────────────────────────────────────────────────────
 // Coordinator can pause/unpause individual agents independently of team-level pause.
 
@@ -130,9 +286,30 @@ export interface TeamRunEntry {
   zeroToolCalls?: boolean;   // true when agent returned 0 tool calls (Issue 12 signal)
   error?: string;
   resultPreview?: string;
+  quality?: {
+    warning?: string;
+    zeroToolCalls?: boolean;
+    resultLength?: number;
+    suspect?: boolean;
+  };
+  roomSnapshot?: TeamRunRoomSnapshot;
+}
+
+export interface TeamRunRoomSnapshot {
+  capturedAt: number;
+  memberStates: Record<string, TeamMemberState>;
+  activeDispatches: TeamDispatchRecord[];
+  recentDispatches: TeamDispatchRecord[];
+  managerAutoWakeEvents: TeamRoomMessage[];
+  memberWakeEvents: TeamRoomMessage[];
+  artifacts: TeamSharedArtifact[];
+  blockers: TeamRoomBlocker[];
+  plan: TeamPlanItem[];
+  relatedEvents: TeamRoomMessage[];
 }
 
 const MAX_TEAM_RUN_HISTORY = 200;
+export const TEAM_DIRECT_THREAD_LEASE_MS = 24 * 60 * 60 * 1000;
 
 export interface ManagedTeam {
   id: string;
@@ -185,6 +362,9 @@ export interface ManagedTeam {
 
   // Inter-agent + user chat messages
   teamChat: TeamChatMessage[];
+
+  // Canonical team-room coordination state.
+  roomState?: TeamRoomState;
 
   // Changes proposed by manager
   pendingChanges: TeamChange[];
@@ -401,6 +581,500 @@ function normalizeContextReferenceList(raw: any): TeamContextReference[] {
   return out.slice(-200);
 }
 
+function normalizeTeamRoomActorType(raw: any): TeamRoomActorType {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'manager' || value === 'member' || value === 'user' || value === 'system' || value === 'main_agent') {
+    return value as TeamRoomActorType;
+  }
+  if (value === 'subagent') return 'member';
+  if (value === 'coordinator') return 'manager';
+  return 'system';
+}
+
+function normalizeTeamRoomMessageCategory(raw: any): TeamRoomMessageCategory {
+  const value = String(raw || '').trim().toLowerCase();
+  if (
+    value === 'chat'
+    || value === 'feedback'
+    || value === 'blocker'
+    || value === 'plan'
+    || value === 'result'
+    || value === 'status'
+    || value === 'goal_update'
+    || value === 'artifact'
+    || value === 'dispatch'
+    || value === 'system'
+  ) {
+    return value as TeamRoomMessageCategory;
+  }
+  return 'chat';
+}
+
+function normalizeTeamMemberPresenceState(raw: any): TeamMemberPresenceState {
+  const value = String(raw || '').trim().toLowerCase();
+  if (
+    value === 'idle'
+    || value === 'planning'
+    || value === 'ready'
+    || value === 'waiting_for_context'
+    || value === 'running'
+    || value === 'blocked'
+    || value === 'reviewing'
+  ) {
+    return value as TeamMemberPresenceState;
+  }
+  if (value === 'executing') return 'running';
+  if (value === 'done' || value === 'complete' || value === 'completed') return 'ready';
+  return 'idle';
+}
+
+function normalizeTeamPlanPriority(raw: any): TeamPlanPriority {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'high' || value === 'medium' || value === 'low') return value as TeamPlanPriority;
+  return 'medium';
+}
+
+function normalizeTeamPlanStatus(raw: any): TeamPlanStatus {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'pending' || value === 'active' || value === 'completed' || value === 'blocked' || value === 'dropped') {
+    return value as TeamPlanStatus;
+  }
+  if (value === 'complete') return 'completed';
+  return 'pending';
+}
+
+function normalizeTeamDispatchStatus(raw: any): TeamDispatchStatus {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'queued' || value === 'running' || value === 'completed' || value === 'failed') {
+    return value as TeamDispatchStatus;
+  }
+  if (value === 'complete') return 'completed';
+  return 'queued';
+}
+
+function inferRoomActorFromChatMessage(message: TeamChatMessage): TeamRoomActorType {
+  if (message.from === 'manager') return 'manager';
+  if (message.from === 'subagent') return 'member';
+  if (message.fromName === 'Main Agent') return 'main_agent';
+  return 'user';
+}
+
+function mapChatTargetToRoomTarget(message: TeamChatMessage): string | undefined {
+  const targetType = String(message.metadata?.targetType || '').trim().toLowerCase();
+  if (targetType === 'team' || targetType === 'room') return 'all';
+  if (targetType === 'manager') return 'manager';
+  if (targetType === 'member') return String(message.metadata?.targetId || '').trim() || undefined;
+  if (targetType === 'user') return 'user';
+  return undefined;
+}
+
+function mapRoomTargetToChatMetadata(target: string | undefined): {
+  targetType?: NonNullable<TeamChatMessage['metadata']>['targetType'];
+  targetId?: string;
+} {
+  const value = String(target || '').trim();
+  if (!value) return {};
+  if (value === 'all') return { targetType: 'team' };
+  if (value === 'manager') return { targetType: 'manager', targetId: 'manager' };
+  if (value === 'user') return { targetType: 'user', targetId: 'user' };
+  return { targetType: 'member', targetId: value };
+}
+
+function mapChatMessageToRoomMessage(message: TeamChatMessage): TeamRoomMessage {
+  const actorType = inferRoomActorFromChatMessage(message);
+  return {
+    id: String(message.id || `room_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+    timestamp: Number(message.timestamp) || Date.now(),
+    actorType,
+    actorName: String(message.fromName || (actorType === 'manager' ? 'Manager' : actorType === 'main_agent' ? 'Main Agent' : 'User')).trim(),
+    actorId: String(message.fromAgentId || message.metadata?.agentId || '').trim() || undefined,
+    content: String(message.content || '').trim(),
+    category: 'chat',
+    target: mapChatTargetToRoomTarget(message),
+    threadId: String(message.threadId || '').trim() || undefined,
+    metadata: message.metadata ? {
+      runId: String(message.metadata.runId || '').trim() || undefined,
+      agentId: String(message.metadata.agentId || message.fromAgentId || '').trim() || undefined,
+      runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
+    } : undefined,
+  };
+}
+
+function mapRoomMessageToChatMessage(message: TeamRoomMessage): TeamChatMessage {
+  const from = message.actorType === 'manager'
+    ? 'manager'
+    : message.actorType === 'member'
+      ? 'subagent'
+      : 'user';
+  const fromName = String(message.actorName || (
+    message.actorType === 'manager'
+      ? 'Manager'
+      : message.actorType === 'main_agent'
+        ? 'Main Agent'
+        : message.actorType === 'member'
+          ? message.actorId || 'Subagent'
+          : 'User'
+  )).trim();
+  return {
+    id: message.id,
+    timestamp: message.timestamp,
+    from,
+    fromName,
+    fromAgentId: message.actorType === 'member'
+      ? (String(message.actorId || '').trim() || undefined)
+      : undefined,
+    content: String(message.content || '').trim(),
+    threadId: String(message.threadId || '').trim() || undefined,
+    metadata: {
+      ...(message.metadata ? {
+        runId: String(message.metadata.runId || '').trim() || undefined,
+        agentId: String(message.metadata.agentId || message.actorId || '').trim() || undefined,
+        runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
+      } : {}),
+      ...mapRoomTargetToChatMetadata(message.target),
+    },
+  };
+}
+
+function normalizeTeamRoomMessage(raw: any): TeamRoomMessage | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const content = String(raw.content || '').trim().slice(0, 8000);
+  if (!content) return null;
+  return {
+    id: String(raw.id || `room_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+    timestamp: Number(raw.timestamp) || Date.now(),
+    actorType: normalizeTeamRoomActorType(raw.actorType || raw.from),
+    actorName: String(raw.actorName || raw.fromName || raw.actorId || 'System').trim().slice(0, 120),
+    actorId: String(raw.actorId || raw.fromAgentId || raw.metadata?.agentId || '').trim() || undefined,
+    content,
+    category: normalizeTeamRoomMessageCategory(raw.category || raw.type),
+    target: String(raw.target || raw.to || '').trim() || undefined,
+    threadId: String(raw.threadId || '').trim() || undefined,
+    metadata: raw.metadata && typeof raw.metadata === 'object' ? {
+      runId: String(raw.metadata.runId || '').trim() || undefined,
+      agentId: String(raw.metadata.agentId || '').trim() || undefined,
+      dispatchId: String(raw.metadata.dispatchId || '').trim() || undefined,
+      runSuccess: typeof raw.metadata.runSuccess === 'boolean' ? raw.metadata.runSuccess : undefined,
+      source: String(raw.metadata.source || '').trim() || undefined,
+    } : undefined,
+  };
+}
+
+function normalizeTeamMemberStateRecord(raw: any, agentId: string): TeamMemberState {
+  return {
+    agentId,
+    status: normalizeTeamMemberPresenceState(raw?.status || raw?.phase),
+    currentTask: String(raw?.currentTask || raw?.current_task || '').trim().slice(0, 500) || undefined,
+    blockedReason: String(raw?.blockedReason || raw?.blocked_reason || '').trim().slice(0, 500) || undefined,
+    lastResult: String(raw?.lastResult || raw?.roundResult || raw?.result || '').trim().slice(0, 1000) || undefined,
+    lastUpdateAt: Number(raw?.lastUpdateAt || raw?.updatedAt) || Date.now(),
+    lastRoomEventSeenAt: Number(raw?.lastRoomEventSeenAt) || undefined,
+  };
+}
+
+function normalizeTeamPlanItem(raw: any): TeamPlanItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const description = String(raw.description || raw.title || '').trim().slice(0, 500);
+  if (!description) return null;
+  const createdAt = Number(raw.createdAt) || Date.now();
+  return {
+    id: String(raw.id || `plan_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+    description,
+    priority: normalizeTeamPlanPriority(raw.priority),
+    status: normalizeTeamPlanStatus(raw.status),
+    ownerAgentId: String(raw.ownerAgentId || raw.owner_agent_id || '').trim() || undefined,
+    reason: String(raw.reason || '').trim().slice(0, 500) || undefined,
+    createdBy: String(raw.createdBy || '').trim() || undefined,
+    createdAt,
+    updatedAt: Number(raw.updatedAt) || createdAt,
+  };
+}
+
+function normalizeTeamDispatchRecord(raw: any): TeamDispatchRecord | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const agentId = String(raw.agentId || '').trim();
+  const taskSummary = String(raw.taskSummary || raw.task || '').trim().slice(0, 1000);
+  if (!agentId || !taskSummary) return null;
+  return {
+    id: String(raw.id || `dispatch_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+    agentId,
+    agentName: String(raw.agentName || agentId).trim().slice(0, 120),
+    taskSummary,
+    status: normalizeTeamDispatchStatus(raw.status),
+    requestedBy: String(raw.requestedBy || '').trim() || undefined,
+    taskId: String(raw.taskId || '').trim() || undefined,
+    createdAt: Number(raw.createdAt) || Date.now(),
+    startedAt: Number(raw.startedAt) || undefined,
+    finishedAt: Number(raw.finishedAt) || undefined,
+    resultPreview: String(raw.resultPreview || '').trim().slice(0, 1500) || undefined,
+  };
+}
+
+function normalizeTeamSharedArtifact(raw: any): TeamSharedArtifact | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = String(raw.name || '').trim().slice(0, 200);
+  if (!name) return null;
+  return {
+    id: String(raw.id || `artifact_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+    name,
+    type: String(raw.type || 'data').trim().slice(0, 80),
+    description: String(raw.description || '').trim().slice(0, 500) || undefined,
+    content: String(raw.content || '').trim().slice(0, 4000) || undefined,
+    path: String(raw.path || '').trim().slice(0, 500) || undefined,
+    createdBy: String(raw.createdBy || 'system').trim().slice(0, 120),
+    createdAt: Number(raw.createdAt) || Date.now(),
+  };
+}
+
+function normalizeTeamBlocker(raw: any): TeamRoomBlocker | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const content = String(raw.content || raw.message || '').trim().slice(0, 1000);
+  if (!content) return null;
+  return {
+    id: String(raw.id || `blocker_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+    content,
+    fromAgentId: String(raw.fromAgentId || '').trim() || undefined,
+    createdAt: Number(raw.createdAt) || Date.now(),
+    resolvedAt: Number(raw.resolvedAt) || undefined,
+  };
+}
+
+function normalizeManagerInboxEntry(raw: any): TeamManagerInboxEntry | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    const text = String(raw).trim().slice(0, 1500);
+    if (!text) return null;
+    const match = text.match(/^\[From ([^\]]+)\]:\s*(.*)$/);
+    const fromAgentId = match?.[1]?.trim();
+    const content = String(match?.[2] || text).trim().slice(0, 1500);
+    return {
+      id: `inbox_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+      fromAgentId: fromAgentId || undefined,
+      fromName: fromAgentId || 'Subagent',
+      content,
+      createdAt: Date.now(),
+    };
+  }
+  if (typeof raw !== 'object') return null;
+  const content = String(raw.content || raw.message || '').trim().slice(0, 1500);
+  if (!content) return null;
+  const fromAgentId = String(raw.fromAgentId || '').trim() || undefined;
+  return {
+    id: String(raw.id || `inbox_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+    fromAgentId,
+    fromName: String(raw.fromName || fromAgentId || 'Subagent').trim().slice(0, 120),
+    content,
+    createdAt: Number(raw.createdAt) || Date.now(),
+    drainedAt: Number(raw.drainedAt) || undefined,
+  };
+}
+
+function buildTeamDirectThreadKey(
+  participantType: TeamDirectThread['participantType'],
+  participantId: string,
+): string {
+  return `${participantType}:${String(participantId || '').trim() || participantType}`;
+}
+
+function buildTeamDirectThreadSessionId(
+  teamId: string,
+  participantType: TeamDirectThread['participantType'],
+  participantId: string,
+  threadId: string,
+): string {
+  const cleanTeamId = String(teamId || '').trim();
+  const cleanParticipantId = String(participantId || participantType).trim();
+  const cleanThreadId = String(threadId || '').trim();
+  if (participantType === 'manager') {
+    return `team_dm_manager_${cleanTeamId}___THREAD___${cleanThreadId}`;
+  }
+  return `team_dm_member_${cleanTeamId}___AGENT___${cleanParticipantId}___THREAD___${cleanThreadId}`;
+}
+
+function normalizeTeamDirectThread(
+  raw: any,
+  teamId: string,
+  key: string,
+): TeamDirectThread | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const participantType = String(raw.participantType || '').trim().toLowerCase();
+  const normalizedType = participantType === 'manager' ? 'manager' : participantType === 'member' ? 'member' : '';
+  if (!normalizedType) return null;
+  const participantId = String(raw.participantId || '').trim() || (normalizedType === 'manager' ? 'manager' : '');
+  if (!participantId) return null;
+  const createdAt = Number(raw.createdAt) || Date.now();
+  const threadId = String(raw.id || `thread_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`).trim();
+  const pendingUserMessages = Array.isArray(raw.pendingUserMessages)
+    ? raw.pendingUserMessages
+        .map((entry: any) => {
+          const content = String(entry?.content || entry?.message || '').trim().slice(0, 4000);
+          if (!content) return null;
+          const normalized: TeamDirectThreadPendingMessage = {
+            id: String(entry?.id || `thread_msg_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`),
+            content,
+            createdAt: Number(entry?.createdAt) || Date.now(),
+            chatMessageId: String(entry?.chatMessageId || '').trim() || undefined,
+          };
+          return normalized;
+        })
+        .filter((entry: TeamDirectThreadPendingMessage | null): entry is TeamDirectThreadPendingMessage => !!entry)
+        .slice(-20)
+    : [];
+  return {
+    id: threadId,
+    participantType: normalizedType as TeamDirectThread['participantType'],
+    participantId,
+    participantLabel: String(raw.participantLabel || participantId).trim().slice(0, 120) || participantId,
+    sessionId: String(raw.sessionId || buildTeamDirectThreadSessionId(teamId, normalizedType as TeamDirectThread['participantType'], participantId, threadId)).trim(),
+    createdAt,
+    lastMessageAt: Number(raw.lastMessageAt) || createdAt,
+    lastParticipantReplyAt: Number(raw.lastParticipantReplyAt) || undefined,
+    leaseExpiresAt: Number(raw.leaseExpiresAt) || (createdAt + TEAM_DIRECT_THREAD_LEASE_MS),
+    pendingUserMessages,
+  };
+}
+
+function buildLegacyRoomMessages(team: any): TeamRoomMessage[] {
+  const chat = Array.isArray(team?.teamChat) ? team.teamChat : [];
+  return chat
+    .map((message: any) => mapChatMessageToRoomMessage(message as TeamChatMessage))
+    .slice(-500);
+}
+
+function buildLegacyManagerInbox(team: any): TeamManagerInboxEntry[] {
+  const inbox = Array.isArray(team?.pendingManagerMessages) ? team.pendingManagerMessages : [];
+  return inbox
+    .map((entry: any) => normalizeManagerInboxEntry(entry))
+    .filter((entry: TeamManagerInboxEntry | null): entry is TeamManagerInboxEntry => !!entry)
+    .slice(-100);
+}
+
+function normalizeTeamRoomState(team: any): { state: TeamRoomState; changed: boolean } {
+  const raw = team?.roomState && typeof team.roomState === 'object' ? team.roomState : null;
+  let changed = !raw;
+
+  const purpose = String(raw?.purpose || team?.purpose || team?.mission || team?.teamContext || team?.description || '').trim().slice(0, 2000);
+  const runGoal = String(raw?.runGoal || team?.currentTask || team?.currentFocus || '').trim().slice(0, 2000);
+
+  const rawMessages = Array.isArray(raw?.roomMessages) ? raw.roomMessages : buildLegacyRoomMessages(team);
+  if (!Array.isArray(raw?.roomMessages)) changed = true;
+  const roomMessages = rawMessages
+    .map((message: any) => normalizeTeamRoomMessage(message))
+    .filter((message: TeamRoomMessage | null): message is TeamRoomMessage => !!message)
+    .slice(-500);
+
+  const rawPlan = Array.isArray(raw?.plan)
+    ? raw.plan
+    : Array.isArray(team?.milestones)
+      ? team.milestones.map((milestone: any) => ({
+          id: milestone.id,
+          description: milestone.description,
+          status: milestone.status === 'complete' ? 'completed' : milestone.status,
+          priority: 'medium',
+          ownerAgentId: Array.isArray(milestone.relevantAgentIds) ? milestone.relevantAgentIds[0] : undefined,
+          createdAt: milestone.createdAt,
+          updatedAt: milestone.completedAt || milestone.createdAt,
+        }))
+      : [];
+  if (!Array.isArray(raw?.plan)) changed = true;
+  const plan = rawPlan
+    .map((item: any) => normalizeTeamPlanItem(item))
+    .filter((item: TeamPlanItem | null): item is TeamPlanItem => !!item)
+    .slice(-100);
+
+  const existingMemberStates = raw?.memberStates && typeof raw.memberStates === 'object' ? raw.memberStates : {};
+  if (!raw?.memberStates || typeof raw.memberStates !== 'object') changed = true;
+  const memberStates: Record<string, TeamMemberState> = {};
+  const currentAgentIds = Array.isArray(team?.subagentIds) ? team.subagentIds : [];
+  for (const [agentId, entry] of Object.entries(existingMemberStates)) {
+    memberStates[agentId] = normalizeTeamMemberStateRecord(entry, agentId);
+  }
+  for (const agentId of currentAgentIds) {
+    if (!memberStates[agentId]) {
+      memberStates[agentId] = normalizeTeamMemberStateRecord({}, agentId);
+      changed = true;
+    }
+  }
+
+  const rawDispatches = Array.isArray(raw?.dispatches) ? raw.dispatches : [];
+  if (!Array.isArray(raw?.dispatches)) changed = true;
+  const dispatches = rawDispatches
+    .map((entry: any) => normalizeTeamDispatchRecord(entry))
+    .filter((entry: TeamDispatchRecord | null): entry is TeamDispatchRecord => !!entry)
+    .slice(-200);
+
+  const rawArtifacts = Array.isArray(raw?.sharedArtifacts) ? raw.sharedArtifacts : [];
+  if (!Array.isArray(raw?.sharedArtifacts)) changed = true;
+  const sharedArtifacts = rawArtifacts
+    .map((entry: any) => normalizeTeamSharedArtifact(entry))
+    .filter((entry: TeamSharedArtifact | null): entry is TeamSharedArtifact => !!entry)
+    .slice(-100);
+
+  const rawBlockers = Array.isArray(raw?.blockers) ? raw.blockers : [];
+  if (!Array.isArray(raw?.blockers)) changed = true;
+  const blockers = rawBlockers
+    .map((entry: any) => normalizeTeamBlocker(entry))
+    .filter((entry: TeamRoomBlocker | null): entry is TeamRoomBlocker => !!entry)
+    .slice(-100);
+
+  const rawInbox = Array.isArray(raw?.managerInbox) ? raw.managerInbox : buildLegacyManagerInbox(team);
+  if (!Array.isArray(raw?.managerInbox)) changed = true;
+  const managerInbox = rawInbox
+    .map((entry: any) => normalizeManagerInboxEntry(entry))
+    .filter((entry: TeamManagerInboxEntry | null): entry is TeamManagerInboxEntry => !!entry)
+    .slice(-100);
+
+  const rawDirectThreads = raw?.directThreads && typeof raw.directThreads === 'object' ? raw.directThreads : {};
+  if (!raw?.directThreads || typeof raw.directThreads !== 'object') changed = true;
+  const directThreads: Record<string, TeamDirectThread> = {};
+  for (const [key, entry] of Object.entries(rawDirectThreads)) {
+    const normalized = normalizeTeamDirectThread(entry, String(team?.id || '').trim(), key);
+    if (!normalized) {
+      changed = true;
+      continue;
+    }
+    directThreads[key] = normalized;
+  }
+
+  return {
+    state: {
+      purpose,
+      runGoal,
+      plan,
+      roomMessages,
+      memberStates,
+      dispatches,
+      sharedArtifacts,
+      blockers,
+      managerInbox,
+      directThreads,
+    },
+    changed,
+  };
+}
+
+function syncLegacyTeamFields(team: ManagedTeam): void {
+  const roomState = team.roomState;
+  if (!roomState) return;
+  const purpose = String(roomState.purpose || team.purpose || team.mission || team.teamContext || team.description || '').trim().slice(0, 2000);
+  const runGoal = String(roomState.runGoal || team.currentTask || team.currentFocus || '').trim().slice(0, 2000);
+  roomState.purpose = purpose;
+  roomState.runGoal = runGoal;
+  team.purpose = purpose || undefined;
+  team.mission = purpose;
+  if (!String(team.teamContext || '').trim()) {
+    team.teamContext = purpose;
+  }
+  team.currentFocus = runGoal;
+}
+
+function ensureTeamRoomState(team: ManagedTeam): TeamRoomState {
+  const normalized = normalizeTeamRoomState(team);
+  team.roomState = normalized.state;
+  syncLegacyTeamFields(team);
+  return team.roomState;
+}
+
 export function normalizeTeamChangeType(rawType: any, diffField?: any): TeamChange['type'] | null {
   const raw = String(rawType || '').trim().toLowerCase();
   if (raw) {
@@ -499,7 +1173,7 @@ export function loadManagedTeamStore(): ManagedTeamStore {
         if (pendingTypeChanged || historyTypeChanged) mutated = true;
       }
 
-      return {
+      const normalizedTeam = {
         ...team,
         pendingChanges: pendingNormalized,
         changeHistory: historyNormalized,
@@ -507,6 +1181,11 @@ export function loadManagedTeamStore(): ManagedTeamStore {
         // Ensure runHistory is always an array (backwards-compat with older JSON)
         runHistory: Array.isArray(team.runHistory) ? team.runHistory : [],
       } as ManagedTeam;
+      const roomNormalized = normalizeTeamRoomState(normalizedTeam);
+      normalizedTeam.roomState = roomNormalized.state;
+      syncLegacyTeamFields(normalizedTeam);
+      if (roomNormalized.changed) mutated = true;
+      return normalizedTeam;
     });
 
     _cache = {
@@ -595,6 +1274,7 @@ export function saveManagedTeam(team: ManagedTeam): void {
   invalidateCache();
   const store = loadManagedTeamStore();
   const idx = store.teams.findIndex(t => t.id === team.id);
+  ensureTeamRoomState(team);
   team.updatedAt = Date.now();
   if (idx === -1) {
     store.teams.push(team);
@@ -655,6 +1335,22 @@ export function createManagedTeam(input: {
     contextReferences: [],
     managerNotes: [],
     teamChat: [],
+    roomState: {
+      purpose: purposeOrContext,
+      runGoal: '',
+      plan: [],
+      roomMessages: [],
+      memberStates: Object.fromEntries(input.subagentIds.map((agentId) => [agentId, {
+        agentId,
+        status: 'idle' as TeamMemberPresenceState,
+        lastUpdateAt: now,
+      }])),
+      dispatches: [],
+      sharedArtifacts: [],
+      blockers: [],
+      managerInbox: [],
+      directThreads: {},
+    },
     pendingChanges: [],
     changeHistory: [],
     runHistory: [],
@@ -664,6 +1360,7 @@ export function createManagedTeam(input: {
     notificationTargets: [],
     originatingSessionId: input.originatingSessionId,
   };
+  syncLegacyTeamFields(team);
   saveManagedTeam(team);
 
   // Initialize memory files for the purpose→task workflow
@@ -691,9 +1388,299 @@ export function appendTeamChat(
     timestamp: Date.now(),
   };
 
-  team.teamChat = [...(team.teamChat || []), msg].slice(-500); // keep last 500 messages
+  const roomState = ensureTeamRoomState(team);
+	  roomState.roomMessages = [...(roomState.roomMessages || []), mapChatMessageToRoomMessage(msg)].slice(-500);
+	  team.teamChat = [...(team.teamChat || []), msg].slice(-500); // keep last 500 messages
+	  saveManagedTeam(team);
+  if (msg.from === 'manager' && msg.metadata?.source !== 'team_proposal_execution') {
+    const content = String(msg.content || '').trim();
+    if (content) {
+      setImmediate(() => {
+        import('../tasks/task-router.js')
+          .then((mod) => mod.mirrorTeamManagerProposalResponse(teamId, content))
+          .catch(() => {});
+      });
+    }
+  }
+	  return msg;
+}
+
+export function appendTeamRoomMessage(
+  teamId: string,
+  message: Omit<TeamRoomMessage, 'id' | 'timestamp'>,
+  options?: { mirrorToChat?: boolean },
+): TeamRoomMessage | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+
+  const entry: TeamRoomMessage = {
+    ...message,
+    id: `room_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+    timestamp: Date.now(),
+  };
+  const roomState = ensureTeamRoomState(team);
+  roomState.roomMessages = [...(roomState.roomMessages || []), entry].slice(-500);
+  if (options?.mirrorToChat !== false) {
+    team.teamChat = [...(team.teamChat || []), mapRoomMessageToChatMessage(entry)].slice(-500);
+  }
   saveManagedTeam(team);
-  return msg;
+  return entry;
+}
+
+export function getTeamDirectThread(
+  teamId: string,
+  participantType: TeamDirectThread['participantType'],
+  participantId?: string,
+): TeamDirectThread | null {
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const effectiveParticipantId = String(participantId || (participantType === 'manager' ? 'manager' : '')).trim();
+  if (!effectiveParticipantId) return null;
+  return roomState.directThreads?.[buildTeamDirectThreadKey(participantType, effectiveParticipantId)] || null;
+}
+
+export function getTeamDirectThreadById(teamId: string, threadId: string): TeamDirectThread | null {
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const match = Object.values(roomState.directThreads || {}).find((entry) => String(entry?.id || '').trim() === String(threadId || '').trim());
+  return match || null;
+}
+
+export function getOrCreateTeamDirectThread(
+  teamId: string,
+  participantType: TeamDirectThread['participantType'],
+  participantId: string,
+  participantLabel: string,
+): TeamDirectThread | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const effectiveParticipantId = String(participantId || (participantType === 'manager' ? 'manager' : '')).trim();
+  if (!effectiveParticipantId) return null;
+  const key = buildTeamDirectThreadKey(participantType, effectiveParticipantId);
+  const now = Date.now();
+  const existing = roomState.directThreads?.[key];
+  if (existing && Number(existing.leaseExpiresAt || 0) > now) {
+    existing.participantLabel = String(participantLabel || existing.participantLabel || effectiveParticipantId).trim().slice(0, 120) || effectiveParticipantId;
+    existing.lastMessageAt = now;
+    existing.leaseExpiresAt = now + TEAM_DIRECT_THREAD_LEASE_MS;
+    roomState.directThreads[key] = existing;
+    saveManagedTeam(team);
+    return existing;
+  }
+  const threadId = `thread_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+  const created: TeamDirectThread = {
+    id: threadId,
+    participantType,
+    participantId: effectiveParticipantId,
+    participantLabel: String(participantLabel || effectiveParticipantId).trim().slice(0, 120) || effectiveParticipantId,
+    sessionId: buildTeamDirectThreadSessionId(teamId, participantType, effectiveParticipantId, threadId),
+    createdAt: now,
+    lastMessageAt: now,
+    leaseExpiresAt: now + TEAM_DIRECT_THREAD_LEASE_MS,
+    pendingUserMessages: [],
+  };
+  roomState.directThreads[key] = created;
+  saveManagedTeam(team);
+  return created;
+}
+
+export function enqueueTeamDirectThreadUserMessage(
+  teamId: string,
+  participantType: TeamDirectThread['participantType'],
+  participantId: string,
+  participantLabel: string,
+  content: string,
+  chatMessageId?: string,
+): TeamDirectThread | null {
+  const thread = getOrCreateTeamDirectThread(teamId, participantType, participantId, participantLabel);
+  if (!thread) return null;
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const key = buildTeamDirectThreadKey(thread.participantType, thread.participantId);
+  const current = roomState.directThreads[key];
+  if (!current) return null;
+  const text = String(content || '').trim().slice(0, 4000);
+  if (!text) return current;
+  current.pendingUserMessages = [
+    ...(Array.isArray(current.pendingUserMessages) ? current.pendingUserMessages : []),
+    {
+      id: `thread_msg_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+      content: text,
+      createdAt: Date.now(),
+      chatMessageId: String(chatMessageId || '').trim() || undefined,
+    },
+  ].slice(-20);
+  current.lastMessageAt = Date.now();
+  current.leaseExpiresAt = current.lastMessageAt + TEAM_DIRECT_THREAD_LEASE_MS;
+  roomState.directThreads[key] = current;
+  saveManagedTeam(team);
+  return current;
+}
+
+export function drainTeamDirectThreadUserMessages(teamId: string, threadId: string): TeamDirectThreadPendingMessage[] {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return [];
+  const roomState = ensureTeamRoomState(team);
+  const entry = Object.entries(roomState.directThreads || {})
+    .find(([, thread]) => String(thread?.id || '').trim() === String(threadId || '').trim());
+  if (!entry) return [];
+  const [key, thread] = entry;
+  const pending = Array.isArray(thread.pendingUserMessages) ? [...thread.pendingUserMessages] : [];
+  thread.pendingUserMessages = [];
+  roomState.directThreads[key] = thread;
+  saveManagedTeam(team);
+  return pending;
+}
+
+export function hasPendingTeamDirectThreadUserMessages(teamId: string, threadId: string): boolean {
+  const thread = getTeamDirectThreadById(teamId, threadId);
+  return !!thread && Array.isArray(thread.pendingUserMessages) && thread.pendingUserMessages.length > 0;
+}
+
+export function listPendingTeamDirectThreadsForParticipant(
+  teamId: string,
+  participantType: TeamDirectThread['participantType'],
+  participantId: string,
+): TeamDirectThread[] {
+  const team = getManagedTeam(teamId);
+  if (!team) return [];
+  const roomState = ensureTeamRoomState(team);
+  return Object.values(roomState.directThreads || {})
+    .filter((thread) =>
+      thread.participantType === participantType
+      && String(thread.participantId || '').trim() === String(participantId || '').trim()
+      && Array.isArray(thread.pendingUserMessages)
+      && thread.pendingUserMessages.length > 0
+    )
+    .sort((a, b) => Number(a.lastMessageAt || 0) - Number(b.lastMessageAt || 0));
+}
+
+export function touchTeamDirectThreadParticipantReply(teamId: string, threadId: string): boolean {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return false;
+  const roomState = ensureTeamRoomState(team);
+  const entry = Object.entries(roomState.directThreads || {})
+    .find(([, thread]) => String(thread?.id || '').trim() === String(threadId || '').trim());
+  if (!entry) return false;
+  const [key, thread] = entry;
+  const now = Date.now();
+  thread.lastParticipantReplyAt = now;
+  thread.lastMessageAt = now;
+  thread.leaseExpiresAt = now + TEAM_DIRECT_THREAD_LEASE_MS;
+  roomState.directThreads[key] = thread;
+  saveManagedTeam(team);
+  return true;
+}
+
+export function getTeamRoomState(teamId: string): TeamRoomState | null {
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  return ensureTeamRoomState(team);
+}
+
+function cloneRoomValue<T>(value: T): T {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function isRoomMessageVisibleToAgent(message: TeamRoomMessage, agentId?: string): boolean {
+  const target = String(message?.target || '').trim();
+  if (!agentId || !target || target === 'all' || target === 'team') return true;
+  const normalizedTarget = target.toLowerCase();
+  return normalizedTarget === agentId.toLowerCase()
+    || normalizedTarget === 'manager'
+    || String(message?.actorId || '').trim().toLowerCase() === agentId.toLowerCase()
+    || String(message?.metadata?.agentId || '').trim().toLowerCase() === agentId.toLowerCase();
+}
+
+export function getTeamRoomEventsSince(
+  teamId: string,
+  sinceAt = 0,
+  options?: { agentId?: string; limit?: number },
+): TeamRoomMessage[] {
+  const roomState = getTeamRoomState(teamId);
+  if (!roomState) return [];
+  const limit = Math.max(1, Math.min(100, Number(options?.limit) || 20));
+  return (roomState.roomMessages || [])
+    .filter((message) => Number(message.timestamp || 0) > Number(sinceAt || 0))
+    .filter((message) => isRoomMessageVisibleToAgent(message, options?.agentId))
+    .slice(-limit)
+    .map((message) => cloneRoomValue(message));
+}
+
+export function markTeamMemberRoomEventsSeen(teamId: string, agentId: string, seenAt = Date.now()): boolean {
+  const cleanAgentId = String(agentId || '').trim();
+  if (!cleanAgentId) return false;
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return false;
+  const roomState = ensureTeamRoomState(team);
+  const current = roomState.memberStates?.[cleanAgentId];
+  roomState.memberStates[cleanAgentId] = {
+    ...(current || {
+      agentId: cleanAgentId,
+      status: 'idle' as TeamMemberPresenceState,
+      lastUpdateAt: seenAt,
+    }),
+    agentId: cleanAgentId,
+    lastRoomEventSeenAt: Math.max(Number(current?.lastRoomEventSeenAt || 0), Number(seenAt || Date.now())),
+  };
+  saveManagedTeam(team);
+  return true;
+}
+
+export function buildTeamRunSnapshot(
+  teamId: string,
+  options?: { agentId?: string; sinceAt?: number; limitEvents?: number },
+): TeamRunRoomSnapshot | null {
+  const roomState = getTeamRoomState(teamId);
+  if (!roomState) return null;
+  const sinceAt = Number(options?.sinceAt || 0);
+  const limitEvents = Math.max(5, Math.min(60, Number(options?.limitEvents) || 24));
+  const messages = Array.isArray(roomState.roomMessages) ? roomState.roomMessages : [];
+  const relatedEvents = messages
+    .filter((message) => !sinceAt || Number(message.timestamp || 0) >= sinceAt)
+    .filter((message) => isRoomMessageVisibleToAgent(message, options?.agentId))
+    .slice(-limitEvents);
+  const managerAutoWakeEvents = messages
+    .filter((message) => message?.metadata?.source === 'team_manager_auto_wake')
+    .slice(-12);
+  const memberWakeEvents = messages
+    .filter((message) => message?.metadata?.source === 'team_member_auto_wake_scheduled')
+    .filter((message) => isRoomMessageVisibleToAgent(message, options?.agentId))
+    .slice(-12);
+  const activeDispatches = (roomState.dispatches || [])
+    .filter((dispatch) => dispatch.status === 'queued' || dispatch.status === 'running')
+    .slice(-20);
+  const recentDispatches = (roomState.dispatches || []).slice(-20);
+  const blockers = (roomState.blockers || [])
+    .filter((blocker) => !blocker.resolvedAt)
+    .slice(-20);
+
+  return cloneRoomValue({
+    capturedAt: Date.now(),
+    memberStates: roomState.memberStates || {},
+    activeDispatches,
+    recentDispatches,
+    managerAutoWakeEvents,
+    memberWakeEvents,
+    artifacts: (roomState.sharedArtifacts || []).slice(-20),
+    blockers,
+    plan: (roomState.plan || []).slice(-50),
+    relatedEvents,
+  });
 }
 
 export function appendManagerNote(
@@ -1119,6 +2106,17 @@ export function queueAgentMessage(teamId: string, agentId: string, message: stri
   return true;
 }
 
+export function peekAgentMessages(teamId: string, agentId: string): string[] {
+  const team = getManagedTeam(teamId);
+  if (!team) return [];
+  const messages = team.pendingMessages?.[agentId];
+  return Array.isArray(messages) ? [...messages] : [];
+}
+
+export function hasPendingAgentMessages(teamId: string, agentId: string): boolean {
+  return peekAgentMessages(teamId, agentId).length > 0;
+}
+
 /**
  * Drain all pending messages for a specific subagent.
  * Called at dispatch time — returns the messages and clears the queue.
@@ -1154,11 +2152,23 @@ export function queueManagerMessage(teamId: string, fromAgentId: string, message
   invalidateCache();
   const team = getManagedTeam(teamId);
   if (!team) return false;
+  const roomState = ensureTeamRoomState(team);
   if (!team.pendingManagerMessages) team.pendingManagerMessages = [];
   const entry = `[From ${fromAgentId}]: ${String(message).slice(0, 1500)}`;
   team.pendingManagerMessages.push(entry);
   // Cap at 20 messages to prevent unbounded growth
   team.pendingManagerMessages = team.pendingManagerMessages.slice(-20);
+  const fromAgent = getAgentById(fromAgentId) as any;
+  roomState.managerInbox = [
+    ...(roomState.managerInbox || []),
+    {
+      id: `inbox_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+      fromAgentId: String(fromAgentId || '').trim() || undefined,
+      fromName: String(fromAgent?.name || fromAgentId || 'Subagent').trim().slice(0, 120),
+      content: String(message).slice(0, 1500),
+      createdAt: Date.now(),
+    },
+  ].slice(-100);
   saveManagedTeam(team);
   return true;
 }
@@ -1171,8 +2181,12 @@ export function drainManagerMessages(teamId: string): string[] {
   invalidateCache();
   const team = getManagedTeam(teamId);
   if (!team || !team.pendingManagerMessages?.length) return [];
+  const roomState = ensureTeamRoomState(team);
   const messages = [...team.pendingManagerMessages];
   team.pendingManagerMessages = [];
+  roomState.managerInbox = (roomState.managerInbox || []).map((entry) =>
+    entry.drainedAt ? entry : { ...entry, drainedAt: Date.now() }
+  );
   saveManagedTeam(team);
   return messages;
 }
@@ -1189,6 +2203,293 @@ export function getPendingMessageCounts(teamId: string): { toManager: number; to
     if (msgs.length > 0) toAgents[agentId] = msgs.length;
   }
   return { toManager, toAgents };
+}
+
+export function updateTeamMemberState(
+  teamId: string,
+  agentId: string,
+  patch: {
+    status?: TeamMemberPresenceState | string;
+    currentTask?: string;
+    blockedReason?: string;
+    lastResult?: string;
+  },
+): TeamMemberState | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const current = roomState.memberStates[agentId] || normalizeTeamMemberStateRecord({}, agentId);
+  const next: TeamMemberState = {
+    ...current,
+    status: normalizeTeamMemberPresenceState(patch.status || current.status),
+    currentTask: patch.currentTask !== undefined
+      ? (String(patch.currentTask || '').trim().slice(0, 500) || undefined)
+      : current.currentTask,
+    blockedReason: patch.blockedReason !== undefined
+      ? (String(patch.blockedReason || '').trim().slice(0, 500) || undefined)
+      : current.blockedReason,
+    lastResult: patch.lastResult !== undefined
+      ? (String(patch.lastResult || '').trim().slice(0, 1000) || undefined)
+      : current.lastResult,
+    lastUpdateAt: Date.now(),
+  };
+  roomState.memberStates[agentId] = next;
+  saveManagedTeam(team);
+  return next;
+}
+
+export function upsertTeamPlanItem(
+  teamId: string,
+  input: {
+    goalId?: string;
+    description: string;
+    priority?: TeamPlanPriority | string;
+    status?: TeamPlanStatus | string;
+    ownerAgentId?: string;
+    reason?: string;
+    createdBy?: string;
+  },
+): TeamPlanItem | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const description = String(input.description || '').trim().slice(0, 500);
+  if (!description) return null;
+  const goalId = String(input.goalId || '').trim();
+  const now = Date.now();
+  const idx = goalId ? roomState.plan.findIndex((item) => item.id === goalId) : -1;
+  if (idx >= 0) {
+    roomState.plan[idx] = {
+      ...roomState.plan[idx],
+      description,
+      priority: normalizeTeamPlanPriority(input.priority || roomState.plan[idx].priority),
+      status: normalizeTeamPlanStatus(input.status || roomState.plan[idx].status),
+      ownerAgentId: input.ownerAgentId !== undefined
+        ? (String(input.ownerAgentId || '').trim() || undefined)
+        : roomState.plan[idx].ownerAgentId,
+      reason: input.reason !== undefined
+        ? (String(input.reason || '').trim().slice(0, 500) || undefined)
+        : roomState.plan[idx].reason,
+      updatedAt: now,
+    };
+    saveManagedTeam(team);
+    return roomState.plan[idx];
+  }
+  const created: TeamPlanItem = {
+    id: `plan_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+    description,
+    priority: normalizeTeamPlanPriority(input.priority),
+    status: normalizeTeamPlanStatus(input.status || 'active'),
+    ownerAgentId: String(input.ownerAgentId || '').trim() || undefined,
+    reason: String(input.reason || '').trim().slice(0, 500) || undefined,
+    createdBy: String(input.createdBy || '').trim() || undefined,
+    createdAt: now,
+    updatedAt: now,
+  };
+  roomState.plan = [...(roomState.plan || []), created].slice(-100);
+  saveManagedTeam(team);
+  return created;
+}
+
+export function shareTeamArtifact(
+  teamId: string,
+  input: {
+    name: string;
+    type?: string;
+    description?: string;
+    content?: string;
+    path?: string;
+    createdBy: string;
+  },
+): TeamSharedArtifact | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const name = String(input.name || '').trim().slice(0, 200);
+  if (!name) return null;
+  const artifact: TeamSharedArtifact = {
+    id: `artifact_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+    name,
+    type: String(input.type || 'data').trim().slice(0, 80),
+    description: String(input.description || '').trim().slice(0, 500) || undefined,
+    content: String(input.content || '').trim().slice(0, 4000) || undefined,
+    path: String(input.path || '').trim().slice(0, 500) || undefined,
+    createdBy: String(input.createdBy || 'system').trim().slice(0, 120),
+    createdAt: Date.now(),
+  };
+  roomState.sharedArtifacts = [...(roomState.sharedArtifacts || []), artifact].slice(-100);
+  saveManagedTeam(team);
+  return artifact;
+}
+
+export function createTeamDispatchRecord(
+  teamId: string,
+  input: {
+    agentId: string;
+    agentName?: string;
+    taskSummary: string;
+    requestedBy?: string;
+    taskId?: string;
+  },
+): TeamDispatchRecord | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const agentId = String(input.agentId || '').trim();
+  const taskSummary = String(input.taskSummary || '').trim().slice(0, 1000);
+  if (!agentId || !taskSummary) return null;
+  const dispatch: TeamDispatchRecord = {
+    id: `dispatch_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`,
+    agentId,
+    agentName: String(input.agentName || agentId).trim().slice(0, 120),
+    taskSummary,
+    status: 'queued',
+    requestedBy: String(input.requestedBy || '').trim() || undefined,
+    taskId: String(input.taskId || '').trim() || undefined,
+    createdAt: Date.now(),
+  };
+  roomState.dispatches = [...(roomState.dispatches || []), dispatch].slice(-200);
+  saveManagedTeam(team);
+  return dispatch;
+}
+
+export function updateTeamDispatchRecord(
+  teamId: string,
+  dispatchId: string,
+  patch: {
+    status?: TeamDispatchStatus | string;
+    taskId?: string;
+    startedAt?: number;
+    finishedAt?: number;
+    resultPreview?: string;
+  },
+): TeamDispatchRecord | null {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  const roomState = ensureTeamRoomState(team);
+  const idx = roomState.dispatches.findIndex((entry) => entry.id === dispatchId);
+  if (idx === -1) return null;
+  roomState.dispatches[idx] = {
+    ...roomState.dispatches[idx],
+    status: patch.status ? normalizeTeamDispatchStatus(patch.status) : roomState.dispatches[idx].status,
+    taskId: patch.taskId !== undefined ? (String(patch.taskId || '').trim() || undefined) : roomState.dispatches[idx].taskId,
+    startedAt: patch.startedAt !== undefined ? patch.startedAt : roomState.dispatches[idx].startedAt,
+    finishedAt: patch.finishedAt !== undefined ? patch.finishedAt : roomState.dispatches[idx].finishedAt,
+    resultPreview: patch.resultPreview !== undefined
+      ? (String(patch.resultPreview || '').trim().slice(0, 1500) || undefined)
+      : roomState.dispatches[idx].resultPreview,
+  };
+  saveManagedTeam(team);
+  return roomState.dispatches[idx];
+}
+
+export function setTeamRunGoal(teamId: string, runGoal: string): boolean {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return false;
+  const roomState = ensureTeamRoomState(team);
+  roomState.runGoal = String(runGoal || '').trim().slice(0, 2000);
+  team.currentFocus = roomState.runGoal;
+  saveManagedTeam(team);
+  return true;
+}
+
+export function setTeamPurpose(teamId: string, purpose: string): boolean {
+  invalidateCache();
+  const team = getManagedTeam(teamId);
+  if (!team) return false;
+  const roomState = ensureTeamRoomState(team);
+  roomState.purpose = String(purpose || '').trim().slice(0, 2000);
+  team.purpose = roomState.purpose || undefined;
+  team.mission = roomState.purpose;
+  if (!String(team.teamContext || '').trim()) {
+    team.teamContext = roomState.purpose;
+  }
+  saveManagedTeam(team);
+  return true;
+}
+
+export function buildTeamRoomSummary(
+  teamOrId: ManagedTeam | string,
+  options?: {
+    limitMessages?: number;
+    agentId?: string;
+    includePlan?: boolean;
+    includeArtifacts?: boolean;
+  },
+): string {
+  const team = typeof teamOrId === 'string' ? getManagedTeam(teamOrId) : teamOrId;
+  if (!team) return '';
+  const roomState = ensureTeamRoomState(team);
+  const viewer = String(options?.agentId || '').trim();
+  const relevantMessages = (roomState.roomMessages || [])
+    .filter((message) => {
+      if (!viewer) return true;
+      if (!message.target || message.target === 'all') return true;
+      return message.target === viewer || (viewer === 'manager' && message.target === 'manager');
+    })
+    .slice(-(options?.limitMessages || 12));
+
+  const memberLines = team.subagentIds.map((agentId) => {
+    const member = roomState.memberStates?.[agentId] || normalizeTeamMemberStateRecord({}, agentId);
+    const agent = getAgentById(agentId) as any;
+    const parts = [`${agent?.name || agentId}: ${member.status}`];
+    if (member.currentTask) parts.push(`task=${member.currentTask}`);
+    if (member.blockedReason) parts.push(`blocked=${member.blockedReason}`);
+    return `  - ${parts.join(' | ')}`;
+  });
+
+  const planLines = options?.includePlan === false
+    ? []
+    : (roomState.plan || []).slice(-8).map((item) =>
+        `  - [${item.status.toUpperCase()}|${item.priority.toUpperCase()}] ${item.description}${item.ownerAgentId ? ` (owner: ${item.ownerAgentId})` : ''}`
+      );
+
+  const artifactLines = options?.includeArtifacts
+    ? (roomState.sharedArtifacts || []).slice(-5).map((artifact) =>
+        `  - ${artifact.name} (${artifact.type})${artifact.path ? ` @ ${artifact.path}` : ''}`
+      )
+    : [];
+
+  const blockerLines = (roomState.blockers || [])
+    .filter((item) => !item.resolvedAt)
+    .slice(-5)
+    .map((item) => `  - ${item.fromAgentId ? `${item.fromAgentId}: ` : ''}${item.content}`);
+
+  const lines: string[] = [
+    `[TEAM ROOM SNAPSHOT]`,
+    `Purpose: ${roomState.purpose || 'Not specified'}`,
+    `Run goal: ${roomState.runGoal || 'Not set'}`,
+    `Member states:`,
+    ...(memberLines.length > 0 ? memberLines : ['  - (no members)']),
+  ];
+
+  if (planLines.length > 0) {
+    lines.push(`Plan:`, ...planLines);
+  }
+  if (blockerLines.length > 0) {
+    lines.push(`Open blockers:`, ...blockerLines);
+  }
+  if (artifactLines.length > 0) {
+    lines.push(`Recent artifacts:`, ...artifactLines);
+  }
+  lines.push(`Recent room messages:`);
+  if (relevantMessages.length === 0) {
+    lines.push(`  - (no recent room messages)`);
+  } else {
+    for (const message of relevantMessages) {
+      const actor = message.actorName || message.actorId || message.actorType;
+      const target = message.target ? ` -> ${message.target}` : '';
+      lines.push(`  - [${actor}${target}] ${message.content.slice(0, 300)}`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 // ─── Main Agent ↔ Coordinator Thread ─────────────────────────────────────────
@@ -1303,7 +2604,9 @@ export function updateTeamFocus(teamId: string, newFocus: string): boolean {
   invalidateCache();
   const team = getManagedTeam(teamId);
   if (!team) return false;
-  team.currentFocus = String(newFocus || '').trim().slice(0, 2000);
+  const roomState = ensureTeamRoomState(team);
+  roomState.runGoal = String(newFocus || '').trim().slice(0, 2000);
+  team.currentFocus = roomState.runGoal;
   saveManagedTeam(team);
   return true;
 }
@@ -1315,7 +2618,13 @@ export function updateTeamMission(teamId: string, newMission: string): boolean {
   invalidateCache();
   const team = getManagedTeam(teamId);
   if (!team) return false;
-  team.mission = String(newMission || '').trim().slice(0, 2000);
+  const roomState = ensureTeamRoomState(team);
+  roomState.purpose = String(newMission || '').trim().slice(0, 2000);
+  team.purpose = roomState.purpose || undefined;
+  team.mission = roomState.purpose;
+  if (!String(team.teamContext || '').trim()) {
+    team.teamContext = roomState.purpose;
+  }
   saveManagedTeam(team);
   return true;
 }

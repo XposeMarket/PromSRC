@@ -1,0 +1,66 @@
+{
+  "id": "kilocode",
+  "kind": "provider",
+  "name": "Kilo Gateway",
+  "description": "Kilo Gateway proxy for multi-provider model routing.",
+  "category": "Gateway",
+  "enabledByDefault": true,
+  "docsUrl": "https://kilocode.ai/",
+  "tags": ["kilocode", "gateway", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["kilo/auto", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-flash-preview"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#16A34A"
+  },
+  "ownership": {
+    "providerIds": ["kilocode"],
+    "modelPrefixes": ["kilo/", "anthropic/", "openai/", "google/"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["KILOCODE_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "kilo_..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "kilo/auto"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.kilo.ai/api/gateway"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.kilo.ai/api/gateway",
+      "model": "kilo/auto"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

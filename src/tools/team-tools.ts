@@ -455,11 +455,11 @@ export const manageTeamGoalTool = {
       const changeVerb = action === 'append' ? 'appended to' : 'updated';
       const reasonStr = reason ? ` Reason: ${reason}` : '';
       const chatMsg = `[Goal ${changeVerb}]${reasonStr}\n\nNew goal: ${newGoal.slice(0, 300)}${newGoal.length > 300 ? '...' : ''}`;
-      appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: chatMsg });
+      const chatMessage = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: chatMsg });
 
       if (_broadcastFn) {
         _broadcastFn({ type: 'team_goal_updated', teamId, teamName: team.name, newGoal });
-        _broadcastFn({ type: 'team_chat_message', teamId, teamName: team.name, message: chatMsg });
+        _broadcastFn({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage, text: chatMsg });
       }
 
       return {

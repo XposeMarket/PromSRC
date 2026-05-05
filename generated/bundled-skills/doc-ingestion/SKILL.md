@@ -1,9 +1,8 @@
 ---
-name: Doc Ingestion
-description: Ingest uploaded documents (PDF, DOCX, XLSX, TXT) into the Prometheus business brain. Extracts structured facts and writes them to BUSINESS.md and the appropriate entity files (clients, contacts, vendors, projects). Use whenever a user uploads a business document and says things like "here's our contract with Acme", "add this to the system", "ingest this", "remember this document", or uploads any file with clear business context. Orchestrates docx-reader, pdf-reader, and xlsx-reader skills automatically based on file type. Triggers on: ingest this, add to business brain, remember this document, upload contract, here is our agreement, add this client, new vendor, project brief uploaded, store this info, learn from this.
-emoji: "🧠"
+name: doc-ingestion
+description: This is the skill that feeds the business brain from real documents instead of manual data entry.
+emoji: "🧩"
 version: 1.0.0
-triggers: ingest this, add to business brain, remember this document, upload contract, here is our agreement, add this client, new vendor, project brief, store this info, learn from this, process this document, add to memory, extract and save, document uploaded with context, contract uploaded, proposal uploaded, SOP uploaded, invoice uploaded, company handbook
 ---
 
 # Doc Ingestion

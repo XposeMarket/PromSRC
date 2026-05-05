@@ -1,9 +1,8 @@
 ---
-name: Image Analyst
-description: Analyze images, screenshots, diagrams, UI mockups, charts, and photos that have been attached to the chat. Extracts structured insights, identifies elements, describes layout, reads text, interprets data. Triggers when images are uploaded or when the user asks to analyze/describe/read an image.
-emoji: 🖼️
+name: image-analyst
+description: Use this skill when images have been uploaded to the chat or when the user wants to analyze a visual file. Works best with vision-capable providers (OpenAI, OpenAI Codex).
+emoji: "🧩"
 version: 1.0.0
-triggers: analyze image, describe image, read screenshot, what is in this image, look at this, annotate, diagram, chart, UI mockup, photo, OCR, extract text from image, what does this show
 ---
 
 # Image Analyst

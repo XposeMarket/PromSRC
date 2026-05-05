@@ -242,6 +242,69 @@ function opPaths(workspacePath: string) {
   };
 }
 
+type OperationalRefreshOptions = {
+  force?: boolean;
+  minIntervalMs?: number;
+};
+
+type OperationalRefreshState = {
+  running: boolean;
+  queued: boolean;
+  options: OperationalRefreshOptions;
+};
+
+const operationalRefreshStates = new Map<string, OperationalRefreshState>();
+
+function mergeOperationalRefreshOptions(
+  current: OperationalRefreshOptions,
+  next?: OperationalRefreshOptions,
+): OperationalRefreshOptions {
+  const merged: OperationalRefreshOptions = {
+    force: Boolean(current.force || next?.force),
+  };
+  const currentMin = Number.isFinite(Number(current.minIntervalMs)) ? Number(current.minIntervalMs) : null;
+  const nextMin = Number.isFinite(Number(next?.minIntervalMs)) ? Number(next?.minIntervalMs) : null;
+  if (currentMin !== null && nextMin !== null) merged.minIntervalMs = Math.min(currentMin, nextMin);
+  else if (currentMin !== null) merged.minIntervalMs = currentMin;
+  else if (nextMin !== null) merged.minIntervalMs = nextMin;
+  return merged;
+}
+
+export function scheduleOperationalIndexRefresh(
+  workspacePath: string,
+  opts?: OperationalRefreshOptions,
+): void {
+  const state = operationalRefreshStates.get(workspacePath) || {
+    running: false,
+    queued: false,
+    options: {},
+  };
+  state.options = mergeOperationalRefreshOptions(state.options, opts);
+  state.queued = true;
+  operationalRefreshStates.set(workspacePath, state);
+  if (state.running) return;
+
+  state.running = true;
+  setImmediate(() => {
+    const active = operationalRefreshStates.get(workspacePath);
+    if (!active) return;
+    const runOpts = active.options;
+    active.queued = false;
+    active.options = {};
+    try {
+      refreshOperationalIndex(workspacePath, runOpts);
+    } catch {
+      // Best effort only; callers read the latest on-disk snapshot.
+    } finally {
+      const nextState = operationalRefreshStates.get(workspacePath);
+      if (!nextState) return;
+      nextState.running = false;
+      operationalRefreshStates.set(workspacePath, nextState);
+      if (nextState.queued) scheduleOperationalIndexRefresh(workspacePath, nextState.options);
+    }
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Source parsers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -840,6 +903,53 @@ function classifyQuery(query: string): QueryIntent {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+function sharedValues(a: string[] | undefined, b: string[] | undefined, limit = 8): string[] {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return [];
+  const right = new Set(b.map((value) => String(value || '').trim()).filter(Boolean));
+  const out: string[] = [];
+  for (const value of a) {
+    const key = String(value || '').trim();
+    if (!key || !right.has(key) || out.includes(key)) continue;
+    out.push(key);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function collectEntityValues(record: OperationalRecord): string[] {
+  return [
+    ...(record.entities.people || []),
+    ...(record.entities.projects || []),
+    ...(record.entities.features || []),
+    ...(record.entities.files || []),
+    ...(record.entities.tools || []),
+    ...(record.entities.aliases || []),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+}
+
+function toOperationalHit(
+  rec: OperationalRecord,
+  score: number,
+  whyMatched: OperationalHit['whyMatched'],
+): OperationalHit {
+  return {
+    id: rec.id,
+    canonicalKey: rec.canonicalKey,
+    recordType: rec.recordType,
+    title: rec.title,
+    summary: rec.summary,
+    body: rec.body,
+    score: Number(score.toFixed(4)),
+    day: rec.day,
+    projectId: rec.projectId,
+    status: rec.status,
+    confidence: rec.confidence,
+    durability: rec.durability,
+    sourceRefs: rec.sourceRefs.map((s) => ({ sourcePath: s.sourcePath, sourceType: s.sourceType })),
+    whyMatched,
+  };
+}
+
 // Search
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -884,7 +994,6 @@ export function searchOperationalLayer(
     recencyBias?: boolean;
   }
 ): OperationalHit[] {
-  refreshOperationalIndex(workspacePath, { minIntervalMs: 30000 });
   const paths = opPaths(workspacePath);
 
   const store = readJson<OperationalStore>(paths.store, {
@@ -968,25 +1077,70 @@ export function searchOperationalLayer(
     .map(([rid, s]) => ({ rid, ...s }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
-    .map(({ rid, score, why }) => {
-      const rec = store.records[rid];
+    .map(({ rid, score, why }) => toOperationalHit(store.records[rid], score, why));
+}
+
+export function getRelatedOperationalRecords(
+  workspacePath: string,
+  recordIdOrKey: string,
+  limit = 8,
+): OperationalHit[] {
+  const paths = opPaths(workspacePath);
+  const store = readJson<OperationalStore>(paths.store, {
+    version: OP_VERSION, updatedAt: '', records: {},
+  });
+  const lookup = readJson<Record<string, string>>(paths.exactLookup, {});
+  const resolvedId = store.records[recordIdOrKey]?.id || lookup[recordIdOrKey];
+  if (!resolvedId) return [];
+  const base = store.records[resolvedId];
+  if (!base) return [];
+
+  const baseEntityValues = collectEntityValues(base);
+  const baseSourcePaths = base.sourceRefs.map((s) => s.sourcePath);
+  const baseSourceTypes = base.sourceRefs.map((s) => s.sourceType);
+  const now = Date.now();
+
+  return Object.values(store.records)
+    .filter((rec) => rec.id !== base.id)
+    .map((rec) => {
+      const sharedRelatedIds = sharedValues(base.relatedIds, [rec.id, rec.canonicalKey, ...rec.relatedIds], 4);
+      const sharedProject = base.projectId && rec.projectId && base.projectId === rec.projectId;
+      const sharedSourcePaths = sharedValues(baseSourcePaths, rec.sourceRefs.map((s) => s.sourcePath), 4);
+      const sharedSourceTypes = sharedValues(baseSourceTypes, rec.sourceRefs.map((s) => s.sourceType), 3);
+      const sharedTags = sharedValues(base.tags, rec.tags, 5);
+      const sharedTerms = sharedValues(base.exactTerms, rec.exactTerms, 6);
+      const sharedEntities = sharedValues(baseEntityValues, collectEntityValues(rec), 6);
+      const sameRecordType = base.recordType === rec.recordType;
+      const reciprocalRelation = rec.relatedIds.includes(base.id) || rec.relatedIds.includes(base.canonicalKey);
+
+      let score = 0;
+      if (sharedRelatedIds.length) score += 1.2;
+      if (reciprocalRelation) score += 0.8;
+      if (sharedProject) score += 0.7;
+      if (sharedSourcePaths.length) score += 0.45 + (sharedSourcePaths.length * 0.08);
+      else if (sharedSourceTypes.length) score += 0.2;
+      if (sharedTags.length) score += Math.min(0.45, sharedTags.length * 0.12);
+      if (sharedTerms.length) score += Math.min(0.6, sharedTerms.length * 0.14);
+      if (sharedEntities.length) score += Math.min(0.7, sharedEntities.length * 0.18);
+      if (sameRecordType) score += 0.12;
+      score += recencyWeight(rec.day, now) * 0.06;
+
       return {
-        id: rec.id,
-        canonicalKey: rec.canonicalKey,
-        recordType: rec.recordType,
-        title: rec.title,
-        summary: rec.summary,
-        body: rec.body,
-        score: Number(score.toFixed(4)),
-        day: rec.day,
-        projectId: rec.projectId,
-        status: rec.status,
-        confidence: rec.confidence,
-        durability: rec.durability,
-        sourceRefs: rec.sourceRefs.map(s => ({ sourcePath: s.sourcePath, sourceType: s.sourceType })),
-        whyMatched: why,
+        rec,
+        score,
+        whyMatched: {
+          exactTerms: sharedTerms,
+          entities: sharedEntities,
+          lexical: [...sharedTags, ...sharedSourcePaths].slice(0, 8),
+          recordTypeReason: sameRecordType ? `related:${base.recordType}` : undefined,
+          recencyReason: sharedProject ? 'shared project context' : undefined,
+        } satisfies OperationalHit['whyMatched'],
       };
-    });
+    })
+    .filter((entry) => entry.score >= 0.25)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(50, limit)))
+    .map(({ rec, score, whyMatched }) => toOperationalHit(rec, score, whyMatched));
 }
 
 export function getOperationalRecord(

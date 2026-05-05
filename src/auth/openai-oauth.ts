@@ -60,6 +60,22 @@ function decodeJwtClaims(jwt: string): Record<string, any> {
   }
 }
 
+export function buildCodexCloudflareHeaders(accessToken?: string, explicitAccountId?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    'User-Agent': 'codex_cli_rs/0.0.0 (Prometheus)',
+    originator: 'codex_cli_rs',
+  };
+  let accountId = String(explicitAccountId || '').trim();
+  if (!accountId && accessToken) {
+    const claims = decodeJwtClaims(accessToken);
+    accountId = String(claims.chatgpt_account_id || claims.sub || '').trim();
+  }
+  if (accountId) {
+    headers['ChatGPT-Account-ID'] = accountId;
+  }
+  return headers;
+}
+
 // ─── Optional token exchange ────────────────────────────────────────────────────
 
 async function tryExchangeForApiKey(idToken: string): Promise<string | null> {

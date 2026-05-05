@@ -1,9 +1,8 @@
 ---
-name: Interactive Visuals (Router)
-description: Router skill — reads the user's request and directs to the correct specialized visualization skill. Do not use this skill to produce visuals directly. Instead, identify which sub-skill applies and use that one. Sub-skills are: chart-visualizer (data charts), svg-diagrams (architecture/technical diagrams), html-interactive (dashboards/calculators/interactive widgets), mermaid-diagrams (flowcharts/sequence/ERD/Gantt). Triggers on: visualize, show visually, make a visual, chart, diagram, graph, interactive, dashboard, render.
-emoji: "🧭"
-version: 2.0.0
-triggers: visualize, show visually, make a visual, chart, diagram, graph, interactive, dashboard, render, draw, plot, illustrate
+name: interactive-visuals
+description: This skill routes visual requests to the correct specialized skill. Read this first, then switch to the right skill.
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Interactive Visuals — Router

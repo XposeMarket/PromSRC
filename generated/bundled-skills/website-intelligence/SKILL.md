@@ -1,9 +1,8 @@
 ---
-name: Website Intelligence
-description: Deploy a 5-agent website audit team to fully analyze any website for SEO, performance, tech stack, AI visibility (GEO), backlinks, and content quality. Use for any request involving website analysis, SEO audit, site performance, or competitive research.
-emoji: 🔍
+name: website-intelligence
+description: Full Website Audit
+emoji: "🧩"
 version: 1.0.0
-triggers: seo, website audit, analyze site, analyze my website, site performance, geo, ai visibility, backlinks, content audit, website intelligence, audit my site, check my site, website score, page speed, tech stack, serp, search ranking
 ---
 
 # Website Intelligence

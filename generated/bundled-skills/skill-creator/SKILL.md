@@ -1,18 +1,9 @@
 ---
 name: Skill Creator
-description: >
-  Create, upgrade, and quality-check Prometheus skills from scratch. Use whenever
-  the user wants to build a new skill, capture a workflow as a reusable skill,
-  add a capability to Prometheus's skill library, upgrade an existing skill, or
-  evaluate whether a skill will trigger and work well. Triggers on: "create a skill",
-  "make a new skill", "build a skill", "add skill", "capture this as a skill",
-  "turn this into a skill", "write a skill for", "new skill", "skill for X",
-  "add capability", "skill builder", "upgrade this skill", "improve this skill",
-  "review this skill", "skill isn't triggering", "skill quality check",
-  "write me a skill that", "I want Prometheus to be able to".
-emoji: 🛠️
+description: A repeatable, quality-controlled process for building Prometheus skills that trigger reliably and actually change behavior.
+emoji: "🧩"
 version: 2.0.0
-triggers: create a skill, make a skill, build a skill, add skill, capture as skill, turn this into a skill, write a skill, new skill, skill builder, skill creator, add capability, upgrade skill, improve skill, review skill, skill not triggering, skill quality check, I want prometheus to be able to
+triggers: create a skill, make a skill, build a skill, add skill, capture as skill, turn this into a skill, write a skill, new skill, skill builder, skill creator, add capability, upgrade skill, improve skill, review skill, skill not triggering, skill quality check, i want prometheus to be able to
 ---
 
 # Skill Creator

@@ -1,0 +1,58 @@
+{
+  "id": "reddit",
+  "kind": "connector",
+  "name": "Reddit",
+  "description": "Connect Reddit so Prometheus can monitor subreddits, track mentions, and draft community posts.",
+  "category": "Social",
+  "enabledByDefault": true,
+  "docsUrl": "https://www.reddit.com/prefs/apps",
+  "tags": ["reddit", "community", "oauth"],
+  "runtime": {
+    "binding": "integrations/connectors/reddit"
+  },
+  "ui": {
+    "color": "#FF4500",
+    "permissions": [
+      { "icon": "?", "label": "Read posts and comments from subreddits" },
+      { "icon": "@", "label": "Monitor brand mentions" },
+      { "icon": "->", "label": "Draft posts and comments with approval" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_reddit"],
+    "capabilities": ["community", "research", "social"],
+    "tools": [
+      "connector_reddit_get_posts",
+      "connector_reddit_search",
+      "connector_reddit_submit_post",
+      "connector_reddit_get_comments"
+    ]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://www.reddit.com/prefs/apps",
+    "docsHint": "Reddit -> Preferences -> Apps -> Create web app -> Redirect URI: http://localhost:19424/auth/callback/reddit",
+    "callback": {
+      "port": 19424,
+      "path": "/auth/callback/reddit"
+    },
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "Client ID",
+        "input": "text",
+        "required": true,
+        "placeholder": "abc123..."
+      },
+      {
+        "key": "clientSecret",
+        "label": "Client Secret",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "abc123..."
+      }
+    ]
+  }
+}

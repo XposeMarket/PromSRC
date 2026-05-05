@@ -1,0 +1,62 @@
+{
+  "id": "openai_codex",
+  "kind": "provider",
+  "name": "OpenAI Codex",
+  "description": "OpenAI account-backed Codex provider using Prometheus desktop auth.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://platform.openai.com/docs/codex",
+  "tags": ["openai", "codex", "desktop auth"],
+  "runtime": {
+    "binding": "providers/openai-codex-adapter",
+    "options": {
+      "staticModels": [
+        "gpt-5.5",
+        "gpt-5.4-codex",
+        "gpt-5.4-codex-mini",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.3",
+        "gpt-5.2-codex",
+        "gpt-5.2",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.1-codex",
+        "gpt-5.1"
+      ]
+    }
+  },
+  "ui": {
+    "color": "#111827"
+  },
+  "ownership": {
+    "providerIds": ["openai_codex"],
+    "modelPrefixes": ["gpt-5", "gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1"],
+    "capabilities": ["llm", "desktop_oauth", "image_generation"]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "codex_oauth"
+  },
+  "config": {
+    "defaults": {
+      "model": "gpt-5.4"
+    },
+    "schema": {
+      "model": "string",
+      "reasoning_effort": "none|minimal|low|medium|high|xhigh?"
+    },
+    "uiHints": {
+      "model": {
+        "label": "Model",
+        "help": "Default Codex model for main chat and tasks."
+      },
+      "reasoning_effort": {
+        "label": "Reasoning Effort",
+        "help": "Optional reasoning level for supported Codex models."
+      }
+    }
+  }
+}

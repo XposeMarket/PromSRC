@@ -1,0 +1,27 @@
+{
+  "id": "memory",
+  "kind": "mcp_preset",
+  "name": "Memory",
+  "description": "MCP preset for persistent memory and knowledge-store workflows.",
+  "category": "Memory",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+  "tags": ["mcp", "memory", "knowledge"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/memory"
+  },
+  "ui": {
+    "color": "#7C3AED"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "memory", "knowledge_store"]
+  },
+  "setup": {
+    "authType": "none"
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"]
+  }
+}

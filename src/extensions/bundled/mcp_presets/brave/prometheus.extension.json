@@ -1,0 +1,40 @@
+{
+  "id": "brave",
+  "kind": "mcp_preset",
+  "name": "Brave Search",
+  "description": "MCP preset for Brave Search web results.",
+  "category": "Search",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+  "tags": ["mcp", "brave", "search"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/brave"
+  },
+  "ui": {
+    "color": "#F97316"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "search", "web"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "fields": [
+      {
+        "key": "BRAVE_API_KEY",
+        "label": "Brave API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "BSA..."
+      }
+    ]
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+    "envTemplate": {
+      "BRAVE_API_KEY": ""
+    }
+  }
+}

@@ -11,26 +11,72 @@
 
 import { API } from './state.js';
 
+const LOCAL_GATEWAY_ORIGIN = 'http://127.0.0.1:18789';
+
+function buildApiCandidateUrls(path) {
+  const rawPath = String(path || '');
+  const candidates = [];
+  const pushCandidate = (url) => {
+    if (!url || candidates.includes(url)) return;
+    candidates.push(url);
+  };
+
+  pushCandidate(API + rawPath);
+
+  if (rawPath.startsWith('/api/')) {
+    try {
+      const origin = String(window.location?.origin || '').trim();
+      if (/^https?:/i.test(origin)) pushCandidate(origin.replace(/\/$/, '') + rawPath);
+    } catch {}
+
+    pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
+  }
+
+  return candidates;
+}
+
+function shouldRetryApiRequest(err) {
+  const name = String(err?.name || '');
+  const message = String(err?.message || '');
+  return (
+    name === 'AbortError' ||
+    /Failed to fetch|NetworkError|Load failed|Request timed out/i.test(message)
+  );
+}
+
 /**
  * Fetch wrapper with JSON content-type and error handling.
  * Returns parsed JSON response.
  */
 export async function api(path, opts = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
-  try {
-    const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, signal: controller.signal, ...opts });
-    if (!r.ok) {
-      const body = await r.text().catch(() => '');
-      throw new Error(`API ${r.status}: ${body}`);
+  const candidates = buildApiCandidateUrls(path);
+  let lastError = null;
+  const timeoutMs = Number(opts.timeoutMs || 30000);
+  const { timeoutMs: _timeoutMs, ...fetchOpts } = opts;
+
+  for (let index = 0; index < candidates.length; index++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(candidates[index], {
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        ...fetchOpts,
+      });
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        throw new Error(`API ${r.status}: ${body}`);
+      }
+      return r.json();
+    } catch (err) {
+      lastError = err?.name === 'AbortError' ? new Error('Request timed out') : err;
+      if (!shouldRetryApiRequest(err) || index === candidates.length - 1) throw lastError;
+    } finally {
+      clearTimeout(timeout);
     }
-    return r.json();
-  } catch (err) {
-    if (err.name === 'AbortError') throw new Error('Request timed out');
-    throw err;
-  } finally {
-    clearTimeout(timeout);
   }
+
+  throw lastError || new Error('Request failed');
 }
 
 // Expose on window
@@ -77,6 +123,7 @@ export const ENDPOINTS = {
   AUDIT_LOG: '/api/audit-log',
   MEMORY_GRAPH: '/api/memory/graph',
   memoryRecord: (id) => `/api/memory/record/${encodeURIComponent(id)}`,
+  MEMORY_CREATE: '/api/memory/create',
   MEMORY_REFRESH: '/api/memory/refresh',
 
   // Settings
@@ -114,7 +161,9 @@ export const ENDPOINTS = {
   CREDENTIALS_AUDIT: '/api/credentials/audit',
 
   // Connections
+  EXTENSIONS_CATALOG: '/api/extensions/catalog',
   CONNECTIONS: '/api/connections',
+  CONNECTIONS_CREDENTIALS: '/api/connections/credentials',
   CONNECTIONS_SAVE: '/api/connections/save',
   CONNECTIONS_DISCONNECT: '/api/connections/disconnect',
   CONNECTIONS_OAUTH_START: '/api/connections/oauth/start',
@@ -133,6 +182,8 @@ export const ENDPOINTS = {
 
   // Shortcuts
   SHORTCUTS: '/api/shortcuts',
+  INSTALLED_APPS: '/api/installed-apps',
+  INSTALLED_APPS_SEARCH: '/api/installed-apps/search',
 
   // Canvas
   CANVAS_FILE: '/api/canvas/file',

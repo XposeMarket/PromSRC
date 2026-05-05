@@ -33,6 +33,11 @@ export interface OpenAICompatConfig {
   /** Called just before each request to get a fresh token (OAuth providers). */
   getToken?: () => Promise<string>;
   providerId: ProviderID;
+  chatCompletionsPath?: string;
+  modelsPath?: string;
+  defaultHeaders?: Record<string, string>;
+  staticModels?: string[];
+  supportsReasoningEffort?: boolean;
 }
 
 export class OpenAICompatAdapter implements LLMProvider {
@@ -57,7 +62,10 @@ export class OpenAICompatAdapter implements LLMProvider {
 
   private async post(path: string, body: object): Promise<any> {
     const auth = await this.getAuthHeader();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(this.config.defaultHeaders || {}),
+    };
     if (auth) headers['Authorization'] = auth;
 
     const url = `${this.config.endpoint.replace(/\/$/, '')}${path}`;
@@ -77,7 +85,9 @@ export class OpenAICompatAdapter implements LLMProvider {
 
   private async get(path: string): Promise<any> {
     const auth = await this.getAuthHeader();
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = {
+      ...(this.config.defaultHeaders || {}),
+    };
     if (auth) headers['Authorization'] = auth;
 
     const url = `${this.config.endpoint.replace(/\/$/, '')}${path}`;
@@ -112,7 +122,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      stream: !!options?.onToken,
 	    };
 	    // Reasoning effort: only forward for providers that implement it.
-	    if (EFFORT_PROVIDERS.has(this.id as string)) {
+    if (this.config.supportsReasoningEffort ?? EFFORT_PROVIDERS.has(this.id as string)) {
 	      let rawEffort: string | undefined;
 	      if (options?.think === false) {
 	        rawEffort = undefined;
@@ -143,7 +153,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      return this.streamChatCompletions(body, options);
 	    }
 
-	    const data = await this.post('/v1/chat/completions', body);
+		    const data = await this.post(this.config.chatCompletionsPath || '/v1/chat/completions', body);
     const choice = data.choices?.[0];
     const message: ChatMessage = {
       role: 'assistant',
@@ -158,7 +168,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 	    if (auth) headers['Authorization'] = auth;
 
-	    const url = `${this.config.endpoint.replace(/\/$/, '')}/v1/chat/completions`;
+		    const url = `${this.config.endpoint.replace(/\/$/, '')}${this.config.chatCompletionsPath || '/v1/chat/completions'}`;
 	    const response = await fetch(url, {
 	      method: 'POST',
 	      headers,
@@ -280,26 +290,39 @@ export class OpenAICompatAdapter implements LLMProvider {
       body.response_format = { type: 'json_object' };
     }
 
-    const data = await this.post('/v1/chat/completions', body);
+	    const data = await this.post(this.config.chatCompletionsPath || '/v1/chat/completions', body);
     const content = data.choices?.[0]?.message?.content ?? '';
     return { response: contentToString(content) };
   }
 
-  async listModels(): Promise<ModelInfo[]> {
-    try {
-      const data = await this.get('/v1/models');
-      return (data.data || []).map((m: any) => ({ name: m.id }));
-    } catch {
-      return [];
-    }
-  }
+	  async listModels(): Promise<ModelInfo[]> {
+	    try {
+	      const data = await this.get(this.config.modelsPath || '/v1/models');
+	      return (data.data || []).map((m: any) => ({ name: m.id }));
+	    } catch {
+	      return (this.config.staticModels || []).map((name) => ({ name }));
+	    }
+	  }
 
-  async testConnection(): Promise<boolean> {
-    try {
-      await this.get('/v1/models');
-      return true;
-    } catch {
-      return false;
-    }
-  }
+	  async testConnection(): Promise<boolean> {
+	    try {
+	      await this.get(this.config.modelsPath || '/v1/models');
+	      return true;
+	    } catch {
+	      const fallbackModel = this.config.staticModels?.[0];
+	      if (!fallbackModel) return false;
+	      try {
+	        await this.post(this.config.chatCompletionsPath || '/v1/chat/completions', {
+	          model: fallbackModel,
+	          messages: [{ role: 'user', content: 'Reply with pong only.' }],
+	          max_tokens: 8,
+	          temperature: 0,
+	          stream: false,
+	        });
+	        return true;
+	      } catch {
+	        return false;
+	      }
+	    }
+	  }
 }

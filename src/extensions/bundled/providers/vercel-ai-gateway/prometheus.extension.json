@@ -1,0 +1,66 @@
+{
+  "id": "vercel-ai-gateway",
+  "kind": "provider",
+  "name": "Vercel AI Gateway",
+  "description": "Vercel AI Gateway for multi-provider routing behind a single API key.",
+  "category": "Gateway",
+  "enabledByDefault": true,
+  "docsUrl": "https://vercel.com/docs/ai-gateway",
+  "tags": ["vercel", "gateway", "aggregator", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-flash-preview", "zai/glm-5.1", "minimax/minimax-m2.7", "moonshotai/kimi-k2.6"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#000000"
+  },
+  "ownership": {
+    "providerIds": ["vercel-ai-gateway"],
+    "modelPrefixes": ["anthropic/", "openai/", "google/", "zai/", "minimax/", "moonshotai/"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["AI_GATEWAY_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "vercel_..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "anthropic/claude-opus-4.6"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://ai-gateway.vercel.sh/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://ai-gateway.vercel.sh/v1",
+      "model": "anthropic/claude-opus-4.6"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

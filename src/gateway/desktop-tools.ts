@@ -12,6 +12,12 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
+import {
+  getInstalledAppsInventory,
+  searchInstalledApps,
+  resolveInstalledAppLaunch,
+  resolveInstalledAppLaunchByQuery,
+} from './installed-apps.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,6 +47,7 @@ export interface DesktopMonitorInfo {
 }
 
 export interface DesktopAdvisorPacket {
+  screenshotId: string;
   screenshotBase64: string;
   screenshotMime: 'image/png';
   width: number;
@@ -57,12 +64,18 @@ export interface DesktopAdvisorPacket {
   virtualScreen?: { left: number; top: number; width: number; height: number };
   /** Region actually captured in this packet (same as top-left used for CopyFromScreen) */
   captureRegion?: { left: number; top: number; width: number; height: number };
+  /** Virtual-screen units per screenshot pixel. Normally 1, but explicit for DPI/fallback safety. */
+  coordinateScale?: { x: number; y: number };
   /** How the bitmap maps to virtual-screen clicks */
   captureMode?: 'all' | 'primary' | 'monitor';
   /** When captureMode === 'monitor', which display index */
   captureMonitorIndex?: number;
   /** Which monitor holds the foreground window (if known) */
   activeMonitorIndex?: number | null;
+  /** Target window metadata for desktop_window_screenshot packets */
+  targetWindow?: DesktopWindowInfo;
+  /** Incremented whenever Prometheus performs an action that may change desktop/window state. */
+  actionVersion?: number;
 }
 
 /** Options for `desktop_screenshot` / `desktopScreenshot` */
@@ -77,6 +90,48 @@ export interface DesktopScreenshotOptions {
 export interface DesktopPointerMonitorOptions {
   monitor_relative?: boolean;
   monitor_index?: number;
+}
+
+export type DesktopCoordinateSpace = 'virtual' | 'monitor' | 'capture' | 'window';
+
+export interface DesktopCoordinateTarget extends DesktopPointerMonitorOptions {
+  x: number;
+  y: number;
+  coordinate_space?: DesktopCoordinateSpace;
+  screenshot_id?: string;
+  window_name?: string;
+  window_handle?: number;
+}
+
+export interface DesktopResolvedActionPoint {
+  x: number;
+  y: number;
+  coordinateSpace: DesktopCoordinateSpace;
+  sourceNote: string;
+  screenshotId?: string;
+  targetWindow?: DesktopWindowInfo;
+}
+
+export type DesktopVerificationMode = 'off' | 'auto' | 'strict';
+export type DesktopVerificationStatus = 'confirmed' | 'likely_noop' | 'uncertain' | 'failed';
+
+export interface DesktopVerificationSignal {
+  kind: 'active_window' | 'probe_hash' | 'probe_ocr';
+  state: 'changed' | 'unchanged' | 'unavailable';
+  detail: string;
+  strength: 'strong' | 'weak';
+}
+
+export interface DesktopActionVerification {
+  status: DesktopVerificationStatus;
+  summary: string;
+  signals: DesktopVerificationSignal[];
+}
+
+export interface DesktopActionVerificationOptions {
+  mode?: DesktopVerificationMode;
+  coordinateSpace?: DesktopCoordinateSpace;
+  allowRetryOnLikelyNoop?: boolean;
 }
 
 /** Parse `desktop_screenshot` tool args (monitor_index overrides capture). */
@@ -122,6 +177,82 @@ interface DesktopSessionState {
 }
 
 const sessions = new Map<string, DesktopSessionState>();
+const DESKTOP_PACKET_TTL_MS = 15 * 60 * 1000;
+const DESKTOP_SCREENSHOT_FRESH_MS = 2 * 60 * 1000;
+const desktopPacketIndex = new Map<string, { sessionId: string; packet: DesktopAdvisorPacket; expiresAt: number }>();
+let desktopActionVersion = 0;
+
+function makeDesktopScreenshotId(capturedAt: number, contentHash: string): string {
+  return `ds_${capturedAt.toString(36)}_${String(contentHash || '').slice(0, 12)}`;
+}
+
+function pruneDesktopPacketIndex(now: number = Date.now()): void {
+  for (const [id, entry] of desktopPacketIndex.entries()) {
+    if (entry.expiresAt <= now) desktopPacketIndex.delete(id);
+  }
+}
+
+function registerDesktopPacket(sessionId: string, packet: DesktopAdvisorPacket): void {
+  pruneDesktopPacketIndex(packet.capturedAt);
+  desktopPacketIndex.set(packet.screenshotId, {
+    sessionId,
+    packet,
+    expiresAt: packet.capturedAt + DESKTOP_PACKET_TTL_MS,
+  });
+}
+
+function markDesktopStateChanged(): void {
+  desktopActionVersion++;
+}
+
+function desktopPacketAgeMs(packet: DesktopAdvisorPacket): number {
+  const capturedAt = Number(packet.capturedAt);
+  return Number.isFinite(capturedAt) ? Date.now() - capturedAt : Number.POSITIVE_INFINITY;
+}
+
+function describeFreshScreenshotRequirement(packet: DesktopAdvisorPacket): string {
+  const ageSec = Math.max(0, Math.round(desktopPacketAgeMs(packet) / 1000));
+  return `screenshot_id "${packet.screenshotId}" is ${ageSec}s old. Capture a fresh focused desktop_window_screenshot before clicking.`;
+}
+
+function describeStaleScreenshotRequirement(packet: DesktopAdvisorPacket): string {
+  const version = Number(packet.actionVersion);
+  if (!Number.isFinite(version)) {
+    return `screenshot_id "${packet.screenshotId}" predates desktop action tracking. Capture a fresh desktop_screenshot or desktop_window_screenshot before clicking.`;
+  }
+  return `screenshot_id "${packet.screenshotId}" is stale because the desktop changed after it was captured. Capture a fresh desktop_screenshot or desktop_window_screenshot and click with that screenshot_id.`;
+}
+
+function describeDesktopWindowBounds(windowInfo: DesktopWindowInfo | undefined | null): string {
+  if (!windowInfo) return 'unknown window';
+  const title = String(windowInfo.title || '').trim() || '(untitled)';
+  const proc = String(windowInfo.processName || '').trim() || 'process';
+  const left = Number(windowInfo.left);
+  const top = Number(windowInfo.top);
+  const width = Number(windowInfo.width);
+  const height = Number(windowInfo.height);
+  const bounds =
+    [left, top, width, height].every(Number.isFinite) && width >= 0 && height >= 0
+      ? ` @ (${Math.floor(left)}, ${Math.floor(top)}) ${Math.floor(width)}x${Math.floor(height)}`
+      : '';
+  return `"${title}" (${proc}${bounds})`;
+}
+
+function pointInsideDesktopWindow(x: number, y: number, windowInfo?: DesktopWindowInfo | null): boolean {
+  if (!windowInfo) return false;
+  const left = Number(windowInfo.left);
+  const top = Number(windowInfo.top);
+  const width = Number(windowInfo.width);
+  const height = Number(windowInfo.height);
+  if (![left, top, width, height].every(Number.isFinite) || width < 1 || height < 1) return false;
+  return x >= left && y >= top && x < left + width && y < top + height;
+}
+
+function sameDesktopWindowHandle(a?: DesktopWindowInfo | null, b?: DesktopWindowInfo | null): boolean {
+  const ah = normalizedWindowHandle(a);
+  const bh = normalizedWindowHandle(b);
+  return ah > 0 && bh > 0 && ah === bh;
+}
 
 // ─── Macro Recording ──────────────────────────────────────────────────────────
 interface MacroAction {
@@ -348,6 +479,7 @@ public static class PrometheusWinApi {
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
   [DllImport("user32.dll")] public static extern uint GetCurrentThreadId();
 }
@@ -534,12 +666,22 @@ $procName = if ($aproc) { [string]$aproc.ProcessName } else { 'unknown' }
 if (-not $winTitle) { $winTitle = '[' + $procName + ']' }
 $activeWindow = $null
 if ($hFg -ne [IntPtr]::Zero) {
+  $fgRect = New-Object PrometheusWinApi+RECT
+  $okFgRect = [PrometheusWinApi]::GetWindowRect($hFg, [ref]$fgRect)
+  $fgLeft = if ($okFgRect) { [int]$fgRect.Left } else { 0 }
+  $fgTop = if ($okFgRect) { [int]$fgRect.Top } else { 0 }
+  $fgWidth = if ($okFgRect) { [int]($fgRect.Right - $fgRect.Left) } else { 0 }
+  $fgHeight = if ($okFgRect) { [int]($fgRect.Bottom - $fgRect.Top) } else { 0 }
   $activeWindow = [ordered]@{
     pid = [int]$apid
     processName = $procName
     title = $winTitle
     handle = [int64]$hFg.ToInt64()
     monitorIndex = [int]$actMi
+    left = $fgLeft
+    top = $fgTop
+    width = $fgWidth
+    height = $fgHeight
   }
 }
 [PSCustomObject]@{
@@ -721,13 +863,15 @@ if ($cropX2 -gt $cropX1 -and $cropY2 -gt $cropY1) {
   $cw = [Math]::Min($bounds.Width - $cx, $cropX2 - $cropX1)
   $ch = [Math]::Min($bounds.Height - $cy, $cropY2 - $cropY1)
   if ($cw -gt 0 -and $ch -gt 0) {
+    $actualLeft = [int]($bounds.Left + $cx)
+    $actualTop = [int]($bounds.Top + $cy)
     $cropped = New-Object System.Drawing.Bitmap $cw, $ch
     $gc = [System.Drawing.Graphics]::FromImage($cropped)
     $gc.DrawImage($bmp, 0, 0, [System.Drawing.Rectangle]::new($cx, $cy, $cw, $ch), [System.Drawing.GraphicsUnit]::Pixel)
     $gc.Dispose()
     $bmp.Dispose()
     $bmp = $cropped
-    $bounds = [System.Drawing.Rectangle]::new($cropX1, $cropY1, $cw, $ch)
+    $bounds = [System.Drawing.Rectangle]::new($actualLeft, $actualTop, $cw, $ch)
   }
 }
 # --- End crop ---
@@ -884,8 +1028,628 @@ async function resolveVirtualPointerCoords(
   return { ok: true, x: xx + m.left, y: yy + m.top };
 }
 
+function normalizeCoordinateSpace(
+  target: DesktopCoordinateTarget,
+): DesktopCoordinateSpace {
+  const raw = String(target.coordinate_space || '').trim().toLowerCase();
+  if (raw === 'virtual' || raw === 'monitor' || raw === 'capture' || raw === 'window') {
+    return raw;
+  }
+  if (target.monitor_relative) return 'monitor';
+  if (target.screenshot_id) return 'capture';
+  if (
+    (target.window_name != null && String(target.window_name).trim()) ||
+    (target.window_handle != null && Number.isFinite(Number(target.window_handle)) && Number(target.window_handle) > 0)
+  ) {
+    return 'window';
+  }
+  return 'virtual';
+}
+
+function getDesktopAdvisorPacketByIdInternal(
+  sessionId: string,
+  screenshotId: string,
+): { ok: true; packet: DesktopAdvisorPacket } | { ok: false; message: string } {
+  const id = String(screenshotId || '').trim();
+  if (!id) return { ok: false, message: 'screenshot_id is required.' };
+  pruneDesktopPacketIndex();
+  const entry = desktopPacketIndex.get(id);
+  if (!entry || entry.sessionId !== sessionId) {
+    return {
+      ok: false,
+      message: `Unknown screenshot_id "${id}". Capture a fresh desktop_screenshot or desktop_window_screenshot first.`,
+    };
+  }
+  if (Date.now() > entry.expiresAt) {
+    desktopPacketIndex.delete(id);
+    return {
+      ok: false,
+      message: `screenshot_id "${id}" expired. Capture a fresh desktop_screenshot or desktop_window_screenshot first.`,
+    };
+  }
+  return { ok: true, packet: entry.packet };
+}
+
+async function resolveWindowCoordinateBase(
+  target: DesktopCoordinateTarget,
+  packet?: DesktopAdvisorPacket,
+): Promise<{ ok: true; window: DesktopWindowInfo; source: 'live' | 'snapshot' } | { ok: false; message: string }> {
+  const handleNum = Number(target.window_handle);
+  const hasHandle = Number.isFinite(handleNum) && handleNum > 0;
+  const query = String(target.window_name || '').trim();
+
+  let liveWindow: DesktopWindowInfo | undefined;
+  if (hasHandle || query || packet?.targetWindow?.handle) {
+    const ctx = await gatherDesktopContextInternal();
+    if (hasHandle) {
+      liveWindow = ctx.windows.find((w) => Number(w.handle) === Math.floor(handleNum));
+    }
+    if (!liveWindow && query) {
+      liveWindow = findWindowsByName(ctx.windows, query)[0];
+    }
+    if (!liveWindow && packet?.targetWindow?.handle) {
+      liveWindow = ctx.windows.find((w) => Number(w.handle) === Number(packet.targetWindow?.handle));
+    }
+  }
+
+  if (liveWindow) {
+    return { ok: true, window: liveWindow, source: 'live' };
+  }
+  if (packet?.targetWindow) {
+    return { ok: true, window: packet.targetWindow, source: 'snapshot' };
+  }
+
+  if (hasHandle) {
+    return { ok: false, message: `No window found for window_handle=${Math.floor(handleNum)}.` };
+  }
+  if (query) {
+    return { ok: false, message: `No window matching "${query}" found.` };
+  }
+  return {
+    ok: false,
+    message: 'coordinate_space="window" requires screenshot_id from desktop_window_screenshot or window_name/window_handle.',
+  };
+}
+
+export function getDesktopAdvisorPacketById(sessionId: string, screenshotId: string): DesktopAdvisorPacket | null {
+  const resolved = getDesktopAdvisorPacketByIdInternal(sessionId, screenshotId);
+  return resolved.ok ? resolved.packet : null;
+}
+
+export async function resolveDesktopActionPoint(
+  sessionId: string,
+  target: DesktopCoordinateTarget,
+  label: string = 'point',
+): Promise<{ ok: true; point: DesktopResolvedActionPoint } | { ok: false; message: string }> {
+  const rawX = Number(target.x);
+  const rawY = Number(target.y);
+  const x = Math.floor(rawX);
+  const y = Math.floor(rawY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return { ok: false, message: `${label}: x and y must be valid numbers.` };
+  }
+
+  const coordinateSpace = normalizeCoordinateSpace(target);
+  if (coordinateSpace === 'virtual') {
+    return {
+      ok: true,
+      point: {
+        x,
+        y,
+        coordinateSpace,
+        sourceNote: '[virtual coordinates]',
+      },
+    };
+  }
+
+  if (coordinateSpace === 'monitor') {
+    const resolved = await resolveVirtualPointerCoords(x, y, {
+      monitor_relative: true,
+      monitor_index: target.monitor_index,
+    });
+    if (!resolved.ok) return { ok: false, message: `${label}: ${resolved.message}` };
+    return {
+      ok: true,
+      point: {
+        x: resolved.x,
+        y: resolved.y,
+        coordinateSpace,
+        sourceNote: `[monitor m=${Math.floor(Number(target.monitor_index))} -> virtual (${resolved.x}, ${resolved.y})]`,
+      },
+    };
+  }
+
+  let packet: DesktopAdvisorPacket | undefined;
+  if (target.screenshot_id != null && String(target.screenshot_id).trim()) {
+    const packetResult = getDesktopAdvisorPacketByIdInternal(sessionId, String(target.screenshot_id || ''));
+    if (!packetResult.ok) return { ok: false, message: `${label}: ${packetResult.message}` };
+    packet = packetResult.packet;
+    if (packet.actionVersion !== desktopActionVersion) {
+      return { ok: false, message: `${label}: ${describeStaleScreenshotRequirement(packet)}` };
+    }
+  }
+
+  if (coordinateSpace === 'capture') {
+    if (!packet) {
+      return {
+        ok: false,
+        message: `${label}: coordinate_space="capture" requires screenshot_id from desktop_screenshot or desktop_window_screenshot.`,
+      };
+    }
+    if (x < 0 || y < 0 || x >= packet.width || y >= packet.height) {
+      return {
+        ok: false,
+        message: `${label}: capture-space point (${x}, ${y}) is outside screenshot ${packet.screenshotId} (${packet.width}x${packet.height}).`,
+      };
+    }
+    if (packet.targetWindow && desktopPacketAgeMs(packet) > DESKTOP_SCREENSHOT_FRESH_MS) {
+      return { ok: false, message: `${label}: ${describeFreshScreenshotRequirement(packet)}` };
+    }
+    const captureRegion = packet.captureRegion || {
+      left: 0,
+      top: 0,
+      width: packet.width,
+      height: packet.height,
+    };
+    const scaleX = Number(packet.coordinateScale?.x);
+    const scaleY = Number(packet.coordinateScale?.y);
+    const resolvedX = Math.floor(captureRegion.left + x * (Number.isFinite(scaleX) && scaleX > 0 ? scaleX : captureRegion.width / packet.width || 1));
+    const resolvedY = Math.floor(captureRegion.top + y * (Number.isFinite(scaleY) && scaleY > 0 ? scaleY : captureRegion.height / packet.height || 1));
+    if (packet.targetWindow) {
+      const ctx = await gatherDesktopContextInternal();
+      const liveTarget = ctx.windows.find((w) => Number(w.handle) === Number(packet.targetWindow?.handle));
+      if (!liveTarget) {
+        return { ok: false, message: `${label}: target window from screenshot is no longer visible. Capture a fresh desktop_window_screenshot.` };
+      }
+      if (!sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
+        return {
+          ok: false,
+          message: `${label}: target window is not active (${shortWindowLabel(ctx.activeWindow)} is active). Use desktop_window_screenshot with focus_first=true and the new screenshot_id before clicking.`,
+        };
+      }
+      if (
+        [packet.targetWindow.left, packet.targetWindow.top, liveTarget.left, liveTarget.top].every((n) => Number.isFinite(Number(n))) &&
+        (Math.floor(Number(packet.targetWindow.left)) !== Math.floor(Number(liveTarget.left)) ||
+          Math.floor(Number(packet.targetWindow.top)) !== Math.floor(Number(liveTarget.top)))
+      ) {
+        return {
+          ok: false,
+          message: `${label}: target window moved since screenshot. Capture a fresh focused desktop_window_screenshot and use its screenshot_id.`,
+        };
+      }
+      if (!pointInsideDesktopWindow(resolvedX, resolvedY, liveTarget)) {
+        return {
+          ok: false,
+          message: `${label}: resolved point (${resolvedX}, ${resolvedY}) is outside active target window ${describeDesktopWindowBounds(liveTarget)}. Re-detect the button bounds from a fresh focused window screenshot.`,
+        };
+      }
+    }
+    return {
+      ok: true,
+      point: {
+        x: resolvedX,
+        y: resolvedY,
+        coordinateSpace,
+        screenshotId: packet.screenshotId,
+        targetWindow: packet.targetWindow,
+        sourceNote: `[capture ${packet.screenshotId} (${x}, ${y}) -> virtual (${resolvedX}, ${resolvedY})]`,
+      },
+    };
+  }
+
+  const windowResult = await resolveWindowCoordinateBase(target, packet);
+  if (!windowResult.ok) return { ok: false, message: `${label}: ${windowResult.message}` };
+  if (packet?.targetWindow && desktopPacketAgeMs(packet) > DESKTOP_SCREENSHOT_FRESH_MS) {
+    return { ok: false, message: `${label}: ${describeFreshScreenshotRequirement(packet)}` };
+  }
+  const windowInfo = windowResult.window;
+  const left = Number(windowInfo.left);
+  const top = Number(windowInfo.top);
+  const width = Number(windowInfo.width);
+  const height = Number(windowInfo.height);
+  if (![left, top, width, height].every(Number.isFinite) || width < 1 || height < 1) {
+    return {
+      ok: false,
+      message: `${label}: target window bounds are unavailable for ${describeDesktopWindowBounds(windowInfo)}.`,
+    };
+  }
+  if (x < 0 || y < 0 || x >= width || y >= height) {
+    return {
+      ok: false,
+      message: `${label}: window-space point (${x}, ${y}) is outside ${describeDesktopWindowBounds(windowInfo)}.`,
+    };
+  }
+  const resolvedX = Math.floor(left) + x;
+  const resolvedY = Math.floor(top) + y;
+  if (packet?.targetWindow) {
+    const ctx = await gatherDesktopContextInternal();
+    const liveTarget = ctx.windows.find((w) => Number(w.handle) === Number(windowInfo.handle));
+    if (!liveTarget) {
+      return { ok: false, message: `${label}: target window is no longer visible. Capture a fresh desktop_window_screenshot.` };
+    }
+    if (!sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
+      return {
+        ok: false,
+        message: `${label}: target window is not active (${shortWindowLabel(ctx.activeWindow)} is active). Use desktop_window_screenshot with focus_first=true and the new screenshot_id before clicking.`,
+      };
+    }
+    if (
+      [packet.targetWindow.left, packet.targetWindow.top, liveTarget.left, liveTarget.top].every((n) => Number.isFinite(Number(n))) &&
+      (Math.floor(Number(packet.targetWindow.left)) !== Math.floor(Number(liveTarget.left)) ||
+        Math.floor(Number(packet.targetWindow.top)) !== Math.floor(Number(liveTarget.top)))
+    ) {
+      return {
+        ok: false,
+        message: `${label}: target window moved since screenshot. Capture a fresh focused desktop_window_screenshot and use its screenshot_id.`,
+      };
+    }
+  }
+  const packetWindow = packet?.targetWindow;
+  const staleNote =
+    packetWindow &&
+    windowResult.source === 'live' &&
+    [packetWindow.left, packetWindow.top].every((n) => Number.isFinite(Number(n))) &&
+    (Math.floor(Number(packetWindow.left)) !== Math.floor(left) ||
+      Math.floor(Number(packetWindow.top)) !== Math.floor(top))
+      ? ` moved since screenshot to (${Math.floor(left)}, ${Math.floor(top)})`
+      : '';
+  return {
+    ok: true,
+    point: {
+      x: resolvedX,
+      y: resolvedY,
+      coordinateSpace,
+      screenshotId: packet?.screenshotId,
+      targetWindow: windowInfo,
+      sourceNote:
+        `[window ${describeDesktopWindowBounds(windowInfo)} local (${x}, ${y}) -> virtual (${resolvedX}, ${resolvedY})` +
+        `${staleNote}]`,
+    },
+  };
+}
+
 function computeContentHash(base64: string): string {
   return crypto.createHash('sha1').update(base64 || '').digest('hex');
+}
+
+function createDesktopAdvisorPacket(input: {
+  screenshotBase64: string;
+  width: number;
+  height: number;
+  capturedAt: number;
+  openWindows: DesktopWindowInfo[];
+  activeWindow?: DesktopWindowInfo;
+  ocrText?: string;
+  ocrConfidence?: number;
+  monitors?: DesktopMonitorInfo[];
+  virtualScreen?: { left: number; top: number; width: number; height: number };
+  captureRegion?: { left: number; top: number; width: number; height: number };
+  coordinateScale?: { x: number; y: number };
+  captureMode?: 'all' | 'primary' | 'monitor';
+  captureMonitorIndex?: number;
+  activeMonitorIndex?: number | null;
+  targetWindow?: DesktopWindowInfo;
+  actionVersion?: number;
+}): DesktopAdvisorPacket {
+  const contentHash = computeContentHash(input.screenshotBase64);
+  return {
+    screenshotId: makeDesktopScreenshotId(input.capturedAt, contentHash),
+    screenshotBase64: input.screenshotBase64,
+    screenshotMime: 'image/png',
+    width: input.width,
+    height: input.height,
+    capturedAt: input.capturedAt,
+    openWindows: input.openWindows,
+    activeWindow: input.activeWindow,
+    ocrText: input.ocrText,
+    ocrConfidence: input.ocrConfidence,
+    contentHash,
+    monitors: input.monitors,
+    virtualScreen: input.virtualScreen,
+    captureRegion: input.captureRegion,
+    coordinateScale: input.coordinateScale,
+    captureMode: input.captureMode,
+    captureMonitorIndex: input.captureMonitorIndex,
+    activeMonitorIndex: input.activeMonitorIndex,
+    targetWindow: input.targetWindow,
+    actionVersion: input.actionVersion ?? desktopActionVersion,
+  };
+}
+
+function storeDesktopPacket(sessionId: string, packet: DesktopAdvisorPacket): void {
+  sessions.set(sessionId, { lastPacket: packet });
+  registerDesktopPacket(sessionId, packet);
+}
+
+interface DesktopVerificationSnapshot {
+  path: string;
+  width: number;
+  height: number;
+  region: { left: number; top: number; width: number; height: number };
+  hash: string;
+  activeWindow: DesktopWindowInfo | null;
+}
+
+function computeBinaryHash(buffer: Buffer): string {
+  return crypto.createHash('sha1').update(buffer).digest('hex');
+}
+
+function normalizedWindowHandle(windowInfo?: DesktopWindowInfo | null): number {
+  const handle = Number(windowInfo?.handle || 0);
+  return Number.isFinite(handle) ? Math.floor(handle) : 0;
+}
+
+function normalizeOcrText(text?: string | null): string {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function buildProbeRegionAroundPoint(
+  x: number,
+  y: number,
+  radiusX: number,
+  radiusY: number = radiusX,
+): [number, number, number, number] {
+  const xx = Math.floor(Number(x));
+  const yy = Math.floor(Number(y));
+  const rx = Math.max(24, Math.floor(Number(radiusX) || 80));
+  const ry = Math.max(24, Math.floor(Number(radiusY) || rx));
+  return [xx - rx, yy - ry, xx + rx, yy + ry];
+}
+
+async function captureDesktopVerificationSnapshot(
+  region: [number, number, number, number],
+): Promise<DesktopVerificationSnapshot> {
+  const [ctx, shot] = await Promise.all([
+    gatherDesktopContextInternal(),
+    captureScreenshotInternal({ kind: 'all' }, region),
+  ]);
+  const png = fs.readFileSync(shot.path);
+  return {
+    path: shot.path,
+    width: shot.width,
+    height: shot.height,
+    region: {
+      left: shot.left,
+      top: shot.top,
+      width: shot.width,
+      height: shot.height,
+    },
+    hash: computeBinaryHash(png),
+    activeWindow: ctx.activeWindow,
+  };
+}
+
+function cleanupDesktopVerificationSnapshot(snapshot?: DesktopVerificationSnapshot | null): void {
+  if (!snapshot?.path) return;
+  try { fs.unlinkSync(snapshot.path); } catch {}
+}
+
+function isDesktopAutoVerificationPreferred(coordinateSpace?: DesktopCoordinateSpace): boolean {
+  return coordinateSpace === 'capture' || coordinateSpace === 'window';
+}
+
+export function resolveDesktopVerificationMode(
+  value: unknown,
+  coordinateSpace?: DesktopCoordinateSpace,
+): DesktopVerificationMode {
+  if (value === false || value === 'false') return 'off';
+  if (value === true || value === 'true') {
+    return isDesktopAutoVerificationPreferred(coordinateSpace) ? 'strict' : 'auto';
+  }
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (raw === 'off' || raw === 'auto' || raw === 'strict') return raw;
+  return isDesktopAutoVerificationPreferred(coordinateSpace) ? 'auto' : 'off';
+}
+
+async function desktopMovePointer(x: number, y: number, settleMs: number = 40): Promise<void> {
+  const xx = Math.floor(Number(x));
+  const yy = Math.floor(Number(y));
+  const waitMs = Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 40)));
+  const script = `
+${PS_DPI_AWARE_HEADER}
+${PS_INPUTAPI_HEADER}
+[void][PrometheusInputApi]::SetCursorPos(${xx}, ${yy})
+${waitMs > 0 ? `Start-Sleep -Milliseconds ${waitMs}` : ''}
+Write-Output "OK"
+`;
+  await runPowerShell(script, { timeoutMs: 4000 });
+}
+
+async function desktopPerformClickAtCurrent(
+  button: 'left' | 'right',
+  repeat: number,
+  modifier?: 'shift' | 'ctrl' | 'alt',
+): Promise<void> {
+  const btn = button === 'right' ? 'right' : 'left';
+  const downFlag = btn === 'right' ? '0x0008' : '0x0002';
+  const upFlag = btn === 'right' ? '0x0010' : '0x0004';
+  const clicks = Math.max(1, Math.min(4, Math.floor(Number(repeat) || 1)));
+  const modVk = modifier === 'shift' ? '0x10' : modifier === 'ctrl' ? '0x11' : modifier === 'alt' ? '0x12' : null;
+  const modDown = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0, [UIntPtr]::Zero)` : '';
+  const modUp = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0x0002, [UIntPtr]::Zero)` : '';
+  const script = `
+${PS_DPI_AWARE_HEADER}
+${PS_INPUTAPI_HEADER}
+${modDown}
+for ($i = 0; $i -lt ${clicks}; $i++) {
+  [PrometheusInputApi]::mouse_event(${downFlag}, 0, 0, 0, [UIntPtr]::Zero)
+  [PrometheusInputApi]::mouse_event(${upFlag}, 0, 0, 0, [UIntPtr]::Zero)
+  if ($i -lt ${clicks - 1}) { Start-Sleep -Milliseconds 80 }
+}
+${modUp}
+Write-Output "OK"
+`;
+  await runPowerShell(script, { timeoutMs: 4000 });
+}
+
+async function desktopPerformScrollAtCurrent(
+  delta: number,
+  horizontal: boolean,
+): Promise<void> {
+  const flag = horizontal ? '0x1000' : '0x0800';
+  const script = `
+${PS_DPI_AWARE_HEADER}
+${PS_INPUTAPI_HEADER}
+[PrometheusInputApi]::mouse_event(${flag}, 0, 0, [int]${Math.floor(Number(delta) || 0)}, [UIntPtr]::Zero)
+Write-Output "OK"
+`;
+  await runPowerShell(script, { timeoutMs: 4000 });
+}
+
+async function loadSnapshotOcrText(snapshot: DesktopVerificationSnapshot | null | undefined): Promise<string> {
+  if (!snapshot?.path) return '';
+  const ocr = await runOcr(snapshot.path);
+  return normalizeOcrText(ocr?.text);
+}
+
+function formatDesktopVerification(
+  verification: DesktopActionVerification,
+  attempt?: { current: number; total: number },
+): string {
+  const attemptPrefix =
+    attempt && attempt.total > 1
+      ? attempt.current > 1
+        ? ` after retry ${attempt.current}/${attempt.total}`
+        : ' on first attempt'
+      : '';
+  return `Verification: ${verification.status}${attemptPrefix} (${verification.summary}).`;
+}
+
+function classifyDesktopVerification(args: {
+  action: 'click' | 'scroll' | 'drag';
+  mode: DesktopVerificationMode;
+  before: DesktopVerificationSnapshot;
+  after: DesktopVerificationSnapshot;
+  beforeOcr: string;
+  afterOcr: string;
+}): DesktopActionVerification {
+  const { action, before, after, beforeOcr, afterOcr } = args;
+  const signals: DesktopVerificationSignal[] = [];
+  const beforeHandle = normalizedWindowHandle(before.activeWindow);
+  const afterHandle = normalizedWindowHandle(after.activeWindow);
+  const activeWindowChanged = beforeHandle !== afterHandle;
+  signals.push({
+    kind: 'active_window',
+    state: activeWindowChanged ? 'changed' : 'unchanged',
+    detail: activeWindowChanged
+      ? `${shortWindowLabel(before.activeWindow)} -> ${shortWindowLabel(after.activeWindow)}`
+      : `stayed on ${shortWindowLabel(after.activeWindow)}`,
+    strength: 'strong',
+  });
+
+  const probeHashChanged = before.hash !== after.hash;
+  signals.push({
+    kind: 'probe_hash',
+    state: probeHashChanged ? 'changed' : 'unchanged',
+    detail: probeHashChanged
+      ? `probe region ${before.region.width}x${before.region.height} changed`
+      : `probe region ${before.region.width}x${before.region.height} stayed identical`,
+    strength: action === 'drag' ? 'weak' : 'strong',
+  });
+
+  const hasOcr = !!beforeOcr || !!afterOcr;
+  const probeOcrChanged = hasOcr ? beforeOcr !== afterOcr : false;
+  signals.push({
+    kind: 'probe_ocr',
+    state: hasOcr ? (probeOcrChanged ? 'changed' : 'unchanged') : 'unavailable',
+    detail: hasOcr
+      ? probeOcrChanged
+        ? `OCR changed from "${beforeOcr.slice(0, 60)}" to "${afterOcr.slice(0, 60)}"`
+        : 'OCR text stayed unchanged'
+      : 'No OCR text detected in the probe region',
+    strength: 'weak',
+  });
+
+  if (activeWindowChanged) {
+    return {
+      status: 'confirmed',
+      summary: 'active window changed after the action',
+      signals,
+    };
+  }
+
+  if (action === 'drag') {
+    if (probeOcrChanged) {
+      return {
+        status: 'confirmed',
+        summary: 'destination region text changed after the drag',
+        signals,
+      };
+    }
+    if (probeHashChanged) {
+      return {
+        status: 'uncertain',
+        summary: 'destination region changed after the drag, but drag verification is visually noisy',
+        signals,
+      };
+    }
+    return {
+      status: 'likely_noop',
+      summary: 'no destination-region change detected after the drag',
+      signals,
+    };
+  }
+
+  if (probeHashChanged || probeOcrChanged) {
+    return {
+      status: 'confirmed',
+      summary: probeOcrChanged
+        ? 'target region changed and OCR shifted after the action'
+        : 'target region changed after the action',
+      signals,
+    };
+  }
+
+  return {
+    status: 'likely_noop',
+    summary: 'no local change detected and the active window stayed the same',
+    signals,
+  };
+}
+
+async function verifyDesktopAction(options: {
+  action: 'click' | 'scroll' | 'drag';
+  mode: DesktopVerificationMode;
+  targetX: number;
+  targetY: number;
+  actionFn: () => Promise<void>;
+  beforeRadius?: number;
+  afterSettleMs?: number;
+}): Promise<DesktopActionVerification> {
+  const radius = Math.max(32, Math.floor(Number(options.beforeRadius) || (options.action === 'scroll' ? 120 : 84)));
+  const region = buildProbeRegionAroundPoint(options.targetX, options.targetY, radius);
+  let before: DesktopVerificationSnapshot | null = null;
+  let after: DesktopVerificationSnapshot | null = null;
+  try {
+    before = await captureDesktopVerificationSnapshot(region);
+    await options.actionFn();
+    await new Promise((resolve) => setTimeout(resolve, Math.max(60, Math.floor(Number(options.afterSettleMs) || 180))));
+    after = await captureDesktopVerificationSnapshot(region);
+    const shouldCheckOcr =
+      options.mode === 'strict' ||
+      before.hash === after.hash ||
+      options.action === 'drag';
+    const [beforeOcr, afterOcr] = shouldCheckOcr
+      ? await Promise.all([loadSnapshotOcrText(before), loadSnapshotOcrText(after)])
+      : ['', ''];
+    return classifyDesktopVerification({
+      action: options.action,
+      mode: options.mode,
+      before,
+      after,
+      beforeOcr,
+      afterOcr,
+    });
+  } catch (error: any) {
+    return {
+      status: options.mode === 'strict' ? 'failed' : 'uncertain',
+      summary: `verification probe failed: ${error?.message || error}`,
+      signals: [],
+    };
+  } finally {
+    cleanupDesktopVerificationSnapshot(before);
+    cleanupDesktopVerificationSnapshot(after);
+  }
 }
 
 async function runOcr(imagePath: string): Promise<{ text: string; confidence: number } | null> {
@@ -950,9 +1714,8 @@ export async function desktopScreenshot(
       ? activeWindow.monitorIndex
       : null;
 
-  const packet: DesktopAdvisorPacket = {
+  const packet = createDesktopAdvisorPacket({
     screenshotBase64,
-    screenshotMime: 'image/png',
     width: shot.width,
     height: shot.height,
     capturedAt,
@@ -960,15 +1723,15 @@ export async function desktopScreenshot(
     activeWindow: activeWindow || undefined,
     ocrText: ocr?.text,
     ocrConfidence: ocr?.confidence,
-    contentHash: computeContentHash(screenshotBase64),
     monitors: ctx.monitors.length ? ctx.monitors : undefined,
     virtualScreen: vs.width > 0 ? vs : undefined,
     captureRegion: { left: shot.left, top: shot.top, width: shot.width, height: shot.height },
+    coordinateScale: { x: 1, y: 1 },
     captureMode: shot.captureMode,
     captureMonitorIndex: shot.captureMonitorIndex,
     activeMonitorIndex,
-  };
-  sessions.set(sessionId, { lastPacket: packet });
+  });
+  storeDesktopPacket(sessionId, packet);
 
   const topWindows = compactWindowList(openWindows, 12);
   const ocrPreview = ocr?.text ? ocr.text.slice(0, 400).replace(/\s+/g, ' ').trim() : '';
@@ -992,21 +1755,27 @@ export async function desktopScreenshot(
 
   const coordHint =
     shot.captureMode === 'all'
-      ? 'Coordinates: (0,0) in this image = virtual top-left above.'
-      : `Coordinates: pixels in this image are relative to capture top-left (${shot.left}, ${shot.top}). For desktop_click / scroll at (x,y), use virtual coords: x_virtual = image_x + ${shot.left}, y_virtual = image_y + ${shot.top}. If capture mode is monitor N, you can also use monitor_relative=true with monitor_index=N and local monitor coordinates directly.`;
+      ? `Coordinates: (0,0) in this image = virtual top-left (${shot.left}, ${shot.top}). For desktop_click / scroll at screenshot pixel (x,y), use coordinate_space="capture" with screenshot_id="${packet.screenshotId}".`
+      : `Coordinates: pixels in this image are relative to capture top-left (${shot.left}, ${shot.top}). For desktop_click / scroll at (x,y), use coordinate_space="capture" with screenshot_id="${packet.screenshotId}" to let the tool convert image coords automatically. If capture mode is monitor N, you can also use coordinate_space="monitor" with monitor_index=N and local monitor coordinates directly.`;
 
   const activeMonLine =
     activeMonitorIndex !== null
       ? `Active (foreground) window is on monitor ${activeMonitorIndex}.`
       : '';
 
+  const screenshotIdLine = `Screenshot ID: ${packet.screenshotId}.`;
+  const screenshotUsageLine =
+    `Use desktop_click/desktop_scroll with {x, y, coordinate_space:"capture", screenshot_id:"${packet.screenshotId}"} to target this exact screenshot; recapture after focus or window movement.`;
+
   return [
     `Desktop screenshot captured (${shot.width}x${shot.height}).`,
+    screenshotIdLine,
     captureSummary,
     virtualLine,
     formatMonitorsForReply(ctx.monitors),
     activeMonLine,
     coordHint,
+    screenshotUsageLine,
     `Active window: ${shortWindowLabel(activeWindow)}.`,
     `Open windows: ${openWindows.length}.`,
     ocrPreview ? `OCR text (${Math.round(ocr?.confidence || 0)}% confidence):\n${ocrPreview}${ocrLen > 400 ? ' ...' : ''}` : `OCR: unavailable.${noOcrHint}`,
@@ -1044,7 +1813,57 @@ export async function desktopFocusWindow(name: string): Promise<string> {
   if (!focused) {
     return `ERROR: Failed to focus "${target.title}" (${target.processName}).`;
   }
+  markDesktopStateChanged();
   return `Focused window: "${target.title}" (${target.processName}).`;
+}
+
+export async function desktopWindowControl(
+  action: 'minimize' | 'maximize' | 'restore' | 'close',
+  selector?: { name?: string; handle?: number; active?: boolean },
+): Promise<string> {
+  ensureWindows();
+  const query = String(selector?.name || '').trim();
+  const handleNum = Number(selector?.handle || 0);
+  const hasHandle = Number.isFinite(handleNum) && handleNum > 0;
+  const useActive = selector?.active === true || (!query && !hasHandle);
+  const ctx = await gatherDesktopContextInternal();
+  let target: DesktopWindowInfo | null = null;
+  if (hasHandle) target = ctx.windows.find((w) => Number(w.handle) === Math.floor(handleNum)) || null;
+  if (!target && query) target = findWindowsByName(ctx.windows, query)[0] || null;
+  if (!target && useActive) target = ctx.activeWindow;
+  if (!target) {
+    return hasHandle
+      ? `ERROR: No window found for handle=${Math.floor(handleNum)}.`
+      : query
+        ? `ERROR: No window matching "${query}" found.`
+        : 'ERROR: No active window found.';
+  }
+
+  if (action !== 'minimize') {
+    await focusWindowHandle(target.handle).catch(() => false);
+    await new Promise((r) => setTimeout(r, 120));
+  }
+
+  const command = action === 'maximize' ? 3 : action === 'minimize' ? 6 : action === 'restore' ? 9 : 0;
+  const script = action === 'close'
+    ? `
+${PS_WINAPI_HEADER}
+$hWnd = [IntPtr]::new([Int64]${Math.floor(Number(target.handle))})
+[void][PrometheusWinApi]::PostMessage($hWnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+Write-Output "OK"
+`
+    : `
+${PS_WINAPI_HEADER}
+$hWnd = [IntPtr]::new([Int64]${Math.floor(Number(target.handle))})
+[void][PrometheusWinApi]::ShowWindowAsync($hWnd, ${command})
+Write-Output "OK"
+`;
+  try {
+    await runPowerShell(script, { timeoutMs: 5000 });
+    return `${action[0].toUpperCase()}${action.slice(1)} requested for "${target.title}" (${target.processName}, handle=${target.handle}).`;
+  } catch (e: any) {
+    return `ERROR: Failed to ${action} "${target.title}" (${target.processName}): ${e?.message || e}`;
+  }
 }
 
 export async function desktopClick(
@@ -1054,38 +1873,64 @@ export async function desktopClick(
   doubleClick: boolean = false,
   pointerOpts?: DesktopPointerMonitorOptions,
   modifier?: 'shift' | 'ctrl' | 'alt',
+  sourceNote?: string,
+  verificationOpts?: DesktopActionVerificationOptions,
 ): Promise<string> {
   ensureWindows();
   const resolved = await resolveVirtualPointerCoords(x, y, pointerOpts);
   if (!resolved.ok) return `ERROR: ${resolved.message}`;
-  const xx = resolved.x;
-  const yy = resolved.y;
+  let xx = resolved.x;
+  let yy = resolved.y;
   const btn = button === 'right' ? 'right' : 'left';
-  const downFlag = btn === 'right' ? '0x0008' : '0x0002';
-  const upFlag = btn === 'right' ? '0x0010' : '0x0004';
   const repeat = doubleClick ? 2 : 1;
-  // Modifier key VK codes: Shift=0x10, Ctrl=0x11, Alt=0x12
-  const modVk = modifier === 'shift' ? '0x10' : modifier === 'ctrl' ? '0x11' : modifier === 'alt' ? '0x12' : null;
-  const modDown = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0, [UIntPtr]::Zero)` : '';
-  const modUp = modVk ? `[PrometheusInputApi]::keybd_event(${modVk}, 0, 0x0002, [UIntPtr]::Zero)` : '';
-
-  const script = `
-${PS_INPUTAPI_HEADER}
-[void][PrometheusInputApi]::SetCursorPos(${xx}, ${yy})
-Start-Sleep -Milliseconds 40
-${modDown}
-for ($i = 0; $i -lt ${repeat}; $i++) {
-  [PrometheusInputApi]::mouse_event(${downFlag}, 0, 0, 0, [UIntPtr]::Zero)
-  [PrometheusInputApi]::mouse_event(${upFlag}, 0, 0, 0, [UIntPtr]::Zero)
-  if ($i -lt ${repeat - 1}) { Start-Sleep -Milliseconds 80 }
-}
-${modUp}
-Write-Output "OK"
-`;
-  await runPowerShell(script, { timeoutMs: 6000 });
+  const verificationMode = resolveDesktopVerificationMode(
+    verificationOpts?.mode,
+    verificationOpts?.coordinateSpace,
+  );
+  const attempts = (verificationMode !== 'off'
+    && verificationOpts?.allowRetryOnLikelyNoop === true
+    && btn === 'left'
+    && repeat === 1
+    && !modifier)
+    ? [
+        { x: xx, y: yy },
+        { x: xx - 4, y: yy - 4 },
+        { x: xx + 4, y: yy + 4 },
+      ]
+    : [{ x: xx, y: yy }];
+  let verificationSummary = '';
+  let finalX = xx;
+  let finalY = yy;
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
+    const attempt = attempts[attemptIndex];
+    finalX = attempt.x;
+    finalY = attempt.y;
+    await desktopMovePointer(finalX, finalY, 40);
+    if (verificationMode === 'off') {
+      await desktopPerformClickAtCurrent(btn, repeat, modifier);
+      break;
+    }
+    const verification = await verifyDesktopAction({
+      action: 'click',
+      mode: verificationMode,
+      targetX: finalX,
+      targetY: finalY,
+      actionFn: () => desktopPerformClickAtCurrent(btn, repeat, modifier),
+      afterSettleMs: 180,
+    });
+    verificationSummary = formatDesktopVerification(verification, {
+      current: attemptIndex + 1,
+      total: attempts.length,
+    });
+    if (verification.status !== 'likely_noop' || attemptIndex === attempts.length - 1) {
+      break;
+    }
+  }
+  xx = finalX;
+  yy = finalY;
   const monitors = await enumerateMonitorsInternal().catch(() => [] as DesktopMonitorInfo[]);
   const hit = monitors.find((m) =>
-    xx >= m.left && xx < (m.left + m.width) && yy >= m.top && yy < (m.top + m.height),
+    finalX >= m.left && finalX < (m.left + m.width) && finalY >= m.top && finalY < (m.top + m.height),
   );
   const relNote =
     pointerOpts?.monitor_relative && pointerOpts.monitor_index !== undefined
@@ -1095,9 +1940,11 @@ Write-Output "OK"
     ? ` [monitor m=${hit.index} local=(${xx - hit.left}, ${yy - hit.top}) of ${hit.width}x${hit.height}]`
     : '';
   const modNote = modifier ? ` [+${modifier}]` : '';
+  const sourceSuffix = sourceNote ? ` ${sourceNote}` : '';
   // Record for macro replay (use resolved virtual coords so replay is coordinate-safe)
-  _macroRecord({ type: doubleClick ? 'double_click' : 'click', x: xx, y: yy, button: btn });
-  return `Clicked ${btn} at (${xx}, ${yy})${doubleClick ? ' [double]' : ''}${modNote}${relNote}${monitorNote}.`;
+  _macroRecord({ type: doubleClick ? 'double_click' : 'click', x: finalX, y: finalY, button: btn });
+  markDesktopStateChanged();
+  return `Clicked ${btn} at (${finalX}, ${finalY})${doubleClick ? ' [double]' : ''}${modNote}${sourceSuffix}${relNote}${monitorNote}.${verificationSummary ? ` ${verificationSummary}` : ''}`;
 }
 
 export async function desktopDrag(
@@ -1107,6 +1954,8 @@ export async function desktopDrag(
   toY: number,
   steps: number = 20,
   pointerOpts?: DesktopPointerMonitorOptions,
+  sourceNote?: string,
+  verificationOpts?: DesktopActionVerificationOptions,
 ): Promise<string> {
   ensureWindows();
   const r0 = await resolveVirtualPointerCoords(fromX, fromY, pointerOpts);
@@ -1122,7 +1971,13 @@ export async function desktopDrag(
     return 'ERROR: from_x, from_y, to_x, to_y must be valid numbers.';
   }
 
-  const script = `
+  const verificationMode = resolveDesktopVerificationMode(
+    verificationOpts?.mode,
+    verificationOpts?.coordinateSpace,
+  );
+  const performDrag = async (): Promise<void> => {
+    const script = `
+${PS_DPI_AWARE_HEADER}
 ${PS_INPUTAPI_HEADER}
 [void][PrometheusInputApi]::SetCursorPos(${fx}, ${fy})
 Start-Sleep -Milliseconds 30
@@ -1136,7 +1991,23 @@ for ($i = 1; $i -le ${st}; $i++) {
 [PrometheusInputApi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
 Write-Output "OK"
 `;
-  await runPowerShell(script, { timeoutMs: 9000 });
+    await runPowerShell(script, { timeoutMs: 9000 });
+  };
+  let verificationSummary = '';
+  if (verificationMode === 'off') {
+    await performDrag();
+  } else {
+    const verification = await verifyDesktopAction({
+      action: 'drag',
+      mode: verificationMode,
+      targetX: tx,
+      targetY: ty,
+      actionFn: performDrag,
+      beforeRadius: 96,
+      afterSettleMs: 220,
+    });
+    verificationSummary = formatDesktopVerification(verification);
+  }
   const monitors = await enumerateMonitorsInternal().catch(() => [] as DesktopMonitorInfo[]);
   const startMon = monitors.find((m) =>
     fx >= m.left && fx < (m.left + m.width) && fy >= m.top && fy < (m.top + m.height),
@@ -1148,12 +2019,15 @@ Write-Output "OK"
     ? ` [start m=${startMon?.index ?? '?'} local=(${startMon ? fx - startMon.left : '?'}, ${startMon ? fy - startMon.top : '?'})` +
       ` -> end m=${endMon?.index ?? '?'} local=(${endMon ? tx - endMon.left : '?'}, ${endMon ? ty - endMon.top : '?'})]`
     : '';
-  return `Dragged from (${fx}, ${fy}) to (${tx}, ${ty}) in ${st} steps.${monNote}`;
+  const sourceSuffix = sourceNote ? ` ${sourceNote}` : '';
+  markDesktopStateChanged();
+  return `Dragged from (${fx}, ${fy}) to (${tx}, ${ty}) in ${st} steps.${sourceSuffix}${monNote}${verificationSummary ? ` ${verificationSummary}` : ''}`;
 }
 
 export async function desktopWait(ms: number = 500): Promise<string> {
   const waitMs = Math.max(50, Math.min(30000, Math.floor(Number(ms) || 500)));
   await new Promise((resolve) => setTimeout(resolve, waitMs));
+  markDesktopStateChanged();
   return `Waited ${waitMs} ms.`;
 }
 
@@ -1264,6 +2138,7 @@ Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 10000, sta: true });
   _macroRecord({ type: 'type', text: payload });
+  markDesktopStateChanged();
   return `Typed ${payload.length} character(s) via clipboard paste (clipboard restored).`;
 }
 
@@ -1278,6 +2153,7 @@ Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: 6000, sta: true });
   _macroRecord({ type: 'key', text: key });
+  markDesktopStateChanged();
   return `Pressed key: ${key || 'Enter'}.`;
 }
 
@@ -1297,17 +2173,107 @@ if ([System.Windows.Forms.Clipboard]::ContainsText()) {
   return `Clipboard text (${out.length} chars):\n${out}`;
 }
 
-export async function desktopSetClipboard(text: string): Promise<string> {
+const CLIPBOARD_IMAGE_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.tif', '.tiff',
+]);
+
+type DesktopSetClipboardArgs =
+  | string
+  | {
+      text?: string;
+      file_path?: string;
+      file_paths?: string[];
+      mode?: 'auto' | 'text' | 'image' | 'files';
+    };
+
+export async function desktopSetClipboard(input: DesktopSetClipboardArgs): Promise<string> {
   ensureWindows();
-  const payload = String(text || '');
-  const escaped = psSingleQuote(payload);
-  const script = `
+  const args = typeof input === 'string' ? { text: input, mode: 'text' as const } : (input || {});
+  const mode = String(args.mode || 'auto').toLowerCase() as 'auto' | 'text' | 'image' | 'files';
+  const textPayload = args.text == null ? '' : String(args.text);
+  const filePaths = Array.from(
+    new Set(
+      [args.file_path, ...(Array.isArray(args.file_paths) ? args.file_paths : [])]
+        .map((p) => String(p || '').trim())
+        .filter(Boolean)
+        .map((p) => path.resolve(p)),
+    ),
+  );
+
+  if ((mode === 'text' || (mode === 'auto' && !filePaths.length)) && !textPayload) {
+    return 'Clipboard updated (0 chars).';
+  }
+
+  if ((mode === 'image' || mode === 'files' || (mode === 'auto' && filePaths.length))) {
+    if (!filePaths.length) return 'ERROR: file_path or file_paths is required for non-text clipboard modes.';
+    for (const filePath of filePaths) {
+      if (!fs.existsSync(filePath)) return `ERROR: Clipboard source file not found: ${filePath}`;
+    }
+  }
+
+  let effectiveMode = mode;
+  if (mode === 'auto' && filePaths.length) {
+    const allImages = filePaths.every((p) => CLIPBOARD_IMAGE_EXTS.has(path.extname(p).toLowerCase()));
+    effectiveMode = allImages && filePaths.length === 1 ? 'image' : 'files';
+  }
+
+  if (effectiveMode === 'text') {
+    const escaped = psSingleQuote(textPayload);
+    const script = `
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Clipboard]::SetText('${escaped}')
 Write-Output "OK"
 `;
-  await runPowerShell(script, { timeoutMs: 6000, sta: true });
-  return `Clipboard updated (${payload.length} chars).`;
+    await runPowerShell(script, { timeoutMs: 6000, sta: true });
+    return `Clipboard updated (${textPayload.length} chars).`;
+  }
+
+  if (effectiveMode === 'image') {
+    const imagePath = filePaths[0];
+    const escapedPath = psSingleQuote(imagePath);
+    const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$path = '${escapedPath}'
+if (-not (Test-Path -LiteralPath $path)) { throw "Image file not found: $path" }
+$img = [System.Drawing.Image]::FromFile($path)
+try {
+  [System.Windows.Forms.Clipboard]::SetImage($img)
+  Start-Sleep -Milliseconds 50
+  if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) {
+    throw "Clipboard did not retain image payload."
+  }
+} finally {
+  $img.Dispose()
+}
+Write-Output "OK"
+`;
+    await runPowerShell(script, { timeoutMs: 8000, sta: true });
+    return `Clipboard updated with image: ${path.basename(imagePath)}.`;
+  }
+
+  if (effectiveMode === 'files') {
+    const quotedPaths = filePaths.map((p) => `'${psSingleQuote(p)}'`).join(', ');
+    const script = `
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$files = New-Object System.Collections.Specialized.StringCollection
+foreach ($p in @(${quotedPaths})) {
+  if (-not (Test-Path -LiteralPath $p)) { throw "Clipboard file not found: $p" }
+  [void]$files.Add($p)
+}
+[System.Windows.Forms.Clipboard]::SetFileDropList($files)
+Start-Sleep -Milliseconds 50
+if (-not [System.Windows.Forms.Clipboard]::ContainsFileDropList()) {
+  throw "Clipboard did not retain file list payload."
+}
+Write-Output "OK"
+`;
+    await runPowerShell(script, { timeoutMs: 8000, sta: true });
+    return `Clipboard updated with ${filePaths.length} file(s).`;
+  }
+
+  return `ERROR: Unsupported clipboard mode "${effectiveMode}".`;
 }
 
 // ─── Mouse Scroll ────────────────────────────────────────────────────────────
@@ -1327,13 +2293,13 @@ export async function desktopScroll(
   y?: number,
   horizontal: boolean = false,
   pointerOpts?: DesktopPointerMonitorOptions,
+  sourceNote?: string,
+  verificationOpts?: DesktopActionVerificationOptions,
 ): Promise<string> {
   ensureWindows();
   const ticks = Math.max(1, Math.min(50, Math.floor(Number(amount) || 3)));
   const isUpOrLeft = direction === 'up' || direction === 'left';
   const delta = isUpOrLeft ? 120 * ticks : -120 * ticks;
-  // MOUSEEVENTF_WHEEL = 0x0800 (vertical), MOUSEEVENTF_HWHEEL = 0x1000 (horizontal)
-  const flag = horizontal ? '0x1000' : '0x0800';
   let mx: number | undefined;
   let my: number | undefined;
   if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
@@ -1342,23 +2308,46 @@ export async function desktopScroll(
     mx = r.x;
     my = r.y;
   }
-  const movePart =
-    mx !== undefined && my !== undefined
-      ? `[void][PrometheusInputApi]::SetCursorPos(${mx}, ${my}); Start-Sleep -Milliseconds 75;`
-      : '';
-  const script = `
-${PS_INPUTAPI_HEADER}
-${movePart}
-[PrometheusInputApi]::mouse_event(${flag}, 0, 0, [int]${delta}, [UIntPtr]::Zero)
-Write-Output "OK"
-`;
-  await runPowerShell(script, { timeoutMs: 6000 });
+  const verificationMode = resolveDesktopVerificationMode(
+    verificationOpts?.mode,
+    verificationOpts?.coordinateSpace,
+  );
+  const performScroll = async (): Promise<void> => {
+    if (mx !== undefined && my !== undefined) {
+      await desktopMovePointer(mx, my, 75);
+    }
+    await desktopPerformScrollAtCurrent(delta, horizontal);
+  };
+  let verificationSummary = '';
+  if (verificationMode !== 'off' && mx !== undefined && my !== undefined) {
+    const verification = await verifyDesktopAction({
+      action: 'scroll',
+      mode: verificationMode,
+      targetX: mx,
+      targetY: my,
+      actionFn: performScroll,
+      beforeRadius: 120,
+      afterSettleMs: 240,
+    });
+    verificationSummary = formatDesktopVerification(verification);
+  } else if (verificationMode !== 'off') {
+    await performScroll();
+    verificationSummary = formatDesktopVerification({
+      status: 'uncertain',
+      summary: 'no explicit x/y target was provided, so scroll verification could not probe a local region',
+      signals: [],
+    });
+  } else {
+    await performScroll();
+  }
   const axisLabel = horizontal ? 'horizontal' : 'vertical';
   const dirLabel = direction;
   const at =
     mx !== undefined && my !== undefined ? ` at virtual (${mx}, ${my})` : '';
+  const sourceSuffix = sourceNote ? ` ${sourceNote}` : '';
   _macroRecord({ type: 'scroll', direction, amount: ticks, horizontal, x: mx, y: my });
-  return `Scrolled ${axisLabel} ${dirLabel} ${ticks} tick(s)${at}.`;
+  markDesktopStateChanged();
+  return `Scrolled ${axisLabel} ${dirLabel} ${ticks} tick(s)${at}${sourceSuffix}.${verificationSummary ? ` ${verificationSummary}` : ''}`;
 }
 
 // ─── Raw key-by-key typing fallback ──────────────────────────────────────────
@@ -1386,6 +2375,7 @@ Write-Output "OK"
 `;
   await runPowerShell(script, { timeoutMs: Math.max(8000, payload.length * 40), sta: true });
   _macroRecord({ type: 'type_raw', text: payload });
+  markDesktopStateChanged();
   return `Typed ${payload.length} character(s) via raw key input.`;
 }
 
@@ -1776,10 +2766,60 @@ export async function desktopLaunchApp(
   app: string,
   appArgs: string = '',
   waitMs: number = 6000,
+  appId?: string,
 ): Promise<string> {
   ensureWindows();
-  const appSafe = psSingleQuote(String(app || '').trim());
-  const argsSafe = psSingleQuote(String(appArgs || '').trim());
+  const rawApp = String(app || '').trim();
+  const rawAppId = String(appId || '').trim();
+  const rawArgs = String(appArgs || '').trim();
+  if (!rawApp && !rawAppId) return 'ERROR: app or app_id is required.';
+
+  let launchTarget = rawApp;
+  let launchArgs = rawArgs;
+  let launchLabel = rawApp || rawAppId;
+  let matchHints = [rawApp || rawAppId].filter(Boolean).map((value) => String(value).toLowerCase());
+
+  if (rawAppId) {
+    const resolved = await resolveInstalledAppLaunch(rawAppId);
+    if (!resolved) {
+      return `ERROR: No installed app found for app_id "${rawAppId}". Run desktop_find_installed_app first.`;
+    }
+    launchLabel = `${resolved.app.displayName} [${resolved.app.id}]`;
+    matchHints = [
+      resolved.app.displayName,
+      ...resolved.app.aliases,
+      ...resolved.app.processNameHints,
+      ...resolved.app.windowTitleHints,
+    ].map((value) => String(value || '').toLowerCase()).filter(Boolean);
+    if (resolved.method.type === 'aumid') {
+      launchTarget = 'explorer.exe';
+      launchArgs = `shell:AppsFolder\\${resolved.method.target}${rawArgs ? ` ${rawArgs}` : ''}`.trim();
+    } else {
+      launchTarget = resolved.method.target;
+      launchArgs = [resolved.method.args, rawArgs].filter(Boolean).join(' ').trim();
+    }
+  } else if (rawApp && !path.isAbsolute(rawApp) && !/[\\/]/.test(rawApp)) {
+    const resolved = await resolveInstalledAppLaunchByQuery(rawApp).catch(() => null);
+    if (resolved) {
+      launchLabel = `${resolved.app.displayName} [${resolved.app.id}]`;
+      matchHints = [
+        resolved.app.displayName,
+        ...resolved.app.aliases,
+        ...resolved.app.processNameHints,
+        ...resolved.app.windowTitleHints,
+      ].map((value) => String(value || '').toLowerCase()).filter(Boolean);
+      if (resolved.method.type === 'aumid') {
+        launchTarget = 'explorer.exe';
+        launchArgs = `shell:AppsFolder\\${resolved.method.target}${rawArgs ? ` ${rawArgs}` : ''}`.trim();
+      } else {
+        launchTarget = resolved.method.target;
+        launchArgs = [resolved.method.args, rawArgs].filter(Boolean).join(' ').trim();
+      }
+    }
+  }
+
+  const appSafe = psSingleQuote(launchTarget);
+  const argsSafe = psSingleQuote(launchArgs);
   const pollMs = 400;
   const maxPolls = Math.max(1, Math.floor(clampInt(waitMs, 200, 60000, 6000) / pollMs));
 
@@ -1798,14 +2838,14 @@ try {
 `;
   const launchOut = await runPowerShell(script, { timeoutMs: 10000 });
   if (launchOut.startsWith('ERROR:')) {
-    return `ERROR: Failed to launch '${app}': ${launchOut.slice(6)}`;
+    return `ERROR: Failed to launch '${launchLabel}': ${launchOut.slice(6)}`;
   }
   const launchedPid = Number(launchOut.replace('LAUNCHED:', '').trim()) || 0;
 
   // Poll for window appearance
   // Console apps (cmd, powershell) are hosted by conhost.exe — their PID in the window list
   // may be the conhost PID, not the cmd.exe PID. We use a multi-strategy search.
-  const appLower = String(app || '').toLowerCase().replace(/\.exe$/i, '');
+  const appLower = path.parse(String(launchTarget || launchLabel || '')).name.toLowerCase().replace(/\.exe$/i, '');
   const CONSOLE_APPS = new Set(['cmd', 'powershell', 'pwsh', 'wt', 'bash', 'git-bash']);
   const isConsoleApp = CONSOLE_APPS.has(appLower);
 
@@ -1829,23 +2869,27 @@ try {
       if (!match) {
         // Strategy 3: fuzzy match on process name or title
         match = windows.find((w) =>
-          w.processName.toLowerCase().includes(appLower) ||
-          w.title.toLowerCase().includes(appLower),
+          matchHints.some((hint) =>
+            hint && (
+              w.processName.toLowerCase().includes(hint)
+              || w.title.toLowerCase().includes(hint)
+            ),
+          ) || w.processName.toLowerCase().includes(appLower) || w.title.toLowerCase().includes(appLower),
         );
       }
 
       if (match) {
         lastHandle = match.handle;
-        return `Launched '${app}' (PID ${launchedPid || match.pid}). Window: "${match.title}" (${match.processName}) handle=${match.handle}.`;
+        return `Launched '${launchLabel}' (PID ${launchedPid || match.pid}). Window: "${match.title}" (${match.processName}) handle=${match.handle}.`;
       }
     } catch {
       // continue polling
     }
   }
   if (launchedPid > 0) {
-    return `Launched '${app}' (PID ${launchedPid}) but no window appeared within ${waitMs}ms. App may still be starting. Use desktop_get_process_list to check.`;
+    return `Launched '${launchLabel}' (PID ${launchedPid}) but no window appeared within ${waitMs}ms. App may still be starting. Use desktop_get_process_list or desktop_find_window to check.`;
   }
-  return `ERROR: Failed to launch '${app}' or detect its window within ${waitMs}ms.`;
+  return `ERROR: Failed to launch '${launchLabel}' or detect its window within ${waitMs}ms.`;
 }
 
 /**
@@ -1911,6 +2955,87 @@ export async function desktopGetProcessList(filter: string = ''): Promise<string
 }
 
 // ─── Phase 3: Screenshot Diffing / Change Detection ───────────────────────────
+
+function summarizeInstalledAppLine(
+  index: number,
+  app: {
+    id: string;
+    displayName: string;
+    aliases: string[];
+    processNameHints: string[];
+    windowTitleHints: string[];
+    installSources: string[];
+    executablePath?: string;
+    shortcutPath?: string;
+    appUserModelId?: string;
+    launchMethods: Array<{ type: 'shortcut' | 'exe' | 'aumid'; target: string }>;
+  },
+  extra?: { score?: number; matchedOn?: string[] },
+): string {
+  const lines: string[] = [];
+  const launchSummary = app.launchMethods.map((method) => method.type).join(', ');
+  const scorePart = extra?.score ? ` score=${Math.round(extra.score)}` : '';
+  lines.push(`${index}. ${app.displayName} [app_id=${app.id}]${scorePart}${launchSummary ? ` launch=${launchSummary}` : ''}`);
+  if (extra?.matchedOn?.length) lines.push(`   Matched on: ${extra.matchedOn.join(', ')}`);
+  if (app.aliases.length) lines.push(`   Aliases: ${app.aliases.slice(0, 8).join(', ')}`);
+  if (app.processNameHints.length) lines.push(`   Process hints: ${app.processNameHints.slice(0, 6).join(', ')}`);
+  if (app.windowTitleHints.length) lines.push(`   Window hints: ${app.windowTitleHints.slice(0, 4).join(', ')}`);
+  if (app.installSources.length) lines.push(`   Sources: ${app.installSources.join(', ')}`);
+  if (app.executablePath) lines.push(`   Executable: ${app.executablePath}`);
+  if (app.shortcutPath) lines.push(`   Shortcut: ${app.shortcutPath}`);
+  if (app.appUserModelId) lines.push(`   AppUserModelID: ${app.appUserModelId}`);
+  return lines.join('\n');
+}
+
+export async function desktopListInstalledApps(
+  filter: string = '',
+  limit: number = 40,
+  refresh: boolean = false,
+): Promise<string> {
+  ensureWindows();
+  const safeLimit = Math.min(Math.max(Math.floor(Number(limit) || 40), 1), 200);
+  const inventory = await getInstalledAppsInventory({ refresh });
+  const cleanFilter = String(filter || '').trim();
+  const apps = cleanFilter
+    ? (await searchInstalledApps(cleanFilter, { limit: safeLimit, refresh: false })).map(({ score: _score, matchedOn: _matchedOn, ...app }) => app)
+    : inventory.apps.slice(0, safeLimit);
+  if (!apps.length) {
+    return cleanFilter
+      ? `No installed apps matched "${filter}".`
+      : 'No installed apps were discovered.';
+  }
+  const header = cleanFilter
+    ? `Installed apps matching "${filter}" (${apps.length} of ${inventory.apps.length} total):`
+    : `Installed apps (${apps.length} shown of ${inventory.apps.length} total):`;
+  const lines = apps.map((row, idx) => summarizeInstalledAppLine(idx + 1, row));
+  return [
+    header,
+    ...lines,
+    `Scanned at: ${new Date(inventory.generatedAt).toISOString()}.`,
+    refresh ? 'Inventory was refreshed before listing.' : 'Use refresh=true to force a rescan.',
+    'Use desktop_find_installed_app(query) for ranked fuzzy search, then desktop_launch_app({ app_id }) for deterministic launch.',
+  ].join('\n');
+}
+
+export async function desktopFindInstalledApp(
+  query: string,
+  limit: number = 10,
+  refresh: boolean = false,
+): Promise<string> {
+  ensureWindows();
+  const clean = String(query || '').trim();
+  if (!clean) return 'ERROR: query is required.';
+  const safeLimit = Math.min(Math.max(Math.floor(Number(limit) || 10), 1), 50);
+  const matches = await searchInstalledApps(clean, { limit: safeLimit, refresh });
+  if (!matches.length) {
+    return `No installed apps matched "${clean}". Use desktop_list_installed_apps with a broad filter or refresh=true to rescan.`;
+  }
+  return [
+    `Found ${matches.length} installed app match(es) for "${clean}":`,
+    ...matches.map((row, idx) => summarizeInstalledAppLine(idx + 1, row, { score: row.score, matchedOn: row.matchedOn })),
+    'Use desktop_launch_app({ app_id: "..." }) to launch the exact match.',
+  ].join('\n');
+}
 
 interface SessionHistory {
   prevPacket?: DesktopAdvisorPacket;
@@ -2138,7 +3263,7 @@ export async function desktopWindowScreenshot(
   const handleNum = Number(options?.handle || 0);
   const hasHandle = Number.isFinite(handleNum) && handleNum > 0;
   const useActive = options?.active === true || (!query && !hasHandle);
-  const focusFirst = options?.focus_first === true;
+  const focusFirst = options?.focus_first !== false;
   const padding = clampInt(options?.padding, 0, 120, 8);
 
   let ctx = await gatherDesktopContextInternal();
@@ -2211,9 +3336,8 @@ export async function desktopWindowScreenshot(
       ? activeWindow.monitorIndex
       : null;
 
-  const packet: DesktopAdvisorPacket = {
+  const packet = createDesktopAdvisorPacket({
     screenshotBase64,
-    screenshotMime: 'image/png',
     width: shot.width,
     height: shot.height,
     capturedAt,
@@ -2221,24 +3345,33 @@ export async function desktopWindowScreenshot(
     activeWindow: activeWindow || undefined,
     ocrText: ocr?.text,
     ocrConfidence: ocr?.confidence,
-    contentHash: computeContentHash(screenshotBase64),
     monitors: ctx.monitors.length ? ctx.monitors : undefined,
     virtualScreen: vs.width > 0 ? vs : undefined,
     captureRegion: { left: shot.left, top: shot.top, width: shot.width, height: shot.height },
+    coordinateScale: { x: 1, y: 1 },
     captureMode: shot.captureMode,
     captureMonitorIndex: shot.captureMonitorIndex,
     activeMonitorIndex,
-  };
-  sessions.set(sessionId, { lastPacket: packet });
+    targetWindow: target,
+  });
+  storeDesktopPacket(sessionId, packet);
 
   const ocrPreview = ocr?.text ? ocr.text.slice(0, 400).replace(/\s+/g, ' ').trim() : '';
   const ocrLen = ocr?.text ? ocr.text.length : 0;
+  const screenshotIdLine = `Screenshot ID: ${packet.screenshotId}.`;
+  const captureUsageLine =
+    `Use coordinate_space="capture" with screenshot_id="${packet.screenshotId}" for clicks based on this cropped image; recapture if focus/window geometry changes.`;
+  const windowUsageLine =
+    `Use coordinate_space="window" with screenshot_id="${packet.screenshotId}" for coordinates relative to the window's own top-left. For minimize/maximize/restore/close, use desktop_window_control.`;
 
   return [
     `Window screenshot captured (${shot.width}x${shot.height}).`,
+    screenshotIdLine,
     `Target window: "${target.title}" (${target.processName}, handle=${target.handle}).`,
     `Window bounds: left=${Math.floor(left)}, top=${Math.floor(top)}, width=${Math.floor(width)}, height=${Math.floor(height)}.`,
     `Capture region: [${x1}, ${y1}] to [${x2}, ${y2}] (padding ${padding}px).`,
+    captureUsageLine,
+    windowUsageLine,
     `Active window: ${shortWindowLabel(activeWindow)}.`,
     ocrPreview ? `OCR text (${Math.round(ocr?.confidence || 0)}% confidence):\n${ocrPreview}${ocrLen > 400 ? ' ...' : ''}` : 'OCR: unavailable.',
   ].join('\n');
@@ -2252,7 +3385,7 @@ export function getDesktopToolDefinitions(): any[] {
         name: 'desktop_screenshot',
         description:
           'Capture desktop screenshot with monitor layout, active-window monitor, and window list (each window tagged with monitor index m=N). ' +
-          'Default: full virtual screen (all monitors). Use capture=primary for main display only, or monitor_index=0,1,... for a single display. ' +
+          'Default: full virtual screen (all monitors). Use capture=primary for main display only, or monitor_index=0,1,... for a single display. Returns a screenshot_id that later desktop_click/desktop_scroll calls can reuse with coordinate_space="capture". ' +
           'Use region=[x1,y1,x2,y2] to crop to a specific area of the virtual screen at full resolution — ideal for zooming in on one app or section on a multi-monitor setup.',
         parameters: {
           type: 'object',
@@ -2316,17 +3449,35 @@ export function getDesktopToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'desktop_window_control',
+        description:
+          'Safely minimize, maximize, restore, or close a window using native Windows APIs. Prefer this over clicking title-bar chrome hit targets.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'], description: 'Window action to perform.' },
+            name: { type: 'string', description: 'Partial window title or process name.' },
+            handle: { type: 'number', description: 'Exact window handle (HWND).' },
+            active: { type: 'boolean', description: 'Use the current active window when no name/handle is supplied.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'desktop_window_screenshot',
         description:
           'Capture only one app window (cropped from the virtual desktop) and attach that screenshot for vision-capable models. ' +
-          'Select a target with name, handle, or active=true. Use focus_first=true to bring it forward before capture.',
+          'Select a target with name, handle, or active=true. Focuses the window before capture unless focus_first=false is explicitly passed. Returns a screenshot_id that supports coordinate_space="capture" and coordinate_space="window".',
         parameters: {
           type: 'object',
           properties: {
             name: { type: 'string', description: 'Partial window title or process name to capture.' },
             handle: { type: 'number', description: 'Exact window handle (HWND) to capture.' },
             active: { type: 'boolean', description: 'Capture currently active window (default when no selector provided).' },
-            focus_first: { type: 'boolean', description: 'Focus target window before screenshot (default false).' },
+            focus_first: { type: 'boolean', description: 'Focus target window before screenshot (default true).' },
             padding: { type: 'number', description: 'Extra pixels around the window bounds (0-120, default 8).' },
           },
         },
@@ -2337,24 +3488,47 @@ export function getDesktopToolDefinitions(): any[] {
       function: {
         name: 'desktop_click',
         description:
-          'Click at Windows virtual-screen coordinates (see desktop_screenshot output for bounds and per-monitor layout). ' +
-          'Optional monitor_relative=true with monitor_index: x,y are relative to that display top-left. ' +
-          'Use modifier to hold Shift/Ctrl/Alt during click. Use verify=true to auto-capture a screenshot 300ms after clicking.',
+          'Perform an actual mouse click at Windows desktop coordinates using virtual, monitor, capture, or window space. ' +
+          'Always provide x and y for the click itself; if you do not know the target coordinates yet, call desktop_screenshot or desktop_window_screenshot first. ' +
+          'For screenshot-driven clicks, pass the fresh screenshot_id with coordinate_space="capture" or "window"; avoid raw virtual coordinates after any focus/window movement. ' +
+          'For maximize/minimize/restore/close, prefer desktop_window_control instead of clicking window chrome. ' +
+          'Use modifier to hold Shift/Ctrl/Alt during click. Returns verification status (`confirmed`, `likely_noop`, `uncertain`, or `failed`) when verification is enabled.',
         parameters: {
           type: 'object',
           required: ['x', 'y'],
           properties: {
-            x: { type: 'number', description: 'X in virtual screen pixels, or monitor-relative if monitor_relative' },
-            y: { type: 'number', description: 'Y in virtual screen pixels, or monitor-relative if monitor_relative' },
+            x: { type: 'number', description: 'Required X coordinate in the chosen coordinate space' },
+            y: { type: 'number', description: 'Required Y coordinate in the chosen coordinate space' },
             button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button (default left)' },
             double_click: { type: 'boolean', description: 'Double-click instead of single-click' },
-            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Hold this modifier key during the click (e.g. shift for multi-select, ctrl for Ctrl+click)' },
-            verify: { type: 'boolean', description: 'If true, capture a screenshot 300ms after clicking and return it inline to confirm the click had effect.' },
+            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Rare. Only use when the user explicitly wants a modified click such as Shift+click or Ctrl+click.' },
+            verify: {
+              type: 'string',
+              enum: ['off', 'auto', 'strict'],
+              description: 'Verification mode. auto defaults on for capture/window targeting and off otherwise. strict always probes for confirmation.',
+            },
+            coordinate_space: {
+              type: 'string',
+              enum: ['virtual', 'monitor', 'capture', 'window'],
+              description: 'virtual=global desktop coords. monitor=coords relative to monitor_index. capture=coords relative to screenshot_id image. window=coords relative to target window top-left. Prefer capture/window with a fresh screenshot_id.',
+            },
+            screenshot_id: {
+              type: 'string',
+              description: 'Screenshot ID returned by desktop_screenshot or desktop_window_screenshot. Required for coordinate_space="capture"; optional but recommended for coordinate_space="window".',
+            },
+            window_name: {
+              type: 'string',
+              description: 'Optional window title/process name when coordinate_space="window".',
+            },
+            window_handle: {
+              type: 'number',
+              description: 'Optional exact window handle when coordinate_space="window".',
+            },
             monitor_relative: {
               type: 'boolean',
-              description: 'If true, x/y are relative to monitor_index top-left (requires monitor_index).',
+              description: 'Legacy alias for coordinate_space="monitor". If true, x/y are relative to monitor_index top-left.',
             },
-            monitor_index: { type: 'integer', description: '0-based display index when monitor_relative is true' },
+            monitor_index: { type: 'integer', description: '0-based display index when using monitor coordinates' },
           },
         },
       },
@@ -2364,18 +3538,34 @@ export function getDesktopToolDefinitions(): any[] {
       function: {
         name: 'desktop_drag',
         description:
-          'Drag between virtual-screen coordinates. Same monitor_relative + monitor_index rules as desktop_click (applies to both endpoints).',
+          'Drag between two points using virtual, monitor, capture, or window space. coordinate_space, screenshot_id, and window targeting apply to both endpoints. Returns verification status when verification is enabled.',
         parameters: {
           type: 'object',
           required: ['from_x', 'from_y', 'to_x', 'to_y'],
           properties: {
-            from_x: { type: 'number', description: 'Start X' },
-            from_y: { type: 'number', description: 'Start Y' },
-            to_x: { type: 'number', description: 'End X' },
-            to_y: { type: 'number', description: 'End Y' },
+            from_x: { type: 'number', description: 'Start X in the chosen coordinate space' },
+            from_y: { type: 'number', description: 'Start Y in the chosen coordinate space' },
+            to_x: { type: 'number', description: 'End X in the chosen coordinate space' },
+            to_y: { type: 'number', description: 'End Y in the chosen coordinate space' },
             steps: { type: 'number', description: 'Interpolation steps (default 20)' },
-            monitor_relative: { type: 'boolean', description: 'Interpret coords as monitor-local for monitor_index' },
-            monitor_index: { type: 'integer', description: '0-based display when monitor_relative' },
+            verify: {
+              type: 'string',
+              enum: ['off', 'auto', 'strict'],
+              description: 'Verification mode. auto defaults on for capture/window targeting and off otherwise.',
+            },
+            coordinate_space: {
+              type: 'string',
+              enum: ['virtual', 'monitor', 'capture', 'window'],
+              description: 'Coordinate space shared by both drag endpoints.',
+            },
+            screenshot_id: {
+              type: 'string',
+              description: 'Screenshot ID returned by desktop_screenshot or desktop_window_screenshot.',
+            },
+            window_name: { type: 'string', description: 'Optional window title/process name when coordinate_space="window".' },
+            window_handle: { type: 'number', description: 'Optional exact window handle when coordinate_space="window".' },
+            monitor_relative: { type: 'boolean', description: 'Legacy alias for coordinate_space="monitor".' },
+            monitor_index: { type: 'integer', description: '0-based display when using monitor coordinates' },
           },
         },
       },
@@ -2433,12 +3623,57 @@ export function getDesktopToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'desktop_set_clipboard',
-        description: 'Write text to clipboard.',
+        description: 'Write text, an image file, or a file list to the clipboard. For a single image file, use mode="image" or mode="auto" and then paste with Ctrl+V.',
         parameters: {
           type: 'object',
-          required: ['text'],
           properties: {
             text: { type: 'string', description: 'Clipboard text' },
+            file_path: { type: 'string', description: 'Single file path to place on the clipboard' },
+            file_paths: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Multiple file paths to place on the clipboard as a file-drop list',
+            },
+            mode: {
+              type: 'string',
+              enum: ['auto', 'text', 'image', 'files'],
+              description: 'auto chooses image for one image file, otherwise files.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_list_installed_apps',
+        description:
+          'List installed desktop apps discovered from Start Menu shortcuts, Get-StartApps, App Paths, and common install directories. ' +
+          'Returns stable app_id values you can pass to desktop_launch_app for deterministic launching.',
+        parameters: {
+          type: 'object',
+          properties: {
+            filter: { type: 'string', description: 'Optional substring filter for names, aliases, process hints, or window hints.' },
+            limit: { type: 'number', description: 'Max apps to return (default 40, max 200).' },
+            refresh: { type: 'boolean', description: 'If true, force a fresh Windows scan before listing.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_find_installed_app',
+        description:
+          'Rank installed app matches for a fuzzy query such as "claude", "codex", or "vscode". ' +
+          'Use this before desktop_launch_app when you need an exact app_id.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'Fuzzy app query, e.g. "claude", "cursor", "visual studio code".' },
+            limit: { type: 'number', description: 'Max ranked matches to return (default 10, max 50).' },
+            refresh: { type: 'boolean', description: 'If true, force a fresh Windows scan before searching.' },
           },
         },
       },
@@ -2448,12 +3683,14 @@ export function getDesktopToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'desktop_launch_app',
-        description: 'Launch a desktop application by name or path and wait for its window to appear.',
+        description:
+          'Launch a desktop application and wait for its window to appear. ' +
+          'Prefer app_id from desktop_find_installed_app or desktop_list_installed_apps for deterministic launches; app still accepts a raw executable name or path for backwards compatibility.',
         parameters: {
           type: 'object',
-          required: ['app'],
           properties: {
-            app: { type: 'string', description: 'Application name or full path, e.g. notepad, code, calc' },
+            app_id: { type: 'string', description: 'Stable installed-app ID returned by desktop_find_installed_app or desktop_list_installed_apps.' },
+            app: { type: 'string', description: 'Raw application name or full path, e.g. notepad, code, calc. Optional when app_id is provided.' },
             args: { type: 'string', description: 'Optional command-line arguments' },
             wait_ms: { type: 'number', description: 'Max ms to wait for window (default 6000)' },
           },
@@ -2540,11 +3777,27 @@ export function getDesktopToolDefinitions(): any[] {
           properties: {
             direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction (left/right = horizontal)' },
             amount: { type: 'number', description: 'Wheel ticks 1-50 (default 3). Fine-grained for subtle scroll.' },
-            x: { type: 'number', description: 'Optional X before scroll (virtual or monitor-relative)' },
-            y: { type: 'number', description: 'Optional Y before scroll' },
+            x: { type: 'number', description: 'Optional X in the chosen coordinate space' },
+            y: { type: 'number', description: 'Optional Y in the chosen coordinate space' },
             axis: { type: 'string', enum: ['vertical', 'horizontal'], description: 'Override axis (inferred from direction if omitted)' },
-            monitor_relative: { type: 'boolean', description: 'Apply monitor_index offset to x,y when both set' },
-            monitor_index: { type: 'integer', description: '0-based display when monitor_relative' },
+            verify: {
+              type: 'string',
+              enum: ['off', 'auto', 'strict'],
+              description: 'Verification mode. auto defaults on for capture/window targeting and off otherwise.',
+            },
+            coordinate_space: {
+              type: 'string',
+              enum: ['virtual', 'monitor', 'capture', 'window'],
+              description: 'Coordinate space for x/y when provided.',
+            },
+            screenshot_id: {
+              type: 'string',
+              description: 'Screenshot ID returned by desktop_screenshot or desktop_window_screenshot.',
+            },
+            window_name: { type: 'string', description: 'Optional window title/process name when coordinate_space="window".' },
+            window_handle: { type: 'number', description: 'Optional exact window handle when coordinate_space="window".' },
+            monitor_relative: { type: 'boolean', description: 'Legacy alias for coordinate_space="monitor".' },
+            monitor_index: { type: 'integer', description: '0-based display when using monitor coordinates' },
           },
         },
       },

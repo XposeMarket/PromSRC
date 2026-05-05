@@ -6,6 +6,7 @@ import { getVault, scrubSecrets } from '../security/vault.js';
 import { getConfigErrors } from './config-schema.js';
 import { ensurePublicWorkspaceScaffold } from './public-workspace.js';
 import { isPublicDistributionBuild } from '../runtime/distribution.js';
+import { listProviderSecretFieldPaths } from '../providers/provider-registry.js';
 
 function migrateLegacyDir(legacyDir: string, targetDir: string): void {
   try {
@@ -115,7 +116,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
         model:   process.env.OPENAI_MODEL   ?? 'gpt-4o',
       },
       openai_codex: {
-        model: process.env.CODEX_MODEL ?? 'gpt-5.3-codex',
+        model: process.env.CODEX_MODEL ?? 'gpt-5.4',
       },
     },
   } as any,
@@ -126,6 +127,20 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       executor: 'qwen3:4b',
       verifier: 'qwen3:4b'
     }
+  },
+  image_generation: {
+    provider: process.env.PROMETHEUS_IMAGE_PROVIDER ?? 'auto',
+    model: process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
+    save_to_workspace: process.env.PROMETHEUS_IMAGE_SAVE_TO_WORKSPACE !== '0',
+    default_output_dir: process.env.PROMETHEUS_IMAGE_OUTPUT_DIR ?? 'generated/images',
+    providers: {
+      openai: {
+        model: process.env.OPENAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
+      },
+      openai_codex: {
+        model: process.env.CODEX_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
+      },
+    },
   },
   tools: {
     enabled: ['shell', 'read', 'write', 'edit', 'search'],
@@ -254,7 +269,6 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       watchdog_no_progress_cycles: 3,
       checkpointing_enabled: true,
     },
-    // Sub-agent mode: false = conservative 4B specialist delegates (sequential)
     // true = full Claude Cowork-style free-form parallel spawn
     subagent_mode: false,
   },
@@ -291,6 +305,20 @@ function resolveStaleWindowsPath(p: string): string {
 
 function normalizeLegacyPathsInConfig(loaded: any): any {
   const out = { ...(loaded || {}) };
+  if (out?.gateway && typeof out.gateway === 'object') {
+    const gateway = { ...out.gateway };
+    const auth = gateway.auth && typeof gateway.auth === 'object'
+      ? { ...gateway.auth }
+      : {};
+    const legacyToken = typeof gateway.auth_token === 'string'
+      ? gateway.auth_token.trim()
+      : '';
+    if (!auth.token && legacyToken) auth.token = legacyToken;
+    if (typeof auth.enabled !== 'boolean') auth.enabled = true;
+    gateway.auth = auth;
+    delete gateway.auth_token;
+    out.gateway = gateway;
+  }
 
   // ── .localclaw → .prometheus migration ──────────────────────────────────
   const skillsDir = String(out?.skills?.directory || '');
@@ -325,10 +353,23 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
   }
 
   // tools.permissions.files allowed/blocked paths
-  if (Array.isArray(out?.tools?.permissions?.files?.allowed_paths)) {
-    out.tools.permissions.files.allowed_paths = out.tools.permissions.files.allowed_paths.map(
-      (p: string) => isStaleWindowsPath(p) ? WORKSPACE_DIR : p
-    );
+  if (out?.tools?.permissions?.files) {
+    const currentAllowed = Array.isArray(out.tools.permissions.files.allowed_paths)
+      ? out.tools.permissions.files.allowed_paths.map(
+          (p: string) => isStaleWindowsPath(p) ? WORKSPACE_DIR : p,
+        )
+      : [];
+    out.tools.permissions.files.allowed_paths = normalizeConfiguredPathList(currentAllowed, {
+      ensureIncludes: [WORKSPACE_DIR],
+      fallback: [WORKSPACE_DIR],
+    });
+
+    const currentBlocked = Array.isArray(out.tools.permissions.files.blocked_paths)
+      ? out.tools.permissions.files.blocked_paths.map(
+          (p: string) => isStaleWindowsPath(p) ? resolveStaleWindowsPath(p) : p,
+        )
+      : [];
+    out.tools.permissions.files.blocked_paths = normalizeConfiguredPathList(currentBlocked);
   }
 
   // agents — fix per-agent workspace paths
@@ -352,16 +393,12 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
       console.log(`[Config] Overriding workspace path "${out.workspace.path}" → "${WORKSPACE_DIR}" (PROMETHEUS_WORKSPACE_DIR)`);
       out.workspace = { ...(out.workspace || {}), path: WORKSPACE_DIR };
     }
-    // Sync allowed_paths to the runtime workspace root
-    if (Array.isArray(out?.tools?.permissions?.files?.allowed_paths)) {
-      out.tools.permissions.files.allowed_paths = out.tools.permissions.files.allowed_paths.map(
-        (p: string) => {
-          const resolved = path.resolve(String(p || ''));
-          if (resolved !== runtimeWs && !resolved.startsWith(runtimeWs + path.sep)) {
-            return WORKSPACE_DIR;
-          }
-          return p;
-        }
+    // Keep the runtime workspace root present in the allowlist, but preserve
+    // additional user-configured external paths from Settings > Security.
+    if (out?.tools?.permissions?.files) {
+      out.tools.permissions.files.allowed_paths = normalizeConfiguredPathList(
+        out.tools.permissions.files.allowed_paths,
+        { ensureIncludes: [runtimeWs], fallback: [runtimeWs] },
       );
     }
   }
@@ -425,6 +462,36 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
   return out;
 }
 
+function normalizeConfiguredPathList(
+  paths: unknown,
+  opts: { ensureIncludes?: string[]; fallback?: string[] } = {},
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  const addPath = (value: unknown) => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const resolved = path.resolve(trimmed);
+    const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(resolved);
+  };
+
+  if (Array.isArray(paths)) {
+    for (const entry of paths) addPath(entry);
+  }
+  for (const required of opts.ensureIncludes || []) addPath(required);
+
+  if (out.length === 0) {
+    for (const fallback of opts.fallback || []) addPath(fallback);
+  }
+
+  return out;
+}
+
 // ─── Secret fields that must never live in config.json plaintext ─────────────
 // Format: [ dotted.path.in.config, vault key name ]
 // On saveConfig(), any of these found as plain strings are moved to the vault
@@ -437,11 +504,11 @@ const SECRET_FIELD_MAP: Array<[string[], string]> = [
   [['channels', 'whatsapp', 'webhookSecret'],     'channels.whatsapp.webhookSecret'],
   [['search', 'tavily_api_key'],                  'search.tavily_api_key'],
   [['search', 'google_api_key'],                  'search.google_api_key'],
+  [['search', 'google_cx'],                       'search.google_cx'],
   [['search', 'brave_api_key'],                   'search.brave_api_key'],
-  [['llm', 'providers', 'openai', 'api_key'],     'llm.openai.api_key'],
-  [['llm', 'providers', 'lm_studio', 'api_key'],  'llm.lm_studio.api_key'],
-  [['llm', 'providers', 'perplexity', 'api_key'], 'llm.perplexity.api_key'],
-  [['llm', 'providers', 'gemini', 'api_key'],     'llm.gemini.api_key'],
+  ...listProviderSecretFieldPaths().map(([providerId, field]) => (
+    [['llm', 'providers', providerId, field], `llm.${providerId}.${field}`] as [string[], string]
+  )),
   [['hooks', 'token'],                             'hooks.token'],
 ];
 
@@ -514,6 +581,17 @@ export class ConfigManager {
             }
           : DEFAULT_CONFIG.llm;
 
+        const mergedImageGeneration = loaded.image_generation
+          ? {
+              ...(DEFAULT_CONFIG.image_generation || {}),
+              ...loaded.image_generation,
+              providers: {
+                ...((DEFAULT_CONFIG.image_generation as any)?.providers || {}),
+                ...((loaded.image_generation as any)?.providers || {}),
+              },
+            }
+          : DEFAULT_CONFIG.image_generation;
+
         const mergedChannels = {
           ...(DEFAULT_CONFIG.channels || {}),
           ...(loaded.channels || {}),
@@ -528,6 +606,7 @@ export class ConfigManager {
           ...DEFAULT_CONFIG,
           ...loaded,
           llm: mergedLlm,
+          image_generation: mergedImageGeneration,
           channels: mergedChannels as any,
           telegram: (mergedChannels as any).telegram,
         };
@@ -593,7 +672,8 @@ export class ConfigManager {
       this.config.skills.directory,
       this.config.memory.path,
       path.join(CONFIG_DIR, 'sessions'),
-      path.join(CONFIG_DIR, 'logs')
+      path.join(CONFIG_DIR, 'logs'),
+      path.join(CONFIG_DIR, 'cache', 'images')
     ];
 
     for (const dir of dirs) {

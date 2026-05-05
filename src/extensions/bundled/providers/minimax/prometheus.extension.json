@@ -1,0 +1,64 @@
+{
+  "id": "minimax",
+  "kind": "provider",
+  "name": "MiniMax",
+  "description": "MiniMax text models through its Anthropic-compatible API surface.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://www.minimax.io/",
+  "tags": ["minimax", "anthropic-compatible", "api"],
+  "runtime": {
+    "binding": "providers/anthropic-adapter",
+    "options": {
+      "authHeader": "bearer",
+      "staticModels": ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"]
+    }
+  },
+  "ui": {
+    "color": "#DC2626"
+  },
+  "ownership": {
+    "providerIds": ["minimax"],
+    "modelPrefixes": ["MiniMax-"],
+    "capabilities": ["llm", "api_key_auth", "anthropic_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["MINIMAX_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "sk-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "MiniMax-M2.7"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.minimax.io/anthropic"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.minimax.io/anthropic",
+      "model": "MiniMax-M2.7"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

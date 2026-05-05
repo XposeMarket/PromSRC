@@ -35,3 +35,9 @@ contextBridge.exposeInMainWorld('prometheusUpdater', {
 contextBridge.exposeInMainWorld('prometheusApp', {
   getVersion: () => ipcRenderer.invoke('get-app-version'),
 });
+
+// ─── Local File Selection Bridge ────────────────────────────────────────────
+contextBridge.exposeInMainWorld('prometheusFiles', {
+  selectCanvasFiles: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'files' }),
+  selectCanvasFolder: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'folder' }),
+});

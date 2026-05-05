@@ -16,6 +16,10 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import {
+  type ProposalRepairContext,
+  normalizeProposalRepairContext,
+} from './repair-context.js';
 
 // ─── Optional broadcast hook ──────────────────────────────────────────────────
 // Set by proposals.router.ts after the WS server is up.
@@ -36,7 +40,7 @@ export type ProposalType =
   | 'prompt_mutation'
   | 'general';
 
-export type ProposalStatus = 'pending' | 'approved' | 'denied' | 'executing' | 'executed' | 'failed' | 'expired';
+export type ProposalStatus = 'pending' | 'approved' | 'denied' | 'executing' | 'repairing' | 'executed' | 'failed' | 'expired';
 export type ProposalPriority = 'critical' | 'high' | 'medium' | 'low';
 
 export interface ProposalAffectedFile {
@@ -64,6 +68,17 @@ export interface ProposalContentSnapshot {
   executorProviderId?: string;
   /** Model to use for the execution task (e.g. 'claude-haiku-4-5-20251001'). */
   executorModel?: string;
+  teamExecution?: ProposalTeamExecution;
+}
+
+export interface ProposalTeamExecution {
+  teamId: string;
+  managerSessionId: string;
+  executorAgentId: string;
+  executorAgentName?: string;
+  returnTarget: 'team_chat';
+  originatingSessionId?: string;
+  notifyMainAgentOnError?: boolean;
 }
 
 export interface ProposalRevision {
@@ -88,6 +103,7 @@ export interface Proposal {
   summary: string;
   details: string;
   sourceAgentId: string;
+  sourceTeamId?: string;
   sourcePipeline?: string;
   affectedFiles: ProposalAffectedFile[];
   diffPreview?: string;
@@ -99,6 +115,7 @@ export interface Proposal {
   riskTier?: 'low' | 'high';
   executorProviderId?: string;
   executorModel?: string;
+  teamExecution?: ProposalTeamExecution;
   status: ProposalStatus;
   version: number;
   revisionHistory: ProposalRevision[];
@@ -111,6 +128,7 @@ export interface Proposal {
   executionResult?: string;
   notes?: string;
   sourceSessionId?: string;
+  repairContext?: ProposalRepairContext;
 }
 
 export interface ProposalUpdateInput {
@@ -126,6 +144,7 @@ export interface ProposalUpdateInput {
   requiresSrcEdit?: boolean;
   executorAgentId?: string;
   executorPrompt?: string;
+  teamExecution?: ProposalTeamExecution;
 }
 
 export type UpdatePendingProposalError = 'not_found' | 'not_pending' | 'validation_failed';
@@ -147,7 +166,7 @@ function getProposalsRoot(): string {
 
 function statusToBucket(status: ProposalStatus): string {
   if (status === 'pending') return 'pending';
-  if (status === 'approved' || status === 'executing') return 'approved';
+  if (status === 'approved' || status === 'executing' || status === 'repairing') return 'approved';
   if (status === 'denied') return 'denied';
   return 'archive';
 }
@@ -196,6 +215,45 @@ export function validateSrcProposalDetails(details: string, affectedFiles: Propo
   return missing;
 }
 
+function validateSrcProposalReadiness(partial: Pick<Proposal, 'type' | 'details' | 'affectedFiles' | 'executorPrompt' | 'riskTier' | 'sourcePipeline'>): string[] {
+  const affectedFiles = partial.affectedFiles || [];
+  if (!hasSrcAffectedFiles(affectedFiles)) return [];
+
+  const missing: string[] = validateSrcProposalDetails(partial.details || '', affectedFiles);
+  const sourcePipeline = String(partial.sourcePipeline || '');
+  const isBuildRepair = sourcePipeline.startsWith('proposal_build_failure');
+  const detailsText = String(partial.details || '').toLowerCase();
+  const executorText = String(partial.executorPrompt || '').toLowerCase();
+
+  if (partial.type !== 'src_edit') {
+    missing.push('type must be src_edit');
+  }
+  if (partial.riskTier !== 'low' && partial.riskTier !== 'high') {
+    missing.push('riskTier must be low or high');
+  }
+  if (!String(partial.executorPrompt || '').trim()) {
+    missing.push('executorPrompt');
+  }
+
+  // Build-failure repair proposals are generated from compiler output after an
+  // approved task is already blocked, so they may not have a fresh read_source
+  // citation. Normal src proposals must prove the plan came from current code.
+  if (!isBuildRepair && !/read_source|grep_source|source_stats|read_webui_source|read_prom_file/.test(`${detailsText}\n${executorText}`)) {
+    missing.push('source-read evidence');
+  }
+
+  const affectedSrcPaths = affectedFiles
+    .map(f => String((f as any)?.path || '').replace(/\\/g, '/').replace(/^\.?\//, '').trim())
+    .filter(p => p.startsWith('src/'));
+  for (const filePath of affectedSrcPaths) {
+    if (!detailsText.includes(filePath.toLowerCase()) && !executorText.includes(filePath.toLowerCase())) {
+      missing.push(`affected file plan for ${filePath}`);
+    }
+  }
+
+  return Array.from(new Set(missing));
+}
+
 // ─── CRUD helpers ──────────────────────────────────────────────────────────────
 
 function cloneAffectedFiles(files: ProposalAffectedFile[] | undefined): ProposalAffectedFile[] {
@@ -205,6 +263,23 @@ function cloneAffectedFiles(files: ProposalAffectedFile[] | undefined): Proposal
     action: ((f as any)?.action === 'create' || (f as any)?.action === 'delete') ? (f as any).action : 'edit',
     description: String((f as any)?.description || ''),
   }));
+}
+
+function normalizeProposalTeamExecution(raw: any): ProposalTeamExecution | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const teamId = String(raw.teamId || '').trim();
+  const executorAgentId = String(raw.executorAgentId || '').trim();
+  if (!teamId || !executorAgentId) return undefined;
+  const managerSessionId = String(raw.managerSessionId || `team_coord_${teamId}`).trim();
+  return {
+    teamId,
+    managerSessionId,
+    executorAgentId,
+    executorAgentName: raw.executorAgentName == null ? undefined : String(raw.executorAgentName).slice(0, 120),
+    returnTarget: 'team_chat',
+    originatingSessionId: raw.originatingSessionId == null ? undefined : String(raw.originatingSessionId),
+    notifyMainAgentOnError: raw.notifyMainAgentOnError !== false,
+  };
 }
 
 function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalContentSnapshot>): ProposalContentSnapshot {
@@ -224,6 +299,7 @@ function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalCon
     riskTier: proposal.riskTier,
     executorProviderId: proposal.executorProviderId,
     executorModel: proposal.executorModel,
+    teamExecution: normalizeProposalTeamExecution((proposal as any).teamExecution),
   };
 }
 
@@ -245,6 +321,7 @@ function normalizeRevision(raw: any): ProposalRevision {
     riskTier: snapshotRaw.riskTier === 'low' ? 'low' : snapshotRaw.riskTier === 'high' ? 'high' : undefined,
     executorProviderId: snapshotRaw.executorProviderId == null ? undefined : String(snapshotRaw.executorProviderId),
     executorModel: snapshotRaw.executorModel == null ? undefined : String(snapshotRaw.executorModel),
+    teamExecution: normalizeProposalTeamExecution(snapshotRaw.teamExecution),
   };
   return {
     version: Math.max(1, Math.floor(Number(raw?.version) || 1)),
@@ -265,9 +342,11 @@ function normalizeProposal(raw: Proposal): Proposal {
     details: String(raw.details || ''),
     affectedFiles: cloneAffectedFiles(raw.affectedFiles),
     requiresBuild: raw.requiresBuild === true,
+    teamExecution: normalizeProposalTeamExecution((raw as any).teamExecution),
     version: Number.isFinite(Number((raw as any).version)) && Number((raw as any).version) > 0
       ? Math.floor(Number((raw as any).version))
       : 1,
+    repairContext: normalizeProposalRepairContext((raw as any).repairContext),
     revisionHistory: Array.isArray((raw as any).revisionHistory)
       ? (raw as any).revisionHistory.map((r: any) => normalizeRevision(r))
       : [],
@@ -301,12 +380,13 @@ function normalizeProposal(raw: Proposal): Proposal {
 export function createProposal(
   partial: Omit<Proposal, 'id' | 'status' | 'version' | 'revisionHistory' | 'approvalSnapshot' | 'createdAt' | 'updatedAt'>
 ): Proposal {
-  const missing = validateSrcProposalDetails(partial.details || '', partial.affectedFiles || []);
+  const missing = validateSrcProposalReadiness(partial);
   if (missing.length > 0) {
     throw new Error(
-      `[ProposalStore] Proposals that edit src/ MUST include these exact sections in details: ${SRC_PROPOSAL_REQUIRED_SECTIONS.join(', ')}. ` +
+      `[ProposalStore] Proposals that edit src/ must be approval-ready implementation plans. ` +
+      `Required details sections: ${SRC_PROPOSAL_REQUIRED_SECTIONS.join(', ')}. ` +
       `Missing: ${missing.join(', ')}. ` +
-      `Add each section as a heading with that exact text.`,
+      `Read the current source, include exact affected src/ paths and an executorPrompt, then resubmit.`,
     );
   }
 
@@ -335,6 +415,7 @@ export function createProposal(
       title: proposal.title,
       priority: proposal.priority,
       sourceAgentId: proposal.sourceAgentId,
+      sourceTeamId: proposal.sourceTeamId || proposal.teamExecution?.teamId,
       sessionId: proposal.sourceSessionId,
     });
   } catch { /* broadcast is best-effort */ }
@@ -369,7 +450,7 @@ export function listProposals(statusFilter?: ProposalStatus | ProposalStatus[]):
   const root = getProposalsRoot();
   const statuses = statusFilter
     ? (Array.isArray(statusFilter) ? statusFilter : [statusFilter])
-    : ['pending', 'approved', 'denied', 'executing', 'executed', 'failed', 'expired'];
+    : ['pending', 'approved', 'denied', 'executing', 'repairing', 'executed', 'failed', 'expired'];
   const buckets = [...new Set((statuses as ProposalStatus[]).map(statusToBucket))];
   const results: Proposal[] = [];
   const seen = new Set<string>();
@@ -411,8 +492,9 @@ export function updatePendingProposal(
   if (updates.requiresSrcEdit !== undefined) next.requiresSrcEdit = updates.requiresSrcEdit === true ? true : undefined;
   if (updates.executorAgentId !== undefined) next.executorAgentId = updates.executorAgentId || undefined;
   if (updates.executorPrompt !== undefined) next.executorPrompt = updates.executorPrompt || undefined;
+  if (updates.teamExecution !== undefined) next.teamExecution = normalizeProposalTeamExecution(updates.teamExecution);
 
-  const missing = validateSrcProposalDetails(next.details || '', next.affectedFiles || []);
+  const missing = validateSrcProposalReadiness(next);
   if (missing.length > 0) {
     return { ok: false, error: 'validation_failed', missingSections: missing, proposal };
   }
@@ -476,6 +558,16 @@ export function markProposalExecuting(id: string, taskId: string): Proposal | nu
   return p;
 }
 
+export function markProposalRepairing(id: string, reason: string, taskId?: string): Proposal | null {
+  const p = loadProposal(id);
+  if (!p) return null;
+  p.status = 'repairing';
+  if (taskId) p.executorTaskId = taskId;
+  p.executionResult = reason.slice(0, 1000);
+  saveProposal(p);
+  return p;
+}
+
 export function markProposalExecuted(id: string, result: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
@@ -523,6 +615,7 @@ export function importProposalFromFile(filePath: string): Proposal | null {
       requiresSrcEdit: raw.requiresSrcEdit === true,
       executorAgentId: raw.executorAgentId,
       executorPrompt: raw.executorPrompt,
+      teamExecution: normalizeProposalTeamExecution(raw.teamExecution),
     });
     try { fs.unlinkSync(filePath); } catch { /* ok */ }
     return proposal;

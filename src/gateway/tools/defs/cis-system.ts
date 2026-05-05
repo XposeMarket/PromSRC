@@ -5,22 +5,42 @@ import { filterPublicBuildToolDefs, getPublicBuildAllowedCategories } from '../.
 
 export function getCisSystemTools(): any[] {
   const categoryDocs: Array<[string, string]> = [
-    ['browser', 'browser — 20 web automation tools (browser_open, browser_click, browser_fill, etc.)'],
-    ['desktop', 'desktop — 26 OS/desktop automation tools (desktop_screenshot, desktop_click, etc.)'],
-    ['team_ops', 'team_ops - agent/team coordination tools (spawn_subagent, message_subagent, team_manage, dispatch_team_agent, etc.)'],
-    ['source_write', 'source_write — 10 code editing tools (find_replace_source, write_source, etc.)'],
-    ['integrations', 'integrations — 5 MCP/webhook/CIS tools (mcp_server_manage, webhook_manage, social_intel, etc.)'],
-    ['connectors', 'connectors — 34 external service tools (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4). Use connector_list first to see what\'s connected.'],
-    ['composites', 'composites - saved multi-step composite tools plus create/get/edit/delete/list composite management tools.'],
+    ['browser_automation', 'browser_automation - web UI automation tools (browser_open, browser_click, browser_fill, save_site_shortcut, etc.)'],
+    ['desktop_automation', 'desktop_automation - OS/desktop automation tools (desktop_screenshot, desktop_click, desktop_launch_app, etc.)'],
+    ['agents_and_teams', 'agents_and_teams - standalone subagents, managed teams, team chat, dispatches, and agent updates.'],
+    ['prometheus_source_read', 'prometheus_source_read - Prometheus app/source inspection tools (read_source, grep_source, read_prom_file, etc.)'],
+    ['prometheus_source_write', 'prometheus_source_write - Prometheus app/source editing tools for approved dev proposal tasks only.'],
+    ['workspace_write', 'workspace_write - workspace file mutation tools (create_file, replace_lines, delete_file, rename_file, etc.)'],
+    ['advanced_memory', 'advanced_memory - memory graph, timeline, project-scoped search, related-record, and index refresh tools.'],
+    ['media_assets', 'media_assets - download and media analysis tools (download_url, download_media, analyze_image, analyze_video).'],
+    ['media_quality', 'media_quality - image/video validation and render inspection tools (contrast, text overflow, frame renders, caption/audio timing).'],
+    ['automations', 'automations - scheduling and automation management tools (schedule_job, history, outputs, patching, stuck control).'],
+    ['external_apps', 'external_apps - connected external app tools (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4). Use connector_list first.'],
+    ['integration_admin', 'integration_admin - MCP server, webhook, and integration setup/admin tools.'],
+    ['social_intelligence', 'social_intelligence - social profile intelligence and reporting tools.'],
+    ['proposal_admin', 'proposal_admin - proposal inspection/editing administration tools.'],
+    ['mcp_server_tools', 'mcp_server_tools - dynamic tools exposed by connected MCP servers (shown as mcp__server__tool). Use only for trusted servers.'],
+    ['composite_tools', 'composite_tools - saved multi-step composite tools plus create/get/edit/delete/list composite management tools.'],
+    ['creative_mode', 'creative_mode - enter or exit the dedicated creative runtime modes.'],
   ];
   const categoryEnum = getPublicBuildAllowedCategories([
-    'browser',
-    'desktop',
-    'team_ops',
-    'source_write',
-    'integrations',
-    'connectors',
-    'composites',
+    'browser_automation',
+    'desktop_automation',
+    'agents_and_teams',
+    'prometheus_source_read',
+    'prometheus_source_write',
+    'workspace_write',
+    'advanced_memory',
+    'media_assets',
+    'media_quality',
+    'automations',
+    'external_apps',
+    'integration_admin',
+    'social_intelligence',
+    'proposal_admin',
+    'mcp_server_tools',
+    'composite_tools',
+    'creative_mode',
   ] as const);
   const requestToolCategoryDescription =
     'Activate a tool category for this session, unlocking those tool schemas for use. ' +
@@ -68,12 +88,10 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'deploy_analysis_team',
         description:
-          'Deploy a one-shot website intelligence analysis for any URL. ' +
-          'Spawns 5 specialists in parallel via background_spawn (SEO, Performance/Stack, AI Visibility/GEO, Backlinks/SERP, Content), ' +
-          'then compiles everything into a beautiful HTML dashboard report saved to the workspace. ' +
-          'Returns the report content AND a reportPath (absolute path to the .html file). ' +
-          'AFTER the tool returns: (1) call present_file({ path: <reportPath> }) to open the dashboard in the canvas, ' +
-          '(2) write a concise executive summary with the top 3 actionable recommendations. ' +
+          'Run a full go-to-market website analysis for any URL. ' +
+          'It deploys background specialists for business profiling, SEO discovery, social reputation, browser funnel testing, CRO and messaging critique, technical auditing, and competitive positioning. ' +
+          'It returns a structured GTM intelligence bundle plus downloadable artifacts for the main agent to compile into an inline interactive HTML dashboard, followed by a full written marketing, sales, and site-improvement plan. ' +
+          'Do not call present_file after this tool. The final experience should be inline, not file-first. ' +
           'Use when the user asks to analyze, audit, check, or investigate any website.',
         parameters: {
           type: 'object',
@@ -123,17 +141,35 @@ export function getCisSystemTools(): any[] {
         },
       },
     },
+    // ── request_team_member_turn: invite a member into the shared room ────────
+    {
+      type: 'function',
+      function: {
+        name: 'request_team_member_turn',
+        description: 'Invite a managed-team member into the shared team room for planning, discussion, clarification, or readiness checks without starting an execution dispatch. The member uses their persistent room session and posts their reply into team chat. Use background=true to ask multiple members in parallel, then collect with get_agent_result(task_id) if needed.',
+        parameters: {
+          type: 'object',
+          required: ['team_id', 'agent_id', 'prompt'],
+          properties: {
+            team_id: { type: 'string', description: 'The team ID (e.g. "team_abc123_xyz")' },
+            agent_id: { type: 'string', description: 'The ID of the team member to invite into the room' },
+            prompt: { type: 'string', description: 'What you want the member to think about, answer, or discuss in the team room' },
+            background: { type: 'boolean', description: 'If true, start the member room turn in the background and return a task_id immediately. Default: false.' },
+          },
+        },
+      },
+    },
     // ── get_agent_result: collect result from a background-dispatched agent ───
     {
       type: 'function',
       function: {
         name: 'get_agent_result',
-        description: 'Collect the result of an agent dispatched with background=true. By default waits until the agent finishes (block=true). Pass block=false to check status without waiting — useful for polling. The task_id comes from the dispatch_team_agent response.',
+        description: 'Collect the result of an agent started with background=true. Works for dispatch_team_agent and request_team_member_turn. By default waits until the agent finishes (block=true). Pass block=false to check status without waiting — useful for polling.',
         parameters: {
           type: 'object',
           required: ['task_id'],
           properties: {
-            task_id: { type: 'string', description: 'The task_id returned by dispatch_team_agent with background=true' },
+            task_id: { type: 'string', description: 'The task_id returned by dispatch_team_agent or request_team_member_turn when background=true' },
             block: { type: 'boolean', description: 'If true (default), wait until the agent finishes. If false, return current status immediately without blocking.' },
             timeout_ms: { type: 'number', description: 'Max wait time in ms when block=true (default: 300000 = 5 min). If the agent is still running after this, returns a "still running" message and you can call again.' },
           },
@@ -392,9 +428,10 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'write_proposal',
-        description:
-          'Submit a proposal for human approval. Use for any change that requires human review before execution: src/ code edits, new features, major config changes. The proposal will appear in the Prometheus proposals panel for you to approve or deny. ' +
-          'REQUIRED for src/ edits: details MUST contain these exact section headings: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Proposals without them will be rejected.',
+	        description:
+	          'Submit a proposal for human approval. Use for any change that requires human review before execution: src/ code edits, new features, major config changes. The proposal will appear in the Prometheus proposals panel for you to approve or deny. ' +
+            'When used by a team manager, executor_agent_id is REQUIRED and must name a subagent on that same team; approved execution will use that subagent model/context and report back to team chat. ' +
+	          'REQUIRED for src/ edits: details MUST contain these exact section headings: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Proposals without them will be rejected.',
         parameters: {
           type: 'object',
           required: ['type', 'title', 'summary', 'details'],
@@ -427,49 +464,13 @@ export function getCisSystemTools(): any[] {
             diff_preview: { type: 'string', description: 'Optional: code diff or before/after snippet' },
             estimated_impact: { type: 'string', description: 'e.g. "adds browser caching, reduces API calls by ~40%"' },
             requires_build: { type: 'boolean', description: 'True if src/ TypeScript changes need npm run build' },
-            executor_agent_id: { type: 'string', description: 'Which agent should execute this when approved (e.g. code_executor)' },
+	            executor_agent_id: { type: 'string', description: 'Which agent should execute this when approved. Required for team manager proposals and must be a member of that team.' },
             executor_prompt: { type: 'string', description: 'Exact prompt to send the executor agent when approved' },
             risk_tier: {
               type: 'string',
               enum: ['low', 'high'],
-              description: "Execution model assignment. 'low' = small isolated change (UI tweak, config field, 1-2 files) → runs on Haiku. 'high' = core logic, auth, multi-file, build changes → runs on Codex. Omit to default to Codex (safe).",
+              description: "Execution model assignment. 'low' uses Settings > Agent Model Defaults > proposal_executor_low_risk for small isolated changes. 'high' uses proposal_executor_high_risk for core logic, auth, multi-file, build, or uncertain changes. Omit only when no risk-specific executor is needed.",
             },
-          },
-        },
-      },
-    },
-    // ── self_improve tool ────────────────────────────────────────
-    {
-      type: 'function',
-      function: {
-        name: 'self_improve',
-        description: 'Access the self-improvement engine. Read performance reports, schedule health, error patterns, behavior changelog, and pending proposals. Also add changelog entries and query the prompt library.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: {
-              type: 'string',
-              enum: [
-                'get_summary',           // overall status snapshot
-                'get_latest_report',     // last weekly perf report
-                'get_schedule_health',   // per-job success rates & errors
-                'get_error_summary',     // error watchdog state
-                'get_goals',             // active goal decompositions
-                'get_changelog',         // recent behavior changes
-                'get_pending_proposals', // proposals awaiting human approval
-                'get_pending_skills',    // skill evolutions awaiting approval
-                'add_changelog_entry',   // record a behavior change
-                'get_proven_patterns',   // prompt library for a category
-              ],
-              description: 'Which operation to perform',
-            },
-            change: { type: 'string', description: 'For add_changelog_entry: what was changed' },
-            reason: { type: 'string', description: 'For add_changelog_entry: why it was changed' },
-            job_name: { type: 'string', description: 'For add_changelog_entry: affected job name' },
-            expected_impact: { type: 'string', description: 'For add_changelog_entry: expected improvement' },
-            category: { type: 'string', description: 'For get_proven_patterns: task category (e.g. web_research, social_media_posting)' },
-            limit: { type: 'number', description: 'For get_changelog: how many recent entries (default 10)' },
           },
         },
       },
@@ -522,6 +523,29 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'business_context_mode',
+        description:
+          'Control automatic BUSINESS.md runtime injection for this session. ' +
+          'Use enable when ongoing work needs persistent business/company context across later turns. ' +
+          'Use disable to save context budget when that context is no longer needed. ' +
+          'Use status to check whether BUSINESS.md auto-injection is currently on. ' +
+          'When enabling, the tool also returns the current BUSINESS.md snapshot immediately so it can be used in the same turn.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['enable', 'disable', 'status'],
+              description: 'Whether to enable, disable, or inspect BUSINESS.md auto-injection for this session.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'skill_list',
         description: 'List all available skills with their ID, emoji, and description. Call this before browser/desktop automation, file edits, or other execution-heavy work to check for a relevant playbook, then use skill_read(id) for full instructions.',
         parameters: { type: 'object', required: [], properties: {} },
@@ -548,6 +572,202 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'skill_resource_list',
+        description:
+          'List static resources bundled with a skill, such as templates, schemas, examples, docs, and assets. ' +
+          'Use after skill_read when the skill instructions mention bundled resources.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', description: 'Skill ID from skill_list.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_resource_read',
+        description:
+          'Read a text resource from inside a bundled skill. Paths are scoped to the skill folder; absolute paths and ../ traversal are rejected. ' +
+          'Only text-like resource types are readable in V1; scripts are never executed.',
+        parameters: {
+          type: 'object',
+          required: ['id', 'path'],
+          properties: {
+            id: { type: 'string', description: 'Skill ID from skill_list.' },
+            path: { type: 'string', description: 'Resource path from skill_resource_list, e.g. "templates/lead-report.md".' },
+            max_chars: { type: 'number', description: 'Optional maximum characters to return.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_import_bundle',
+        description:
+          'Install a downloaded bundled skill from a local directory, local .zip file, or HTTPS URL to a .zip. ' +
+          'A GitHub tree URL such as https://github.com/owner/repo/tree/main/skills is also supported and may import multiple skills. ' +
+          'The bundle must contain skill.json or SKILL.md. This imports static resources only; no bundled scripts are executed.',
+        parameters: {
+          type: 'object',
+          required: ['source'],
+          properties: {
+            source: { type: 'string', description: 'Directory path, .zip path, GitHub tree URL, or https URL to a .zip skill bundle.' },
+            id: { type: 'string', description: 'Optional override ID to install as. Only valid for a single skill bundle.' },
+            overwrite: { type: 'boolean', description: 'Replace an existing skill with the same ID. Default false.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_inspect',
+        description:
+          'Inspect the normalized metadata for a skill, including native/overlay manifest source, provenance, resources, validation, required tools, categories, and permissions.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', description: 'Skill ID from skill_list.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_manifest_write',
+        description:
+          'Write a Prometheus-owned manifest overlay for an installed skill without modifying the downloaded skill folder. ' +
+          'Use to enrich third-party skills with version, triggers, categories, required tools, permissions, and curated resources.',
+        parameters: {
+          type: 'object',
+          required: ['id', 'manifest'],
+          properties: {
+            id: { type: 'string', description: 'Installed skill ID.' },
+            manifest: {
+              type: 'object',
+              description: 'Manifest overlay object. Prometheus normalizes id and defaults schemaVersion/entrypoint.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_create_bundle',
+        description:
+          'Create a first-class bundled skill with skill.json, SKILL.md, optional resources, categories, required tools, and permissions. ' +
+          'Use this for reusable workflows that need templates, schemas, examples, references, or richer metadata.',
+        parameters: {
+          type: 'object',
+          required: ['id', 'name', 'instructions'],
+          properties: {
+            id: { type: 'string', description: 'Unique kebab-case skill ID.' },
+            name: { type: 'string', description: 'Human-readable skill name.' },
+            description: { type: 'string', description: 'One-sentence summary.' },
+            instructions: { type: 'string', description: 'Full SKILL.md instructions.' },
+            emoji: { type: 'string', description: 'Single emoji representing this skill.' },
+            version: { type: 'string', description: 'Version string. Default 1.0.0.' },
+            triggers: { type: 'string', description: 'Comma-separated trigger phrases.' },
+            categories: { type: 'string', description: 'Comma-separated categories.' },
+            requiredTools: { type: 'string', description: 'Comma-separated required tool/category names.' },
+            permissions: { type: 'object', description: 'Permission hints such as browser, workspaceRead, workspaceWrite, shell, externalSideEffects.' },
+            resources: {
+              type: 'array',
+              description: 'Optional text resources to create.',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string' },
+                  content: { type: 'string' },
+                  type: { type: 'string' },
+                  description: { type: 'string' },
+                },
+              },
+            },
+            overwrite: { type: 'boolean', description: 'Replace an existing skill with the same ID. Default false.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_resource_write',
+        description:
+          'Create or update a text resource inside an installed skill bundle. Path is scoped to the skill folder; absolute paths and ../ traversal are rejected.',
+        parameters: {
+          type: 'object',
+          required: ['id', 'path', 'content'],
+          properties: {
+            id: { type: 'string', description: 'Installed skill ID.' },
+            path: { type: 'string', description: 'Resource path, e.g. templates/report.md or schemas/output.json.' },
+            content: { type: 'string', description: 'Text content to write.' },
+            type: { type: 'string', description: 'Resource type: template, schema, example, doc, prompt-fragment, data, asset.' },
+            description: { type: 'string', description: 'Resource description for the manifest.' },
+            addToManifest: { type: 'boolean', description: 'Add/update this resource in skill.json. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_resource_delete',
+        description:
+          'Delete a resource inside an installed skill bundle and remove it from skill.json by default. Path is scoped to the skill folder.',
+        parameters: {
+          type: 'object',
+          required: ['id', 'path'],
+          properties: {
+            id: { type: 'string', description: 'Installed skill ID.' },
+            path: { type: 'string', description: 'Resource path from skill_resource_list.' },
+            removeFromManifest: { type: 'boolean', description: 'Remove resource from skill.json. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_export_bundle',
+        description:
+          'Export an installed skill as a .zip bundle that can be shared or imported elsewhere. Overlay manifests are materialized as skill.json in the zip.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', description: 'Installed skill ID.' },
+            outputPath: { type: 'string', description: 'Optional output .zip path. Defaults to skills/exports/<id>.skill.zip.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_update_from_source',
+        description:
+          'Re-download an imported skill or skill collection using stored provenance. Local Prometheus overlay manifests are preserved.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', description: 'Installed skill ID with provenance.' },
+            overwrite: { type: 'boolean', description: 'Overwrite existing imported folders. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'skill_create',
         description: 'Create a new reusable skill and save it to the workspace. Use this when you develop a repeatable workflow, technique, or set of instructions that would be useful for future tasks. The skill will be available via skill_list immediately after creation.',
         parameters: {
@@ -557,10 +777,45 @@ export function getCisSystemTools(): any[] {
             id: { type: 'string', description: 'Unique kebab-case id, e.g. "python-debugger" or "tweet-poster"' },
             name: { type: 'string', description: 'Human-readable name, e.g. "Python Debugger"' },
             description: { type: 'string', description: 'One-sentence summary of what this skill does' },
-            instructions: { type: 'string', description: 'Full markdown instructions for using this skill — be thorough, as this is what you will read when the skill is enabled in future sessions' },
+            instructions: { type: 'string', description: 'Full markdown instructions for using this skill - be thorough, as this is what you will read with skill_read when relevant' },
             emoji: { type: 'string', description: 'Single emoji representing this skill' },
-            triggers: { type: 'string', description: 'Comma-separated keywords that will auto-activate this skill when matched against tool names or messages, e.g. "python,debug,traceback"' },
+            triggers: { type: 'string', description: 'Comma-separated keywords used as discovery metadata, e.g. "python,debug,traceback"' },
           },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'enter_creative_mode',
+        description:
+          'Enter a persistent creative workspace mode for this session. ' +
+          'Valid modes: design, image, canvas, video. Canvas is a legacy alias for image. ' +
+          'Use this when the user is actively working in a specialized creative workflow and should stay there across turns.',
+        parameters: {
+          type: 'object',
+          required: ['mode'],
+          properties: {
+            mode: {
+              type: 'string',
+              enum: ['design', 'image', 'canvas', 'video'],
+              description: 'Creative mode to activate for this session.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'exit_creative_mode',
+        description:
+          'Exit the active creative workspace mode for this session and return to normal main chat behavior. ' +
+          'Use only when the specialized creative workflow is clearly complete or the user explicitly asks to leave it.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {},
         },
       },
     },

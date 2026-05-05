@@ -9,9 +9,11 @@
  *              Does NOT write to memory or create proposals.
  *
  *   DREAM    — once nightly (default 23:30 local)
- *              Synthesizes all of today's thoughts, applies durable memory
+ *              Synthesizes the target day's thoughts, applies durable memory
  *              updates directly, generates formal proposals for everything else,
  *              and rewrites Brain/proposals.md as the morning briefing.
+ *              About 30 minutes later, runs a cleanup-only memory solidifier
+ *              that may remove/dedupe but must not add new memory.
  *
  * Eligibility is state-based, not timer-only:
  *   Thought: eligible when now - lastThoughtAt >= 6h (with 12h catch-up cap)
@@ -24,7 +26,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { addMessage, clearHistory, persistToolLog } from '../session';
+import { activateToolCategory, addMessage, clearHistory, clearSessionMutationScope, persistToolLog, setSessionMutationScope } from '../session';
+import { isKnownProviderId } from '../../providers/provider-registry.js';
 import {
   getBrainDir,
   ensureBrainDirs,
@@ -39,6 +42,7 @@ import {
   fmtLocal,
   type BrainLatestState,
 } from './brain-state';
+import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -48,8 +52,11 @@ const CHECK_INTERVAL_MS    = 15 * 60 * 1000;        // 15-minute ticker
 const DREAM_HOUR           = 23;                    // local hour for dream eligibility
 const DREAM_MIN            = 30;                    // local minute for dream eligibility
 const DREAM_BUFFER_MIN     = 90;                    // don't start thought if dream is ≤90 min away
+const DREAM_CLEANUP_DELAY_MS = 30 * 60 * 1000;      // run the memory solidifier 30m after dream success
 const THOUGHT_RETRY_BACKOFF_MS = 30 * 60 * 1000;    // wait 30m after a failed attempt
 const DREAM_RETRY_BACKOFF_MS   = 60 * 60 * 1000;    // wait 60m after a failed attempt
+const DREAM_CLEANUP_RETRY_BACKOFF_MS = 60 * 60 * 1000;
+const DREAM_CATCHUP_LOOKBACK_DAYS = 7;              // max backlog window to auto-catch-up
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,13 +94,53 @@ export interface BrainJobStatus {
   lastRun: string | null;
   nextRun: string | null;
   schedule: string;
+  model?: string;
   todayCount?: number;
   ranToday?: boolean;
-  thoughtModel?: string;
-  dreamModel?: string;
+  pendingDate?: string;
   lastAttempt?: string | null;
   lastOutcome?: 'idle' | 'success' | 'failed';
   lastError?: string | null;
+}
+
+export interface BrainStatus {
+  thought: BrainJobStatus;
+  dream: BrainJobStatus;
+  thoughtModel: string;
+  dreamModel: string;
+}
+
+function getDreamTimeForDate(dateStr: string): Date {
+  const [year, month, day] = String(dateStr || '').split('-').map((part) => Number(part));
+  if (!year || !month || !day) throw new Error(`Invalid dream date "${dateStr}"`);
+  return new Date(year, month - 1, day, DREAM_HOUR, DREAM_MIN, 0, 0);
+}
+
+function addLocalDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function parseBrainModelRef(raw: string): { providerId: string; model: string } | null {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  const slashIdx = value.indexOf('/');
+  if (slashIdx <= 0) return null;
+  const providerId = value.slice(0, slashIdx).trim();
+  const model = value.slice(slashIdx + 1).trim();
+  if (!providerId || !model || !isKnownProviderId(providerId)) return null;
+  return { providerId, model };
+}
+
+function normalizeBrainModelRef(raw: unknown, label: 'thoughtModel' | 'dreamModel'): string {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  const parsed = parseBrainModelRef(value);
+  if (!parsed) {
+    throw new Error(`${label} must use "provider/model" format with a supported provider.`);
+  }
+  return `${parsed.providerId}/${parsed.model}`;
 }
 
 export class BrainRunner {
@@ -101,6 +148,7 @@ export class BrainRunner {
   private ticker: NodeJS.Timeout | null = null;
   private thoughtRunning = false;
   private dreamRunning   = false;
+  private dreamCleanupRunning = false;
 
   constructor(deps: BrainRunnerDeps) {
     this.deps = deps;
@@ -108,11 +156,12 @@ export class BrainRunner {
 
   // ─── Public API ───────────────────────────────────────────────────────────
 
-  getBrainStatus(): { thought: BrainJobStatus; dream: BrainJobStatus } {
+  getBrainStatus(): BrainStatus {
     const state   = loadLatestState();
     const today   = getLocalDateStr();
     const daily   = loadDailyStatus(today);
     const now     = new Date();
+    const pendingDreamDate = this._getPendingDreamDate(now, state);
 
     // Next thought
     const lastThought = state.lastThoughtAt ? new Date(state.lastThoughtAt) : null;
@@ -121,13 +170,18 @@ export class BrainRunner {
       : now.getTime();
 
     // Next dream
-    const dreamTime = new Date(now);
-    dreamTime.setHours(DREAM_HOUR, DREAM_MIN, 0, 0);
-    if (dreamTime.getTime() <= now.getTime()) {
-      dreamTime.setDate(dreamTime.getDate() + 1);
-    }
+    const dreamTime = pendingDreamDate
+      ? new Date(now)
+      : (() => {
+          const next = new Date(now);
+          next.setHours(DREAM_HOUR, DREAM_MIN, 0, 0);
+          if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+          return next;
+        })();
 
     return {
+      thoughtModel: state.thoughtModel || '',
+      dreamModel: state.dreamModel || '',
       thought: {
         id: 'brain_thought',
         name: '🧠 Brain Thought',
@@ -137,9 +191,8 @@ export class BrainRunner {
         lastRun: state.lastThoughtAt,
         nextRun: new Date(nextThoughtMs).toISOString(),
         schedule: 'Every 6 hours',
+        model: state.thoughtModel || '',
         todayCount: daily.thoughts.length,
-        thoughtModel: state.thoughtModel || '',
-        dreamModel:   state.dreamModel  || '',
         lastAttempt: state.lastThoughtAttemptAt,
         lastOutcome: state.lastThoughtStatus,
         lastError: state.lastThoughtError,
@@ -147,13 +200,15 @@ export class BrainRunner {
       dream: {
         id: 'brain_dream',
         name: '💤 Brain Dream',
-        description: 'Nightly synthesis: updates memory and generates proposals',
+        description: 'Nightly synthesis plus a second-pass memory cleanup 30m later',
         enabled: state.dreamEnabled !== false,
-        running: this.dreamRunning,
+        running: this.dreamRunning || this.dreamCleanupRunning,
         lastRun: state.lastDreamCompletedAt || daily.dreamCompletedAt,
         nextRun: dreamTime.toISOString(),
-        schedule: `Nightly at ${String(DREAM_HOUR).padStart(2,'0')}:${String(DREAM_MIN).padStart(2,'0')} local`,
-        ranToday: daily.dreamRan,
+        schedule: `Nightly at ${String(DREAM_HOUR).padStart(2,'0')}:${String(DREAM_MIN).padStart(2,'0')} local, cleanup about 30m later`,
+        model: state.dreamModel || '',
+        ranToday: state.lastDreamDate === today || daily.dreamRan,
+        pendingDate: pendingDreamDate || undefined,
         lastAttempt: state.lastDreamAttemptAt,
         lastOutcome: state.lastDreamStatus,
         lastError: state.lastDreamError,
@@ -170,8 +225,8 @@ export class BrainRunner {
     const state = loadLatestState();
     if (partial.thoughtEnabled !== undefined) state.thoughtEnabled = partial.thoughtEnabled;
     if (partial.dreamEnabled  !== undefined) state.dreamEnabled  = partial.dreamEnabled;
-    if (partial.thoughtModel  !== undefined) state.thoughtModel  = String(partial.thoughtModel || '');
-    if (partial.dreamModel    !== undefined) state.dreamModel    = String(partial.dreamModel   || '');
+    if (partial.thoughtModel  !== undefined) state.thoughtModel  = normalizeBrainModelRef(partial.thoughtModel, 'thoughtModel');
+    if (partial.dreamModel    !== undefined) state.dreamModel    = normalizeBrainModelRef(partial.dreamModel, 'dreamModel');
     saveLatestState(state);
   }
 
@@ -185,8 +240,9 @@ export class BrainRunner {
       const ok = await this._runThought(windowStart, now, today, daily.thoughts.length + 1);
       if (!ok) throw new Error('Brain thought run did not produce verified artifacts');
     } else {
-      const daily = loadDailyStatus(today);
-      const ok = await this._runDream(today, daily.thoughts.length);
+      const now = new Date();
+      const pendingDate = this._getPendingDreamDate(now, loadLatestState()) || today;
+      const ok = await this._runDream(pendingDate, this._countThoughtsForDate(pendingDate));
       if (!ok) throw new Error('Brain dream run did not produce verified artifacts');
     }
   }
@@ -225,25 +281,44 @@ export class BrainRunner {
     const today    = getLocalDateStr(now);
     const daily    = loadDailyStatus(today);
     const latest   = loadLatestState();
+    const pendingDreamDate = this._getPendingDreamDate(now, latest);
+    const pendingCleanupDate = this._getPendingDreamCleanupDate(now, latest);
 
     // Dream check first — takes priority if eligible
     if (
       !this.dreamRunning
-      && !daily.dreamRan
+      && !!pendingDreamDate
       && latest.dreamEnabled !== false
-      && this._isDreamEligible(now)
-      && this._isDreamRetryReady(now, latest)
+      && this._isDreamRetryReady(now, latest, pendingDreamDate)
     ) {
       if (this.thoughtRunning) {
         console.log('[BrainRunner] Dream eligible but waiting for thought to finish');
         return;
       }
-      this._runDream(today, daily.thoughts.length)
+      this._runDream(pendingDreamDate, this._countThoughtsForDate(pendingDreamDate))
         .then((ok) => {
           if (!ok) console.warn('[BrainRunner] Dream run finished with failure status');
         })
         .catch(err =>
           console.error('[BrainRunner] Dream run error:', err?.message)
+        );
+      return;
+    }
+
+    // Dream cleanup check - runs after the main dream has safely completed.
+    if (
+      !this.dreamRunning
+      && !this.dreamCleanupRunning
+      && !!pendingCleanupDate
+      && latest.dreamEnabled !== false
+      && this._isDreamCleanupRetryReady(now, latest, pendingCleanupDate)
+    ) {
+      this._runDreamCleanup(pendingCleanupDate)
+        .then((ok) => {
+          if (!ok) console.warn('[BrainRunner] Dream cleanup run finished with failure status');
+        })
+        .catch(err =>
+          console.error('[BrainRunner] Dream cleanup run error:', err?.message)
         );
       return;
     }
@@ -269,6 +344,79 @@ export class BrainRunner {
     const h = now.getHours();
     const m = now.getMinutes();
     return h > DREAM_HOUR || (h === DREAM_HOUR && m >= DREAM_MIN);
+  }
+
+  private _getLatestDueDreamDate(now: Date): string {
+    if (this._isDreamEligible(now)) return getLocalDateStr(now);
+    return getLocalDateStr(addLocalDays(now, -1));
+  }
+
+  private _hasDreamArtifactForDate(dateStr: string): boolean {
+    try {
+      const dreamDir = path.join(getBrainDir(), 'dreams', dateStr);
+      if (!fs.existsSync(dreamDir) || !fs.statSync(dreamDir).isDirectory()) return false;
+      return fs.readdirSync(dreamDir).some((entry) => entry.endsWith('-dream.md'));
+    } catch {
+      return false;
+    }
+  }
+
+  private _hasDreamCleanupArtifactForDate(dateStr: string): boolean {
+    try {
+      const dreamDir = path.join(getBrainDir(), 'dreams', dateStr);
+      if (!fs.existsSync(dreamDir) || !fs.statSync(dreamDir).isDirectory()) return false;
+      return fs.readdirSync(dreamDir).some((entry) => entry.endsWith('-cleanup.md'));
+    } catch {
+      return false;
+    }
+  }
+
+  private _countThoughtsForDate(dateStr: string): number {
+    try {
+      const thoughtsDir = path.join(getBrainDir(), 'thoughts', dateStr);
+      if (!fs.existsSync(thoughtsDir) || !fs.statSync(thoughtsDir).isDirectory()) return 0;
+      return fs.readdirSync(thoughtsDir).filter((entry) => entry.endsWith('-thought.md')).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  private _getPendingDreamDate(now: Date, state: BrainLatestState): string | null {
+    const latestDueDate = this._getLatestDueDreamDate(now);
+    const latestDueDay = getDreamTimeForDate(latestDueDate);
+    if (latestDueDay.getTime() > now.getTime()) return null;
+
+    let cursor = state.lastDreamDate
+      ? addLocalDays(getDreamTimeForDate(state.lastDreamDate), 1)
+      : getDreamTimeForDate(latestDueDate);
+    const oldestAllowed = addLocalDays(getDreamTimeForDate(latestDueDate), -(DREAM_CATCHUP_LOOKBACK_DAYS - 1));
+    if (cursor.getTime() < oldestAllowed.getTime()) cursor = oldestAllowed;
+
+    while (cursor.getTime() <= latestDueDay.getTime()) {
+      const candidateDate = getLocalDateStr(cursor);
+      const dailyStatus = loadDailyStatus(candidateDate);
+      const legacyCompleted = !!state.lastDreamDate
+        && candidateDate < state.lastDreamDate
+        && this._hasDreamArtifactForDate(candidateDate);
+      if (!dailyStatus.dreamRan && !legacyCompleted && candidateDate !== state.lastDreamDate) {
+        return candidateDate;
+      }
+      cursor = addLocalDays(cursor, 1);
+    }
+    return null;
+  }
+
+  private _getPendingDreamCleanupDate(now: Date, state: BrainLatestState): string | null {
+    const dreamDate = state.lastDreamDate;
+    if (!dreamDate || state.lastDreamStatus !== 'success' || !state.lastDreamCompletedAt) return null;
+    if (state.lastDreamCleanupDate === dreamDate) return null;
+
+    const dailyStatus = loadDailyStatus(dreamDate);
+    if (dailyStatus.dreamCleanupRan || this._hasDreamCleanupArtifactForDate(dreamDate)) return null;
+
+    const dueAt = new Date(new Date(state.lastDreamCompletedAt).getTime() + DREAM_CLEANUP_DELAY_MS);
+    if (!Number.isFinite(dueAt.getTime()) || now.getTime() < dueAt.getTime()) return null;
+    return dreamDate;
   }
 
   /** Returns true if dream is ≤ DREAM_BUFFER_MIN away — avoid starting a thought too close */
@@ -313,10 +461,38 @@ export class BrainRunner {
     return { windowStart, windowEnd };
   }
 
-  private _isDreamRetryReady(now: Date, state: BrainLatestState): boolean {
-    if (state.lastDreamStatus !== 'failed' || !state.lastDreamAttemptAt) return true;
+  private _isDreamRetryReady(now: Date, state: BrainLatestState, pendingDate: string): boolean {
+    if (
+      state.lastDreamStatus !== 'failed'
+      || !state.lastDreamAttemptAt
+      || state.lastDreamAttemptDate !== pendingDate
+    ) {
+      return true;
+    }
     const elapsedSinceAttempt = now.getTime() - new Date(state.lastDreamAttemptAt).getTime();
     return elapsedSinceAttempt >= DREAM_RETRY_BACKOFF_MS;
+  }
+
+  private _isDreamCleanupRetryReady(now: Date, state: BrainLatestState, pendingDate: string): boolean {
+    if (
+      state.lastDreamCleanupStatus !== 'failed'
+      || !state.lastDreamCleanupAttemptAt
+      || state.lastDreamCleanupAttemptDate !== pendingDate
+    ) {
+      return true;
+    }
+    const elapsedSinceAttempt = now.getTime() - new Date(state.lastDreamCleanupAttemptAt).getTime();
+    return elapsedSinceAttempt >= DREAM_CLEANUP_RETRY_BACKOFF_MS;
+  }
+
+  private _extractProposalIds(toolResults: Array<{ name: string; args: any; result: string; error: boolean }>): string[] {
+    const ids = new Set<string>();
+    for (const tr of toolResults || []) {
+      if (tr?.error || String(tr?.name || '') !== 'write_proposal') continue;
+      const matches = String(tr?.result || '').match(/prop_[a-z0-9_]+/gi) || [];
+      for (const match of matches) ids.add(match);
+    }
+    return Array.from(ids);
   }
 
   // ─── Thought run ──────────────────────────────────────────────────────────
@@ -334,6 +510,15 @@ export class BrainRunner {
     const windowLabel = getWindowLabel(windowStart);
     const runId       = crypto.randomUUID();
     const sessionId   = `brain_thought_${dateStr}_${windowLabel}`;
+    const abortSignal = { aborted: false };
+    const runtimeId = registerLiveRuntime({
+      kind: 'brain_thought',
+      label: `Brain thought - ${dateStr} ${windowLabel}`,
+      sessionId,
+      source: 'system',
+      detail: `Window ${fmtUtc(windowStart)} -> ${fmtUtc(windowEnd)}`,
+      abortSignal,
+    });
 
     console.log(`[BrainRunner] Starting Thought ${thoughtNumber} — window ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`);
 
@@ -345,18 +530,19 @@ export class BrainRunner {
     saveLatestState(state);
 
     clearHistory(sessionId);
-    addMessage(
-      sessionId,
-      { role: 'user', content: `[Brain Thought ${thoughtNumber}] Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`, timestamp: Date.now() },
-      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
-    );
+	    addMessage(
+	      sessionId,
+	      { role: 'user', content: `[Brain Thought ${thoughtNumber}] Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`, timestamp: Date.now() },
+	      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
+	    );
 
-    const outFile = `thoughts/${dateStr}/${windowLabel}-thought.md`;
-    const absOutFile = path.join(getBrainDir(), outFile);
-    const prompt = this._buildThoughtPrompt({
-      windowStart, windowEnd, dateStr, windowLabel,
-      thoughtNumber, outFile: absOutFile,
-    });
+	    const outFile = `thoughts/${dateStr}/${windowLabel}-thought.md`;
+	    const absOutFile = path.join(getBrainDir(), outFile);
+	    const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
+	    const prompt = this._buildThoughtPromptV2({
+	      windowStart, windowEnd, dateStr, windowLabel,
+	      thoughtNumber, outFile: absOutFile,
+	    });
 
     const sendSSE = (event: string, data: any) => {
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
@@ -364,16 +550,21 @@ export class BrainRunner {
       }
     };
 
-    const thoughtModelOverride = loadLatestState().thoughtModel?.trim() || undefined;
-    let resultText = '';
-    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
-    try {
-      const result = await this.deps.handleChat(
-        prompt,
-        sessionId,
+	    const thoughtModelOverride = loadLatestState().thoughtModel?.trim() || undefined;
+	    let resultText = '';
+	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
+      try {
+        activateToolCategory(sessionId, 'file_ops');
+        setSessionMutationScope(sessionId, {
+	        allowedFiles: [workspaceOutFile],
+	        allowedDirs: [path.posix.dirname(workspaceOutFile)],
+	      });
+	      const result = await this.deps.handleChat(
+	        prompt,
+	        sessionId,
         sendSSE,
         undefined,
-        undefined,
+        abortSignal,
         `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe only — no memory writes, no proposals.`,
         thoughtModelOverride,
         'cron',
@@ -381,26 +572,31 @@ export class BrainRunner {
           'list_directory',
           'list_files',
           'read_file',
-          'file_stats',
-          'grep_file',
-          'grep_files',
+	          'file_stats',
+	          'grep_file',
+	          'grep_files',
           'search_files',
           'mkdir',
           'create_file',
-          'replace_lines',
-          'find_replace',
+          'write_file',
+	          'replace_lines',
+	          'find_replace',
           'insert_after',
           'delete_lines',
         ],
       );
-      resultText = result?.text || '';
+      resultText = abortSignal.aborted
+        ? 'ABORTED: Brain thought run aborted by operator.'
+        : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
-    } catch (err: any) {
-      resultText = `Error: ${err?.message || String(err)}`;
-      console.error(`[BrainRunner] Thought ${thoughtNumber} failed:`, err?.message);
-    } finally {
-      this.thoughtRunning = false;
-    }
+	    } catch (err: any) {
+	      resultText = `Error: ${err?.message || String(err)}`;
+	      console.error(`[BrainRunner] Thought ${thoughtNumber} failed:`, err?.message);
+	    } finally {
+	      finishLiveRuntime(runtimeId);
+	      clearSessionMutationScope(sessionId);
+	      this.thoughtRunning = false;
+	    }
 
     addMessage(
       sessionId,
@@ -457,22 +653,6 @@ export class BrainRunner {
       error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
     });
 
-    // Create automated session for UI visibility
-    this.deps.broadcast({
-      type: 'automated_session_created',
-      session: {
-        id: sessionId,
-        title: `🧠 Thought ${thoughtNumber} — ${dateStr} ${windowLabel}`,
-        jobName: 'Brain Thought',
-        jobId: 'brain_thought',
-        automated: true,
-        createdAt: Date.now(),
-        history: [
-          { role: 'user', content: `[Brain Thought ${thoughtNumber}] Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}` },
-          { role: 'ai', content: resultText.slice(0, 6000) },
-        ],
-      },
-    });
     if (success) {
       console.log(`[BrainRunner] Thought ${thoughtNumber} complete — wrote to ${outFile}`);
     } else {
@@ -499,6 +679,15 @@ export class BrainRunner {
     const now         = new Date();
     const dreamLabel  = getWindowLabel(now);
     const sessionId   = `brain_dream_${dateStr}`;
+    const abortSignal = { aborted: false };
+    const runtimeId = registerLiveRuntime({
+      kind: 'brain_dream',
+      label: `Brain dream - ${dateStr}`,
+      sessionId,
+      source: 'system',
+      detail: `Nightly synthesis for ${dateStr}`,
+      abortSignal,
+    });
 
     console.log(`[BrainRunner] Starting Dream for ${dateStr} (${thoughtCount} thoughts available)`);
 
@@ -509,9 +698,11 @@ export class BrainRunner {
       { disableCompactionCheck: true, disableMemoryFlushCheck: true },
     );
 
-    const outFile    = `dreams/${dateStr}/${dreamLabel}-dream.md`;
-    const absOutFile = path.join(getBrainDir(), outFile);
-    const prompt     = this._buildDreamPrompt({ dateStr, dreamLabel, thoughtCount, outFile: absOutFile });
+	    const outFile    = `dreams/${dateStr}/${dreamLabel}-dream.md`;
+	    const absOutFile = path.join(getBrainDir(), outFile);
+	    const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
+	    const workspaceProposalsFile = path.join('Brain', 'proposals.md').replace(/\\/g, '/');
+	    const prompt     = this._buildDreamPromptV2({ dateStr, dreamLabel, thoughtCount, outFile: absOutFile });
 
     const sendSSE = (event: string, data: any) => {
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
@@ -519,52 +710,75 @@ export class BrainRunner {
       }
     };
 
-    const dreamState = loadLatestState();
-    dreamState.lastDreamAttemptAt = new Date().toISOString();
-    dreamState.lastDreamStatus = 'idle';
-    dreamState.lastDreamError = null;
-    saveLatestState(dreamState);
+	    const dreamState = loadLatestState();
+	    dreamState.lastDreamAttemptAt = new Date().toISOString();
+	    dreamState.lastDreamAttemptDate = dateStr;
+	    dreamState.lastDreamStatus = 'idle';
+	    dreamState.lastDreamError = null;
+	    saveLatestState(dreamState);
 
-    const dreamModelOverride = loadLatestState().dreamModel?.trim() || undefined;
-    let resultText = '';
-    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
-    try {
-      const result = await this.deps.handleChat(
-        prompt,
-        sessionId,
+	    const dreamModelOverride = loadLatestState().dreamModel?.trim() || undefined;
+	    let resultText = '';
+	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
+	    try {
+	      activateToolCategory(sessionId, 'file_ops');
+	      activateToolCategory(sessionId, 'source_read');
+	      setSessionMutationScope(sessionId, {
+	        allowedFiles: [workspaceOutFile, workspaceProposalsFile],
+	        allowedDirs: [path.posix.dirname(workspaceOutFile)],
+	      });
+	      const result = await this.deps.handleChat(
+	        prompt,
+	        sessionId,
         sendSSE,
         undefined,
-        undefined,
-        `CONTEXT: Automated Brain Dream run for ${dateStr}. Synthesize today's thoughts, write durable memory updates, create proposals. This is the nightly execution run.`,
+        abortSignal,
+        `CONTEXT: Automated Brain Dream run for ${dateStr}. Synthesize the thoughts for that date, write durable memory updates, create proposals. This is the nightly execution run.`,
         dreamModelOverride,
         'cron',
         [
           'list_directory',
           'list_files',
           'read_file',
-          'file_stats',
-          'grep_file',
-          'grep_files',
+	          'file_stats',
+	          'grep_file',
+	          'grep_files',
           'search_files',
           'mkdir',
           'create_file',
-          'replace_lines',
-          'find_replace',
+          'write_file',
+	          'replace_lines',
+	          'find_replace',
           'insert_after',
           'delete_lines',
           'memory_browse',
           'memory_write',
+          'list_source',
+          'source_stats',
+          'read_source',
+          'grep_source',
+          'list_prom',
+          'prom_file_stats',
+          'read_prom_file',
+          'grep_prom',
+          'webui_source_stats',
+          'read_webui_source',
+          'grep_webui_source',
           'write_proposal',
         ],
       );
-      resultText = result?.text || '';
+      resultText = abortSignal.aborted
+        ? 'ABORTED: Brain dream run aborted by operator.'
+        : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
-    } catch (err: any) {
-      resultText = `Error: ${err?.message || String(err)}`;
-      console.error(`[BrainRunner] Dream for ${dateStr} failed:`, err?.message);
-    } finally {
-      this.dreamRunning = false;
-    }
+	    } catch (err: any) {
+	      resultText = `Error: ${err?.message || String(err)}`;
+	      console.error(`[BrainRunner] Dream for ${dateStr} failed:`, err?.message);
+	    } finally {
+	      finishLiveRuntime(runtimeId);
+	      clearSessionMutationScope(sessionId);
+	      this.dreamRunning = false;
+	    }
 
     addMessage(
       sessionId,
@@ -594,13 +808,15 @@ export class BrainRunner {
     const runFailed = /^error:/i.test(String(resultText || '').trim());
     const success = artifactsFresh && !runFailed;
 
-    const state = loadLatestState();
-    if (success) {
-      state.lastDreamDate = dateStr;
-      state.lastDreamCompletedAt = new Date().toISOString();
-      state.lastDreamStatus = 'success';
-      state.lastDreamError = null;
-      saveLatestState(state);
+	    const state = loadLatestState();
+	    if (success) {
+	      state.proposalDedupeIds = this._extractProposalIds(toolResults).slice(-100);
+	      state.lastDreamDate = dateStr;
+	      state.lastDreamCompletedAt = new Date().toISOString();
+	      state.lastDreamAttemptDate = dateStr;
+	      state.lastDreamStatus = 'success';
+	      state.lastDreamError = null;
+	      saveLatestState(state);
 
       const daily = loadDailyStatus(dateStr);
       daily.dreamRan         = true;
@@ -625,22 +841,6 @@ export class BrainRunner {
       error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
     });
 
-    // Automated session for UI
-    this.deps.broadcast({
-      type: 'automated_session_created',
-      session: {
-        id: sessionId,
-        title: `💤 Dream — ${dateStr}`,
-        jobName: 'Brain Dream',
-        jobId: 'brain_dream',
-        automated: true,
-        createdAt: Date.now(),
-        history: [
-          { role: 'user', content: `[Brain Dream] Nightly synthesis for ${dateStr} — ${thoughtCount} thought(s)` },
-          { role: 'ai', content: resultText.slice(0, 6000) },
-        ],
-      },
-    });
     if (success) {
       console.log(`[BrainRunner] Dream complete for ${dateStr} — wrote to ${outFile}`);
     } else {
@@ -656,6 +856,167 @@ export class BrainRunner {
   }
 
   // ─── Thought prompt ───────────────────────────────────────────────────────
+
+  private async _runDreamCleanup(dateStr: string): Promise<boolean> {
+    if (this.dreamCleanupRunning || this.dreamRunning) return false;
+    this.dreamCleanupRunning = true;
+    const runStartedAt = Date.now();
+
+    const now = new Date();
+    const cleanupLabel = getWindowLabel(now);
+    const sessionId = `brain_dream_cleanup_${dateStr}`;
+    const abortSignal = { aborted: false };
+    const runtimeId = registerLiveRuntime({
+      kind: 'brain_dream',
+      label: `Brain dream cleanup - ${dateStr}`,
+      sessionId,
+      source: 'system',
+      detail: `Second-pass memory solidifier for ${dateStr}`,
+      abortSignal,
+    });
+
+    console.log(`[BrainRunner] Starting Dream cleanup for ${dateStr}`);
+
+    const state = loadLatestState();
+    state.lastDreamCleanupAttemptAt = new Date().toISOString();
+    state.lastDreamCleanupAttemptDate = dateStr;
+    state.lastDreamCleanupStatus = 'idle';
+    state.lastDreamCleanupError = null;
+    saveLatestState(state);
+
+    clearHistory(sessionId);
+    addMessage(
+      sessionId,
+      { role: 'user', content: `[Brain Dream Cleanup] Memory solidifier for ${dateStr}`, timestamp: Date.now() },
+      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
+    );
+
+    const outFile = `dreams/${dateStr}/${cleanupLabel}-cleanup.md`;
+    const absOutFile = path.join(getBrainDir(), outFile);
+    const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
+    const prompt = this._buildDreamCleanupPromptV2({ dateStr, outFile: absOutFile });
+
+    const sendSSE = (event: string, data: any) => {
+      if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
+        this.deps.broadcast({ type: 'brain_dream_cleanup_sse', date: dateStr, event, data });
+      }
+    };
+
+    const dreamModelOverride = loadLatestState().dreamModel?.trim() || undefined;
+    let resultText = '';
+    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
+    try {
+      activateToolCategory(sessionId, 'file_ops');
+      setSessionMutationScope(sessionId, {
+        allowedFiles: [workspaceOutFile, 'USER.md', 'SOUL.md', 'MEMORY.md'],
+        allowedDirs: [path.posix.dirname(workspaceOutFile)],
+      });
+      const result = await this.deps.handleChat(
+        prompt,
+        sessionId,
+        sendSSE,
+        undefined,
+        abortSignal,
+        `CONTEXT: Automated Brain Dream cleanup for ${dateStr}. Second pass only: remove or dedupe stale/redundant memory text. No additions, no proposals.`,
+        dreamModelOverride,
+        'cron',
+        [
+          'list_directory',
+          'list_files',
+          'read_file',
+          'file_stats',
+          'grep_file',
+          'grep_files',
+          'search_files',
+          'mkdir',
+          'create_file',
+          'write_file',
+          'replace_lines',
+          'find_replace',
+          'insert_after',
+          'delete_lines',
+          'memory_browse',
+        ],
+      );
+      resultText = abortSignal.aborted
+        ? 'ABORTED: Brain dream cleanup run aborted by operator.'
+        : (result?.text || '');
+      toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
+    } catch (err: any) {
+      resultText = `Error: ${err?.message || String(err)}`;
+      console.error(`[BrainRunner] Dream cleanup for ${dateStr} failed:`, err?.message);
+    } finally {
+      finishLiveRuntime(runtimeId);
+      clearSessionMutationScope(sessionId);
+      this.dreamCleanupRunning = false;
+    }
+
+    addMessage(
+      sessionId,
+      { role: 'assistant', content: resultText.slice(0, 6000), timestamp: Date.now() },
+      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
+    );
+    if (toolResults.length > 0) {
+      const toolLogLines = toolResults.slice(-8).map((r) => {
+        const ok = r.error ? 'âœ—' : 'âœ“';
+        const args = r.args ? JSON.stringify(r.args).slice(0, 80) : '';
+        const preview = String(r.result || '').slice(0, 120).replace(/\n/g, ' ');
+        return `${ok} ${r.name}(${args}): ${preview}`;
+      });
+      persistToolLog(sessionId, toolLogLines.join('\n'));
+    }
+
+    const cleanupExists = fs.existsSync(absOutFile);
+    const cleanupStats = cleanupExists ? fs.statSync(absOutFile) : null;
+    const fileLooksFresh = !!cleanupStats && cleanupStats.size > 0 && cleanupStats.mtimeMs >= (runStartedAt - 5000);
+    const runFailed = /^error:/i.test(String(resultText || '').trim());
+    const success = fileLooksFresh && !runFailed;
+
+    const latestAfter = loadLatestState();
+    if (success) {
+      latestAfter.lastDreamCleanupDate = dateStr;
+      latestAfter.lastDreamCleanupCompletedAt = new Date().toISOString();
+      latestAfter.lastDreamCleanupAttemptDate = dateStr;
+      latestAfter.lastDreamCleanupStatus = 'success';
+      latestAfter.lastDreamCleanupError = null;
+      saveLatestState(latestAfter);
+
+      const daily = loadDailyStatus(dateStr);
+      daily.dreamCleanupRan = true;
+      daily.dreamCleanupFile = outFile;
+      daily.dreamCleanupCompletedAt = new Date().toISOString();
+      saveDailyStatus(daily);
+    } else {
+      latestAfter.lastDreamCleanupStatus = 'failed';
+      latestAfter.lastDreamCleanupError = runFailed
+        ? String(resultText).slice(0, 500)
+        : `Expected dream cleanup artifact missing/stale: ${outFile}`;
+      saveLatestState(latestAfter);
+    }
+
+    this.deps.broadcast({
+      type: 'brain_dream_cleanup_done',
+      date: dateStr,
+      file: outFile,
+      summary: resultText.slice(0, 600),
+      success,
+      error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
+    });
+
+
+    if (success) {
+      console.log(`[BrainRunner] Dream cleanup complete for ${dateStr} - wrote to ${outFile}`);
+    } else {
+      console.warn(`[BrainRunner] Dream cleanup for ${dateStr} failed integrity checks`);
+      this.deps.broadcast({
+        type: 'brain_dream_cleanup_failed',
+        date: dateStr,
+        file: outFile,
+        error: loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure',
+      });
+    }
+    return success;
+  }
 
   private _buildThoughtPrompt(opts: {
     windowStart: Date;
@@ -924,8 +1285,36 @@ Available proposal types:
   task_trigger       — schedule a one-shot investigation task
   general            — anything that doesn't fit above
 
+Source-code proposal rules:
+  - If a proposal would edit Prometheus source code, it MUST be type src_edit and affected_files MUST include the exact src/... paths.
+  - Before calling write_proposal for src_edit, inspect current code with the source tools:
+      * Use grep_source or list_source to locate relevant files when the path is uncertain.
+      * Use source_stats before reading large or unfamiliar files.
+      * Use read_source on every affected src/ file and cite the lines or symbols you inspected.
+      * For web-ui code, use webui_source_stats, read_webui_source, and grep_webui_source.
+  - Do NOT rely only on audit notes or thought summaries for src_edit proposals. The proposal must be based on the actual current source.
+  - The details field for any proposal touching src/ MUST include these exact markdown headings:
+      ## Why this change
+      ## Exact source edits
+      ## Deterministic behavior after patch
+      ## Acceptance tests
+      ## Risks and compatibility
+  - In "Exact source edits", name the files, functions/classes/handlers, and current behavior you verified from read_source.
+  - In "Acceptance tests", include the build/test command that should verify the edit, usually npm run build for TypeScript source changes.
+  - Set requires_build=true for TypeScript/backend src edits unless there is a specific reason no build is needed.
+  - Make executorPrompt source-aware: instruct the approved executor to read affected files with read_source/read_webui_source first, then edit with the matching source write tools.
+
+Risk tier rules:
+  - Every src_edit proposal MUST set risk_tier to either low or high.
+  - risk_tier controls which executor default is used after approval:
+      * low  -> Settings > Agent Model Defaults > proposal_executor_low_risk
+      * high -> Settings > Agent Model Defaults > proposal_executor_high_risk
+  - Use low only for isolated, easy-to-review changes such as comments, copy, small config glue, or a one-file bug fix with narrow behavior.
+  - Use high for core runtime logic, auth/security, memory/proposal execution, source-write tools, multi-file edits, data migrations, or anything where a bad patch could break builds or user workflows.
+  - If unsure, choose high. Do not hardcode a model name unless executor_provider_id/executor_model is explicitly justified.
+
 For each proposal passing the gate:
-  - Call write_proposal with: type, priority, title, summary, details, affectedFiles[], executorPrompt
+  - Call write_proposal with: type, priority, title, summary, details, affected_files[], executorPrompt, risk_tier
   - Save the returned proposal ID for the output files
 
 If 0 proposals pass the gate: note this in the dream file. This is normal.
@@ -1003,6 +1392,552 @@ _(Items noticed but intentionally not proposed — insufficient confidence or ev
 ---
 
 After all writes: print a plain-text summary of what was done tonight (memory updates, proposals created, deferred count).
+`;
+  }
+
+  private _buildThoughtPromptV2(opts: {
+    windowStart: Date;
+    windowEnd: Date;
+    dateStr: string;
+    windowLabel: string;
+    thoughtNumber: number;
+    outFile: string;
+  }): string {
+    const { windowStart, windowEnd, dateStr, thoughtNumber, outFile } = opts;
+    const wsStart = fmtUtc(windowStart);
+    const wsEnd = fmtUtc(windowEnd);
+    const nowStr = fmtLocal(new Date());
+    const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
+    const memNotesFileRel = path.join('memory', `${dateStr}-intraday-notes.md`);
+    const auditDirRel = 'audit';
+    const outFileRel = path.relative(this.deps.workspacePath, outFile);
+
+    return `You are Prometheus, running an automated Brain Thought analysis.
+
+BRAIN THOUGHT ${thoughtNumber} - Observation + Seed Capture
+Window: ${wsStart} -> ${wsEnd}
+Date: ${dateStr}
+Output: ${outFileRel}
+
+IMPORTANT - FILE PATH CONVENTION:
+All paths in this prompt are relative to the workspace root.
+Pass them directly to file tools without modification.
+Do not prepend "workspace/" or any drive letter.
+
+STRICT RULES:
+- Do not write to USER.md, SOUL.md, or any memory files
+- Do not call write_proposal or create any proposals
+- Do not update cron jobs, skills, configs, or team state
+- Your only permitted file write is the thought output file listed above
+
+PRIMARY PURPOSE:
+You are not just auditing for mistakes. You are acting like a proactive second brain. You are trying to notice:
+- repeated workflows the user performed manually today that could become a skill, composite tool, browser teaching workflow, desktop workflow, or automation
+- unfinished feature ideas the user mentioned but did not complete
+- new agents, subagents, teams, or workspace surfaces that now deserve follow-up work
+- latent opportunities where Prometheus could proactively help tomorrow, across any context: business, marketing, websites, apps, notifications, communications, code, research, content, or operations
+- concrete next-step proposals the Dream could investigate into executor-ready plans
+- "the user would probably appreciate if I got ahead on this" moments, even when they were not phrased as explicit tasks
+- useful wonderings: thoughtful "I wonder if..." observations that may be seeds for future help, not only defects
+
+STEP 1 - SCAN AUDIT WINDOW
+
+Scan the audit directory for activity between ${wsStart} and ${wsEnd}.
+Audit root: ${auditDirRel}
+
+Priority scan order:
+1. ${auditDirRel}/chats/sessions/ - chat session snapshots
+2. ${auditDirRel}/chats/transcripts/ - inspect transcripts for sessions that look feature-oriented, planning-heavy, or unfinished
+3. ${auditDirRel}/tasks/ - task state snapshots
+4. ${auditDirRel}/cron/runs/ - JSONL run history files filtered by timestamp
+5. ${auditDirRel}/teams/ - team activity logs, new subagents, and manager outputs if present
+6. ${auditDirRel}/proposals/ - proposal state changes if present
+7. ${memNotesFileRel} - today's intraday notes if the file exists
+
+Selective reading strategy:
+- List each directory first and identify the files that matter
+- For JSONL files, extract only entries whose timestamps fall in the window
+- Read selectively; you do not need every character
+- When a session snapshot hints at a half-finished idea, planning discussion, new subagent, new website effort, or "we should build X", read the matching transcript before judging it
+- If a directory is empty or no files fall in the window, note "no activity" and continue
+
+STEP 2 - ANALYZE USING THE RUBRIC
+
+For every finding, assign confidence (high, medium, low) and cite evidence.
+
+A. Activity Summary
+- What actually happened in this window
+- Major user requests and what was asked
+- Files written or changed
+- Tasks completed or failed
+- Scheduled jobs that ran
+- Agents or teams that were invoked
+
+B. Behavior Quality
+- Where Prometheus acted well
+- Where it stalled, looped, or took too many steps
+- Over-tooling or under-tooling
+- User corrections, re-prompts, or frustration signals
+- Misunderstandings that required clarification
+
+C. Memory Candidates
+- Items that might be worthy of USER.md, SOUL.md, or MEMORY.md
+- Only flag if durable and not clearly already captured
+- Format as a table row: Item | Target file | Confidence | Evidence
+
+D. Opportunity Seeds
+- Capture unfinished or proactive opportunities the Dream should investigate
+- This is the most important section when the user talked about something but did not finish it
+- Include repeated manual workflows, partial feature ideas, new agents/subagents/teams created but not yet deployed, placeholder-heavy or underused workspace surfaces, business/marketing/product ideas, notification follow-ups, and concrete "Prometheus should probably help with this next" openings
+- Prefer seeds that can become proposals, skills, composite tools, browser/desktop taught workflows, scheduled monitors, or one-shot task triggers
+- Format as: Seed | Why it matters | Suggested scouting surface | Confidence | Evidence
+
+E. Improvement Candidates
+- Items that might be worthy of proposals
+- Format as: Issue | Proposal type | Confidence | Evidence
+- Proposal types: prompt_mutation / skill_evolution / src_edit / config_change / feature_addition / task_trigger / general
+
+F. Window Verdict
+- Active: yes / no
+- Signal quality: high / medium / low / none
+- Summary: short narrative brain note, 2-4 paragraphs. Put the real summary at the top of the final file, before section A.
+- Wonder: include 1-3 natural "I wonder if..." thoughts. They can be speculative, but label uncertainty honestly and ground them in the day's signals.
+
+STEP 3 - WRITE THE THOUGHT FILE
+
+Create the output directory if needed: ${thoughtsDirRel}
+Write the thought file to: ${outFileRel}
+
+Use exactly this structure:
+
+---
+# Thought ${thoughtNumber} - ${dateStr} | Window: ${wsStart}-${wsEnd}
+_Generated: ${nowStr}_
+
+## Summary
+[2-4 short paragraphs. Make this feel like an actual thought, not a report stub: summarize what happened, what it seems to mean, where the momentum or friction was, and include 1-3 natural "I wonder if..." observations. Keep it grounded; do not invent facts.]
+
+## A. Activity Summary
+[populate from your analysis]
+
+## B. Behavior Quality
+**Went well:**
+- [item] | evidence: [ref]
+
+**Stalled or struggled:**
+- [item] | evidence: [ref]
+
+**Tool usage patterns:**
+- [observations]
+
+**User corrections:**
+- [observations, or "none observed"]
+
+## C. Memory Candidates
+| Item | Target | Confidence | Evidence |
+|------|--------|-----------|---------|
+| ...  | USER.md or SOUL.md or MEMORY.md | high/medium/low | [file ref] |
+
+_(Leave table with a single dash row if nothing found.)_
+
+## D. Opportunity Seeds
+| Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
+|------|----------------|----------------------------|-----------|---------|
+| ...  | [why Dream should care tomorrow] | [src/... or web-ui/... or teams/... or workspace path] | high/medium/low | [ref] |
+
+_(Leave table with a single dash row if nothing found.)_
+
+## E. Improvement Candidates
+| Issue | Proposal Type | Confidence | Evidence |
+|-------|--------------|-----------|---------|
+| ...   | prompt_mutation | high/medium/low | [ref] |
+
+_(Leave table with a single dash row if nothing found.)_
+
+## F. Window Verdict
+**Active:** yes/no
+**Signal quality:** high/medium/low/none
+**Summary:** [1-2 sentence factual recap; the richer narrative belongs in the top Summary section]
+---
+
+After the file is written: confirm the write succeeded and stop. Do not do anything else.
+`;
+  }
+
+  private _buildDreamCleanupPromptV2(opts: {
+    dateStr: string;
+    outFile: string;
+  }): string {
+    const { dateStr, outFile } = opts;
+    const nowStr = fmtLocal(new Date());
+    const outFileRel = path.relative(this.deps.workspacePath, outFile);
+    const dreamsDirRel = path.join('Brain', 'dreams', dateStr);
+    const userMdFileRel = 'USER.md';
+    const soulMdFileRel = 'SOUL.md';
+    const memoryMdFileRel = 'MEMORY.md';
+    const latestDreamDirRel = path.join('Brain', 'dreams', dateStr);
+
+    return `You are Prometheus, running the second Brain Dream pass: the memory solidifier.
+
+BRAIN DREAM CLEANUP - Memory Solidifier
+Date: ${dateStr}
+Time: ${nowStr}
+Output: ${outFileRel}
+
+IMPORTANT - FILE PATH CONVENTION:
+All paths in this prompt are relative to the workspace root.
+Pass them directly to file tools without modification.
+Do not prepend "workspace/" or any drive letter.
+
+STRICT RULES:
+- This pass runs after the nightly dream has already updated memory.
+- Do not create proposals.
+- Do not add new memories, new facts, new preferences, or new sections to USER.md, SOUL.md, or MEMORY.md.
+- You may only remove, lightly merge, or dedupe text that is clearly redundant, stale, contradictory, or unimportant after the latest dream.
+- If the memory is already good, make no memory edits. This is a successful outcome.
+- When uncertain, preserve the memory. It is better to leave a duplicate than erase something important.
+- Your only required write is the cleanup report at ${outFileRel}. Memory edits are optional and conservative.
+
+STEP 1 - READ CURRENT MEMORY
+Read:
+- ${userMdFileRel}
+- ${soulMdFileRel}
+- ${memoryMdFileRel}
+
+Also list and read the latest main dream artifact in ${latestDreamDirRel} so you understand what was just added or updated.
+
+STEP 2 - LIGHT DEDUPE / CLEANUP REVIEW
+Look only for:
+- exact or near-exact duplicate bullets
+- obsolete wording directly contradicted by newer memory nearby
+- tiny one-off details that slipped into durable memory and are not useful weeks from now
+- duplicated operational rules where one clearer version can safely remain
+
+Do not perform broad rewrites. Do not polish prose for style alone. Do not compress nuanced memories into vague summaries.
+
+STEP 3 - OPTIONAL EDITS
+If and only if an edit is clearly safe:
+- Use replace_lines, find_replace, or delete_lines surgically.
+- Prefer removing the weaker duplicate and keeping the more specific, more recent, or more actionable version.
+- Do not use insert_after unless it is only to repair formatting after removing text.
+
+STEP 4 - WRITE CLEANUP REPORT
+Create directory ${dreamsDirRel} if needed.
+Write ${outFileRel} with this structure:
+
+---
+# Dream Cleanup - ${dateStr}
+_Generated: ${nowStr}_
+
+## Cleanup Summary
+[1-3 short paragraphs. Say whether memory was already solid or what small cleanup happened.]
+
+## Memory Edits
+| File | Action | Reason |
+|------|--------|--------|
+| USER.md / SOUL.md / MEMORY.md | removed/deduped/none | [why this was safe] |
+
+_(If no edits: "None - memory already looked solid enough to preserve as-is.")_
+
+## Preserved On Purpose
+- [Any duplicate-looking or messy item you intentionally kept because it may still matter, or "None noted."]
+---
+
+After writing the cleanup report, print a plain-text summary and stop.
+`;
+  }
+
+  private _buildDreamPromptV2(opts: {
+    dateStr: string;
+    dreamLabel: string;
+    thoughtCount: number;
+    outFile: string;
+  }): string {
+    const { dateStr, thoughtCount, outFile } = opts;
+    const nowStr = fmtLocal(new Date());
+    const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
+    const dreamsDirRel = path.join('Brain', 'dreams', dateStr);
+    const proposalsFileRel = path.join('Brain', 'proposals.md');
+    const userMdFileRel = 'USER.md';
+    const soulMdFileRel = 'SOUL.md';
+    const memoryMdFileRel = 'MEMORY.md';
+    const pendingPropsDirRel = path.join('proposals', 'pending');
+    const auditDirRel = 'audit';
+    const outFileRel = path.relative(this.deps.workspacePath, outFile);
+
+    return `You are Prometheus, running an automated Brain Dream - the nightly synthesis and execution run.
+
+BRAIN DREAM - Nightly Synthesis + Execution
+Date: ${dateStr}
+Time: ${nowStr}
+Thoughts available: ${thoughtCount}
+Outputs:
+- ${outFileRel}
+- ${proposalsFileRel} (rewrite as the post-day summary)
+
+Treat ${dateStr} as the target date for this run, even if the current clock is now on a later day.
+
+IMPORTANT - FILE PATH CONVENTION:
+All paths in this prompt are relative to the workspace root.
+Pass them directly to file tools without modification.
+Do not prepend "workspace/" or any drive letter.
+
+You have 6 phases tonight. Execute them in order.
+
+OPERATING POSTURE:
+Act like the user's proactive second brain. The best dream is not just "what failed today"; it notices what the user is trying to become faster at, what they repeated manually, where they are building momentum, and what they would likely appreciate waking up to as approval-ready help. Look across all contexts: business, marketing, websites, apps, notifications, email/follow-up, code, content, research, operations, and personal workflow.
+
+The dream should contain a little wonder. Use a few grounded "I wonder if..." observations where appropriate. These are allowed to be speculative as long as they are clearly framed as wonderings and tied to evidence.
+
+PHASE 1 - LOAD THE TARGET DATE'S THOUGHTS
+
+List directory: ${thoughtsDirRel}
+Read all *-thought.md files found there.
+
+Also load for context:
+- ${userMdFileRel}
+- ${soulMdFileRel}
+- ${memoryMdFileRel}
+- ${proposalsFileRel}
+
+List ${pendingPropsDirRel} to see what formal proposals are currently pending approval.
+You also have prom-root read tools tonight. Use them when the best evidence lives outside plain workspace surfaces:
+- list_prom / read_prom_file / grep_prom for scripts/, electron/, .prometheus/, root docs, and allowlisted project-root files
+- read_source / grep_source for src/
+- read_webui_source / grep_webui_source for web-ui/
+
+If no thought files exist in ${thoughtsDirRel}:
+- Note "no thoughts available" in the dream file
+- Skip phases 2-5
+- Still write the dream file and proposals.md
+
+PHASE 2 - CROSS-EXAMINE HIGH-CONFIDENCE ITEMS
+
+For any item marked high confidence in sections C, D, or E of any thought:
+- Read the cited evidence file or session from ${auditDirRel}
+- Verify the finding is real and accurately described
+- If evidence does not support the claim, downgrade or discard it
+- Only items surviving verification proceed to later phases
+
+Medium and low confidence items:
+- Record them in the dream file under "Deferred Ideas"
+- Do not write them to memory or propose them yet
+
+When a verified opportunity seed points to a partially-finished idea or a newly-created but idle agent, subagent, or workspace surface, treat that as a first-class signal, not a side note.
+
+PHASE 3 - INCUBATE OPPORTUNITY SEEDS
+
+For each verified high-confidence opportunity seed:
+- Scout the suggested surface directly before deciding what to propose
+- Read the actual current files, configs, pages, agent definitions, or code involved
+- Turn vague intent into a concrete morning-ready proposal only if the evidence supports it
+
+Also look for repeated workflows across the thoughts even if no single thought named them as an opportunity. If the user did a similar task multiple times, consider whether Prometheus should propose:
+- a new skill
+- a composite tool
+- a browser teach-mode workflow
+- a desktop workflow
+- a monitor or notification-to-action flow
+- a one-shot task that gets ahead of likely next work
+
+Incubation heuristics:
+1. PARTIAL FEATURE IDEA
+   If the user talked about a feature but left it unfinished, inspect the relevant src/, web-ui/, or prom-root files and determine what already exists, what is missing, and the smallest meaningful proposal that moves it forward tomorrow.
+2. NEW AGENT OR SUBAGENT
+   If a new agent, subagent, or team was created or configured, inspect its team files, manager outputs, related workspace surfaces, and nearby code. Look for concrete work it could own next.
+3. PLACEHOLDER OR NEGLECTED SURFACE
+   If a website, page, feature area, or workspace surface appears placeholder-heavy or half-built, inspect the real files and propose the next shippable improvement batch.
+4. LATENT USER INTENT
+   If the user clearly wants momentum but did not explicitly assign a task, prefer a proposal that packages the next step for approval rather than waiting for the user to restate it tomorrow.
+5. NOTIFICATION OR EXTERNAL EVENT FOLLOW-UP
+   If the logs show Prometheus noticed a notification, message, lead, business event, or other external signal, consider whether an approval-ready proposal should draft a response, email someone, schedule a follow-up, create a research task, or automate the recurring pattern.
+6. PRODUCT/WEBSITE/APP IMPROVEMENT
+   If the user was building a website or app, inspect the relevant files or browser-hosted surface when available and propose concrete UX, content, reliability, or launch-readiness improvements when evidence supports them.
+
+Do not hallucinate work. Every incubated proposal still needs concrete evidence from current files or audit history.
+
+PHASE 4 - MEMORY UPDATES
+
+Memory write gate - all 4 conditions must be true:
+1. DURABLE - the fact will still matter weeks from now
+2. NEW - it is not already present in equivalent meaning in USER.md, SOUL.md, or MEMORY.md
+3. EVIDENCED - repeated signal or one strongly verified signal
+4. ACTIONABLE - it should concretely change future behavior
+
+If nothing passes, write nothing to memory.
+
+For items that do pass:
+- Edit USER.md for user identity, preferences, projects, communication style, and workflow rules
+- Edit SOUL.md for Prometheus behavior rules, tool policies, and operating constraints
+- Edit MEMORY.md for durable long-term context and decisions
+- Be surgical and record each write in the dream output under "Memory Updates Applied"
+
+PHASE 5 - PROPOSALS
+
+Proposal quality gate - all 4 conditions must be true:
+1. CONCRETE - specific file, job, skill, agent, or behavior to change
+2. EVIDENCED - clear citation from a thought file or verified audit or source reference
+3. NOT DUPLICATE - no semantically equivalent proposal already pending or already in the ledger
+4. EXECUTOR-READY - the executor prompt has enough detail to implement without guesswork
+
+Proposal handoff rule:
+- A proposal is the implementation plan. Approval means "execute this plan", not "approve this idea and figure it out later".
+- Do not submit proposals whose details only explain benefits, intent, or expected impact.
+- Every proposal must say exactly what to create, edit, delete, inspect, or verify. If you cannot produce that plan from current evidence, defer the idea instead of proposing it.
+
+This phase is not limited to "fix what went wrong."
+Strong proposals can also come from:
+- unfinished feature requests mentioned in chat
+- repeated manual workflows that should become skills or composite tools
+- proactive follow-through for new agents, subagents, or teams
+- real product or workspace opportunities discovered during incubation
+- business, marketing, sales, communication, website, or app ideas that would help the user move faster
+- external events or notifications Prometheus can turn into useful drafts, follow-ups, or automations
+- planned content or workspace work that is clearly blocked only by the user not having time yet
+
+Available proposal types:
+- prompt_mutation
+- skill_evolution
+- src_edit
+- config_change
+- feature_addition
+- memory_update
+- task_trigger
+- general
+
+Source-code proposal rules:
+- If a proposal would edit Prometheus source code, it must be type src_edit and affected_files must include the exact src/... paths
+- Before calling write_proposal for src_edit, inspect current code with the source tools:
+  - Use grep_source or list_source to locate relevant files when the path is uncertain
+  - Use source_stats before reading large or unfamiliar files
+  - Use read_source on every affected src/ file and cite the functions, classes, handlers, constants, or line ranges you inspected
+- For web-ui code, use the web-ui source tools
+- For scripts/, electron/, .prometheus/, and other allowlisted project-root files, use prom-root read tools before proposing
+- Do not rely only on thought summaries for source-edit proposals; base them on actual current files
+- Any proposal touching src/ must include these exact markdown headings in details:
+  ## Why this change
+  ## Exact source edits
+  ## Deterministic behavior after patch
+  ## Acceptance tests
+  ## Risks and compatibility
+- In "Exact source edits", include an ordered implementation plan with the exact files and symbols to edit, the current behavior observed from read_source, and the intended replacement behavior.
+- In "Acceptance tests", include the build/test command that should verify the edit, usually npm run build for TypeScript source changes.
+- Set requires_build=true for TypeScript/backend src edits unless there is a specific reason no build is needed.
+- Set executor_prompt, not executorPrompt. The executor_prompt must restate the ordered plan and instruct the approved executor to read the affected files with read_source/read_webui_source/read_prom_file first, then apply only the approved edits.
+- If the needed src files or exact edit points are not known after inspection, do not create the proposal. Record it as deferred with "needs source scouting" instead.
+
+Risk tier rules:
+- Every src_edit proposal must set risk_tier to low or high
+- Use low only for isolated, easy-to-review changes
+- Use high for core runtime logic, proposal execution, source-write tools, multi-file edits, or anything that could break workflows
+- If unsure, choose high
+
+For each proposal passing the gate:
+- Call write_proposal with: type, priority, title, summary, details, affected_files, executor_prompt, risk_tier
+- Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
+- Save the returned proposal ID for the output files
+
+If zero proposals pass the gate, note that in the dream file.
+
+PHASE 6 - WRITE OUTPUTS
+
+6a. Create directory ${dreamsDirRel} if needed.
+Write ${outFileRel} with this structure. Use \`mkdir\` for the directory and \`write_file\` for the markdown artifact:
+
+---
+# Dream - ${dateStr}
+_Generated: ${nowStr}_
+_Thoughts synthesized: N_
+
+## Day Summary
+[3-5 short paragraphs written like a thoughtful day-story rather than a report stub. Put the real summary first: what the day felt like, what moved, what dragged, what Prometheus noticed about the user's momentum, and what proactive openings seem worth waking up to. Include 1-3 grounded "I wonder if..." observations. The wonder can be small or unrelated to proposals, but it should feel like the brain is actually thinking. Do not change any other section formatting.]
+
+## Memory Updates Applied
+| Item | File | Change Made | Evidence |
+|------|------|------------|---------|
+| [item] | USER.md / SOUL.md / MEMORY.md | [what was added or updated] | [thought ref] |
+
+_(If none: "None - no items passed the memory gate tonight.")_
+
+## Proposals Generated
+| # | Type | Title | Priority | ID |
+|---|------|-------|----------|----|
+| 1 | prompt_mutation | ... | high | prop_xxx |
+
+_(If none: "None - no items passed the proposal gate tonight.")_
+
+## Opportunity Incubation
+| Seed | Surfaces Inspected | What The Dream Learned | Outcome |
+|------|--------------------|------------------------|---------|
+| [seed] | [files or areas inspected] | [current-state summary] | proposed or deferred |
+
+## Deferred Ideas
+| Idea | Reason Deferred | Confidence | From |
+|------|-----------------|-----------|------|
+| [medium or low confidence items] | [insufficient evidence / duplicate / etc.] | medium | Thought 2 |
+
+## Tomorrow's Watch Items
+- [specific things to monitor in the next day's thoughts]
+---
+
+6b. Rewrite ${proposalsFileRel} completely. This file is not just a proposal ledger anymore; it is the user's morning-readable, full post-day Dream summary after memory updates, investigation/incubation, and proposal generation are complete. Use \`write_file\` so the existing file is replaced in full.
+
+---
+# Brain Daily Summary - ${dateStr}
+_Last Updated: ${nowStr}_
+_Dream Source: ${outFileRel}_
+
+## Day Story
+[5-9 paragraphs in the same thoughtful, narrative style as the thought files. Cover what the thoughts noticed, what the dream verified, what the day seemed to mean, what moved, what dragged, where the user had momentum, and what Prometheus learned after investigating. This should be readable as the full post-day account, not a terse queue. Include 1-3 grounded "I wonder if..." observations.]
+
+## What The Thoughts Noted
+- [Specific signals from Thought 1 with evidence]
+- [Specific signals from Thought 2 with evidence]
+- [Specific signals from Thought 3 with evidence]
+
+## What The Dream Verified
+- [High-confidence item]: checked [surface/evidence], concluded [result]
+
+## Memory Updates Applied
+| Item | File | Change Made | Evidence |
+|------|------|------------|---------|
+| [item or None] | USER.md / SOUL.md / MEMORY.md | [what changed or why nothing changed] | [thought/audit ref] |
+
+## Opportunity Incubation
+| Seed | Surfaces Inspected | What The Dream Learned | Outcome |
+|------|--------------------|------------------------|---------|
+| [seed] | [files or areas inspected] | [current-state summary] | proposed / deferred / already pending |
+
+## Proposals
+
+### 1) [Proposal title]
+- **Type:** [type]
+- **Priority:** high / medium / low
+- **Confidence:** high / medium / low
+- **Reason:** [why this was flagged, with evidence reference]
+- **Status:** submitted
+- **Proposal ID:** [id from write_proposal]
+- **Affects:** [specific file / job name / skill name / agent]
+- **Expected impact:** [what concretely improves]
+
+_(Repeat for each proposal. If none: write "No proposals generated tonight - all items were below the quality gate.")_
+
+## Deferred Ideas
+| Idea | Reason | Confidence | First Seen |
+|------|--------|-----------|-----------|
+| ... | low evidence | medium | Thought 1 |
+
+## Tomorrow's Watch Items
+- [specific thing to monitor tomorrow]
+
+## Run Accounting
+- Thoughts synthesized: N
+- Memory updates applied: N
+- Opportunity seeds incubated: N
+- Proposals generated: N (High: N, Medium: N, Low: N)
+---
+
+After all writes, print a plain-text summary of what was done tonight.
 `;
   }
 }

@@ -1,9 +1,8 @@
 ---
-name: Mermaid Diagrams
-description: Render text-defined flowcharts, sequence diagrams, ER diagrams, Gantt charts, state machines, and class diagrams directly in chat using Mermaid.js syntax. Use when the diagram structure can be expressed as relationships between named entities — not for custom-positioned layouts (use svg-diagrams) or data charts (use chart-visualizer). Fast, readable, version-control friendly. Outputs a fenced ```mermaid block. Triggers on: flowchart, sequence diagram, process flow, ER diagram, entity relationship, Gantt chart, state machine, class diagram, timeline, decision tree, workflow diagram, data model.
-emoji: "🗺️"
+name: mermaid-diagrams
+description: Render flowcharts, sequence diagrams, ERDs, Gantt charts, and more directly in chat using Mermaid.js syntax in a fenced `mermaid` block.
+emoji: "🧩"
 version: 1.0.0
-triggers: flowchart, sequence diagram, process flow, ER diagram, entity relationship, gantt, state machine, class diagram, timeline, decision tree, workflow, data model, user journey, git graph, mindmap, quadrant, flow chart, flow diagram, steps diagram, approval flow, onboarding flow, login flow, auth flow, database schema
 ---
 
 # Mermaid Diagrams

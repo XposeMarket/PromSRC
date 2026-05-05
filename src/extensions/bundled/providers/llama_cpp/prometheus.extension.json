@@ -1,0 +1,49 @@
+{
+  "id": "llama_cpp",
+  "kind": "provider",
+  "name": "llama.cpp",
+  "description": "Local llama-server endpoint using the OpenAI-compatible API surface.",
+  "category": "Local",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/ggerganov/llama.cpp",
+  "tags": ["local", "llama.cpp", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter"
+  },
+  "ui": {
+    "color": "#374151"
+  },
+  "ownership": {
+    "providerIds": ["llama_cpp"],
+    "capabilities": ["llm", "local_inference", "openai_compat"]
+  },
+  "setup": {
+    "authType": "none",
+    "statusMode": "generic"
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "http://localhost:8080",
+      "model": ""
+    },
+    "schema": {
+      "endpoint": "string",
+      "model": "string",
+      "api_key": "string?"
+    },
+    "uiHints": {
+      "endpoint": {
+        "label": "Endpoint",
+        "help": "llama-server HTTP endpoint."
+      },
+      "model": {
+        "label": "Model",
+        "help": "Model name reported by your llama.cpp server."
+      },
+      "api_key": {
+        "label": "API Key",
+        "help": "Optional auth token if your local server requires one."
+      }
+    }
+  }
+}

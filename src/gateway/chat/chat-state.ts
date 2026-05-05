@@ -16,11 +16,11 @@ export const activeTasks: Map<string, TaskState> = new Map();
 /**
  * Maximum LLM↔tool rounds per handleChat invocation (each round = model reply + tool batch).
  * Desktop/browser automation often needs many rounds (screenshot → scroll × N → summarize).
- * Override with env PROMETHEUS_MAX_TOOL_ROUNDS (5–200).
+ * Override with env PROMETHEUS_MAX_TOOL_ROUNDS (5–500).
  */
 export function getMaxToolRounds(): number {
   const raw = String(process.env.PROMETHEUS_MAX_TOOL_ROUNDS || '').trim();
   const n = parseInt(raw, 10);
-  if (Number.isFinite(n) && n >= 5 && n <= 200) return n;
-  return 50;
+  if (Number.isFinite(n) && n >= 5 && n <= 500) return n;
+  return 80;
 }

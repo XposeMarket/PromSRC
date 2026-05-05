@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { resolveSkillsRoot } from '../skills/store.js';
+import { loadSkillPackage } from '../gateway/skills-runtime/skill-package.js';
 
 // Prefer config next to the project, fall back to home.
 // In packaged Electron runtime PROMETHEUS_DATA_DIR is set by main.js and takes priority
@@ -24,13 +25,23 @@ function intEnv(name: string, fallback: number): number {
 }
 
 const PROMPT_BUDGET_FULL = {
-  totalChars: intEnv('PROMETHEUS_PROMPT_TOTAL_CHARS', 6000),
-  soulChars: 1400,
+  totalChars: intEnv('PROMETHEUS_PROMPT_TOTAL_CHARS', 7500),
+  soulChars: 3200,
   memoryChars: 700,
   skillsTotalChars: 1400,
   skillEachChars: 900,
   extraChars: 4500,
 };
+
+const SOUL_EMBODIMENT_GUIDANCE = [
+  '## Prometheus Identity Contract',
+  '',
+  'If SOUL.md is present, it is not optional flavor text. Treat it as your durable personality, values, relationship posture, and operating identity.',
+  '',
+  'Embody its persona and tone unless a higher-priority instruction conflicts. Let it shape how you collaborate, not just what facts you mention.',
+  '',
+  'Avoid stiff generic chatbot behavior, corporate assistant-speak, hollow enthusiasm, and purely transactional replies. Stay useful, grounded, and action-oriented while sounding like Prometheus.',
+].join('\n');
 
 const PROMPT_BUDGET_MINIMAL = {
   totalChars: intEnv('PROMETHEUS_SUBAGENT_PROMPT_TOTAL_CHARS', 2000),
@@ -81,38 +92,22 @@ export function loadSkills(): SkillInfo[] {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const skillDir = path.join(SKILLS_DIR, entry.name);
-      const skillMd = path.join(skillDir, 'SKILL.md');
-      const promptMd = path.join(skillDir, 'PROMPT.md');
-      const manifestJson = path.join(skillDir, 'skill.json');
-      if (!fs.existsSync(skillMd)) continue;
-      let manifest: any = null;
-      try {
-        if (fs.existsSync(manifestJson)) {
-          manifest = JSON.parse(fs.readFileSync(manifestJson, 'utf-8'));
-        }
-      } catch {
-        manifest = null;
-      }
-      const executionEnabled = manifest && typeof manifest.execution_enabled === 'boolean'
-        ? !!manifest.execution_enabled
-        : true;
-      const status = String(manifest?.status || '').trim().toLowerCase();
-      if (!executionEnabled || status === 'blocked' || status === 'needs_setup') continue;
-      const contentPath = fs.existsSync(promptMd) ? promptMd : skillMd;
-      if (fs.existsSync(contentPath)) {
-        skills.push({
-          slug: entry.name,
-          content: fs.readFileSync(contentPath, 'utf-8').trim(),
-          path: skillMd,
-          promptPath: fs.existsSync(promptMd) ? promptMd : undefined,
-          status: status || 'ready',
-          executionEnabled,
-          riskLevel: String(manifest?.risk?.level || '').trim() || undefined,
-          name: String(manifest?.name || '').trim() || entry.name,
-          description: String(manifest?.description || '').trim(),
-          templates: Array.isArray(manifest?.templates) ? manifest.templates : [],
-        });
-      }
+      const pkg = loadSkillPackage(skillDir, entry.name);
+      if (!pkg) continue;
+      if (!pkg.executionEnabled || pkg.status === 'blocked' || pkg.status === 'needs_setup') continue;
+      const contentPath = pkg.promptPath || pkg.filePath;
+      skills.push({
+        slug: pkg.id,
+        content: fs.readFileSync(contentPath, 'utf-8').trim(),
+        path: pkg.filePath,
+        promptPath: pkg.promptPath,
+        status: pkg.status,
+        executionEnabled: pkg.executionEnabled,
+        riskLevel: pkg.riskLevel,
+        name: pkg.name,
+        description: pkg.description,
+        templates: Array.isArray((pkg.manifest as any)?.templates) ? (pkg.manifest as any).templates : [],
+      });
     }
   } catch {}
   return skills;
@@ -272,7 +267,10 @@ export function buildSystemPrompt(options?: BuildSystemPromptOptions): string {
   };
 
   const soulCapped = clampText(soul, budget.soulChars);
-  if (soulCapped) pushPart(soulCapped);
+  if (soulCapped) {
+    pushPart(SOUL_EMBODIMENT_GUIDANCE);
+    pushPart(soulCapped);
+  }
 
   const includeMemory = options?.includeMemory ?? true;
   if (includeMemory) {

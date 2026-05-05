@@ -1,0 +1,66 @@
+{
+  "id": "openrouter",
+  "kind": "provider",
+  "name": "OpenRouter",
+  "description": "OpenRouter aggregator for routing across hosted model providers with one API key.",
+  "category": "Gateway",
+  "enabledByDefault": true,
+  "docsUrl": "https://openrouter.ai/",
+  "tags": ["openrouter", "gateway", "aggregator", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["moonshotai/kimi-k2.6", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "qwen/qwen3.6-plus", "openai/gpt-5.4", "google/gemini-3-flash-preview", "z-ai/glm-5.1", "x-ai/grok-4.20", "minimax/minimax-m2.7"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#111827"
+  },
+  "ownership": {
+    "providerIds": ["openrouter"],
+    "modelPrefixes": ["anthropic/", "openai/", "google/", "qwen/", "moonshotai/", "z-ai/", "x-ai/", "minimax/"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["OPENROUTER_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "sk-or-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "moonshotai/kimi-k2.6"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://openrouter.ai/api/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://openrouter.ai/api/v1",
+      "model": "moonshotai/kimi-k2.6"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

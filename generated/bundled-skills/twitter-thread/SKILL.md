@@ -1,9 +1,8 @@
 ---
-name: Twitter Thread
-description: Turn any idea, article, research finding, or insight into a high-engagement Twitter/X thread. Covers hook writing, thread structure, formatting, and posting via browser automation. Triggers on requests to write a thread, tweet sequence, or turn something into a thread.
-emoji: 🐦
+name: twitter-thread
+description: Turn any input — an idea, article, research, or insight — into a punchy, structured, high-engagement X/Twitter thread.
+emoji: "🧩"
 version: 1.0.0
-triggers: twitter thread, tweet thread, write a thread, x thread, thread about, turn this into a thread, thread on, tweetstorm, post thread, viral thread, thread ideas
 ---
 
 # Twitter Thread

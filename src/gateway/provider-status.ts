@@ -28,7 +28,7 @@ export async function resolveProviderStatus(testConnection: () => Promise<boolea
   }
 
   const connected = await Promise.race([
-    testConnection(),
+    testConnection().catch(() => false),
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), PROVIDER_STATUS_TIMEOUT_MS)),
   ]);
   markProviderStatus(connected);

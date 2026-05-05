@@ -20,7 +20,11 @@ export interface ApprovalRecord {
   id: string;
   /** The chat session or task that triggered this approval */
   sessionId: string;
+  /** Background task id when this approval belongs to a task panel */
+  taskId?: string;
   agentId?: string;
+  originType?: 'main_chat' | 'subagent' | 'background_task' | 'scheduled_task' | 'proposal' | 'unknown';
+  originLabel?: string;
   /** The tool that is waiting for approval */
   toolName: string;
   toolArgs: Record<string, any>;
@@ -111,6 +115,11 @@ class ApprovalQueue {
    * Used by the commit-tier path in registry.ts so the tool waits for user.
    */
   onResolve(id: string, callback: (approved: boolean) => void): void {
+    const record = this.records.get(id);
+    if (record && record.status !== 'pending') {
+      callback(record.status === 'approved');
+      return;
+    }
     this.callbacks.set(id, callback);
   }
 

@@ -127,6 +127,16 @@ export class GitHubConnector extends OAuthConnector {
     return data.items || [];
   }
 
+  async createRepo(name: string, options?: { description?: string; private?: boolean; autoInit?: boolean; homepage?: string }): Promise<any> {
+    return this.ghPost('/user/repos', {
+      name,
+      description: options?.description || '',
+      private: options?.private !== false,
+      auto_init: options?.autoInit === true,
+      homepage: options?.homepage || undefined,
+    });
+  }
+
   async getFileContents(owner: string, repo: string, path: string): Promise<{ content: string; sha: string }> {
     const data = await this.ghGet(`/repos/${owner}/${repo}/contents/${path}`);
     const content = Buffer.from(data.content, 'base64').toString('utf-8');

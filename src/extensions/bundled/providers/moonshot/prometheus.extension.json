@@ -1,0 +1,66 @@
+{
+  "id": "moonshot",
+  "kind": "provider",
+  "name": "Moonshot / Kimi",
+  "description": "Moonshot API access for Kimi coding and reasoning models.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://platform.moonshot.ai/",
+  "tags": ["moonshot", "kimi", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#7C3AED"
+  },
+  "ownership": {
+    "providerIds": ["moonshot"],
+    "modelPrefixes": ["kimi-"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["MOONSHOT_API_KEY", "KIMI_API_KEY", "KIMI_CODING_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "sk-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "kimi-k2.6"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.moonshot.ai/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.moonshot.ai/v1",
+      "model": "kimi-k2.6"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

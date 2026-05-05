@@ -1,15 +1,7 @@
 ---
 name: Pitch Deck Builder
-description: >
-  Build investor pitch decks with the right narrative arc, slide structure, and
-  content. Use whenever the user needs to create or improve a pitch deck, fundraise,
-  prepare for investor meetings, build a demo day deck, or structure their company
-  story for capital. Triggers on: "pitch deck", "investor deck", "fundraising deck",
-  "seed deck", "Series A deck", "demo day", "investor presentation", "raise money",
-  "build our deck", "write our pitch", "investor slides", "fundraising", "VC pitch",
-  "angel pitch", "how to pitch investors", "review my deck", "improve my deck",
-  "what slides do I need", "tell our story to investors".
-emoji: 📊
+description: Build pitch decks that tell a tight story, earn trust, and move investors to a next meeting.
+emoji: "🧩"
 version: 1.0.0
 triggers: pitch deck, investor deck, fundraising, seed deck, series a deck, demo day, investor presentation, raise money, investor slides, vc pitch, angel pitch, pitch investors, review deck, improve deck
 ---

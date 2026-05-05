@@ -1,18 +1,9 @@
 ---
 name: Product Discovery
-description: >
-  User research synthesis, opportunity sizing, feature prioritization, and product
-  roadmap decisions. Use whenever the user needs to decide what to build next, validate
-  a product idea, prioritize a feature backlog, run a discovery sprint, synthesize
-  customer feedback, or create a PRD. Triggers on: "product discovery", "what should
-  we build", "feature prioritization", "RICE scoring", "ICE scoring", "product roadmap",
-  "prioritize the backlog", "validate this feature", "customer feedback synthesis",
-  "opportunity sizing", "user story", "PRD", "product requirements", "Jobs to be Done",
-  "JTBD", "discovery sprint", "product hypothesis", "feature request", "should we build X",
-  "is X worth building", "product strategy", "roadmap planning".
-emoji: 🗺️
+description: Structured process for deciding what to build, validating it's worth building, and scoping it so the team can execute.
+emoji: "🧩"
 version: 1.0.0
-triggers: product discovery, feature prioritization, RICE scoring, ICE scoring, product roadmap, prioritize backlog, validate feature, opportunity sizing, user story, PRD, product requirements, JTBD, jobs to be done, discovery sprint, product hypothesis, feature request, should we build, product strategy, roadmap planning, what to build next
+triggers: product discovery, feature prioritization, rice scoring, ice scoring, product roadmap, prioritize backlog, validate feature, opportunity sizing, user story, prd, product requirements, jtbd, jobs to be done, discovery sprint, product hypothesis, feature request, should we build, product strategy, roadmap planning, what to build next
 ---
 
 # Product Discovery
@@ -43,7 +34,7 @@ We believe a solution exists in [general problem space]."
 
 Example:
 "We have observed that SDRs struggle to personalize outreach at scale when managing 100+
-prospects simultaneously. This results in generic emails, low reply rates, and wasted 
+prospects simultaneously. This results in generic emails, low reply rates, and wasted
 pipeline capacity. We believe a solution exists in AI-assisted personalization without
 sacrificing deliverability."
 ```
@@ -66,8 +57,8 @@ Frame every feature as a job the customer is hiring your product to do:
 ```
 JOB STATEMENT: "When [situation], I want to [motivation], so I can [expected outcome]."
 
-Example: 
-"When I'm preparing for a sales call, I want to quickly see the prospect's recent 
+Example:
+"When I'm preparing for a sales call, I want to quickly see the prospect's recent
 activity and company news, so I can open with something relevant and build rapport faster."
 
 Jobs have three layers:

@@ -2,6 +2,9 @@ import { ToolResult } from '../types.js';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import { fetchXThread } from '../gateway/browser-tools.js';
+import { executeDownloadMedia, executeDownloadUrl } from './download-tools.js';
+import { executeAnalyzeImage, executeAnalyzeVideo } from './media-analysis.js';
 
 type SearchResultItem = { title: string; url: string; snippet: string };
 type StructuredSource = { id: number; tier: 'A' | 'B' | 'C'; title: string; url: string; snippet: string; score: number };
@@ -22,6 +25,89 @@ type SearchDiagnostics = {
   attempted: SearchProviderAttempt[];
   selected_provider?: SearchProvider;
 };
+type XMediaDescriptor = {
+  type: 'image' | 'video';
+  url?: string;
+  previewUrl?: string;
+};
+type XFetchedTweet = {
+  id?: string;
+  link?: string;
+  author?: string;
+  handle?: string;
+  timestamp?: string;
+  text?: string;
+  hasImage?: boolean;
+  hasVideo?: boolean;
+  rawRef?: string;
+  media?: XMediaDescriptor[];
+  metrics?: {
+    likes?: string;
+    replies?: string;
+    reposts?: string;
+    views?: string;
+  };
+};
+type XDownloadedMediaKind = 'image' | 'video' | 'audio' | 'other';
+type XDownloadedMedia = {
+  rel_path: string;
+  path?: string;
+  bytes?: number;
+  kind: XDownloadedMediaKind;
+  source: 'download_url' | 'download_media';
+  url?: string;
+  source_tweet_id?: string;
+  source_tweet_link?: string;
+};
+type XMediaAnalysis = {
+  rel_path: string;
+  kind: XDownloadedMediaKind;
+  status: 'analyzed' | 'skipped' | 'failed';
+  analysis?: string;
+  transcript?: string | null;
+  sample_frames?: string[];
+  output_dir_rel?: string;
+  error?: string;
+};
+type XFetchMediaReport = {
+  detected: boolean;
+  hinted_tweet_count: number;
+  direct_image_candidates: number;
+  video_tweet_candidates: number;
+  fallback_page_download_attempted: boolean;
+  downloaded_files: XDownloadedMedia[];
+  analyses: XMediaAnalysis[];
+  errors: string[];
+  analysis_limited: boolean;
+};
+type XFetchPayload = {
+  success: boolean;
+  url: string;
+  tweets?: XFetchedTweet[];
+  count?: number;
+  snapshot_deltas?: Array<{
+    pass: number;
+    scrollY: number;
+    added: string[];
+    removed: string[];
+    totalElements: number;
+  }>;
+  message?: string;
+  error?: string;
+  x_media?: XFetchMediaReport;
+};
+type WebFetchProgressPhase =
+  | 'fetch_complete'
+  | 'extracting_media'
+  | 'extraction_complete'
+  | 'analyzing_media'
+  | 'analysis_complete'
+  | 'analysis_skipped';
+export type WebFetchProgressEvent = {
+  phase: WebFetchProgressPhase;
+  message: string;
+};
+type WebFetchProgressReporter = (event: WebFetchProgressEvent) => void;
 
 function normalizeGoogleUrl(url: string): string {
   try {
@@ -461,10 +547,14 @@ export function getSearchProvidersSummary(): string {
     const data = cfg.getConfig() as any;
     const searchCfg = data.search || {};
     const preferred = String(searchCfg.preferred_provider || 'ddg').toLowerCase();
+    const tavilyKey = cfg.resolveSecret(searchCfg.tavily_api_key);
+    const googleKey = cfg.resolveSecret(searchCfg.google_api_key);
+    const googleCx = cfg.resolveSecret(searchCfg.google_cx);
+    const braveKey = cfg.resolveSecret(searchCfg.brave_api_key);
     const providers: { key: string; label: string; available: boolean }[] = [
-      { key: 'tavily', label: 'Tavily', available: !!(searchCfg.tavily_api_key) },
-      { key: 'google', label: 'Google', available: !!(searchCfg.google_api_key && searchCfg.google_cx) },
-      { key: 'brave',  label: 'Brave',  available: !!(searchCfg.brave_api_key) },
+      { key: 'tavily', label: 'Tavily', available: !!tavilyKey },
+      { key: 'google', label: 'Google', available: !!(googleKey && googleCx) },
+      { key: 'brave',  label: 'Brave',  available: !!braveKey },
       { key: 'ddg',    label: 'DuckDuckGo', available: true },
     ];
     return providers
@@ -493,10 +583,10 @@ function getSearchConfig(): {
     const searchCfg = data.search || {};
     const preferredRaw = String(searchCfg.preferred_provider || 'ddg').toLowerCase();
     const preferred = (['tavily', 'google', 'brave', 'ddg'].includes(preferredRaw) ? preferredRaw : 'ddg') as 'tavily' | 'google' | 'brave' | 'ddg';
-    // Resolve vault references (keys stored as vault:// refs)
+    // Resolve vault-backed search credentials so saves in Settings are used immediately.
     const tavilyKey = cfg.resolveSecret(searchCfg.tavily_api_key);
     const googleKey = cfg.resolveSecret(searchCfg.google_api_key);
-    const googleCx = searchCfg.google_cx;
+    const googleCx = cfg.resolveSecret(searchCfg.google_cx);
     const braveKey = cfg.resolveSecret(searchCfg.brave_api_key);
     return { preferred, tavilyKey, googleKey, googleCx, braveKey };
   } catch {
@@ -956,17 +1046,464 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
 }
 
 // ── web_fetch: fetch a URL and return clean text ──────────────────────────────
-export async function executeWebFetch(args: { url: string; max_chars?: number }): Promise<ToolResult> {
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.svg']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus']);
+const MAX_X_IMAGE_DOWNLOADS = 12;
+const MAX_X_VIDEO_DOWNLOADS = 4;
+const MAX_X_MEDIA_ANALYSES = 8;
+const MAX_X_IMAGE_DOWNLOAD_CONCURRENCY = 4;
+const MAX_X_MEDIA_ANALYSIS_CONCURRENCY = 2;
+
+function isXUrl(url: string): boolean {
+  return /^https?:\/\/(www\.)?(x\.com|twitter\.com|mobile\.twitter\.com)\//i.test(String(url || '').trim());
+}
+
+function isXStatusUrl(url: string): boolean {
+  return /^https?:\/\/(www\.)?(x\.com|twitter\.com|mobile\.twitter\.com)\/[^/?#]+\/status\/\d+/i.test(String(url || '').trim());
+}
+
+function clipText(value: string, maxChars: number): string {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[...truncated]`;
+}
+
+function reportWebFetchProgress(
+  reporter: WebFetchProgressReporter | undefined,
+  phase: WebFetchProgressPhase,
+  message: string,
+): void {
+  try {
+    reporter?.({ phase, message });
+  } catch {
+    // Best-effort progress reporting only.
+  }
+}
+
+function classifyXMediaLabel(imageCount: number, videoCount: number): 'Video' | 'Images' | 'Media' {
+  if (videoCount > 0 && imageCount === 0) return 'Video';
+  if (imageCount > 0 && videoCount === 0) return 'Images';
+  return 'Media';
+}
+
+function detectDownloadedMediaKind(filePath: string): XDownloadedMediaKind {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
+  return 'other';
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }));
+  return results;
+}
+
+function normalizeXImageUrl(url: string): string {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    if (!/pbs\.twimg\.com$/i.test(parsed.hostname) || !/\/media\//i.test(parsed.pathname)) {
+      return parsed.toString();
+    }
+    if (parsed.searchParams.has('name')) parsed.searchParams.set('name', 'orig');
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
+function parseXFetchPayload(raw: string, url: string): XFetchPayload {
+  const text = String(raw || '').trim();
+  try {
+    return JSON.parse(text) as XFetchPayload;
+  } catch {
+    return {
+      success: false,
+      url,
+      error: text ? `X fetch returned a non-JSON error: ${clipText(text, 600)}` : 'X fetch returned invalid JSON.',
+    };
+  }
+}
+
+function collectXMediaCandidates(tweets: XFetchedTweet[], fallbackUrl: string): {
+  imageJobs: Array<{ url: string; sourceTweetId?: string; sourceTweetLink?: string }>;
+  videoJobs: Array<{ url: string; sourceTweetId?: string; sourceTweetLink?: string }>;
+  hintedTweetCount: number;
+} {
+  const imageJobs: Array<{ url: string; sourceTweetId?: string; sourceTweetLink?: string }> = [];
+  const videoJobs: Array<{ url: string; sourceTweetId?: string; sourceTweetLink?: string }> = [];
+  const seenImages = new Set<string>();
+  const seenVideoTweets = new Set<string>();
+  let hintedTweetCount = 0;
+
+  for (const tweet of tweets) {
+    const media = Array.isArray(tweet.media) ? tweet.media : [];
+    const hasHint = media.length > 0 || tweet.hasImage === true || tweet.hasVideo === true;
+    if (hasHint) hintedTweetCount += 1;
+
+    for (const mediaItem of media) {
+      if (mediaItem?.type !== 'image' || !mediaItem.url) continue;
+      const normalizedUrl = normalizeXImageUrl(mediaItem.url);
+      if (!normalizedUrl || seenImages.has(normalizedUrl)) continue;
+      seenImages.add(normalizedUrl);
+      imageJobs.push({
+        url: normalizedUrl,
+        sourceTweetId: tweet.id,
+        sourceTweetLink: tweet.link,
+      });
+    }
+
+    const statusUrl = String(tweet.link || fallbackUrl || '').trim();
+    const hasVideo = media.some(item => item?.type === 'video') || tweet.hasVideo === true;
+    if (!statusUrl || !hasVideo || seenVideoTweets.has(statusUrl)) continue;
+    seenVideoTweets.add(statusUrl);
+    videoJobs.push({
+      url: statusUrl,
+      sourceTweetId: tweet.id,
+      sourceTweetLink: tweet.link,
+    });
+  }
+
+  return { imageJobs, videoJobs, hintedTweetCount };
+}
+
+async function analyzeDownloadedXMedia(file: XDownloadedMedia): Promise<XMediaAnalysis> {
+  if (file.kind === 'image') {
+    const result = await executeAnalyzeImage({
+      file_path: file.rel_path,
+      prompt: 'Analyze this image downloaded from an X post. Describe what is visible and transcribe any visible text.',
+    });
+    if (!result.success) {
+      return {
+        rel_path: file.rel_path,
+        kind: file.kind,
+        status: 'failed',
+        error: result.error || 'Image analysis failed.',
+      };
+    }
+    return {
+      rel_path: file.rel_path,
+      kind: file.kind,
+      status: 'analyzed',
+      analysis: clipText(String(result.data?.analysis || result.stdout || ''), 2200),
+    };
+  }
+
+  if (file.kind === 'video') {
+    const result = await executeAnalyzeVideo({
+      file_path: file.rel_path,
+      prompt: 'Analyze this video downloaded from an X post. Summarize the clip, visible text, and spoken audio if available.',
+      sample_count: 4,
+    });
+    if (!result.success) {
+      return {
+        rel_path: file.rel_path,
+        kind: file.kind,
+        status: 'failed',
+        error: result.error || 'Video analysis failed.',
+      };
+    }
+    return {
+      rel_path: file.rel_path,
+      kind: file.kind,
+      status: 'analyzed',
+      analysis: clipText(String(result.data?.analysis || result.stdout || ''), 2800),
+      transcript: result.data?.transcript ? clipText(String(result.data.transcript), 4000) : null,
+      sample_frames: Array.isArray(result.data?.sample_frames) ? result.data.sample_frames.slice(0, 8) : undefined,
+      output_dir_rel: result.data?.output_dir_rel ? String(result.data.output_dir_rel) : undefined,
+    };
+  }
+
+  return {
+    rel_path: file.rel_path,
+    kind: file.kind,
+    status: 'skipped',
+    error: file.kind === 'audio'
+      ? 'No dedicated audio analysis tool is registered yet; spoken-audio extraction currently comes from analyze_video.'
+      : `Unsupported downloaded media type: ${file.kind}`,
+  };
+}
+
+async function buildXMediaReport(
+  payload: XFetchPayload,
+  fallbackUrl: string,
+  progress?: WebFetchProgressReporter,
+): Promise<XFetchMediaReport> {
+  const tweets = Array.isArray(payload.tweets) ? payload.tweets : [];
+  const { imageJobs, videoJobs, hintedTweetCount } = collectXMediaCandidates(tweets, fallbackUrl);
+  const downloadedFiles: XDownloadedMedia[] = [];
+  const errors: string[] = [];
+  let fallbackPageDownloadAttempted = false;
+  const mediaLabel = classifyXMediaLabel(imageJobs.length, videoJobs.length);
+
+  if (hintedTweetCount > 0) {
+    reportWebFetchProgress(progress, 'extracting_media', `Extracting ${mediaLabel}...`);
+  }
+
+  const imageDownloadResults = await mapWithConcurrency(
+    imageJobs.slice(0, MAX_X_IMAGE_DOWNLOADS),
+    MAX_X_IMAGE_DOWNLOAD_CONCURRENCY,
+    async (job) => {
+      const result = await executeDownloadUrl({
+        url: job.url,
+        output_dir: 'downloads/x_fetch_media/images',
+      });
+      return { job, result };
+    },
+  );
+
+  for (const { job, result } of imageDownloadResults) {
+    if (!result.success) {
+      errors.push(`download_url(${job.url}): ${result.error || 'failed'}`);
+      continue;
+    }
+    downloadedFiles.push({
+      rel_path: String(result.data?.rel_path || ''),
+      path: result.data?.path ? String(result.data.path) : undefined,
+      bytes: Number.isFinite(Number(result.data?.bytes)) ? Number(result.data.bytes) : undefined,
+      kind: detectDownloadedMediaKind(String(result.data?.rel_path || result.data?.path || '')),
+      source: 'download_url',
+      url: job.url,
+      source_tweet_id: job.sourceTweetId,
+      source_tweet_link: job.sourceTweetLink,
+    });
+  }
+
+  for (const job of videoJobs.slice(0, MAX_X_VIDEO_DOWNLOADS)) {
+    const result = await executeDownloadMedia({
+      url: job.url,
+      output_dir: 'downloads/x_fetch_media',
+      audio_only: false,
+    });
+    if (!result.success) {
+      errors.push(`download_media(${job.url}): ${result.error || 'failed'}`);
+      continue;
+    }
+    const files = Array.isArray(result.data?.files) ? result.data.files : [];
+    for (const file of files) {
+      const relPath = String(file?.rel_path || '').trim();
+      if (!relPath) continue;
+      downloadedFiles.push({
+        rel_path: relPath,
+        path: file?.path ? String(file.path) : undefined,
+        bytes: Number.isFinite(Number(file?.bytes)) ? Number(file.bytes) : undefined,
+        kind: detectDownloadedMediaKind(relPath),
+        source: 'download_media',
+        url: job.url,
+        source_tweet_id: job.sourceTweetId,
+        source_tweet_link: job.sourceTweetLink,
+      });
+    }
+  }
+
+  if (downloadedFiles.length === 0 && hintedTweetCount > 0) {
+    fallbackPageDownloadAttempted = true;
+    const fallbackResult = await executeDownloadMedia({
+      url: fallbackUrl,
+      output_dir: 'downloads/x_fetch_media',
+      audio_only: false,
+    });
+    if (!fallbackResult.success) {
+      errors.push(`download_media(${fallbackUrl}) fallback: ${fallbackResult.error || 'failed'}`);
+    } else {
+      const files = Array.isArray(fallbackResult.data?.files) ? fallbackResult.data.files : [];
+      for (const file of files) {
+        const relPath = String(file?.rel_path || '').trim();
+        if (!relPath) continue;
+        downloadedFiles.push({
+          rel_path: relPath,
+          path: file?.path ? String(file.path) : undefined,
+          bytes: Number.isFinite(Number(file?.bytes)) ? Number(file.bytes) : undefined,
+          kind: detectDownloadedMediaKind(relPath),
+          source: 'download_media',
+          url: fallbackUrl,
+        });
+      }
+    }
+  }
+
+  const dedupedFiles = downloadedFiles.filter((file, index, arr) =>
+    arr.findIndex(candidate => candidate.rel_path === file.rel_path) === index);
+  const analyses: XMediaAnalysis[] = [];
+  let analysisLimited = false;
+
+  if (hintedTweetCount > 0) {
+    const extractionMessage = dedupedFiles.length > 0
+      ? `Extraction Complete. Downloaded ${dedupedFiles.length} file${dedupedFiles.length === 1 ? '' : 's'}.`
+      : 'Extraction Complete. No downloadable media files were found.';
+    reportWebFetchProgress(progress, 'extraction_complete', extractionMessage);
+  }
+
+  const analyzableFiles = dedupedFiles.filter(file => file.kind === 'image' || file.kind === 'video');
+  if (analyzableFiles.length > 0) {
+    const analysisLabel = classifyXMediaLabel(
+      analyzableFiles.filter(file => file.kind === 'image').length,
+      analyzableFiles.filter(file => file.kind === 'video').length,
+    );
+    reportWebFetchProgress(progress, 'analyzing_media', `Analyzing ${analysisLabel}...`);
+  } else if (hintedTweetCount > 0) {
+    reportWebFetchProgress(progress, 'analysis_skipped', 'Analysis skipped. No supported media files were available.');
+  }
+
+  const filesToAnalyze = dedupedFiles.slice(0, MAX_X_MEDIA_ANALYSES);
+  if (dedupedFiles.length > filesToAnalyze.length) analysisLimited = true;
+  const analysisResults = await mapWithConcurrency(
+    filesToAnalyze,
+    MAX_X_MEDIA_ANALYSIS_CONCURRENCY,
+    async (file) => {
+      try {
+        return await analyzeDownloadedXMedia(file);
+      } catch (error: any) {
+        return {
+          rel_path: file.rel_path,
+          kind: file.kind,
+          status: 'failed',
+          error: String(error?.message || error || 'Media analysis failed.'),
+        } as XMediaAnalysis;
+      }
+    },
+  );
+  analyses.push(...analysisResults);
+
+  if (analyzableFiles.length > 0) {
+    const analyzedCount = analyses.filter(item => item.status === 'analyzed').length;
+    const analysisMessage = analyzedCount > 0
+      ? `Analysis Complete. Analyzed ${analyzedCount} file${analyzedCount === 1 ? '' : 's'}.`
+      : 'Analysis Complete. Media analysis finished without a successful result.';
+    reportWebFetchProgress(progress, 'analysis_complete', analysisMessage);
+  }
+
+  return {
+    detected: hintedTweetCount > 0,
+    hinted_tweet_count: hintedTweetCount,
+    direct_image_candidates: imageJobs.length,
+    video_tweet_candidates: videoJobs.length,
+    fallback_page_download_attempted: fallbackPageDownloadAttempted,
+    downloaded_files: dedupedFiles,
+    analyses,
+    errors,
+    analysis_limited: analysisLimited,
+  };
+}
+
+function summarizeXMediaReport(report?: XFetchMediaReport): string | null {
+  if (!report) return null;
+  const parts: string[] = [];
+  parts.push(report.detected
+    ? `Detected media in ${report.hinted_tweet_count} tweet(s)`
+    : 'No media detected');
+  if (report.downloaded_files.length > 0) {
+    parts.push(`downloaded ${report.downloaded_files.length} file(s)`);
+  }
+  const analyzedCount = report.analyses.filter(item => item.status === 'analyzed').length;
+  if (analyzedCount > 0) {
+    parts.push(`analyzed ${analyzedCount} file(s)`);
+  }
+  if (report.errors.length > 0) {
+    parts.push(`media errors: ${report.errors.length}`);
+  }
+  if (report.analysis_limited) {
+    parts.push('analysis output was capped');
+  }
+  return parts.join('; ');
+}
+
+async function executeXWebFetch(
+  url: string,
+  maxChars: number,
+  progress?: WebFetchProgressReporter,
+): Promise<ToolResult> {
+  const raw = await fetchXThread('web_fetch', url);
+  const payload = parseXFetchPayload(raw, url);
+
+  if (payload.success) {
+    reportWebFetchProgress(progress, 'fetch_complete', 'Web fetch complete.');
+  }
+
+  if (payload.success && isXStatusUrl(url)) {
+    try {
+      payload.x_media = await buildXMediaReport(payload, url, progress);
+    } catch (error: any) {
+      payload.x_media = {
+        detected: false,
+        hinted_tweet_count: 0,
+        direct_image_candidates: 0,
+        video_tweet_candidates: 0,
+        fallback_page_download_attempted: false,
+        downloaded_files: [],
+        analyses: [],
+        errors: [String(error?.message || error || 'X media pipeline failed.')],
+        analysis_limited: false,
+      };
+    }
+  }
+
+  const stdoutPayload = payload.x_media
+    ? {
+        success: payload.success,
+        url: payload.url,
+        count: payload.count,
+        message: payload.message,
+        error: payload.error,
+        x_media_summary: summarizeXMediaReport(payload.x_media),
+        x_media: payload.x_media,
+        snapshot_deltas: payload.snapshot_deltas,
+        tweets: payload.tweets,
+      }
+    : payload;
+  const stdout = clipText(JSON.stringify(stdoutPayload, null, 2), maxChars);
+  if (!payload.success) {
+    return {
+      success: false,
+      error: payload.error || `X fetch failed for ${url}.`,
+      data: payload,
+      stdout,
+    };
+  }
+
+  return {
+    success: true,
+    data: payload,
+    stdout,
+  };
+}
+
+export async function executeWebFetch(
+  args: { url: string; max_chars?: number },
+  progress?: WebFetchProgressReporter,
+): Promise<ToolResult> {
   if (!args.url?.trim()) return { success: false, error: 'url is required' };
+  const url = String(args.url || '').trim();
   const maxChars = args.max_chars ?? 10_000;
 
+  if (isXUrl(url)) {
+    return executeXWebFetch(url, maxChars, progress);
+  }
+
   try {
-    const res = await fetch(args.url, {
+    const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0' },
       signal: AbortSignal.timeout(20_000),
       redirect: 'follow',
     });
-    if (!res.ok) return { success: false, error: `HTTP ${res.status} from ${args.url}` };
+    if (!res.ok) return { success: false, error: `HTTP ${res.status} from ${url}` };
 
     const contentType = res.headers.get('content-type') ?? '';
     if (!contentType.includes('text') && !contentType.includes('json')) {
@@ -991,7 +1528,7 @@ export async function executeWebFetch(args: { url: string; max_chars?: number })
 
     return {
       success: true,
-      data: { url: args.url, length: text.length },
+      data: { url, length: text.length },
       stdout: text,
     };
   } catch (err: any) {
@@ -1014,7 +1551,7 @@ export const webSearchTool = {
 
 export const webFetchTool = {
   name: 'web_fetch',
-  description: 'Fetch and extract the text content of any URL. Good for reading articles, docs, or pages found via web_search.',
+  description: 'Fetch and extract the text content of any URL. For X/Twitter status URLs, returns structured tweet/thread data and will attempt to download and analyze attached media automatically.',
   execute: executeWebFetch,
   schema: {
     url: 'string (required) - Full URL to fetch (include https://)',
@@ -1030,8 +1567,8 @@ export async function webSearch(query: string): Promise<string> {
   return result.stdout || result.data?.answer || `No results for "${query}".`;
 }
 
-export async function webFetch(url: string): Promise<string> {
-  const result = await executeWebFetch({ url });
-  if (!result.success) return result.error || `Fetch failed for ${url}.`;
+export async function webFetch(url: string, progress?: WebFetchProgressReporter): Promise<string> {
+  const result = await executeWebFetch({ url }, progress);
+  if (!result.success) return result.stdout || result.error || `Fetch failed for ${url}.`;
   return result.stdout || `Fetched ${url} but no content extracted.`;
 }

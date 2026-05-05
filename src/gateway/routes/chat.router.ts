@@ -24,8 +24,9 @@ import {
 } from '../../config/config';
 import { getVault } from '../../security/vault';
 import { getOllamaClient } from '../../agents/ollama-client';
+import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, getSessionsByChannel, recordSessionCompaction, deleteSession } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, setActivatedToolCategories } from '../session';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -53,11 +54,15 @@ import {
   browserWait,
   browserScroll,
   browserClose,
+  formatBrowserInteractionContextBlock,
   browserGetFocusedItem,
   browserGetPageText,
   getBrowserToolDefinitions,
   getBrowserSessionInfo,
   getBrowserAdvisorPacket,
+  type BrowserAdvisorPacket,
+  type BrowserObserveMode,
+  resolveBrowserObserveMode,
 } from '../browser-tools';
 import {
   seedDefaultShortcuts,
@@ -118,6 +123,93 @@ const formatPreflightExecutionObjective: any = () => '';
 const formatPreflightHint: any = () => '';
 const formatAdvisoryHint: any = () => '';
 const formatBrowserAdvisorHint: any = () => '';
+
+const CREATIVE_RUNTIME_CORE_TOOL_NAMES = new Set([
+  'exit_creative_mode',
+  'get_creative_mode',
+  'generate_image',
+  'download_url',
+  'download_media',
+  'analyze_image',
+  'analyze_video',
+  'memory_write',
+  'memory_read',
+  'memory_browse',
+  'memory_search',
+  // Keep session continuity available in design/image/canvas/video modes.
+  'write_note',
+]);
+
+function isCreativeRuntimeToolName(name: string): boolean {
+  if (!name) return false;
+  // Keep Creative Mode in parity with main chat for skills. The skill surface is
+  // intentionally extensible, so admit the whole skill_* family instead of a
+  // stale hardcoded subset.
+  if (name.startsWith('skill_')) return true;
+  if (name.startsWith('creative_')) return true;
+  if (name.startsWith('video_')) return true;
+  if (name.startsWith('image_')) return true;
+  return CREATIVE_RUNTIME_CORE_TOOL_NAMES.has(name);
+}
+
+function formatRecentMessagesForCreativeHandoff(
+  history: Array<{ role: string; content: string }>,
+  currentMessage: string,
+): string {
+  const current = String(currentMessage || '').trim();
+  const recent = (history || [])
+    .filter((m) => {
+      const role = String(m?.role || '').trim();
+      const content = String(m?.content || '').trim();
+      if (!role || !content) return false;
+      return !(role === 'user' && current && content === current);
+    })
+    .slice(-5);
+  if (!recent.length) return '';
+  return recent
+    .map((m, index) => {
+      const role = String(m.role || 'message').toUpperCase();
+      const content = String(m.content || '').replace(/\r/g, '').trim();
+      return `${index + 1}. ${role}: ${content}`;
+    })
+    .join('\n\n');
+}
+
+function formatSkillsReadForCreativeHandoff(toolResults: ToolResult[]): string {
+  const seen = new Set<string>();
+  const blocks: string[] = [];
+  for (const tr of toolResults || []) {
+    if (tr?.name !== 'skill_read' || tr.error) continue;
+    const id = String((tr.args as any)?.id || (tr.args as any)?.skill_id || '').trim() || `skill_${blocks.length + 1}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const content = String(tr.result || '').replace(/\r/g, '').trim();
+    if (!content) continue;
+    blocks.push(`--- skill_read: ${id} ---\n${content}`);
+  }
+  return blocks.join('\n\n');
+}
+
+function formatPreCreativeSwitchToolResultsForHandoff(toolResults: ToolResult[]): string {
+  const results = (toolResults || [])
+    .filter((tr) => tr && tr.name && tr.name !== 'switch_creative_mode' && tr.name !== 'enter_creative_mode');
+  if (!results.length) return '';
+
+  const blocks = results.map((tr, index) => {
+    let args = '{}';
+    try {
+      args = JSON.stringify(tr.args || {});
+    } catch {}
+    const result = String(tr.result || '').replace(/\r/g, '').trim();
+    return [
+      `--- pre_switch_tool_${index + 1}: ${tr.name}${tr.error ? ' [ERROR]' : ''} ---`,
+      `args: ${args}`,
+      result ? `result:\n${result}` : 'result: (empty)',
+    ].join('\n');
+  });
+
+  return blocks.join('\n\n');
+}
 const formatDesktopAdvisorHint: any = () => '';
 const getOrchestrationConfig: any = () => null;
 const clampOrchestrationConfig: any = (x: any) => x;
@@ -148,6 +240,7 @@ import {
   type TaskRecord,
   type TaskStatus,
 } from '../tasks/task-store';
+import { clearTaskRunBinding, completeNextOpenTaskStep, getTaskRunBinding, mirrorSessionChatEvent } from '../tasks/task-run-mirror';
 import {
   loadScheduleMemory,
   loadRunLog,
@@ -158,6 +251,14 @@ import {
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { analyzeRunForImprovement, applyPromptMutation } from '../scheduling/prompt-mutation';
 import { processTaskFailure, buildSelfRepairTriggerPrompt } from '../errors/error-watchdog';
+import {
+  decidePostActionObservation,
+  summarizeBrowserObservationState,
+  summarizeDesktopObservationState,
+  type PostActionObservationDecision,
+  type BrowserObservationPageState,
+  type DesktopObservationPacketState,
+} from '../observation-policy';
 import { goalDecomposeTool, executeGoalDecompose, approveGoal, loadGoal, listGoals } from '../goal-decomposer';
 import {
   listManagedTeams,
@@ -182,7 +283,6 @@ import {
 import { triggerManagerReview, handleManagerConversation, setTeamRunAgentFn } from '../teams/team-manager-runner';
 import { buildTeamDispatchTask } from '../teams/team-dispatch-runtime';
 import { checkForTeamSuggestion } from '../teams/team-detector';
-import { runWeeklyPerformanceReview, formatPerformanceReport, loadSelfImprovementStore, approveSkillEvolution, getWeeklyReviewJobDefinition } from '../scheduling/self-improvement-engine';
 import { SubagentManager } from '../agents-runtime/subagent-manager';
 // orchestration/file-op-v2 removed — stubs to prevent reference errors
 type FileOpType = 'CHAT' | 'FILE_EDIT' | 'FILE_CREATE' | 'FILE_ANALYSIS' | 'BROWSER_OP' | 'DESKTOP_OP';
@@ -204,9 +304,10 @@ const saveFileOpCheckpoint: any = () => {};
 const clearFileOpCheckpoint: any = () => {};
 import { webSearch, webFetch } from '../../tools/web';
 import {
-  buildTools as _buildTools,
-  getToolCategory,
-  type BuildToolsDeps,
+	  buildTools as _buildTools,
+	  getToolCategory,
+	  getRuntimeToolCategories,
+	  type BuildToolsDeps,
   type ToolResult,
   type TaskControlResponse,
   type ScheduleJobAction,
@@ -292,6 +393,10 @@ import {
   sanitizeAgentId,
   normalizeAgentsForSave,
 } from './channels.router';
+import {
+  registerLiveRuntime,
+  finishLiveRuntime,
+} from '../live-runtime-registry';
 import {
   router as teamsRouter,
   initTeamsRouter,
@@ -412,6 +517,44 @@ import {
 import { activeTasks, getMaxToolRounds } from '../chat/chat-state';
 const MAX_TOOL_ROUNDS = getMaxToolRounds();
 
+function resolveEffectiveMaxToolRounds(
+  baseMax: number,
+  opts: { creativeMode?: string | null; executionMode: ExecutionMode; message: string },
+): number {
+  const configured = Number.isFinite(baseMax) && baseMax > 0 ? Math.floor(baseMax) : 80;
+  const msg = String(opts.message || '');
+  const toolHeavyInteractive =
+    opts.executionMode === 'interactive'
+    && (
+      !!opts.creativeMode
+      || /\b(browser|desktop|creative mode|video|clip|export|render|canvas|automation)\b/i.test(msg)
+    );
+
+  if (opts.creativeMode === 'video') return Math.max(configured, 160);
+  if (opts.creativeMode) return Math.max(configured, 120);
+  if (toolHeavyInteractive) return Math.max(configured, 120);
+  if (
+    opts.executionMode === 'background_task'
+    || opts.executionMode === 'background_agent'
+    || opts.executionMode === 'proposal_execution'
+    || opts.executionMode === 'cron'
+    || opts.executionMode === 'team_manager'
+    || opts.executionMode === 'team_subagent'
+  ) {
+    return Math.max(configured, 100);
+  }
+  return configured;
+}
+
+function isResumableExecutionMode(executionMode: ExecutionMode): boolean {
+  return executionMode === 'background_task'
+    || executionMode === 'background_agent'
+    || executionMode === 'proposal_execution'
+    || executionMode === 'cron'
+    || executionMode === 'team_manager'
+    || executionMode === 'team_subagent';
+}
+
 // ─── Injected singletons (set by initChatRouter in server-v2.ts) ──────────────
 let _cronScheduler: CronScheduler;
 let _telegramChannel: TelegramChannel;
@@ -443,6 +586,17 @@ type ReasoningOptions = {
 const ROLLING_COMPACTION_SUMMARY_PREFIX = '[Rolling context summary]';
 const LEGACY_COMPACTION_SUMMARY_PREFIX = '[Compacted context summary]';
 const CONTEXT_COMPACTION_TOOL_NAME = 'context_compaction';
+
+function shouldUseSessionWorkspace(
+  executionMode: ExecutionMode,
+  sessionWorkspace: string | undefined,
+): boolean {
+  if (!sessionWorkspace) return false;
+  // Normal web/terminal/Telegram chat should follow the workspace selected by
+  // the current launcher/config. Persisted per-session workspaces are for
+  // scoped autonomous runs such as teams, cron, heartbeats, and proposals.
+  return executionMode !== 'interactive';
+}
 
 interface RollingCompactionPolicy {
   enabled: boolean;
@@ -666,47 +820,176 @@ async function handleChat(
   try {
   const ollama = getOllamaClient();
   const isBootStartupTurn = /\bBOOT\.md\b/i.test(String(callerContext || ''));
+  const isHotRestartTurn = /\[HOT RESTART CONTEXT\]/i.test(String(callerContext || ''));
   const bootAllowedTools = new Set(['list_files', 'read_file']);
   const configuredWorkspace = getConfig().getWorkspacePath();
   const sessionWorkspace = getWorkspace(sessionId);
-  // Session workspace (set by team dispatch, cron scheduler, etc.) takes priority
-  // over the global config path. Without this, team/subagent workspaces get silently
-  // overwritten back to the main workspace every single handleChat call.
-  const workspacePath = sessionWorkspace || configuredWorkspace;
+  // Scoped execution workspaces (set by team dispatch, cron scheduler, etc.) take
+  // priority over the global config path. For normal interactive chat, the current
+  // launcher/config remains authoritative so stale persisted sessions cannot keep
+  // a dev run bound to an old AppData/legacy workspace or vice versa.
+  const workspacePath = shouldUseSessionWorkspace(executionMode, sessionWorkspace)
+    ? sessionWorkspace
+    : configuredWorkspace;
   if (workspacePath && sessionWorkspace !== workspacePath) {
     setWorkspace(sessionId, workspacePath);
   }
+  const rawSendSSE = sendSSE;
+  sendSSE = (event: string, data: any) => {
+    rawSendSSE(event, data);
+    mirrorSessionChatEvent(sessionId, event, data, broadcastWS);
+  };
+  const finalizeBoundTaskRun = (status: 'complete' | 'failed', summary: string) => {
+    const binding = getTaskRunBinding(sessionId);
+    if (!binding?.taskId) return;
+    const text = String(summary || '').trim();
+    if (status === 'complete') {
+      completeNextOpenTaskStep(binding.taskId, text.slice(0, 200));
+    }
+    updateTaskStatus(binding.taskId, status, { finalSummary: text });
+    appendJournal(binding.taskId, {
+      type: status === 'complete' ? 'status_push' : 'error',
+      content: `${status === 'complete' ? 'Done' : 'Failed'}: ${text.slice(0, 240)}`,
+      detail: text.slice(0, 2000),
+    });
+    broadcastWS({ type: status === 'complete' ? 'task_complete' : 'task_failed', taskId: binding.taskId, summary: text });
+    broadcastWS({ type: 'task_panel_update', taskId: binding.taskId });
+    clearTaskRunBinding(sessionId, binding.taskId);
+  };
   console.log(`[v2] SESSION: ${sessionId} | Workspace: ${workspacePath}`);
-  const history = getHistoryForApiCall(sessionId, 10);
-  autoActivateToolCategories(sessionId, message, history.length);
+  const creativeMode = executionMode === 'interactive' ? getCreativeMode(sessionId) : null;
+  const isolatedCreativeRuntime = creativeMode === 'image' || creativeMode === 'canvas' || creativeMode === 'video';
+  const anyCreativeRuntime = !!creativeMode;
+  const effectiveMaxToolRounds = resolveEffectiveMaxToolRounds(MAX_TOOL_ROUNDS, {
+    creativeMode,
+    executionMode,
+    message,
+  });
+  const creativeProfile = creativeMode
+    ? (creativeMode === 'canvas'
+      ? 'creative_image'
+      : `creative_${creativeMode}` as 'creative_design' | 'creative_image' | 'creative_video')
+    : undefined;
+  const history = executionMode === 'cron'
+    ? []
+    : isolatedCreativeRuntime
+      ? getHistoryForApiCall(sessionId, 4, { maxMessages: 3 })
+      : creativeMode
+        ? getHistoryForApiCall(sessionId, 10, { maxMessages: 5 })
+        : getHistoryForApiCall(sessionId, 10);
+	  const isFullAccessSubagentMode =
+	    executionMode === 'background_agent' ||
+	    executionMode === 'team_manager' ||
+	    executionMode === 'team_subagent';
+	  if (isFullAccessSubagentMode) {
+	    setActivatedToolCategories(sessionId, getRuntimeToolCategories());
+	  } else if (!isolatedCreativeRuntime) {
+	    autoActivateToolCategories(sessionId, message, history.length);
+	  }
   // Build compact tool log from last 3 assistant turns — injected into system prompt
   // so the model always knows what it recently did even across the short history window.
-  const recentToolLog = getRecentToolLog(sessionId, 3, 1500);
+  const recentToolLog = creativeMode || executionMode === 'cron' ? '' : getRecentToolLog(sessionId, 3, 1500);
+  const recentCreativeToolLog = isolatedCreativeRuntime
+    ? (() => {
+        const raw = getRecentToolLog(sessionId, 4, 2500);
+        if (!raw) return '';
+        const creativeLines = raw.split(/\r?\n/)
+          .filter((line) => /\b(creative_|video_|image_|generate_image|download_url|download_media|analyze_image|analyze_video|write_note|memory_)/.test(line));
+        return creativeLines.length > 0
+          ? `[RECENT_CREATIVE_EDIT_RESULTS]\n${creativeLines.join('\n')}`.slice(0, 2500)
+          : '';
+      })()
+    : '';
+  const creativeReferencePrompt = isolatedCreativeRuntime
+    ? formatCreativeReferencesForPrompt(sessionId, 16)
+    : '';
+  const inferReferenceImageMimeType = (filePath: string): string => {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+    if (ext === '.webp') return 'image/webp';
+    if (ext === '.gif') return 'image/gif';
+    return 'image/png';
+  };
+  const resolveReferenceImagePath = (rawPath: string): string | null => {
+    const value = String(rawPath || '').trim();
+    if (!value) return null;
+    const absPath = path.isAbsolute(value) ? value : path.resolve(workspacePath, value);
+    try {
+      if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) return absPath;
+    } catch {
+      return null;
+    }
+    return null;
+  };
+  const buildCreativeReferenceVisionMessage = (): any | null => {
+    if (!isolatedCreativeRuntime || !primarySupportsVision()) return null;
+    const refs = getCreativeReferences(sessionId);
+    const images: Array<{ path: string; label: string; mimeType: string; base64: string }> = [];
+    for (const ref of refs) {
+      const candidates = ref.selectedFrames.length > 0
+        ? ref.selectedFrames
+        : (ref.kind === 'image' && ref.path ? [ref.path] : []);
+      for (const candidate of candidates.slice(0, 4)) {
+        const absPath = resolveReferenceImagePath(candidate);
+        if (!absPath) continue;
+        try {
+          images.push({
+            path: candidate,
+            label: `${ref.kind} ${ref.authority} ${ref.intent}`,
+            mimeType: inferReferenceImageMimeType(absPath),
+            base64: fs.readFileSync(absPath).toString('base64'),
+          });
+        } catch {
+          // Skip unreadable reference frames; the text path remains in the prompt.
+        }
+        if (images.length >= 10) break;
+      }
+      if (images.length >= 10) break;
+    }
+    if (!images.length) return null;
+    return {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text:
+            `[CREATIVE_REFERENCE_FRAME_OBSERVATION]\n` +
+            `These are saved reference images/frames from this chat session. Use direct visual perception of them as style, pacing, composition, typography, UI, and motion-direction evidence before creating or revising the active Creative ${creativeMode} work.\n` +
+            images.map((image, index) => `#${index + 1} ${image.label}: ${image.path}`).join('\n'),
+        },
+        ...images.map((image) => buildVisionImagePart(image.base64, image.mimeType)),
+      ],
+    };
+  };
   // Build full tool list then apply filters
-  const allBuiltTools = buildTools(sessionId);
+	  const allBuiltTools = anyCreativeRuntime ? buildTools() : buildTools(sessionId);
   // Telegram sessions: hide start_task so the model never tries to background-task anything.
   // Telegram runs inline (interactive mode) and the background task path has broken tool-arg
   // serialisation that causes browser_open to receive JSON strings instead of objects.
   const isTelegramSessionForTools = String(sessionId || '').startsWith('telegram_');
-  // start_task spawns a local Ollama sub-loop — never appropriate inside a background task or subagent run.
+  // Runtime subagents inherit the same activated categories and background
+  // controls as main chat. Only the legacy recursive start_task guard remains.
   const isBackgroundOrSubagentMode = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent' || executionMode === 'cron' || executionMode === 'team_manager' || executionMode === 'team_subagent';
   const isProposalExecutionMode = executionMode === 'proposal_execution';
-  // Tools always stripped from subagent/background runs
+  // Tools always stripped from background/subagent runs.
   const alwaysStrip = new Set(isBackgroundOrSubagentMode ? ['start_task'] : []);
   // write_note is a core runtime tool and must stay available in interactive chat.
   // Prompt context and tool docs already instruct the model when to skip it.
   const interactiveStrip = new Set<string>();
-  const baseTools = isBootStartupTurn
-    ? allBuiltTools.filter((t: any) => bootAllowedTools.has(String(t?.function?.name || '')))
-    : toolFilter && toolFilter.length > 0
-      ? allBuiltTools.filter((t: any) => {
-          const tName = String(t?.function?.name || '');
-          if (alwaysStrip.has(tName)) return false;
-          if (interactiveStrip.has(tName)) return false;
-          return toolFilter.some(pattern => {
-            if (pattern.endsWith('*')) return tName.startsWith(pattern.slice(0, -1));
-            return tName === pattern;
-          });
+	  const effectiveToolFilter = isFullAccessSubagentMode ? undefined : toolFilter;
+	  const baseTools = isBootStartupTurn
+	    ? allBuiltTools.filter((t: any) => bootAllowedTools.has(String(t?.function?.name || '')))
+	    : isHotRestartTurn
+	      ? []
+	    : effectiveToolFilter && effectiveToolFilter.length > 0
+	      ? allBuiltTools.filter((t: any) => {
+	          const tName = String(t?.function?.name || '');
+	          if (alwaysStrip.has(tName)) return false;
+	          if (interactiveStrip.has(tName)) return false;
+	          return effectiveToolFilter.some(pattern => {
+	            if (pattern.endsWith('*')) return tName.startsWith(pattern.slice(0, -1));
+	            return tName === pattern;
+	          });
         })
       : isTelegramSessionForTools || isBackgroundOrSubagentMode
         ? allBuiltTools.filter((t: any) => !alwaysStrip.has(String(t?.function?.name || '')) && String(t?.function?.name || '') !== 'start_task')
@@ -720,14 +1003,16 @@ async function handleChat(
     'task_control',
     'declare_plan', 'complete_plan_step', 'step_complete',
     'request_tool_category',
+    'business_context_mode',
     'connector_list',
     'switch_model',
     ...(!isPublicDistributionBuild() ? [
       'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
       'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
+      'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',
     ] : []),
   ]);
-  const tools = isProposalExecutionMode
+  let tools = isProposalExecutionMode
     ? baseTools.filter((t: any) => {
         const tName = String(t?.function?.name || '');
         if (!tName || tName === 'write_proposal') return false;
@@ -736,6 +1021,9 @@ async function handleChat(
         return true; // Category tools are still governed by per-session activation.
       })
     : baseTools;
+  if (creativeMode) {
+    tools = tools.filter((t: any) => isCreativeRuntimeToolName(String(t?.function?.name || '')));
+  }
   const allToolResults: ToolResult[] = [];
   let allThinking = '';
   let preflightRoute: 'primary_direct' | 'primary_with_plan' | 'secondary_chat' | 'background_task' | null = null;
@@ -744,8 +1032,6 @@ async function handleChat(
   const MAX_CONTINUATION_NUDGES = 4;
   let planFinalizationGuard = 0;
   const MAX_PLAN_FINALIZATION_GUARD = 4;
-  let browserActionsSinceObservation = 0;
-  const BROWSER_CADENCE_OBSERVE_EVERY = 2;
   const orchestrationSkillEnabled = isOrchestrationSkillEnabled();
   const greetingLikeTurn = isGreetingLikeMessage(message);
   const progressState: {
@@ -783,18 +1069,6 @@ async function handleChat(
     providerId?: string;
     source: 'turn_override' | 'provider_override' | 'model_override' | 'config_default' | 'default';
   } => {
-    const knownProviders = new Set(['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic']);
-    const parseProviderModelRef = (ref: string): { providerId: string; model: string } | null => {
-      const raw = String(ref || '').trim();
-      if (!raw || !raw.includes('/')) return null;
-      const slashIdx = raw.indexOf('/');
-      if (slashIdx <= 0) return null;
-      const providerId = raw.slice(0, slashIdx).trim();
-      const model = raw.slice(slashIdx + 1).trim();
-      if (!providerId || !model || !knownProviders.has(providerId)) return null;
-      return { providerId, model };
-    };
-
     // Highest priority: turn-scoped override set by switch_model tool.
     const turnOverride = getTurnModelOverride(sessionId);
     if (turnOverride?.providerId && turnOverride?.model) {
@@ -848,19 +1122,26 @@ async function handleChat(
     // This keeps per-mode model routing autonomous and stateless for each API call.
     const cfg = getConfig().getConfig() as any;
     const defaults = cfg?.agent_model_defaults || {};
-    const modeKey = executionMode === 'interactive'
-      ? 'main_chat'
+    const modeKeys = executionMode === 'interactive'
+      ? ['main_chat']
       : executionMode === 'background_agent'
-        // background_spawn agents: prefer dedicated key, fall back to background_task
-        ? (defaults?.background_agent ? 'background_agent' : 'background_task')
+        ? ['background_agent', 'background_task']
         : executionMode === 'team_manager'
-          ? 'manager'
-        : executionMode === 'team_subagent'
-          ? ''
-        : (executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'cron')
-          ? 'background_task'
-          : '';
-    const modeRef = modeKey ? String(defaults?.[modeKey] || '').trim() : '';
+          ? ['team_manager', 'manager']
+          : executionMode === 'team_subagent'
+            ? ['team_subagent', 'subagent']
+            : (executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'cron')
+              ? ['background_task']
+              : [];
+    let modeKey = '';
+    let modeRef = '';
+    for (const key of modeKeys) {
+      const ref = String(defaults?.[key] || '').trim();
+      if (!ref) continue;
+      modeKey = key;
+      modeRef = ref;
+      break;
+    }
     if (modeRef) {
       const parsed = parseProviderModelRef(modeRef);
       if (parsed) {
@@ -926,6 +1207,18 @@ async function handleChat(
   let manualPlanSkillScoutCompleted = false;
   let manualPlanSkillListDone = false;
   let manualPlanSkillReadCount = 0;
+  const declaredPlanSkillScoutBlockMessage = (attemptedTool?: string): string => {
+    const blockedLine = attemptedTool
+      ? `Blocked: declared-plan skill scout pre-step is incomplete, so "${attemptedTool}" cannot run yet.`
+      : 'Blocked: declared-plan skill scout pre-step is incomplete.';
+    return [
+      blockedLine,
+      'Required next tool call: skill_list({}).',
+      'After skill_list succeeds, optionally call skill_read({"id":"<relevant-skill-id>"}) if a relevant skill appears.',
+      'Then call complete_plan_step({"note":"Skill scout complete"}).',
+      'This closes only the hidden scout pre-step; declared plan step 1 has not started or advanced.',
+    ].join('\n');
+  };
   // consecutiveFailures: how many times the current step has failed in a row.
   // Resets on any success. Used to stay on the step during retries.
   let consecutiveStepFailures = 0;
@@ -1461,6 +1754,7 @@ async function handleChat(
     }
   }
 
+  const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
   const personalityCtx = await buildPersonalityContext(
     sessionId,
     workspacePath,
@@ -1471,19 +1765,25 @@ async function handleChat(
     // Component 5: inject browser_vision hint when vision mode is active for this session.
     // browserVisionModeActive is declared higher in handleChat's closure scope.
     browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-    // local_llm: tiny prompt for small model primaries; cloud primaries use default (full)
-    isLocalPrimary ? { profile: 'local_llm' } : undefined,
+    teachModeActive
+      ? { profile: 'teach_mode' }
+      : creativeProfile
+      ? { profile: creativeProfile }
+      : (isLocalPrimary ? { profile: 'local_llm' } : undefined),
   );
   let switchModelPersonalityCtx: string | null = null;
 
   // Inject active browser session state so LLM knows to reuse it instead of re-opening
   const browserInfo = getBrowserSessionInfo(sessionId);
+  const browserControlCtx = formatBrowserInteractionContextBlock(sessionId);
   const browserStateCtx = browserInfo.active
     ? `\n\n[BROWSER SESSION ACTIVE: A browser tab is already open.${
         browserInfo.title ? ` Current page: "${browserInfo.title}"` : ''
       }${
         browserInfo.url ? ` at ${browserInfo.url}` : ''
-      }. Use browser_snapshot to see current elements, or browser_click to navigate. Do NOT call browser_open unless you need to go to a completely different site.]`
+      }. Use browser_snapshot to see current elements, or browser_click to navigate. Do NOT call browser_open unless you need to go to a completely different site.${
+        browserInfo.mode ? ` Current browser control mode: ${browserInfo.mode}.` : ''
+      }]${browserControlCtx ? `\n${browserControlCtx}` : ''}`
     : '';
 
   const now = new Date();
@@ -1523,6 +1823,7 @@ async function handleChat(
       return [
         'EXECUTION MODE: Scheduled cron task.',
         'Act autonomously and complete the prompt without asking follow-up questions.',
+        'Follow the scheduled task plan shown in the task panel. Do not create proposals, tasks, or external side effects unless the schedule prompt explicitly instructs you to do so.',
       ].join('\n');
     }
     if (executionMode === 'team_subagent') {
@@ -1550,12 +1851,65 @@ async function handleChat(
     ? 'If this background-agent task has 2+ meaningful phases, call bg_plan_declare FIRST (2-8 short steps). Keep executing within the current step until the phase is actually complete, then call bg_plan_advance(note) to move forward. Do NOT use declare_plan/complete_plan_step in background_agent mode.'
     : executionMode === 'proposal_execution'
       ? 'Proposal execution already has a fixed task plan. Do NOT call declare_plan. Execute steps in order, use tools directly, and call step_complete(note) after each completed step.'
+      : creativeMode
+        ? `Creative mode is active (${creativeMode}). Do NOT call declare_plan unless the user explicitly asks for a plan or checklist. Stay inside this creative mode across turns until the user exits it or you intentionally call exit_creative_mode because the specialized workflow is clearly finished. Do not exit just because one edit, render, or export completed.`
       : 'Unless explicitly told otherwise by the user, do NOT call declare_plan. Default to direct execution. Call declare_plan only when the user explicitly asks for a plan/checklist/step-by-step approach or asks you to outline steps before acting. Do NOT call declare_plan for browser_* or desktop_* actions by default, and do NOT call it for single-phase work, read-only lookups, exploratory tasks, conversational replies, explanations, code generation, or skill-read-then-respond. When a plan is active, declare once, do not re-declare mid-turn, keep each step in_progress until truly complete, then complete_plan_step with concrete evidence, and finish only after all plan steps are complete.';
+  const creativeModeSystemBlock = creativeMode
+    ? `CREATIVE MODE: ${creativeMode.toUpperCase()}.\nCanvas is the primary workspace in this mode.\nUse the canvas-related file context first. Keep the user inside this mode until it is appropriate to exit.`
+    : '';
+  const creativeRoutingInstruction = 'Creative routing: use generate_image when the user wants AI to generate a brand-new raster image from a prompt, including requests phrased as "generate me an image", "make an image", "create an image", mockups, posters, logos, brand kits, thumbnails, or concept art that should return a single generated PNG/JPG. If the user references an uploaded image/logo and asks for a generated image, put the exact uploaded file path in generate_image.reference_images and keep the prompt focused on the desired output; do not switch creative modes just to use a reference. GPT image models, including gpt-image-2 when available, are accessed through generate_image, not creative mode. Enter or switch to image creative mode only when the user explicitly wants an editable canvas/scene, manual design board, layered composition, ongoing visual workspace, iterative layout edits, or exportable canvas project. Enter or switch to video creative mode only for timelines, animation, captioned clips, promo videos, or motion export workflows. Once in creative mode, operate the editor with creative_* tools instead of describing edits in chat. Start from the blank canvas unless the user asks to continue an existing scene. Creative work must be visual-first: after meaningful edits, call creative_get_state or creative_render_snapshot before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into your vision context like browser/desktop screenshots; do not treat them as metadata-only calls or wait for a separate critic summary. Remotion motion template policy: when the user asks for caption reels, subtitles with animated words, audiograms, audio-reactive visuals, social/video presets, product promos, launch clips, template variants, reusable motion styles, or platform variants such as Reel/Short/Story/Square/YouTube, prefer creative_list_motion_templates, creative_preview_motion_template, creative_apply_motion_template, and creative_generate_motion_variants before manually constructing every layer with low-level canvas ops. Prefer caption-reel-v2 for new caption reels, TikToks, Reels, Shorts, launch captions, and reusable caption-template work. Use Remotion templates as high-level motion systems, then use normal creative tools for manual refinement. Video creative director policy: for any non-trivial video mode request, load creative-director-video when available before final layout/export decisions, not only for Remotion work. For Remotion-backed implementation work, load remotion-best-practices and use its rules for animations, captions, sequencing, fonts, transitions, assets, measuring text, audio visualization, and render checks; do not scaffold or run a separate Remotion Studio project unless the user specifically asks for an independent Remotion preview/project. If repeated edits make generated layers overlap or stale layers keep rendering, rebuild from a fresh video scene instead of patching a corrupted timeline. Creative library policy: do not build rich designs from only generic rectangles, circles, default starter icons, fade_slide_up, and scale_pop. Use Iconify deliberately: for any meaningful icon, logo-like symbol, UI mark, social icon, tech icon, object icon, or visual metaphor, call creative_search_icons and then use exact Iconify names in icon elements. Use animation search deliberately: for video, captions, image montages, and motion graphics, call creative_search_animations before choosing motion unless the user requested a specific preset. Use the full element catalog: text, image, video, shape, icon, group, overlays, captions, asset layers, fitted media, keyframes, timeline sequencing, styles, shadows, borders, radius, filters, crops, opacity, rotation, and z-index. For video motion choices, call creative_search_animations or creative_get_state to inspect available animation preset ids; use those libraries deliberately rather than reusing the same starter template. Before presenting or exporting creative work, run at least one direct visual self-review with creative_render_snapshot; for video, use sampleTimesMs for chosen moments or sampleEveryFrame/frameStepMs in contiguous batches when full playback inspection matters. If your own visual review shows unreadable text, overlap, weak contrast, bad framing, wrong dimensions, blank/awkward video frames, or timing issues, fix the scene with creative tools and run another direct frame review before exporting or claiming completion. Video creative_export does not run a separate critic gate; you are responsible for looking at rendered frames directly before export.';
+  const creativeDebuggingInstruction = 'Creative debugging tools: when working in video mode, use video_render_frame, video_render_contact_sheet, video_analyze_frame, video_analyze_timeline, video_check_keyframes, video_check_caption_timing, video_check_audio_sync, video_extract_clip_frames, and video_analyze_imported_video when those names fit the job. Use creative_element_inventory for a complete layer/timeline inventory with text, timing, animation, visibility, provenance, and validation details. Use creative_frame_trace to see which elements are actually active at exact timestamps, with resolved opacity/transform/z-order/source information. Use creative_frame_diff to compare two timestamps and detect what changed, appeared, disappeared, or stayed static. Use creative_history_status, creative_undo, and creative_redo to recover from destructive resets, bad template applications, failed batch edits, or visual regressions; after undo/redo, render or inspect the scene before continuing. For image mode, use image_get_element_at_point, image_get_overlaps, image_get_bounds_summary, image_check_text_overflow, image_check_contrast, and image_detect_empty_regions when diagnosing composition/layout issues. Use creative_export_trace before or after export when you need certainty about the scene hash, render/export job, saved scene, active export, or whether stale/cached output was used. Before risky rebuilds or large experiments, call creative_checkpoint with action "save"; restore a checkpoint if the design gets worse. If a scene is contaminated by duplicated ids, offscreen debris, stale template residue, editor artifacts, hidden layers, or ghost content, call creative_purge_scene first. Only call creative_reset_scene with force=true after a checkpoint/export or when the user explicitly asked for a fresh blank scene. Do not keep patching a corrupted video timeline when purge plus inventory/trace gives a cleaner path.';
+  const creativeRuntimeSystemPrompt = isolatedCreativeRuntime
+    ? [
+        `You are Prometheus Creative Runtime, a specialized ${creativeMode === 'video' ? 'video/motion' : 'image/canvas'} editor agent.`,
+        `Current date: ${dateStr}, ${timeStr}.`,
+        '',
+        'This is not normal Prometheus main chat. Do not use subagent/team/background/proposal behavior, broad browser/desktop doctrine, or declare_plan protocol.',
+        'Your job is to manipulate the active creative workspace directly with creative tools, render/inspect the result, iterate, and then report concise progress or completion.',
+        'Use only the creative runtime context below plus the current user request. Prefer tool action over explanation.',
+        '',
+        `ACTIVE MODE: ${creativeMode === 'canvas' ? 'image' : creativeMode}.`,
+        'Canvas/scene state is authoritative. Use creative_get_state or creative_render_snapshot early when continuing an existing scene or after meaningful edits.',
+        'Use selected element, asset library, brand/project context, and mode-specific tool docs from the creative context. Do not pull in normal chat history except the compact creative handoff/request and recent creative edit results.',
+        'Skill tools are core and available in this creative runtime with main-chat parity: every skill_* tool exposed by the runtime is allowed here. Use skill_list and skill_read when you need more creative instructions, references, or ideas; use skill_resource_list and skill_resource_read for bundled resources including templates, examples, docs, schemas, prompts, data, and references; use skill_inspect for normalized metadata/provenance. When maintaining creative skills or bundles, use the bundle/resource/manifest/import/export/update/create skill tools as needed. If the handoff includes skills read before the switch, treat them as already-loaded active instructions.',
+        'Do not exit creative mode unless the user explicitly asks to leave or the creative workflow is clearly finished.',
+        creativeMode === 'video'
+          ? 'For video work, validate timing, frames, readability, safe areas, and motion with creative_render_snapshot, frame trace/inventory tools, and export trace before final export.'
+          : 'For image work, validate layout, text fit, contrast, composition, and asset placement with creative_render_snapshot before final export.',
+      ].join('\n')
+    : '';
+  const teachModeSystemBlock = teachModeActive
+      ? [
+        'TEACH MODE: Workflow teaching and verification.',
+        'Your primary objective is to help the user capture, verify, and package a reusable browser workflow.',
+        'Treat the recorded Teach steps as the source of truth for the intended flow.',
+        'When Teach mode is waiting for verification approval, summarize the workflow, call out risky steps, and ask how far verification should go before running anything.',
+        'Once the user approves verification, call browser_teach_verify with the approved boundary before you summarize the replay result.',
+        'After verification, explain what actually happened, what adjustments were needed, and what you think the workflow is for.',
+        'Ask the user to confirm whether that understanding is correct before proposing packaging.',
+        'You may recommend composite, skill, both, or neither after verification, but do NOT create any composite tool or skill unless the user explicitly asks you to.',
+      ].join('\n')
+    : '';
 
-  const baseSystemPrompt = `${executionModeSystemBlock ? `${executionModeSystemBlock}\n\n` : ''}You are Prom, a local AI assistant running inside Prometheus.\nCurrent date: ${dateStr}, ${timeStr}.\nNever search for or link Prometheus repos unless the user is asking about Prometheus itself.\nThis app runs on the user's own machine - browser/desktop automation requests are pre-authorized.\nExecution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.\nVisual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_snapshot/browser_vision_screenshot and desktop_screenshot over repeated browser_run_js probing. Use browser_run_js only when visual/snapshot evidence is insufficient for a concrete action.\n${planProtocolInstruction}\n${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`;
+  const baseSystemPrompt = `${executionModeSystemBlock ? `${executionModeSystemBlock}\n\n` : ''}${creativeModeSystemBlock ? `${creativeModeSystemBlock}\n\n` : ''}${teachModeSystemBlock ? `${teachModeSystemBlock}\n\n` : ''}You are Prom, a local AI assistant running inside Prometheus.\nCurrent date: ${dateStr}, ${timeStr}.\nNever search for or link Prometheus repos unless the user is asking about Prometheus itself.\nThis app runs on the user's own machine - browser/desktop automation requests are pre-authorized.\nExecution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.\nVisual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots when state likely changed, the UI is ambiguous, or a risky action just ran. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_snapshot/browser_vision_screenshot and desktop_screenshot over repeated browser_run_js probing. Use browser_run_js only when visual/snapshot evidence is insufficient for a concrete action.\n${creativeRoutingInstruction}\n${creativeDebuggingInstruction}\n${planProtocolInstruction}\n${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`;
   const buildSystemPrompt = (mode: 'full' | 'switch_model'): string => {
+    if (isolatedCreativeRuntime) {
+      return [
+        creativeRuntimeSystemPrompt,
+        currentModelSystemBlock ? `[MODEL]\n${currentModelSystemBlock}` : '',
+        personalityCtx,
+        creativeReferencePrompt,
+        callerContext ? `[CREATIVE_HANDOFF_CONTEXT]\n${callerContext}` : '',
+        recentCreativeToolLog,
+      ].filter(Boolean).join('\n\n');
+    }
     if (mode === 'switch_model') {
       return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
+    }
+    if (executionMode === 'team_subagent') {
+      // Team subagents inherit the broader Prometheus identity/memory first, then
+      // receive their team-local role and task context as the most specific guidance.
+      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${(getConfig().getConfig() as any)?.agent_builder?.enabled === true ? '\n\n' + getWorkflowContextBlock() : ''}`;
     }
     return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${(getConfig().getConfig() as any)?.agent_builder?.enabled === true ? '\n\n' + getWorkflowContextBlock() : ''}`;
   };
@@ -1574,8 +1928,15 @@ async function handleChat(
     messages.push({ role: 'assistant', content: 'I have the pinned context. Continuing...' });
   }
 
-  for (const msg of history) {
+  const historyForMessages = isolatedCreativeRuntime ? [] : history;
+  for (const msg of historyForMessages) {
     messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
+  }
+  const creativeReferenceVisionMessage = buildCreativeReferenceVisionMessage();
+  if (creativeReferenceVisionMessage) {
+    messages.push(creativeReferenceVisionMessage);
+    sendSSE('vision_injected', { source: 'creative_references', frames: Array.isArray(creativeReferenceVisionMessage.content) ? creativeReferenceVisionMessage.content.length - 1 : 0 });
+    sendSSE('info', { message: 'Creative reference frame vision injected for this Creative mode turn.' });
   }
   if (attachments && attachments.length > 0 && primarySupportsVision()) {
     messages.push({
@@ -1590,42 +1951,84 @@ async function handleChat(
   }
 
   // ── Browser observation policy layer ──────────────────────────────────────────────
-  type ObserveMode = 'none' | 'delta' | 'snapshot' | 'screenshot';
-  const BROWSER_TOOL_POLICY: Record<string, ObserveMode> = {
-    // Low-risk deterministic — no observation by default
-    'browser_wait':              'none',
-    'browser_get_page_text':     'none',
-    'browser_get_focused_item':  'none',
-    // Interaction-heavy tools: use compact DOM delta + forced screenshot for accuracy.
-    'browser_click':             'delta',
-    'browser_fill':              'delta',
-    'browser_press_key':         'delta',
-    'browser_scroll_collect':    'delta',
-    'browser_scroll':            'delta',
-    // High-risk navigation/visual — full screenshot or snapshot
-    'browser_open':              'screenshot',
-    'browser_vision_click':      'screenshot',
-    'browser_snapshot':          'snapshot',
-    'browser_snapshot_delta':    'none',
-    'browser_vision_screenshot': 'screenshot',
-    'browser_vision_type':       'delta',
-    'browser_send_to_telegram':  'none',
-    // JS should be used sparingly; when it is used, immediately re-ground with visual evidence.
-    'browser_run_js':            'screenshot',
-  };
+  type ObserveMode = BrowserObserveMode;
+  const BROWSER_OBSERVE_TOOLS = new Set([
+    'browser_wait',
+    'browser_get_page_text',
+    'browser_get_focused_item',
+    'browser_click',
+    'browser_fill',
+    'browser_upload_file',
+    'browser_press_key',
+    'browser_key',
+    'browser_drag',
+    'browser_click_and_download',
+    'browser_scroll_collect',
+    'browser_scroll',
+    'browser_open',
+    'browser_vision_click',
+    'browser_snapshot',
+    'browser_snapshot_delta',
+    'browser_vision_screenshot',
+    'browser_vision_type',
+    'browser_send_to_telegram',
+    'browser_run_js',
+  ]);
   const BROWSER_FORCE_SCREENSHOT_AFTER_TOOLS = new Set([
     'browser_click',
     'browser_fill',
+    'browser_upload_file',
     'browser_press_key',
+    'browser_drag',
     'browser_scroll',
     'browser_scroll_collect',
   ]);
 
   const maybeAppendVisionScreenshotForTool = async (
     toolName: string,
-    toolResult?: { error?: boolean },
+    toolResult?: { error?: boolean; data?: any },
     toolInput?: Record<string, any>,
   ): Promise<void> => {
+    if (toolName === 'creative_render_snapshot' || toolName === 'creative_get_state' || toolName === 'video_render_frame' || toolName === 'video_render_contact_sheet' || toolName === 'video_analyze_frame' || toolName === 'video_extract_clip_frames') {
+      if (toolResult?.error || !primarySupportsVision()) return;
+      const rawFrames = Array.isArray(toolResult?.data?.snapshots)
+        ? toolResult?.data?.snapshots
+        : (toolResult?.data?.snapshot ? [toolResult.data.snapshot] : []);
+      const frames = rawFrames
+        .map((frame: any) => {
+          const dataUrl = String(frame?.dataUrl || '').trim();
+          const match = dataUrl.match(/^data:([^,]+);base64,(.+)$/);
+          if (!match) return null;
+          return {
+            mimeType: String(match[1] || 'image/png').split(';')[0] || 'image/png',
+            base64: match[2] || '',
+            width: Number(frame?.width || 0),
+            height: Number(frame?.height || 0),
+            atMs: frame?.atMs,
+          };
+        })
+        .filter(Boolean);
+      if (!frames.length) {
+        sendSSE('info', { message: 'Creative frame injection requested, but no image frames were returned.' });
+        return;
+      }
+      messages.push({
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text:
+              `[CREATIVE_DIRECT_FRAME_OBSERVATION]\n` +
+              `These are the rendered frame images from the active creative workspace. Use your own visual perception of these frames as direct context for the next step; no separate critic summary has been run.\n` +
+              `Frames: ${frames.map((frame: any, index: number) => `#${index + 1} ${frame.width}x${frame.height}${Number.isFinite(Number(frame.atMs)) ? ` @ ${frame.atMs}ms` : ''}`).join(', ')}`,
+          },
+          ...frames.map((frame: any) => buildVisionImagePart(frame.base64, frame.mimeType)),
+        ],
+      });
+      sendSSE('vision_injected', { source: 'creative', tool: toolName, frames: frames.length });
+      sendSSE('info', { message: `Creative rendered frame vision injected (${frames.length} frame${frames.length === 1 ? '' : 's'}).` });
+      return;
+    }
     // Desktop tools have their own handling
     if (toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot') {
       // Keep existing desktop behavior — always inject on success
@@ -1640,34 +2043,15 @@ async function handleChat(
     }
 
     // Browser tool observation policy
-    if (!BROWSER_TOOL_POLICY.hasOwnProperty(toolName)) return;
+    if (!BROWSER_OBSERVE_TOOLS.has(toolName)) return;
 
     // 1. Determine effective observe mode
-    const aiOverride = toolInput?.observe as ObserveMode | undefined;
-    let effectiveMode: ObserveMode;
+    let effectiveMode: ObserveMode = toolResult?.error
+      ? 'screenshot'
+      : resolveBrowserObserveMode(toolName, toolInput?.observe);
 
-    if (toolResult?.error) {
-      // Failures always trigger screenshot regardless of policy or override
-      effectiveMode = 'screenshot';
-    } else if (aiOverride && ['none', 'delta', 'snapshot', 'screenshot'].includes(aiOverride)) {
-      effectiveMode = aiOverride;
-    } else {
-      effectiveMode = BROWSER_TOOL_POLICY[toolName] ?? 'none';
-    }
-
-    // 2. Cadence guard — every N actions, upgrade 'none' to 'delta' for orientation
-    browserActionsSinceObservation++;
-    if (effectiveMode === 'none' && browserActionsSinceObservation >= BROWSER_CADENCE_OBSERVE_EVERY) {
-      effectiveMode = 'delta';
-    }
-
-    // 3. Reset cadence counter if we're observing, or on navigation
-    if (effectiveMode !== 'none' || toolName === 'browser_open') {
-      browserActionsSinceObservation = 0;
-    }
-
-    // 4. Execute the chosen observation mode
-    if (effectiveMode === 'none') return;
+    // 2. Execute the chosen observation mode
+    if (effectiveMode === 'none' || effectiveMode === 'compact') return;
 
     if (effectiveMode === 'delta') {
       // Use lightweight DOM delta instead of full vision
@@ -1714,6 +2098,261 @@ async function handleChat(
         sendSSE('info', { message: `Vision screenshot unavailable (browser) after ${toolName}.` });
       }
     }
+  };
+
+  type PreActionObservationContext = {
+    browserBefore: BrowserObservationPageState | null;
+    desktopBefore: DesktopObservationPacketState | null;
+  };
+
+  type AppliedObservationContext = {
+    decision: PostActionObservationDecision;
+    browserAfterPacket: BrowserAdvisorPacket | null;
+    advisorTriggerToolName: string;
+    advisorTriggerToolArgs: Record<string, any>;
+    advisorTriggerToolResult: ToolResult;
+  };
+
+  const isDesktopVisualToolName = (toolName: string): boolean =>
+    toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
+
+  const countRecentToolRepeats = (toolName: string, toolArgs: Record<string, any>): number => {
+    const argsHash = hashArgs(toolArgs);
+    const loopRepeats = recentToolCalls.filter((t) => t.name === toolName && t.argsHash === argsHash).length;
+    const priorRepeats = allToolResults.filter((result) =>
+      result.name === toolName && hashArgs(result.args) === argsHash,
+    ).length;
+    return Math.max(1, loopRepeats, priorRepeats + 1);
+  };
+
+  const countRecentToolFailures = (toolName: string, toolArgs: Record<string, any>): number => {
+    const argsHash = hashArgs(toolArgs);
+    return allToolResults.filter((result) =>
+      result.error && result.name === toolName && hashArgs(result.args) === argsHash,
+    ).length;
+  };
+
+  const captureObservationPreContext = async (
+    toolName: string,
+    toolArgs: Record<string, any> = {},
+  ): Promise<PreActionObservationContext> => {
+    let browserBefore: BrowserObservationPageState | null = null;
+    let desktopBefore: DesktopObservationPacketState | null = null;
+
+    if (isBrowserToolName(toolName)) {
+      const sessionInfo = getBrowserSessionInfo(sessionId);
+      const packet = sessionInfo.active
+        ? await getBrowserAdvisorPacket(sessionId, { maxItems: 0, snapshotElements: 48 }).catch(() => null)
+        : null;
+      browserBefore = summarizeBrowserObservationState(packet, sessionInfo.active ? sessionInfo : null);
+    }
+
+    if (isDesktopToolName(toolName)) {
+      desktopBefore = summarizeDesktopObservationState(getDesktopAdvisorPacket(sessionId));
+    }
+
+    return { browserBefore, desktopBefore };
+  };
+
+  const buildObservationDecisionForTool = async (
+    toolName: string,
+    toolArgs: Record<string, any>,
+    toolResult: ToolResult,
+    preContext: PreActionObservationContext,
+  ): Promise<{
+    decision: PostActionObservationDecision;
+    browserAfterPacket: BrowserAdvisorPacket | null;
+  }> => {
+    let browserAfterPacket: BrowserAdvisorPacket | null = null;
+    let browserAfter: BrowserObservationPageState | null = null;
+    let desktopAfter: DesktopObservationPacketState | null = null;
+    const isBrowserTool = isBrowserToolName(toolName);
+    const isDesktopTool = isDesktopToolName(toolName);
+    const requestedBrowserMode = isBrowserTool
+      ? resolveBrowserObserveMode(toolName, toolArgs?.observe)
+      : undefined;
+    const hasObserveOverride = Object.prototype.hasOwnProperty.call(toolArgs || {}, 'observe')
+      && toolArgs?.observe !== undefined;
+
+    if (isBrowserTool) {
+      const sessionInfo = getBrowserSessionInfo(sessionId);
+      browserAfterPacket = sessionInfo.active
+        ? await getBrowserAdvisorPacket(sessionId, { maxItems: 0, snapshotElements: 48 }).catch(() => null)
+        : null;
+      browserAfter = summarizeBrowserObservationState(browserAfterPacket, sessionInfo.active ? sessionInfo : null);
+    }
+
+    if (isDesktopTool) {
+      desktopAfter = summarizeDesktopObservationState(getDesktopAdvisorPacket(sessionId));
+    }
+
+    const decision = decidePostActionObservation({
+      toolName,
+      args: toolArgs,
+      requestedMode: requestedBrowserMode,
+      hasObserveOverride,
+      error: toolResult.error,
+      resultText: toolResult.result,
+      recentRepeats: countRecentToolRepeats(toolName, toolArgs),
+      recentFailures: countRecentToolFailures(toolName, toolArgs),
+      browser: {
+        before: preContext.browserBefore,
+        after: browserAfter,
+      },
+      desktop: {
+        before: preContext.desktopBefore,
+        after: desktopAfter,
+      },
+    });
+
+    return { decision, browserAfterPacket };
+  };
+
+  const appendBrowserDeltaObservation = async (
+    toolName: string,
+    reason: string,
+  ): Promise<void> => {
+    try {
+      const delta = await browserSnapshotDelta(sessionId);
+      if (!delta) return;
+      messages.push({
+        role: 'user',
+        content: [{ type: 'text', text: `[SYSTEM: DOM delta after ${toolName}]\n${delta}` }],
+      });
+      sendSSE('info', { message: `DOM delta injected (browser) after ${toolName}: ${reason}.` });
+    } catch {
+      // Best-effort only.
+    }
+  };
+
+  const appendBrowserVisionObservation = async (
+    toolName: string,
+    reason: string,
+    options?: { reuseExisting?: boolean },
+  ): Promise<void> => {
+    let visionMessage = options?.reuseExisting
+      ? buildVisionScreenshotMessage(sessionId, 'browser')
+      : null;
+
+    if (!visionMessage) {
+      try { await browserVisionScreenshot(sessionId); } catch {}
+      visionMessage = buildVisionScreenshotMessage(sessionId, 'browser');
+    }
+
+    if (visionMessage) {
+      messages.push(visionMessage);
+      sendSSE('vision_injected', { source: 'browser', tool: toolName });
+      sendSSE('info', { message: `Vision screenshot injected (browser) after ${toolName}: ${reason}.` });
+    } else {
+      sendSSE('info', { message: `Vision screenshot unavailable (browser) after ${toolName}: ${reason}.` });
+    }
+  };
+
+  const appendObservationArtifacts = async (
+    toolName: string,
+    toolArgs: Record<string, any>,
+    toolResult: ToolResult,
+    decision: PostActionObservationDecision,
+  ): Promise<void> => {
+    if (toolName === 'creative_render_snapshot' || toolName === 'creative_get_state' || toolName === 'video_render_frame' || toolName === 'video_render_contact_sheet' || toolName === 'video_analyze_frame' || toolName === 'video_extract_clip_frames') {
+      await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
+      return;
+    }
+    if (isDesktopVisualToolName(toolName)) {
+      await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
+      return;
+    }
+    if (!isBrowserToolName(toolName)) return;
+    if (decision.mode === 'none' || decision.mode === 'snapshot') return;
+    if (decision.mode === 'delta') {
+      if (toolName !== 'browser_snapshot_delta') {
+        await appendBrowserDeltaObservation(toolName, decision.reason);
+      }
+      return;
+    }
+    if (decision.mode === 'screenshot') {
+      await appendBrowserVisionObservation(
+        toolName,
+        decision.reason,
+        { reuseExisting: toolName === 'browser_vision_screenshot' },
+      );
+    }
+  };
+
+  const applySharedPostActionObservation = async (
+    toolName: string,
+    toolArgs: Record<string, any>,
+    toolResult: ToolResult,
+    preContext: PreActionObservationContext,
+  ): Promise<AppliedObservationContext> => {
+    const { decision, browserAfterPacket } = await buildObservationDecisionForTool(
+      toolName,
+      toolArgs,
+      toolResult,
+      preContext,
+    );
+
+    let advisorTriggerToolName = toolName;
+    let advisorTriggerToolArgs = toolArgs;
+    let advisorTriggerToolResult = toolResult;
+
+    await appendObservationArtifacts(toolName, toolArgs, toolResult, decision);
+
+    if (
+      isDesktopToolName(toolName)
+      && !isDesktopVisualToolName(toolName)
+      && decision.mode === 'screenshot'
+    ) {
+      try {
+        await desktopWait(350);
+        const autoToolName: 'desktop_screenshot' = 'desktop_screenshot';
+        const activeMonitorIndex = await desktopGetActiveMonitorIndex();
+        const autoToolArgs = activeMonitorIndex !== null ? { capture: activeMonitorIndex } : {};
+        let autoShot = activeMonitorIndex !== null
+          ? await desktopScreenshotWithHistory(sessionId, { capture: activeMonitorIndex })
+          : await desktopScreenshotWithHistory(sessionId);
+        if (String(autoShot).startsWith('ERROR')) {
+          autoShot = await desktopScreenshotWithHistory(sessionId);
+        }
+        const syntheticResult: ToolResult = {
+          name: autoToolName,
+          args: autoToolArgs,
+          result: autoShot,
+          error: String(autoShot).startsWith('ERROR'),
+        };
+        const autoShotContent = buildDesktopScreenshotContent(syntheticResult, sessionId, '');
+        messages.push({
+          role: 'tool',
+          tool_name: autoToolName,
+          content: typeof autoShotContent === 'string'
+            ? `[Auto-screenshot after ${toolName}: ${decision.reason}]\n${autoShotContent}`
+            : autoShotContent,
+        });
+        await maybeAppendVisionScreenshotForTool(autoToolName, syntheticResult, autoToolArgs);
+        sendSSE('tool_result', {
+          action: autoToolName,
+          result: autoShot.slice(0, 300),
+          error: syntheticResult.error,
+          stepNum: allToolResults.length,
+          synthetic: true,
+        });
+        if (!syntheticResult.error) {
+          advisorTriggerToolName = autoToolName;
+          advisorTriggerToolArgs = autoToolArgs;
+          advisorTriggerToolResult = syntheticResult;
+        }
+      } catch {
+        // Non-fatal: continue without synthetic screenshot.
+      }
+    }
+
+    return {
+      decision,
+      browserAfterPacket,
+      advisorTriggerToolName,
+      advisorTriggerToolArgs,
+      advisorTriggerToolResult,
+    };
   };
 
   const continuationCue = isContinuationCue(message);
@@ -2122,14 +2761,23 @@ async function handleChat(
     return { added, deduped, total: browserAdvisorCollectedFeed.length };
   };
 
-  const maybeRunBrowserAdvisorPass = async (triggerToolName: string, triggerResult: ToolResult): Promise<void> => {
-    if (!isBrowserToolName(triggerToolName) || triggerResult.error) return;
+  const maybeRunBrowserAdvisorPass = async (
+    triggerToolName: string,
+    triggerResult: ToolResult,
+    triggerToolArgs?: Record<string, any>,
+    decision?: PostActionObservationDecision,
+    prefetchedPacket?: BrowserAdvisorPacket | null,
+  ): Promise<void> => {
+    if (!isBrowserToolName(triggerToolName)) return;
+    if (decision && !decision.shouldRunAdvisor) return;
+    if (!decision && triggerResult.error) return;
     const orchCfg = getOrchestrationConfig();
     if (!orchestrationSkillEnabled || !orchCfg?.enabled) return;
     if (browserAdvisorCallsThisTurn >= browserMaxAdvisorCallsPerTurn) return;
     if (orchestrationStats.assistCount >= orchCfg.limits.max_assists_per_session) return;
 
-    const packet = await getBrowserAdvisorPacket(sessionId, { maxItems: browserPacketMaxItems, snapshotElements: 180 });
+    const packet = prefetchedPacket
+      || await getBrowserAdvisorPacket(sessionId, { maxItems: browserPacketMaxItems, snapshotElements: 180 });
     if (!packet) return;
     const packetUrlKey = toUrlKey(packet.page.url);
     if (
@@ -2517,7 +3165,7 @@ async function handleChat(
         role: 'system',
         content: `You are Prom. Execute browser tool calls exactly as instructed by the advisor directive below.
 
-BROWSER TOOLS: browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_scroll, browser_close, web_fetch
+BROWSER TOOLS: browser_open, browser_snapshot, browser_click, browser_fill, browser_drag, browser_upload_file, browser_press_key, browser_wait, browser_scroll, browser_click_and_download, browser_close, web_fetch, download_url, download_media, generate_image
 
 RULES:
 1. Call exactly the tool and params the advisor specifies.
@@ -2547,21 +3195,27 @@ RULES:
     } else if (advisor.next_tool?.tool) {
       const isWebFetchStep = advisor.next_tool.tool === 'web_fetch';
       const collectTail = advisor.route === 'collect_more' && !isWebFetchStep
-        ? ' Then continue collection: if needed call browser_wait(1200) and browser_snapshot before deciding again.'
+        ? ' Then continue collection: if needed call browser_wait(1200), and capture browser_snapshot before deciding again only if new content should have loaded or the UI is still ambiguous.'
         : '';
       const webFetchNote = isWebFetchStep
         ? ' Use web_fetch (not browser_open) since you already have the URL and only need the text content.'
         : '';
       messages.push({
         role: 'user',
-        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. Do not stop with intent text. After this step, capture browser_snapshot or browser_vision_screenshot if state changed before deciding again.${collectTail}${webFetchNote}`,
+        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. Do not stop with intent text. After this step, capture browser_snapshot or browser_vision_screenshot only if state likely changed or the UI is ambiguous before deciding again.${collectTail}${webFetchNote}`,
       });
     }
   };
 
-  const maybeRunDesktopAdvisorPass = async (triggerToolName: string, triggerResult: ToolResult): Promise<void> => {
-    if (!isDesktopToolName(triggerToolName) || triggerResult.error) return;
-    if (triggerToolName !== 'desktop_screenshot' && triggerToolName !== 'desktop_window_screenshot') return;
+  const maybeRunDesktopAdvisorPass = async (
+    triggerToolName: string,
+    triggerResult: ToolResult,
+    decision?: PostActionObservationDecision,
+  ): Promise<void> => {
+    if (!isDesktopToolName(triggerToolName)) return;
+    if (decision && !decision.shouldRunAdvisor) return;
+    if (!decision && triggerResult.error) return;
+    if (!isDesktopVisualToolName(triggerToolName)) return;
     const orchCfg = getOrchestrationConfig();
     if (!orchestrationSkillEnabled || !orchCfg?.enabled) return;
     if (desktopAdvisorCallsThisTurn >= desktopMaxAdvisorCallsPerTurn) return;
@@ -2657,7 +3311,7 @@ RULES:
         role: 'system',
         content: `You are Prom. Execute desktop tool calls exactly as instructed by the advisor directive below.
 
-DESKTOP TOOLS: desktop_screenshot, desktop_get_monitors, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard
+DESKTOP TOOLS: desktop_screenshot, desktop_get_monitors, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_scroll, desktop_wait, desktop_type, desktop_type_raw, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard
 
 RULES:
 1. Call exactly the tool and params the advisor specifies.
@@ -2684,7 +3338,7 @@ RULES:
     } else if (advisor.next_tool?.tool) {
       messages.push({
         role: 'user',
-        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. After acting, capture desktop_screenshot again before deciding the next step.`,
+        content: `Immediate next step: call ${advisor.next_tool.tool} with params ${JSON.stringify(advisor.next_tool.params || {})}. After acting, capture desktop_screenshot again only if the UI likely changed or the outcome is ambiguous before deciding the next step.`,
       });
     }
   };
@@ -2769,13 +3423,13 @@ RULES:
   console.log('[v2] -- CHAT --');
 
   for (let round = 0; ; round++) {
-    if (round >= MAX_TOOL_ROUNDS) {
+    if (round >= effectiveMaxToolRounds) {
       const allowExtendedFileOpLoop =
         fileOpV2Active
         && (fileOpType === 'FILE_CREATE' || fileOpType === 'FILE_EDIT')
         && (fileOpOwner === 'secondary' || !!fileOpLastFailureSignature);
       if (!allowExtendedFileOpLoop) break;
-      if (round === MAX_TOOL_ROUNDS) {
+      if (round === effectiveMaxToolRounds) {
         sendSSE('info', {
           message: 'FILE_OP v2: extending execution beyond default step cap for secondary-owned repair convergence.',
         });
@@ -2819,6 +3473,7 @@ RULES:
         markProgressStepStart(toolName);
         sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, synthetic: true });
 
+        const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
         const toolResult = await executeTool(toolName, toolArgs, workspacePath, { cronScheduler: _cronScheduler, handleChat, telegramChannel: _telegramChannel, skillsManager: _skillsManager, sanitizeAgentId, normalizeAgentsForSave, buildTeamDispatchContext, runTeamAgentViaChat, bindTeamNotificationTargetFromSession, pauseManagedTeamInternal, resumeManagedTeamInternal, handleTaskControlAction, makeBroadcastForTask, sendSSE }, sessionId);
         allToolResults.push(toolResult);
         logToolCall(workspacePath, toolName, toolArgs, toolResult.result, toolResult.error);
@@ -2853,7 +3508,12 @@ RULES:
           tool_call_id: toolCallId || undefined,
           content: toolMessageContent,
         });
-        await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
+        const appliedObservation = await applySharedPostActionObservation(
+          toolName,
+          toolArgs,
+          toolResult,
+          preObservationContext,
+        );
 
         if (isBrowserTool && !toolResult.error) {
           browserForcedRetries = 0;
@@ -2872,8 +3532,18 @@ RULES:
           continuationNudges = 0;
         }
         // Fire advisor after each browser/desktop tool in the synthetic batch
-        await maybeRunBrowserAdvisorPass(toolName, toolResult);
-        await maybeRunDesktopAdvisorPass(toolName, toolResult);
+        await maybeRunBrowserAdvisorPass(
+          appliedObservation.advisorTriggerToolName,
+          appliedObservation.advisorTriggerToolResult,
+          appliedObservation.advisorTriggerToolArgs,
+          appliedObservation.decision,
+          appliedObservation.browserAfterPacket,
+        );
+        await maybeRunDesktopAdvisorPass(
+          appliedObservation.advisorTriggerToolName,
+          appliedObservation.advisorTriggerToolResult,
+          appliedObservation.decision,
+        );
       }
 
       sendSSE('info', { message: 'Synthetic steps complete.' });
@@ -3021,7 +3691,7 @@ RULES:
             history.length,
             _skillsManager,
             browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-            { profile: 'switch_model' },
+            teachModeActive ? { profile: 'teach_mode' } : { profile: 'switch_model' },
           );
         }
         if (messages[0]?.role === 'system') messages[0].content = isLocalPrimary
@@ -3337,6 +4007,28 @@ RULES:
 
       if (shouldForceManualPlanRetry) {
         continuationNudges++;
+        if (
+          manualPlanSkillScoutRequired
+          && !manualPlanSkillScoutCompleted
+          && progressState.manualStepAdvance
+          && stepCursor === 0
+        ) {
+          const guideMsg = declaredPlanSkillScoutBlockMessage();
+          console.log(
+            `[v2] PLAN POST-CHECK: forcing continuation (${continuationNudges}/${MAX_CONTINUATION_NUDGES}) - skill scout pre-step incomplete`,
+          );
+          sendSSE('info', {
+            message: 'Post-check: continuing - declared-plan skill scout pre-step needs skill_list.',
+          });
+          if (candidateText) {
+            messages.push({ role: 'assistant', content: candidateText });
+          }
+          messages.push({
+            role: 'user',
+            content: guideMsg,
+          });
+          continue;
+        }
         const currentStepIndex = progressState.items.findIndex(
           (i) => i.status === 'in_progress' || i.status === 'pending',
         );
@@ -3426,7 +4118,7 @@ RULES:
         const preview = desktopAdvisorHintPreview ? `Advisor hint: ${desktopAdvisorHintPreview}` : '';
         messages.push({
           role: 'user',
-          content: `${preview}\nDo not stop. Call the next desktop tool now. If state may have changed, use desktop_screenshot again.`,
+          content: `${preview}\nDo not stop. Call the next desktop tool now. If the UI likely changed or the outcome is ambiguous, use desktop_screenshot again.`,
         });
         continue;
       }
@@ -3811,7 +4503,7 @@ RULES:
       if (spawnedBgRuns.length > 0) {
         sendSSE('info', { message: `Waiting for ${spawnedBgRuns.length} background agent${spawnedBgRuns.length > 1 ? 's' : ''} to complete...` });
         const joinedResults = await Promise.all(
-          spawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_until_timeout', timeoutMs: run.timeoutMs }))
+          spawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs }))
         );
         const resultBlocks = joinedResults
           .map((r, i) => {
@@ -3833,11 +4525,29 @@ RULES:
       }
       // ── End background agent finalization gate ────────────────────────────────
 
+      const finalArtifacts = Array.from(
+        new Map(
+          allToolResults
+            .flatMap((result) => Array.isArray((result as any).artifacts) ? (result as any).artifacts : [])
+            .map((artifact: any) => {
+              const key = [
+                String(artifact?.type || ''),
+                String(artifact?.title || ''),
+                String(artifact?.path || ''),
+                String(artifact?.summary || ''),
+              ].join('|');
+              return [key, artifact];
+            }),
+        ).values(),
+      );
+
+      finalizeBoundTaskRun(/^\s*ERROR:/i.test(finalText) ? 'failed' : 'complete', finalText);
       return {
         type: allToolResults.length > 0 ? 'execute' : 'chat',
         text: finalText,
         thinking: allThinking || undefined,
         toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+        artifacts: finalArtifacts.length > 0 ? finalArtifacts : undefined,
       };
     }
 
@@ -3864,16 +4574,14 @@ RULES:
           toolName === 'skill_list'
           || toolName === 'skill_read'
           || toolName === 'request_tool_category'
+          || toolName === 'business_context_mode'
           || toolName === 'complete_plan_step'
           || toolName === 'step_complete'
           || toolName === 'declare_plan';
         if (!isSkillScoutTool) {
-          const guideMsg =
-            'Step 1 is skill discovery. Call skill_list first (and skill_read for any relevant skill), then complete_plan_step to continue.';
+          const guideMsg = declaredPlanSkillScoutBlockMessage(toolName);
           allToolResults.push({ name: toolName, args: toolArgs, result: guideMsg, error: true });
           logToolCall(workspacePath, toolName, toolArgs, guideMsg, true);
-          markProgressStepStart(toolName);
-          markProgressStepResult(false, toolName);
           sendSSE('tool_result', {
             action: toolName,
             result: guideMsg,
@@ -3890,13 +4598,11 @@ RULES:
         }
       }
 
-      if (toolName === 'desktop_click' && typeof toolArgs?.modifier === 'string') {
-        const requestedModifier = String(toolArgs.modifier || '').toLowerCase().trim();
-        const hasValidModifier =
-          requestedModifier === 'shift' || requestedModifier === 'ctrl' || requestedModifier === 'alt';
-        const userAskedForModifier = /\b(ctrl|control|shift|alt|modifier|cmd\+|command\+)\b/i.test(String(message || ''));
-        if (hasValidModifier && !userAskedForModifier) {
-          const blockMsg = `Blocked desktop_click modifier "${requestedModifier}" because the user did not request a modified click. Retry with modifier omitted.`;
+      if (toolName === 'desktop_click') {
+        const hasFiniteX = Number.isFinite(Number(toolArgs?.x));
+        const hasFiniteY = Number.isFinite(Number(toolArgs?.y));
+        if (!hasFiniteX || !hasFiniteY) {
+          const blockMsg = 'Blocked desktop_click because it is an actual mouse click tool and requires numeric x and y coordinates. If the target point is not known yet, call desktop_screenshot or desktop_window_screenshot first, then retry with x and y.';
           allToolResults.push({ name: toolName, args: toolArgs, result: blockMsg, error: true });
           logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
           markProgressStepStart(toolName);
@@ -3914,6 +4620,18 @@ RULES:
             content: blockMsg,
           });
           continue;
+        }
+
+        if (typeof toolArgs?.modifier === 'string') {
+          const requestedModifier = String(toolArgs.modifier || '').toLowerCase().trim();
+          const hasValidModifier =
+            requestedModifier === 'shift' || requestedModifier === 'ctrl' || requestedModifier === 'alt';
+          const userAskedForModifier = /\b(ctrl|control|shift|alt|modifier|cmd\+|command\+)\b/i.test(String(message || ''));
+          if (hasValidModifier && !userAskedForModifier) {
+            if (toolArgs && typeof toolArgs === 'object') {
+              delete (toolArgs as any).modifier;
+            }
+          }
         }
       }
 
@@ -4043,9 +4761,38 @@ RULES:
           content: blockMsg,
         });
         continue;
-      }
+	      }
 
-      if (toolName === 'create_file') {
+	      if (isHotRestartTurn) {
+	        const blockMsg = `HOT RESTART mode: "${toolName}" is disabled. Provide the restart follow-up only.`;
+	        console.log(`[v2] HOT RESTART TOOL BLOCKED: ${toolName}`);
+	        const blockedResult: ToolResult = {
+	          name: toolName,
+	          args: toolArgs,
+	          result: blockMsg,
+	          error: false,
+	        };
+	        allToolResults.push(blockedResult);
+	        roundHadProgress = true;
+	        logToolCall(workspacePath, toolName, toolArgs, blockMsg, false);
+	        markProgressStepStart(toolName);
+	        markProgressStepResult(true);
+	        sendSSE('tool_result', {
+	          action: toolName,
+	          result: blockMsg,
+	          error: false,
+	          stepNum: allToolResults.length,
+	        });
+	        messages.push({
+	          role: 'tool',
+	          tool_name: toolName,
+	          tool_call_id: toolCallId || undefined,
+	          content: blockMsg,
+	        });
+	        continue;
+	      }
+
+	      if (toolName === 'create_file') {
         const fn = toolArgs.filename || toolArgs.name;
         if (fn && batchCreatedFiles.has(fn)) {
           console.log(`[v2] SKIP: duplicate create_file("${fn}") in same batch`);
@@ -4259,7 +5006,7 @@ RULES:
           role: 'tool',
           tool_name: toolName,
           tool_call_id: toolCallId || undefined,
-          content: `${planSummary} Skill scout pre-step is now active. Call skill_list now, then skill_read only if a relevant skill appears, then complete_plan_step. This closes only the hidden scout pre-step; declared step 1 remains the next visible action.`,
+          content: `${planSummary}\n\n${declaredPlanSkillScoutBlockMessage()}`,
         });
         resetProgressRoundStats();
         continue;
@@ -4330,7 +5077,7 @@ RULES:
           && stepCursor === 0
           && !manualPlanSkillListDone
         ) {
-          const scoutMsg = 'Step 1 is not complete yet: run skill_list first (and optional skill_read), then call complete_plan_step.';
+          const scoutMsg = declaredPlanSkillScoutBlockMessage(toolName);
           allToolResults.push({ name: toolName, args: toolArgs, result: scoutMsg, error: true });
           sendSSE('tool_result', { action: toolName, result: scoutMsg, error: true, stepNum: allToolResults.length });
           messages.push({
@@ -4475,17 +5222,16 @@ RULES:
         };
       }
 
-      // ── Sub-agent spawn / specialist delegate ──────────────────────────────────────────────
-      if (toolName === 'delegate_to_specialist' || toolName === 'subagent_spawn') {
+      // ── Sub-agent spawn ────────────────────────────────────────────────────────────────────
+      if (toolName === 'subagent_spawn') {
         const isTaskSession = sessionId.startsWith('task_');
 
         // Determine profile and build child prompt
-        const profile = ((toolArgs.profile || toolArgs.type || 'reader_only') as SubagentProfile);
-        const subTitle  = String(toolArgs.task_title || `${profile} specialist task`).slice(0, 120);
+        const profile = ((toolArgs.profile || 'reader_only') as SubagentProfile);
+        const subTitle  = String(toolArgs.task_title || `${profile} sub-agent task`).slice(0, 120);
         const subPrompt = [
           toolArgs.context_snippet ? `[CONTEXT]\n${String(toolArgs.context_snippet).slice(0, 1200)}\n[/CONTEXT]\n\n` : '',
-          String(toolArgs.input || toolArgs.task_prompt || '').trim(),
-          toolArgs.target_file ? `\n\nTarget file: ${toolArgs.target_file}` : '',
+          String(toolArgs.task_prompt || '').trim(),
         ].join('').trim();
 
         if (!subPrompt) {
@@ -4493,7 +5239,7 @@ RULES:
             role: 'tool',
             tool_name: toolName,
             tool_call_id: toolCallId || undefined,
-            content: 'Sub-agent spawn failed: no task_prompt or input provided.',
+            content: 'Sub-agent spawn failed: no task_prompt provided.',
           });
           markProgressStepResult(false);
           continue;
@@ -4552,9 +5298,7 @@ RULES:
           console.error(`[SubagentSpawn] Child ${childTask.id} error:`, err.message)
         );
 
-        const ackMsg = toolName === 'subagent_spawn'
-          ? `Spawned sub-agent "${subTitle}" (ID: ${childTask.id}, profile: ${profile}). Parent task is paused pending completion.`
-          : `Delegated to ${profile} specialist (ID: ${childTask.id}). Parent task is paused until specialist completes.`;
+        const ackMsg = `Spawned sub-agent "${subTitle}" (ID: ${childTask.id}, profile: ${profile}). Parent task is paused pending completion.`;
 
         console.log(`[SubagentSpawn] ${ackMsg}`);
         appendJournal(parentTaskId || childTask.id, { type: 'status_push', content: ackMsg });
@@ -4647,7 +5391,8 @@ RULES:
       }
 
 
-      const toolResult = await executeTool(toolName, toolArgs, workspacePath, { cronScheduler: _cronScheduler, handleChat, telegramChannel: _telegramChannel, skillsManager: _skillsManager, sanitizeAgentId, normalizeAgentsForSave, buildTeamDispatchContext, runTeamAgentViaChat, bindTeamNotificationTargetFromSession, pauseManagedTeamInternal, resumeManagedTeamInternal, handleTaskControlAction, makeBroadcastForTask, sendSSE }, sessionId);
+	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
+	      const toolResult = await executeTool(toolName, toolArgs, workspacePath, { cronScheduler: _cronScheduler, handleChat, telegramChannel: _telegramChannel, skillsManager: _skillsManager, sanitizeAgentId, normalizeAgentsForSave, buildTeamDispatchContext, runTeamAgentViaChat, bindTeamNotificationTargetFromSession, pauseManagedTeamInternal, resumeManagedTeamInternal, handleTaskControlAction, makeBroadcastForTask, sendSSE }, sessionId);
       if (
         manualPlanSkillScoutRequired
         && !manualPlanSkillScoutCompleted
@@ -4672,18 +5417,6 @@ RULES:
       if (!toolResult.error) roundHadProgress = true;
       markProgressStepResult(!toolResult.error, toolName);
 
-      // ── Skill lifecycle SSE status events ──────────────────────────────────────
-      if (!toolResult.error) {
-        if (toolName === 'skill_enable') {
-          const enabledSkill = _skillsManager.get(String(toolArgs.id || ''));
-          if (enabledSkill) sendSSE('info', { message: `Skill active: ${enabledSkill.emoji} ${enabledSkill.name}` });
-        } else if (toolName === 'skill_disable') {
-          const disabledId = String(toolArgs.id || '');
-          const disabledSkill = _skillsManager.get(disabledId);
-          sendSSE('info', { message: `${disabledSkill ? disabledSkill.name : disabledId} cleared` });
-        }
-      }
-
       // ── Orchestration: track trigger state
       orchestrationState.recordToolResult(round, toolName, toolArgs, toolResult.error);
       orchestrationLog.push(
@@ -4693,9 +5426,80 @@ RULES:
       );
 
       console.log(toolResult.error ? `[v2] TOOL FAIL: ${toolResult.result.slice(0, 100)}` : `[v2] TOOL OK: ${toolResult.result.slice(0, 100)}`);
-      sendSSE('tool_result', { action: toolName, result: toolResult.result.slice(0, 500), error: toolResult.error, stepNum: allToolResults.length });
+		      sendSSE('tool_result', {
+		        action: toolName,
+		        args: toolArgs,
+		        result: toolResult.result.slice(0, 4000),
+		        error: toolResult.error,
+		        stepNum: allToolResults.length,
+		        extra: toolResult.extra,
+		      });
 
       // ── Canvas auto-present: emit canvas_present + track session canvas files ──
+      if (
+        !isolatedCreativeRuntime
+        && !toolResult.error
+        && (toolName === 'switch_creative_mode' || toolName === 'enter_creative_mode')
+      ) {
+        const nextCreativeMode = String((toolResult as any)?.data?.creativeMode || getCreativeMode(sessionId) || '').trim();
+        if (nextCreativeMode === 'image' || nextCreativeMode === 'canvas' || nextCreativeMode === 'video') {
+          const initialIntent = String(toolArgs?.initialIntent || toolArgs?.reason || message || '').trim();
+          const recentMessagesForHandoff = formatRecentMessagesForCreativeHandoff(history, message);
+          const skillsReadForHandoff = formatSkillsReadForCreativeHandoff(allToolResults);
+          const preSwitchToolResultsForHandoff = formatPreCreativeSwitchToolResultsForHandoff(allToolResults);
+          const handoffContext = [
+            '[CREATIVE_RUNTIME_HANDOFF]',
+            `Mode: ${nextCreativeMode === 'canvas' ? 'image' : nextCreativeMode}`,
+            initialIntent ? `Initial intent: ${initialIntent}` : '',
+            `Original user request: ${message}`,
+            recentMessagesForHandoff ? `[RECENT_MESSAGES_BEFORE_CREATIVE_SWITCH]\n${recentMessagesForHandoff}` : '',
+            preSwitchToolResultsForHandoff ? `[PRE_CREATIVE_SWITCH_TOOL_RESULTS]\nThese are the setup/tool results from this same turn before creative mode was activated. Preserve decisions, loaded references, activated categories, constraints, and resource guidance from this trail.\n\n${preSwitchToolResultsForHandoff}` : '',
+            skillsReadForHandoff ? `[SKILLS_READ_BEFORE_CREATIVE_SWITCH]\nThese skills were read earlier in this same turn before creative mode was activated. Treat them as active instructions and continue following them inside Creative Mode.\n\n${skillsReadForHandoff}` : '',
+            callerContext ? `Prior context summary:\n${String(callerContext).slice(0, 1600)}` : '',
+          ].filter(Boolean).join('\n');
+          sendSSE('info', { message: `Creative runtime handoff: ${nextCreativeMode}.` });
+          return handleChat(
+            message,
+            sessionId,
+            sendSSE,
+            undefined,
+            abortSignal,
+            handoffContext,
+            modelOverride,
+            executionMode,
+            undefined,
+            attachments,
+            reasoningOptions,
+            providerOverride,
+          );
+        }
+      }
+
+      if (isolatedCreativeRuntime && !toolResult.error && toolName === 'exit_creative_mode') {
+        const previousCreativeMode = String((toolResult as any)?.data?.previousMode || creativeMode || '').trim();
+        const handoffContext = [
+          '[NORMAL_CHAT_HANDOFF]',
+          previousCreativeMode ? `Exited creative mode: ${previousCreativeMode}` : 'Exited creative mode.',
+          `Original user request: ${message}`,
+          callerContext ? `Prior context summary:\n${String(callerContext).slice(0, 1600)}` : '',
+        ].filter(Boolean).join('\n');
+        sendSSE('info', { message: 'Returned to normal chat runtime.' });
+        return handleChat(
+          message,
+          sessionId,
+          sendSSE,
+          undefined,
+          abortSignal,
+          handoffContext,
+          modelOverride,
+          executionMode,
+          undefined,
+          attachments,
+          reasoningOptions,
+          providerOverride,
+        );
+      }
+
       // Only on success, only for file-mutation tools, not during background tasks.
       if (!toolResult.error && executionMode !== 'background_task' && executionMode !== 'proposal_execution' && executionMode !== 'background_agent' && executionMode !== 'cron' && executionMode !== 'team_manager' && executionMode !== 'team_subagent') {
         const FILE_PRESENT_TOOLS = new Set(['create_file', 'write', 'present_file']);
@@ -4729,13 +5533,18 @@ RULES:
           : (isDesktopTool)
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
-      messages.push({
-        role: 'tool',
-        tool_name: toolName,
-        tool_call_id: toolCallId || undefined,
-        content: toolMessageContent,
-      });
-      await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
+	      messages.push({
+	        role: 'tool',
+	        tool_name: toolName,
+	        tool_call_id: toolCallId || undefined,
+	        content: toolMessageContent,
+	      });
+	      const appliedObservation = await applySharedPostActionObservation(
+	        toolName,
+	        toolArgs,
+	        toolResult,
+	        preObservationContext,
+	      );
 
       if (isBrowserTool && !toolResult.error) {
         browserForcedRetries = 0;
@@ -4753,47 +5562,19 @@ RULES:
       if (!toolResult.error) {
         continuationNudges = 0;
       }
-      await maybeRunBrowserAdvisorPass(toolName, toolResult);
-      await maybeRunDesktopAdvisorPass(toolName, toolResult);
+	      await maybeRunBrowserAdvisorPass(
+	        appliedObservation.advisorTriggerToolName,
+	        appliedObservation.advisorTriggerToolResult,
+	        appliedObservation.advisorTriggerToolArgs,
+	        appliedObservation.decision,
+	        appliedObservation.browserAfterPacket,
+	      );
+	      await maybeRunDesktopAdvisorPass(
+	        appliedObservation.advisorTriggerToolName,
+	        appliedObservation.advisorTriggerToolResult,
+	        appliedObservation.decision,
+	      );
 
-      // ── Auto-screenshot after desktop interaction tools ─────────────────────
-      // For direct UI interactions, prefer capturing the monitor that currently
-      // contains the active window, with full-desktop fallback if needed.
-      const DESKTOP_ACTION_TOOLS = new Set([
-        'desktop_click', 'desktop_type', 'desktop_type_raw', 'desktop_press_key',
-        'desktop_drag', 'desktop_scroll', 'desktop_focus_window',
-      ]);
-      if (isDesktopTool && !toolResult.error && DESKTOP_ACTION_TOOLS.has(toolName)) {
-        try {
-          await desktopWait(350); // brief settle time for UI to update
-          const autoToolName: 'desktop_screenshot' = 'desktop_screenshot';
-          let autoShot = '';
-          const activeMonitorIndex = await desktopGetActiveMonitorIndex();
-          if (activeMonitorIndex !== null) {
-            autoShot = await desktopScreenshotWithHistory(sessionId, { capture: activeMonitorIndex });
-          } else {
-            autoShot = await desktopScreenshotWithHistory(sessionId);
-          }
-          if (String(autoShot).startsWith('ERROR')) {
-            autoShot = await desktopScreenshotWithHistory(sessionId);
-          }
-          const autoShotContent = buildDesktopScreenshotContent(
-            { name: autoToolName, args: {}, result: autoShot, error: false },
-            sessionId,
-            '',
-          );
-          messages.push({
-            role: 'tool',
-            tool_name: autoToolName,
-            content: typeof autoShotContent === 'string'
-              ? `[Auto-screenshot after ${toolName}]
-${autoShotContent}`
-              : autoShotContent,
-          });
-          await maybeAppendVisionScreenshotForTool(autoToolName, undefined, {});
-          sendSSE('tool_result', { action: autoToolName, result: autoShot.slice(0, 300), error: false, stepNum: allToolResults.length, synthetic: true });
-        } catch { /* non-fatal — AI continues without auto-screenshot */ }
-      }
     }
 
     finalizeProgressRound();
@@ -4847,7 +5628,23 @@ ${autoShotContent}`
     sendSSE('info', { message: 'Processing...' });
   }
 
-  return { type: 'execute', text: 'Hit max steps.', toolResults: allToolResults };
+  const stepCount = allToolResults.length;
+  console.warn(`[v2] WARN max tool rounds reached (${effectiveMaxToolRounds}) in ${executionMode} mode after ${stepCount} tool result(s).`);
+  sendSSE('info', {
+    message: `Reached the turn safety boundary after ${stepCount} tool step(s). Preserving progress and preparing continuation.`,
+  });
+
+  if (isResumableExecutionMode(executionMode)) {
+    return { type: 'execute', text: 'Hit max steps - continuing next round.', toolResults: allToolResults };
+  }
+
+  const creativeSuffix = creativeMode
+    ? ' The Creative Mode scene remains open with the latest changes, so the next turn can continue from here.'
+    : '';
+  const text = stepCount > 0
+    ? `I reached the turn safety boundary after ${stepCount} tool step(s), but progress was preserved.${creativeSuffix} Say "continue" and I will pick up from the current state instead of starting over.`
+    : 'I reached the turn safety boundary before completing the request. Say "continue" and I will retry from the current state.';
+  return { type: 'execute', text, toolResults: allToolResults };
   } finally {
     // switch_model overrides are strictly turn-scoped; always clear on turn end.
     clearTurnModelOverride(sessionId);
@@ -4877,12 +5674,26 @@ async function runInteractiveTurn(
 	  callerContext?: string,
 	  reasoningOptions?: ReasoningOptions,
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
-	): Promise<HandleChatResult> {
-  const userMsg = { role: 'user' as const, content: message, timestamp: Date.now() };
+    modelOverride?: string,
+): Promise<HandleChatResult> {
+  const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
+  const isTimerTurn = /^\s*\[Timer fired\]/i.test(String(message || ''));
+  const userMsg = {
+    role: 'user' as const,
+    content: message,
+    timestamp: Date.now(),
+    ...(isTimerTurn ? { channel: 'system' as const, channelLabel: 'timer' } : {}),
+  };
   const rollingCompactionPolicy = resolveRollingCompactionPolicy();
   let rollingCompactionApplied = false;
 
-  if (rollingCompactionPolicy.enabled) {
+  if (isSubagentChatSession) {
+    const session = getSession(sessionId);
+    session.pendingCompaction = false;
+    session.pendingMemoryFlush = false;
+  }
+
+  if (!isSubagentChatSession && rollingCompactionPolicy.enabled) {
     const currentSession = getSession(sessionId);
     const { nonSummarySinceCheckpoint } = getRollingCompactionProgress(currentSession, userMsg);
     const shouldAttemptRollingCompaction = nonSummarySinceCheckpoint >= rollingCompactionPolicy.messageCount;
@@ -4950,7 +5761,9 @@ async function runInteractiveTurn(
   const addResult = addMessage(sessionId, userMsg, {
     deferOnMemoryFlush: true,
     deferOnCompaction: true,
-    disableCompactionCheck: rollingCompactionApplied,
+    disableCompactionCheck: rollingCompactionApplied || isSubagentChatSession,
+    disableMemoryFlushCheck: isSubagentChatSession,
+    maxMessages: isSubagentChatSession ? 120 : undefined,
   });
 
   if (addResult.deferredForCompaction && addResult.compactionPrompt) {
@@ -5024,25 +5837,49 @@ async function runInteractiveTurn(
 	    pins.length > 0 ? pins : undefined,
 	    abortSignal,
 	    mergedCallerContext,
-	    undefined,
+	    modelOverride,
 	    undefined,
 	    undefined,
 	    Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
 	    reasoningOptions,
 	  );
 
-  if (!abortSignal?.aborted) {
-    if (result.toolResults && result.toolResults.length > 0) {
-      const toolLogLines = result.toolResults.slice(-8).map((r) => {
+  const toolLogLines = result.toolResults && result.toolResults.length > 0
+    ? result.toolResults.slice(-8).map((r) => {
         const ok = r.error ? '\u2717' : '\u2713';
         const args = r.args ? JSON.stringify(r.args).slice(0, 60) : '';
         const preview = String(r.result || '').slice(0, 100).replace(/\n/g, ' ');
         return `${ok} ${r.name}(${args}): ${preview}`;
-      });
-      persistToolLog(sessionId, toolLogLines.join('\n'));
-    }
-    addMessage(sessionId, { role: 'assistant', content: result.text, timestamp: Date.now() });
-    await maybeRefreshProjectLearning(sessionId);
+      })
+    : [];
+
+  if (toolLogLines.length > 0) {
+    persistToolLog(sessionId, toolLogLines.join('\n'));
+  }
+
+  if (abortSignal?.aborted) {
+    const interruptedText = String(result.text || '').trim();
+    const checkpointText = [
+      '[Interrupted by user]',
+      interruptedText || 'The turn was stopped before a final response was produced.',
+      toolLogLines.length > 0
+        ? `Recent tool/process context was preserved for continuation:\n${toolLogLines.join('\n')}`
+        : 'No tool calls had completed yet.',
+      'When the user asks to continue, resume from this checkpoint instead of restarting from scratch.',
+    ].filter(Boolean).join('\n\n');
+    addMessage(sessionId, { role: 'assistant', content: checkpointText, timestamp: Date.now() }, {
+      disableCompactionCheck: isSubagentChatSession,
+      disableMemoryFlushCheck: isSubagentChatSession,
+      maxMessages: isSubagentChatSession ? 120 : undefined,
+    });
+    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId, [checkpointText]);
+  } else {
+    addMessage(sessionId, { role: 'assistant', content: result.text, timestamp: Date.now() }, {
+      disableCompactionCheck: isSubagentChatSession,
+      disableMemoryFlushCheck: isSubagentChatSession,
+      maxMessages: isSubagentChatSession ? 120 : undefined,
+    });
+    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId);
   }
 
   return result;
@@ -5089,7 +5926,7 @@ router.get('/api/status', async (_req, res) => {
   const ollama = getOllamaClient();
   const rawCfg = getConfig().getConfig() as any;
   const provider: string = rawCfg.llm?.provider || 'ollama';
-  const isCloudProvider = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic';
+  const isCloudProvider = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';
   const cachedProviderStatus = readProviderStatusCache();
   const connected = isCloudProvider
     ? !!cachedProviderStatus?.connected
@@ -5112,7 +5949,7 @@ router.get('/api/status', async (_req, res) => {
 });
 
 router.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', pinnedMessages, attachments, reasoning } = req.body;
+  const { message, sessionId = 'default', pinnedMessages, attachments, reasoning, callerContext } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
   setLastMainSessionId(String(sessionId || 'default'));
 
@@ -5129,6 +5966,14 @@ router.post('/api/chat', async (req, res) => {
   setModelBusy(true);
 
   const abortSignal = { aborted: false };
+  const runtimeId = registerLiveRuntime({
+    kind: 'main_chat',
+    label: 'Main chat',
+    sessionId: String(sessionId || 'default'),
+    source: 'web',
+    detail: String(message || '').slice(0, 160),
+    abortSignal,
+  });
   let requestCompleted = false;
   res.on('close', () => {
     if (!requestCompleted && !abortSignal.aborted) {
@@ -5140,21 +5985,21 @@ router.post('/api/chat', async (req, res) => {
   try {
     const result = await runInteractiveTurn(
       message,
-      sessionId,
-      sendSSE,
-      pinnedMessages,
-	      abortSignal,
-	      undefined,
-	      reasoning && typeof reasoning === 'object' ? reasoning : undefined,
-	      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
-		    );
+	      sessionId,
+	      sendSSE,
+	      pinnedMessages,
+		      abortSignal,
+		      typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
+		      reasoning && typeof reasoning === 'object' ? reasoning : undefined,
+		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
+			    );
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
 	      sendSSE('final', { text: result.text });
 	      sendSSE('done', {
         reply: result.text, mode: result.type,
         sections: [{ type: result.type === 'execute' ? 'tool_results' : 'text', content: result.text }],
-        thinking: result.thinking, results: result.toolResults,
+        thinking: result.thinking, results: result.toolResults, artifacts: result.artifacts,
       });
     }
 		  } catch (err: any) {
@@ -5166,6 +6011,7 @@ router.post('/api/chat', async (req, res) => {
   } finally {
     requestCompleted = true;
     clearInterval(heartbeat);
+    finishLiveRuntime(runtimeId);
     setModelBusy(false); // release busy guard — cron scheduler may now run
     res.end();
   }
@@ -5175,62 +6021,14 @@ router.post('/api/chat', async (req, res) => {
 router.get('/api/sessions', async (req, res) => {
   try {
     const channel = req.query.channel as string | undefined;
-    let sessions = [];
-    
     if (channel) {
-      // Filter by channel
       const validChannels = ['terminal', 'telegram', 'web', 'system'];
       if (!validChannels.includes(channel)) {
         res.status(400).json({ error: 'Invalid channel. Valid values: ' + validChannels.join(', ') });
         return;
       }
-      sessions = getSessionsByChannel(channel as any);
-    } else {
-      // Return all sessions
-      const SESSION_DIR = (() => {
-        try {
-          return path.join(getConfig().getConfigDir(), 'sessions');
-        } catch {
-          return path.join(process.cwd(), '.prometheus', 'sessions');
-        }
-      })();
-      
-      if (fs.existsSync(SESSION_DIR)) {
-        const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.json'));
-        for (const file of files) {
-          const sessionId = file.slice(0, -5); // remove .json
-          try {
-            const session = getSession(sessionId);
-            sessions.push(session);
-          } catch {
-            // Skip corrupted sessions
-          }
-        }
-      }
     }
-    
-    // Format response with metadata — sorted newest first
-    const formatted = sessions
-      .map(s => {
-        const firstUserMsg = s.history?.find(m => m.role === 'user');
-        const titleRaw = firstUserMsg?.content || '';
-        const title = titleRaw.slice(0, 60) || '(empty)';
-        return {
-          id: s.id,
-          channel: s.channel || 'web',
-          createdAt: s.createdAt,
-          lastActiveAt: s.lastActiveAt,
-          messageCount: s.history?.length || 0,
-          title,
-          preview: title,
-        };
-      })
-      // Filter out sessions with zero messages (brand-new sessions never sent a message)
-      .filter(s => s.messageCount > 0)
-      // Sort newest first by lastActiveAt
-      .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
-
-    res.json({ sessions: formatted });
+    res.json({ sessions: listSessionSummaries(channel as any) });
   } catch (err: any) {
     console.error('[/api/sessions] Error:', err);
     res.status(500).json({ error: err.message || 'Failed to list sessions' });
@@ -5238,6 +6036,39 @@ router.get('/api/sessions', async (req, res) => {
 });
 
 // ── Get single session by ID ──────────────────────────────────────────────────
+router.get('/api/sessions/search', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const channel = String(req.query.channel || '').trim();
+    const limit = Number(req.query.limit || 80);
+    const validChannels = ['', 'terminal', 'telegram', 'web', 'system'];
+    if (!validChannels.includes(channel)) {
+      res.status(400).json({ error: 'Invalid channel. Valid values: terminal, telegram, web, system' });
+      return;
+    }
+    const sessions = searchSessionSummaries(q, {
+      channel: channel ? channel as any : undefined,
+      limit,
+    }).map((session) => {
+      const project = findProjectBySessionId(session.id);
+      return project
+        ? {
+            ...session,
+            projectId: project.id,
+            projectName: project.name,
+          }
+        : session;
+    });
+    res.json({
+      query: q,
+      sessions,
+    });
+  } catch (err: any) {
+    console.error('[/api/sessions/search] Error:', err);
+    res.status(500).json({ error: err.message || 'Failed to search sessions' });
+  }
+});
+
 router.get('/api/sessions/:id', (req, res) => {
   try {
     const sessionId = String(req.params.id);
@@ -5254,6 +6085,10 @@ router.get('/api/sessions/:id', (req, res) => {
         history: session.history,
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
+        creativeMode: session.creativeMode || null,
+        canvasProjectRoot: session.canvasProjectRoot || null,
+        canvasProjectLabel: session.canvasProjectLabel || null,
+        canvasProjectLink: session.canvasProjectLink || null,
         title: session.history && session.history.length > 0
           ? (session.history.find(m => m.role === 'user')?.content || session.id).slice(0, 42)
           : session.id,

@@ -8,7 +8,7 @@ import { isConnectorConnected, listConnectors, getConnector } from '../../../int
 // Map from connector ID to available tool names (for discovery)
 export const CONNECTOR_TOOL_MAP: Record<string, string[]> = {
   gmail: ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels'],
-  github: ['connector_github_list_repos', 'connector_github_list_issues', 'connector_github_create_issue', 'connector_github_list_prs', 'connector_github_search'],
+  github: ['connector_github_list_repos', 'connector_github_list_issues', 'connector_github_create_issue', 'connector_github_create_repo', 'connector_github_list_prs', 'connector_github_search'],
   slack: ['connector_slack_list_channels', 'connector_slack_send_message', 'connector_slack_get_history', 'connector_slack_search'],
   notion: ['connector_notion_search', 'connector_notion_get_page', 'connector_notion_create_page', 'connector_notion_query_database'],
   google_drive: ['connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file', 'connector_gdrive_search'],
@@ -32,7 +32,7 @@ export function buildConnectorStatus(): string {
   }
 
   if (connected.length === 0) {
-    return `No connectors connected yet (${disconnected.length} available: ${disconnected.join(', ')}).\nConnect them in the Connections panel, then activate the connectors category to use their tools.`;
+    return `No connectors connected yet (${disconnected.length} available: ${disconnected.join(', ')}).\nConnect them in the Connections panel, then activate the external_apps category to use their tools.`;
   }
 
   const lines: string[] = [`Connected connectors (${connected.length} of ${all.length}):`];
@@ -47,7 +47,7 @@ export function buildConnectorStatus(): string {
   if (disconnected.length > 0) {
     lines.push(`\nNot connected (${disconnected.length}): ${disconnected.join(', ')}`);
   }
-  lines.push('\nUse request_tool_category({"category":"connectors"}) to unlock all connector tools for this session.');
+  lines.push('\nUse request_tool_category({"category":"external_apps"}) to unlock all connector tools for this session.');
   return lines.join('\n');
 }
 
@@ -158,6 +158,24 @@ export function getConnectorToolDefs(): any[] {
             title: { type: 'string', description: 'Issue title' },
             body: { type: 'string', description: 'Issue description (markdown supported)' },
             labels: { type: 'array', items: { type: 'string' }, description: 'Label names to apply' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'connector_github_create_repo',
+        description: '[GitHub] Create a new repository for the connected GitHub account. Requires approval before execution.',
+        parameters: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', description: 'Repository name' },
+            description: { type: 'string', description: 'Repository description' },
+            private: { type: 'boolean', description: 'Whether the repository should be private. Defaults to true.' },
+            auto_init: { type: 'boolean', description: 'Create the repository with an initial README commit.' },
+            homepage: { type: 'string', description: 'Optional homepage URL' },
           },
         },
       },

@@ -1,13 +1,8 @@
 ---
-name: Secret and Token Ops
-description: >
-  Operate safely with credentials, API keys, bearer tokens, and secrets using vault-first handling,
-  strict redaction, lifecycle hygiene, and incident-safe leak response procedures. Triggers on:
-  secret handling, token management, credential rotation, API key safety, key revocation,
-  leaked key response, redact logs, secure storage, vault usage, credential recovery.
-emoji: 🔐
+name: secret-and-token-ops
+description: Use this skill whenever a task touches secrets, tokens, API keys, credentials, or authentication material.
+emoji: "🧩"
 version: 1.0.0
-triggers: secret handling, token management, credential operations, credential rotation, rotate api key, rotate token, revoke token, revoke key, recover access token, leaked credential, leaked api key, leaked token, incident response for secrets, redact logs, redaction-safe logging, vault-safe credentials, secure secret storage, key lifecycle, token lifecycle, credential hygiene, auth secret safety, env var secret handling, publishable key vs secret key, secret exposure prevention
 ---
 
 # Secret and Token Ops

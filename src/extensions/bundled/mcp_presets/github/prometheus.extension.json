@@ -1,0 +1,40 @@
+{
+  "id": "github",
+  "kind": "mcp_preset",
+  "name": "GitHub MCP",
+  "description": "MCP preset for GitHub repos, pull requests, issues, and code operations.",
+  "category": "Developer",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/github",
+  "tags": ["mcp", "github", "stdio"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/github"
+  },
+  "ui": {
+    "color": "#24292E"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "repositories", "issues", "pull_requests"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "fields": [
+      {
+        "key": "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "label": "Personal Access Token",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "ghp_..."
+      }
+    ]
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "envTemplate": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+    }
+  }
+}

@@ -1,6 +1,6 @@
 ---
-name: Web Design Skill
-description: Use when creating web pages of any sort
+name: web-design-skill
+description: Front End UI Design Skill
 emoji: "🧩"
 version: 1.0.0
 ---
@@ -10,8 +10,8 @@ name: web-design-system
 description: >
   Master-level visual design system for building stunning, professional websites with premium aesthetics.
   ALWAYS use this skill when creating any website, landing page, portfolio, SaaS page, or web UI where visual
-  quality matters. Triggers on: "fancy", "beautiful", "modern", "premium", "professional", "impressive", 
-  "polished", "luxury", "sleek", or "stunning" websites. Also triggers for any request involving background 
+  quality matters. Triggers on: "fancy", "beautiful", "modern", "premium", "professional", "impressive",
+  "polished", "luxury", "sleek", or "stunning" websites. Also triggers for any request involving background
   images, hero sections, color palettes, typography choices, layout design, dark/light themes, glassmorphism,
   gradients, or overall site aesthetic. Pair with web-animation skill for motion on top of great design.
 ---
@@ -205,7 +205,7 @@ section { padding: clamp(60px, 10vw, 140px) 0; }
 ### Full-Page Gradient Background
 ```css
 body {
-  background: 
+  background:
     radial-gradient(ellipse 80% 50% at 20% -10%, rgba(124,92,252,0.25) 0%, transparent 60%),
     radial-gradient(ellipse 60% 40% at 80% 100%, rgba(252,92,125,0.15) 0%, transparent 60%),
     var(--bg-primary);
@@ -217,7 +217,7 @@ body {
 .hero {
   position: relative;
   min-height: 100vh;
-  background: 
+  background:
     linear-gradient(to bottom, rgba(4,4,10,0.5) 0%, rgba(4,4,10,0.85) 70%, var(--bg-primary) 100%),
     url('hero-bg.jpg') center/cover no-repeat;
 }
@@ -499,8 +499,8 @@ root.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
 
 ### Image Guidelines
 - Use `object-fit: cover` for all hero/card images
-- Always include `loading="lazy"` on below-fold images  
-- Add a subtle overlay for text on image readability  
+- Always include `loading="lazy"` on below-fold images
+- Add a subtle overlay for text on image readability
 - Use `aspect-ratio` to prevent layout shift
 
 ```css

@@ -1053,6 +1053,7 @@ function prettify(name: string): string {
     complete_plan_step: 'Completing step',
     background_spawn:   'Spawning agent',
     background_status:  'Checking agents',
+    background_wait:    'Waiting for agents',
     write_proposal:     'Writing proposal',
     task_control:       'Task control',
     schedule_job:       'Scheduling job',

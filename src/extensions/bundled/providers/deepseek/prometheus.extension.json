@@ -1,0 +1,66 @@
+{
+  "id": "deepseek",
+  "kind": "provider",
+  "name": "DeepSeek",
+  "description": "Direct DeepSeek API access for DeepSeek chat and reasoning models.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://api-docs.deepseek.com/",
+  "tags": ["deepseek", "api", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["deepseek-chat", "deepseek-reasoner"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#0F172A"
+  },
+  "ownership": {
+    "providerIds": ["deepseek"],
+    "modelPrefixes": ["deepseek-"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["DEEPSEEK_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "sk-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "deepseek-chat"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.deepseek.com/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

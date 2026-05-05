@@ -1,1 +1,0 @@
-{"t":"2026-03-07T18:02:53.648Z","status":"error","duration":960,"result_excerpt":"Error: openai_codex API error 400: {\"detail\":\"The 'openai/gpt-4.1-mini' model is not supported when using Codex with a ChatGPT account.\"}"}

@@ -1,0 +1,27 @@
+{
+  "id": "filesystem",
+  "kind": "mcp_preset",
+  "name": "Filesystem",
+  "description": "MCP preset for local filesystem read and write access.",
+  "category": "Filesystem",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+  "tags": ["mcp", "filesystem", "stdio"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/filesystem"
+  },
+  "ui": {
+    "color": "#4B5563"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "filesystem"]
+  },
+  "setup": {
+    "authType": "none"
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users"]
+  }
+}

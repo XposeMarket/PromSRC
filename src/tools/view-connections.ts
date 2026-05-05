@@ -26,6 +26,7 @@ const CONNECTOR_CATALOG = [
   { id: 'hubspot',      name: 'HubSpot',      category: 'CRM',       authType: 'oauth'   },
   { id: 'salesforce',   name: 'Salesforce',   category: 'CRM',       authType: 'oauth'   },
   { id: 'stripe',       name: 'Stripe',       category: 'Finance',   authType: 'oauth'   },
+  { id: 'vercel',       name: 'Vercel',       category: 'Dev',       authType: 'apikey'  },
   { id: 'ga4',          name: 'Google Analytics', category: 'Analytics', authType: 'oauth' },
   { id: 'instagram',    name: 'Instagram',    category: 'Social',    authType: 'browser' },
   { id: 'tiktok',       name: 'TikTok',       category: 'Social',    authType: 'browser' },
@@ -67,7 +68,7 @@ export const viewConnectionsTool = {
     'Use action="list" for a summary, action="detail" with connector_id for full activity log.',
   schema: {
     action: 'list (summary of all) | detail (full info for one connector)',
-    connector_id: 'ID of specific connector for detail view (gmail, slack, github, notion, hubspot, salesforce, stripe, ga4, instagram, tiktok, x, linkedin, reddit, google_drive)',
+    connector_id: 'ID of specific connector for detail view (gmail, slack, github, notion, hubspot, salesforce, stripe, vercel, ga4, instagram, tiktok, x, linkedin, reddit, google_drive)',
   },
   jsonSchema: {
     type: 'object',

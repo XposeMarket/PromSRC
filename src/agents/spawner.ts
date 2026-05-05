@@ -1,8 +1,10 @@
 import { getAgentById, ensureAgentWorkspace, getConfig } from '../config/config.js';
 import { ensureTeamAgentIdentity } from '../gateway/teams/team-workspace.js';
 import { getOllamaClient } from './ollama-client.js';
+import path from 'path';
 import { buildProviderById } from '../providers/factory.js';
 import { parseAgentModelString, ProviderReactorClient } from './provider-reactor.js';
+import { resolveConfiguredAgentModel } from './model-routing.js';
 import { Reactor } from './reactor.js';
 import { createTask, updateTaskStatus, appendJournal, mutatePlan } from '../gateway/tasks/task-store.js';
 import { runWithWorkspace } from '../tools/workspace-context.js';
@@ -97,6 +99,26 @@ interface ResolvedProvider {
   isOllama: boolean;
 }
 
+function inferSpawnAgentType(agent: any, explicitAgentType?: string): string {
+  const provided = String(explicitAgentType || '').trim();
+  if (provided) return provided;
+  if (String(agent?.id || '').trim() === 'main') return 'main_chat';
+  try {
+    const { listManagedTeams } = require('../gateway/teams/managed-teams.js');
+    const teams = listManagedTeams();
+    const agentId = String(agent?.id || '').trim();
+    if (agent?.isTeamManager === true || teams.some((team: any) => String(team?.managerAgentId || '').trim() === agentId)) {
+      return 'team_manager';
+    }
+    if (teams.some((team: any) => Array.isArray(team?.subagentIds) && team.subagentIds.includes(agentId))) {
+      return 'team_subagent';
+    }
+  } catch {
+    // Non-fatal — fall back to the generic standalone subagent default.
+  }
+  return 'subagent';
+}
+
 /**
  * Resolves which provider + model to use for a given agent.
  *
@@ -135,16 +157,15 @@ function resolveAgentProvider(agent: any, agentType?: string): ResolvedProvider 
   try {
     const { getConfig } = require('../config/config');
     const cfg = getConfig().getConfig() as any;
-    const typeDefaults = cfg.agent_model_defaults || {};
-    // Use the supplied agentType, or fall back to 'subagent' as the sensible default
-    const typeKey = agentType || 'subagent';
-    // Check role-specific key first (e.g. subagent_researcher), then generic subagent
-    const roleTypeKey = (agent as any).roleType ? `subagent_${(agent as any).roleType}` : null;
-    const defaultModel: string | undefined =
-      (roleTypeKey && typeDefaults[roleTypeKey]) || typeDefaults[typeKey] || typeDefaults['subagent'];
+    const inferredType = inferSpawnAgentType(agent, agentType);
+    const resolvedDefault = resolveConfiguredAgentModel(cfg, agent, {
+      agentType: inferredType,
+      fallbackToPrimary: false,
+    });
+    const defaultModel = String(resolvedDefault.model || '').trim();
 
-    if (defaultModel && defaultModel.trim()) {
-      const defaultParsed = parseAgentModelString(defaultModel.trim());
+    if (defaultModel) {
+      const defaultParsed = parseAgentModelString(defaultModel);
       if (defaultParsed) {
         const provider = buildProviderById(defaultParsed.provider);
         const isOllama = defaultParsed.provider === 'ollama';
@@ -168,6 +189,51 @@ function resolveAgentProvider(agent: any, agentType?: string): ResolvedProvider 
     model: '', // will be resolved by getModelForRole inside OllamaClient
     isOllama,
   };
+}
+
+function normalizePathForCompare(p: string): string {
+  const resolved = path.resolve(String(p || ''));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const base = normalizePathForCompare(basePath);
+  const target = normalizePathForCompare(targetPath);
+  if (!base || !target) return false;
+  const rel = path.relative(base, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function resolveAgentExecutionWorkspace(agent: any, mainWorkspacePath: string): string {
+  const configured = String(agent?.executionWorkspace || agent?.execution_workspace || agent?.workspaceRoot || '').trim();
+  if (!configured) return mainWorkspacePath;
+  const resolved = path.resolve(configured);
+  const allowedWorkPaths = resolveAgentAllowedWorkPaths(agent, mainWorkspacePath);
+  if (!allowedWorkPaths.some((allowed) => isPathInside(allowed, resolved))) {
+    console.warn(`[agent:${agent?.id || 'unknown'}] Ignoring executionWorkspace outside allowed work paths: ${resolved}`);
+    return mainWorkspacePath;
+  }
+  return resolved;
+}
+
+function resolveAgentAllowedWorkPaths(agent: any, mainWorkspacePath: string): string[] {
+  const rawValues = [
+    ...(Array.isArray(agent?.allowedWorkPaths) ? agent.allowedWorkPaths : []),
+    ...(Array.isArray(agent?.allowed_work_paths) ? agent.allowed_work_paths : []),
+  ];
+  const roots = [mainWorkspacePath];
+  for (const raw of rawValues) {
+    const value = String(raw || '').trim();
+    if (!value) continue;
+    roots.push(path.isAbsolute(value) ? value : path.join(mainWorkspacePath, value));
+  }
+  const seen = new Set<string>();
+  return roots.map((p) => path.resolve(p)).filter((resolved) => {
+    const key = normalizePathForCompare(resolved);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // ─── Core Spawn ───────────────────────────────────────────────────────────────
@@ -212,10 +278,12 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
     ? ensureTeamAgentIdentity(options.teamId, options.agentId, agentOwnWorkspace)
     : agentOwnWorkspace;
   const mainWorkspacePath = getConfig().getWorkspacePath() || process.cwd();
+  const agentExecutionWorkspace = resolveAgentExecutionWorkspace(agent, mainWorkspacePath);
+  const agentAllowedWorkPaths = resolveAgentAllowedWorkPaths(agent, mainWorkspacePath);
   // Team dispatches pass the team workspace here. Standalone one-off subagents
-  // run with the full main workspace so they can read/edit normal project files;
-  // their private subagent workspace is guidance for their own artifacts only.
-  const workspacePath = options.workspacePath || mainWorkspacePath;
+  // can declare an executionWorkspace so file tools and run_command are confined
+  // to a specific project directory while identity/artifacts stay separate.
+  const workspacePath = options.workspacePath || agentExecutionWorkspace;
   const maxSteps = options.maxSteps ?? agent.maxSteps ?? 8;
   // Subagents use the same full runtime context as main chat, with their
   // identity layered in from system_prompt.md / HEARTBEAT.md.
@@ -243,16 +311,17 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
 
   const workspaceGuidance = options.teamId
     ? `\n\n[Workspace rules]\nYou have full subagent runtime and tool access. Work inside the assigned team workspace by default so team artifacts stay together.\nTeam workspace: ${workspacePath}`
-    : `\n\n[Workspace rules]\nYou have full main-chat-equivalent runtime and tool access. You may read, edit, and modify files anywhere in the main workspace when the task requires it.\n\nYou are also assigned as a one-off subagent with a private artifact workspace. Put your own outputs, notes, logs, scratch files, and memory updates in that subagent workspace by default so your work stays separated from main chat and other agents. Do not treat this as a restriction on editing project files.\nMain workspace: ${workspacePath}\nSubagent artifact workspace: ${agentOwnWorkspace}`;
+    : `\n\n[Workspace rules]\nYou have full subagent runtime and tool access. File tools and run_command are scoped to your allowed work paths.\nDefault execution workspace: ${workspacePath}\nAllowed work paths:\n${agentAllowedWorkPaths.map((p) => `- ${p}`).join('\n')}\nSubagent identity/artifact workspace: ${agentOwnWorkspace}`;
   const taskMessageBase = options.context
     ? `${options.task}\n\n[Context from orchestrator]\n${options.context}${workspaceGuidance}`
     : `${options.task}${workspaceGuidance}`;
   const taskMessage = selfLearnSuffix ? `${taskMessageBase}${selfLearnSuffix}` : taskMessageBase;
 
-  const resolved = resolveAgentProvider(agent, options.agentType);
+  const resolvedAgentType = inferSpawnAgentType(agent, options.agentType);
+  const resolved = resolveAgentProvider(agent, resolvedAgentType);
   const label = `[agent:${agent.id}@${resolved.providerId}]`;
 
-  console.log(`${label} Spawning — provider=${resolved.providerId} isOllama=${resolved.isOllama} model=${resolved.model || '(global)'} agentType=${options.agentType || 'subagent'}`);
+  console.log(`${label} Spawning — provider=${resolved.providerId} isOllama=${resolved.isOllama} model=${resolved.model || '(global)'} agentType=${resolvedAgentType}`);
 
   // Cloud providers: no serialization needed — each is an independent HTTP call
   // Ollama: must acquire the mutex before running
@@ -315,7 +384,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   try {
     // runWithWorkspace sets AsyncLocalStorage for the entire async chain,
     // ensuring all file tool calls inside this agent run are workspace-scoped.
-    const resultText = await runWithWorkspace(workspacePath, runAgent);
+    const resultText = await runWithWorkspace(workspacePath, runAgent, agentAllowedWorkPaths);
 
     console.log(`${label} Completed in ${Date.now() - startMs}ms (${stepCount} steps)`);
 

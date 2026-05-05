@@ -12,9 +12,21 @@ import {
   updateResumeContext, listTasks, deleteTask, mutatePlan, getEvidenceBusSnapshot,
   createTask, type TaskRecord, type TaskStatus,
 } from './task-store';
-import { addMessage } from '../session';
+import { addMessage, clearHistory } from '../session';
 import { BackgroundTaskRunner } from './background-task-runner';
 import { type TaskControlResponse } from '../tool-builder';
+import {
+  buildTaskPauseSnapshot,
+  formatTaskPauseSnapshot,
+  formatTaskRecoveryConversation,
+  getTaskRecoveryNoToolsFilter,
+  getTaskRecoverySessionId,
+  getTaskReplySessionIds,
+  getTaskResumeBriefSessionId,
+  isTaskRecoveryEligible,
+  matchesTaskReplySession,
+  syncTaskRecoverySession,
+} from './task-recovery';
 
 const ACTIVE_TASK_STATUSES: TaskStatus[] = [
   'queued', 'running', 'paused', 'stalled',
@@ -39,6 +51,180 @@ export function initTaskRouter(deps: TaskRouterDeps): void { _deps = deps; }
 function getDeps(): TaskRouterDeps {
   if (!_deps) throw new Error('[task-router] Not initialized — call initTaskRouter() first');
   return _deps;
+}
+
+const RECOVERY_BLOCKED_STATUSES: TaskStatus[] = [
+  'needs_assistance',
+  'stalled',
+  'paused',
+  'failed',
+  'awaiting_user_input',
+];
+
+function isRecoveryBlockedTask(task: TaskRecord | null | undefined): boolean {
+  if (!task || !isTaskRecoveryEligible(task)) return false;
+  if (!RECOVERY_BLOCKED_STATUSES.includes(task.status)) return false;
+  return task.status !== 'paused' || task.pauseReason !== 'user_pause';
+}
+
+function findRecoveryTaskForReplySession(sessionId: string, statuses?: TaskStatus[]): TaskRecord | null {
+  const blocked = listTasks({ status: statuses || RECOVERY_BLOCKED_STATUSES })
+    .filter((task) => isRecoveryBlockedTask(task))
+    .filter((task) => matchesTaskReplySession(task, sessionId))
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt);
+  return blocked[0] || null;
+}
+
+function buildTaskRecoveryCallerContext(task: TaskRecord, objective: 'conversation' | 'resume_brief'): string {
+  const liveTask = loadTask(task.id) || task;
+  const snapshot = liveTask.pauseSnapshot || buildTaskPauseSnapshot(liveTask);
+  const latestAnalysis = String(liveTask.pauseAnalysis?.message || '').trim();
+  const latestConversation = formatTaskRecoveryConversation(liveTask.recoveryConversation, { maxTurns: 14 });
+  return [
+    objective === 'resume_brief'
+      ? 'TASK RECOVERY MODE: resume brief synthesis.'
+      : 'TASK RECOVERY MODE: paused-task conversation.',
+    'This is a task-attached recovery conversation for a paused background task.',
+    'Do not use tools.',
+    objective === 'resume_brief'
+      ? 'Write only the compact execution brief the task runner should receive next. Do not include pleasantries.'
+      : 'Answer the user using the paused-task context below. Explain what happened, what is known, and the safest next step.',
+    '',
+    formatTaskPauseSnapshot(snapshot, { maxChars: objective === 'resume_brief' ? 60_000 : 80_000 }),
+    '',
+    '[LATEST PAUSE ANALYSIS]',
+    latestAnalysis || '(none)',
+    '',
+    '[RECOVERY DISCUSSION SO FAR]',
+    latestConversation,
+    '',
+    objective === 'resume_brief'
+      ? 'The output must be a compact recovery plan for the worker. Include what failed, agreed fix, what to avoid repeating, and the exact next step.'
+      : 'Stay in discussion mode unless the outer system has already chosen to resume the task.',
+  ].filter(Boolean).join('\n');
+}
+
+async function generateTaskRecoveryReply(task: TaskRecord, userMessage: string): Promise<string> {
+  const liveTask = loadTask(task.id) || task;
+  if (!liveTask.pauseSnapshot) {
+    liveTask.pauseSnapshot = buildTaskPauseSnapshot(liveTask);
+    saveTask(liveTask);
+  }
+  syncTaskRecoverySession(liveTask);
+  const { handleChat } = getDeps();
+  const result = await handleChat(
+    userMessage,
+    getTaskRecoverySessionId(liveTask.id),
+    () => {},
+    undefined,
+    undefined,
+    buildTaskRecoveryCallerContext(liveTask, 'conversation'),
+    undefined,
+    undefined,
+    getTaskRecoveryNoToolsFilter(),
+    undefined,
+    undefined,
+    liveTask.executorProvider,
+  );
+  return String(result?.text || '').trim();
+}
+
+async function synthesizeTaskResumeBrief(task: TaskRecord, latestUserMessage: string, action: 'resume' | 'rerun'): Promise<string> {
+  const liveTask = loadTask(task.id) || task;
+  if (!liveTask.pauseSnapshot) {
+    liveTask.pauseSnapshot = buildTaskPauseSnapshot(liveTask);
+    saveTask(liveTask);
+  }
+  const briefSessionId = getTaskResumeBriefSessionId(liveTask.id);
+  try {
+    clearHistory(briefSessionId);
+  } catch {}
+  const prompt = [
+    `User approval mode: ${action}.`,
+    `Latest user instruction: ${latestUserMessage}`,
+    '',
+    'Write the compact resume brief for the task runner.',
+    'Keep it focused on:',
+    '- where the task stopped',
+    '- what failed or was missing',
+    '- the agreed fix or guidance from the recovery discussion',
+    '- what to do next',
+    '- what not to repeat',
+    '',
+    'Output plain text only.',
+  ].join('\n');
+  const { handleChat } = getDeps();
+  const result = await handleChat(
+    prompt,
+    briefSessionId,
+    () => {},
+    undefined,
+    undefined,
+    buildTaskRecoveryCallerContext(liveTask, 'resume_brief'),
+    undefined,
+    undefined,
+    getTaskRecoveryNoToolsFilter(),
+    undefined,
+    undefined,
+    liveTask.executorProvider,
+  );
+  const text = String(result?.text || '').trim();
+  if (text) return text;
+  const currentStep = Math.min((liveTask.currentStepIndex || 0) + 1, Math.max(1, liveTask.plan.length));
+  return [
+    `Resume task "${liveTask.title}" from step ${currentStep}/${Math.max(1, liveTask.plan.length)}.`,
+    liveTask.pauseAnalysis?.message ? `Pause analysis: ${liveTask.pauseAnalysis.message}` : '',
+    `Latest user instruction: ${latestUserMessage}`,
+    'Continue from the blocked step using the agreed recovery guidance. Do not restart completed work unless it is explicitly required.',
+  ].filter(Boolean).join('\n');
+}
+
+function persistRecoveryConversationUpdate(
+  taskId: string,
+  turns: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: number; source?: 'pause_analysis' | 'chat' | 'task_panel' | 'team_manager' | 'system' }>,
+  opts?: { resumeBrief?: string; approvedAction?: 'resume' | 'rerun'; clearPendingClarification?: boolean },
+): TaskRecord | null {
+  const liveTask = loadTask(taskId);
+  if (!liveTask) return null;
+  const existing = Array.isArray(liveTask.recoveryConversation) ? liveTask.recoveryConversation.slice(-30) : [];
+  const appended = turns
+    .filter((turn) => turn && (turn.role === 'user' || turn.role === 'assistant') && String(turn.content || '').trim())
+    .map((turn, idx) => ({
+      role: turn.role,
+      content: String(turn.content || '').trim(),
+      timestamp: Number(turn.timestamp) || (Date.now() + idx),
+      source: turn.source,
+    }));
+  liveTask.recoveryConversation = [...existing, ...appended].slice(-40);
+  if (opts?.resumeBrief) {
+    liveTask.resumeBrief = {
+      createdAt: Date.now(),
+      content: opts.resumeBrief,
+      approvedAction: opts.approvedAction,
+    };
+    liveTask.resumeContext = {
+      ...(liveTask.resumeContext || {
+        messages: [],
+        browserSessionActive: false,
+        round: 0,
+        orchestrationLog: [],
+      }),
+      onResumeInstruction: [
+        '[TASK RECOVERY BRIEF]',
+        opts.resumeBrief,
+        'Continue from the current blocked step. Use the recovery brief above instead of replaying the failure chat log.',
+        '[/TASK RECOVERY BRIEF]',
+      ].join('\n'),
+    };
+  }
+  if (opts?.clearPendingClarification && liveTask.pendingClarificationQuestion) {
+    delete liveTask.pendingClarificationQuestion;
+  }
+  saveTask(liveTask);
+  try {
+    syncTaskRecoverySession(liveTask);
+  } catch {}
+  return liveTask;
 }
 
 export function latestTaskForSession(sessionId: string, statuses: TaskStatus[]): TaskRecord | null {
@@ -320,14 +506,30 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
 
     // Status is 'running' but no active runner found — runner died without cleanup.
     // Auto-correct the stale status so the resume proceeds normally.
-    if (task.status === 'running') {
-      appendJournal(task.id, { type: 'status_push', content: 'Stale running status detected (no active runner). Auto-correcting to paused for resume.' });
-      BackgroundTaskRunner.forceRelease(task.id); // clear any ghost activeRunners entry
-      updateTaskStatus(task.id, 'paused', { pauseReason: 'error' });
-      task.status = 'paused'; // keep local ref in sync
-    }
+	    if (task.status === 'running') {
+	      appendJournal(task.id, { type: 'status_push', content: 'Stale running status detected (no active runner). Auto-correcting to paused for resume.' });
+	      BackgroundTaskRunner.forceRelease(task.id); // clear any ghost activeRunners entry
+	      updateTaskStatus(task.id, 'paused', { pauseReason: 'error' });
+	      task.status = 'paused'; // keep local ref in sync
+	    }
 
-    if (action === 'resume') {
+	    const activeBuildRepair = task.proposalExecution?.buildFailure;
+	    const activeRepairProposalId = String(activeBuildRepair?.repairProposalId || '').trim();
+	    const activeRepairTaskId = String(activeBuildRepair?.repairTaskId || '').trim();
+	    const isBlockedOnRepair = !!activeBuildRepair
+	      && activeBuildRepair.status !== 'resolved'
+	      && (task.pauseReason === 'blocked_on_repair' || !!activeRepairProposalId || !!activeRepairTaskId);
+	    if (isBlockedOnRepair) {
+	      return {
+	        success: false,
+	        action,
+	        code: 'blocked_on_repair',
+	        task: summarizeTaskRecord(task),
+	        message: `Task "${task.title}" is blocked on a linked repair${activeRepairProposalId ? ` proposal ${activeRepairProposalId}` : ''}${activeRepairTaskId ? ` (task ${activeRepairTaskId})` : ''}. Approve or finish that repair flow before resuming or rerunning the original task.`,
+	      };
+	    }
+
+	    if (action === 'resume') {
       if (task.status === 'complete') {
         return { success: false, action, code: 'already_complete', message: `Task "${task.title}" is complete. Use rerun to restart.` };
       }
@@ -467,10 +669,148 @@ export function renderTaskCandidatesForHuman(candidates: Array<Record<string, an
     .join('\n');
 }
 
+export async function handleTaskRecoveryMessage(
+  taskId: string,
+  rawMessage: string,
+  opts?: { sourceSessionId?: string; source?: 'chat' | 'task_panel' | 'team_manager' },
+): Promise<{ handled: boolean; resumed: boolean; reply: string | null; action?: 'conversation' | 'resume' | 'rerun' | 'cancel' }> {
+  const task = loadTask(taskId);
+  const message = String(rawMessage || '').trim();
+  if (!task || !message || !isRecoveryBlockedTask(task)) {
+    return { handled: false, resumed: false, reply: null };
+  }
+
+  const source = opts?.source === 'task_panel' ? 'task_panel' : opts?.source === 'team_manager' ? 'team_manager' : 'chat';
+  const sourceSessionId = String(opts?.sourceSessionId || task.sessionId || getTaskReplySessionIds(task)[0] || '').trim();
+
+  if (isCancelIntent(message)) {
+    const ctl = await handleTaskControlAction(sourceSessionId, { action: 'pause', task_id: task.id, note: message });
+    const reply = ctl.success ? (ctl.message || `Paused task "${task.title}".`) : `Could not pause task "${task.title}".`;
+    persistRecoveryConversationUpdate(task.id, [
+      { role: 'user', content: message, source },
+      { role: 'assistant', content: reply, source: 'system' },
+    ]);
+    appendJournal(task.id, { type: 'status_push', content: `Recovery conversation cancelled task: ${message.slice(0, 200)}` });
+    return { handled: true, resumed: false, reply, action: 'cancel' };
+  }
+
+  const explicitRerunRequested = /\b(rerun|re-run|restart|start again|from scratch)\b/i.test(message);
+  const resumeRequestedBroad =
+    isResumeIntent(message) ||
+    /\b(retry|try again)\b/i.test(message) ||
+    /^\s*(proceed|go ahead|ok|okay|continue|yes|yep|sure|do it|keep going|sounds good|ready|do that)\.?\s*$/i.test(message) ||
+    /\b(go ahead|continue|resume|proceed|apply|do that|use that plan)\b/i.test(message);
+
+  if (explicitRerunRequested || resumeRequestedBroad) {
+    const approvedAction: 'resume' | 'rerun' = explicitRerunRequested ? 'rerun' : 'resume';
+    const resumeBrief = await synthesizeTaskResumeBrief(task, message, approvedAction);
+    const summaryReply = approvedAction === 'rerun'
+      ? `Rerunning task "${task.title}" from the start with the recovery brief below.\n\n${resumeBrief}`
+      : `Resuming task "${task.title}" with the recovery brief below.\n\n${resumeBrief}`;
+    persistRecoveryConversationUpdate(
+      task.id,
+      [
+        { role: 'user', content: message, source },
+        { role: 'assistant', content: summaryReply, source: 'system' },
+      ],
+      {
+        resumeBrief,
+        approvedAction,
+        clearPendingClarification: true,
+      },
+    );
+    const ctl = await handleTaskControlAction(sourceSessionId, { action: approvedAction, task_id: task.id });
+    const reply = ctl.success
+      ? summaryReply
+      : `${summaryReply}\n\nI prepared the recovery brief, but I could not ${approvedAction} the task automatically: ${ctl.message || 'unknown error'}`;
+    appendJournal(task.id, {
+      type: 'resume',
+      content: `Recovery discussion approved ${approvedAction}: ${message.slice(0, 220)}`,
+    });
+    return { handled: true, resumed: !!ctl.success, reply, action: approvedAction };
+  }
+
+  let reply = '';
+  try {
+    reply = await generateTaskRecoveryReply(task, message);
+  } catch (err: any) {
+    console.warn(`[TaskRecovery] Conversation reply failed for task ${task.id}:`, err?.message || err);
+  }
+  if (!reply) {
+    reply = task.pauseAnalysis?.message || buildBlockedTaskStatusMessage(task);
+  }
+  persistRecoveryConversationUpdate(task.id, [
+    { role: 'user', content: message, source },
+    { role: 'assistant', content: reply, source: 'system' },
+  ]);
+  appendJournal(task.id, {
+    type: 'status_push',
+    content: `Recovery conversation updated via ${source}: ${message.slice(0, 200)}`,
+  });
+  return { handled: true, resumed: false, reply, action: 'conversation' };
+}
+
+export async function mirrorTeamManagerProposalResponse(teamId: string, managerMessage: string): Promise<{ handled: boolean; taskId?: string; resumed?: boolean }> {
+  const cleanTeamId = String(teamId || '').trim();
+  const message = String(managerMessage || '').trim();
+  if (!cleanTeamId || !message) return { handled: false };
+  const candidates = listTasks({ status: ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'] })
+    .filter((task) => String(task.proposalExecution?.teamExecution?.teamId || '') === cleanTeamId)
+    .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0));
+  const task = candidates[0];
+  if (!task) return { handled: false };
+  const proposalId = String(task.proposalExecution?.proposalId || '').trim();
+  const labeledMessage = [
+    `Manager response to proposal executor:`,
+    proposalId ? `Proposal: ${proposalId}` : '',
+    `Task: ${task.id}`,
+    '',
+    message,
+  ].filter(Boolean).join('\n');
+  const recoveryInstruction = `${labeledMessage}\n\nContinue the proposal task using this manager guidance.`;
+  const recovery = await handleTaskRecoveryMessage(task.id, recoveryInstruction, {
+    sourceSessionId: String(task.proposalExecution?.teamExecution?.managerSessionId || `team_coord_${cleanTeamId}`),
+    source: 'team_manager',
+  });
+  if (recovery.handled) {
+    appendJournal(task.id, {
+      type: recovery.resumed ? 'resume' : 'status_push',
+      content: `Manager response mirrored from team chat: ${message.slice(0, 180)}`,
+    });
+    try {
+      const { getConfig } = await import('../../config/config.js');
+      const { notifyMainAgent } = await import('../teams/notify-bridge.js');
+      notifyMainAgent(
+        getConfig().getWorkspacePath(),
+        cleanTeamId,
+        recovery.resumed ? 'team_report_ready' : 'team_error',
+        {
+          proposalId,
+          taskId: task.id,
+          task: task.title,
+          summary: 'Manager responded to paused proposal executor and resumed/recovery-handled the task.',
+          error: recovery.resumed ? undefined : labeledMessage.slice(0, 500),
+          event: recovery.resumed ? 'manager_resumed_team_proposal' : 'manager_replied_to_team_proposal',
+          message: labeledMessage.slice(0, 2000),
+        },
+        undefined,
+        task.proposalExecution?.teamExecution?.originatingSessionId,
+      );
+    } catch {}
+  }
+  return { handled: recovery.handled, taskId: task.id, resumed: recovery.resumed };
+}
+
 export async function tryHandleBlockedTaskFollowup(sessionId: string, rawMessage: string): Promise<string | null> {
   if (String(sessionId || '').startsWith('task_')) return null;
   const message = String(rawMessage || '').trim();
   if (!message) return null;
+
+  const recoveryTask = findRecoveryTaskForReplySession(sessionId);
+  if (recoveryTask) {
+    const recovery = await handleTaskRecoveryMessage(recoveryTask.id, message, { sourceSessionId: sessionId, source: 'chat' });
+    if (recovery.handled) return recovery.reply;
+  }
 
   // ── Path 0: Task awaiting clarification — user's reply is the answer ─────────
   // When the AI asked a question mid-task and paused for user input, ANY message

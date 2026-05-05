@@ -316,6 +316,10 @@ window.newProjectSession = async function(projectId, isOnboarding = false) {
 };
 
 window.openProjectSession = async function(projectId, sessionId, isOnboarding = false) {
+  if (window.currentMode !== 'chat' && typeof window.setMode === 'function') {
+    window.setMode('chat');
+  }
+
   _currentProjectSessionId = sessionId;
   _activeProjectId = projectId;
 
@@ -347,9 +351,17 @@ window.openProjectSession = async function(projectId, sessionId, isOnboarding = 
         title: serverTitle,
         history: serverHistory,
         processLog: [],
+        source: 'project',
+        projectId,
+        automated: false,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
+      if (typeof window.saveChatSessions === 'function') window.saveChatSessions();
+    } else {
+      existing.source = existing.source || 'project';
+      existing.projectId = existing.projectId || projectId;
+      existing.automated = false;
       if (typeof window.saveChatSessions === 'function') window.saveChatSessions();
     }
   }
@@ -667,9 +679,28 @@ window.saveProjectMemorySnapshot = async function() {
 // call it directly from openProjectSession / openSession hooks.
 
 function _maybeClearProjectState(sessionId) {
+  const cachedSession = Array.isArray(window.chatSessions)
+    ? window.chatSessions.find(s => s.id === sessionId)
+    : null;
+  if (cachedSession?.projectId) {
+    _currentProjectSessionId = sessionId;
+    _activeProjectId = cachedSession.projectId;
+    document.body.classList.add('in-project-session');
+    document.body.dataset.projectId = cachedSession.projectId;
+    return;
+  }
+  if (!_projects.length) return;
+
   const ownerProject = _projects.find(p =>
     (p.sessions || []).some(s => s.id === sessionId)
   );
+  if (ownerProject) {
+    _currentProjectSessionId = sessionId;
+    _activeProjectId = ownerProject.id;
+    document.body.classList.add('in-project-session');
+    document.body.dataset.projectId = ownerProject.id;
+    return;
+  }
   if (!ownerProject) {
     // Not a project session — clear all project UI state
     _currentProjectSessionId = null;

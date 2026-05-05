@@ -6,7 +6,7 @@ import { getConfig } from '../../config/config';
 import { addMessage } from '../session';
 import { broadcastWS } from '../comms/broadcaster';
 import {
-  loadTask, listTasks, deleteTask, updateTaskStatus,
+  loadTask, listTaskSummaries, deleteTask, updateTaskStatus,
   getEvidenceBusSnapshot, appendJournal,
 } from '../tasks/task-store';
 import { loadScheduleMemory, loadRunLog } from '../scheduling/schedule-memory';
@@ -20,6 +20,7 @@ import { getWorkspace } from '../session';
 import { hookBus } from '../hooks';
 import { updateResumeContext, type TaskStatus } from '../tasks/task-store';
 import { getErrorAudit } from '../../security/error-audit';
+import { handleTaskRecoveryMessage } from '../tasks/task-router';
 
 
 export const router = Router();
@@ -98,6 +99,7 @@ router.post('/api/tasks/:id/run', async (req, res) => {
   const jobs = _cronScheduler.getJobs();
   const job = jobs.find((j: any) => j.id === req.params.id);
   if (!job) { res.status(404).json({ success: false, error: 'Job not found' }); return; }
+  if (job.status === 'running') { res.status(409).json({ success: false, error: 'Job is already running.' }); return; }
   res.json({ success: true, message: 'Job queued for immediate run' });
   _cronScheduler.runJobNow(req.params.id, { respectActiveHours: false }).catch(console.error);
 });
@@ -310,7 +312,7 @@ router.post('/api/heartbeat/agents/:agentId/tick', async (req, res) => {
   }
 });
 router.get('/api/bg-tasks', (_req, res) => {
-  const tasks = listTasks();
+  const tasks = listTaskSummaries();
   res.json({ success: true, tasks });
 });
 
@@ -547,6 +549,20 @@ router.post('/api/bg-tasks/:id/message', async (req: any, res: any) => {
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
   const userMessage = String(req.body?.message || '').trim();
   if (!userMessage) { res.status(400).json({ success: false, error: 'message is required' }); return; }
+
+  const recoveryResult = await handleTaskRecoveryMessage(task.id, userMessage, {
+    sourceSessionId: task.sessionId || task.originatingSessionId,
+    source: 'task_panel',
+  });
+  if (recoveryResult.handled) {
+    res.json({
+      success: true,
+      resumed: recoveryResult.resumed,
+      reply: recoveryResult.reply,
+      action: recoveryResult.action,
+    });
+    return;
+  }
 
   // Inject the message into the task session so the agent sees it on the next round.
   const sessionId = `task_${task.id}`;

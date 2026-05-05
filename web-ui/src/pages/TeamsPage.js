@@ -10,6 +10,7 @@
  * Cross-page: renderSessionsList (window.* during migration)
  */
 
+import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { api } from '../api.js';
 import { escHtml, bgtToast, timeAgo, showToast, showConfirm } from '../utils.js';
 import { wsEventBus } from '../ws.js';
@@ -50,9 +51,21 @@ let teamMemberIds = new Set(); // agentIds belonging to any team
 let activeTeamId = null;      // currently focused team (board open)
 let teamBoardTab = 'context'; // context | memory | runs | chat
 let teamRuns = [];            // cached runs for active team
+let teamRoomState = null;     // live room state for active team
+let teamRunExpanded = {};     // runId -> expanded/collapsed in Runs tab
 let teamChatMessages = [];    // cached chat for active team
+const TEAM_CHAT_INITIAL_VISIBLE = 20;
+let teamChatVisibleCountByTeam = {}; // teamId -> number of recent messages currently visible
 let teamWorkspaceFiles = [];  // cached workspace files for active team (flat)
 let teamWorkspaceTree = [];   // cached workspace tree (nested) for active team
+let teamWorkspaceData = null; // full workspace API response (incl. workspacePath)
+let teamMemoryFiles = { memory: null, lastRun: null, pending: null, loading: false };
+let teamSubagentDetailId = null;     // currently-open subagent inside the Subagents tab
+let teamSubagentDetailTab = 'overview'; // overview | systemprompt | heartbeat
+let teamSubagentDetail = { systemPrompt: '', heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
+let _teamCmEditors = {};      // CodeMirror instances for the Subagents tab editors
+let teamWorkspaceOpenFile = null; // { teamId, relpath, name, content, modifiedAt, dirty, mode }
+let _teamWorkspaceCm = null;
 let teamActiveRunsByTeam = {};      // teamId -> { taskId -> live run row }
 let teamProgressExpandedRuns = {};  // `${teamId}::${runKey}` -> true
 let teamProgressTaskCache = {};     // taskId -> { items, status, title, loadedAt, error? }
@@ -62,6 +75,339 @@ const workspaceFolderExpanded = new Set(); // relativePaths of expanded folders
 let teamChatPolling = null;
 let teamChatDraftByTeam = {}; // teamId -> unsent draft message
 let activeTeamChatSignature = '';
+let teamChatStreamingState = null;
+const MAX_TEAM_CHAT_QUEUE = 8;
+let teamChatAbortControllersByTeam = {}; // teamId -> AbortController
+let teamChatQueueByTeam = {}; // teamId -> [{ content }]
+let teamChatQueueDrainTimers = {}; // teamId -> timer id
+let teamDispatchStreamsByTeam = {}; // teamId -> { taskId -> live dispatch bubble state }
+let teamDispatchExpanded = {};      // `${teamId}::${taskId}` -> true
+let teamDispatchTicker = null;
+let teamDispatchRefreshTimers = {}; // teamId -> timeout handle
+let teamManagerStreamsByTeam = {};  // teamId -> { streamId -> live manager turn state }
+let teamMemberStreamsByTeam = {};   // teamId -> { streamId -> live member room turn state }
+let teamChatMentionState = null;
+
+function normalizeTeamChatMentionSearch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, '')
+    .trim();
+}
+
+function buildTeamChatHandleLabel(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/^@+/, '');
+}
+
+function getTeamById(teamId) {
+  return teamsData.find((team) => team.id === teamId) || null;
+}
+
+function getTeamChatParticipants(teamOrId) {
+  const team = typeof teamOrId === 'string' ? getTeamById(teamOrId) : teamOrId;
+  if (!team) return [];
+  const allAgents = Array.isArray(window._allAgentsForTeam) ? window._allAgentsForTeam : [];
+  const participants = [
+    {
+      type: 'team',
+      id: team.id,
+      label: 'team',
+      aliases: ['team'],
+    },
+    {
+      type: 'manager',
+      id: 'manager',
+      label: 'manager',
+      aliases: ['manager'],
+    },
+  ];
+  for (const agentId of (team.subagentIds || [])) {
+    const agent = allAgents.find((entry) => entry.id === agentId);
+    const label = buildTeamChatHandleLabel(agent?.name || agentId);
+    const aliases = Array.from(new Set([
+      label,
+      label.toLowerCase(),
+      label.replace(/\s+/g, '-'),
+      label.replace(/\s+/g, ''),
+      String(agentId || '').trim(),
+      String(agentId || '').trim().replace(/[_-]+/g, ' '),
+    ].map((value) => String(value || '').trim()).filter(Boolean)));
+    participants.push({
+      type: 'member',
+      id: agentId,
+      label,
+      aliases,
+    });
+  }
+  return participants.map((participant) => ({
+    ...participant,
+    searchKey: Array.from(new Set(
+      [participant.label, participant.id, ...(participant.aliases || [])]
+        .map((value) => normalizeTeamChatMentionSearch(value))
+        .filter(Boolean),
+    )).join(' | '),
+  }));
+}
+
+function findTeamChatMentions(text, teamOrId) {
+  const raw = String(text || '');
+  if (!raw.includes('@')) return [];
+  const participants = getTeamChatParticipants(teamOrId);
+  if (!participants.length) return [];
+  const aliasEntries = participants
+    .flatMap((participant) => (participant.aliases || []).map((alias) => ({
+      participant,
+      alias,
+      aliasLower: String(alias || '').toLowerCase(),
+    })))
+    .sort((a, b) => b.alias.length - a.alias.length);
+  const lowerRaw = raw.toLowerCase();
+  const matches = [];
+  let index = 0;
+  while (index < raw.length) {
+    if (raw.charAt(index) !== '@') { index += 1; continue; }
+    const prev = index > 0 ? raw.charAt(index - 1) : '';
+    if (prev && /[A-Za-z0-9_]/.test(prev)) { index += 1; continue; }
+    const after = raw.slice(index + 1);
+    const afterLower = lowerRaw.slice(index + 1);
+    let found = null;
+    for (const entry of aliasEntries) {
+      if (!entry.aliasLower) continue;
+      if (!afterLower.startsWith(entry.aliasLower)) continue;
+      const boundary = after.charAt(entry.alias.length);
+      if (boundary && !/[\s.,!?;:)\]}]/.test(boundary)) continue;
+      found = entry;
+      break;
+    }
+    if (!found) { index += 1; continue; }
+    const end = index + 1 + found.alias.length;
+    matches.push({
+      start: index,
+      end,
+      text: raw.slice(index, end),
+      participant: found.participant,
+    });
+    index = end;
+  }
+  return matches;
+}
+
+function renderTeamChatMentionHtml(mention) {
+  const label = buildTeamChatHandleLabel(mention?.participant?.label || mention?.text || '');
+  return `<span style="color:#79c0ff;font-weight:700">@${escHtml(label)}</span>`;
+}
+
+function renderTeamChatTextWithMentions(text, teamOrId, options = {}) {
+  const raw = String(text || '');
+  const mentions = findTeamChatMentions(raw, teamOrId);
+  const renderPlain = (input) => escHtml(String(input || '')).replace(/\n/g, '<br>');
+  if (!mentions.length) {
+    if (options.markdown && typeof marked !== 'undefined') {
+      return marked.parse(raw);
+    }
+    return renderPlain(raw);
+  }
+
+  const placeholders = [];
+  let rebuilt = '';
+  let cursor = 0;
+  for (const mention of mentions) {
+    rebuilt += raw.slice(cursor, mention.start);
+    const token = `[[[TEAM_MENTION_${placeholders.length}]]]`;
+    placeholders.push({ token, mention });
+    rebuilt += token;
+    cursor = mention.end;
+  }
+  rebuilt += raw.slice(cursor);
+
+  let html = options.markdown && typeof marked !== 'undefined'
+    ? marked.parse(rebuilt)
+    : renderPlain(rebuilt);
+  for (const entry of placeholders) {
+    html = html.split(entry.token).join(renderTeamChatMentionHtml(entry.mention));
+  }
+  return html;
+}
+
+function getLeadingTeamChatTarget(text, teamOrId) {
+  const raw = String(text || '');
+  const trimmed = raw.trimStart();
+  const leadingOffset = raw.length - trimmed.length;
+  const mentions = findTeamChatMentions(raw, teamOrId);
+  const leading = mentions.find((mention) => mention.start === leadingOffset);
+  if (!leading) return { type: 'room', targetId: '', targetLabel: '', routedMessage: raw.trim() };
+  const routedMessage = raw.slice(leading.end).trim() || raw.trim();
+  return {
+    type: leading.participant.type,
+    targetId: leading.participant.type === 'member' ? leading.participant.id : '',
+    targetLabel: leading.participant.label,
+    routedMessage,
+  };
+}
+
+function syncTeamChatInputMirror(teamId) {
+  const input = document.getElementById('team-chat-input');
+  const mirror = document.getElementById('team-chat-input-mirror');
+  const placeholder = document.getElementById('team-chat-input-placeholder');
+  if (!input || !mirror) return;
+  const value = input.value || '';
+  mirror.innerHTML = value
+    ? renderTeamChatTextWithMentions(value, teamId, { markdown: false })
+    : '&nbsp;';
+  mirror.scrollTop = input.scrollTop;
+  if (placeholder) placeholder.style.display = value ? 'none' : 'block';
+}
+
+function resizeTeamChatInput() {
+  const input = document.getElementById('team-chat-input');
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(180, Math.max(64, input.scrollHeight))}px`;
+  syncTeamChatInputMirror(activeTeamId);
+}
+
+function hideTeamChatMentionPopover() {
+  teamChatMentionState = null;
+  const popover = document.getElementById('team-chat-mention-popover');
+  if (popover) {
+    popover.style.display = 'none';
+    popover.innerHTML = '';
+  }
+}
+
+function renderTeamChatMentionPopover(teamId) {
+  const popover = document.getElementById('team-chat-mention-popover');
+  if (!popover || !teamChatMentionState || teamChatMentionState.teamId !== teamId) return;
+  const items = Array.isArray(teamChatMentionState.items) ? teamChatMentionState.items : [];
+  if (!items.length) {
+    hideTeamChatMentionPopover();
+    return;
+  }
+  popover.style.display = 'block';
+  popover.innerHTML = items.map((item, index) => {
+    const active = index === Number(teamChatMentionState.activeIndex || 0);
+    const hint = item.type === 'team' ? 'Everyone'
+      : item.type === 'manager' ? 'Manager'
+      : (item.id || 'Member');
+    return `
+      <button
+        type="button"
+        onclick="selectTeamChatMention('${teamId}', ${index})"
+        style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;border:none;background:${active ? 'rgba(76,141,255,0.16)' : 'transparent'};color:var(--text);padding:9px 11px;cursor:pointer;text-align:left"
+      >
+        <span style="font-size:12px;font-weight:700;color:${active ? '#9dc2ff' : 'var(--text)'}">@${escHtml(item.label)}</span>
+        <span style="font-size:11px;color:var(--muted)">${escHtml(hint)}</span>
+      </button>
+    `;
+  }).join('');
+}
+
+function refreshTeamChatMentionState(teamId) {
+  const input = document.getElementById('team-chat-input');
+  if (!input) return;
+  const value = input.value || '';
+  const caret = Number(input.selectionStart ?? value.length);
+  const uptoCaret = value.slice(0, caret);
+  const atIndex = uptoCaret.lastIndexOf('@');
+  if (atIndex < 0) {
+    hideTeamChatMentionPopover();
+    return;
+  }
+  const beforeAt = atIndex > 0 ? uptoCaret.charAt(atIndex - 1) : '';
+  if (beforeAt && /[A-Za-z0-9_]/.test(beforeAt)) {
+    hideTeamChatMentionPopover();
+    return;
+  }
+  const query = uptoCaret.slice(atIndex + 1);
+  if (query.includes('\n') || /[()[\]{}]/.test(query)) {
+    hideTeamChatMentionPopover();
+    return;
+  }
+  const normalizedQuery = normalizeTeamChatMentionSearch(query);
+  const items = getTeamChatParticipants(teamId).filter((participant) => {
+    if (!normalizedQuery) return true;
+    return participant.searchKey.includes(normalizedQuery);
+  });
+  if (!items.length) {
+    hideTeamChatMentionPopover();
+    return;
+  }
+  const activeIndex = Math.min(Number(teamChatMentionState?.activeIndex || 0), items.length - 1);
+  teamChatMentionState = {
+    teamId,
+    start: atIndex,
+    end: caret,
+    items,
+    activeIndex: activeIndex < 0 ? 0 : activeIndex,
+  };
+  renderTeamChatMentionPopover(teamId);
+}
+
+function selectTeamChatMention(teamId, index) {
+  const input = document.getElementById('team-chat-input');
+  if (!input || !teamChatMentionState || teamChatMentionState.teamId !== teamId) return;
+  const items = Array.isArray(teamChatMentionState.items) ? teamChatMentionState.items : [];
+  const picked = items[Number(index)];
+  if (!picked) return;
+  const value = input.value || '';
+  const before = value.slice(0, teamChatMentionState.start);
+  const after = value.slice(teamChatMentionState.end).replace(/^\s*/, '');
+  const mentionText = `@${picked.label}`;
+  const nextValue = `${before}${mentionText}${after ? ' ' : ' '}${after}`;
+  const nextCaret = before.length + mentionText.length + 1;
+  input.value = nextValue;
+  input.focus();
+  input.setSelectionRange(nextCaret, nextCaret);
+  teamChatDraftByTeam[teamId] = nextValue;
+  hideTeamChatMentionPopover();
+  resizeTeamChatInput();
+  refreshTeamChatMentionState(teamId);
+}
+
+function handleTeamChatInputKeydown(event, teamId) {
+  if (teamChatMentionState && teamChatMentionState.teamId === teamId && Array.isArray(teamChatMentionState.items) && teamChatMentionState.items.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      teamChatMentionState.activeIndex = (Number(teamChatMentionState.activeIndex || 0) + 1) % teamChatMentionState.items.length;
+      renderTeamChatMentionPopover(teamId);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      teamChatMentionState.activeIndex = (Number(teamChatMentionState.activeIndex || 0) - 1 + teamChatMentionState.items.length) % teamChatMentionState.items.length;
+      renderTeamChatMentionPopover(teamId);
+      return;
+    }
+    if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+      event.preventDefault();
+      selectTeamChatMention(teamId, Number(teamChatMentionState.activeIndex || 0));
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideTeamChatMentionPopover();
+      return;
+    }
+  }
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendTeamChat(teamId);
+  }
+}
+
+if (!window.__teamChatMentionDismissBound) {
+  window.__teamChatMentionDismissBound = true;
+  document.addEventListener('mousedown', (event) => {
+    const target = event.target;
+    if (target && typeof target.closest === 'function' && target.closest('#team-chat-composer-shell')) return;
+    hideTeamChatMentionPopover();
+  });
+}
 
 function getTeamChatSignature(messages) {
   const list = Array.isArray(messages) ? messages : [];
@@ -69,23 +415,1052 @@ function getTeamChatSignature(messages) {
   return `${list.length}:${last?.id || ''}:${last?.timestamp || 0}`;
 }
 
+function isTeamChatBusy(teamId) {
+  return !!(teamChatStreamingState && teamChatStreamingState.teamId === teamId && teamChatStreamingState.completed !== true);
+}
+
+function getTeamChatQueue(teamId, create = false) {
+  if (!teamId) return [];
+  if (!teamChatQueueByTeam[teamId] && create) teamChatQueueByTeam[teamId] = [];
+  return teamChatQueueByTeam[teamId] || [];
+}
+
+function queueTeamChatMessage(teamId, content) {
+  const text = String(content || '').trim();
+  if (!text) return false;
+  const queue = getTeamChatQueue(teamId, true);
+  if (queue.length >= MAX_TEAM_CHAT_QUEUE) {
+    bgtToast('Queue full', 'Wait for the team chat to catch up before adding more.');
+    return false;
+  }
+  queue.push({ content: text });
+  bgtToast('Queued', 'This will send after the current team turn.');
+  return true;
+}
+
+function scheduleNextTeamQueuedMessage(teamId) {
+  if (!teamId || (teamChatStreamingState && teamChatStreamingState.teamId === teamId) || teamChatQueueDrainTimers[teamId]) return;
+  const queue = getTeamChatQueue(teamId);
+  if (queue.length === 0) return;
+  teamChatQueueDrainTimers[teamId] = setTimeout(() => {
+    delete teamChatQueueDrainTimers[teamId];
+    if (teamChatStreamingState && teamChatStreamingState.teamId === teamId) return;
+    const next = getTeamChatQueue(teamId).shift();
+    if (!next?.content) return;
+    sendTeamChat(teamId, next.content);
+  }, 120);
+  refreshTeamChatComposerState(teamId);
+}
+
+function getTeamEventChatMessage(msg) {
+  const candidate = msg?.chatMessage || msg?.message;
+  return candidate && typeof candidate === 'object' ? candidate : null;
+}
+
+function newTeamChatProcessEntry(type, content, extra = undefined) {
+  return {
+    ts: new Date().toLocaleTimeString(),
+    type: String(type || 'info'),
+    content: String(content || ''),
+    ...(extra && typeof extra === 'object' ? extra : {}),
+  };
+}
+
+function pushTeamChatProgressLine(line) {
+  if (!teamChatStreamingState) return;
+  const text = String(line || '').trim();
+  if (!text) return;
+  const lines = Array.isArray(teamChatStreamingState.progressLines) ? teamChatStreamingState.progressLines : [];
+  if (lines[lines.length - 1] === text) return;
+  lines.push(text);
+  if (lines.length > 8) lines.splice(0, lines.length - 8);
+  teamChatStreamingState.progressLines = lines;
+}
+
+function addTeamChatProcessEntry(type, content, extra = undefined) {
+  if (!teamChatStreamingState) return;
+  if (!Array.isArray(teamChatStreamingState.processEntries)) teamChatStreamingState.processEntries = [];
+  teamChatStreamingState.processEntries.push(newTeamChatProcessEntry(type, content, extra));
+}
+
+function getTeamDispatchStreamMap(teamId) {
+  if (!teamId) return {};
+  if (!teamDispatchStreamsByTeam[teamId]) teamDispatchStreamsByTeam[teamId] = {};
+  return teamDispatchStreamsByTeam[teamId];
+}
+
+function getTeamDispatchStreams(teamId) {
+  return Object.values(getTeamDispatchStreamMap(teamId))
+    .sort((a, b) => Number(a.startedAt || 0) - Number(b.startedAt || 0));
+}
+
+function ensureTeamDispatchStream(teamId, taskId, patch = {}) {
+  if (!teamId || !taskId) return null;
+  const streamMap = getTeamDispatchStreamMap(teamId);
+  const existing = streamMap[taskId] || {
+    teamId,
+    taskId,
+    agentId: '',
+    agentName: 'Subagent',
+    taskSummary: '',
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    status: 'running',
+    completed: false,
+    content: '',
+    finalReply: '',
+    thinking: '',
+    lastTool: '',
+    progressLines: ['Working...'],
+    processEntries: [],
+    stepCount: 0,
+    durationMs: 0,
+  };
+  Object.assign(existing, patch || {});
+  if (!Array.isArray(existing.progressLines)) existing.progressLines = [];
+  if (!Array.isArray(existing.processEntries)) existing.processEntries = [];
+  if (!existing.progressLines.length) existing.progressLines = ['Working...'];
+  existing.updatedAt = Date.now();
+  streamMap[taskId] = existing;
+  refreshTeamDispatchTicker();
+  return existing;
+}
+
+function removeTeamDispatchStream(teamId, taskId) {
+  const streamMap = getTeamDispatchStreamMap(teamId);
+  if (streamMap && streamMap[taskId]) delete streamMap[taskId];
+  delete teamDispatchExpanded[`${teamId}::${taskId}`];
+  if (Object.keys(streamMap || {}).length === 0) {
+    delete teamDispatchStreamsByTeam[teamId];
+  }
+  refreshTeamDispatchTicker();
+}
+
+function pushTeamDispatchProgressLine(stream, line) {
+  if (!stream) return;
+  const text = String(line || '').trim();
+  if (!text) return;
+  const lines = Array.isArray(stream.progressLines) ? stream.progressLines : [];
+  if (lines[lines.length - 1] === text) return;
+  lines.push(text);
+  if (lines.length > 8) lines.splice(0, lines.length - 8);
+  stream.progressLines = lines;
+}
+
+function addTeamDispatchProcessEntry(stream, type, content, extra = undefined) {
+  if (!stream) return;
+  if (!Array.isArray(stream.processEntries)) stream.processEntries = [];
+  stream.processEntries.push(newTeamChatProcessEntry(type, content, extra));
+  if (stream.processEntries.length > 250) {
+    stream.processEntries.splice(0, stream.processEntries.length - 250);
+  }
+}
+
+function formatTeamDispatchElapsed(stream) {
+  if (!stream) return '0s';
+  const startedAt = Number(stream.startedAt || Date.now());
+  const totalMs = stream.completed
+    ? Math.max(0, Number(stream.durationMs || 0) || (Number(stream.finishedAt || Date.now()) - startedAt))
+    : Math.max(0, Date.now() - startedAt);
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+function refreshTeamDispatchTicker() {
+  const hasActive = Object.values(teamDispatchStreamsByTeam).some((streamMap) =>
+    Object.values(streamMap || {}).some((stream) => stream && stream.completed !== true)
+  );
+  if (!hasActive) {
+    if (teamDispatchTicker) {
+      clearInterval(teamDispatchTicker);
+      teamDispatchTicker = null;
+    }
+    return;
+  }
+  if (teamDispatchTicker) return;
+  teamDispatchTicker = setInterval(() => {
+    if (activeTeamId && teamBoardTab === 'chat' && getTeamDispatchStreams(activeTeamId).length > 0) {
+      renderActiveTeamChat(activeTeamId, { forceBottom: false });
+    }
+  }, 1000);
+}
+
+function scheduleTeamDispatchRefresh(teamId, forceBottom = false) {
+  if (!teamId) return;
+  if (teamDispatchRefreshTimers[teamId]) return;
+  teamDispatchRefreshTimers[teamId] = setTimeout(() => {
+    delete teamDispatchRefreshTimers[teamId];
+    refreshVisibleTeamChat(teamId, forceBottom);
+  }, 70);
+}
+
+function getTeamManagerStreamMap(teamId) {
+  if (!teamId) return {};
+  if (!teamManagerStreamsByTeam[teamId]) teamManagerStreamsByTeam[teamId] = {};
+  return teamManagerStreamsByTeam[teamId];
+}
+
+function getTeamManagerStreams(teamId) {
+  return Object.values(getTeamManagerStreamMap(teamId))
+    .sort((a, b) => Number(a.startedAt || 0) - Number(b.startedAt || 0));
+}
+
+function ensureTeamManagerStream(teamId, streamId, patch = {}) {
+  if (!teamId || !streamId) return null;
+  const streamMap = getTeamManagerStreamMap(teamId);
+  const existing = streamMap[streamId] || {
+    teamId,
+    streamId,
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    completed: false,
+    source: 'conversation',
+    turn: 1,
+    content: '',
+    finalReply: '',
+    thinking: '',
+    progressLines: ['Thinking...'],
+    processEntries: [],
+    stepCount: 0,
+    durationMs: 0,
+  };
+  Object.assign(existing, patch || {});
+  if (!Array.isArray(existing.progressLines)) existing.progressLines = [];
+  if (!Array.isArray(existing.processEntries)) existing.processEntries = [];
+  if (!existing.progressLines.length) existing.progressLines = ['Thinking...'];
+  existing.updatedAt = Date.now();
+  streamMap[streamId] = existing;
+  return existing;
+}
+
+function removeTeamManagerStream(teamId, streamId) {
+  const streamMap = getTeamManagerStreamMap(teamId);
+  if (streamMap && streamMap[streamId]) delete streamMap[streamId];
+  if (Object.keys(streamMap || {}).length === 0) delete teamManagerStreamsByTeam[teamId];
+}
+
+function applyTeamManagerStreamEvent(msg) {
+  const teamId = String(msg?.teamId || '').trim();
+  const streamId = String(msg?.streamId || '').trim();
+  if (!teamId || !streamId) return null;
+  const eventType = String(msg?.eventType || '').trim();
+  const event = msg?.data && typeof msg.data === 'object' ? msg.data : {};
+  const stream = ensureTeamManagerStream(teamId, streamId, {
+    startedAt: Number(msg.startedAt || Date.now()),
+    source: String(msg.source || 'conversation'),
+    turn: Number(msg.turn || 1),
+  });
+  if (!stream) return null;
+
+  switch (eventType) {
+    case 'token': {
+      const chunk = String(event.text || '');
+      if (chunk) stream.content = `${stream.content || ''}${chunk}`;
+      break;
+    }
+    case 'thinking_delta': {
+      const chunk = String(event.thinking || event.text || '');
+      if (chunk) {
+        stream.thinking = `${stream.thinking || ''}${chunk}`;
+        pushTeamDispatchProgressLine(stream, 'Thinking...');
+      }
+      break;
+    }
+    case 'thinking':
+    case 'agent_thought': {
+      const thought = String(event.thinking || event.text || '').trim();
+      if (!thought) break;
+      stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
+      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'info': {
+      const info = String(event.message || '').trim();
+      if (!info) break;
+      pushTeamDispatchProgressLine(stream, info);
+      addTeamDispatchProcessEntry(stream, 'info', info, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'heartbeat': {
+      const heartbeatMsg = String(event.message || event.current_step || event.state || '').trim();
+      if (heartbeatMsg) pushTeamDispatchProgressLine(stream, heartbeatMsg);
+      break;
+    }
+    case 'progress_state': {
+      const items = Array.isArray(event.items) ? event.items : [];
+      const activeIndex = Number(event.activeIndex || -1);
+      const activeItem = activeIndex >= 0 ? items[activeIndex] : null;
+      const activeText = String(activeItem?.text || '').trim();
+      if (activeText) pushTeamDispatchProgressLine(stream, activeText);
+      break;
+    }
+    case 'tool_call': {
+      const action = String(event.action || '').trim();
+      if (!action) break;
+      const stepNum = Number(event.stepNum || 0);
+      const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
+      const args = event.args && typeof event.args === 'object' ? event.args : null;
+      const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
+      stream.stepCount = Number(stream.stepCount || 0) + 1;
+      pushTeamDispatchProgressLine(stream, `${stepPrefix}Running ${action}...`);
+      addTeamDispatchProcessEntry(
+        stream,
+        'tool',
+        `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`,
+        (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
+      );
+      break;
+    }
+    case 'tool_result': {
+      const action = String(event.action || '').trim() || 'tool';
+      const stepNum = Number(event.stepNum || 0);
+      const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
+      const text = String(event.result || '').trim();
+      const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+      pushTeamDispatchProgressLine(stream, `${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`);
+      addTeamDispatchProcessEntry(
+        stream,
+        ok ? 'result' : 'error',
+        `${stepPrefix}${action} => ${text || '(no output)'}`,
+        event.actor ? { actor: event.actor } : undefined,
+      );
+      break;
+    }
+    case 'tool_progress': {
+      const action = String(event.action || '').trim();
+      const progressMsg = String(event.message || '').trim();
+      if (!action || !progressMsg) break;
+      pushTeamDispatchProgressLine(stream, `${action}: ${progressMsg}`);
+      addTeamDispatchProcessEntry(stream, 'info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'final': {
+      const reply = String(event.reply || event.text || '').trim();
+      if (!reply) break;
+      stream.finalReply = reply;
+      if (!stream.content) stream.content = reply;
+      addTeamDispatchProcessEntry(stream, 'final', reply);
+      break;
+    }
+    case 'done': {
+      const reply = String(event.reply || event.text || '').trim();
+      if (reply) {
+        stream.finalReply = reply;
+        if (!stream.content) stream.content = reply;
+      }
+      if (String(event.thinking || '').trim()) {
+        stream.thinking = stream.thinking
+          ? `${stream.thinking}\n\n${String(event.thinking).trim()}`
+          : String(event.thinking).trim();
+      }
+      stream.completed = true;
+      stream.finishedAt = Date.now();
+      stream.durationMs = Math.max(Number(stream.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+      break;
+    }
+    default:
+      break;
+  }
+
+  stream.updatedAt = Date.now();
+  return stream;
+}
+
+function getTeamMemberStreamMap(teamId) {
+  if (!teamId) return {};
+  if (!teamMemberStreamsByTeam[teamId]) teamMemberStreamsByTeam[teamId] = {};
+  return teamMemberStreamsByTeam[teamId];
+}
+
+function getTeamMemberStreams(teamId) {
+  return Object.values(getTeamMemberStreamMap(teamId))
+    .sort((a, b) => Number(a.startedAt || 0) - Number(b.startedAt || 0));
+}
+
+function ensureTeamMemberStream(teamId, streamId, patch = {}) {
+  if (!teamId || !streamId) return null;
+  const streamMap = getTeamMemberStreamMap(teamId);
+  const existing = streamMap[streamId] || {
+    teamId,
+    streamId,
+    agentId: '',
+    agentName: 'Team Member',
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    completed: false,
+    content: '',
+    finalReply: '',
+    thinking: '',
+    progressLines: ['Thinking...'],
+    processEntries: [],
+    stepCount: 0,
+    durationMs: 0,
+  };
+  Object.assign(existing, patch || {});
+  if (!Array.isArray(existing.progressLines)) existing.progressLines = [];
+  if (!Array.isArray(existing.processEntries)) existing.processEntries = [];
+  if (!existing.progressLines.length) existing.progressLines = ['Thinking...'];
+  existing.updatedAt = Date.now();
+  streamMap[streamId] = existing;
+  return existing;
+}
+
+function removeTeamMemberStream(teamId, streamId) {
+  const streamMap = getTeamMemberStreamMap(teamId);
+  if (streamMap && streamMap[streamId]) delete streamMap[streamId];
+  if (Object.keys(streamMap || {}).length === 0) delete teamMemberStreamsByTeam[teamId];
+}
+
+function applyTeamMemberStreamEvent(msg) {
+  const teamId = String(msg?.teamId || '').trim();
+  const streamId = String(msg?.streamId || '').trim();
+  if (!teamId || !streamId) return null;
+  const eventType = String(msg?.eventType || '').trim();
+  const event = msg?.data && typeof msg.data === 'object' ? msg.data : {};
+  const stream = ensureTeamMemberStream(teamId, streamId, {
+    agentId: String(msg.agentId || '').trim(),
+    agentName: String(msg.agentName || msg.agentId || 'Team Member').trim(),
+    startedAt: Number(msg.startedAt || Date.now()),
+  });
+  if (!stream) return null;
+
+  switch (eventType) {
+    case 'token': {
+      const chunk = String(event.text || '');
+      if (chunk) stream.content = `${stream.content || ''}${chunk}`;
+      break;
+    }
+    case 'thinking_delta': {
+      const chunk = String(event.thinking || event.text || '');
+      if (chunk) {
+        stream.thinking = `${stream.thinking || ''}${chunk}`;
+        pushTeamDispatchProgressLine(stream, 'Thinking...');
+      }
+      break;
+    }
+    case 'thinking':
+    case 'agent_thought': {
+      const thought = String(event.thinking || event.text || '').trim();
+      if (!thought) break;
+      stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
+      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'info': {
+      const info = String(event.message || '').trim();
+      if (!info) break;
+      pushTeamDispatchProgressLine(stream, info);
+      addTeamDispatchProcessEntry(stream, 'info', info, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'progress_state': {
+      const items = Array.isArray(event.items) ? event.items : [];
+      const activeIndex = Number(event.activeIndex || -1);
+      const activeItem = activeIndex >= 0 ? items[activeIndex] : null;
+      const activeText = String(activeItem?.text || '').trim();
+      if (activeText) pushTeamDispatchProgressLine(stream, activeText);
+      break;
+    }
+    case 'tool_call': {
+      const action = String(event.action || '').trim();
+      if (!action) break;
+      const args = event.args && typeof event.args === 'object' ? event.args : null;
+      const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
+      stream.stepCount = Number(stream.stepCount || 0) + 1;
+      pushTeamDispatchProgressLine(stream, `Running ${action}...`);
+      addTeamDispatchProcessEntry(
+        stream,
+        'tool',
+        `${action}${argsPreview ? ` ${argsPreview}` : ''}`,
+        (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
+      );
+      break;
+    }
+    case 'tool_result': {
+      const action = String(event.action || '').trim() || 'tool';
+      const text = String(event.result || '').trim();
+      const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+      pushTeamDispatchProgressLine(stream, `${action} ${ok ? 'complete' : 'failed'}`);
+      addTeamDispatchProcessEntry(
+        stream,
+        ok ? 'result' : 'error',
+        `${action} => ${text || '(no output)'}`,
+        event.actor ? { actor: event.actor } : undefined,
+      );
+      break;
+    }
+    case 'tool_progress': {
+      const action = String(event.action || '').trim();
+      const progressMsg = String(event.message || '').trim();
+      if (!action || !progressMsg) break;
+      pushTeamDispatchProgressLine(stream, `${action}: ${progressMsg}`);
+      addTeamDispatchProcessEntry(stream, 'info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'final': {
+      const reply = String(event.reply || event.text || '').trim();
+      if (!reply) break;
+      stream.finalReply = reply;
+      if (!stream.content) stream.content = reply;
+      addTeamDispatchProcessEntry(stream, 'final', reply);
+      break;
+    }
+    case 'done': {
+      const reply = String(event.reply || event.text || '').trim();
+      if (reply) {
+        stream.finalReply = reply;
+        if (!stream.content) stream.content = reply;
+      }
+      if (String(event.thinking || '').trim()) {
+        stream.thinking = stream.thinking
+          ? `${stream.thinking}\n\n${String(event.thinking).trim()}`
+          : String(event.thinking).trim();
+      }
+      stream.completed = true;
+      stream.finishedAt = Date.now();
+      stream.durationMs = Math.max(Number(stream.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+      break;
+    }
+    default:
+      break;
+  }
+
+  stream.updatedAt = Date.now();
+  return stream;
+}
+
+function mergeDispatchMetadataIntoMessages(teamId, messages) {
+  const list = Array.isArray(messages) ? messages.map((message) => ({ ...message })) : [];
+  const streamMap = getTeamDispatchStreamMap(teamId);
+  return list.map((message) => {
+    const taskId = String(message?.metadata?.taskId || '').trim();
+    if (!taskId || !streamMap[taskId]) return message;
+    const stream = streamMap[taskId];
+    return {
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        taskId,
+        stepCount: message.metadata?.stepCount ?? stream.stepCount,
+        durationMs: message.metadata?.durationMs ?? stream.durationMs,
+        thinking: message.metadata?.thinking || stream.thinking || undefined,
+        processEntries: (Array.isArray(message.metadata?.processEntries) && message.metadata.processEntries.length > 0)
+          ? message.metadata.processEntries
+          : (Array.isArray(stream.processEntries) ? [...stream.processEntries] : undefined),
+      },
+    };
+  });
+}
+
+function reconcileTeamDispatchStreamsWithMessages(teamId, messages) {
+  const taskIds = new Set(
+    (Array.isArray(messages) ? messages : [])
+      .map((message) => String(message?.metadata?.taskId || '').trim())
+      .filter(Boolean)
+  );
+  if (taskIds.size === 0) return;
+  const streamMap = getTeamDispatchStreamMap(teamId);
+  let removedAny = false;
+  for (const taskId of Object.keys(streamMap)) {
+    if (!taskIds.has(taskId)) continue;
+    delete streamMap[taskId];
+    delete teamDispatchExpanded[`${teamId}::${taskId}`];
+    removedAny = true;
+  }
+  if (removedAny && Object.keys(streamMap).length === 0) {
+    delete teamDispatchStreamsByTeam[teamId];
+  }
+  if (removedAny) refreshTeamDispatchTicker();
+}
+
+function renderTeamDispatchBubble(teamId, stream) {
+  if (!stream) return '';
+  const expandedKey = `${teamId}::${stream.taskId}`;
+  const expanded = teamDispatchExpanded[expandedKey] === true;
+  const previewText = String(stream.finalReply || stream.content || '').trim();
+  const summaryLines = [
+    stream.completed ? 'Finished.' : 'Working...',
+    `Last tool: ${stream.lastTool ? escHtml(stream.lastTool) : '<span style="color:var(--muted)">waiting...</span>'}`,
+    `${stream.completed ? 'Worked for' : 'Working for'} ${escHtml(formatTeamDispatchElapsed(stream))}`,
+  ];
+  const progressHtml = Array.isArray(stream.progressLines) && stream.progressLines.length
+    ? `<div style="margin-top:8px;font-size:11px;line-height:1.5;color:var(--muted)">
+        ${stream.progressLines.map((line) => `<div>&bull; ${escHtml(line)}</div>`).join('')}
+      </div>`
+    : '';
+  const expandedHtml = expanded
+    ? `
+      ${previewText ? `<div style="margin-top:10px;font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(previewText)}</div>` : ''}
+      ${progressHtml}
+      <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;line-height:1.6;color:var(--text)">
+        ${formatTeamChatProcessLines(stream.processEntries || [])}
+      </div>
+    `
+    : '';
+  return `
+    <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">
+      <div style="font-size:10px;color:var(--muted)">${escHtml(String(stream.agentName || stream.agentId || 'Subagent'))} · ${escHtml(stream.completed ? 'finished' : 'working')}</div>
+      <div onclick="toggleTeamDispatchBubble('${String(teamId)}','${String(stream.taskId)}')" style="max-width:88%;padding:10px 12px;border-radius:12px 12px 12px 4px;background:var(--panel-2);color:var(--text);border:1px solid var(--line);font-size:12px;line-height:1.55;overflow-wrap:anywhere;cursor:pointer">
+        <div style="font-weight:700">${stream.completed ? 'Finished' : 'Working...'}</div>
+        <div style="margin-top:6px;font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:3px">
+          ${summaryLines.map((line) => `<div>${line}</div>`).join('')}
+        </div>
+        ${expandedHtml}
+      </div>
+    </div>
+  `;
+}
+
+function formatTeamChatProcessLines(entries) {
+  if (!entries || entries.length === 0) return '<div style="color:var(--muted)">No process details.</div>';
+  const TYPE_COLORS = {
+    think: '#388bfd',
+    tool: '#e3b341',
+    result: '#bc8cff',
+    error: '#e05c5c',
+    final: '#56d364',
+    warn: '#d6a64f',
+    info: '#79c0ff',
+  };
+  return entries.map((entry) => {
+    const type = String(entry?.type || 'info');
+    const color = TYPE_COLORS[type] || 'var(--muted)';
+    const ts = escHtml(String(entry?.ts || ''));
+    const content = escHtml(String(entry?.content || ''));
+    return `<div style="margin-bottom:4px"><span style="color:var(--muted)">[${ts}]</span> <span style="color:${color};font-weight:700">${escHtml(type.toUpperCase())}</span> ${content}</div>`;
+  }).join('');
+}
+
+function renderTeamChatProcessPill(entries, prefix = 'team_proc') {
+  if (!entries || entries.length === 0) return '';
+  const id = `${prefix}_${Math.random().toString(36).slice(2)}`;
+  return `
+    <div style="margin-top:8px">
+      <button class="process-pill-btn" onclick="toggleTeamChatProcess('${id}')">Process</button>
+      <div id="${id}" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">
+        ${formatTeamChatProcessLines(entries)}
+      </div>
+    </div>
+  `;
+}
+
+function renderTeamChatBubbleFrame(options) {
+  const align = options.align === 'right' ? 'flex-end' : 'flex-start';
+  const innerAlign = options.align === 'right' ? 'flex-end' : 'flex-start';
+  return `
+    <div style="display:flex;justify-content:${align};width:100%">
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:${innerAlign};max-width:min(84%, 760px);min-width:min(180px, 100%)">
+        ${options.actorLine || ''}
+        ${options.targetLine || ''}
+        <div style="display:block;max-width:100%;width:100%;padding:12px 14px;border-radius:${options.radius || '18px'};background:${options.bubbleBg || 'var(--panel-2)'};color:${options.bubbleColor || 'var(--text)'};border:${options.bubbleBorder || '1px solid var(--line)'};box-shadow:${options.shadow || 'none'};font-size:12px;line-height:1.58;white-space:normal;overflow-wrap:anywhere;word-break:break-word">
+          ${options.bodyHtml || ''}
+          ${options.metaLine || ''}
+          ${options.processHtml || ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderTeamChatMessageBubble(message) {
+  const isUser = message.from === 'user';
+  const label = String(message.fromName || (isUser ? 'You' : message.from === 'manager' ? 'Manager' : 'Subagent'));
+  const timeLabel = timeAgo(message.timestamp);
+  const content = String(message.content || '');
+  const renderedContent = renderTeamChatTextWithMentions(content, activeTeamId, { markdown: !isUser });
+  const processHtml = !isUser ? renderTeamChatProcessPill(message.metadata?.processEntries || [], 'team_msg_proc') : '';
+  const runMetaBits = [];
+  if (!isUser && Number(message?.metadata?.stepCount || 0) > 0) runMetaBits.push(`${Number(message.metadata.stepCount)} tools`);
+  if (!isUser && Number(message?.metadata?.durationMs || 0) > 0) runMetaBits.push(`${Math.max(1, Math.round(Number(message.metadata.durationMs) / 1000))}s`);
+  const runMetaHtml = runMetaBits.length > 0
+    ? `<div style="margin-top:10px;font-size:10px;color:var(--muted)">${escHtml(runMetaBits.join(' · '))}</div>`
+    : '';
+  const targetLabel = String(message?.metadata?.targetLabel || '').trim();
+  const targetLine = isUser && targetLabel
+    ? `<div style="font-size:10px;color:#79c0ff;font-weight:700">to @${escHtml(buildTeamChatHandleLabel(targetLabel))}</div>`
+    : '';
+  return renderTeamChatBubbleFrame({
+    align: isUser ? 'right' : 'left',
+    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">${escHtml(label)} · ${timeLabel}</div>`,
+    targetLine,
+    bubbleBg: isUser ? 'linear-gradient(180deg, rgba(76,141,255,0.98) 0%, rgba(47,111,255,0.98) 100%)' : 'var(--panel-2)',
+    bubbleColor: isUser ? '#f7fbff' : 'var(--text)',
+    bubbleBorder: isUser ? '1px solid rgba(125,182,255,0.34)' : '1px solid var(--line)',
+    radius: isUser ? '18px 18px 8px 18px' : '18px 18px 18px 8px',
+    shadow: isUser ? '0 10px 24px rgba(46,111,255,0.18)' : '0 6px 18px rgba(0,0,0,0.10)',
+    bodyHtml: `<div>${renderedContent}</div>`,
+    metaLine: runMetaHtml,
+    processHtml,
+  });
+}
+
+function renderTeamManagerBackgroundStreamingBubble(stream) {
+  if (!stream) return '';
+  const progressHtml = Array.isArray(stream.progressLines) && stream.progressLines.length
+    ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
+        ${stream.progressLines.map((line) => `<div>&bull; ${escHtml(line)}</div>`).join('')}
+      </div>`
+    : '';
+  const content = String(stream.content || stream.finalReply || '').trim();
+  const processHtml = renderTeamChatProcessPill(stream.processEntries || [], `team_bg_mgr_proc_${String(stream.streamId || '').replace(/[^a-z0-9_-]/gi, '')}`);
+  const metaBits = [];
+  if (Number(stream?.stepCount || 0) > 0) metaBits.push(`${Number(stream.stepCount)} tools`);
+  if (Number(stream?.durationMs || 0) > 0) metaBits.push(`${Math.max(1, Math.round(Number(stream.durationMs) / 1000))}s`);
+  const metaHtml = metaBits.length > 0
+    ? `<div style="margin-top:10px;font-size:10px;color:var(--muted)">${escHtml(metaBits.join(' · '))}</div>`
+    : '';
+  return renderTeamChatBubbleFrame({
+    align: 'left',
+    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">Manager · ${escHtml(stream.completed ? 'finalizing' : 'live')}</div>`,
+    radius: '18px 18px 18px 8px',
+    bubbleBg: 'var(--panel-2)',
+    bubbleColor: 'var(--text)',
+    bubbleBorder: '1px solid var(--line)',
+    shadow: '0 6px 18px rgba(0,0,0,0.10)',
+    bodyHtml: `
+      ${progressHtml}
+      ${content
+        ? `<div style="font-size:12px;line-height:1.58">${renderTeamChatTextWithMentions(content, stream.teamId, { markdown: false })}</div>`
+        : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`}
+    `,
+    metaLine: metaHtml,
+    processHtml,
+  });
+}
+
+function renderTeamMemberStreamingBubble(stream) {
+  if (!stream) return '';
+  const progressHtml = Array.isArray(stream.progressLines) && stream.progressLines.length
+    ? `<div style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
+        ${stream.progressLines.map((line) => `<div>&bull; ${escHtml(line)}</div>`).join('')}
+      </div>`
+    : '';
+  const content = String(stream.content || stream.finalReply || '').trim();
+  const processHtml = renderTeamChatProcessPill(stream.processEntries || [], `team_member_proc_${String(stream.streamId || '').replace(/[^a-z0-9_-]/gi, '')}`);
+  const metaBits = [];
+  if (Number(stream?.stepCount || 0) > 0) metaBits.push(`${Number(stream.stepCount)} tools`);
+  if (Number(stream?.durationMs || 0) > 0) metaBits.push(`${Math.max(1, Math.round(Number(stream.durationMs) / 1000))}s`);
+  const metaHtml = metaBits.length > 0
+    ? `<div style="margin-top:10px;font-size:10px;color:var(--muted)">${escHtml(metaBits.join(' · '))}</div>`
+    : '';
+  return renderTeamChatBubbleFrame({
+    align: 'left',
+    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">${escHtml(String(stream.agentName || stream.agentId || 'Team Member'))} · ${escHtml(stream.completed ? 'finalizing' : 'live')}</div>`,
+    radius: '18px 18px 18px 8px',
+    bubbleBg: 'var(--panel-2)',
+    bubbleColor: 'var(--text)',
+    bubbleBorder: '1px solid var(--line)',
+    shadow: '0 6px 18px rgba(0,0,0,0.10)',
+    bodyHtml: `
+      ${progressHtml}
+      ${content
+        ? `<div style="font-size:12px;line-height:1.58">${renderTeamChatTextWithMentions(content, stream.teamId, { markdown: false })}</div>`
+        : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`}
+    `,
+    metaLine: metaHtml,
+    processHtml,
+  });
+}
+
+function renderTeamChatStreamingBubble(team) {
+  if (!teamChatStreamingState || teamChatStreamingState.teamId !== team.id) return '';
+  const progressHtml = Array.isArray(teamChatStreamingState.progressLines) && teamChatStreamingState.progressLines.length
+    ? `<div id="team-chat-streaming-progress-lines" style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
+        ${teamChatStreamingState.progressLines.map((line) => `<div>&bull; ${escHtml(line)}</div>`).join('')}
+      </div>`
+    : '';
+  const content = String(teamChatStreamingState.content || teamChatStreamingState.finalReply || '').trim();
+  const processHtml = renderTeamChatProcessPill(teamChatStreamingState.processEntries || [], 'team_stream_proc');
+  return renderTeamChatBubbleFrame({
+    align: 'left',
+    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">Manager · live</div>`,
+    radius: '18px 18px 18px 8px',
+    bubbleBg: 'var(--panel-2)',
+    bubbleColor: 'var(--text)',
+    bubbleBorder: '1px solid var(--line)',
+    shadow: '0 6px 18px rgba(0,0,0,0.10)',
+    bodyHtml: `
+      ${progressHtml}
+      ${content
+        ? `<div id="team-chat-streaming-text-content" style="font-size:12px;line-height:1.58">${renderTeamChatTextWithMentions(content, team.id, { markdown: false })}</div>`
+        : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`}
+    `,
+    processHtml: `<div id="team-chat-streaming-process-wrapper">${processHtml}</div>`,
+  });
+}
+
+function refreshTeamChatStreamingUI(teamId, force = false) {
+  if (!teamChatStreamingState || teamChatStreamingState.teamId !== teamId || activeTeamId !== teamId || teamBoardTab !== 'chat') return;
+  refreshTeamChatComposerState(teamId);
+  if (force) {
+    renderActiveTeamChat(teamId, { forceBottom: true });
+  } else {
+    const textEl = document.getElementById('team-chat-streaming-text-content');
+    if (textEl) {
+      textEl.textContent = String(teamChatStreamingState.content || teamChatStreamingState.finalReply || '');
+    } else {
+      renderActiveTeamChat(teamId, { forceBottom: true });
+    }
+    const progressEl = document.getElementById('team-chat-streaming-progress-lines');
+    if (progressEl) {
+      const lines = Array.isArray(teamChatStreamingState.progressLines) ? teamChatStreamingState.progressLines : [];
+      progressEl.innerHTML = lines.map((line) => `<div>&bull; ${escHtml(line)}</div>`).join('');
+    }
+    const processEl = document.getElementById('team-chat-streaming-process-wrapper');
+    if (processEl) {
+      processEl.innerHTML = renderTeamChatProcessPill(teamChatStreamingState.processEntries || [], 'team_stream_proc');
+    }
+  }
+  requestAnimationFrame(() => {
+    const msgs = document.getElementById('team-chat-messages');
+    if (msgs) msgs.scrollTop = msgs.scrollHeight;
+  });
+}
+
+function refreshTeamChatComposerState(teamId) {
+  if (activeTeamId !== teamId || teamBoardTab !== 'chat') return;
+  const busy = isTeamChatBusy(teamId);
+  const queuedCount = getTeamChatQueue(teamId).length;
+  const btn = document.getElementById('team-chat-send-button');
+  if (btn) {
+    btn.textContent = busy ? 'Stop' : 'Send';
+    btn.onclick = () => busy ? abortTeamChat(teamId) : sendTeamChat(teamId);
+    btn.style.background = busy ? '#e05c5c' : 'var(--brand)';
+    btn.style.boxShadow = busy ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)';
+  }
+  const badge = document.getElementById('team-chat-queue-badge');
+  if (badge) {
+    badge.style.display = queuedCount ? 'inline-flex' : 'none';
+    badge.textContent = `${queuedCount} queued`;
+  }
+  const placeholder = document.getElementById('team-chat-input-placeholder');
+  if (placeholder) {
+    placeholder.textContent = busy
+      ? 'Queue a room note, or type @team, @manager, or @someone...'
+      : 'Post a room note, or type @team, @manager, or @someone...';
+  }
+}
+
+function attachTeamStreamingMetadata(messages, streamingState) {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  if (!streamingState) return list;
+  const finalContent = String(streamingState.finalReply || streamingState.content || '').trim();
+  let applied = false;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const msg = list[i];
+    if (msg?.from !== 'manager') continue;
+    if (finalContent && String(msg.content || '').trim() !== finalContent) continue;
+    list[i] = {
+      ...msg,
+      metadata: {
+        ...(msg.metadata || {}),
+        processEntries: Array.isArray(streamingState.processEntries) ? [...streamingState.processEntries] : [],
+        thinking: String(streamingState.thinking || '').trim() || undefined,
+      },
+    };
+    applied = true;
+    break;
+  }
+  if (!applied && finalContent) {
+    list.push({
+      id: `team_stream_${Date.now()}`,
+      timestamp: Date.now(),
+      from: 'manager',
+      fromName: 'Manager',
+      content: finalContent,
+      metadata: {
+        processEntries: Array.isArray(streamingState.processEntries) ? [...streamingState.processEntries] : [],
+        thinking: String(streamingState.thinking || '').trim() || undefined,
+        localStreamingFallback: true,
+      },
+    });
+  }
+  return list;
+}
+
+function refreshVisibleTeamChat(teamId, forceBottom = false) {
+  if (activeTeamId === teamId && teamBoardTab === 'chat') {
+    renderActiveTeamChat(teamId, { forceBottom });
+  }
+}
+
+function toggleTeamDispatchBubble(teamId, taskId) {
+  const key = `${teamId}::${taskId}`;
+  teamDispatchExpanded[key] = !teamDispatchExpanded[key];
+  refreshVisibleTeamChat(teamId, false);
+}
+
+function applyTeamDispatchStreamEvent(msg) {
+  const teamId = String(msg?.teamId || '').trim();
+  const taskId = String(msg?.taskId || '').trim();
+  if (!teamId || !taskId) return null;
+  const eventType = String(msg?.eventType || '').trim();
+  const event = msg?.data && typeof msg.data === 'object' ? msg.data : {};
+  const stream = ensureTeamDispatchStream(teamId, taskId, {
+    agentId: msg.agentId || '',
+    agentName: msg.agentName || msg.agentId || 'Subagent',
+    taskSummary: msg.taskSummary || '',
+    startedAt: Number(msg.startedAt || Date.now()),
+  });
+  if (!stream) return null;
+
+  switch (eventType) {
+    case 'token': {
+      const chunk = String(event.text || '');
+      if (chunk) stream.content = `${stream.content || ''}${chunk}`;
+      break;
+    }
+    case 'thinking_delta': {
+      const chunk = String(event.thinking || event.text || '');
+      if (chunk) {
+        stream.thinking = `${stream.thinking || ''}${chunk}`;
+        pushTeamDispatchProgressLine(stream, 'Thinking...');
+      }
+      break;
+    }
+    case 'thinking':
+    case 'agent_thought': {
+      const thought = String(event.thinking || event.text || '').trim();
+      if (!thought) break;
+      stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
+      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'info': {
+      const info = String(event.message || '').trim();
+      if (!info) break;
+      pushTeamDispatchProgressLine(stream, info);
+      addTeamDispatchProcessEntry(stream, 'info', info, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'heartbeat': {
+      const heartbeatMsg = String(event.message || event.current_step || event.state || '').trim();
+      if (heartbeatMsg) pushTeamDispatchProgressLine(stream, heartbeatMsg);
+      break;
+    }
+    case 'progress_state': {
+      const items = Array.isArray(event.items) ? event.items : [];
+      const activeIndex = Number(event.activeIndex || -1);
+      const activeItem = activeIndex >= 0 ? items[activeIndex] : null;
+      const activeText = String(activeItem?.text || '').trim();
+      if (activeText) pushTeamDispatchProgressLine(stream, activeText);
+      break;
+    }
+    case 'tool_call': {
+      const action = String(event.action || '').trim();
+      if (!action) break;
+      const stepNum = Number(event.stepNum || 0);
+      const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
+      const args = event.args && typeof event.args === 'object' ? event.args : null;
+      const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
+      stream.lastTool = action;
+      stream.stepCount = Number(stream.stepCount || 0) + 1;
+      pushTeamDispatchProgressLine(stream, `${stepPrefix}Running ${action}...`);
+      addTeamDispatchProcessEntry(
+        stream,
+        'tool',
+        `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`,
+        (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
+      );
+      break;
+    }
+    case 'tool_result': {
+      const action = String(event.action || '').trim() || 'tool';
+      const stepNum = Number(event.stepNum || 0);
+      const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
+      const text = String(event.result || '').trim();
+      const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+      pushTeamDispatchProgressLine(stream, `${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`);
+      addTeamDispatchProcessEntry(
+        stream,
+        ok ? 'result' : 'error',
+        `${stepPrefix}${action} => ${text || '(no output)'}`,
+        event.actor ? { actor: event.actor } : undefined,
+      );
+      break;
+    }
+    case 'tool_progress': {
+      const action = String(event.action || '').trim();
+      const progressMsg = String(event.message || '').trim();
+      if (!action || !progressMsg) break;
+      pushTeamDispatchProgressLine(stream, `${action}: ${progressMsg}`);
+      addTeamDispatchProcessEntry(stream, 'info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+      break;
+    }
+    case 'final': {
+      const reply = String(event.reply || event.text || '').trim();
+      if (!reply) break;
+      stream.finalReply = reply;
+      if (!stream.content) stream.content = reply;
+      addTeamDispatchProcessEntry(stream, 'final', reply);
+      break;
+    }
+    case 'done': {
+      const reply = String(event.reply || event.text || '').trim();
+      if (reply) {
+        stream.finalReply = reply;
+        if (!stream.content) stream.content = reply;
+      }
+      if (String(event.thinking || '').trim()) {
+        stream.thinking = stream.thinking
+          ? `${stream.thinking}\n\n${String(event.thinking).trim()}`
+          : String(event.thinking).trim();
+      }
+      stream.completed = true;
+      stream.status = 'finalizing';
+      stream.finishedAt = Date.now();
+      stream.durationMs = Math.max(Number(stream.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+      break;
+    }
+    default:
+      break;
+  }
+
+  stream.updatedAt = Date.now();
+  return stream;
+}
+
 function renderActiveTeamChat(teamId, opts = {}) {
   if (teamBoardTab !== 'chat' || activeTeamId !== teamId) return;
   const { forceBottom = false } = opts;
   const contentEl = document.getElementById('team-tab-content');
   if (!contentEl) return;
+  const team = teamsData.find((t) => t.id === teamId);
+  if (!team) return;
+
   const msgElBefore = document.getElementById('team-chat-messages');
   const inputBefore = document.getElementById('team-chat-input');
   const prevScrollTop = msgElBefore ? msgElBefore.scrollTop : 0;
   const wasNearBottom = msgElBefore
     ? (msgElBefore.scrollHeight - (msgElBefore.scrollTop + msgElBefore.clientHeight)) < 28
     : true;
+
+  // Fast path: chat is already mounted — patch only the messages list. This
+  // keeps the composer's textarea, focus, draft, and event listeners intact
+  // and avoids the scroll-jump that comes from replacing the whole tab.
+  if (msgElBefore && inputBefore) {
+    msgElBefore.innerHTML = _renderTeamChatMessagesInner(team);
+    refreshTeamChatComposerState(teamId);
+    requestAnimationFrame(() => {
+      const el = document.getElementById('team-chat-messages');
+      if (!el) return;
+      if (forceBottom || wasNearBottom) {
+        el.scrollTop = el.scrollHeight;
+      } else {
+        const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        el.scrollTop = Math.min(prevScrollTop, maxTop);
+      }
+    });
+    return;
+  }
+
+  // First mount — full render (sets up the composer too).
   if (inputBefore) {
     teamChatDraftByTeam[teamId] = inputBefore.value || '';
   }
-
-  const team = teamsData.find(t => t.id === teamId);
-  if (!team) return;
   contentEl.innerHTML = renderTeamChatTab(team);
 
   const inputAfter = document.getElementById('team-chat-input');
@@ -93,18 +1468,25 @@ function renderActiveTeamChat(teamId, opts = {}) {
     inputAfter.value = teamChatDraftByTeam[teamId] || '';
     inputAfter.addEventListener('input', () => {
       teamChatDraftByTeam[teamId] = inputAfter.value || '';
+      resizeTeamChatInput();
+      refreshTeamChatMentionState(teamId);
     });
+    inputAfter.addEventListener('keydown', (event) => handleTeamChatInputKeydown(event, teamId));
+    inputAfter.addEventListener('click', () => refreshTeamChatMentionState(teamId));
+    inputAfter.addEventListener('keyup', () => refreshTeamChatMentionState(teamId));
+    inputAfter.addEventListener('scroll', () => syncTeamChatInputMirror(teamId));
+    resizeTeamChatInput();
+    refreshTeamChatMentionState(teamId);
+    refreshTeamChatComposerState(teamId);
+  } else {
+    hideTeamChatMentionPopover();
   }
 
   requestAnimationFrame(() => {
     const msgElAfter = document.getElementById('team-chat-messages');
     if (!msgElAfter) return;
-    if (forceBottom || wasNearBottom) {
-      msgElAfter.scrollTop = msgElAfter.scrollHeight;
-    } else {
-      const maxTop = Math.max(0, msgElAfter.scrollHeight - msgElAfter.clientHeight);
-      msgElAfter.scrollTop = Math.min(prevScrollTop, maxTop);
-    }
+    // On first mount always land at the bottom (newest messages).
+    msgElAfter.scrollTop = msgElAfter.scrollHeight;
   });
 }
 
@@ -763,6 +2145,7 @@ async function loadTeamBoardData(teamId) {
       window._allAgentsForTeam = agentsData.agents;
     }
     teamRuns = runsData.runs || [];
+    teamRoomState = runsData.roomState || null;
     const nextLive = {};
     for (const run of teamRuns) {
       const taskId = String(run?.taskId || '').trim();
@@ -772,9 +2155,11 @@ async function loadTeamBoardData(teamId) {
       }
     }
     teamActiveRunsByTeam[teamId] = nextLive;
-    teamChatMessages = chatData.messages || [];
+    teamChatMessages = mergeDispatchMetadataIntoMessages(teamId, chatData.messages || []);
     teamWorkspaceFiles = workspaceData.files || [];
-      teamWorkspaceTree = workspaceData.tree || [];
+    teamWorkspaceTree = workspaceData.tree || [];
+    teamWorkspaceData = workspaceData || null;
+    reconcileTeamDispatchStreamsWithMessages(teamId, teamChatMessages);
     activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
   } catch (err) {
     console.error('[Teams] Load board data failed:', err);
@@ -806,8 +2191,8 @@ function renderTeamBoard(teamId) {
     </div>`;
 
   // Tabs
-  const tabs = ['context','workspace','memory','runs','chat'];
-  const tabLabels = { context:'Context', workspace:'Workspace', memory:'Memory', runs:'Runs', chat:'Team Chat' };
+  const tabs = ['context','subagents','workspace','memory','runs','chat'];
+  const tabLabels = { context:'Context', subagents:'Subagents', workspace:'Workspace', memory:'Memory', runs:'Runs', chat:'Team Chat' };
   const pendingCount = (team.pendingChanges||[]).length;
   body.innerHTML = `
     <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 16px;flex-shrink:0;background:var(--panel-2)">
@@ -826,18 +2211,7 @@ function renderTeamBoard(teamId) {
 
   // Start chat polling
   clearInterval(teamChatPolling);
-  if (teamBoardTab === 'chat') {
-    teamChatPolling = setInterval(() => {
-      api(`/api/teams/${teamId}/chat?limit=100`).then(d => {
-        const nextMessages = d.messages || [];
-        const nextSig = getTeamChatSignature(nextMessages);
-        if (nextSig === activeTeamChatSignature) return;
-        teamChatMessages = nextMessages;
-        activeTeamChatSignature = nextSig;
-        renderActiveTeamChat(teamId, { forceBottom: false });
-      }).catch(() => {});
-    }, 5000);
-  }
+  teamChatPolling = null;
 }
 
 function switchTeamTab(tab, teamId) {
@@ -846,11 +2220,51 @@ function switchTeamTab(tab, teamId) {
   if (tab === 'chat') {
     setTimeout(() => renderActiveTeamChat(teamId, { forceBottom: true }), 100);
   }
+  if (tab === 'memory') {
+    loadTeamMemoryFiles(teamId);
+  }
+  if (tab === 'workspace' && teamWorkspaceOpenFile && teamWorkspaceOpenFile.teamId === teamId) {
+    // Re-mount the CodeMirror editor when returning to the workspace tab
+    setTimeout(() => _mountWorkspaceCm(), 50);
+  }
+  if (tab === 'subagents') {
+    // First open: pick the first agent if none selected
+    const team = teamsData.find(t => t.id === teamId);
+    if (team && !teamSubagentDetailId && (team.subagentIds || []).length > 0) {
+      openTeamSubagentDetail(teamId, team.subagentIds[0]);
+    }
+  }
+}
+
+async function loadTeamMemoryFiles(teamId) {
+  teamMemoryFiles = { memory: null, lastRun: null, pending: null, loading: true };
+  // Re-render to show loading
+  if (teamBoardTab === 'memory' && activeTeamId === teamId) {
+    const el = document.getElementById('team-tab-content');
+    if (el) el.innerHTML = renderTeamTabContent(teamsData.find(t => t.id === teamId) || {});
+  }
+  const fetchOne = async (name) => {
+    try {
+      const d = await api(`/api/teams/${teamId}/workspace/${encodeURIComponent(name)}`);
+      try { return JSON.parse(d.content || ''); } catch { return { _raw: d.content }; }
+    } catch { return null; }
+  };
+  const [memory, lastRun, pending] = await Promise.all([
+    fetchOne('memory.json'),
+    fetchOne('last_run.json'),
+    fetchOne('pending.json'),
+  ]);
+  teamMemoryFiles = { memory, lastRun, pending, loading: false };
+  if (teamBoardTab === 'memory' && activeTeamId === teamId) {
+    const el = document.getElementById('team-tab-content');
+    if (el) el.innerHTML = renderTeamTabContent(teamsData.find(t => t.id === teamId) || {});
+  }
 }
 
 function renderTeamTabContent(team) {
   switch (teamBoardTab) {
     case 'context': return renderTeamContextTab(team);
+    case 'subagents': return renderTeamSubagentsTab(team);
     case 'workspace': return renderTeamWorkspaceTab(team);
     case 'memory': return renderTeamMemoryTab(team);
     case 'runs': return renderTeamRunsTab(team);
@@ -859,13 +2273,154 @@ function renderTeamTabContent(team) {
   }
 }
 
-// --- Workspace file icon helper ---------------------------------------------
-function _wsFileIcon(name) {
+// --- Workspace file type label (color + 3-letter tag, no emojis) ----------
+function _wsFileTag(name) {
   const ext = (name || '').split('.').pop().toLowerCase();
-  return { json:'📄', md:'📝', txt:'📝', log:'📋', csv:'📊', html:'🌐', htm:'🌐',
-           js:'⚙️', ts:'⚙️', jsx:'⚙️', tsx:'⚙️', py:'🐍', sh:'⚙️',
-           png:'🖼️', jpg:'🖼️', jpeg:'🖼️', gif:'🖼️', svg:'🖼️',
-           zip:'📦', gz:'📦', env:'🔒' }[ext] || '📄';
+  const map = {
+    json: ['JSN', '#0d4faf', '#eaf2ff'],
+    md:   ['MD',  '#0f6e3a', '#eafaf0'],
+    txt:  ['TXT', '#666',    '#f0f0f0'],
+    log:  ['LOG', '#7a5a00', '#fff7e0'],
+    csv:  ['CSV', '#0f6e3a', '#eafaf0'],
+    html: ['HTM', '#b04a00', '#fff1e6'],
+    htm:  ['HTM', '#b04a00', '#fff1e6'],
+    js:   ['JS',  '#7a5a00', '#fff7e0'],
+    ts:   ['TS',  '#0d4faf', '#eaf2ff'],
+    jsx:  ['JSX', '#7a5a00', '#fff7e0'],
+    tsx:  ['TSX', '#0d4faf', '#eaf2ff'],
+    py:   ['PY',  '#0d4faf', '#eaf2ff'],
+    sh:   ['SH',  '#444',    '#ececec'],
+    png:  ['IMG', '#7a3aa8', '#f3eaff'],
+    jpg:  ['IMG', '#7a3aa8', '#f3eaff'],
+    jpeg: ['IMG', '#7a3aa8', '#f3eaff'],
+    gif:  ['IMG', '#7a3aa8', '#f3eaff'],
+    svg:  ['SVG', '#7a3aa8', '#f3eaff'],
+    zip:  ['ZIP', '#666',    '#f0f0f0'],
+    gz:   ['GZ',  '#666',    '#f0f0f0'],
+    env:  ['ENV', '#b42323', '#fff0f0'],
+  };
+  const [label, fg, bg] = map[ext] || [(ext || 'FIL').slice(0,3).toUpperCase(), '#555', '#eee'];
+  return `<span style="font-size:9px;font-weight:800;letter-spacing:0.04em;color:${fg};background:${bg};border-radius:3px;padding:1px 5px;font-family:'IBM Plex Mono',monospace;flex-shrink:0">${label}</span>`;
+}
+
+function _teamRoomState() {
+  return teamRoomState || {};
+}
+
+function _teamAgentName(agentId) {
+  const ag = _findAgentInTeam(agentId);
+  return ag?.name || agentId || 'agent';
+}
+
+function _teamStatePill(label, value, color = 'var(--muted)') {
+  return `<span style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:2px 7px;font-size:10px;font-weight:700;color:${color};white-space:nowrap">${escHtml(label)}${value ? `: ${escHtml(value)}` : ''}</span>`;
+}
+
+function _renderTeamMemberStatesCompact(roomState) {
+  const states = Object.values(roomState?.memberStates || {});
+  if (states.length === 0) {
+    return `<div style="font-size:11px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel-2)">No member state updates yet.</div>`;
+  }
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">
+    ${states.map(st => {
+      const status = String(st.status || 'idle');
+      const color = status === 'blocked' ? '#b42323' : status === 'running' ? '#0d4faf' : status === 'ready' || status === 'done' ? '#0f6e3a' : 'var(--muted)';
+      return `<div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:9px;display:flex;flex-direction:column;gap:5px;min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+          <div style="font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(_teamAgentName(st.agentId))}</div>
+          ${_teamStatePill(status, '', color)}
+        </div>
+        ${st.currentTask ? `<div style="font-size:11px;color:var(--text);line-height:1.35;overflow-wrap:anywhere">${escHtml(st.currentTask)}</div>` : ''}
+        ${st.blockedReason ? `<div style="font-size:11px;color:#b42323;line-height:1.35;overflow-wrap:anywhere">${escHtml(st.blockedReason)}</div>` : ''}
+        ${st.lastUpdateAt ? `<div style="font-size:10px;color:var(--muted)">${timeAgo(st.lastUpdateAt)}</div>` : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function _renderTeamActiveDispatches(roomState) {
+  const dispatches = roomState?.activeDispatches || [];
+  if (dispatches.length === 0) {
+    return `<div style="font-size:11px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel-2)">No active dispatches.</div>`;
+  }
+  return `<div style="display:flex;flex-direction:column;gap:6px">
+    ${dispatches.map(d => `<div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:8px 10px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+        <span style="font-size:12px;font-weight:800">${escHtml(d.agentName || _teamAgentName(d.agentId))}</span>
+        ${_teamStatePill(String(d.status || 'queued'), '')}
+      </div>
+      <div style="font-size:11px;color:var(--text);line-height:1.4;overflow-wrap:anywhere">${escHtml(d.taskSummary || '')}</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">${d.startedAt ? `started ${timeAgo(d.startedAt)}` : d.createdAt ? `queued ${timeAgo(d.createdAt)}` : ''}</div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function _renderTeamPlanOwnership(plan) {
+  const items = Array.isArray(plan) ? plan : [];
+  if (items.length === 0) {
+    return `<div style="font-size:11px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel-2)">No plan ownership yet.</div>`;
+  }
+  return `<div style="display:flex;flex-direction:column;gap:6px">
+    ${items.slice(-20).map(item => `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start;border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:8px 10px">
+      <div style="min-width:0">
+        <div style="font-size:12px;font-weight:700;line-height:1.35;overflow-wrap:anywhere">${escHtml(item.description || '')}</div>
+        ${item.reason ? `<div style="font-size:10px;color:var(--muted);line-height:1.35;margin-top:3px;overflow-wrap:anywhere">${escHtml(item.reason)}</div>` : ''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+        ${_teamStatePill(String(item.status || 'pending'), '')}
+        ${item.ownerAgentId ? _teamStatePill('owner', _teamAgentName(item.ownerAgentId), '#0d4faf') : _teamStatePill('owner', 'unassigned')}
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function _renderTeamEventsList(events, emptyLabel) {
+  const list = Array.isArray(events) ? events : [];
+  if (list.length === 0) {
+    return `<div style="font-size:11px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel-2)">${escHtml(emptyLabel || 'No events yet.')}</div>`;
+  }
+  return `<div style="display:flex;flex-direction:column;gap:6px">
+    ${list.slice().reverse().slice(0, 12).map(ev => `<div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:8px 10px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap">
+        <span style="font-size:11px;font-weight:800">${escHtml(ev.actorName || ev.actorId || 'system')}</span>
+        ${ev.metadata?.source ? _teamStatePill(String(ev.metadata.source), '') : ''}
+        ${ev.timestamp ? `<span style="font-size:10px;color:var(--muted)">${timeAgo(ev.timestamp)}</span>` : ''}
+      </div>
+      <div style="font-size:11px;line-height:1.4;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(ev.content || '')}</div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function _renderTeamArtifactsList(artifacts) {
+  const list = Array.isArray(artifacts) ? artifacts : [];
+  if (list.length === 0) {
+    return `<div style="font-size:11px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel-2)">No shared artifacts yet.</div>`;
+  }
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">
+    ${list.slice().reverse().slice(0, 12).map(a => `<div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:9px;display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;align-items:center;gap:6px">
+        ${_teamStatePill(String(a.type || 'artifact'), '')}
+        <span style="font-size:10px;color:var(--muted)">${a.createdAt ? timeAgo(a.createdAt) : ''}</span>
+      </div>
+      <div style="font-size:12px;font-weight:800;overflow-wrap:anywhere">${escHtml(a.name || 'Untitled')}</div>
+      ${a.description ? `<div style="font-size:11px;color:var(--muted);line-height:1.35;overflow-wrap:anywhere">${escHtml(a.description)}</div>` : ''}
+      ${a.path ? `<div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;overflow-wrap:anywhere">${escHtml(a.path)}</div>` : ''}
+    </div>`).join('')}
+  </div>`;
+}
+
+function _renderTeamBlockersList(blockers) {
+  const list = Array.isArray(blockers) ? blockers : [];
+  if (list.length === 0) {
+    return `<div style="font-size:11px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel-2)">No open blockers.</div>`;
+  }
+  return `<div style="display:flex;flex-direction:column;gap:6px">
+    ${list.slice().reverse().slice(0, 12).map(b => `<div style="border:1px solid #f2c5c5;background:#fff5f5;border-radius:8px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:800;color:#b42323;margin-bottom:3px">${escHtml(b.fromAgentId ? _teamAgentName(b.fromAgentId) : 'Team')}</div>
+      <div style="font-size:11px;line-height:1.4;color:#7a1d1d;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(b.content || '')}</div>
+      ${b.createdAt ? `<div style="font-size:10px;color:#9d4b4b;margin-top:4px">${timeAgo(b.createdAt)}</div>` : ''}
+    </div>`).join('')}
+  </div>`;
 }
 
 function _wsFileSize(bytes) {
@@ -875,47 +2430,44 @@ function _wsFileSize(bytes) {
   return bytes+'B';
 }
 
-// Render a workspace tree entry (file or folder) at a given indent depth
+// Render a workspace tree entry (file or folder) at a given indent depth.
+// Clean directory tree, no emojis. Folders are flat rows; files are indented
+// under their parent with a left guide line.
 function renderWorkspaceTree(entries, depth) {
   if (!entries || entries.length === 0) return '';
-  const indent = depth * 16;
+  const indent = depth * 14;
   return entries.map(entry => {
     if (entry.isDirectory) {
       const relPath = entry.relativePath || entry.name;
       const isOpen = workspaceFolderExpanded.has(relPath);
-      const chevron = isOpen ? '▼' : '▶';
+      const chevron = isOpen ? '▾' : '▸'; // ▾ ▸
+      const count = (entry.children || []).length;
       const childrenHtml = isOpen ? renderWorkspaceTree(entry.children || [], depth + 1) : '';
       return `
         <div>
-          <div onclick="toggleWorkspaceFolder('${escHtml(relPath)}')" style="display:flex;align-items:center;gap:6px;padding:6px 8px;padding-left:${indent + 8}px;border-radius:7px;cursor:pointer;user-select:none;background:var(--panel-2);border:1px solid var(--line);margin-bottom:2px" onmouseover="this.style.background='var(--panel-hover)'" onmouseout="this.style.background='var(--panel-2)'">
-            <span style="color:var(--muted);font-size:11px;width:10px;flex-shrink:0">${chevron}</span>
-            <span style="font-size:16px">📁</span>
-            <span style="font-size:13px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(entry.name)}/</span>
-            <span style="font-size:10px;color:var(--muted)">${(entry.children || []).length} item${(entry.children||[]).length===1?'':'s'}</span>
+          <div onclick="toggleWorkspaceFolder('${escHtml(relPath)}')" style="display:flex;align-items:center;gap:7px;padding:5px 8px;padding-left:${indent + 8}px;border-radius:5px;cursor:pointer;user-select:none" onmouseover="this.style.background='var(--panel-2)'" onmouseout="this.style.background='transparent'">
+            <span style="color:var(--muted);font-size:10px;width:10px;flex-shrink:0;text-align:center">${chevron}</span>
+            <span style="font-size:13px;font-weight:700;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(entry.name)}</span>
+            <span style="font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums">${count}</span>
           </div>
-          ${isOpen ? `<div style="border-left:2px solid var(--line);margin-left:${indent + 20}px;margin-bottom:4px;padding-left:4px">${childrenHtml}</div>` : ''}
+          ${isOpen ? `<div style="margin-left:${indent + 13}px;border-left:1px solid var(--line);padding-left:0">${childrenHtml}</div>` : ''}
         </div>`;
     }
-    // File entry
-    const icon = _wsFileIcon(entry.name);
+    // File row — compact single line with tag, name, size, time. Click to open in viewer.
+    const tag = _wsFileTag(entry.name);
     const size = _wsFileSize(entry.size);
-    const agentTag = entry.writtenBy ? `<span style="font-size:10px;background:#eaf2ff;color:#0d4faf;border-radius:4px;padding:1px 6px;font-weight:600">${escHtml(entry.writtenBy)}</span>` : '';
-    const readTags = (entry.readBy || []).map(id => `<span style="font-size:10px;background:#f0fdf4;color:#166534;border-radius:4px;padding:1px 5px">${escHtml(id)}</span>`).join('');
+    const agentTag = entry.writtenBy ? `<span style="font-size:10px;background:#eaf2ff;color:#0d4faf;border-radius:3px;padding:0 5px;font-weight:600">w: ${escHtml(entry.writtenBy)}</span>` : '';
+    const readTags = (entry.readBy || []).slice(0,3).map(id => `<span style="font-size:10px;background:#f0fdf4;color:#166534;border-radius:3px;padding:0 5px">r: ${escHtml(id)}</span>`).join('');
+    const rel = (entry.relativePath || entry.name).replace(/'/g, "\\'");
+    const isOpen = teamWorkspaceOpenFile && teamWorkspaceOpenFile.relpath === (entry.relativePath || entry.name);
     return `
-      <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;padding-left:${indent + 11}px;margin-bottom:3px">
-        <div style="display:flex;align-items:flex-start;gap:9px">
-          <span style="font-size:18px;flex-shrink:0;margin-top:1px">${icon}</span>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:12px;font-weight:700;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(entry.relativePath || entry.name)}">${escHtml(entry.name)}</div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">
-              ${size ? `<span style="font-size:11px;color:var(--muted)">${size}</span>` : ''}
-              ${entry.modifiedAt ? `<span style="font-size:11px;color:var(--muted)">· ${timeAgo(entry.modifiedAt)}</span>` : ''}
-              ${agentTag ? `<span style="font-size:10px;color:var(--muted)">Written by:</span>${agentTag}` : ''}
-              ${readTags ? `<span style="font-size:10px;color:var(--muted)">Read by:</span>${readTags}` : ''}
-            </div>
-            ${entry.preview ? `<div style="font-size:11px;color:var(--muted);margin-top:5px;font-family:'IBM Plex Mono',monospace;background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:5px 7px;white-space:pre-wrap;max-height:56px;overflow:hidden">${escHtml(entry.preview)}</div>` : ''}
-          </div>
-        </div>
+      <div onclick="openTeamWorkspaceFile('${rel}')" style="display:flex;align-items:center;gap:8px;padding:4px 8px;padding-left:${indent + 8}px;border-radius:5px;font-size:12px;cursor:pointer;${isOpen?'background:var(--panel-2);outline:1px solid var(--brand)':''}" onmouseover="if(!this.dataset.open)this.style.background='var(--panel-2)'" onmouseout="if(!this.dataset.open)this.style.background='${isOpen?'var(--panel-2)':'transparent'}'" data-open="${isOpen?'1':''}" title="${escHtml(entry.relativePath || entry.name)}">
+        ${tag}
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${escHtml(entry.name)}</span>
+        ${agentTag}
+        ${readTags}
+        ${size ? `<span style="font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${size}</span>` : ''}
+        ${entry.modifiedAt ? `<span style="font-size:10px;color:var(--muted);min-width:64px;text-align:right">${timeAgo(entry.modifiedAt)}</span>` : ''}
       </div>`;
   }).join('');
 }
@@ -936,28 +2488,195 @@ function toggleWorkspaceFolder(relPath) {
 
 function renderTeamWorkspaceTab(team) {
   const tree = teamWorkspaceTree || [];
-  const treeHtml = tree.length === 0
-    ? `<div style="text-align:center;color:var(--muted);font-size:13px;padding:32px 16px">
-        <div style="font-size:36px;margin-bottom:10px">🗂</div>
+  const treeBody = tree.length === 0
+    ? `<div style="text-align:center;color:var(--muted);font-size:12px;padding:24px 12px">
         <div style="font-weight:700;margin-bottom:6px">No workspace files yet</div>
-        <div style="font-size:12px;line-height:1.6">Agents write shared files here during runs.<br>Example: a scraper writes <code style="background:var(--panel-2);padding:1px 5px;border-radius:4px">news.json</code>, a writer reads it and outputs <code style="background:var(--panel-2);padding:1px 5px;border-radius:4px">post.md</code>.</div>
+        <div style="line-height:1.6">Agents write shared files here during runs.</div>
       </div>`
-    : `<div style="display:flex;flex-direction:column;gap:0">${renderWorkspaceTree(tree, 0)}</div>`;
+    : `<div id="team-workspace-files-${team.id}" style="display:flex;flex-direction:column;gap:0">${renderWorkspaceTree(tree, 0)}</div>`;
 
   return `
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div>
+    <div style="display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;height:calc(100vh - 220px)">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <div style="min-width:0">
           <div style="font-size:13px;font-weight:800">Shared Workspace</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Files agents create, read, and pass between each other during runs</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(teamWorkspaceData?.workspacePath || '')}">${escHtml(teamWorkspaceData?.workspacePath || `teams/${team.id}/workspace`)}</div>
         </div>
-        <button onclick="refreshTeamWorkspace('${team.id}');switchTeamTab('workspace','${team.id}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">↻ Refresh</button>
+        <button onclick="refreshTeamWorkspace('${team.id}');switchTeamTab('workspace','${team.id}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Refresh</button>
       </div>
-      <div style="background:var(--panel-2);border:1px dashed var(--line-strong);border-radius:10px;padding:10px 14px;font-size:11px;color:var(--muted);line-height:1.7">
-        💡 <strong>How it works:</strong> Each team gets a shared <code style="background:var(--panel);padding:1px 5px;border-radius:4px">workspace/</code> directory. Configure agents to read/write files there. Example pipeline: <em>scraper → news.json → writer → post.md → poster → publish</em>
+      <div style="display:flex;gap:10px;flex:1;min-height:0">
+        <div style="width:340px;flex-shrink:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;overflow:auto">${treeBody}</div>
+        <div id="team-workspace-viewer" style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden">${renderTeamWorkspaceViewer(team)}</div>
       </div>
-      ${treeHtml}
     </div>`;
+}
+
+function _wsModeFromName(name) {
+  const ext = String(name || '').split('.').pop().toLowerCase();
+  if (['js','jsx','ts','tsx','mjs','cjs'].includes(ext)) return 'javascript';
+  if (ext === 'json') return { name: 'javascript', json: true };
+  if (['md','markdown'].includes(ext)) return 'markdown';
+  if (['html','htm'].includes(ext)) return 'htmlmixed';
+  if (ext === 'css') return 'css';
+  if (ext === 'xml') return 'xml';
+  if (ext === 'py') return 'python';
+  return null; // plain text
+}
+
+function renderTeamWorkspaceViewer(team) {
+  const open = teamWorkspaceOpenFile;
+  if (!open || open.teamId !== team.id) {
+    return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;padding:24px;text-align:center">
+      <div>
+        <div style="font-weight:700;margin-bottom:6px">No file open</div>
+        <div style="font-size:12px">Click any file in the tree to view or edit it here.</div>
+      </div>
+    </div>`;
+  }
+  if (open.loading) {
+    return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px">Loading ${escHtml(open.name)}…</div>`;
+  }
+  if (open.error) {
+    return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:#b42323;font-size:12px;padding:16px;text-align:center">${escHtml(open.error)}</div>`;
+  }
+  return `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel-2);flex-shrink:0">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(open.relpath)}">${escHtml(open.relpath)}${open.dirty ? ' <span style="color:#b06b00;font-weight:800">●</span>' : ''}</div>
+        <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${(open.content || '').length} chars${open.modifiedAt ? ' · modified ' + timeAgo(open.modifiedAt) : ''}</div>
+      </div>
+      <button onclick="reloadTeamWorkspaceFile('${team.id}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">Reload</button>
+      <button onclick="saveTeamWorkspaceFile('${team.id}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:6px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
+      <button onclick="closeTeamWorkspaceFile()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">Close</button>
+    </div>
+    <div id="team-workspace-cm" style="flex:1;min-height:0;overflow:hidden"></div>
+    <div id="team-workspace-viewer-status" style="font-size:11px;color:var(--muted);padding:4px 10px;border-top:1px solid var(--line);min-height:18px;flex-shrink:0"></div>`;
+}
+
+async function openTeamWorkspaceFile(relpath) {
+  if (!activeTeamId) return;
+  const teamId = activeTeamId;
+  const name = String(relpath).split('/').pop() || relpath;
+  teamWorkspaceOpenFile = { teamId, relpath, name, content: '', loading: true, dirty: false };
+  _renderWorkspaceViewerOnly();
+  try {
+    const d = await api(`/api/teams/${teamId}/workspace/${encodeURIComponent(name)}?relpath=${encodeURIComponent(relpath)}`);
+    teamWorkspaceOpenFile = {
+      teamId, relpath, name,
+      content: d.content || '',
+      modifiedAt: d.modifiedAt,
+      loading: false,
+      dirty: false,
+      mode: _wsModeFromName(name),
+    };
+  } catch (err) {
+    teamWorkspaceOpenFile = { teamId, relpath, name, loading: false, error: err?.message || String(err) };
+  }
+  _renderWorkspaceViewerOnly();
+  _mountWorkspaceCm();
+  // Re-render the tree row highlight
+  if (teamBoardTab === 'workspace') {
+    const treePane = document.querySelector('#team-tab-content [id^="team-workspace-files-"]');
+    if (treePane) treePane.innerHTML = renderWorkspaceTree(teamWorkspaceTree || [], 0);
+  }
+}
+
+function _renderWorkspaceViewerOnly() {
+  const team = teamsData.find((t) => t.id === activeTeamId);
+  const viewer = document.getElementById('team-workspace-viewer');
+  if (!team || !viewer) return;
+  viewer.innerHTML = renderTeamWorkspaceViewer(team);
+}
+
+function _mountWorkspaceCm() {
+  const open = teamWorkspaceOpenFile;
+  if (!open || open.loading || open.error) return;
+  const host = document.getElementById('team-workspace-cm');
+  if (!host || typeof CodeMirror === 'undefined') return;
+  host.innerHTML = '';
+  _teamWorkspaceCm = CodeMirror(host, {
+    value: open.content || '',
+    mode: open.mode || null,
+    theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'material-darker' : 'default',
+    lineNumbers: true,
+    lineWrapping: true,
+    viewportMargin: Infinity,
+  });
+  _teamWorkspaceCm.on('change', () => {
+    if (!teamWorkspaceOpenFile) return;
+    const next = _teamWorkspaceCm.getValue();
+    const wasDirty = teamWorkspaceOpenFile.dirty;
+    teamWorkspaceOpenFile.content = next;
+    teamWorkspaceOpenFile.dirty = true;
+    if (!wasDirty) _refreshWorkspaceViewerHeader();
+  });
+  setTimeout(() => _teamWorkspaceCm && _teamWorkspaceCm.refresh(), 50);
+}
+
+function _refreshWorkspaceViewerHeader() {
+  // Cheap header-only refresh — just re-render the viewer header line
+  // (without remounting the editor).
+  const open = teamWorkspaceOpenFile;
+  if (!open) return;
+  const viewer = document.getElementById('team-workspace-viewer');
+  if (!viewer) return;
+  const headerTitle = viewer.querySelector('div > div > div:first-child');
+  if (headerTitle) {
+    headerTitle.innerHTML = `${escHtml(open.relpath)}${open.dirty ? ' <span style="color:#b06b00;font-weight:800">●</span>' : ''}`;
+  }
+}
+
+async function reloadTeamWorkspaceFile(teamId) {
+  if (!teamWorkspaceOpenFile) return;
+  const { relpath, name } = teamWorkspaceOpenFile;
+  try {
+    const d = await api(`/api/teams/${teamId}/workspace/${encodeURIComponent(name)}?relpath=${encodeURIComponent(relpath)}`);
+    teamWorkspaceOpenFile.content = d.content || '';
+    teamWorkspaceOpenFile.modifiedAt = d.modifiedAt;
+    teamWorkspaceOpenFile.dirty = false;
+    if (_teamWorkspaceCm) _teamWorkspaceCm.setValue(d.content || '');
+    _refreshWorkspaceViewerHeader();
+    const status = document.getElementById('team-workspace-viewer-status');
+    if (status) status.textContent = 'Reloaded.';
+  } catch (err) {
+    const status = document.getElementById('team-workspace-viewer-status');
+    if (status) status.textContent = `Error: ${err?.message || err}`;
+  }
+}
+
+async function saveTeamWorkspaceFile(teamId) {
+  if (!teamWorkspaceOpenFile) return;
+  const { relpath, name } = teamWorkspaceOpenFile;
+  const content = _teamWorkspaceCm ? _teamWorkspaceCm.getValue() : (teamWorkspaceOpenFile.content || '');
+  const status = document.getElementById('team-workspace-viewer-status');
+  if (status) status.textContent = 'Saving…';
+  try {
+    await api(`/api/teams/${teamId}/workspace/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, relpath }),
+    });
+    teamWorkspaceOpenFile.content = content;
+    teamWorkspaceOpenFile.dirty = false;
+    teamWorkspaceOpenFile.modifiedAt = Date.now();
+    _refreshWorkspaceViewerHeader();
+    if (status) status.textContent = 'Saved.';
+    bgtToast('Saved', `${relpath} updated`);
+    // Refresh workspace cache so the tree reflects new size/mtime
+    refreshTeamWorkspace(teamId);
+  } catch (err) {
+    if (status) status.textContent = `Error: ${err?.message || err}`;
+  }
+}
+
+function closeTeamWorkspaceFile() {
+  teamWorkspaceOpenFile = null;
+  _teamWorkspaceCm = null;
+  _renderWorkspaceViewerOnly();
+  if (teamBoardTab === 'workspace' && activeTeamId) {
+    const treePane = document.querySelector('#team-tab-content [id^="team-workspace-files-"]');
+    if (treePane) treePane.innerHTML = renderWorkspaceTree(teamWorkspaceTree || [], 0);
+  }
 }
 
 function getTeamContextReferences(team) {
@@ -1003,6 +2722,7 @@ function renderTeamContextTab(team) {
   const purposeText = team.purpose || team.mission || team.teamContext || '';
   const currentTask = team.currentFocus || '';
   const lastReviewAt = team.manager?.lastReviewAt;
+  const roomState = _teamRoomState();
 
   return `
     <div>
@@ -1025,13 +2745,29 @@ function renderTeamContextTab(team) {
         </div>
       </div>
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Member States</div>
+        ${_renderTeamMemberStatesCompact(roomState)}
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Active Dispatches</div>
+        ${_renderTeamActiveDispatches(roomState)}
+      </div>
+    </div>
     <div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <div>
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Context &amp; Reference</div>
           <div style="font-size:10px;color:var(--muted);margin-top:2px">Each save adds a new card. Cards are injected into manager + subagent runtime context.</div>
         </div>
-        <button id="ctx-save-btn-${team.id}" onclick="saveTeamContextNotes('${team.id}')" style="flex-shrink:0;border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;margin-left:12px">Save</button>
+        <div style="display:flex;gap:6px;flex-shrink:0;margin-left:12px">
+          <label style="cursor:pointer;border:1px solid var(--line);background:var(--panel-2);border-radius:7px;padding:5px 10px;font-size:11px;font-weight:600;color:var(--muted)">
+            📎 Upload File
+            <input type="file" style="display:none" onchange="uploadTeamContextFile('${team.id}',this)" />
+          </label>
+          <button id="ctx-save-btn-${team.id}" onclick="saveTeamContextNotes('${team.id}')" style="border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:10px">
         <input
@@ -1135,55 +2871,538 @@ function renderTeamContextTab(team) {
     </div>`;
 }
 
-function renderTeamMemoryTab(team) {
-  const notes = (team.managerNotes || []).slice().reverse();
-  const pending = team.pendingChanges || [];
-  const history = (team.changeHistory || []).slice().reverse().slice(0, 20);
+function _memoryFileSection(title, subtitle, value) {
+  if (value === null || value === undefined) {
+    return `
+      <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px">
+        <div style="font-size:12px;font-weight:800;margin-bottom:2px">${escHtml(title)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${escHtml(subtitle)}</div>
+        <div style="font-size:11px;color:var(--muted);font-style:italic">File not found yet — created on first run.</div>
+      </div>`;
+  }
+  let body = '';
+  if (value && value._raw) {
+    body = `<pre style="margin:0;font-size:11px;font-family:'IBM Plex Mono',monospace;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(value._raw)}</pre>`;
+  } else {
+    const json = JSON.stringify(value, null, 2);
+    body = `<pre style="margin:0;font-size:11px;font-family:'IBM Plex Mono',monospace;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px;max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(json)}</pre>`;
+  }
   return `
-    ${pending.length > 0 ? `
-      <div>
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#e05c5c;margin-bottom:8px">? Pending Changes (${pending.length})</div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          ${pending.map(c => `
-            <div style="background:var(--panel-2);border:1px solid var(--line);border-left:3px solid ${c.riskLevel==='high'?'#e05c5c':c.riskLevel==='medium'?'#d6a64f':'#31b884'};border-radius:8px;padding:10px 12px">
-              <div style="font-size:12px;font-weight:700;margin-bottom:4px">${escHtml(c.description)}</div>
-              <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Risk: ${c.riskLevel} · ${c.targetSubagentId ? 'Target: ' + c.targetSubagentId : 'Team-wide'}</div>
-              <div style="display:flex;gap:6px">
-                <button onclick="applyTeamChangeFn('${team.id}','${c.id}')" style="background:#31b884;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Apply</button>
-                <button onclick="rejectTeamChangeFn('${team.id}','${c.id}')" style="background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">Reject</button>
-              </div>
-            </div>`).join('')}
-        </div>
-      </div>` : ''}
-    <div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Manager Notes</div>
-      ${notes.length === 0 ? '<div style="color:var(--muted);font-size:13px">No notes yet. Manager will write notes after first review.</div>' : ''}
-      <div style="display:flex;flex-direction:column;gap:6px">
-        ${notes.slice(0,30).map(n => `
-          <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px">
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-              <span style="font-size:10px;background:${n.type==='decision'?'#eaf2ff':n.type==='analysis'?'#f0fff0':'#fff8e6'};color:${n.type==='decision'?'#0d4faf':n.type==='analysis'?'#0f6e3a':'#7a5a00'};border-radius:4px;padding:2px 6px;font-weight:700">${n.type}</span>
-              <span style="font-size:10px;color:var(--muted)">${timeAgo(n.timestamp)}</span>
-            </div>
-            <div style="font-size:12px;line-height:1.5;color:var(--text)">${escHtml(n.content)}</div>
-          </div>`).join('')}
-      </div>
-    </div>
-    ${history.length > 0 ? `
-      <div>
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Change History</div>
-        <div style="display:flex;flex-direction:column;gap:4px">
-          ${history.map(c => `
-            <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;font-size:11px">
-              <span style="color:${c.status==='applied'?'#31b884':'#e05c5c'};font-size:12px">${c.status==='applied'?'?':'?'}</span>
-              <span style="flex:1;color:var(--text)">${escHtml(c.description)}</span>
-              <span style="color:var(--muted)">${timeAgo(c.appliedAt||c.rejectedAt||c.proposedAt)}</span>
-            </div>`).join('')}
-        </div>
-      </div>` : ''}`;
+    <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px">
+      <div style="font-size:12px;font-weight:800;margin-bottom:2px">${escHtml(title)}</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${escHtml(subtitle)}</div>
+      ${body}
+    </div>`;
 }
 
-function renderTeamRunsTab(team) {
+function _renderMemoryEvents(memory) {
+  if (!memory || memory._raw) return '';
+  const events = Array.isArray(memory.events) ? memory.events.slice(-20).reverse() : [];
+  const decisions = Array.isArray(memory.decisions) ? memory.decisions.slice(-10).reverse() : [];
+  const summaries = Array.isArray(memory.runSummaries) ? memory.runSummaries.slice(-5).reverse() : [];
+  if (events.length === 0 && decisions.length === 0 && summaries.length === 0) return '';
+  return `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Recent Events (${events.length})</div>
+        <div style="display:flex;flex-direction:column;gap:5px;max-height:280px;overflow-y:auto">
+          ${events.length === 0 ? '<div style="font-size:11px;color:var(--muted);font-style:italic">None.</div>' : events.map(e => `
+            <div style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 9px">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+                <span style="font-size:10px;background:${e.authorType==='manager'?'#eaf2ff':e.authorType==='subagent'?'#f0fff0':'#fff8e6'};color:${e.authorType==='manager'?'#0d4faf':e.authorType==='subagent'?'#0f6e3a':'#7a5a00'};border-radius:3px;padding:0 5px;font-weight:700">${escHtml(e.authorType||'?')}</span>
+                <span style="font-size:10px;color:var(--muted);font-weight:600">${escHtml(e.authorId||'')}</span>
+                ${e.tag ? `<span style="font-size:10px;color:var(--muted)">· ${escHtml(e.tag)}</span>` : ''}
+                <span style="margin-left:auto;font-size:10px;color:var(--muted)">${e.timestamp ? new Date(e.timestamp).toLocaleString() : ''}</span>
+              </div>
+              <div style="font-size:11px;line-height:1.5;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(String(e.content||''))}</div>
+            </div>`).join('')}
+        </div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Decisions / Summaries</div>
+        <div style="display:flex;flex-direction:column;gap:5px;max-height:280px;overflow-y:auto">
+          ${decisions.length === 0 && summaries.length === 0 ? '<div style="font-size:11px;color:var(--muted);font-style:italic">None.</div>' : ''}
+          ${summaries.map(s => `
+            <div style="background:var(--panel);border:1px solid var(--line);border-left:3px solid #0d4faf;border-radius:6px;padding:7px 9px">
+              <div style="font-size:10px;font-weight:700;color:#0d4faf;margin-bottom:2px">RUN SUMMARY</div>
+              <div style="font-size:11px;line-height:1.5;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(typeof s === 'string' ? s : JSON.stringify(s))}</div>
+            </div>`).join('')}
+          ${decisions.map(d => `
+            <div style="background:var(--panel);border:1px solid var(--line);border-left:3px solid #0f6e3a;border-radius:6px;padding:7px 9px">
+              <div style="font-size:10px;font-weight:700;color:#0f6e3a;margin-bottom:2px">DECISION</div>
+              <div style="font-size:11px;line-height:1.5;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(typeof d === 'string' ? d : JSON.stringify(d))}</div>
+            </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderTeamMemoryTab(team) {
+  const teamId = team.id;
+  const { memory, lastRun, pending, loading } = teamMemoryFiles;
+  const wsPath = teamWorkspaceData?.workspacePath || `teams/${teamId}/workspace`;
+  const pendingChanges = team.pendingChanges || [];
+  const roomState = _teamRoomState();
+  return `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:13px;font-weight:800">Team Memory</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(wsPath)}">${escHtml(wsPath)}</div>
+        </div>
+        <button onclick="loadTeamMemoryFiles('${teamId}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">${loading ? 'Loading…' : 'Refresh'}</button>
+      </div>
+
+      ${_renderMemoryEvents(memory)}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Artifacts</div>
+          ${_renderTeamArtifactsList(roomState.artifacts || [])}
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Blockers</div>
+          ${_renderTeamBlockersList(roomState.blockers || [])}
+        </div>
+      </div>
+
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Plan Ownership</div>
+        ${_renderTeamPlanOwnership(roomState.plan || [])}
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Manager Auto-Wake Events</div>
+          ${_renderTeamEventsList(roomState.managerAutoWakeEvents || [], 'No manager auto-wakes yet.')}
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Why Agents Woke Up</div>
+          ${_renderTeamEventsList(roomState.memberWakeEvents || [], 'No member wake reasons yet.')}
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${_memoryFileSection('memory.json', 'Cross-run accumulated knowledge', memory)}
+        ${_memoryFileSection('last_run.json', 'Most recent manager run summary', lastRun)}
+      </div>
+      ${_memoryFileSection('pending.json', 'Unresolved blockers, follow-ups, questions', pending)}
+
+      ${pendingChanges.length > 0 ? `
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#e05c5c;margin-bottom:8px">Pending Changes (${pendingChanges.length})</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${pendingChanges.map(c => `
+              <div style="background:var(--panel-2);border:1px solid var(--line);border-left:3px solid ${c.riskLevel==='high'?'#e05c5c':c.riskLevel==='medium'?'#d6a64f':'#31b884'};border-radius:8px;padding:10px 12px">
+                <div style="font-size:12px;font-weight:700;margin-bottom:4px">${escHtml(c.description||'')}</div>
+                <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Risk: ${escHtml(c.riskLevel||'low')} · ${c.targetSubagentId ? 'Target: ' + escHtml(c.targetSubagentId) : 'Team-wide'}</div>
+                <div style="display:flex;gap:6px">
+                  <button onclick="applyTeamChangeFn('${teamId}','${escHtml(c.id)}')" style="background:#31b884;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Apply</button>
+                  <button onclick="rejectTeamChangeFn('${teamId}','${escHtml(c.id)}')" style="background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">Reject</button>
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>` : ''}
+
+      ${(team.managerNotes||[]).length > 0 ? `
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px">Manager Notes</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${(team.managerNotes||[]).slice().reverse().slice(0,30).map(n => `
+              <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+                  <span style="font-size:10px;background:${n.type==='decision'?'#eaf2ff':n.type==='analysis'?'#f0fff0':'#fff8e6'};color:${n.type==='decision'?'#0d4faf':n.type==='analysis'?'#0f6e3a':'#7a5a00'};border-radius:4px;padding:2px 6px;font-weight:700">${escHtml(n.type||'note')}</span>
+                  <span style="font-size:10px;color:var(--muted)">${timeAgo(n.timestamp)}</span>
+                </div>
+                <div style="font-size:12px;line-height:1.5;color:var(--text);white-space:pre-wrap">${escHtml(n.content||'')}</div>
+              </div>`).join('')}
+          </div>
+        </div>` : ''}
+    </div>`;
+}
+
+// ─── Team Subagents Tab ──────────────────────────────────────────────────────
+
+function _findAgentInTeam(agentId) {
+  return (window._allAgentsForTeam || []).find(a => a.id === agentId) || { id: agentId, name: agentId };
+}
+
+// Refresh team agent cache + re-render detail panel after a model picker save.
+registerAgentModelPickerOnSaved('ts-model', async (agentId) => {
+  try {
+    const data = await api('/api/agents');
+    if (data?.agents) window._allAgentsForTeam = data.agents;
+  } catch {}
+  if (teamSubagentDetailTab === 'overview' && teamSubagentDetailId === agentId) {
+    const team = teamsData.find(t => t.id === activeTeamId);
+    const body = document.getElementById('team-subagent-detail-body');
+    if (body && team) body.innerHTML = renderTeamSubagentDetailBody(team, agentId);
+    agentModelPickerHydrate('ts-model', _findAgentInTeam(agentId));
+  }
+});
+
+function renderTeamSubagentsTab(team) {
+  const agentIds = team.subagentIds || [];
+  if (agentIds.length === 0) {
+    return `<div style="text-align:center;color:var(--muted);font-size:13px;padding:32px 16px">
+      <div style="font-weight:700;margin-bottom:6px">No subagents on this team</div>
+      <div style="font-size:12px;line-height:1.6">Add agents from the Context tab.</div>
+    </div>`;
+  }
+  const activeId = teamSubagentDetailId && agentIds.includes(teamSubagentDetailId) ? teamSubagentDetailId : agentIds[0];
+  const list = agentIds.map(id => {
+    const ag = _findAgentInTeam(id);
+    const isActive = id === activeId;
+    const sched = ag.cronSchedule || '';
+    return `<button onclick="openTeamSubagentDetail('${team.id}','${escHtml(id)}')" style="text-align:left;border:1px solid ${isActive?'var(--brand)':'var(--line)'};background:${isActive?'var(--panel)':'var(--panel-2)'};border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:2px;width:100%">
+      <div style="font-size:12px;font-weight:700;color:${isActive?'var(--brand)':'var(--text)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.name || id)}</div>
+      <div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace">${escHtml(id)}</div>
+      ${sched ? `<div style="font-size:10px;color:#0d4faf;margin-top:2px">${escHtml(sched)}</div>` : ''}
+    </button>`;
+  }).join('');
+
+  return `
+    <div style="display:flex;gap:12px;flex:1;min-height:0;height:calc(100vh - 220px)">
+      <div style="width:220px;flex-shrink:0;display:flex;flex-direction:column;gap:6px;overflow-y:auto">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:0 2px 4px">Subagents (${agentIds.length})</div>
+        ${list}
+      </div>
+      <div id="team-subagent-detail-panel" style="flex:1;min-width:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden">
+        ${renderTeamSubagentDetail(team, activeId)}
+      </div>
+    </div>`;
+}
+
+function renderTeamSubagentDetail(team, agentId) {
+  if (!agentId) return '<div style="padding:24px;color:var(--muted);font-size:13px;text-align:center">Select a subagent to view details.</div>';
+  const ag = _findAgentInTeam(agentId);
+  const tabs = ['overview','systemprompt','heartbeat'];
+  const labels = { overview:'Overview', systemprompt:'System Prompt', heartbeat:'Heartbeat' };
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);flex-shrink:0">
+      <div style="min-width:0">
+        <div style="font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.name || agentId)}</div>
+        ${ag.description ? `<div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.description)}</div>` : ''}
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button onclick="runSubagentNow('${escHtml(agentId)}',this,'${team.id}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--brand);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Run Now</button>
+      </div>
+    </div>
+    <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0">
+      ${tabs.map(t => {
+        const active = t === teamSubagentDetailTab;
+        return `<button onclick="switchTeamSubagentTab('${team.id}','${escHtml(agentId)}','${t}')" style="padding:9px 14px;font-size:12px;font-weight:${active?'700':'500'};border:none;background:none;cursor:pointer;color:${active?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${active?'var(--brand)':'transparent'};margin-bottom:-1px">${labels[t]}</button>`;
+      }).join('')}
+    </div>
+    <div id="team-subagent-detail-body" style="flex:1;min-height:0;overflow-y:auto;padding:14px">
+      ${renderTeamSubagentDetailBody(team, agentId)}
+    </div>`;
+}
+
+function renderTeamSubagentDetailBody(team, agentId) {
+  switch (teamSubagentDetailTab) {
+    case 'overview': return renderTeamSubagentOverview(team, agentId);
+    case 'systemprompt': return renderTeamSubagentSystemPrompt(team, agentId);
+    case 'heartbeat': return renderTeamSubagentHeartbeat(team, agentId);
+    default: return '';
+  }
+}
+
+function renderTeamSubagentOverview(team, agentId) {
+  const ag = _findAgentInTeam(agentId);
+  const refs = teamSubagentDetail.contextRefs || [];
+  const refsHtml = refs.length === 0
+    ? `<div style="border:1px dashed var(--line);border-radius:8px;padding:12px;font-size:11px;color:var(--muted);background:var(--panel-2)">No context references for this agent yet.</div>`
+    : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px">
+        ${refs.map(ref => {
+          const preview = String(ref.content||'').replace(/\s+/g,' ').slice(0,140);
+          return `<div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:9px;display:flex;flex-direction:column;gap:5px;min-height:96px">
+            <div style="font-size:11px;font-weight:700;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(ref.title||'Untitled')}</div>
+            <div style="font-size:10px;color:var(--muted);overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical">${escHtml(preview||'(empty)')}</div>
+            <button onclick="deleteTeamSubagentCtxRef('${team.id}','${escHtml(agentId)}','${escHtml(ref.id)}')" style="margin-top:auto;align-self:flex-start;border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer">Delete</button>
+          </div>`;
+        }).join('')}
+      </div>`;
+  return `
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
+        <div style="display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:12px">
+          <div style="color:var(--muted);font-weight:700">Agent ID</div><div style="font-family:'IBM Plex Mono',monospace">${escHtml(agentId)}</div>
+          <div style="color:var(--muted);font-weight:700">Model</div><div>${escHtml(ag.effectiveModel || 'Inherited')}</div>
+          <div style="color:var(--muted);font-weight:700">Schedule</div><div>${ag.cronSchedule ? `<code style="background:var(--panel);padding:1px 5px;border-radius:4px">${escHtml(ag.cronSchedule)}</code>` : '<span style="color:var(--muted)">Not scheduled</span>'}</div>
+          <div style="color:var(--muted);font-weight:700">Workspace</div><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(ag.workspace || '')}">${escHtml(ag.workspace || 'Not set')}</div>
+        </div>
+      </div>
+
+      ${_renderAgentModelPicker(ag, 'ts-model')}
+
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-size:12px;font-weight:800">Context &amp; Reference</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">Per-agent reference cards. Injected into this agent's runtime context.</div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+          <input id="ts-ctx-title-${escHtml(agentId)}" type="text" placeholder="Reference title" style="border:1px solid var(--line);border-radius:7px;padding:7px 10px;font-size:12px;background:var(--panel-2);color:var(--text)" />
+          <textarea id="ts-ctx-content-${escHtml(agentId)}" rows="3" placeholder="Reference content" style="border:1px solid var(--line);border-radius:7px;padding:7px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);resize:vertical"></textarea>
+          <button onclick="saveTeamSubagentCtxRef('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;align-self:flex-start">Save Reference</button>
+        </div>
+        ${refsHtml}
+      </div>
+    </div>`;
+}
+
+function renderTeamSubagentSystemPrompt(team, agentId) {
+  return `
+    <div style="display:flex;flex-direction:column;gap:10px;height:100%">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:12px;font-weight:800">system_prompt.md</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Defines this agent's persona, role, and constraints</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button onclick="reloadTeamSubagentSystemPrompt('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Reload</button>
+          <button onclick="saveTeamSubagentSystemPrompt('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
+        </div>
+      </div>
+      <div id="ts-sysprompt-cm-${escHtml(agentId)}" style="flex:1;min-height:340px;border:1px solid var(--line);border-radius:8px;overflow:hidden"></div>
+      <div id="ts-sysprompt-status-${escHtml(agentId)}" style="font-size:11px;color:var(--muted);min-height:14px"></div>
+    </div>`;
+}
+
+function renderTeamSubagentHeartbeat(team, agentId) {
+  const cfg = teamSubagentDetail.heartbeatCfg || { enabled: false, intervalMinutes: 30 };
+  return `
+    <div style="display:flex;flex-direction:column;gap:12px;height:100%">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:12px;font-weight:800">Heartbeat</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Recurring scheduled task for this agent</div>
+        </div>
+        <button onclick="tickTeamSubagentHeartbeat('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Run Now</button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:14px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+        <label style="display:flex;align-items:center;gap:7px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="ts-hb-enabled-${escHtml(agentId)}" ${cfg.enabled ? 'checked' : ''} style="width:15px;height:15px" />
+          Enabled
+        </label>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:12px;color:var(--muted)">Every</span>
+          <input type="number" id="ts-hb-interval-${escHtml(agentId)}" min="1" max="1440" value="${cfg.intervalMinutes||30}" style="width:64px;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;text-align:center;background:var(--panel);color:var(--text)" />
+          <span style="font-size:12px;color:var(--muted)">min</span>
+        </div>
+        <button onclick="saveTeamSubagentHbConfig('${team.id}','${escHtml(agentId)}')" style="margin-left:auto;border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">Save Config</button>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:6px;flex:1;min-height:0">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:11px;font-weight:700;color:var(--muted)">HEARTBEAT.md — what this agent does when woken</div>
+          <button onclick="saveTeamSubagentHeartbeatMd('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">Save HEARTBEAT.md</button>
+        </div>
+        <div id="ts-heartbeat-cm-${escHtml(agentId)}" style="flex:1;min-height:280px;border:1px solid var(--line);border-radius:8px;overflow:hidden"></div>
+        <div id="ts-hb-status-${escHtml(agentId)}" style="font-size:11px;color:var(--muted);min-height:14px"></div>
+      </div>
+    </div>`;
+}
+
+// ─── Team Subagents Tab — interactions ────────────────────────────────────────
+
+function _disposeTeamCmEditors() {
+  for (const k of Object.keys(_teamCmEditors)) {
+    try { _teamCmEditors[k] = null; } catch {}
+  }
+  _teamCmEditors = {};
+}
+
+function _mountCm(elId, value, mode) {
+  const el = document.getElementById(elId);
+  if (!el || typeof CodeMirror === 'undefined') return null;
+  el.innerHTML = '';
+  const cm = CodeMirror(el, {
+    value: value || '',
+    mode: mode || 'markdown',
+    theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'material-darker' : 'default',
+    lineNumbers: true,
+    lineWrapping: true,
+    viewportMargin: Infinity,
+  });
+  // Force a resize after mount so it fills the container
+  setTimeout(() => cm.refresh(), 50);
+  return cm;
+}
+
+async function openTeamSubagentDetail(teamId, agentId) {
+  teamSubagentDetailId = agentId;
+  // Reset detail caches when switching agents
+  teamSubagentDetail = { systemPrompt: '', heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
+  _disposeTeamCmEditors();
+
+  // Fetch in parallel
+  const [sp, hbMd, hbCfg, refs] = await Promise.all([
+    api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`).catch(() => ({ content: '' })),
+    api(`/api/agents/${encodeURIComponent(agentId)}/heartbeat-md`).catch(() => ({ content: '' })),
+    api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`).catch(() => ({ config: {} })),
+    api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ references: [] })),
+  ]);
+  teamSubagentDetail.systemPrompt = sp.content || '';
+  teamSubagentDetail.heartbeatMd = hbMd.content || '';
+  const cfg = hbCfg.config || {};
+  teamSubagentDetail.heartbeatCfg = { enabled: cfg.enabled === true, intervalMinutes: cfg.intervalMinutes || 30 };
+  teamSubagentDetail.contextRefs = refs.references || refs.contextReferences || [];
+
+  // Re-render the detail panel only (preserve list selection state)
+  if (teamBoardTab === 'subagents' && activeTeamId === teamId) {
+    const team = teamsData.find(t => t.id === teamId);
+    const panel = document.getElementById('team-subagent-detail-panel');
+    if (panel && team) panel.innerHTML = renderTeamSubagentDetail(team, agentId);
+    // Also update the list highlight
+    renderTeamBoard(teamId);
+    _mountTeamSubagentEditors(agentId);
+    if (teamSubagentDetailTab === 'overview') {
+      agentModelPickerHydrate('ts-model', _findAgentInTeam(agentId));
+    }
+  }
+}
+
+function switchTeamSubagentTab(teamId, agentId, tab) {
+  teamSubagentDetailTab = tab;
+  const team = teamsData.find(t => t.id === teamId);
+  if (!team) return;
+  const body = document.getElementById('team-subagent-detail-body');
+  if (body) body.innerHTML = renderTeamSubagentDetailBody(team, agentId);
+  _mountTeamSubagentEditors(agentId);
+  if (tab === 'overview') {
+    agentModelPickerHydrate('ts-model', _findAgentInTeam(agentId));
+  }
+}
+
+function _mountTeamSubagentEditors(agentId) {
+  if (teamSubagentDetailTab === 'systemprompt') {
+    const cm = _mountCm(`ts-sysprompt-cm-${agentId}`, teamSubagentDetail.systemPrompt, 'markdown');
+    if (cm) _teamCmEditors[`sysprompt:${agentId}`] = cm;
+  }
+  if (teamSubagentDetailTab === 'heartbeat') {
+    const cm = _mountCm(`ts-heartbeat-cm-${agentId}`, teamSubagentDetail.heartbeatMd, 'markdown');
+    if (cm) _teamCmEditors[`heartbeat:${agentId}`] = cm;
+  }
+}
+
+async function saveTeamSubagentSystemPrompt(teamId, agentId) {
+  const cm = _teamCmEditors[`sysprompt:${agentId}`];
+  if (!cm) return;
+  const status = document.getElementById(`ts-sysprompt-status-${agentId}`);
+  if (status) status.textContent = 'Saving…';
+  try {
+    await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: cm.getValue() }),
+    });
+    teamSubagentDetail.systemPrompt = cm.getValue();
+    if (status) status.textContent = 'Saved.';
+    bgtToast('Saved', `system_prompt.md updated for ${agentId}`);
+  } catch (err) {
+    if (status) status.textContent = `Error: ${err?.message || err}`;
+  }
+}
+
+async function reloadTeamSubagentSystemPrompt(teamId, agentId) {
+  try {
+    const d = await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`);
+    teamSubagentDetail.systemPrompt = d.content || '';
+    const cm = _teamCmEditors[`sysprompt:${agentId}`];
+    if (cm) cm.setValue(teamSubagentDetail.systemPrompt);
+  } catch {}
+}
+
+async function saveTeamSubagentHeartbeatMd(teamId, agentId) {
+  const cm = _teamCmEditors[`heartbeat:${agentId}`];
+  if (!cm) return;
+  const status = document.getElementById(`ts-hb-status-${agentId}`);
+  if (status) status.textContent = 'Saving…';
+  try {
+    await api(`/api/agents/${encodeURIComponent(agentId)}/heartbeat-md`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: cm.getValue() }),
+    });
+    teamSubagentDetail.heartbeatMd = cm.getValue();
+    if (status) status.textContent = 'Saved.';
+    bgtToast('Saved', `HEARTBEAT.md updated for ${agentId}`);
+  } catch (err) {
+    if (status) status.textContent = `Error: ${err?.message || err}`;
+  }
+}
+
+async function saveTeamSubagentHbConfig(teamId, agentId) {
+  const enabledEl = document.getElementById(`ts-hb-enabled-${agentId}`);
+  const intervalEl = document.getElementById(`ts-hb-interval-${agentId}`);
+  const enabled = !!(enabledEl && enabledEl.checked);
+  const intervalMinutes = Math.max(1, Math.min(1440, parseInt(intervalEl?.value || '30', 10) || 30));
+  const status = document.getElementById(`ts-hb-status-${agentId}`);
+  if (status) status.textContent = 'Saving…';
+  try {
+    await api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, intervalMinutes }),
+    });
+    teamSubagentDetail.heartbeatCfg = { enabled, intervalMinutes };
+    if (status) status.textContent = 'Saved.';
+    bgtToast('Saved', `Heartbeat config updated for ${agentId}`);
+  } catch (err) {
+    if (status) status.textContent = `Error: ${err?.message || err}`;
+  }
+}
+
+async function tickTeamSubagentHeartbeat(teamId, agentId) {
+  try {
+    await api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}/tick`, { method: 'POST' });
+    bgtToast('Triggered', `Heartbeat run dispatched for ${agentId}`);
+  } catch (err) {
+    bgtToast('Error', err?.message || String(err));
+  }
+}
+
+async function saveTeamSubagentCtxRef(teamId, agentId) {
+  const titleEl = document.getElementById(`ts-ctx-title-${agentId}`);
+  const contentEl = document.getElementById(`ts-ctx-content-${agentId}`);
+  const title = (titleEl?.value || '').trim();
+  const content = (contentEl?.value || '').trim();
+  if (!title && !content) return;
+  try {
+    await api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, content }),
+    });
+    if (titleEl) titleEl.value = '';
+    if (contentEl) contentEl.value = '';
+    const refs = await api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ references: [] }));
+    teamSubagentDetail.contextRefs = refs.references || refs.contextReferences || [];
+    const body = document.getElementById('team-subagent-detail-body');
+    const team = teamsData.find(t => t.id === teamId);
+    if (body && team) body.innerHTML = renderTeamSubagentDetailBody(team, agentId);
+  } catch (err) {
+    bgtToast('Error', err?.message || String(err));
+  }
+}
+
+async function deleteTeamSubagentCtxRef(teamId, agentId, refId) {
+  try {
+    await api(`/api/agents/${encodeURIComponent(agentId)}/context-refs/${encodeURIComponent(refId)}`, { method: 'DELETE' });
+    teamSubagentDetail.contextRefs = (teamSubagentDetail.contextRefs || []).filter(r => r.id !== refId);
+    const body = document.getElementById('team-subagent-detail-body');
+    const team = teamsData.find(t => t.id === teamId);
+    if (body && team) body.innerHTML = renderTeamSubagentDetailBody(team, agentId);
+  } catch (err) {
+    bgtToast('Error', err?.message || String(err));
+  }
+}
+
+function renderTeamRunsTabLegacy(team) {
   if (teamRuns.length === 0) {
     return '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">No runs yet. Runs will appear here once subagents execute.</div>';
   }
@@ -1207,24 +3426,156 @@ function renderTeamRunsTab(team) {
     </div>`;
 }
 
+function renderTeamRunsTab(team) {
+  if (teamRuns.length === 0) {
+    return '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">No runs yet. Runs will appear here once subagents execute.</div>';
+  }
+  return `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${teamRuns.map(r => {
+        const runId = String(r.id || r.taskId || `${r.agentId}-${r.startedAt}`);
+        const expanded = teamRunExpanded[runId] === true;
+        const snap = r.roomSnapshot || _teamRoomState();
+        const successColor = r.inProgress ? '#0d4faf' : r.success ? '#31b884' : '#e05c5c';
+        const finalText = String(r.resultPreview || r.taskSummary || r.error || '').trim();
+        return `
+        <div style="background:var(--panel-2);border:1px solid var(--line);border-left:4px solid ${successColor};border-radius:8px;overflow:hidden">
+          <button onclick="toggleTeamRunCard('${escHtml(runId)}')" style="width:100%;border:none;background:transparent;color:inherit;text-align:left;padding:11px 12px;cursor:pointer;font-family:inherit;display:flex;align-items:flex-start;gap:10px">
+            <div style="width:58px;flex-shrink:0;font-size:10px;font-weight:800;color:${successColor};text-transform:uppercase;margin-top:2px">${r.inProgress ? 'RUNNING' : r.success ? 'PASS' : 'ATTN'}</div>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                <span style="font-size:13px;font-weight:800;color:var(--text)">${escHtml(r.agentName||r.agentId)}</span>
+                ${_teamStatePill(String(r.trigger || 'run'), '')}
+                ${r.taskStatus ? _teamStatePill(String(r.taskStatus), '') : ''}
+                ${r.quality?.suspect || r.zeroToolCalls ? _teamStatePill('quality', 'review', '#b06b00') : ''}
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${r.startedAt ? new Date(r.startedAt).toLocaleString() : ''}${r.durationMs ? ` &middot; ${Math.round(r.durationMs/1000)}s` : ''} &middot; ${r.stepCount||0} steps</div>
+              ${finalText ? `<div style="font-size:11px;color:var(--text);line-height:1.4;opacity:0.9;white-space:pre-wrap;overflow-wrap:anywhere;${expanded ? '' : 'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden'}">${escHtml(finalText)}</div>` : ''}
+            </div>
+            <div style="font-size:14px;color:var(--muted);line-height:1">${expanded ? '&#9662;' : '&#9656;'}</div>
+          </button>
+          ${expanded ? `
+            <div style="border-top:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:12px;background:var(--panel)">
+              <div>
+                <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Final Summary</div>
+                <div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:10px;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:${r.error ? '#b42323' : 'var(--text)'}">${escHtml(finalText || 'No summary captured.')}</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div>
+                  <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Member States</div>
+                  ${_renderTeamMemberStatesCompact(snap)}
+                </div>
+                <div>
+                  <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Active Dispatches</div>
+                  ${_renderTeamActiveDispatches(snap)}
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div>
+                  <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Artifacts</div>
+                  ${_renderTeamArtifactsList(snap.artifacts || [])}
+                </div>
+                <div>
+                  <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Blockers</div>
+                  ${_renderTeamBlockersList(snap.blockers || [])}
+                </div>
+              </div>
+              <div>
+                <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Plan Ownership</div>
+                ${_renderTeamPlanOwnership(snap.plan || [])}
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div>
+                  <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Manager Auto-Wake Events</div>
+                  ${_renderTeamEventsList(snap.managerAutoWakeEvents || [], 'No manager auto-wakes in this snapshot.')}
+                </div>
+                <div>
+                  <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Why This Agent Woke Up</div>
+                  ${_renderTeamEventsList(snap.memberWakeEvents || [], 'No wake reason captured for this agent.')}
+                </div>
+              </div>
+              <div>
+                <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Related Room Events</div>
+                ${_renderTeamEventsList(snap.relatedEvents || [], 'No related room events captured.')}
+              </div>
+            </div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function toggleTeamRunCard(runId) {
+  teamRunExpanded[runId] = teamRunExpanded[runId] !== true;
+  if (teamBoardTab === 'runs' && activeTeamId) {
+    const team = teamsData.find(t => t.id === activeTeamId);
+    const el = document.getElementById('team-tab-content');
+    if (team && el) el.innerHTML = renderTeamRunsTab(team);
+  }
+}
+
+function _renderTeamChatMessagesInner(team) {
+  const all = teamChatMessages;
+  const visibleCount = Math.max(TEAM_CHAT_INITIAL_VISIBLE, teamChatVisibleCountByTeam[team.id] || TEAM_CHAT_INITIAL_VISIBLE);
+  const startIdx = Math.max(0, all.length - visibleCount);
+  const msgs = all.slice(startIdx);
+  const hiddenCount = startIdx;
+  const liveManagerStreams = getTeamManagerStreams(team.id);
+  const liveMemberStreams = getTeamMemberStreams(team.id);
+  const liveDispatches = getTeamDispatchStreams(team.id);
+  const hasBackgroundManagerStream = liveManagerStreams.some((stream) => stream && stream.completed !== true);
+  const showMoreBtn = hiddenCount > 0
+    ? `<button onclick="showMoreTeamChat('${team.id}')" style="align-self:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;margin-bottom:4px">+ Show ${Math.min(20, hiddenCount)} earlier ${hiddenCount === 1 ? 'message' : 'messages'} (${hiddenCount} hidden)</button>`
+    : '';
+  const empty = msgs.length === 0 && !hasBackgroundManagerStream && liveDispatches.length === 0 && liveManagerStreams.length === 0 && liveMemberStreams.length === 0
+    ? '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Team room is quiet. Type normally to post a room note, or use @team, @manager, or @someone to address a participant directly.</div>'
+    : '';
+  return `
+    ${showMoreBtn}
+    ${empty}
+    ${msgs.map((m) => renderTeamChatMessageBubble(m)).join('')}
+    ${renderTeamChatStreamingBubble(team)}
+    ${liveManagerStreams.map((stream) => renderTeamManagerBackgroundStreamingBubble(stream)).join('')}
+    ${liveMemberStreams.map((stream) => renderTeamMemberStreamingBubble(stream)).join('')}
+    ${liveDispatches.map((stream) => renderTeamDispatchBubble(team.id, stream)).join('')}`;
+}
+
+function showMoreTeamChat(teamId) {
+  const cur = teamChatVisibleCountByTeam[teamId] || TEAM_CHAT_INITIAL_VISIBLE;
+  teamChatVisibleCountByTeam[teamId] = cur + 20;
+  // Preserve scroll position relative to the first currently-visible message
+  // so the user's reading anchor doesn't jump when older messages prepend.
+  const msgEl = document.getElementById('team-chat-messages');
+  const prevScrollHeight = msgEl ? msgEl.scrollHeight : 0;
+  const prevScrollTop = msgEl ? msgEl.scrollTop : 0;
+  const team = teamsData.find((t) => t.id === teamId);
+  if (!team || !msgEl) return;
+  msgEl.innerHTML = _renderTeamChatMessagesInner(team);
+  requestAnimationFrame(() => {
+    const newEl = document.getElementById('team-chat-messages');
+    if (!newEl) return;
+    const delta = newEl.scrollHeight - prevScrollHeight;
+    newEl.scrollTop = prevScrollTop + delta;
+  });
+}
+
 function renderTeamChatTab(team) {
-  const msgs = teamChatMessages.slice(-80);
-  const colors = { manager:'#4c8dff', user:'var(--brand)', subagent:'#31b884' };
+  const isSending = isTeamChatBusy(team.id);
+  const queuedCount = getTeamChatQueue(team.id).length;
   return `
     <div id="team-chat-messages" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:calc(100% - 80px)">
-      ${msgs.length === 0 ? '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Team chat is empty. The manager will post here after each review.</div>' : ''}
-      ${msgs.map(m => `
-        <div style="display:flex;flex-direction:column;gap:3px">
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="font-size:11px;font-weight:700;color:${colors[m.from]||'var(--muted)'}">${escHtml(m.fromName)}</span>
-            <span style="font-size:10px;color:var(--muted)">${timeAgo(m.timestamp)}</span>
-          </div>
-          <div style="font-size:12px;line-height:1.5;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(m.content)}</div>
-        </div>`).join('')}
+      ${_renderTeamChatMessagesInner(team)}
     </div>
-    <div style="flex-shrink:0;border-top:1px solid var(--line);padding:10px 0 0;margin-top:8px;display:flex;gap:8px;align-items:flex-end">
-      <textarea id="team-chat-input" rows="2" placeholder="Message the manager..." style="flex:1;resize:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTeamChat('${team.id}');}"></textarea>
-      <button onclick="sendTeamChat('${team.id}')" style="background:var(--brand);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;height:36px">Send</button>
+    <div id="team-chat-composer-shell" style="flex-shrink:0;border-top:1px solid var(--line);padding:12px 0 0;margin-top:10px;display:flex;gap:10px;align-items:flex-end">
+      <div id="team-chat-composer" style="flex:1;position:relative">
+        <div id="team-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;margin-bottom:6px">${queuedCount} queued</div>
+        <div id="team-chat-mention-popover" style="display:none;position:absolute;left:0;right:0;bottom:calc(100% + 10px);z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 38px rgba(0,0,0,0.22);overflow:hidden"></div>
+        <div style="position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden">
+          <div id="team-chat-input-mirror" aria-hidden="true" style="position:absolute;inset:0;padding:12px 14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;pointer-events:none;color:var(--text);overflow:hidden"></div>
+          <div id="team-chat-input-placeholder" style="position:absolute;left:14px;right:14px;top:12px;font-size:13px;line-height:1.6;color:var(--muted);pointer-events:none">${isSending ? 'Queue a room note, or type @team, @manager, or @someone...' : 'Post a room note, or type @team, @manager, or @someone...'}</div>
+          <textarea id="team-chat-input" rows="3" spellcheck="true" style="position:relative;z-index:1;width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:transparent;caret-color:var(--text);outline:none;min-height:64px"></textarea>
+        </div>
+      </div>
+      <button id="team-chat-send-button" onclick="${isSending ? `abortTeamChat('${team.id}')` : `sendTeamChat('${team.id}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:12px;padding:10px 16px;font-size:12px;font-weight:800;cursor:pointer;height:42px;min-width:64px;box-shadow:${isSending ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)'}">${isSending ? 'Stop' : 'Send'}</button>
     </div>`;
 }
 
@@ -1266,25 +3617,263 @@ function renderCharacterSVG(id, emoji, color) {
 }
 
 // --- Actions -----------------------------------------------------------------
-async function sendTeamChat(teamId) {
+async function sendTeamChat(teamId, queuedMessage = null) {
   const inp = document.getElementById('team-chat-input');
-  if (!inp) return;
-  const msg = inp.value.trim();
+  const fromQueue = queuedMessage !== null && queuedMessage !== undefined;
+  if (!inp && !fromQueue) return;
+  const msg = fromQueue ? String(queuedMessage || '').trim() : String(inp?.value || '').trim();
   if (!msg) return;
-  inp.value = '';
-  teamChatDraftByTeam[teamId] = '';
-  inp.disabled = true;
-  try {
-    await api(`/api/teams/${teamId}/chat`, { method:'POST', body: JSON.stringify({ message: msg }) });
-    const data = await api(`/api/teams/${teamId}/chat?limit=100`);
-    teamChatMessages = data.messages || [];
-    activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
+
+  if (isTeamChatBusy(teamId)) {
+    const queued = queueTeamChatMessage(teamId, msg);
+    if (queued && !fromQueue && inp) {
+      inp.value = '';
+      teamChatDraftByTeam[teamId] = '';
+      resizeTeamChatInput();
+    }
+    hideTeamChatMentionPopover();
+    refreshTeamChatComposerState(teamId);
     renderActiveTeamChat(teamId, { forceBottom: true });
+    requestAnimationFrame(() => {
+      const newInp = document.getElementById('team-chat-input');
+      if (newInp) newInp.focus();
+    });
+    return;
+  }
+
+  const routeTarget = getLeadingTeamChatTarget(msg, teamId);
+  if (inp && !fromQueue) inp.value = '';
+  if (!fromQueue) teamChatDraftByTeam[teamId] = '';
+  hideTeamChatMentionPopover();
+  resizeTeamChatInput();
+  const streamState = {
+    teamId,
+    content: '',
+    thinking: '',
+    processEntries: [],
+    progressLines: ['Manager is thinking...'],
+    completed: false,
+    finalReply: '',
+    fallbackTimer: null,
+  };
+  teamChatStreamingState = streamState;
+  const controller = new AbortController();
+  teamChatAbortControllersByTeam[teamId] = controller;
+  let wasAborted = false;
+  renderActiveTeamChat(teamId, { forceBottom: true });
+  try {
+    const res = await fetch(`/api/teams/${encodeURIComponent(teamId)}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        message: msg,
+        targetType: routeTarget.type,
+        targetId: routeTarget.targetId || undefined,
+        targetLabel: routeTarget.targetLabel || undefined,
+        routedMessage: routeTarget.routedMessage || msg,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.body) throw new Error('No response body from team stream');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let event;
+        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+        if (teamChatStreamingState !== streamState) continue;
+
+        switch (event.type) {
+          case 'token': {
+            const chunk = String(event.text || '');
+            if (chunk) {
+              streamState.content = `${streamState.content || ''}${chunk}`;
+              refreshTeamChatStreamingUI(teamId);
+            }
+            break;
+          }
+          case 'thinking_delta': {
+            const chunk = String(event.thinking || event.text || '');
+            if (chunk) {
+              streamState.thinking = `${streamState.thinking || ''}${chunk}`;
+              pushTeamChatProgressLine('Thinking...');
+              refreshTeamChatStreamingUI(teamId);
+            }
+            break;
+          }
+          case 'thinking':
+          case 'agent_thought': {
+            const thought = String(event.thinking || event.text || '').trim();
+            if (thought) {
+              streamState.thinking = streamState.thinking ? `${streamState.thinking}\n\n${thought}` : thought;
+              addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
+              refreshTeamChatStreamingUI(teamId, true);
+            }
+            break;
+          }
+          case 'info': {
+            const info = String(event.message || '').trim();
+            if (info) {
+              pushTeamChatProgressLine(info);
+              addTeamChatProcessEntry('info', info, event.actor ? { actor: event.actor } : undefined);
+              refreshTeamChatStreamingUI(teamId, true);
+            }
+            break;
+          }
+          case 'heartbeat': {
+            const heartbeatMsg = String(event.message || event.current_step || event.state || '').trim();
+            if (heartbeatMsg && !/^processing$/i.test(heartbeatMsg)) pushTeamChatProgressLine(heartbeatMsg);
+            refreshTeamChatStreamingUI(teamId);
+            break;
+          }
+          case 'progress_state': {
+            const items = Array.isArray(event.items) ? event.items : [];
+            const activeIndex = Number(event.activeIndex || -1);
+            const activeItem = activeIndex >= 0 ? items[activeIndex] : null;
+            const activeText = String(activeItem?.text || '').trim();
+            if (activeText) pushTeamChatProgressLine(activeText);
+            refreshTeamChatStreamingUI(teamId);
+            break;
+          }
+          case 'tool_call': {
+            const action = String(event.action || '').trim();
+            if (action) {
+              const stepNum = Number(event.stepNum || 0);
+              const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
+              const args = (event.args && typeof event.args === 'object') ? event.args : null;
+              const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
+              pushTeamChatProgressLine(`${stepPrefix}Running ${action}...`);
+              addTeamChatProcessEntry('tool', `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`, args || undefined);
+              refreshTeamChatStreamingUI(teamId, true);
+            }
+            break;
+          }
+          case 'tool_result': {
+            const action = String(event.action || '').trim() || 'tool';
+            const stepNum = Number(event.stepNum || 0);
+            const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
+            const text = String(event.result || '').trim();
+            const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+            pushTeamChatProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`);
+            addTeamChatProcessEntry(ok ? 'result' : 'error', `${stepPrefix}${action} => ${text || '(no output)'}`, event.actor ? { actor: event.actor } : undefined);
+            refreshTeamChatStreamingUI(teamId, true);
+            break;
+          }
+          case 'tool_progress': {
+            const action = String(event.action || '').trim();
+            const progressMsg = String(event.message || '').trim();
+            if (action && progressMsg) {
+              pushTeamChatProgressLine(`${action}: ${progressMsg}`);
+              addTeamChatProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+              refreshTeamChatStreamingUI(teamId, true);
+            }
+            break;
+          }
+          case 'final': {
+            const reply = String(event.reply || event.text || '').trim();
+            if (reply) {
+              streamState.finalReply = reply;
+              if (!streamState.content) streamState.content = reply;
+              addTeamChatProcessEntry('final', reply);
+              refreshTeamChatStreamingUI(teamId, true);
+            }
+            break;
+          }
+          case 'done': {
+            const reply = String(event.reply || event.text || '').trim();
+            if (reply) {
+              streamState.finalReply = reply;
+              if (!streamState.content) streamState.content = reply;
+            }
+            streamState.completed = true;
+            if (streamState.fallbackTimer) clearTimeout(streamState.fallbackTimer);
+            streamState.fallbackTimer = setTimeout(() => {
+              if (teamChatStreamingState !== streamState) return;
+              const finalText = String(streamState.finalReply || streamState.content || '').trim();
+              if (finalText && !teamChatMessages.some((entry) => String(entry.content || '').trim() === finalText && entry.from === 'manager')) {
+                teamChatMessages.push({
+                  id: `team_chat_stream_${Date.now()}`,
+                  from: 'manager',
+                  fromName: 'Manager',
+                  content: finalText,
+                  timestamp: Date.now(),
+                  metadata: {
+                    source: 'team_chat_stream',
+                    localStreamingFallback: true,
+                    processEntries: Array.isArray(streamState.processEntries) ? [...streamState.processEntries] : [],
+                    thinking: String(streamState.thinking || '').trim(),
+                  },
+                });
+                activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
+              }
+              if (teamChatStreamingState === streamState) teamChatStreamingState = null;
+              renderActiveTeamChat(teamId, { forceBottom: true });
+              scheduleNextTeamQueuedMessage(teamId);
+            }, 450);
+            refreshTeamChatStreamingUI(teamId, true);
+            break;
+          }
+          case 'error':
+            throw new Error(String(event.message || 'Unknown stream error'));
+        }
+      }
+    }
   } catch (err) {
-    bgtToast('? Error', 'Could not send message');
+    wasAborted = controller.signal.aborted || err?.name === 'AbortError';
+    if (streamState.fallbackTimer) clearTimeout(streamState.fallbackTimer);
+    if (wasAborted) {
+      pushTeamChatProgressLine('Stopped by user.');
+      streamState.completed = true;
+      if (teamChatStreamingState === streamState) teamChatStreamingState = null;
+      renderActiveTeamChat(teamId, { forceBottom: true });
+    } else {
+      if (teamChatStreamingState === streamState) teamChatStreamingState = null;
+      teamChatMessages.push({
+        id: `team_chat_error_${Date.now()}`,
+        from: 'manager',
+        fromName: 'Manager',
+        content: `Error: ${err?.message || String(err)}`,
+        timestamp: Date.now(),
+        metadata: { success: false },
+      });
+      activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
+      renderActiveTeamChat(teamId, { forceBottom: true });
+      bgtToast('? Error', 'Could not send message');
+    }
   } finally {
-    inp.disabled = false;
-    inp.focus();
+    if (teamChatAbortControllersByTeam[teamId] === controller) delete teamChatAbortControllersByTeam[teamId];
+  }
+  if (!wasAborted && !isTeamChatBusy(teamId)) scheduleNextTeamQueuedMessage(teamId);
+  requestAnimationFrame(() => {
+    const newInp = document.getElementById('team-chat-input');
+    if (newInp) {
+      newInp.focus();
+      resizeTeamChatInput();
+    }
+  });
+}
+
+function abortTeamChat(teamId) {
+  const controller = teamChatAbortControllersByTeam[teamId];
+  if (controller && !controller.signal.aborted) controller.abort();
+  if (teamChatStreamingState && teamChatStreamingState.teamId === teamId) {
+    pushTeamChatProgressLine('Stopping...');
+    refreshTeamChatStreamingUI(teamId, true);
   }
 }
 
@@ -1466,6 +4055,47 @@ async function deleteTeamContextReferenceCard(teamId) {
   }
 }
 
+async function uploadTeamContextFile(teamId, input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const isText = file.type.startsWith('text/') || /\.(md|txt|json|yaml|yml|csv|xml|js|ts|py|sh|html|css)$/i.test(file.name);
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      let content, encoding;
+      if (isText) {
+        content = e.target.result;
+        encoding = 'text';
+      } else {
+        content = e.target.result.split(',')[1];
+        encoding = 'base64';
+      }
+      bgtToast('📎 Uploading…', file.name);
+      const res = await api(`/api/teams/${teamId}/context-files`, {
+        method: 'POST',
+        body: JSON.stringify({ filename: file.name, content, encoding, title: file.name }),
+      });
+      // Optimistically update team context refs in memory
+      const team = teamsData.find(t => t.id === teamId);
+      if (team && res?.ref) {
+        team.contextReferences = [...(team.contextReferences || []), res.ref];
+      }
+      _teamsDataSig = '';
+      await refreshTeams();
+      if (activeTeamId === teamId) {
+        await loadTeamBoardData(teamId);
+        renderTeamBoard(teamId);
+      }
+      bgtToast('✅ Uploaded', `${file.name} added to team workspace`);
+    } catch (err) {
+      bgtToast('❌ Error', err.message || 'Upload failed');
+    }
+  };
+  if (isText) reader.readAsText(file);
+  else reader.readAsDataURL(file);
+  input.value = '';
+}
+
 async function pauseTeam(teamId) {
   try {
     await api(`/api/teams/${teamId}/pause`, { method:'POST', body: JSON.stringify({ reason: 'Paused from Teams UI' }) });
@@ -1497,12 +4127,17 @@ async function resumeTeam(teamId) {
 async function deleteTeam(teamId) {
   const team = teamsData.find(t => t.id === teamId);
   if (!team) return;
-  if (!confirm(`Delete team "${team.name}"? Subagents will remain unless you delete them separately.`)) return;
+  const agentCount = (team.subagentIds || []).length;
+  const agentNote = agentCount > 0
+    ? `\n\nThis will permanently delete ${agentCount} subagent${agentCount !== 1 ? 's' : ''} and all their files.`
+    : '';
+  if (!confirm(`Delete team "${team.name}"?${agentNote}\n\nThis cannot be undone.`)) return;
   try {
-    await api(`/api/teams/${teamId}`, { method:'DELETE' });
+    const result = await api(`/api/teams/${teamId}`, { method:'DELETE' });
     if (activeTeamId === teamId) closeTeamBoard();
     await refreshTeams();
-    bgtToast('🗑 Team deleted', team.name);
+    const deleted = result.deletedAgents?.length || 0;
+    bgtToast('🗑 Team deleted', deleted > 0 ? `${team.name} and ${deleted} agent${deleted !== 1 ? 's' : ''}` : team.name);
   } catch (err) {
     bgtToast('? Error', err.message || 'Could not delete team');
   }
@@ -1652,7 +4287,7 @@ async function runSubagentNow(agentId, btn, teamId) {
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || r.statusText);
     }
-    bgtToast('▶️ Running!', `${agentId} started — check Tasks page for live progress`);
+    bgtToast('▶️ Running!', `${agentId} started — check team chat for live progress`);
   } catch (err) {
     bgtToast('❌ Failed', String(err?.message || err));
   } finally {
@@ -1785,11 +4420,32 @@ function handleTeamWsEvent(msg) {
         trigger: 'team_dispatch',
         inProgress: true,
         taskStatus: 'running',
-        startedAt: Date.now(),
+        startedAt: Number(msg.startedAt || Date.now()),
         success: false,
       };
+      ensureTeamDispatchStream(msg.teamId, msg.taskId, {
+        agentId: msg.agentId || '',
+        agentName: msg.agentName || msg.agentId || 'Subagent',
+        taskSummary: msg.taskSummary || '',
+        startedAt: Number(msg.startedAt || Date.now()),
+        status: 'running',
+        completed: false,
+        progressLines: ['Working...'],
+      });
       if (activeTeamId === msg.teamId) {
         _refreshTeamProgressPanel(msg.teamId);
+        refreshVisibleTeamChat(msg.teamId, false);
+      }
+    }
+  }
+  if (msg.type === 'task_stream_event') {
+    const stream = applyTeamDispatchStreamEvent(msg);
+    if (stream) {
+      const eventType = String(msg?.eventType || '').trim();
+      if (eventType === 'token' || eventType === 'thinking_delta') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else {
+        refreshVisibleTeamChat(stream.teamId, false);
       }
     }
   }
@@ -1808,11 +4464,60 @@ function handleTeamWsEvent(msg) {
       if (teamActiveRunsByTeam[msg.teamId]?.[msg.taskId]) {
         delete teamActiveRunsByTeam[msg.teamId][msg.taskId];
       }
+      const stream = ensureTeamDispatchStream(msg.teamId, msg.taskId, {
+        agentId: msg.agentId || '',
+        agentName: msg.agentName || msg.agentId || 'Subagent',
+        taskSummary: msg.taskSummary || '',
+      });
+      if (stream) {
+        stream.completed = true;
+        stream.status = 'finalizing';
+        stream.finishedAt = Date.now();
+        stream.durationMs = Math.max(Number(stream.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+        if (msg.summary && !stream.finalReply) stream.finalReply = String(msg.summary);
+      }
       if (activeTeamId === msg.teamId) {
-        loadTeamBoardData(msg.teamId).then(() => {
+        if (teamBoardTab === 'chat') {
           _refreshTeamProgressPanel(msg.teamId);
-          if (teamBoardTab === 'runs') renderTeamBoard(msg.teamId);
-        });
+          refreshVisibleTeamChat(msg.teamId, false);
+        } else {
+          loadTeamBoardData(msg.teamId).then(() => {
+            _refreshTeamProgressPanel(msg.teamId);
+            if (teamBoardTab === 'runs') renderTeamBoard(msg.teamId);
+            else refreshVisibleTeamChat(msg.teamId, false);
+          });
+        }
+      }
+    }
+  }
+  if (msg.type === 'task_failed' || msg.type === 'task_paused') {
+    if (msg.teamId && msg.taskId) {
+      if (teamActiveRunsByTeam[msg.teamId]?.[msg.taskId]) {
+        delete teamActiveRunsByTeam[msg.teamId][msg.taskId];
+      }
+      const stream = ensureTeamDispatchStream(msg.teamId, msg.taskId, {
+        agentId: msg.agentId || '',
+        agentName: msg.agentName || msg.agentId || 'Subagent',
+        taskSummary: msg.taskSummary || '',
+      });
+      if (stream) {
+        stream.completed = msg.type !== 'task_paused';
+        stream.status = msg.type === 'task_failed' ? 'failed' : 'paused';
+        stream.finishedAt = Date.now();
+        stream.durationMs = Math.max(Number(stream.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+        if (msg.summary) pushTeamDispatchProgressLine(stream, String(msg.summary));
+        if (msg.summary && !stream.finalReply) stream.finalReply = String(msg.summary);
+      }
+      if (activeTeamId === msg.teamId) {
+        if (teamBoardTab === 'chat') {
+          _refreshTeamProgressPanel(msg.teamId);
+          refreshVisibleTeamChat(msg.teamId, false);
+        } else {
+          loadTeamBoardData(msg.teamId).then(() => {
+            _refreshTeamProgressPanel(msg.teamId);
+            refreshVisibleTeamChat(msg.teamId, false);
+          });
+        }
       }
     }
   }
@@ -1821,30 +4526,130 @@ function handleTeamWsEvent(msg) {
     bgtToast(`🏠 ${msg.teamName}`, `${icon} ${msg.agentName} completed a task`);
     refreshTeamsDebounced();
     if (activeTeamId === msg.teamId) {
-      loadTeamBoardData(msg.teamId).then(() => {
-        if (teamBoardTab === 'chat') renderActiveTeamChat(msg.teamId, { forceBottom: false });
-        else renderTeamBoard(msg.teamId);
-        // Always refresh workspace cache after a run (agent may have written files)
+      if (teamBoardTab === 'chat') {
+        refreshVisibleTeamChat(msg.teamId, false);
         api(`/api/teams/${msg.teamId}/workspace`).then(d => {
           if (d?.files) {
             teamWorkspaceFiles = d.files;
             teamWorkspaceTree = d.tree || [];
-            if (teamBoardTab === 'workspace') renderTeamBoard(msg.teamId);
           }
         }).catch(() => {});
-        // Refresh side panels if open
-        const sidePanels = document.getElementById('team-side-panels');
-        if (sidePanels) _showTeamPanels(msg.teamId);
-      });
+      } else {
+        loadTeamBoardData(msg.teamId).then(() => {
+          if (teamBoardTab === 'chat') renderActiveTeamChat(msg.teamId, { forceBottom: false });
+          else renderTeamBoard(msg.teamId);
+          // Always refresh workspace cache after a run (agent may have written files)
+          api(`/api/teams/${msg.teamId}/workspace`).then(d => {
+            if (d?.files) {
+              teamWorkspaceFiles = d.files;
+              teamWorkspaceTree = d.tree || [];
+              if (teamBoardTab === 'workspace') renderTeamBoard(msg.teamId);
+            }
+          }).catch(() => {});
+          // Refresh side panels if open
+          const sidePanels = document.getElementById('team-side-panels');
+          if (sidePanels) _showTeamPanels(msg.teamId);
+        });
+      }
     }
   }
   if (msg.type === 'team_manager_review_done') {
     refreshTeamsDebounced();
     if (activeTeamId === msg.teamId) {
-      loadTeamBoardData(msg.teamId).then(() => {
-        if (teamBoardTab === 'chat') renderActiveTeamChat(msg.teamId, { forceBottom: false });
-        else renderTeamBoard(msg.teamId);
+      if (teamBoardTab === 'chat') {
+        refreshVisibleTeamChat(msg.teamId, false);
+      } else {
+        loadTeamBoardData(msg.teamId).then(() => {
+          if (teamBoardTab === 'chat') renderActiveTeamChat(msg.teamId, { forceBottom: false });
+          else renderTeamBoard(msg.teamId);
+        });
+      }
+    }
+  }
+  if (msg.type === 'team_manager_stream_start') {
+    if (msg.teamId && msg.streamId) {
+      ensureTeamManagerStream(msg.teamId, msg.streamId, {
+        startedAt: Number(msg.startedAt || Date.now()),
+        source: String(msg.source || 'conversation'),
+        turn: Number(msg.turn || 1),
+        completed: false,
       });
+      refreshVisibleTeamChat(msg.teamId, false);
+    }
+  }
+  if (msg.type === 'team_manager_stream_event') {
+    const stream = applyTeamManagerStreamEvent(msg);
+    if (stream) {
+      const eventType = String(msg?.eventType || '').trim();
+      if (eventType === 'token' || eventType === 'thinking_delta') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else {
+        refreshVisibleTeamChat(stream.teamId, false);
+      }
+    }
+  }
+  if (msg.type === 'team_manager_stream_done') {
+    if (msg.teamId && msg.streamId) {
+      const stream = ensureTeamManagerStream(msg.teamId, msg.streamId, {
+        startedAt: Number(msg.startedAt || Date.now()),
+        source: String(msg.source || 'conversation'),
+        turn: Number(msg.turn || 1),
+      });
+      if (stream) {
+        stream.completed = true;
+        stream.finishedAt = Number(msg.completedAt || Date.now());
+        stream.durationMs = Math.max(Number(stream.durationMs || 0), Number(msg.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+      }
+      setTimeout(() => {
+        const stillThere = getTeamManagerStreamMap(msg.teamId)?.[msg.streamId];
+        if (!stillThere) return;
+        removeTeamManagerStream(msg.teamId, msg.streamId);
+        refreshVisibleTeamChat(msg.teamId, false);
+      }, 3000);
+      refreshVisibleTeamChat(msg.teamId, false);
+    }
+  }
+  if (msg.type === 'team_member_stream_start') {
+    if (msg.teamId && msg.streamId) {
+      ensureTeamMemberStream(msg.teamId, msg.streamId, {
+        agentId: String(msg.agentId || '').trim(),
+        agentName: String(msg.agentName || msg.agentId || 'Team Member').trim(),
+        startedAt: Number(msg.startedAt || Date.now()),
+        completed: false,
+      });
+      refreshVisibleTeamChat(msg.teamId, false);
+    }
+  }
+  if (msg.type === 'team_member_stream_event') {
+    const stream = applyTeamMemberStreamEvent(msg);
+    if (stream) {
+      const eventType = String(msg?.eventType || '').trim();
+      if (eventType === 'token' || eventType === 'thinking_delta') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else {
+        refreshVisibleTeamChat(stream.teamId, false);
+      }
+    }
+  }
+  if (msg.type === 'team_member_stream_done') {
+    if (msg.teamId && msg.streamId) {
+      const stream = ensureTeamMemberStream(msg.teamId, msg.streamId, {
+        agentId: String(msg.agentId || '').trim(),
+        agentName: String(msg.agentName || msg.agentId || 'Team Member').trim(),
+        startedAt: Number(msg.startedAt || Date.now()),
+      });
+      if (stream) {
+        stream.completed = true;
+        stream.finishedAt = Number(msg.completedAt || Date.now());
+        stream.durationMs = Math.max(Number(stream.durationMs || 0), Number(msg.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+      }
+      setTimeout(() => {
+        const stillThere = getTeamMemberStreamMap(msg.teamId)?.[msg.streamId];
+        if (!stillThere) return;
+        removeTeamMemberStream(msg.teamId, msg.streamId);
+        refreshVisibleTeamChat(msg.teamId, false);
+      }, 3000);
+      refreshVisibleTeamChat(msg.teamId, false);
     }
   }
   if (msg.type === 'team_dispatch') {
@@ -1853,6 +4658,26 @@ function handleTeamWsEvent(msg) {
   if (msg.type === 'team_dispatch_complete') {
     const icon = msg.success ? '?' : '?';
     bgtToast(`${icon} ${msg.agentId}`, (msg.resultPreview||'').slice(0,100));
+    if (msg.teamId && msg.taskId) {
+      const stream = ensureTeamDispatchStream(msg.teamId, msg.taskId, {
+        agentId: msg.agentId || '',
+        agentName: msg.agentName || msg.agentId || 'Subagent',
+        durationMs: Number(msg.durationMs || 0),
+        stepCount: Number(msg.stepCount || 0),
+      });
+      if (stream) {
+        stream.completed = true;
+        stream.status = msg.success ? 'finalizing' : 'failed';
+        stream.finishedAt = Date.now();
+        stream.durationMs = Math.max(Number(stream.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+        if (msg.resultPreview && !stream.finalReply) stream.finalReply = String(msg.resultPreview);
+      }
+      setTimeout(() => {
+        const stillThere = getTeamDispatchStreamMap(msg.teamId)?.[msg.taskId];
+        if (!stillThere) return;
+        removeTeamDispatchStream(msg.teamId, msg.taskId);
+      }, 3000);
+    }
     if (activeTeamId === msg.teamId) {
       loadTeamBoardData(msg.teamId).then(() => {
         if (teamBoardTab === 'chat') {
@@ -1879,8 +4704,29 @@ function handleTeamWsEvent(msg) {
     }
   }
   if (msg.type === 'team_chat_message') {
+    const chatMessage = getTeamEventChatMessage(msg);
+    if (chatMessage?.metadata?.taskId) {
+      removeTeamDispatchStream(msg.teamId, String(chatMessage.metadata.taskId));
+    }
+    if (chatMessage?.metadata?.runId) {
+      removeTeamManagerStream(msg.teamId, String(chatMessage.metadata.runId));
+      removeTeamMemberStream(msg.teamId, String(chatMessage.metadata.runId));
+    }
     if (activeTeamId === msg.teamId && teamBoardTab === 'chat') {
-      teamChatMessages.push(msg.message);
+      if (!chatMessage) return;
+      if (teamChatStreamingState && teamChatStreamingState.teamId === msg.teamId && chatMessage.from === 'manager') {
+        if (teamChatStreamingState.fallbackTimer) clearTimeout(teamChatStreamingState.fallbackTimer);
+        teamChatStreamingState = null;
+        scheduleNextTeamQueuedMessage(msg.teamId);
+      }
+      if (teamChatMessages.some((entry) => entry.id === chatMessage.id)) return;
+      teamChatMessages = teamChatMessages.filter((entry) => !(
+        entry?.metadata?.localStreamingFallback
+        && chatMessage.from === entry.from
+        && String(chatMessage.content || '').trim() === String(entry.content || '').trim()
+      ));
+      teamChatMessages.push(chatMessage);
+      teamChatMessages = mergeDispatchMetadataIntoMessages(msg.teamId, teamChatMessages);
       activeTeamChatSignature = getTeamChatSignature(teamChatMessages);
       renderActiveTeamChat(msg.teamId, { forceBottom: false });
     }
@@ -1899,8 +4745,18 @@ function handleTeamWsEvent(msg) {
     // Always refresh the right-column approval panel — shows in current chat session
     loadSessionApprovals();
   }
+  if (msg.type === 'approval_created') {
+    bgtToast(`⏳ Command Approval`, (msg.summary || 'New command approval').slice(0, 100));
+    const badge = document.getElementById('approvals-badge');
+    if (badge) { badge.style.display = 'inline-block'; badge.textContent = '+'; }
+    if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
+    loadSessionApprovals();
+  }
   if (msg.type === 'proposal_approved') {
     if (currentMode === 'proposals') loadProposals();
+  }
+  if (msg.type === 'approval_approved') {
+    if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
   }
   if (msg.type === 'proposal_executing') {
     bgtToast(`⏳ Executing proposal`, msg.title || 'Proposal running...');
@@ -1920,6 +4776,28 @@ function handleTeamWsEvent(msg) {
           automated: true,
           unread: true,
           isProposal: true,
+        });
+        saveChatSessions();
+        renderSessionsList();
+      }
+    }
+  }
+  if (msg.type === 'approval_executing') {
+    bgtToast(`⏳ Executing command`, (msg.summary || 'Approved command running...').slice(0, 100));
+    if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
+    const execSessionId = msg.sessionId || `approval_${msg.approvalId}`;
+    if (execSessionId) {
+      const existIdx = chatSessions.findIndex(s => s.id === execSessionId);
+      if (existIdx === -1) {
+        chatSessions.push({
+          id: execSessionId,
+          title: `⌘ ${msg.summary || 'Command execution'}`,
+          history: [{ role: 'assistant', content: `⏳ **Executing approved command**\n\nThis command is running in the background. Results will appear here when complete.` }],
+          processLog: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          automated: true,
+          unread: true,
         });
         saveChatSessions();
         renderSessionsList();
@@ -1955,6 +4833,32 @@ function handleTeamWsEvent(msg) {
     saveChatSessions();
     renderSessionsList();
   }
+  if (msg.type === 'approval_executed') {
+    bgtToast(`✅ Command complete`, (msg.summary || 'Approved command complete').slice(0, 100));
+    if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
+    const execSessionId = msg.sessionId || `approval_${msg.approvalId}`;
+    const sessIdx = chatSessions.findIndex(s => s.id === execSessionId);
+    const completionMsg = `✅ **Approved command executed**\n\nCheck the Approvals panel for the command output preview.`;
+    if (sessIdx !== -1) {
+      chatSessions[sessIdx].history.push({ role: 'assistant', content: completionMsg });
+      chatSessions[sessIdx].updatedAt = Date.now();
+      chatSessions[sessIdx].unread = execSessionId !== activeChatSessionId;
+      chatSessions[sessIdx].title = `✅ ${msg.summary || 'Approved command'}`;
+    } else {
+      chatSessions.push({
+        id: execSessionId,
+        title: `✅ ${msg.summary || 'Approved command'}`,
+        history: [{ role: 'assistant', content: completionMsg }],
+        processLog: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        automated: true,
+        unread: true,
+      });
+    }
+    saveChatSessions();
+    renderSessionsList();
+  }
   if (msg.type === 'proposal_failed') {
     bgtToast(`❌ Proposal failed`, (msg.title || 'Execution failed') + (msg.error ? ': ' + msg.error.slice(0, 80) : ''));
     if (currentMode === 'proposals') loadProposals();
@@ -1971,9 +4875,38 @@ function handleTeamWsEvent(msg) {
       renderSessionsList();
     }
   }
+  if (msg.type === 'approval_failed') {
+    bgtToast(`❌ Command failed`, ((msg.summary || 'Approved command failed') + (msg.error ? `: ${msg.error}` : '')).slice(0, 100));
+    if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
+    const execSessionId = msg.sessionId || `approval_${msg.approvalId}`;
+    const sessIdx = chatSessions.findIndex(s => s.id === execSessionId);
+    const failMsg = `❌ **Approved command failed**\n\n${msg.error || 'An error occurred during execution.'}`;
+    if (sessIdx !== -1) {
+      chatSessions[sessIdx].history.push({ role: 'assistant', content: failMsg });
+      chatSessions[sessIdx].updatedAt = Date.now();
+      chatSessions[sessIdx].unread = true;
+      chatSessions[sessIdx].title = `❌ ${msg.summary || 'Approved command'}`;
+    } else {
+      chatSessions.push({
+        id: execSessionId,
+        title: `❌ ${msg.summary || 'Approved command'}`,
+        history: [{ role: 'assistant', content: failMsg }],
+        processLog: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        automated: true,
+        unread: true,
+      });
+    }
+    saveChatSessions();
+    renderSessionsList();
+  }
   if (msg.type === 'proposal_denied') {
     if (currentMode === 'proposals') loadProposals();
     checkPendingProposalsBadge();
+  }
+  if (msg.type === 'approval_denied' || msg.type === 'approval_expired') {
+    if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
   }
   if (msg.type === 'team_paused' || msg.type === 'team_resumed' || msg.type === 'team_deleted' || msg.type === 'team_updated' || msg.type === 'team_created') {
     if (msg.type === 'team_paused') bgtToast(`⏸️ ${msg.teamName || 'Team'}`, 'Paused');
@@ -2043,9 +4976,12 @@ window.renderTeamTabContent = renderTeamTabContent;
 window.renderTeamContextTab = renderTeamContextTab;
 window.renderTeamMemoryTab = renderTeamMemoryTab;
 window.renderTeamRunsTab = renderTeamRunsTab;
+window.toggleTeamRunCard = toggleTeamRunCard;
 window.renderTeamChatTab = renderTeamChatTab;
 window.renderTeamCharacters = renderTeamCharacters;
 window.sendTeamChat = sendTeamChat;
+window.abortTeamChat = abortTeamChat;
+window.selectTeamChatMention = selectTeamChatMention;
 window.triggerManagerReview = triggerManagerReview;
 window.runAllTeamAgents = runAllTeamAgents;
 window.toggleTeamRunPause = toggleTeamRunPause;
@@ -2054,6 +4990,7 @@ window.openTeamContextRefModal = openTeamContextRefModal;
 window.closeTeamContextRefModal = closeTeamContextRefModal;
 window.saveTeamContextReferenceModal = saveTeamContextReferenceModal;
 window.deleteTeamContextReferenceCard = deleteTeamContextReferenceCard;
+window.uploadTeamContextFile = uploadTeamContextFile;
 window.pauseTeam = pauseTeam;
 window.resumeTeam = resumeTeam;
 window.deleteTeam = deleteTeam;
@@ -2075,10 +5012,32 @@ window.renderWorkspaceTree = renderWorkspaceTree;
 window.toggleWorkspaceFolder = toggleWorkspaceFolder;
 window.renderTeamWorkspaceTab = renderTeamWorkspaceTab;
 window.refreshTeamWorkspace = refreshTeamWorkspace;
+window.loadTeamMemoryFiles = loadTeamMemoryFiles;
+window.openTeamWorkspaceFile = openTeamWorkspaceFile;
+window.reloadTeamWorkspaceFile = reloadTeamWorkspaceFile;
+window.saveTeamWorkspaceFile = saveTeamWorkspaceFile;
+window.closeTeamWorkspaceFile = closeTeamWorkspaceFile;
+window.renderTeamSubagentsTab = renderTeamSubagentsTab;
+window.openTeamSubagentDetail = openTeamSubagentDetail;
+window.switchTeamSubagentTab = switchTeamSubagentTab;
+window.saveTeamSubagentSystemPrompt = saveTeamSubagentSystemPrompt;
+window.reloadTeamSubagentSystemPrompt = reloadTeamSubagentSystemPrompt;
+window.saveTeamSubagentHeartbeatMd = saveTeamSubagentHeartbeatMd;
+window.saveTeamSubagentHbConfig = saveTeamSubagentHbConfig;
+window.tickTeamSubagentHeartbeat = tickTeamSubagentHeartbeat;
+window.saveTeamSubagentCtxRef = saveTeamSubagentCtxRef;
+window.deleteTeamSubagentCtxRef = deleteTeamSubagentCtxRef;
 window.getTeamContextReferences = getTeamContextReferences;
 window.renderTeamContextReferenceCards = renderTeamContextReferenceCards;
 window.getTeamChatSignature = getTeamChatSignature;
 window.renderActiveTeamChat = renderActiveTeamChat;
+window.showMoreTeamChat = showMoreTeamChat;
+window.toggleTeamChatProcess = function(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' || !el.style.display ? 'block' : 'none';
+};
+window.toggleTeamDispatchBubble = toggleTeamDispatchBubble;
 window.loadTeamProgressTask = loadTeamProgressTask;
 window.toggleTeamProgressRun = toggleTeamProgressRun;
 window.hashStr = hashStr;

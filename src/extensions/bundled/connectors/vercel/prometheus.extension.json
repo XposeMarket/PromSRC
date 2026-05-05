@@ -1,0 +1,54 @@
+{
+  "id": "vercel",
+  "kind": "connector",
+  "name": "Vercel",
+  "description": "Connect Vercel so Prometheus can detect projects, trigger deployments, and surface preview URLs.",
+  "category": "Dev",
+  "enabledByDefault": true,
+  "docsUrl": "https://vercel.com/account/tokens",
+  "tags": ["vercel", "deployments", "api key"],
+  "runtime": {
+    "binding": "integrations/vercel"
+  },
+  "ui": {
+    "color": "#111111",
+    "permissions": [
+      { "icon": "^", "label": "Create and link Vercel projects" },
+      { "icon": "->", "label": "Trigger deployments from the canvas" },
+      { "icon": "?", "label": "Read deployment state and live URLs" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["vercel"],
+    "capabilities": ["deployments", "hosting"],
+    "tools": ["vercel_deploy", "vercel_env"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "statusMode": "generic",
+    "docsUrl": "https://vercel.com/account/tokens",
+    "docsHint": "Vercel -> Account Settings -> Tokens. Project ID and Team ID are optional.",
+    "fields": [
+      {
+        "key": "apiKey",
+        "label": "API Token",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "vercel_pat_..."
+      },
+      {
+        "key": "projectId",
+        "label": "Project ID",
+        "input": "text",
+        "placeholder": "prj_..."
+      },
+      {
+        "key": "teamId",
+        "label": "Team ID",
+        "input": "text",
+        "placeholder": "team_..."
+      }
+    ]
+  }
+}

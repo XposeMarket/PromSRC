@@ -6,6 +6,9 @@ import { broadcastWS, broadcastTeamEvent, resolveChannelsConfig, normalizeTelegr
 import { listManagedTeams, saveManagedTeam, deleteManagedTeam } from '../teams/managed-teams';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
 import { spawnAgent } from '../../agents/spawner';
+import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
+import { addMessage, getSession, setWorkspace } from '../session';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -22,15 +25,38 @@ let _telegramChannel: any;
 
 
 let _dispatchToAgent: (agentId: string, message: string, context: string | undefined, source: string) => Promise<any>;
+let _runInteractiveTurn: (
+  message: string,
+  sessionId: string,
+  sendSSE: (event: string, data: any) => void,
+  pinnedMessages?: Array<{ role: string; content: string }>,
+  abortSignal?: { aborted: boolean },
+  callerContext?: string,
+  reasoningOptions?: any,
+  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+  modelOverride?: string,
+) => Promise<{ type: string; text: string; thinking?: string }>;
 
 export function initChannelsRouter(deps: {
   cronScheduler: any;
   telegramChannel: any;
   dispatchToAgent: (agentId: string, message: string, context: string | undefined, source: string) => Promise<any>;
+  runInteractiveTurn: (
+    message: string,
+    sessionId: string,
+    sendSSE: (event: string, data: any) => void,
+    pinnedMessages?: Array<{ role: string; content: string }>,
+    abortSignal?: { aborted: boolean },
+    callerContext?: string,
+    reasoningOptions?: any,
+    attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+    modelOverride?: string,
+  ) => Promise<{ type: string; text: string; thinking?: string }>;
 }): void {
   _cronScheduler = deps.cronScheduler;
   _telegramChannel = deps.telegramChannel;
   _dispatchToAgent = deps.dispatchToAgent;
+  _runInteractiveTurn = deps.runInteractiveTurn;
 }
 
 // ─── Channels API ──────────────────────────────────────────────────────────────
@@ -291,6 +317,11 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
     name: String(raw?.name || id || 'Agent').trim() || 'Agent',
   };
   if (raw?.description !== undefined) normalized.description = String(raw.description || '').trim();
+  if (raw?.emoji !== undefined) normalized.emoji = String(raw.emoji || '').trim();
+  if (raw?.identity && typeof raw.identity === 'object') normalized.identity = raw.identity;
+  if (raw?.roleType !== undefined) normalized.roleType = String(raw.roleType || '').trim();
+  if (raw?.teamRole !== undefined) normalized.teamRole = String(raw.teamRole || '').trim();
+  if (raw?.teamAssignment !== undefined) normalized.teamAssignment = String(raw.teamAssignment || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
   if (raw?.model !== undefined) normalized.model = String(raw.model || '').trim();
   if (typeof raw?.default === 'boolean') normalized.default = raw.default;
@@ -315,6 +346,8 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   }
   // Preserve dynamic subagent metadata so it survives round-trips through the settings UI
   if (raw?.subagentType !== undefined) normalized.subagentType = raw.subagentType;
+  if (raw?.scheduleId !== undefined) normalized.scheduleId = String(raw.scheduleId || '').trim();
+  if (raw?.scheduleName !== undefined) normalized.scheduleName = String(raw.scheduleName || '').trim();
   if (raw?.createdAt !== undefined) normalized.createdAt = raw.createdAt;
   if (raw?.createdBy !== undefined) normalized.createdBy = raw.createdBy;
   if (Array.isArray(raw?.allowed_tools)) normalized.allowed_tools = raw.allowed_tools;
@@ -336,12 +369,15 @@ function _normalizeAgentsForSave(incomingAgents: any[]): any[] {
     seen.add(n.id);
     out.push(n);
   }
-  if (out.length > 0 && !out.some(a => a.default === true)) out[0].default = true;
-  if (out.filter(a => a.default === true).length > 1) {
-    let found = false;
+  const explicitMain = out.find((a) => a.id === 'main');
+  if (explicitMain) {
+    for (const a of out) a.default = a.id === 'main';
+  } else {
+    // When config does not define an explicit main agent, the synthetic main
+    // agent returned by getAgents() owns the default role. No standalone/team
+    // subagent should be marked default in persisted config.
     for (const a of out) {
-      if (a.default === true && !found) { found = true; continue; }
-      if (a.default === true) a.default = false;
+      if (a.default === true) delete a.default;
     }
   }
   return out;
@@ -353,40 +389,212 @@ function findLastCronRunAt(agentId: string): number | null {
   return hit ? hit.finishedAt : null;
 }
 
-function getPrimaryModelRef(cfg: any): string {
-  const provider = String(cfg?.llm?.provider || '').trim();
-  const providerModel = provider ? String(cfg?.llm?.providers?.[provider]?.model || '').trim() : '';
-  const model = providerModel || String(cfg?.models?.primary || '').trim();
-  return provider && model ? `${provider}/${model}` : model;
-}
-
-function inferAgentDefaultModelKey(agent: any, isManager: boolean, isTeamMember: boolean): string {
-  if (isManager) return 'manager';
-  if (isTeamMember) return 'team_subagent';
-  if (String(agent?.id || '') === 'main' || agent?.default === true) return 'main_chat';
-  return 'subagent';
-}
-
 function resolveEffectiveAgentModel(cfg: any, agent: any, isManager: boolean, isTeamMember: boolean): { model: string; source: string } {
-  const explicit = String(agent?.model || '').trim();
-  if (explicit) return { model: explicit, source: 'agent_override' };
+  return resolveConfiguredAgentModel(cfg, agent, {
+    isManager,
+    isTeamMember,
+    fallbackToPrimary: true,
+  });
+}
 
-  const defaults = cfg?.agent_model_defaults || {};
-  const typeKey = inferAgentDefaultModelKey(agent, isManager, isTeamMember);
-  const roleType = String(agent?.roleType || '').trim().toLowerCase();
-  const roleKey = roleType ? `subagent_${roleType}` : '';
-  const candidates: Array<[string, string | undefined]> = typeKey === 'team_subagent'
-    ? [...(roleKey ? [[roleKey, defaults?.[roleKey]] as [string, string | undefined]] : [])]
-    : typeKey === 'subagent'
-      ? [...(roleKey ? [[roleKey, defaults?.[roleKey]] as [string, string | undefined]] : []), ['subagent', defaults?.subagent]]
-      : [[typeKey, defaults?.[typeKey]]];
-  for (const [key, value] of candidates) {
-    const defaultModel = String(value || '').trim();
-    if (defaultModel) return { model: defaultModel, source: `agent_model_defaults.${key}` };
+function getSubagentChatSessionId(agentId: string): string {
+  return `subagent_chat_${_sanitizeAgentId(agentId)}`;
+}
+
+function loadAgentIdentityPrompt(agentWorkspace: string): string {
+  const candidates = [
+    path.join(agentWorkspace, 'system_prompt.md'),
+    path.join(agentWorkspace, 'AGENTS.md'),
+    path.join(agentWorkspace, 'HEARTBEAT.md'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const content = fs.readFileSync(candidate, 'utf-8').trim();
+      if (content) return content;
+    } catch {
+      // Ignore unreadable prompt file and keep falling back.
+    }
   }
+  return '';
+}
 
-  const primary = getPrimaryModelRef(cfg);
-  return { model: primary, source: 'primary' };
+function buildSubagentCallerContext(agentId: string, agent: any, mainWorkspace: string, artifactWorkspace: string): string {
+  const identityPrompt = loadAgentIdentityPrompt(artifactWorkspace);
+  const intro = [
+    '[SUBAGENT CHAT CONTEXT]',
+    `You are chatting directly with the user as the configured agent "${agent?.name || agentId}" (id: ${agentId}).`,
+    'This is a normal conversational thread using the main Prometheus chat runtime, not a one-off task dispatch.',
+    'Treat greetings, check-ins, and small talk conversationally. Do not start with a filesystem scan unless the user asks for work or you genuinely need context.',
+    'You still have your normal tools and can use them whenever they are useful or requested.',
+    `Main workspace: ${mainWorkspace}`,
+    `Subagent artifact workspace: ${artifactWorkspace}`,
+    'Keep your own notes, scratch files, and subagent-specific artifacts in the artifact workspace when practical.',
+  ];
+  if (!identityPrompt) {
+    intro.push('No subagent identity file was found. Use the configured agent name, description, and current user request as your guide.');
+    intro.push('[/SUBAGENT CHAT CONTEXT]');
+    return intro.join('\n');
+  }
+  return [
+    ...intro,
+    '',
+    'Your configured identity prompt follows. Keep this role and scope, but stay conversational unless the user is asking you to execute.',
+    '',
+    identityPrompt,
+    '[/SUBAGENT CHAT CONTEXT]',
+  ].join('\n');
+}
+
+function seedSubagentSessionFromChatStore(agentId: string, sessionId: string, workspacePath: string): void {
+  setWorkspace(sessionId, workspacePath);
+  const session = getSession(sessionId);
+  if (Array.isArray(session.history) && session.history.length > 0) return;
+
+  const prior = getSubagentChatHistory(agentId, 80);
+  for (const msg of prior) {
+    if (msg.role !== 'user' && msg.role !== 'agent') continue;
+    addMessage(sessionId, {
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: String(msg.content || ''),
+      timestamp: Number(msg.ts || Date.now()) || Date.now(),
+      channel: 'web',
+    }, {
+      disableCompactionCheck: true,
+      disableMemoryFlushCheck: true,
+    });
+  }
+}
+
+function createSSESender(res: any): (event: string, data: any) => void {
+  return (type: string, data: any) => {
+    try {
+      res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    } catch {
+      // Ignore broken pipe / closed client writes.
+    }
+  };
+}
+
+async function runSubagentChatTurn(
+  agentId: string,
+  agent: any,
+  message: string,
+  timeoutMs: number,
+  sendSSE?: (event: string, data: any) => void,
+  externalAbortSignal?: { aborted: boolean },
+): Promise<{ result: { type: string; text: string; thinking?: string }; historyEntry: any; messages: any[] }> {
+  const startedAt = Date.now();
+  const cfg = getConfig().getConfig() as any;
+  const teamMemberIds = getTeamMemberAgentIds();
+  const allTeams = listManagedTeams();
+  const isManager = !!(agent as any)?.isTeamManager || allTeams.some((team: any) => String(team?.managerAgentId || '').trim() === agentId);
+  const effectiveModel = resolveEffectiveAgentModel(cfg, agent, isManager, teamMemberIds.has(agentId));
+  const mainWorkspace = getConfig().getWorkspacePath();
+  const artifactWorkspace = ensureAgentWorkspace(agent);
+  const sessionId = getSubagentChatSessionId(agentId);
+  seedSubagentSessionFromChatStore(agentId, sessionId, mainWorkspace);
+  const callerContext = buildSubagentCallerContext(agentId, agent, mainWorkspace, artifactWorkspace);
+  const abortSignal = externalAbortSignal || { aborted: false };
+  const baseEmit = sendSSE || (() => {});
+
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  let settled = false;
+  let rejectTimeout: ((reason?: any) => void) | undefined;
+  const clearInactivityTimeout = () => {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    }
+  };
+  const resetInactivityTimeout = () => {
+    if (settled) return;
+    clearInactivityTimeout();
+    timeoutHandle = setTimeout(() => {
+      if (settled) return;
+      abortSignal.aborted = true;
+      rejectTimeout?.(new Error(`Subagent chat timeout after ${timeoutMs}ms of inactivity`));
+    }, timeoutMs);
+    if (typeof (timeoutHandle as any)?.unref === 'function') (timeoutHandle as any).unref();
+  };
+  const timeoutErr = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+  const emit = (event: string, data: any) => {
+    resetInactivityTimeout();
+    baseEmit(event, data);
+  };
+
+  try {
+    resetInactivityTimeout();
+    const result = await Promise.race([
+      _runInteractiveTurn(
+        message,
+        sessionId,
+        emit,
+        undefined,
+        abortSignal,
+        callerContext,
+        undefined,
+        undefined,
+        effectiveModel.model || undefined,
+      ),
+      timeoutErr,
+    ]).finally(() => {
+      settled = true;
+      clearInactivityTimeout();
+    });
+
+    if (abortSignal.aborted) {
+      throw new Error('Subagent chat stopped.');
+    }
+
+    const finishedAt = Date.now();
+    const reply = String(result?.text || '').trim() || '(No response text returned.)';
+    const agentMessage = appendSubagentChatMessage(agentId, {
+      role: 'agent',
+      content: reply,
+      metadata: {
+        source: 'subagent_chat',
+        success: true,
+        mode: result?.type || 'chat',
+        durationMs: finishedAt - startedAt,
+        model: effectiveModel.model,
+        modelSource: effectiveModel.source,
+      },
+    });
+    broadcastWS({ type: 'subagent_chat_message', agentId, message: agentMessage });
+
+    const historyEntry = recordAgentRun({
+      agentId,
+      agentName: agent.name || agentId,
+      trigger: 'manual',
+      success: true,
+      startedAt,
+      finishedAt,
+      durationMs: finishedAt - startedAt,
+      stepCount: undefined,
+      error: undefined,
+      resultPreview: reply,
+    });
+
+    return {
+      result,
+      historyEntry,
+      messages: getSubagentChatHistory(agentId, 100),
+    };
+  } catch (err: any) {
+    if (abortSignal.aborted) {
+      throw err;
+    }
+    const agentMessage = appendSubagentChatMessage(agentId, {
+      role: 'agent',
+      content: `Error: ${err.message}`,
+      metadata: { source: 'subagent_chat', success: false },
+    });
+    broadcastWS({ type: 'subagent_chat_message', agentId, message: agentMessage });
+    throw err;
+  }
 }
 
 router.get('/api/agents', (_req, res) => {
@@ -449,7 +657,7 @@ router.get('/api/agents', (_req, res) => {
       effectiveModelSource: effectiveModel.source,
     };
   });
-  const defaultAgent = agents.find((a) => a.default) || agents[0] || null;
+  const defaultAgent = agents.find((a) => a.id === 'main') || agents.find((a) => a.default) || agents[0] || null;
   res.json({ success: true, agents, defaultAgentId: defaultAgent?.id || null, teamMemberIds: Array.from(teamMemberIds) });
 });
 
@@ -457,6 +665,104 @@ router.get('/api/agents/history', (req, res) => {
   const agentId = String(req.query.agentId || '').trim() || undefined;
   const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
   res.json({ success: true, history: getAgentRunHistory(agentId, limit) });
+});
+
+router.get('/api/agents/:id/chat', (req, res) => {
+  const agentId = _sanitizeAgentId(req.params.id);
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+  const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+  res.json({ success: true, messages: getSubagentChatHistory(agentId, limit) });
+});
+
+router.post('/api/agents/:id/chat', async (req, res) => {
+  const agentId = _sanitizeAgentId(req.params.id);
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+  if (!_runInteractiveTurn) return res.status(503).json({ success: false, error: 'Subagent chat runtime is not initialized' });
+
+  const message = String(req.body?.message || '').trim();
+  if (!message) return res.status(400).json({ success: false, error: 'message is required' });
+
+  const userMessage = appendSubagentChatMessage(agentId, {
+    role: 'user',
+    content: message,
+    metadata: { source: 'subagent_chat' },
+  });
+  broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
+
+  const timeoutMs = Number.isFinite(Number(req.body?.timeoutMs)) && Number(req.body.timeoutMs) > 0
+    ? Math.floor(Number(req.body.timeoutMs))
+    : 300000;
+
+  try {
+    const payload = await runSubagentChatTurn(agentId, agent, message, timeoutMs);
+    res.json({ success: true, ...payload });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, messages: getSubagentChatHistory(agentId, 100) });
+  }
+});
+
+router.post('/api/agents/:id/chat/stream', async (req, res) => {
+  const agentId = _sanitizeAgentId(req.params.id);
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+  if (!_runInteractiveTurn) return res.status(503).json({ success: false, error: 'Subagent chat runtime is not initialized' });
+
+  const message = String(req.body?.message || '').trim();
+  if (!message) return res.status(400).json({ success: false, error: 'message is required' });
+
+  const timeoutMs = Number.isFinite(Number(req.body?.timeoutMs)) && Number(req.body.timeoutMs) > 0
+    ? Math.floor(Number(req.body.timeoutMs))
+    : 300000;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const sendSSE = createSSESender(res);
+  sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
+  const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
+  const abortSignal = { aborted: false };
+  let requestCompleted = false;
+  req.on('aborted', () => {
+    if (!requestCompleted) {
+      abortSignal.aborted = true;
+    }
+  });
+  res.on('close', () => {
+    if (!requestCompleted && !res.writableEnded) {
+      abortSignal.aborted = true;
+    }
+  });
+
+  const userMessage = appendSubagentChatMessage(agentId, {
+    role: 'user',
+    content: message,
+    metadata: { source: 'subagent_chat' },
+  });
+  broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
+
+  try {
+    const payload = await runSubagentChatTurn(agentId, agent, message, timeoutMs, sendSSE, abortSignal);
+    if (!abortSignal.aborted) {
+      sendSSE('final', { text: payload.result?.text || '' });
+      sendSSE('done', {
+        reply: payload.result?.text || '',
+        thinking: payload.result?.thinking || '',
+        historyEntry: payload.historyEntry,
+      });
+    }
+  } catch (err: any) {
+    if (!abortSignal.aborted) {
+      sendSSE('error', { message: err.message || 'Unknown error' });
+    }
+  } finally {
+    requestCompleted = true;
+    clearInterval(heartbeat);
+    res.end();
+  }
 });
 
 // Returns the next N scheduled run times for an agent (based on its cronSchedule).
@@ -565,10 +871,10 @@ router.delete('/api/agents/:id', (req, res) => {
   const cm = getConfig();
   const current = cm.getConfig() as any;
   const explicitAgents = Array.isArray(current.agents) ? current.agents : [];
-  // Protect the default (main) agent — it must always exist
+  // Protect the main agent — it must always exist
   const target = explicitAgents.find((a: any) => _sanitizeAgentId(a.id) === targetId);
-  if (target?.default === true) {
-    res.status(403).json({ success: false, error: 'Cannot delete the default agent. Reassign default to another agent first.' });
+  if (targetId === 'main') {
+    res.status(403).json({ success: false, error: 'Cannot delete the main agent.' });
     return;
   }
   const next = explicitAgents.filter((a: any) => _sanitizeAgentId(a.id) !== targetId);
@@ -776,6 +1082,101 @@ router.put('/api/agents/:id/subagent-config', (req, res) => {
   res.json({ success: true, config: updated });
 });
 
+// ─── Agent Context References ────────────────────────────────────────────────
+
+function loadAgentContextRefs(workspace: string): any[] {
+  const p = path.join(workspace, 'context-refs.json');
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')).refs || []; } catch { return []; }
+}
+
+function saveAgentContextRefs(workspace: string, refs: any[]): void {
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'context-refs.json'), JSON.stringify({ refs }, null, 2), 'utf-8');
+}
+
+router.get('/api/agents/:id/context-refs', (req, res) => {
+  const agent = getAgentById(_sanitizeAgentId(req.params.id));
+  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+  const workspace = resolveAgentWorkspaceSafe(agent);
+  res.json({ success: true, refs: loadAgentContextRefs(workspace) });
+});
+
+router.post('/api/agents/:id/context-refs', (req, res) => {
+  const agent = getAgentById(_sanitizeAgentId(req.params.id));
+  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+  const title = String(req.body?.title || '').trim();
+  const content = String(req.body?.content || '').trim();
+  if (!title || !content) return res.status(400).json({ success: false, error: 'title and content are required' });
+  const workspace = resolveAgentWorkspaceSafe(agent);
+  const refs = loadAgentContextRefs(workspace);
+  const ref = { id: `ref_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,6)}`, title, content, createdAt: Date.now(), updatedAt: Date.now() };
+  refs.push(ref);
+  saveAgentContextRefs(workspace, refs);
+  res.json({ success: true, ref });
+});
+
+router.put('/api/agents/:id/context-refs/:refId', (req, res) => {
+  const agent = getAgentById(_sanitizeAgentId(req.params.id));
+  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+  const workspace = resolveAgentWorkspaceSafe(agent);
+  const refs = loadAgentContextRefs(workspace);
+  const idx = refs.findIndex(r => r.id === req.params.refId);
+  if (idx < 0) return res.status(404).json({ success: false, error: 'Ref not found' });
+  if (req.body?.title !== undefined) refs[idx].title = String(req.body.title).trim();
+  if (req.body?.content !== undefined) refs[idx].content = String(req.body.content).trim();
+  refs[idx].updatedAt = Date.now();
+  saveAgentContextRefs(workspace, refs);
+  res.json({ success: true, ref: refs[idx] });
+});
+
+router.delete('/api/agents/:id/context-refs/:refId', (req, res) => {
+  const agent = getAgentById(_sanitizeAgentId(req.params.id));
+  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+  const workspace = resolveAgentWorkspaceSafe(agent);
+  const refs = loadAgentContextRefs(workspace);
+  const filtered = refs.filter(r => r.id !== req.params.refId);
+  if (filtered.length === refs.length) return res.status(404).json({ success: false, error: 'Ref not found' });
+  saveAgentContextRefs(workspace, filtered);
+  res.json({ success: true });
+});
+
+// POST /api/agents/:id/context-files — upload a file to the agent's context-files dir
+// Body: { filename, content (text or base64), encoding?: 'base64'|'text', title? }
+router.post('/api/agents/:id/context-files', (req, res) => {
+  const agent = getAgentById(_sanitizeAgentId(req.params.id));
+  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+  const rawFilename = String(req.body?.filename || '').trim();
+  if (!rawFilename) return res.status(400).json({ success: false, error: 'filename is required' });
+  const safeFilename = path.basename(rawFilename).replace(/[^a-zA-Z0-9_\-\.]/g, '_').slice(0, 120);
+  const content = String(req.body?.content || '');
+  const encoding = String(req.body?.encoding || 'text');
+  const title = String(req.body?.title || safeFilename).trim().slice(0, 120);
+  const workspace = resolveAgentWorkspaceSafe(agent);
+  const filesDir = path.join(workspace, 'context-files');
+  fs.mkdirSync(filesDir, { recursive: true });
+  const filePath = path.join(filesDir, safeFilename);
+  if (encoding === 'base64') {
+    fs.writeFileSync(filePath, Buffer.from(content, 'base64'));
+  } else {
+    fs.writeFileSync(filePath, content, 'utf-8');
+  }
+  // Add a context ref pointing to this file
+  const refs = loadAgentContextRefs(workspace);
+  const relPath = `context-files/${safeFilename}`;
+  const ref = {
+    id: `ref_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,6)}`,
+    title,
+    content: `File uploaded for context: ${relPath}\nRead this file before performing tasks that may relate to its content.`,
+    filePath: relPath,
+    isFile: true,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  refs.push(ref);
+  saveAgentContextRefs(workspace, refs);
+  res.json({ success: true, ref, filePath: relPath });
+});
+
 router.post('/api/agents/:id/spawn', async (req, res) => {
   const agentId = _sanitizeAgentId(req.params.id);
   const agent = getAgentById(agentId);
@@ -788,7 +1189,18 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
     res.status(400).json({ success: false, error: 'task is required' });
     return;
   }
-  const context = req.body?.context !== undefined ? String(req.body.context) : undefined;
+  // Inject context refs into the context block
+  const workspace = resolveAgentWorkspaceSafe(agent);
+  const refs = loadAgentContextRefs(workspace);
+  let contextRefsBlock = '';
+  if (refs.length > 0) {
+    const lines = refs.map(r => `- **${r.title}**: ${r.content}`).join('\n');
+    contextRefsBlock = `[CONTEXT REFERENCES]\n${lines}\n`;
+  }
+  const rawContext = req.body?.context !== undefined ? String(req.body.context) : undefined;
+  const context = contextRefsBlock
+    ? [contextRefsBlock, rawContext].filter(Boolean).join('\n\n')
+    : rawContext;
   const maxStepsRaw = req.body?.maxSteps;
   const maxSteps = Number.isFinite(Number(maxStepsRaw)) && Number(maxStepsRaw) > 0
     ? Math.floor(Number(maxStepsRaw))
@@ -797,6 +1209,13 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
   const timeoutMs = Number.isFinite(Number(timeoutRaw)) && Number(timeoutRaw) > 0
     ? Math.floor(Number(timeoutRaw))
     : 120000;
+  const teamMemberIds = getTeamMemberAgentIds();
+  const allTeams = listManagedTeams();
+  const isManager = !!(agent as any)?.isTeamManager || allTeams.some((team: any) => String(team?.managerAgentId || '').trim() === agentId);
+  const agentType = inferAgentModelDefaultType(agent, {
+    isManager,
+    isTeamMember: teamMemberIds.has(agentId),
+  });
 
   const startedAt = Date.now();
   const result = await spawnAgent({
@@ -805,6 +1224,7 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
     context,
     maxSteps,
     timeoutMs,
+    agentType,
   });
   const finishedAt = Date.now();
   const historyEntry = recordAgentRun({

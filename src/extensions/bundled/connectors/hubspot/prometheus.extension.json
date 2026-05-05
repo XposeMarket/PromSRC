@@ -1,0 +1,60 @@
+{
+  "id": "hubspot",
+  "kind": "connector",
+  "name": "HubSpot",
+  "description": "Connect HubSpot so Prometheus can read contacts, deals, and pipeline state.",
+  "category": "CRM",
+  "enabledByDefault": true,
+  "docsUrl": "https://developers.hubspot.com/",
+  "tags": ["hubspot", "crm", "oauth"],
+  "runtime": {
+    "binding": "integrations/connectors/hubspot"
+  },
+  "ui": {
+    "color": "#FF7A59",
+    "permissions": [
+      { "icon": "@", "label": "Read contacts, companies, and deals" },
+      { "icon": "=", "label": "Read pipeline and deal stages" },
+      { "icon": "+", "label": "Log activity and update records with approval" },
+      { "icon": "->", "label": "Create follow-up tasks" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_hubspot"],
+    "capabilities": ["crm", "deals", "contacts"],
+    "tools": [
+      "connector_hubspot_list_contacts",
+      "connector_hubspot_get_contact",
+      "connector_hubspot_create_contact",
+      "connector_hubspot_search",
+      "connector_hubspot_list_deals"
+    ]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://developers.hubspot.com/",
+    "docsHint": "HubSpot -> Developer Account -> Apps -> Create App -> Auth -> Redirect: http://localhost:19426/auth/callback/hubspot",
+    "callback": {
+      "port": 19426,
+      "path": "/auth/callback/hubspot"
+    },
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "Client ID",
+        "input": "text",
+        "required": true,
+        "placeholder": "abc123..."
+      },
+      {
+        "key": "clientSecret",
+        "label": "Client Secret",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "abc123..."
+      }
+    ]
+  }
+}

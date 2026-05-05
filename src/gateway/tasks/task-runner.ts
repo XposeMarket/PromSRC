@@ -12,7 +12,11 @@
 
 import crypto from 'crypto';
 import { getOllamaClient } from '../../agents/ollama-client';
+import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
+import { registerBrowserSessionMetadata } from '../browser-tools';
+import { getActivatedToolCategories, getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
+import { getRuntimeToolCategories } from '../tool-builder';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -378,6 +382,8 @@ export interface EphemeralBackgroundSpawnInput {
   tags?: string[];
   tools?: TaskTool[];  // Optional full tool set (same as main agent)
   spawnerSessionId?: string;  // Session ID of the main chat that spawned this — for SSE forwarding
+  modelOverride?: string;
+  providerOverride?: string;
 }
 
 export interface EphemeralBackgroundJoinResult {
@@ -390,13 +396,23 @@ export interface EphemeralBackgroundJoinResult {
   error?: string;
 }
 
+export interface EphemeralBackgroundWaitResult {
+  waitedMs: number;
+  timedOut: boolean;
+  backgroundIds: string[];
+  completed: number;
+  failed: number;
+  running: number;
+  statuses: EphemeralBackgroundStatus[];
+}
+
 interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   promise: Promise<void>;
   spawnerSessionId?: string;
 }
 
 const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
-const DEFAULT_BACKGROUND_TIMEOUT_MS = 15_000;
+const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
 const _ephemeralBackgroundRuns = new Map<string, EphemeralBackgroundRecord>();
 
 // ─── Background Agent deps (injected at startup via setBackgroundAgentDeps) ──
@@ -472,21 +488,16 @@ function clampBackgroundTimeoutMs(raw: number | undefined): number {
 function resolveBackgroundAgentModelRouting(): { providerId?: string; model?: string; source: string } {
   try {
     const cfg = getConfig().getConfig() as any;
-    const knownProviders = new Set(['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic']);
     const defaults = cfg?.agent_model_defaults || {};
     const ref = String(defaults.background_agent || defaults.background_task || '').trim();
     if (ref) {
-      const slash = ref.indexOf('/');
-      if (slash > 0) {
-        const providerId = ref.slice(0, slash).trim();
-        const model = ref.slice(slash + 1).trim();
-        if (providerId && model && knownProviders.has(providerId)) {
-          return {
-            providerId,
-            model,
-            source: defaults.background_agent ? 'agent_model_defaults.background_agent' : 'agent_model_defaults.background_task',
-          };
-        }
+      const parsed = parseProviderModelRef(ref);
+      if (parsed) {
+        return {
+          providerId: parsed.providerId,
+          model: parsed.model,
+          source: defaults.background_agent ? 'agent_model_defaults.background_agent' : 'agent_model_defaults.background_task',
+        };
       }
       return { model: ref, source: defaults.background_agent ? 'agent_model_defaults.background_agent' : 'agent_model_defaults.background_task' };
     }
@@ -528,11 +539,53 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       const { handleChat, broadcastWS } = _bgDeps;
       const sessionId = `background_${record.id}`;
       const { spawnerSessionId } = record;
+      try {
+        const runtimeCategories = getRuntimeToolCategories();
+        const inheritedCategories = spawnerSessionId
+          ? Array.from(getActivatedToolCategories(spawnerSessionId))
+          : [];
+        const categories = Array.from(new Set([
+          ...runtimeCategories,
+          ...inheritedCategories,
+        ]));
+        setActivatedToolCategories(sessionId, categories);
+        if (spawnerSessionId) {
+          const parentWorkspace = getWorkspace(spawnerSessionId);
+          if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);
+        }
+      } catch (err: any) {
+        console.warn(`[Background Agent] ${record.id} could not inherit session tool context: ${err?.message || err}`);
+      }
+      registerBrowserSessionMetadata(sessionId, {
+        ownerType: 'background',
+        ownerId: record.id,
+        label: 'Subagent',
+        taskPrompt: prompt,
+        spawnerSessionId,
+      });
       const modelRouting = resolveBackgroundAgentModelRouting();
-      record.providerId = modelRouting.providerId;
-      record.model = modelRouting.model;
-      record.modelSource = modelRouting.source;
+      const providerOverride = String(record.providerId || '').trim();
+      const modelOverride = String(record.model || '').trim();
+      record.providerId = providerOverride || modelRouting.providerId;
+      record.model = modelOverride || modelRouting.model;
+      record.modelSource = (providerOverride || modelOverride)
+        ? (record.modelSource || 'background_spawn_override')
+        : modelRouting.source;
       const toolCallLog: string[] = [];
+
+      if (spawnerSessionId) {
+        broadcastWS({
+          type: 'browser:agent_registered',
+          sessionId,
+          browserOwnerType: 'background',
+          browserOwnerId: record.id,
+          browserLabel: 'Subagent',
+          browserTaskPrompt: prompt,
+          browserSpawnerSessionId: spawnerSessionId,
+          active: false,
+          timestamp: Date.now(),
+        });
+      }
 
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
       const sendSSE = (event: string, data: any) => {
@@ -564,12 +617,12 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           undefined,   // extra
           undefined,   // abortSignal
           `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly.`,
-          modelRouting.model,   // modelOverride
+          record.model,   // modelOverride
           'background_agent',
           undefined,   // toolFilter — full tool access
           undefined,
           undefined,
-          modelRouting.providerId,
+          record.providerId,
         );
         // handleChat returns a ChatResult object — extract .text, not the whole object
         const finalText = String((chatResult as any)?.text ?? chatResult ?? '').trim();
@@ -629,7 +682,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   const joinPolicy: BackgroundJoinPolicy =
     input?.joinPolicy === 'wait_all' || input?.joinPolicy === 'best_effort_merge'
       ? input.joinPolicy
-      : 'wait_until_timeout';
+      : 'wait_all';
   const timeoutMs = clampBackgroundTimeoutMs(input?.timeoutMs);
 
   const record: EphemeralBackgroundRecord = {
@@ -643,6 +696,11 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
+  const explicitProviderOverride = String(input?.providerOverride || '').trim();
+  const explicitModelOverride = String(input?.modelOverride || '').trim();
+  if (explicitProviderOverride) record.providerId = explicitProviderOverride;
+  if (explicitModelOverride) record.model = explicitModelOverride;
+  if (explicitProviderOverride || explicitModelOverride) record.modelSource = 'background_spawn_override';
   record.promise = startBackgroundExecution(record, prompt);
   _ephemeralBackgroundRuns.set(id, record);
   console.log(`[Background Agent] spawned ${id} (policy=${joinPolicy}, timeoutMs=${timeoutMs})`);
@@ -681,6 +739,81 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
 }
 
 export const backgroundProgress = backgroundStatus;
+
+function isBackgroundTerminal(rec: EphemeralBackgroundRecord): boolean {
+  return rec.state === 'completed' || rec.state === 'failed' || rec.state === 'timed_out';
+}
+
+function listBackgroundRecordsForWait(input: {
+  backgroundId?: string;
+  backgroundIds?: string[];
+  spawnerSessionId?: string;
+}): EphemeralBackgroundRecord[] {
+  const explicitIds = [
+    String(input?.backgroundId || '').trim(),
+    ...(Array.isArray(input?.backgroundIds) ? input.backgroundIds.map((id) => String(id || '').trim()) : []),
+  ].filter(Boolean);
+  if (explicitIds.length > 0) {
+    return Array.from(new Set(explicitIds))
+      .map((id) => _ephemeralBackgroundRuns.get(id))
+      .filter(Boolean) as EphemeralBackgroundRecord[];
+  }
+  const spawnerSessionId = String(input?.spawnerSessionId || '').trim();
+  if (!spawnerSessionId) return [];
+  return Array.from(_ephemeralBackgroundRuns.values())
+    .filter((rec) => rec.spawnerSessionId === spawnerSessionId && !isBackgroundTerminal(rec));
+}
+
+function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundStatus {
+  return {
+    id: rec.id,
+    state: rec.state,
+    joinPolicy: rec.joinPolicy,
+    timeoutMs: rec.timeoutMs,
+    tags: rec.tags,
+    providerId: rec.providerId,
+    model: rec.model,
+    modelSource: rec.modelSource,
+    startedAt: rec.startedAt,
+    completedAt: rec.completedAt,
+    result: rec.result,
+    error: rec.error,
+    mergedAt: rec.mergedAt,
+  };
+}
+
+export async function backgroundWait(input: {
+  backgroundId?: string;
+  backgroundIds?: string[];
+  spawnerSessionId?: string;
+  timeoutMs?: number;
+}): Promise<EphemeralBackgroundWaitResult> {
+  const records = listBackgroundRecordsForWait(input);
+  const timeoutMs = clampBackgroundTimeoutMs(input?.timeoutMs);
+  const startedAt = Date.now();
+  if (records.length > 0) {
+    await Promise.race([
+      Promise.all(records.map((rec) => rec.promise.catch(() => undefined))),
+      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
+  } else if (timeoutMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  }
+  const waitedMs = Date.now() - startedAt;
+  const statuses = records.map(statusFromRecord);
+  const completed = statuses.filter((status) => status.state === 'completed').length;
+  const failed = statuses.filter((status) => status.state === 'failed').length;
+  const running = statuses.filter((status) => status.state === 'in_progress' || status.state === 'queued').length;
+  return {
+    waitedMs,
+    timedOut: running > 0,
+    backgroundIds: statuses.map((status) => status.id),
+    completed,
+    failed,
+    running,
+    statuses,
+  };
+}
 
 async function waitForBackgroundWithTimeout(rec: EphemeralBackgroundRecord, timeoutMs: number): Promise<boolean> {
   if (rec.state === 'completed' || rec.state === 'failed' || rec.state === 'timed_out') return true;

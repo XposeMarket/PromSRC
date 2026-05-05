@@ -6,17 +6,25 @@ import { getConfig, getAgentById } from '../../config/config';
 import { broadcastTeamEvent, addTeamSseClient, removeTeamSseClient } from '../comms/broadcaster';
 import {
   listManagedTeams, getManagedTeam, saveManagedTeam, deleteManagedTeam, createManagedTeam,
-  appendTeamChat, applyTeamChange, rejectTeamChange, addTeamNotificationTarget,
+  appendTeamChat, applyTeamChange, rejectTeamChange, addTeamNotificationTarget, enqueueTeamDirectThreadUserMessage, getOrCreateTeamDirectThread, queueAgentMessage,
   listTeamContextReferences, addTeamContextReference, updateTeamContextReference,
   deleteTeamContextReference, buildTeamContextRuntimeBlock,
-  computeTeamHealth, getTeamRunHistory,
+  computeTeamHealth, getTeamRunHistory, getTeamRoomState,
 } from '../teams/managed-teams';
-import { createTask, listTasks, updateTaskStatus, mutatePlan, appendJournal } from '../tasks/task-store';
+import { createTask, listTaskSummaries, updateTaskStatus, mutatePlan, appendJournal } from '../tasks/task-store';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory } from '../../scheduler';
-import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
+import {
+  triggerManagerReview,
+  handleManagerConversation,
+  handleManagerConversationDetailed,
+  verifySubagentResult,
+} from '../teams/team-manager-runner';
+import { routeTeamEvent } from '../teams/team-event-router';
+import { scheduleTeamMemberAutoWake, scheduleTeamMemberDirectWake } from '../teams/team-member-room';
 import { dismissTeamSuggestion } from '../teams/team-detector';
 import { buildTeamDispatchTask, runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
 import { claimAgentForTeamWorkspace } from '../teams/team-workspace';
+import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import * as fs from 'fs';
 import * as path from 'path';
 import { appendManagerNote, getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -45,6 +53,107 @@ export function initTeamsRouter(deps: {
   _sanitizeAgentId = deps.sanitizeAgentId;
   _normalizeAgentsForSave = deps.normalizeAgentsForSave;
   _bindTeamNotificationTargetFromSession = deps.bindTeamNotificationTargetFromSession;
+}
+
+function createSSESender(res: any): (event: string, data: any) => void {
+  return (type: string, data: any) => {
+    try {
+      res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    } catch {
+      // Ignore writes after client disconnect.
+    }
+  };
+}
+
+type TeamChatRouteTarget = {
+  type: 'room' | 'team' | 'manager' | 'member';
+  targetId?: string;
+  targetLabel?: string;
+  routedMessage: string;
+};
+
+function normalizeTeamMentionKey(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, '')
+    .trim();
+}
+
+function buildTeamMentionParticipants(team: any): Array<{
+  type: 'team' | 'manager' | 'member';
+  id: string;
+  label: string;
+  aliases: string[];
+}> {
+  const participants: Array<{ type: 'team' | 'manager' | 'member'; id: string; label: string; aliases: string[] }> = [
+    { type: 'team', id: team.id, label: 'team', aliases: ['team'] },
+    { type: 'manager', id: 'manager', label: 'manager', aliases: ['manager'] },
+  ];
+  for (const agentId of Array.isArray(team?.subagentIds) ? team.subagentIds : []) {
+    const agent = getAgentById(agentId) as any;
+    const label = String(agent?.name || agentId).trim() || String(agentId || '').trim();
+    const aliases = Array.from(new Set([
+      normalizeTeamMentionKey(label),
+      normalizeTeamMentionKey(agentId),
+      normalizeTeamMentionKey(label.replace(/\s+/g, '-')),
+    ].filter(Boolean)));
+    participants.push({ type: 'member', id: agentId, label, aliases });
+  }
+  return participants;
+}
+
+function resolveTeamChatRouteTarget(team: any, rawMessage: string, body: any): TeamChatRouteTarget {
+  const original = String(rawMessage || '').trim();
+  const explicitType = String(body?.targetType || '').trim().toLowerCase();
+  const explicitTargetId = String(body?.targetId || '').trim();
+  const explicitTargetLabel = String(body?.targetLabel || '').trim();
+  const routedMessage = String(body?.routedMessage || '').trim() || original;
+
+  if (explicitType === 'room') {
+    return { type: 'room', routedMessage };
+  }
+  if ((explicitType === 'team' || explicitType === 'manager') && !explicitTargetId) {
+    return { type: explicitType, targetLabel: explicitTargetLabel || explicitType, routedMessage };
+  }
+  if (explicitType === 'member' && explicitTargetId && Array.isArray(team?.subagentIds) && team.subagentIds.includes(explicitTargetId)) {
+    return {
+      type: 'member',
+      targetId: explicitTargetId,
+      targetLabel: explicitTargetLabel || (getAgentById(explicitTargetId) as any)?.name || explicitTargetId,
+      routedMessage,
+    };
+  }
+
+  const leading = String(rawMessage || '').trimStart();
+  if (!leading.startsWith('@')) {
+    return { type: 'room', routedMessage: original };
+  }
+
+  const afterAt = leading.slice(1);
+  const participants = buildTeamMentionParticipants(team);
+  const aliasEntries = participants
+    .flatMap((participant) => participant.aliases.map((alias) => ({ participant, alias })))
+    .sort((a, b) => b.alias.length - a.alias.length);
+  const lowerAfter = afterAt.toLowerCase();
+
+  for (const entry of aliasEntries) {
+    if (!entry.alias) continue;
+    if (!lowerAfter.startsWith(entry.alias)) continue;
+    const boundaryChar = afterAt.charAt(entry.alias.length);
+    if (boundaryChar && !/[\s.,!?;:)\]}]/.test(boundaryChar)) continue;
+    const rest = afterAt.slice(entry.alias.length).trimStart();
+    return {
+      type: entry.participant.type,
+      targetId: entry.participant.type === 'member' ? entry.participant.id : undefined,
+      targetLabel: entry.participant.label,
+      routedMessage: rest || original,
+    };
+  }
+
+  return { type: 'room', routedMessage: original };
 }
 
 // ─── Teams API ───────────────────────────────────────────────────────────────────
@@ -346,11 +455,93 @@ router.delete('/api/teams/:id/context-references/:refId', (req, res) => {
 
 router.delete('/api/teams/:id', (req, res) => {
   try {
+    const team = getManagedTeam(req.params.id);
+    if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
+
+    const subagentIds = [...(team.subagentIds || [])];
+
+    // --- Delete all subagents: config entries, cron jobs, workspace dirs ---
+    const cm = getConfig();
+    const current = cm.getConfig() as any;
+    let explicitAgents: any[] = Array.isArray(current.agents) ? [...current.agents] : [];
+    const cfgWorkspace = getConfig().getWorkspacePath() || process.cwd();
+    const removedAgentPaths: string[] = [];
+    let deletedScheduledJobs = 0;
+
+    for (const agentId of subagentIds) {
+      const sanitized = _sanitizeAgentId(agentId);
+      const agentEntry = explicitAgents.find((a: any) => _sanitizeAgentId(a.id) === sanitized);
+
+      explicitAgents = explicitAgents.filter((a: any) => _sanitizeAgentId(a.id) !== sanitized);
+
+      for (const job of _cronScheduler.getJobs()) {
+        if (_sanitizeAgentId((job as any).subagent_id || '') !== sanitized) continue;
+        if (_cronScheduler.deleteJob(job.id)) deletedScheduledJobs++;
+      }
+
+      const candidateDirs = new Set<string>([
+        path.join(cfgWorkspace, '.prometheus', 'subagents', sanitized),
+        path.join(process.cwd(), '.prometheus', 'subagents', sanitized),
+      ]);
+      if (agentEntry?.workspace) candidateDirs.add(String(agentEntry.workspace));
+
+      const safeSuffixes = [
+        `/.prometheus/subagents/${sanitized}`.toLowerCase(),
+        `/subagents/${sanitized}`.toLowerCase(),
+      ];
+
+      for (const dir of candidateDirs) {
+        try {
+          const resolved = path.resolve(dir);
+          const normalized = resolved.replace(/\\/g, '/').toLowerCase();
+          const underWorkspace = normalized.startsWith(path.resolve(cfgWorkspace).replace(/\\/g, '/').toLowerCase() + '/');
+          if (!underWorkspace || !safeSuffixes.some(suffix => normalized.endsWith(suffix))) continue;
+          if (!fs.existsSync(resolved)) continue;
+          fs.rmSync(resolved, { recursive: true, force: true });
+          removedAgentPaths.push(resolved);
+        } catch {}
+      }
+    }
+
+    if (subagentIds.length > 0) {
+      cm.updateConfig({ agents: _normalizeAgentsForSave(explicitAgents) } as any);
+      reloadAgentSchedules();
+    }
+
+    // --- Delete team workspace directory ---
+    const removedWorkspacePaths: string[] = [];
+    try {
+      const { getTeamWorkspacePath: getWsPath } = require('../teams/team-workspace') as typeof import('../teams/team-workspace');
+      // getTeamWorkspacePath returns {root}/teams/{teamId}/workspace — parent is the team dir
+      const teamDir = path.dirname(getWsPath(req.params.id));
+      const teamsRoot = path.dirname(teamDir);
+      const resolvedTeamDir = path.resolve(teamDir);
+      const resolvedTeamsRoot = path.resolve(teamsRoot);
+      // Safety: only delete if directly inside the teams root
+      if (
+        resolvedTeamDir.startsWith(resolvedTeamsRoot + path.sep) &&
+        resolvedTeamDir !== resolvedTeamsRoot &&
+        fs.existsSync(resolvedTeamDir)
+      ) {
+        fs.rmSync(resolvedTeamDir, { recursive: true, force: true });
+        removedWorkspacePaths.push(resolvedTeamDir);
+      }
+    } catch {}
+
+    // --- Delete the team record ---
     const ok = deleteManagedTeam(req.params.id);
     if (ok) {
       broadcastTeamEvent({ type: 'team_deleted', teamId: req.params.id });
     }
-    res.json({ success: ok, error: ok ? undefined : 'Team not found' });
+
+    res.json({
+      success: ok,
+      error: ok ? undefined : 'Team not found',
+      deletedAgents: subagentIds,
+      removedAgentPaths,
+      removedWorkspacePaths,
+      deletedScheduledJobs,
+    });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -394,7 +585,7 @@ router.get('/api/teams/:id/runs', (req, res) => {
         .map((r: any) => String(r?.taskId || '').trim())
         .filter(Boolean),
     );
-    const activeTasks = listTasks({
+    const activeTasks = listTaskSummaries({
       status: ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'waiting_subagent'] as TaskStatus[],
     });
     for (const task of activeTasks) {
@@ -427,7 +618,35 @@ router.get('/api/teams/:id/runs', (req, res) => {
       });
     }
     allRuns.sort((a, b) => b.startedAt - a.startedAt);
-    res.json({ success: true, runs: allRuns.slice(0, limit) });
+    const roomState = getTeamRoomState(team.id);
+    res.json({ success: true, runs: allRuns.slice(0, limit), roomState: buildTeamRoomStateView(roomState) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+function buildTeamRoomStateView(roomState: any): any {
+  const messages = Array.isArray(roomState?.roomMessages) ? roomState.roomMessages : [];
+  const dispatches = Array.isArray(roomState?.dispatches) ? roomState.dispatches : [];
+  const blockers = Array.isArray(roomState?.blockers) ? roomState.blockers : [];
+  return {
+    memberStates: roomState?.memberStates || {},
+    activeDispatches: dispatches.filter((entry: any) => ['queued', 'running'].includes(String(entry?.status || '').toLowerCase())).slice(-30),
+    recentDispatches: dispatches.slice(-30),
+    managerAutoWakeEvents: messages.filter((entry: any) => entry?.metadata?.source === 'team_manager_auto_wake').slice(-20),
+    memberWakeEvents: messages.filter((entry: any) => entry?.metadata?.source === 'team_member_auto_wake_scheduled').slice(-20),
+    artifacts: Array.isArray(roomState?.sharedArtifacts) ? roomState.sharedArtifacts.slice(-30) : [],
+    blockers: blockers.filter((entry: any) => !entry?.resolvedAt).slice(-30),
+    plan: Array.isArray(roomState?.plan) ? roomState.plan.slice(-80) : [],
+    recentEvents: messages.slice(-80),
+  };
+}
+
+router.get('/api/teams/:id/room-state', (req, res) => {
+  try {
+    const team = getManagedTeam(req.params.id);
+    if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
+    res.json({ success: true, roomState: buildTeamRoomStateView(getTeamRoomState(team.id)) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -453,22 +672,102 @@ router.post('/api/teams/:id/chat', async (req, res) => {
     if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
     const content = String(req.body?.message || '').trim();
     if (!content) return res.status(400).json({ success: false, error: 'message is required' });
+    const routeTarget = resolveTeamChatRouteTarget(team, content, req.body || {});
+    if (routeTarget.type === 'member') {
+      if (!routeTarget.targetId || !team.subagentIds.includes(routeTarget.targetId)) {
+        return res.status(400).json({ success: false, error: 'Target subagent is not a member of this team' });
+      }
+      if (team.agentPauseStates?.[routeTarget.targetId]?.paused === true) {
+        return res.status(409).json({ success: false, error: `${routeTarget.targetLabel || routeTarget.targetId} is paused.` });
+      }
+    }
+    const directThread = routeTarget.type === 'manager'
+      ? getOrCreateTeamDirectThread(req.params.id, 'manager', 'manager', routeTarget.targetLabel || 'manager')
+      : routeTarget.type === 'member' && routeTarget.targetId
+        ? getOrCreateTeamDirectThread(req.params.id, 'member', routeTarget.targetId, routeTarget.targetLabel || routeTarget.targetId)
+        : null;
 
     // Post user message to chat
     const userMsg = appendTeamChat(req.params.id, {
       from: 'user',
       fromName: 'You',
       content,
+      threadId: String(directThread?.id || '').trim() || undefined,
+      metadata: {
+        targetType: routeTarget.type,
+        targetId: routeTarget.targetId,
+        targetLabel: routeTarget.targetLabel,
+      },
     });
 
-    broadcastTeamEvent({ type: 'team_chat_message', teamId: req.params.id, message: userMsg });
-    res.json({ success: true, message: userMsg });
+    broadcastTeamEvent({ type: 'team_chat_message', teamId: req.params.id, teamName: team.name, chatMessage: userMsg, text: userMsg?.content || '' });
+    res.json({ success: true, message: userMsg, target: routeTarget });
 
-    // Conversational manager reply - runs async after response is sent.
-    // Direct conversation with manager, NOT a performance review.
-    handleManagerConversation(req.params.id, content, broadcastTeamEvent).catch(err =>
-      console.error('[Teams] Manager conversation failed:', err.message)
-    );
+    if (routeTarget.type === 'team') {
+      const broadcastText = routeTarget.routedMessage || content;
+      for (const memberAgentId of Array.isArray(team.subagentIds) ? team.subagentIds : []) {
+        if (!memberAgentId) continue;
+        if (team.agentPauseStates?.[memberAgentId]?.paused === true) continue;
+        queueAgentMessage(
+          req.params.id,
+          memberAgentId,
+          `[From Team Owner to @team] ${broadcastText}`,
+        );
+        scheduleTeamMemberAutoWake(req.params.id, memberAgentId, {
+          reason: 'The team owner addressed the whole team in the room.',
+          source: 'manager_message',
+        });
+      }
+      handleManagerConversation(req.params.id, routeTarget.routedMessage || content, broadcastTeamEvent).catch(err =>
+        console.error('[Teams] Manager conversation failed:', err.message)
+      );
+      return;
+    }
+
+    if (routeTarget.type === 'manager') {
+      handleManagerConversation(
+        req.params.id,
+        routeTarget.routedMessage || content,
+        broadcastTeamEvent,
+        false,
+        {
+          sessionIdOverride: String(directThread?.sessionId || '').trim() || undefined,
+          threadId: String(directThread?.id || '').trim() || undefined,
+          replyTargetType: 'user',
+          replyTargetId: 'user',
+          replyTargetLabel: 'You',
+        },
+      ).catch(err =>
+        console.error('[Teams] Manager direct conversation failed:', err.message)
+      );
+      return;
+    }
+
+    if (routeTarget.type === 'member' && routeTarget.targetId) {
+      if (directThread) {
+        enqueueTeamDirectThreadUserMessage(
+          req.params.id,
+          'member',
+          routeTarget.targetId,
+          routeTarget.targetLabel || routeTarget.targetId,
+          routeTarget.routedMessage || content,
+          userMsg?.id,
+        );
+        scheduleTeamMemberDirectWake(req.params.id, routeTarget.targetId, String(directThread.id || '').trim(), {
+          reason: 'The team owner sent you a direct message in the team chat.',
+        });
+      } else {
+        queueAgentMessage(
+          req.params.id,
+          routeTarget.targetId,
+          `[From Team Owner${routeTarget.targetLabel ? ` via @${routeTarget.targetLabel}` : ''}] ${routeTarget.routedMessage || content}`,
+        );
+        scheduleTeamMemberAutoWake(req.params.id, routeTarget.targetId, {
+          reason: 'The team owner addressed you directly in the room.',
+          source: 'manager_message',
+        });
+      }
+    }
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -522,10 +821,17 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
     if (!team.subagentIds.includes(agentId)) return res.status(403).json({ success: false, error: 'Agent is not a member of this team' });
 
     // Log it in team chat
-    appendTeamChat(req.params.id, {
+    const dispatchChatMsg = appendTeamChat(req.params.id, {
       from: 'manager',
       fromName: 'Manager',
       content: `Dispatched one-off task to ${agentId}: ${String(task)}`,
+    });
+    broadcastTeamEvent({
+      type: 'team_chat_message',
+      teamId: req.params.id,
+      teamName: team.name,
+      chatMessage: dispatchChatMsg,
+      text: dispatchChatMsg?.content || '',
     });
 
     broadcastTeamEvent({ type: 'team_dispatch', teamId: req.params.id, teamName: team.name, agentId, task: String(task) });
@@ -537,6 +843,7 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
         const dispatchPrompt = buildTeamDispatchTask({
           agentId: String(agentId),
           task: String(task),
+          teamId: req.params.id,
           context: mergedContext || undefined,
         });
         const startedAt = Date.now();
@@ -548,18 +855,53 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
           durationMs: result.durationMs, stepCount: result.stepCount,
           error: result.error, resultPreview: result.success ? String(result.result || '') : undefined,
         });
-        appendTeamChat(req.params.id, {
+        const resultChatMsg = appendTeamChat(req.params.id, {
           from: 'subagent',
-          fromName: agentId,
+          fromName: result.agentName || agentId,
           fromAgentId: agentId,
           content: result.success
             ? `Task complete: ${String(result.result || '')}`
             : `Task failed: ${result.error || 'unknown error'}`,
+          metadata: {
+            agentId,
+            runSuccess: result.success,
+            taskId: result.taskId,
+            stepCount: result.stepCount,
+            durationMs: result.durationMs,
+            thinking: result.thinking,
+            processEntries: result.processEntries,
+          },
+        });
+        broadcastTeamEvent({
+          type: 'team_chat_message',
+          teamId: req.params.id,
+          teamName: team.name,
+          chatMessage: resultChatMsg,
+          text: resultChatMsg?.content || '',
+        });
+        routeTeamEvent({
+          type: result.success ? 'member_completed_task' : 'member_failed_task',
+          teamId: req.params.id,
+          agentId,
+          agentName: result.agentName,
+          task: String(task),
+          resultSummary: String(result.result || '').trim(),
+          error: result.error,
+          warning: result.warning,
+          taskId: result.taskId,
+          stepCount: result.stepCount,
+          durationMs: result.durationMs,
+          source: 'api_team_dispatch_background',
         });
         broadcastTeamEvent({
           type: 'team_dispatch_complete', teamId: req.params.id,
           teamName: team.name,
-          agentId, success: result.success,
+          agentId,
+          agentName: result.agentName,
+          taskId: result.taskId,
+          success: result.success,
+          durationMs: result.durationMs,
+          stepCount: result.stepCount,
           resultPreview: String(result.result || result.error || ''),
         });
         await verifySubagentResult(
@@ -570,9 +912,16 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
           broadcastTeamEvent,
         );
       } catch (err: any) {
-        appendTeamChat(req.params.id, {
+        const failedChatMsg = appendTeamChat(req.params.id, {
           from: 'subagent', fromName: agentId, fromAgentId: agentId,
           content: `Dispatch failed: ${err.message}`,
+        });
+        broadcastTeamEvent({
+          type: 'team_chat_message',
+          teamId: req.params.id,
+          teamName: team.name,
+          chatMessage: failedChatMsg,
+          text: failedChatMsg?.content || '',
         });
       }
     })();
@@ -616,12 +965,12 @@ router.post('/api/teams/:id/start', async (req, res) => {
     res.json({ success: true });
 
     // Post session-start notice to team chat
-    appendTeamChat(teamId, {
+    const chatMsg = appendTeamChat(teamId, {
       from: 'user',
       fromName: 'Team Owner',
       content: `Session started (task: ${requestedTask})`,
     });
-    broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name });
+    broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, text: chatMsg?.content || '' });
 
     // Build kickoff prompt for coordinator (purpose + optional task aware)
     const kickoffPrompt = _buildTeamStartKickoffPrompt(team, requestedTask);
@@ -653,12 +1002,12 @@ router.post('/api/teams/:id/run-all', async (req, res) => {
 
     res.json({ success: true, message: 'Manager-coordinated run started' });
 
-    appendTeamChat(teamId, {
+    const chatMsg = appendTeamChat(teamId, {
       from: 'user',
       fromName: 'Team Owner',
       content: `Run requested (task: ${requestedTask})`,
     });
-    broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name });
+    broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, text: chatMsg?.content || '' });
 
     const kickoffPrompt = _buildTeamStartKickoffPrompt(team, requestedTask);
     handleManagerConversation(teamId, kickoffPrompt, broadcastTeamEvent, true).catch((err: any) =>
@@ -823,7 +1172,7 @@ router.get('/api/teams/:id/workspace', (req, res) => {
       listWorkspaceTree,
       ensureTeamWorkspace,
       getTeamWorkspacePath,
-    } = require('../team-workspace');
+    } = require('../teams/team-workspace');
     ensureTeamWorkspace(req.params.id);
     const files = listWorkspaceFiles(req.params.id);
     const tree = listWorkspaceTree(req.params.id);
@@ -838,26 +1187,39 @@ router.get('/api/teams/:id/workspace', (req, res) => {
   }
 });
 
+// Resolve a workspace-relative path safely, rejecting traversal outside the
+// team workspace root. Returns { wsPath, target, filePath } on success or
+// throws an Error.
+function _resolveWorkspaceTarget(teamId: string, filenameParam: string, relpathQuery: unknown) {
+  const { getTeamWorkspacePath } = require('../teams/team-workspace') as typeof import('../teams/team-workspace');
+  const wsPath = getTeamWorkspacePath(teamId);
+  const wsResolved = path.resolve(wsPath);
+  const relpath = String(relpathQuery || '').trim();
+  const target = relpath || path.basename(filenameParam);
+  if (!target) throw new Error('Empty path');
+  const filePath = path.resolve(wsPath, target);
+  if (filePath !== wsResolved && !filePath.startsWith(wsResolved + path.sep)) {
+    throw new Error('Path escapes workspace');
+  }
+  return { wsPath, target: target.replace(/\\/g, '/'), filePath };
+}
+
 router.get('/api/teams/:id/workspace/:filename', (req, res) => {
   try {
     const team = getManagedTeam(req.params.id);
     if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
-    const {
-      getTeamWorkspacePath,
-      recordFileRead,
-    } = require('../teams/team-workspace') as typeof import('../teams/team-workspace');
-    const wsPath = getTeamWorkspacePath(req.params.id);
-    const safe = path.basename(req.params.filename);
-    const filePath = path.join(wsPath, safe);
+    const { recordFileRead } = require('../teams/team-workspace') as typeof import('../teams/team-workspace');
+    const { target, filePath } = _resolveWorkspaceTarget(req.params.id, req.params.filename, req.query.relpath);
     if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'File not found' });
     const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) return res.status(400).json({ success: false, error: 'Target is a directory' });
     if (stat.size > 2 * 1024 * 1024) {
       return res.status(413).json({ success: false, error: 'File too large to serve via API (>2MB)' });
     }
     const fileContent = fs.readFileSync(filePath, 'utf-8');
     const agentId = String(req.query.agentId || '').trim();
-    if (agentId) recordFileRead(req.params.id, safe, agentId);
-    res.json({ success: true, filename: safe, content: fileContent, size: stat.size, modifiedAt: stat.mtimeMs });
+    if (agentId) recordFileRead(req.params.id, target, agentId);
+    res.json({ success: true, filename: target, content: fileContent, size: stat.size, modifiedAt: stat.mtimeMs });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -871,18 +1233,21 @@ router.post('/api/teams/:id/workspace/:filename', (req, res) => {
     if (fileContent === undefined || fileContent === null) {
       return res.status(400).json({ success: false, error: 'content is required' });
     }
-    const { writeWorkspaceFile } = require('../team-workspace');
+    const { recordFileWrite, ensureTeamWorkspace } = require('../teams/team-workspace') as typeof import('../teams/team-workspace');
+    ensureTeamWorkspace(req.params.id);
+    const { target, filePath } = _resolveWorkspaceTarget(req.params.id, req.params.filename, req.body?.relpath || req.query.relpath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, String(fileContent), 'utf-8');
     const agentId = String(req.body?.agentId || req.query.agentId || '').trim() || undefined;
-    const safe = path.basename(req.params.filename);
-    const filePath = writeWorkspaceFile(req.params.id, safe, String(fileContent), agentId);
+    if (agentId) recordFileWrite(req.params.id, target, agentId);
     broadcastTeamEvent({
       type: 'team_workspace_updated',
       teamId: req.params.id,
       teamName: team.name,
-      filename: safe,
+      filename: target,
       agentId,
     });
-    res.json({ success: true, filename: safe, path: filePath });
+    res.json({ success: true, filename: target, path: filePath });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -892,9 +1257,11 @@ router.delete('/api/teams/:id/workspace/:filename', (req, res) => {
   try {
     const team = getManagedTeam(req.params.id);
     if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
-    const { deleteWorkspaceFile } = require('../team-workspace');
-    const safe = path.basename(req.params.filename);
-    const deleted = deleteWorkspaceFile(req.params.id, safe);
+    const { target, filePath } = _resolveWorkspaceTarget(req.params.id, req.params.filename, req.query.relpath);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'File not found' });
+    fs.unlinkSync(filePath);
+    const safe = target;
+    const deleted = true;
     if (!deleted) return res.status(404).json({ success: false, error: 'File not found' });
     broadcastTeamEvent({
       type: 'team_workspace_updated',
@@ -913,7 +1280,7 @@ router.post('/api/teams/:id/workspace/:filename/record-read', (req, res) => {
   try {
     const agentId = String(req.body?.agentId || '').trim();
     if (!agentId) return res.status(400).json({ success: false, error: 'agentId is required' });
-    const { recordFileRead } = require('../team-workspace');
+    const { recordFileRead } = require('../teams/team-workspace');
     const safe = path.basename(req.params.filename);
     recordFileRead(req.params.id, safe, agentId);
     res.json({ success: true });
@@ -975,15 +1342,38 @@ router.post('/api/schedules', (req: any, res: any) => {
       ? `${String(prompt).slice(0, 2000)}\n\n[REFERENCE LINKS]\n${refLinks.map(u => `- ${u}`).join('\n')}`
       : String(prompt).slice(0, 2000);
 
+    const scheduleName = String(name).slice(0, 100);
+    const promptText = promptWithRefs;
+    const selectedSubagentId = String(subagent_id || '').trim();
+
     const job = _cronScheduler.createJob({
-      name: String(name).slice(0, 100),
-      prompt: promptWithRefs,
+      name: scheduleName,
+      prompt: promptText,
       schedule: /^\d/.test(pattern) ? pattern : null,
       runAt: !/^\d/.test(pattern) ? pattern : null,
       tz: timezone || 'UTC',
       delivery: 'web',
-      ...(subagent_id ? { subagent_id: String(subagent_id).trim() } : {}),
+      ...(selectedSubagentId ? { subagent_id: selectedSubagentId } : {}),
     } as any);
+
+    const ownerAgent = selectedSubagentId
+      ? { agentId: selectedSubagentId, created: false }
+      : ensureScheduleOwnerAgent({
+          scheduleId: job.id,
+          scheduleName,
+          prompt: promptText,
+        });
+    if (selectedSubagentId) {
+      ensureScheduleRuntimeForAgent(selectedSubagentId, {
+        scheduleId: job.id,
+        scheduleName,
+        prompt: promptText,
+      });
+    }
+    if (!selectedSubagentId) {
+      _cronScheduler.updateJob(job.id, { subagent_id: ownerAgent.agentId } as any);
+      job.subagent_id = ownerAgent.agentId;
+    }
     
     res.json({
       success: true,
@@ -992,6 +1382,8 @@ router.post('/api/schedules', (req: any, res: any) => {
         name: job.name,
         status: 'active',
         next_run: job.nextRun,
+        subagent_id: job.subagent_id || '',
+        schedule_owner_created: ownerAgent.created,
       },
     });
   } catch (err: any) {
@@ -1011,16 +1403,35 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
   }
   
 	  try {
+      const existing = _cronScheduler.getJobStatus(req.params.id)?.job;
+      const incomingSubagentId = Object.prototype.hasOwnProperty.call(req.body || {}, 'subagent_id')
+        ? String(subagent_id || '').trim()
+        : String(existing?.subagent_id || '').trim();
+      const effectivePrompt = prompt ? String(prompt).slice(0, 2000) : String(existing?.prompt || '');
+      const effectiveName = name ? String(name).slice(0, 100) : String(existing?.name || 'Scheduled Job');
+      const ownerAgent = incomingSubagentId
+        ? { agentId: incomingSubagentId, created: false }
+        : ensureScheduleOwnerAgent({
+            scheduleId: req.params.id,
+            scheduleName: effectiveName,
+            prompt: effectivePrompt,
+          });
+      if (incomingSubagentId) {
+        ensureScheduleRuntimeForAgent(incomingSubagentId, {
+          scheduleId: req.params.id,
+          scheduleName: effectiveName,
+          prompt: effectivePrompt,
+        });
+      }
+
 	    const updates: any = {
 	      name: name ? String(name).slice(0, 100) : undefined,
 	      prompt: prompt ? String(prompt).slice(0, 2000) : undefined,
 	      schedule: pattern && /^\d/.test(pattern) ? pattern : undefined,
 	      runAt: pattern && !/^\d/.test(pattern) ? pattern : undefined,
 	      tz: timezone || undefined,
+        subagent_id: ownerAgent.agentId,
 	    };
-	    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'subagent_id')) {
-	      updates.subagent_id = subagent_id ? String(subagent_id).trim() : undefined;
-	    }
 	    const job = _cronScheduler.updateJob(req.params.id, updates);
     
     res.json({ success: true, job });
@@ -1067,10 +1478,25 @@ router.patch('/api/schedules/:id', (req: any, res: any) => {
 
 router.post('/api/schedules/:id/run', (req: any, res: any) => {
   try {
-    _cronScheduler.runJobNow(req.params.id);
-    res.json({ success: true, message: 'Schedule triggered' });
+    const status = _cronScheduler.getJobStatus(req.params.id);
+    const job = status?.job;
+    if (!job) {
+      return res.status(404).json({ success: false, error: 'Schedule not found' });
+    }
+    if (job.type === 'heartbeat') {
+      return res.status(400).json({ success: false, error: 'Legacy heartbeat schedules cannot be run manually.' });
+    }
+    if (job.status === 'running') {
+      return res.status(409).json({ success: false, error: 'Schedule is already running.' });
+    }
+
+    const runPromise = _cronScheduler.runJobNow(req.params.id);
+    runPromise.catch((err: any) => {
+      console.error(`[Schedules] Run-now failed for ${req.params.id}:`, err?.message || err);
+    });
+    res.json({ success: true, message: 'Schedule triggered', jobId: job.id, jobName: job.name });
   } catch (err: any) {
-    res.json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1079,15 +1505,175 @@ router.post('/api/schedules/:id/run', (req: any, res: any) => {
 router.get('/api/brain/status', (_req: any, res: any) => {
   const runner = getBrainRunnerInstance();
   if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
-  res.json({ success: true, ...runner.getBrainStatus() });
+  const status = runner.getBrainStatus();
+  res.json({
+    success: true,
+    ...status,
+    thoughtModel: status.thoughtModel || '',
+    dreamModel: status.dreamModel || '',
+  });
 });
 
 router.patch('/api/brain/config', (req: any, res: any) => {
   const runner = getBrainRunnerInstance();
   if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
-  const { thoughtEnabled, dreamEnabled, thoughtModel, dreamModel } = req.body;
-  runner.setConfig({ thoughtEnabled, dreamEnabled, thoughtModel, dreamModel });
-  res.json({ success: true });
+  try {
+    const { thoughtEnabled, dreamEnabled, thoughtModel, dreamModel } = req.body;
+    runner.setConfig({ thoughtEnabled, dreamEnabled, thoughtModel, dreamModel });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Invalid brain config' });
+  }
+});
+
+router.post('/api/teams/:id/chat/stream', async (req, res) => {
+  const team = getManagedTeam(req.params.id);
+  if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
+
+  const content = String(req.body?.message || '').trim();
+  if (!content) return res.status(400).json({ success: false, error: 'message is required' });
+  const routeTarget = resolveTeamChatRouteTarget(team, content, req.body || {});
+  if (routeTarget.type === 'member') {
+    if (!routeTarget.targetId || !team.subagentIds.includes(routeTarget.targetId)) {
+      return res.status(400).json({ success: false, error: 'Target subagent is not a member of this team' });
+    }
+    if (team.agentPauseStates?.[routeTarget.targetId]?.paused === true) {
+      return res.status(409).json({ success: false, error: `${routeTarget.targetLabel || routeTarget.targetId} is paused.` });
+    }
+  }
+  const directThread = routeTarget.type === 'manager'
+    ? getOrCreateTeamDirectThread(req.params.id, 'manager', 'manager', routeTarget.targetLabel || 'manager')
+    : routeTarget.type === 'member' && routeTarget.targetId
+      ? getOrCreateTeamDirectThread(req.params.id, 'member', routeTarget.targetId, routeTarget.targetLabel || routeTarget.targetId)
+      : null;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  const sendSSE = createSSESender(res);
+  sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
+  const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
+  const abortSignal = { aborted: false };
+  const closeStream = () => {
+    clearInterval(heartbeat);
+    if (!res.writableEnded) {
+      try { res.end(); } catch {}
+    }
+  };
+
+  req.on('aborted', () => {
+    abortSignal.aborted = true;
+    clearInterval(heartbeat);
+  });
+  res.on('close', () => {
+    if (!res.writableEnded) abortSignal.aborted = true;
+    clearInterval(heartbeat);
+  });
+
+  try {
+    const userMsg = appendTeamChat(req.params.id, {
+      from: 'user',
+      fromName: 'You',
+      content,
+      threadId: String(directThread?.id || '').trim() || undefined,
+      metadata: {
+        targetType: routeTarget.type,
+        targetId: routeTarget.targetId,
+        targetLabel: routeTarget.targetLabel,
+      },
+    });
+    broadcastTeamEvent({
+      type: 'team_chat_message',
+      teamId: req.params.id,
+      teamName: team.name,
+      chatMessage: userMsg,
+      text: userMsg?.content || '',
+    });
+
+    if (routeTarget.type === 'member' && routeTarget.targetId) {
+      if (directThread) {
+        enqueueTeamDirectThreadUserMessage(
+          req.params.id,
+          'member',
+          routeTarget.targetId,
+          routeTarget.targetLabel || routeTarget.targetId,
+          routeTarget.routedMessage || content,
+          userMsg?.id,
+        );
+        scheduleTeamMemberDirectWake(req.params.id, routeTarget.targetId, String(directThread.id || '').trim(), {
+          reason: 'The team owner sent you a direct message in the team chat.',
+        });
+      } else {
+        queueAgentMessage(
+          req.params.id,
+          routeTarget.targetId,
+          `[From Team Owner${routeTarget.targetLabel ? ` via @${routeTarget.targetLabel}` : ''}] ${routeTarget.routedMessage || content}`,
+        );
+        scheduleTeamMemberAutoWake(req.params.id, routeTarget.targetId, {
+          reason: 'The team owner addressed you directly in the room.',
+          source: 'manager_message',
+        });
+      }
+      sendSSE('final', { text: `Message queued for ${routeTarget.targetLabel || routeTarget.targetId}.` });
+      sendSSE('done', {
+        reply: `Message queued for ${routeTarget.targetLabel || routeTarget.targetId}.`,
+        reason: 'member_message_queued',
+        turns: 0,
+      });
+      return;
+    }
+
+    if (routeTarget.type === 'team') {
+      const broadcastText = routeTarget.routedMessage || content;
+      for (const memberAgentId of Array.isArray(team.subagentIds) ? team.subagentIds : []) {
+        if (!memberAgentId) continue;
+        if (team.agentPauseStates?.[memberAgentId]?.paused === true) continue;
+        queueAgentMessage(
+          req.params.id,
+          memberAgentId,
+          `[From Team Owner to @team] ${broadcastText}`,
+        );
+        scheduleTeamMemberAutoWake(req.params.id, memberAgentId, {
+          reason: 'The team owner addressed the whole team in the room.',
+          source: 'manager_message',
+        });
+      }
+    }
+
+    const result = await handleManagerConversationDetailed(
+      req.params.id,
+      routeTarget.routedMessage || content,
+      broadcastTeamEvent,
+      false,
+      {
+        sendSSE,
+        abortSignal,
+        sessionIdOverride: String(directThread?.sessionId || '').trim() || undefined,
+        threadId: String(directThread?.id || '').trim() || undefined,
+        replyTargetType: routeTarget.type === 'manager' ? 'user' : undefined,
+        replyTargetId: routeTarget.type === 'manager' ? 'user' : undefined,
+        replyTargetLabel: routeTarget.type === 'manager' ? 'You' : undefined,
+      },
+    );
+
+    if (!abortSignal.aborted) {
+      sendSSE('final', { text: result?.managerMessage || '' });
+      sendSSE('done', {
+        reply: result?.managerMessage || '',
+        reason: result?.reason || 'single_turn',
+        turns: result?.turns || 0,
+      });
+    }
+  } catch (err: any) {
+    if (!abortSignal.aborted) {
+      sendSSE('error', { message: err.message || 'Unknown error' });
+    }
+  } finally {
+    closeStream();
+  }
 });
 
 router.post('/api/brain/run', async (req: any, res: any) => {
@@ -1104,6 +1690,42 @@ router.post('/api/brain/run', async (req: any, res: any) => {
 });
 
 // ─── Schedule pattern parser ────────────────────────────────────────────────────
+
+// POST /api/teams/:id/context-files — upload a file to the team workspace
+// Saves the file and adds a context reference entry so agents know it exists.
+// Body: { filename, content (text or base64), encoding?: 'base64'|'text', title? }
+router.post('/api/teams/:id/context-files', (req, res) => {
+  try {
+    const team = getManagedTeam(req.params.id);
+    if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
+    const rawFilename = String(req.body?.filename || '').trim();
+    if (!rawFilename) return res.status(400).json({ success: false, error: 'filename is required' });
+    const safeFilename = path.basename(rawFilename).replace(/[^a-zA-Z0-9_\-\.]/g, '_').slice(0, 120);
+    const content = String(req.body?.content || '');
+    const encoding = String(req.body?.encoding || 'text');
+    const title = String(req.body?.title || safeFilename).trim().slice(0, 120);
+
+    const { getTeamWorkspacePath, ensureTeamWorkspace } = require('../teams/team-workspace') as typeof import('../teams/team-workspace');
+    ensureTeamWorkspace(req.params.id);
+    const wsPath = getTeamWorkspacePath(req.params.id);
+    const filePath = path.join(wsPath, safeFilename);
+
+    if (encoding === 'base64') {
+      fs.writeFileSync(filePath, Buffer.from(content, 'base64'));
+    } else {
+      fs.writeFileSync(filePath, content, 'utf-8');
+    }
+
+    // Add a context reference so agents are notified
+    const refContent = `File uploaded for context: ${safeFilename}\nThis file is in the team workspace. Read it before performing tasks that may relate to its content.`;
+    const created = addTeamContextReference(req.params.id, { title, content: refContent, actor: 'upload' });
+
+    broadcastTeamEvent({ type: 'team_workspace_updated', teamId: req.params.id, teamName: team.name, filename: safeFilename });
+    res.json({ success: true, ref: created, filePath: safeFilename });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 router.post('/api/schedules/parse', (req: any, res: any) => {
   const { text, timezone } = req.body;

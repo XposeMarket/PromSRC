@@ -9,11 +9,18 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'list_files',
-        description: 'List all files in the workspace root directory (flat). Use list_directory for a specific folder or directory tree.',
-        parameters: { type: 'object', properties: {}, required: [] },
-      },
-    },
-    {
+        description: 'List files in a directory (flat). Defaults to the workspace root, and also accepts absolute paths that are in Settings > Security > allowed paths. Use list_directory for folders plus recursion.',
+	        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Directory path relative to workspace root, or an absolute path inside the configured allowed paths. Default: workspace root.' },
+            directory: { type: 'string', description: 'Alias for path.' },
+          },
+          required: [],
+        },
+	      },
+	    },
+	    {
       type: 'function',
       function: {
         name: 'read_file',
@@ -209,11 +216,13 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'list_directory',
-        description: 'Recursively list all files and folders under a path in the workspace. Use "." or "" for the workspace root. More detailed than list_files.',
+        description: 'List files and folders under a path in the workspace. Use "." or "" for the workspace root. More detailed than list_files, which only returns root files.',
         parameters: {
           type: 'object', required: [],
           properties: {
             path: { type: 'string', description: 'Directory path relative to workspace root. Default: workspace root.' },
+            max_depth: { type: 'number', description: 'Optional recursion depth. Default: 2.' },
+            max_entries: { type: 'number', description: 'Optional maximum entries. Default: 500, max: 1000.' },
           },
         },
       },
@@ -227,7 +236,6 @@ export function getFileWebMemoryTools(): any[] {
           'Read a file from the Prometheus src/ directory (TypeScript source code). READ-ONLY — never modifies files. ' +
           'Use this to understand the codebase before writing a proposal or making edits. ' +
           'Pass the path relative to src/, e.g. "gateway/server-v2.ts" or "gateway/tool-builder.ts". ' +
-          'Also supports root-level files: package.json, tsconfig.json, README.md, CHANGELOG.md. ' +
           'Supports windowed reads for large files: use start_line+num_lines for arbitrary ranges, or head/tail for first/last N lines.',
         parameters: {
           type: 'object', required: ['file'],
@@ -401,6 +409,181 @@ export function getFileWebMemoryTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'list_prom',
+        description:
+          'List allowlisted files and directories inside the real Prometheus project root. READ-ONLY — internal/dev inspection only. ' +
+          'Use this to inspect launcher/bootstrap surfaces such as scripts/, electron/, build/, dist/, .prometheus/, src/, web-ui/, and selected root markdown/json files. ' +
+          'This tool is intended for dev sessions and is hidden in public/Electron builds.',
+        parameters: {
+          type: 'object', required: [],
+          properties: {
+            path: { type: 'string', description: 'Allowlisted prom-root path to list. Leave empty for the allowlisted project root view.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'prom_file_stats',
+        description:
+          'Get metadata for an allowlisted file in the real Prometheus project root. READ-ONLY — internal/dev inspection only. ' +
+          'Returns line count, byte size, last modified, and a read hint for read_prom_file. Hidden in public/Electron builds.',
+        parameters: {
+          type: 'object', required: ['file'],
+          properties: {
+            file: { type: 'string', description: 'Allowlisted prom-root file path, e.g. "SELF.md" or "scripts/dev-server.ts".' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_prom_file',
+        description:
+          'Read an allowlisted file from the real Prometheus project root. READ-ONLY — internal/dev inspection only. ' +
+          'Use this for launcher/bootstrap/debug surfaces outside src/ and web-ui/, such as SELF.md, AGENTS.md, scripts/, electron/, build/, dist/, or .prometheus/. ' +
+          'Supports start_line+num_lines plus head/tail, and returns a directory listing when the target is a directory. Hidden in public/Electron builds.',
+        parameters: {
+          type: 'object', required: ['file'],
+          properties: {
+            file: { type: 'string', description: 'Allowlisted prom-root path, e.g. "SELF.md" or "scripts".' },
+            start_line: { type: 'number', description: '1-based line to start reading from (default: 1). Use with num_lines for a specific range.' },
+            num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
+            head: { type: 'number', description: 'Return only first N lines.' },
+            tail: { type: 'number', description: 'Return only last N lines.' },
+          },
+        },
+      },
+    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'grep_prom',
+        description:
+          'Search file contents across allowlisted Prometheus project-root surfaces using a regex or literal pattern. READ-ONLY — internal/dev inspection only. ' +
+          'Returns matching lines with file paths and line numbers, constrained to the prom-root allowlist. Hidden in public/Electron builds.',
+        parameters: {
+          type: 'object', required: ['pattern'],
+          properties: {
+            pattern: { type: 'string', description: 'Regex or literal string to search for.' },
+            path: { type: 'string', description: 'Allowlisted prom-root directory to search within. Leave empty to search the allowlisted prom-root surface.' },
+            glob: { type: 'string', description: 'Comma-separated file name patterns to include, e.g. "*.ts,*.md". Default: all files.' },
+            case_insensitive: { type: 'boolean', description: 'Case-insensitive match. Default: false.' },
+            context: { type: 'number', description: 'Lines of context around each match (like -C N). Default: 0.' },
+            max_results: { type: 'number', description: 'Max matching lines to return. Default: 100.' },
+          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'find_replace_prom',
+	        description:
+	          'Find exact text in an allowlisted Prometheus project-root file and replace it. ' +
+	          'Only available in proposal execution sessions. Use read_prom_file first to confirm exact text. ' +
+	          'Use this for dev-only root surfaces outside plain src/ and web-ui/ when a proposal must edit scripts/, electron/, build/, dist/, .prometheus/, or selected root files.',
+	        parameters: {
+	          type: 'object', required: ['file', 'find', 'replace'],
+	          properties: {
+	            file: { type: 'string', description: 'Allowlisted prom-root file path, e.g. "scripts/dev-server.ts" or "AGENTS.md".' },
+	            find: { type: 'string', description: 'Exact text to find, including whitespace and newlines.' },
+	            replace: { type: 'string', description: 'Replacement text.' },
+	            replace_all: { type: 'boolean', description: 'If true, replace all occurrences. Default: false.' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'replace_lines_prom',
+	        description:
+	          'Replace specific line numbers in an allowlisted Prometheus project-root file. ' +
+	          'Only available in proposal execution sessions. Use read_prom_file first to see line numbers.',
+	        parameters: {
+	          type: 'object', required: ['file', 'start_line', 'end_line', 'new_content'],
+	          properties: {
+	            file: { type: 'string', description: 'Allowlisted prom-root file path.' },
+	            start_line: { type: 'number', description: 'First line to replace (1-based).' },
+	            end_line: { type: 'number', description: 'Last line to replace (1-based, inclusive).' },
+	            new_content: { type: 'string', description: 'New content to insert in place of those lines.' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'insert_after_prom',
+	        description:
+	          'Insert new lines after a specific line number in an allowlisted Prometheus project-root file. Use 0 to insert at beginning. ' +
+	          'Only available in proposal execution sessions.',
+	        parameters: {
+	          type: 'object', required: ['file', 'after_line', 'content'],
+	          properties: {
+	            file: { type: 'string', description: 'Allowlisted prom-root file path.' },
+	            after_line: { type: 'number', description: 'Line number to insert after (0 = beginning).' },
+	            content: { type: 'string', description: 'Content to insert.' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'delete_lines_prom',
+	        description:
+	          'Delete specific lines from an allowlisted Prometheus project-root file. ' +
+	          'Only available in proposal execution sessions. Use read_prom_file first to see line numbers.',
+	        parameters: {
+	          type: 'object', required: ['file', 'start_line', 'end_line'],
+	          properties: {
+	            file: { type: 'string', description: 'Allowlisted prom-root file path.' },
+	            start_line: { type: 'number', description: 'First line to delete (1-based).' },
+	            end_line: { type: 'number', description: 'Last line to delete (1-based, inclusive).' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'write_prom_file',
+	        description:
+	          'Create or overwrite an allowlisted Prometheus project-root file. ' +
+	          'Only available in proposal execution sessions. Prefer surgical tools for existing files unless a full rewrite or new file is intentional.',
+	        parameters: {
+	          type: 'object', required: ['file', 'content'],
+	          properties: {
+	            file: { type: 'string', description: 'Allowlisted prom-root file path.' },
+	            content: { type: 'string', description: 'Full file content to write.' },
+	            overwrite: { type: 'boolean', description: 'If true, overwrite existing file content. Default: true.' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'delete_prom_file',
+	        description:
+	          'Delete an allowlisted Prometheus project-root file. Only available in proposal execution sessions. ' +
+	          'Use list_prom/read_prom_file first to verify the exact file.',
+	        parameters: {
+	          type: 'object', required: ['file'],
+	          properties: {
+	            file: { type: 'string', description: 'Allowlisted prom-root file path.' },
+	          },
+	        },
+	      },
+	    },
+
+	    {
+	      type: 'function',
+	      function: {
         name: 'grep_files',
         description:
           'DEPRECATED — use search_files instead (same capability, cleaner interface). ' +
@@ -495,10 +678,10 @@ export function getFileWebMemoryTools(): any[] {
         },
       },
     },
-    {
-      type: 'function',
-      function: {
-        name: 'write_source',
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'write_source',
         description:
           'Create or overwrite a file in src/ directly. Use for deterministic full-file writes, including creating new src files. ' +
           'Only available in proposal execution sessions. ' +
@@ -510,13 +693,28 @@ export function getFileWebMemoryTools(): any[] {
             content: { type: 'string', description: 'Full file content to write' },
             overwrite: { type: 'boolean', description: 'If true, overwrite existing file content. Default: true.' },
           },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'find_replace_webui_source',
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'delete_source',
+	        description:
+	          'Delete a file from src/ directly. Only available in proposal execution sessions. ' +
+	          'Use list_source/read_source first to verify the exact file.',
+	        parameters: {
+	          type: 'object', required: ['file'],
+	          properties: {
+	            file: { type: 'string', description: 'Path relative to src/, e.g. "gateway/old-file.ts"' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'find_replace_webui_source',
         description:
           'Find exact text in a web-ui/ file and replace it. The surgical edit tool for frontend source changes. ' +
           'ALWAYS call read_webui_source first to confirm exact text. ' +
@@ -588,28 +786,43 @@ export function getFileWebMemoryTools(): any[] {
         },
       },
     },
-    {
-      type: 'function',
-      function: {
-        name: 'write_webui_source',
-        description:
-          'Create or overwrite a file in web-ui/ directly. Use for deterministic full-file writes, including creating new frontend files. ' +
-          'Only available in proposal execution sessions. ' +
-          'Pass the path relative to web-ui/, e.g. "src/pages/NewPage.js".',
-        parameters: {
-          type: 'object', required: ['file', 'content'],
-          properties: {
-            file: { type: 'string', description: 'Path relative to web-ui/, e.g. "src/pages/NewPage.js"' },
-            content: { type: 'string', description: 'Full file content to write' },
-            overwrite: { type: 'boolean', description: 'If true, overwrite existing file content. Default: true.' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'web_search',
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'write_webui_source',
+	        description:
+	          'Create or overwrite a file in web-ui/ directly. Use for deterministic full-file writes, including creating new frontend files. ' +
+	          'Only available in proposal execution sessions. ' +
+	          'Pass the path relative to web-ui/, e.g. "src/pages/NewPage.js".',
+	        parameters: {
+	          type: 'object', required: ['file', 'content'],
+	          properties: {
+	            file: { type: 'string', description: 'Path relative to web-ui/, e.g. "src/pages/NewPage.js"' },
+	            content: { type: 'string', description: 'Full file content to write' },
+	            overwrite: { type: 'boolean', description: 'If true, overwrite existing file content. Default: true.' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'delete_webui_source',
+	        description:
+	          'Delete a file from web-ui/ directly. Only available in proposal execution sessions. ' +
+	          'Use list_webui_source/read_webui_source first to verify the exact file.',
+	        parameters: {
+	          type: 'object', required: ['file'],
+	          properties: {
+	            file: { type: 'string', description: 'Path relative to web-ui/, e.g. "src/pages/OldPage.js"' },
+	          },
+	        },
+	      },
+	    },
+	    {
+	      type: 'function',
+	      function: {
+	        name: 'web_search',
         description: 'Search the web for current information. Use web_fetch on result URLs to read full page content.',
         parameters: {
           type: 'object', required: ['query'],
@@ -621,10 +834,92 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_fetch',
-        description: 'Fetch the full text content of a webpage URL. Use this AFTER web_search to read the actual page content instead of just snippets. Essential for getting real data, details, and context.',
+        description: 'Fetch the full text content of a webpage URL. Use this AFTER web_search to read the actual page content instead of just snippets. For X/Twitter status URLs, it returns structured post data and will attempt attached-media download plus analysis automatically.',
         parameters: {
           type: 'object', required: ['url'],
           properties: { url: { type: 'string', description: 'Full URL to fetch (from web_search results or any URL)' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'download_url',
+        description: 'Download a URL directly into the workspace. Use this for direct image URLs, article assets, PDFs, and normal file links. Saves to downloads/ by default.',
+        parameters: {
+          type: 'object', required: ['url'],
+          properties: {
+            url: { type: 'string', description: 'Direct URL to download' },
+            filename: { type: 'string', description: 'Optional output filename override' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: downloads' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'download_media',
+        description: 'Download media from a supported page URL using yt-dlp. Use for X videos, YouTube videos, Instagram posts/reels, TikTok videos, and similar media pages. Saves to downloads/media by default.',
+        parameters: {
+          type: 'object', required: ['url'],
+          properties: {
+            url: { type: 'string', description: 'Page URL containing the media item' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: downloads/media' },
+            audio_only: { type: 'boolean', description: 'If true, extract audio only' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'generate_image',
+        description: 'Generate a new raster image from a text prompt using the configured AI image provider/GPT image model such as gpt-image-2. Use this for one-shot image generation, including brand kits, posters, thumbnails, concept art, and requests that reference uploaded files. Saves to generated/images by default.',
+        parameters: {
+          type: 'object', required: ['prompt'],
+          properties: {
+            prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
+            reference_images: { type: 'array', items: { type: 'string' }, maxItems: 16, description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs. These are sent as actual image inputs for gpt-image-2 reference/edit generation.' },
+            aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired image aspect ratio' },
+            count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many images to generate at once' },
+            provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex'], description: 'Optional image provider override' },
+            model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/images' },
+            save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'analyze_image',
+        description: 'Analyze a local image file and describe what is visible using the active vision-capable model. Use this after downloading or generating an image when you want Prometheus to actually inspect it.',
+        parameters: {
+          type: 'object', required: ['file_path'],
+          properties: {
+            file_path: { type: 'string', description: 'Workspace-relative or absolute path to the image file' },
+            prompt: { type: 'string', description: 'Optional analysis prompt or focus instruction' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'analyze_video',
+        description: 'Analyze a local video by extracting sampled frames and optional audio transcript, then using the active vision-capable model to summarize what happens in the clip.',
+        parameters: {
+          type: 'object', required: ['file_path'],
+          properties: {
+            file_path: { type: 'string', description: 'Workspace-relative or absolute path to the video file' },
+            prompt: { type: 'string', description: 'Optional analysis prompt or focus instruction' },
+            sample_count: { type: 'number', description: 'How many visual samples to extract (default 6, max 8)' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory for extracted artifacts' },
+            extract_audio: { type: 'boolean', description: 'If true, extract audio when ffmpeg is available (default true)' },
+            transcribe: { type: 'boolean', description: 'If true, attempt local whisper transcription when available (default true)' },
+          },
         },
       },
     },

@@ -52,7 +52,8 @@ import { setBackgroundAgentDeps } from '../tasks/task-runner';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import { startAuditMaterializer } from '../audit/materializer';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
-import { markProviderStatus, markProviderStatusChecking } from '../provider-status';
+import { markProviderStatus, markProviderStatusChecking, resolveProviderStatus } from '../provider-status';
+import { getProvider } from '../../providers/factory';
 
 // ─── Deps contract ────────────────────────────────────────────────────────────
 // All singletons that live in server-v2.ts and are needed during startup wiring.
@@ -164,34 +165,20 @@ function buildTeamCompletionPacket(teamId: string, managerMessage: string, turns
   ].join('\n');
 }
 
-function scheduleStartupProviderWarmup(host: string, port: number): void {
+function scheduleStartupProviderWarmup(): void {
   markProviderStatusChecking(true);
   const timer = setTimeout(async () => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000);
     try {
-      const response = await fetch(`http://${host}:${port}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: 'Reply with exactly: pong',
-          sessionId: `startup_connection_probe_${Date.now()}`,
-        }),
-        signal: controller.signal,
-      });
-      const text = await response.text();
-      const connected = response.ok && /"type":"done"/.test(text) && !/"type":"error"/.test(text);
-      markProviderStatus(connected);
+      const provider = getProvider();
+      const connected = await resolveProviderStatus(() => provider.testConnection());
       broadcastWS({ type: 'provider_status', providerOnline: connected, source: 'startup_probe' });
       console.log(`[ProviderStatus] Startup probe ${connected ? 'succeeded' : 'failed'}.`);
     } catch (err: any) {
       markProviderStatus(false);
       broadcastWS({ type: 'provider_status', providerOnline: false, source: 'startup_probe' });
       console.warn('[ProviderStatus] Startup probe failed:', err?.message || err);
-    } finally {
-      clearTimeout(timeout);
     }
-  }, 1500);
+  }, 750);
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
 }
 
@@ -237,7 +224,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       model: effectiveModel,
       workspace: liveConfig.workspace.path,
       skillsTotal: skillsManager.getAll().length,
-      skillsEnabled: skillsManager.getEnabledSkills().length,
+      skillsEnabled: 0,
       searchStatus: hasSearch,
       memoryFiles: 'SOUL.md + USER.md + MEMORY.md',
       gpuInfo: gpuDisplay,
@@ -480,6 +467,29 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     console.warn('[TeamDispatch] Could not wire dispatch deps:', e.message);
   }
 
+  try {
+    const { setTeamMemberRoomDeps } = require('../teams/team-member-room.js');
+    setTeamMemberRoomDeps({
+      handleChat,
+      broadcastTeamEvent,
+      buildTools: () => buildTools(),
+    });
+    console.log('[TeamMemberRoom] deps wired — persistent room turns ready.');
+  } catch (e: any) {
+    console.warn('[TeamMemberRoom] Could not wire room deps:', e.message);
+  }
+
+  try {
+    const { setTeamManagerAutoWakeDeps } = require('../teams/team-manager-autowake.js');
+    setTeamManagerAutoWakeDeps({
+      handleManagerConversation,
+      broadcastTeamEvent,
+    });
+    console.log('[TeamManagerAutoWake] deps wired — event-driven manager wakeups ready.');
+  } catch (e: any) {
+    console.warn('[TeamManagerAutoWake] Could not wire auto-wake deps:', e.message);
+  }
+
   const coordinatorCompletionDedup = new Set<string>();
 
   // Wire coordinator deps — main agent acts as team manager
@@ -647,7 +657,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
 
   const bootWorkspace = getConfig().getWorkspacePath() || (getConfig().getConfig() as any).workspace?.path || '';
   if (bootWorkspace) {
-    scheduleStartupProviderWarmup(HOST, PORT);
+    scheduleStartupProviderWarmup();
 
     try {
       startAuditMaterializer({

@@ -1,5 +1,5 @@
 # ============================================================
-# LocalClaw - .gitignore
+# Prometheus - .gitignore
 # ============================================================
 
 # --- DOCKER / ENV ---
@@ -12,6 +12,7 @@
 .smallclaw/config.json
 .smallclaw/credentials/
 .smallclaw/vault/
+/.prometheus/
 
 # --- RUNTIME DATA ---
 .localclaw/sessions/
@@ -50,6 +51,22 @@
 # These are default templates that ship with SmallClaw — new users need them.
 # Ignore: daily memory logs, tool audit log, heartbeat, and any AI-generated scratch files.
 workspace/memory/
+workspace/.prometheus/
+workspace/audit/
+workspace/downloads/
+workspace/uploads/
+workspace/Brain/
+workspace/entities/
+workspace/events/
+workspace/integrations/
+workspace/projects/
+workspace/proposals/
+workspace/tasks/
+workspace/teams/
+workspace/lead-research
+workspace/lead-research/
+workspace/Prometheus Website/
+workspace/oss-agents/
 workspace/tool_audit.log
 workspace/HEARTBEAT.md
 workspace/note.txt
@@ -61,6 +78,7 @@ workspace/*.sh
 workspace/*.bat
 workspace/*.txt
 workspace/xposemarket-site/
+teams/team_mn74d1g9_0f4d45/workspace/_github_prometheus_upload
 
 # --- DASHBOARD RUNTIME STATE ---
 ai-dashboard/dashboard-state.json
@@ -74,12 +92,44 @@ gateway.err.log
 # --- TEMP FILES ---
 tmp_payload.json
 mnt/
+/.claude/settings.local.json
+/.vscode/settings.json
+/.pip-cache/
+/.pip-tmp/
+/.tmp-py/
+__pycache__/
+*.pyc
 .tmp_*
 .tmp_*/
 .tmp_openclaw_*/
 .tmp_codex_*
 tmp_*
 fix_log_line.py
+
+# --- LOCAL PLANNING / HANDOFF ARTIFACTS ---
+/CIS.docx
+/Prometheus_CIS_Plan.docx
+/Prometheus_Teams_CIS_Master_Plan.docx
+/prometheus_browser_intelligence.docx
+/skills.zip
+/Context.md
+/PROPOSALS_ANALYSIS.md
+/Prometheus_Teams_CIS_Master_Plan.md
+/apply-local-llm-patch.js
+/b5-server-v2.js
+/write-chat-helpers.js
+/patch-server-v2.js
+/rebrand-html.js
+/rebrand-src.js
+/test-ollama.mjs
+/check-build.bat
+/start-gateway.bat
+
+# --- LOCAL BINARY / MODEL ARTIFACTS ---
+/bin/ffmpeg/
+*.onnx
+*.gguf
+*.safetensors
 
 # --- RUNTIME FILES THAT MUST NEVER ENTER SOURCE ---
 src/**/*.log
@@ -89,9 +139,9 @@ workspace/memory/
 
 # --- NODE ---
 node_modules/
-dist/
+/dist/
 *.js.map
-package/
+/package/
 *.tgz
 
 # --- TEST ARTIFACTS ---
@@ -103,7 +153,7 @@ Thumbs.db
 desktop.ini
 
 # --- ELECTRON BUILD OUTPUT ---
-release/
-release-public/
-output/
-tmp/
+/release/
+/release-public/
+/output/
+/tmp/

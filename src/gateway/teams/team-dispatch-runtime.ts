@@ -1,10 +1,20 @@
 import fs from 'fs';
 import path from 'path';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
-import { getManagedTeam, drainAgentMessages, recordTeamRun } from './managed-teams';
+import { parseProviderModelRef, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+import {
+  getManagedTeam,
+  drainAgentMessages,
+  recordTeamRun,
+  buildTeamRoomSummary,
+  buildTeamRunSnapshot,
+  getTeamRoomEventsSince,
+  markTeamMemberRoomEventsSeen,
+} from './managed-teams';
 import { getTeamWorkspacePath, buildWorkspaceContextBlock, ensureTeamWorkspace, ensureTeamAgentIdentity } from './team-workspace';
-import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { loadTask, saveTask } from '../tasks/task-store';
+import { bindTaskRunToSession, clearTaskRunBinding, completeNextOpenTaskStep } from '../tasks/task-run-mirror';
+import { getRuntimeToolCategories } from '../tool-builder';
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
 // These are injected at runtime to avoid circular imports with server-v2.ts
@@ -49,6 +59,130 @@ export function setDispatchDeps(deps: DispatchDeps): void {
   _dispatchDeps = deps;
 }
 
+function parseTeamProviderModel(raw: string): { providerOverride?: string; modelOverride?: string } {
+  const v = String(raw || '').trim();
+  if (!v) return {};
+  const parsed = parseProviderModelRef(v);
+  if (parsed) {
+    return { providerOverride: parsed.providerId, modelOverride: parsed.model };
+  }
+  return { modelOverride: v };
+}
+
+export function resolveTeamSubagentModelRouting(agentId: string): { providerOverride?: string; modelOverride?: string; executorProvider?: string } {
+  const agent = getAgentById(agentId);
+  const cfg = getConfig().getConfig() as any;
+  const resolved = resolveConfiguredAgentModel(cfg, agent, {
+    agentType: 'team_subagent',
+    isTeamMember: true,
+    fallbackToPrimary: true,
+  });
+  const routing = parseTeamProviderModel(resolved.model);
+  return {
+    ...routing,
+    executorProvider: routing.modelOverride
+      ? routing.providerOverride
+        ? `${routing.providerOverride}/${routing.modelOverride}`
+        : routing.modelOverride
+      : undefined,
+  };
+}
+
+export function buildTeamSubagentCallerContext(teamId: string, agentId: string, task: string, options: { sourceLabel?: string } = {}): {
+  callerContext: string;
+  teamWorkspacePath?: string;
+  agentName: string;
+} {
+  const agent = getAgentById(agentId);
+  const agentName = agent?.name ?? agentId;
+  const team = teamId ? getManagedTeam(teamId) : null;
+  let teamWorkspacePath = '';
+  if (teamId) {
+    try { teamWorkspacePath = ensureTeamWorkspace(teamId); } catch {}
+  }
+
+  let agentRoleBlock = '';
+  if (agent) {
+    try {
+      const globalAgentWs = String((agent as any)?.workspace || '') || ensureAgentWorkspace(agent as any);
+      const identityWs = teamId
+        ? ensureTeamAgentIdentity(teamId, agentId, globalAgentWs || undefined)
+        : globalAgentWs;
+      const spFile = [path.join(identityWs, 'system_prompt.md'), path.join(identityWs, 'HEARTBEAT.md')]
+        .find(f => fs.existsSync(f));
+      if (spFile) {
+        const raw = fs.readFileSync(spFile, 'utf-8').trim();
+        if (raw) agentRoleBlock = `[YOUR ROLE ON THIS TEAM - ${agentName}]\n${raw}`;
+      }
+    } catch {}
+  }
+
+  const pendingMessages = teamId ? drainAgentMessages(teamId, agentId) : [];
+  const memberState = team?.roomState?.memberStates?.[agentId];
+  const roomDeltaSince = Number(memberState?.lastRoomEventSeenAt || memberState?.lastUpdateAt || 0);
+  const roomEventDeltas = teamId
+    ? getTeamRoomEventsSince(teamId, roomDeltaSince, { agentId, limit: 12 })
+    : [];
+  if (teamId && roomEventDeltas.length > 0) {
+    markTeamMemberRoomEventsSeen(teamId, agentId);
+  }
+  const roomDeltaBlock = roomEventDeltas.length > 0
+    ? [
+        `[ROOM EVENTS SINCE YOUR LAST TURN]`,
+        ...roomEventDeltas.map((event, index) => {
+          const actor = String(event.actorName || event.actorId || event.actorType || 'system').trim();
+          const target = event.target ? ` -> ${event.target}` : '';
+          const source = event.metadata?.source ? ` [${event.metadata.source}]` : '';
+          return `${index + 1}. ${actor}${target}${source}: ${String(event.content || '').replace(/\s+/g, ' ').slice(0, 400)}`;
+        }),
+        `Use this delta to understand what changed while you were away.`,
+      ].join('\n')
+    : '';
+  const roomSummary = team ? buildTeamRoomSummary(team, {
+    agentId,
+    limitMessages: 10,
+    includePlan: true,
+    includeArtifacts: true,
+  }) : '';
+  const sourceLabel = options.sourceLabel || 'TEAM DISPATCH';
+
+  const callerContext = [
+    `[${sourceLabel} - ${team?.name || teamId} | agent: ${agentId}]`,
+    `You are Prometheus. You have been assigned a specific role on this team for this session.`,
+    ``,
+    teamWorkspacePath
+      ? [
+          `[YOUR WORKING DIRECTORY]`,
+          `${teamWorkspacePath}`,
+          ``,
+          `This is the team workspace for "${team?.name || teamId}". Write ALL task outputs and shared`,
+          `files here. Do NOT write to your own agent workspace or any other path.`,
+          `  -> Check existing files here before creating new ones.`,
+          `  -> Prior run context: memory.json, last_run.json, pending.json are in this directory.`,
+        ].join('\n')
+      : '',
+    agentRoleBlock ? `\n${agentRoleBlock}` : '',
+    roomSummary ? `\n${roomSummary}` : '',
+    roomDeltaBlock ? `\n${roomDeltaBlock}` : '',
+    pendingMessages.length > 0
+      ? `\n[MESSAGES FOR YOU]\n${pendingMessages.map((m, i) => `${i + 1}. ${m}`).join('\n')}\nAcknowledge and act on these as part of your task.`
+      : '',
+    `\n[TEAM COLLABORATION TOOLS]`,
+    `You always have team_ops available in this team execution. Use these tools when appropriate:`,
+    `- update_my_status: mark yourself running, blocked, waiting_for_context, ready, or done.`,
+    `- talk_to_teammate: message another member, "manager", or "all".`,
+    `- request_context / request_manager_help: ask the manager for missing context or escalation.`,
+    `- share_artifact: publish reusable outputs/files/findings into shared team state.`,
+    `- update_team_goal: propose or update plan items when your work reveals a better next step.`,
+    ``,
+    `[ESCALATION]`,
+    `Post blockers or errors to team chat so the manager can act on them.`,
+    task ? `\n[ASSIGNED TASK]\n${String(task).slice(0, 2000)}` : '',
+  ].filter(Boolean).join('\n');
+
+  return { callerContext, teamWorkspacePath, agentName };
+}
+
 /** Session IDs of agents currently running — used for loop-guard in dispatch_team_agent handler */
 export const _activeAgentSessions = new Set<string>();
 
@@ -68,6 +202,14 @@ export interface RunAgentResult {
   result: string;
   error?: string;
   processLog?: string;
+  processEntries?: Array<{
+    ts?: string;
+    type?: string;
+    content?: string;
+    actor?: string;
+    [key: string]: any;
+  }>;
+  thinking?: string;
   durationMs: number;
   stepCount?: number;
   agentName: string;
@@ -86,6 +228,7 @@ export async function runTeamAgentViaChat(
   task: string,
   teamId: string,
   timeoutMs = 300000,
+  trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
 ): Promise<RunAgentResult> {
   if (!_dispatchDeps) {
     return { success: false, result: '', error: 'Dispatch deps not initialized', durationMs: 0, agentName: agentId };
@@ -96,31 +239,14 @@ export async function runTeamAgentViaChat(
   const startedAt = Date.now();
   const team = teamId ? getManagedTeam(teamId) : null;
   const sessionId = `team_dispatch_${agentId}_${Date.now()}`;
-  const knownProviders = new Set(['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic']);
-  const parseProviderModel = (raw: string): { providerOverride?: string; modelOverride?: string } => {
-    const v = String(raw || '').trim();
-    if (!v) return {};
-    const idx = v.indexOf('/');
-    if (idx > 0) {
-      const providerId = v.slice(0, idx).trim();
-      const model = v.slice(idx + 1).trim();
-      if (providerId && model && knownProviders.has(providerId)) {
-        return { providerOverride: providerId, modelOverride: model };
-      }
-    }
-    return { modelOverride: v };
-  };
   const resolveAgentModelRouting = (): { providerOverride?: string; modelOverride?: string } => {
-    const explicitModel = String((agent as any)?.model || '').trim();
-    if (explicitModel) return parseProviderModel(explicitModel);
-
     const cfg = getConfig().getConfig() as any;
-    const defaults = cfg?.agent_model_defaults || {};
-    const roleType = String((agent as any)?.roleType || '').trim().toLowerCase();
-    const roleKey = roleType ? `subagent_${roleType}` : '';
-    const fallbackRef = String((roleKey && defaults?.[roleKey]) || '').trim();
-    if (!fallbackRef) return {};
-    return parseProviderModel(fallbackRef);
+    const resolved = resolveConfiguredAgentModel(cfg, agent, {
+      agentType: 'team_subagent',
+      isTeamMember: true,
+      fallbackToPrimary: true,
+    });
+    return parseTeamProviderModel(resolved.model);
   };
   const agentRouting = resolveAgentModelRouting();
 
@@ -174,19 +300,12 @@ export async function runTeamAgentViaChat(
     }
   } catch {}
 
-  // Pre-activate tool categories from agent config (browser, desktop, etc.).
-  // background_spawn is a core tool and needs no category activation.
-  const agentAllowedCategories: string[] = Array.isArray((agent as any)?.allowed_categories)
-    ? (agent as any).allowed_categories
-    : [];
-  if (agentAllowedCategories.length > 0) {
-    try {
-      const { activateToolCategory } = require('../session');
-      for (const cat of agentAllowedCategories) {
-        activateToolCategory(sessionId, cat);
-      }
-    } catch { /* non-fatal */ }
-  }
+	  // Team-dispatched agents run with the same runtime category surface as main chat.
+	  // Approval policy still gates commit-tier actions such as shell, GitHub, and Vercel.
+	  try {
+	    const { setActivatedToolCategories } = require('../session');
+	    setActivatedToolCategories(sessionId, getRuntimeToolCategories());
+	  } catch { /* non-fatal */ }
 
   // Create task record
   const cronTask = deps.createTask({
@@ -198,10 +317,44 @@ export async function runTeamAgentViaChat(
   });
   deps.updateTaskStatus(cronTask.id, 'running');
   deps.setTaskStepRunning(cronTask.id, 0);
-  deps.broadcastTeamEvent({ type: 'task_running', taskId: cronTask.id, teamId, agentId });
+  deps.broadcastTeamEvent({
+    type: 'task_running',
+    taskId: cronTask.id,
+    teamId,
+    agentId,
+    agentName,
+    taskSummary: task,
+    startedAt,
+  });
 
   // Drain any queued messages for this agent
   const pendingMessages = teamId ? drainAgentMessages(teamId, agentId) : [];
+  const memberState = team?.roomState?.memberStates?.[agentId];
+  const roomDeltaSince = Number(memberState?.lastRoomEventSeenAt || memberState?.lastUpdateAt || 0);
+  const roomEventDeltas = teamId
+    ? getTeamRoomEventsSince(teamId, roomDeltaSince, { agentId, limit: 12 })
+    : [];
+  const roomDeltaBlock = roomEventDeltas.length > 0
+    ? [
+        `[ROOM EVENTS SINCE YOUR LAST TURN]`,
+        ...roomEventDeltas.map((event, index) => {
+          const actor = String(event.actorName || event.actorId || event.actorType || 'system').trim();
+          const target = event.target ? ` -> ${event.target}` : '';
+          const source = event.metadata?.source ? ` [${event.metadata.source}]` : '';
+          return `${index + 1}. ${actor}${target}${source}: ${String(event.content || '').replace(/\s+/g, ' ').slice(0, 400)}`;
+        }),
+        `Use this delta to understand what changed while you were away. If you are waking because of a teammate or manager handoff, respond to that reason directly.`,
+      ].join('\n')
+    : '';
+  if (teamId && roomEventDeltas.length > 0) {
+    markTeamMemberRoomEventsSeen(teamId, agentId);
+  }
+  const roomSummary = team ? buildTeamRoomSummary(team, {
+    agentId,
+    limitMessages: 10,
+    includePlan: true,
+    includeArtifacts: true,
+  }) : '';
 
   // Detect complex multi-step tasks that should use declare_plan
   const taskLower = task.toLowerCase();
@@ -210,9 +363,9 @@ export async function runTeamAgentViaChat(
     ? `\n[COMPLEX TASK PLANNING]\nThis is a multi-phase task. Call declare_plan with 2-4 meaningful steps IMMEDIATELY:\n  1. First step for initial research/setup\n  2. Execution/gathering phase\n  3. Compilation/analysis phase\n  4. Formatting/output phase (if needed)\nDeclare these steps now, then execute them in order. Do NOT skip planning for a complex task like this.`
     : '';
 
-  // Lean callerContext — subagents get role + workspace + comms only.
-  // Chat history and team members list are intentionally omitted: the manager holds
-  // that context, not subagents. Task specifics come through in the dispatch message.
+  // Lean callerContext — subagents get role + workspace + a compact team-room snapshot.
+  // We still avoid dumping the full transcript; members see a summarized slice of the
+  // room plus direct queued messages so execution stays focused and affordable.
   const callerContext = [
     `[TEAM DISPATCH — ${team?.name || teamId} | agent: ${agentId}]`,
     `You are Prometheus. You have been assigned a specific role on this team for this session.`,
@@ -229,9 +382,18 @@ export async function runTeamAgentViaChat(
         ].join('\n')
       : '',
     agentRoleBlock ? `\n${agentRoleBlock}` : '',
+    roomSummary ? `\n${roomSummary}` : '',
+    roomDeltaBlock ? `\n${roomDeltaBlock}` : '',
     pendingMessages.length > 0
       ? `\n[MESSAGES FOR YOU]\n${pendingMessages.map((m, i) => `${i + 1}. ${m}`).join('\n')}\nAcknowledge and act on these as part of your task.`
       : '',
+    `\n[TEAM COLLABORATION TOOLS]`,
+    `You always have team_ops available in this team dispatch. Use these tools when appropriate:`,
+    `- update_my_status: mark yourself running, blocked, waiting_for_context, ready, or done.`,
+    `- talk_to_teammate: message another member, "manager", or "all".`,
+    `- request_context / request_manager_help: ask the manager for missing context or escalation.`,
+    `- share_artifact: publish reusable outputs/files/findings into shared team state.`,
+    `- update_team_goal: propose or update plan items when your work reveals a better next step.`,
     `\n[PARALLEL EXECUTION]`,
     `Use background_spawn to run independent subtasks in parallel while you continue your main work.`,
     `background_spawn(prompt) — spawns a full LLM agent; result is auto-merged at turn-end.`,
@@ -267,52 +429,178 @@ export async function runTeamAgentViaChat(
 
   let stepCount = 0;
   const processLogLines: string[] = [];
+  const processEntries: Array<{
+    ts?: string;
+    type?: string;
+    content?: string;
+    actor?: string;
+    [key: string]: any;
+  }> = [];
+  let thinkingText = '';
+  let liveReplyText = '';
 
-  const sendSSE = (event: string, data: any) => {
+  const nowTs = () => new Date().toLocaleTimeString();
+  const safePreview = (value: any, max = 400): string => {
+    if (value == null) return '';
+    if (typeof value === 'string') return value.slice(0, max);
+    try {
+      return JSON.stringify(value).slice(0, max);
+    } catch {
+      return String(value).slice(0, max);
+    }
+  };
+  const pushProcessEntry = (type: string, content: string, extra: Record<string, any> = {}) => {
+    const text = String(content || '').trim();
+    if (!text) return;
+    processEntries.push({
+      ts: nowTs(),
+      type,
+      content: text,
+      ...extra,
+    });
+    if (processEntries.length > 250) processEntries.splice(0, processEntries.length - 250);
+  };
+  const captureTaskStreamEvent = (event: string, data: any) => {
+    if (event === 'token') {
+      const chunk = String(data?.text || '');
+      if (chunk) liveReplyText = `${liveReplyText}${chunk}`;
+      return;
+    }
+    if (event === 'thinking_delta') {
+      const chunk = String(data?.thinking || data?.text || '');
+      if (chunk) thinkingText = `${thinkingText}${chunk}`;
+      return;
+    }
+    if (event === 'thinking' || event === 'agent_thought') {
+      const thought = String(data?.thinking || data?.text || '').trim();
+      if (!thought) return;
+      thinkingText = thinkingText ? `${thinkingText}\n\n${thought}` : thought;
+      processLogLines.push(`[thinking] ${thought.slice(0, 200)}`);
+      pushProcessEntry('think', thought, data?.actor ? { actor: data.actor } : {});
+      return;
+    }
+    if (event === 'info') {
+      const info = String(data?.message || '').trim();
+      if (!info) return;
+      processLogLines.push(`[info] ${info.slice(0, 200)}`);
+      pushProcessEntry('info', info, data?.actor ? { actor: data.actor } : {});
+      return;
+    }
+    if (event === 'progress_state') {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const activeIndex = Number(data?.activeIndex ?? -1);
+      const activeItem = activeIndex >= 0 ? items[activeIndex] : null;
+      const activeText = String(activeItem?.text || '').trim();
+      if (activeText) {
+        processLogLines.push(`[progress] ${activeText.slice(0, 200)}`);
+        pushProcessEntry('info', activeText);
+      }
+      return;
+    }
     if (event === 'tool_call') {
       stepCount++;
-      const toolName = data?.action || data?.tool || data?.name || '?';
-      const argsStr = JSON.stringify(data?.args || data?.input || {}).slice(0, 200);
-      processLogLines.push(`[tool_call] ${toolName}(${argsStr})`);
-    } else if (event === 'tool_result') {
-      const resultStr = String(data?.result ?? data?.output ?? data?.content ?? '').slice(0, 400);
-      if (resultStr) processLogLines.push(`[tool_result] ${resultStr}`);
-    } else if (event === 'thinking' && data?.text) {
-      processLogLines.push(`[thinking] ${String(data.text).slice(0, 200)}`);
-    } else if (event === 'progress_state') {
-      deps.updateTaskRuntimeProgress(cronTask.id, {
-        source: data?.source,
-        activeIndex: Number(data?.activeIndex ?? -1),
-        items: Array.isArray(data?.items)
-          ? data.items.map((item: any, idx: number) => ({
-            id: String(item?.id || `p${idx + 1}`),
-            text: String(item?.text || ''),
-            status: String(item?.status || 'pending') as any,
-          }))
-          : [],
+      const toolName = String(data?.action || data?.tool || data?.name || '?').trim() || '?';
+      const argsStr = safePreview(data?.args || data?.input || {}, 220);
+      processLogLines.push(`[tool_call] ${toolName}${argsStr ? `(${argsStr})` : '()'}`);
+      pushProcessEntry('tool', `${toolName}${argsStr ? ` ${argsStr}` : ''}`, {
+        ...(data?.actor ? { actor: data.actor } : {}),
+        ...(data?.args && typeof data.args === 'object' ? { args: data.args } : {}),
       });
+      return;
     }
-    deps.broadcastTeamEvent({ type: 'task_tool_call', taskId: cronTask.id, tool: data?.action, args: data?.args });
+    if (event === 'tool_result') {
+      const toolName = String(data?.action || data?.tool || data?.name || '?').trim() || '?';
+      const resultStr = safePreview(data?.result ?? data?.output ?? data?.content ?? '', 500);
+      if (resultStr) processLogLines.push(`[tool_result] ${toolName} => ${resultStr}`);
+      pushProcessEntry(data?.error === true ? 'error' : 'result', `${toolName} => ${resultStr || '(no output)'}`, data?.actor ? { actor: data.actor } : {});
+      return;
+    }
+    if (event === 'tool_progress') {
+      const toolName = String(data?.action || data?.tool || data?.name || '?').trim() || '?';
+      const progressMsg = String(data?.message || '').trim();
+      if (!progressMsg) return;
+      processLogLines.push(`[tool_progress] ${toolName}: ${progressMsg.slice(0, 240)}`);
+      pushProcessEntry('info', `${toolName}: ${progressMsg}`, data?.actor ? { actor: data.actor } : {});
+      return;
+    }
+    if (event === 'final' || event === 'done') {
+      const reply = String(data?.reply || data?.text || '').trim();
+      if (reply) {
+        liveReplyText = reply;
+        processLogLines.push(`[final] ${reply.slice(0, 240)}`);
+        pushProcessEntry('final', reply);
+      }
+      const thinking = String(data?.thinking || '').trim();
+      if (thinking) thinkingText = thinkingText ? `${thinkingText}\n\n${thinking}` : thinking;
+    }
+  };
+  const broadcastTeamTaskEvent = (data: any) => {
+    const payload = {
+      ...(data || {}),
+      taskId: data?.taskId || cronTask.id,
+      teamId,
+      agentId,
+      agentName,
+      taskSummary: task,
+      startedAt,
+    };
+    if (payload.type === 'task_stream_event') {
+      captureTaskStreamEvent(String(payload.eventType || ''), payload.data);
+    }
+    deps.broadcastTeamEvent(payload);
   };
 
+  bindTaskRunToSession(sessionId, {
+    taskId: cronTask.id,
+    source: 'team_dispatch',
+    teamId,
+    agentId,
+  });
+  let runTimeoutHandle: NodeJS.Timeout | undefined;
   _activeAgentSessions.add(sessionId);
   try {
-    const runner = new BackgroundTaskRunner(
-      cronTask.id,
-      deps.handleChat as any,
-      (data: object) => deps.broadcastTeamEvent({ ...data, teamId, agentId }),
-      null,
-    );
-    await Promise.race<any>([
-      runner.start(),
-      new Promise<any>((_, reject) =>
-        setTimeout(() => reject(new Error(`Team agent timeout after ${timeoutMs}ms`)), timeoutMs)
+    const abortSignal = { aborted: false };
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      runTimeoutHandle = setTimeout(() => {
+        abortSignal.aborted = true;
+        reject(new Error(`Team agent timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+      if (typeof (runTimeoutHandle as any)?.unref === 'function') (runTimeoutHandle as any).unref();
+    });
+    const result = await Promise.race<any>([
+      deps.handleChat(
+        task,
+        sessionId,
+        (event, data) => broadcastTeamTaskEvent({
+          type: 'task_stream_event',
+          eventType: event,
+          data,
+        }),
+        undefined,
+        abortSignal,
+        callerContext,
+        agentRouting.modelOverride,
+        'team_subagent',
+        undefined,
+        undefined,
+        undefined,
+        agentRouting.providerOverride,
       ),
+      timeoutPromise,
     ]);
+    if (runTimeoutHandle) clearTimeout(runTimeoutHandle);
 
     const finalTask = loadTask(cronTask.id);
-    const finalStatus = finalTask?.status || 'failed';
-    const resultText = String(finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || '');
+    const resultText = String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
+    const finalStatus = abortSignal.aborted
+      ? 'failed'
+      : (finalTask?.status && finalTask.status !== 'running' ? finalTask.status : (/^\s*ERROR:/i.test(resultText) ? 'failed' : 'complete'));
+    if (finalStatus === 'complete') {
+      completeNextOpenTaskStep(cronTask.id, resultText.slice(0, 200));
+      deps.updateTaskStatus(cronTask.id, 'complete', { finalSummary: resultText });
+    } else if (finalStatus === 'failed') {
+      deps.updateTaskStatus(cronTask.id, 'failed', { finalSummary: resultText || 'Team agent failed.' });
+    }
     const waitingForManager = finalStatus === 'awaiting_user_input' || finalStatus === 'needs_assistance' || finalStatus === 'paused';
     const success = finalStatus === 'complete' && !resultText.startsWith('ERROR:');
     const zeroToolCalls = stepCount === 0;
@@ -346,7 +634,7 @@ export async function runTeamAgentViaChat(
       recordTeamRun(teamId, {
         agentId,
         agentName,
-        trigger: 'team_dispatch',
+        trigger,
         taskId: cronTask.id,
         success,
         startedAt,
@@ -356,6 +644,13 @@ export async function runTeamAgentViaChat(
         zeroToolCalls,
         error: success ? (resultWarning || undefined) : (waitingForManager ? `Waiting: ${resultText.slice(0, 260)}` : resultText.slice(0, 300)),
         resultPreview: success ? resultText : undefined,
+        quality: {
+          warning: resultWarning || undefined,
+          zeroToolCalls,
+          resultLength: resultText.length,
+          suspect: !!resultWarning || zeroToolCalls,
+        },
+        roomSnapshot: buildTeamRunSnapshot(teamId, { agentId, sinceAt: startedAt }) || undefined,
       });
     }
 
@@ -374,6 +669,8 @@ export async function runTeamAgentViaChat(
         ? `WAITING_FOR_MANAGER: ${resultText || 'The subagent paused for manager input.'}`
         : resultWarning ? `${resultWarning}\n\n${resultText}` : resultText,
       processLog: processLogLines.length > 0 ? processLogLines.join('\n') : undefined,
+      processEntries: processEntries.length > 0 ? [...processEntries] : undefined,
+      thinking: thinkingText.trim() || undefined,
       durationMs: finishedAt - startedAt,
       stepCount,
       agentName,
@@ -388,7 +685,7 @@ export async function runTeamAgentViaChat(
       recordTeamRun(teamId, {
         agentId,
         agentName,
-        trigger: 'team_dispatch',
+        trigger,
         taskId: cronTask.id,
         success: false,
         startedAt,
@@ -397,22 +694,69 @@ export async function runTeamAgentViaChat(
         stepCount,
         zeroToolCalls: stepCount === 0,
         error: String(err?.message ?? err).slice(0, 300),
+        quality: {
+          zeroToolCalls: stepCount === 0,
+          resultLength: 0,
+          suspect: true,
+        },
+        roomSnapshot: buildTeamRunSnapshot(teamId, { agentId, sinceAt: startedAt }) || undefined,
       });
     }
 
     deps.updateTaskStatus(cronTask.id, 'failed', { finalSummary: String(err?.message ?? err).slice(0, 500) });
     deps.appendJournal(cronTask.id, { type: 'status_push', content: `Failed: ${String(err?.message ?? err).slice(0, 200)}` });
+    deps.broadcastTeamEvent({
+      type: 'task_failed',
+      taskId: cronTask.id,
+      teamId,
+      agentId,
+      agentName,
+      taskSummary: task,
+      startedAt,
+      summary: String(err?.message ?? err).slice(0, 200),
+    });
     return {
       success: false,
       result: '',
       error: String(err?.message ?? err),
+      processLog: processLogLines.length > 0 ? processLogLines.join('\n') : undefined,
+      processEntries: processEntries.length > 0 ? [...processEntries] : undefined,
+      thinking: thinkingText.trim() || undefined,
       durationMs: finishedAt - startedAt,
       stepCount,
       agentName,
       taskId: cronTask.id,
     };
   } finally {
+    if (runTimeoutHandle) clearTimeout(runTimeoutHandle);
     _activeAgentSessions.delete(sessionId);
+    clearTaskRunBinding(sessionId, cronTask.id);
+    if (teamId) {
+      try {
+        const { hasPendingAgentMessages, listPendingTeamDirectThreadsForParticipant } = require('./managed-teams');
+        if (hasPendingAgentMessages(teamId, agentId)) {
+          const { scheduleTeamMemberAutoWake } = require('./team-member-room');
+          scheduleTeamMemberAutoWake(teamId, agentId, {
+            reason: 'New teammate messages arrived while you were dispatched.',
+            delayMs: 500,
+            source: 'dispatch_followup',
+          });
+        }
+        const pendingDirectThreads = listPendingTeamDirectThreadsForParticipant(teamId, 'member', agentId);
+        if (Array.isArray(pendingDirectThreads) && pendingDirectThreads.length > 0) {
+          const { scheduleTeamMemberDirectWake } = require('./team-member-room');
+          for (const thread of pendingDirectThreads) {
+            if (!thread?.id) continue;
+            scheduleTeamMemberDirectWake(teamId, agentId, thread.id, {
+              reason: 'The team owner sent you a direct follow-up while you were dispatched.',
+              delayMs: 500,
+            });
+          }
+        }
+      } catch {
+        // Best-effort handoff back into the room.
+      }
+    }
   }
 }
 
@@ -628,22 +972,8 @@ function buildGenericTeamContext(agentId: string, teamId?: string): string {
  * Build enforced tool filter for team-dispatched runs.
  */
 export function buildTeamToolFilter(agentId: string): string[] | null {
-  const agent = getAgentById(agentId);
-  if (!agent) return null;
-
-  const workspace = ensureAgentWorkspace(agent as any);
-  const dynamicConfig = readSubagentConfig(agentId, workspace);
-
-  const allowedTools = normalizeList(dynamicConfig?.allowed_tools ?? (agent as any).allowed_tools);
-  const mcpServers = normalizeList(dynamicConfig?.mcp_servers ?? (agent as any).mcp_servers);
-
-  const filter: string[] = [...allowedTools];
-  for (const serverId of mcpServers) {
-    filter.push(`mcp__${serverId}__*`);
-  }
-
-  const normalized = unique(filter);
-  return normalized.length > 0 ? normalized : null;
+  void agentId;
+  return null;
 }
 
 // ── Src read access ─────────────────────────────────────────────────────────

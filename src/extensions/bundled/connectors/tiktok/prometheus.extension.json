@@ -1,0 +1,32 @@
+{
+  "id": "tiktok",
+  "kind": "connector",
+  "name": "TikTok",
+  "description": "Connect TikTok through the Prometheus browser session for performance, audience, and trend analysis.",
+  "category": "Social",
+  "enabledByDefault": true,
+  "docsUrl": "https://www.tiktok.com/",
+  "tags": ["tiktok", "social", "browser session"],
+  "runtime": {
+    "binding": "gateway/connections/browser-session:tiktok"
+  },
+  "ui": {
+    "color": "#010101",
+    "permissions": [
+      { "icon": "[]", "label": "Read video views, watch time, and shares" },
+      { "icon": "=", "label": "Read follower growth and profile analytics" },
+      { "icon": "#", "label": "Read hashtag and sound performance" }
+    ]
+  },
+  "ownership": {
+    "capabilities": ["social", "analytics", "browser_session"]
+  },
+  "setup": {
+    "authType": "browser_session",
+    "statusMode": "generic",
+    "browserLogin": {
+      "url": "https://www.tiktok.com/login",
+      "checkUrl": "https://www.tiktok.com/"
+    }
+  }
+}

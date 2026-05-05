@@ -1,18 +1,9 @@
 ---
 name: Deal Analyzer
-description: >
-  Analyze M&A, investment, partnership, and commercial deals for red flags, structure,
-  risk, and negotiation levers. Use whenever the user is reviewing a term sheet, evaluating
-  an acquisition, assessing a partnership agreement, analyzing a vendor contract, or
-  needs help understanding deal mechanics. Triggers on: "analyze this deal", "review this
-  term sheet", "acquisition offer", "partnership agreement", "deal structure", "investment
-  terms", "is this a good deal", "what should I negotiate", "red flags in this contract",
-  "letter of intent", "LOI review", "due diligence", "deal review", "should I take this
-  offer", "commercial contract", "SaaS contract", "vendor agreement", "deal mechanics",
-  "cap table", "dilution", "liquidation preference", "anti-dilution".
-emoji: ⚖️
+description: Structured framework for evaluating deals — investment, M&A, partnerships, or commercial agreements — before signing anything.
+emoji: "🧩"
 version: 1.0.0
-triggers: deal analysis, term sheet, acquisition offer, partnership agreement, deal structure, investment terms, red flags, letter of intent, LOI, due diligence, deal review, commercial contract, vendor agreement, cap table, dilution, liquidation preference, anti-dilution, M&A, is this a good deal, what should I negotiate
+triggers: deal analysis, term sheet, acquisition offer, partnership agreement, deal structure, investment terms, red flags, letter of intent, loi, due diligence, deal review, commercial contract, vendor agreement, cap table, dilution, liquidation preference, anti-dilution, m&a, is this a good deal, what should i negotiate
 ---
 
 # Deal Analyzer

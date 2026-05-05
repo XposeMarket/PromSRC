@@ -12,11 +12,12 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
+import { buildGatewayCorsOptions } from '../gateway-auth';
 
 export function createApp(): express.Application {
   const app = express();
 
-  app.use(cors());
+  app.use(cors(buildGatewayCorsOptions()));
   app.use(express.json({ limit: '50mb' }));
 
   const root = resolvePrometheusRoot();
@@ -24,6 +25,16 @@ export function createApp(): express.Application {
     ? getPublicWebUiRoot()
     : path.join(root, 'web-ui');
   app.use(express.static(webUiPath, { etag: false, lastModified: false, setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store');
+  } }));
+
+  const pretextDistPath = path.join(root, 'node_modules', '@chenglou', 'pretext', 'dist');
+  app.use('/vendor/pretext', express.static(pretextDistPath, { etag: false, lastModified: false, setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store');
+  } }));
+
+  const jsPdfDistPath = path.join(root, 'node_modules', 'jspdf', 'dist');
+  app.use('/vendor/jspdf', express.static(jsPdfDistPath, { etag: false, lastModified: false, setHeaders: (res) => {
     res.setHeader('Cache-Control', 'no-store');
   } }));
 

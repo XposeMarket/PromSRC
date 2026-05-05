@@ -25,8 +25,18 @@ import {
   type ProposalStatus,
 } from '../proposals/proposal-store.js';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
+import { loadTask, saveTask, type TaskStatus } from '../tasks/task-store.js';
+import {
+  DEV_SRC_SELF_EDIT_MODE,
+  DEV_SRC_SELF_EDIT_REPAIR_MODE,
+  prepareDevSrcSelfEditWorkspace,
+  prepareDevSrcRepairWorkspace,
+  proposalUsesDevSrcSelfEditMode,
+} from '../proposals/dev-src-self-edit.js';
 
 const router = Router();
+const PROPOSAL_ACTIVE_TASK_STATUSES = new Set<TaskStatus>(['queued', 'running', 'waiting_subagent']);
+const PROPOSAL_PAUSED_TASK_STATUSES = new Set<TaskStatus>(['paused', 'stalled', 'needs_assistance', 'awaiting_user_input']);
 
 function proposalTouchesInternalCode(proposal: any): boolean {
   const affectedFiles = Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [];
@@ -38,13 +48,85 @@ function proposalTouchesInternalCode(proposal: any): boolean {
     const p = String(f?.path || '').replace(/\\/g, '/').trim();
     return p.startsWith('web-ui/') || p.startsWith('./web-ui/') || p.includes('/web-ui/');
   });
+  const touchesPromRoot = affectedFiles.some((f: any) => isPromRootAffectedPath(f?.path));
   return Boolean(
     proposal?.type === 'src_edit'
     || proposal?.requiresSrcEdit
     || proposal?.requiresBuild
     || touchesSrc
     || touchesWebUi
+    || touchesPromRoot
   );
+}
+
+function isPromRootAffectedPath(rawPath: unknown): boolean {
+  const p = String(rawPath || '').replace(/\\/g, '/').replace(/^\.?\//, '').trim();
+  if (!p) return false;
+  if (p.startsWith('src/') || p.startsWith('web-ui/')) return false;
+  const top = p.split('/')[0] || '';
+  return [
+    '.prometheus',
+    'scripts',
+    'electron',
+    'build',
+    'dist',
+  ].includes(top) || [
+    'package.json',
+    'package-lock.json',
+    'tsconfig.json',
+    'README.md',
+    'CHANGELOG.md',
+    'SELF.md',
+    'AGENTS.md',
+  ].includes(p);
+}
+
+function normalizeProposalScopePath(rawPath: unknown): string {
+  return String(rawPath || '')
+    .replace(/\\/g, '/')
+    .trim()
+    .replace(/^\.?\//, '')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/$/, '');
+}
+
+function buildProposalMutationScope(proposal: any): { allowedFiles: string[]; allowedDirs: string[] } | undefined {
+  const allowedFiles = Array.from(new Set<string>(
+    (Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [])
+      .map((file: any) => normalizeProposalScopePath(file?.path))
+      .filter((value: string) => !!value),
+  ));
+  if (allowedFiles.length === 0) return undefined;
+  return { allowedFiles, allowedDirs: [] };
+}
+
+function proposalTouchesUnsupportedInternalCode(proposal: any): boolean {
+  return proposalTouchesInternalCode(proposal)
+    && !proposalUsesDevSrcSelfEditMode(proposal)
+    && !proposalUsesDevSrcSelfEditRepairMode(proposal);
+}
+
+function proposalUsesDevSrcSelfEditRepairMode(proposal: any): boolean {
+  return Boolean(proposal?.repairContext?.repairOnly) && proposalUsesDevSrcSelfEditMode(proposal);
+}
+
+function getProposalExecutorTaskStatus(proposal: any): TaskStatus | '' {
+  const taskId = String(proposal?.executorTaskId || '').trim();
+  if (!taskId) return '';
+  const task = loadTask(taskId);
+  return task?.status || '';
+}
+
+function enrichProposalExecutionState(proposal: any): any {
+  if (String(proposal?.status || '').trim().toLowerCase() !== 'executing') return proposal;
+  const taskStatus = getProposalExecutorTaskStatus(proposal);
+  if (!taskStatus) return proposal;
+  return {
+    ...proposal,
+    taskStatus,
+    taskActive: PROPOSAL_ACTIVE_TASK_STATUSES.has(taskStatus),
+    taskPaused: PROPOSAL_PAUSED_TASK_STATUSES.has(taskStatus),
+  };
 }
 
 // ── GET /api/proposals ────────────────────────────────────────────────────────
@@ -59,7 +141,18 @@ router.get('/api/proposals', (req: Request, res: Response) => {
     } else if (status === 'pending') {
       proposals = listProposals('pending');
     } else if (status === 'approved') {
-      proposals = listProposals(['approved', 'executing']);
+      proposals = listProposals('approved');
+    } else if (status === 'in_progress' || status === 'executing') {
+      proposals = listProposals('executing').filter((proposal) => {
+        const taskStatus = getProposalExecutorTaskStatus(proposal);
+        if (!taskStatus) return true;
+        return PROPOSAL_ACTIVE_TASK_STATUSES.has(taskStatus);
+      });
+    } else if (status === 'paused') {
+      proposals = listProposals('executing').filter((proposal) => {
+        const taskStatus = getProposalExecutorTaskStatus(proposal);
+        return !!taskStatus && PROPOSAL_PAUSED_TASK_STATUSES.has(taskStatus);
+      });
     } else if (status === 'denied') {
       proposals = listProposals('denied');
     } else if (status === 'executed') {
@@ -75,6 +168,8 @@ router.get('/api/proposals', (req: Request, res: Response) => {
     if (sessionId) {
       proposals = proposals.filter(p => p.sourceSessionId === sessionId);
     }
+
+    proposals = proposals.map((proposal) => enrichProposalExecutionState(proposal));
 
     res.json({ success: true, proposals });
   } catch (err: any) {
@@ -156,20 +251,33 @@ router.post('/api/proposals/:id/approve', async (req: Request, res: Response) =>
     }
 
     _broadcastFn?.({ type: 'proposal_approved', proposalId: proposal.id, title: proposal.title });
-    res.json({ success: true, proposal });
+    let dispatchResult: { taskId: string; sessionId: string } | null = null;
 
-    // Dispatch execution fire-and-forget after responding — shared with Telegram path
     // Trigger if executorPrompt is set OR if proposal has affectedFiles + details (AI-generated proposals
-    // put the full implementation plan in `details` and don't set executorPrompt explicitly)
+    // put the full implementation plan in `details` and don't set executorPrompt explicitly). Wait only
+    // until the executor task is created, so approval clicks cannot silently succeed without a real task.
     const hasExecutionPlan = !!(proposal.executorPrompt || (proposal.affectedFiles?.length && proposal.details));
     if (hasExecutionPlan) {
-      setImmediate(() => {
-        dispatchApprovedProposal(proposal).catch((err: any) => {
-          console.error(`[Proposals] Dispatch failed for ${proposal.id}:`, err?.message);
-          _broadcastFn?.({ type: 'proposal_dispatch_error', proposalId: proposal.id, error: err?.message });
+      try {
+        dispatchResult = await dispatchApprovedProposal(proposal);
+      } catch (err: any) {
+        console.error(`[Proposals] Dispatch failed for ${proposal.id}:`, err?.message);
+        _broadcastFn?.({ type: 'proposal_dispatch_error', proposalId: proposal.id, error: err?.message });
+        return res.status(500).json({
+          success: false,
+          error: `Proposal approved, but executor dispatch failed: ${err?.message || 'Unknown error'}`,
+          proposal: loadProposal(proposal.id) || proposal,
         });
-      });
+      }
     }
+
+    res.json({
+      success: true,
+      proposal: loadProposal(proposal.id) || proposal,
+      dispatched: Boolean(dispatchResult),
+      taskId: dispatchResult?.taskId,
+      sessionId: dispatchResult?.sessionId,
+    });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to approve proposal' });
   }
@@ -179,7 +287,9 @@ router.post('/api/proposals/:id/approve', async (req: Request, res: Response) =>
  * dispatchApprovedProposal — single canonical dispatch function.
  *
  * Called by BOTH the HTTP approval route AND the Telegram pr:ap callback.
- * Always sets sessionId = `proposal_${id}` so src-edit tools unlock correctly.
+ * Always sets sessionId = `proposal_${id}` so proposal results stay linked to the
+ * original approval record. Source self-edit rights are now controlled by explicit
+ * task metadata, not by the session prefix alone.
  * Exported so telegram-channel.ts can import and call it directly.
  */
 export async function dispatchApprovedProposal(
@@ -189,21 +299,72 @@ export async function dispatchApprovedProposal(
   if (isPublicDistributionBuild() && proposalTouchesInternalCode(proposal)) {
     throw new Error('Internal code proposal execution is disabled in the public distribution build.');
   }
+	  if (proposalTouchesUnsupportedInternalCode(proposal)) {
+	    throw new Error('Automatic internal-code proposal execution is limited to src-only dev self-edit proposals. Revise the proposal to touch only src/ files.');
+	  }
+  if (proposal?.teamExecution && proposalTouchesInternalCode(proposal)) {
+    throw new Error('Team manager proposals cannot execute Prometheus internal source-code changes. Create dev src proposals from the main/dev agent path instead.');
+  }
 
   const { launchBackgroundTaskRunner } = await import('../tasks/task-router.js');
   const { createTask } = await import('../tasks/task-store.js');
-  const { markProposalExecuting, markProposalFailed, hasSrcAffectedFiles } = await import('../proposals/proposal-store.js');
+  const {
+    markProposalExecuting,
+    markProposalFailed,
+    markProposalRepairing,
+    hasSrcAffectedFiles,
+  } = await import('../proposals/proposal-store.js');
 
   const proposalId = proposal.id;
   const executorPrompt = String(proposal.executorPrompt || '');
+  const proposalMutationScope = buildProposalMutationScope(proposal);
+  const repairContext = proposal?.repairContext && typeof proposal.repairContext === 'object'
+    ? proposal.repairContext
+    : undefined;
+  const usesDevSrcSelfEditRepair = proposalUsesDevSrcSelfEditRepairMode(proposal);
+  const usesDevSrcSelfEdit = !usesDevSrcSelfEditRepair && proposalUsesDevSrcSelfEditMode(proposal);
+  if ((usesDevSrcSelfEdit || usesDevSrcSelfEditRepair) && (!proposalMutationScope || proposalMutationScope.allowedFiles.length === 0)) {
+    throw new Error('Dev src self-edit proposals require at least one approved src/ file in affectedFiles.');
+  }
   const hasWebUiAffectedFiles = Array.isArray(proposal.affectedFiles) && proposal.affectedFiles.some((f: any) => {
     const p = String(f?.path || '').replace(/\\/g, '/').trim();
     return p.startsWith('web-ui/') || p.startsWith('./web-ui/') || p.includes('/web-ui/');
   });
   const needsBuild = Boolean(proposal.requiresBuild) || hasSrcAffectedFiles(proposal.affectedFiles || []) || hasWebUiAffectedFiles;
-  const needsSrcEdit = Boolean(proposal.requiresSrcEdit) || hasSrcAffectedFiles(proposal.affectedFiles || []);
-  const needsWebUiEdit = hasWebUiAffectedFiles;
-  const sessionId = `proposal_${proposalId}`;  // MUST start with 'proposal_' to unlock proposal-gated source edit tools
+		  const needsSrcEdit = Boolean(proposal.requiresSrcEdit) || hasSrcAffectedFiles(proposal.affectedFiles || []);
+		  const needsWebUiEdit = hasWebUiAffectedFiles;
+		  const needsPromRootEdit = (proposal.affectedFiles || []).some((f: any) => isPromRootAffectedPath(f?.path));
+	  const sessionId = `proposal_${proposalId}`;
+  const teamExecution = proposal?.teamExecution && typeof proposal.teamExecution === 'object'
+    ? proposal.teamExecution
+    : undefined;
+  const defaultBuildCommand = usesDevSrcSelfEditRepair || usesDevSrcSelfEdit
+    ? 'npm run build:backend'
+    : 'npm run build';
+  const canonicalBuildCommand = String(repairContext?.canonicalBuildCommand || defaultBuildCommand).trim() || defaultBuildCommand;
+  const devSrcSandboxBlock = usesDevSrcSelfEditRepair ? [
+    ``,
+    `SANDBOX MODE: Dev src build repair.`,
+    `You are editing an isolated repair copy of a failed proposal sandbox, not the live repo.`,
+    `Fix only the captured build failure. Do NOT continue implementing the original proposal in this repair task.`,
+    `Only approved src/ files are writable. After a successful repair build, finish with a concise repair summary; Prometheus will automatically hand the repaired sandbox back to the blocked original task.`,
+  ].join('\n') : usesDevSrcSelfEdit ? [
+    ``,
+    `SANDBOX MODE: Dev src self-edit.`,
+    `You are editing an isolated copy of Prometheus source code, not the live repo.`,
+    `Only approved src/ files are writable, and only those scoped src/ files will be promoted back after a successful build.`,
+    `Do not create or edit files outside the approved src/ scope.`,
+  ].join('\n') : '';
+
+  const devSrcWorkspace = usesDevSrcSelfEditRepair
+    ? prepareDevSrcRepairWorkspace(
+      proposalId,
+      String(repairContext?.failedWorkspaceRoot || '').trim(),
+      proposalMutationScope?.allowedFiles || [],
+    )
+    : usesDevSrcSelfEdit
+      ? prepareDevSrcSelfEditWorkspace(proposalId, proposalMutationScope?.allowedFiles || [])
+      : undefined;
 
   // Build execution prompt with explicit src-tool instructions when needed
   const affectedFilesBlock = (proposal.affectedFiles || []).length > 0
@@ -227,7 +388,23 @@ export async function dispatchApprovedProposal(
     `  • insert_after_source(file, after_line, content)           — insert lines`,
     `  • delete_lines_source(file, start_line, end_line)          — delete lines`,
     `  • write_source(file, content, overwrite?)                  — create/overwrite src file`,
-  ].join('\n') : '';
+	  ].join('\n') : '';
+	  const promToolBlock = needsPromRootEdit ? [
+	    ``,
+	    `CRITICAL - PROM-ROOT EDIT TOOLS: You MUST use prom-root-specific tools for allowlisted project-root edits outside src/ and web-ui/.`,
+	    `Do NOT use find_replace, replace_lines, create_file, write_file, or delete_file for these paths.`,
+	    `Use ONLY:`,
+	    `  - list_prom(path?)                                               - list allowlisted project-root dirs`,
+	    `  - prom_file_stats(file)                                          - prom-root file metadata`,
+	    `  - read_prom_file(file, start_line?, num_lines?, head?, tail?)     - read prom-root file`,
+	    `  - grep_prom(pattern, path?, glob?, case_insensitive?)             - search prom-root`,
+	    `  - find_replace_prom(file, find, replace)                         - text swap`,
+	    `  - replace_lines_prom(file, start_line, end_line, new_content)     - line edit`,
+	    `  - insert_after_prom(file, after_line, content)                   - insert lines`,
+	    `  - delete_lines_prom(file, start_line, end_line)                  - delete lines`,
+	    `  - write_prom_file(file, content, overwrite?)                     - create/overwrite prom-root file`,
+	    `  - delete_prom_file(file)                                         - delete prom-root file`,
+	  ].join('\n') : '';
   const webUiToolBlock = needsWebUiEdit ? [
     ``,
     `⚠️ CRITICAL — WEB-UI EDIT TOOLS: You MUST use web-ui-specific tools for ALL web-ui/ edits.`,
@@ -245,9 +422,11 @@ export async function dispatchApprovedProposal(
   ].join('\n') : '';
 
   const fullPrompt = [
-    `[PROPOSAL EXECUTION] Executing approved proposal.`,
-    srcToolBlock,
-    webUiToolBlock,
+		    `[PROPOSAL EXECUTION] Executing approved proposal.`,
+        devSrcSandboxBlock,
+		    srcToolBlock,
+		    webUiToolBlock,
+		    promToolBlock,
     ``,
     `TITLE: ${proposal.title || 'Untitled'}`,
     `PRIORITY: ${proposal.priority || 'medium'}`,
@@ -260,13 +439,13 @@ export async function dispatchApprovedProposal(
     affectedFilesBlock,
     diffBlock,
     proposal.estimatedImpact ? `\nEXPECTED IMPACT: ${proposal.estimatedImpact}` : '',
-    needsBuild ? `\nBUILD REQUIRED: Yes — run npm run build after edits. MANDATORY. Stop if build fails — task will pause for assistance.` : '',
+    needsBuild ? `\nBUILD REQUIRED: Yes — run ${canonicalBuildCommand} after edits. MANDATORY. Stop if build fails — task will pause for assistance.` : '',
     ``,
     `INSTRUCTIONS:`,
-    `1. Read affected files with ${needsSrcEdit || needsWebUiEdit ? 'the correct source read tool first (read_source for src/, read_webui_source for web-ui/)' : 'read_file first'} to understand current state.`,
-    `2. Apply edits using ${needsSrcEdit || needsWebUiEdit ? 'the source tool matching the target path and edit operation (src/*_source for src/, webui/*_webui_source for web-ui/)' : 'find_replace or replace_lines'}.`,
+	    `1. Read affected files with ${needsSrcEdit || needsWebUiEdit || needsPromRootEdit ? 'the correct source read tool first (read_source for src/, read_webui_source for web-ui/, read_prom_file for allowlisted prom-root files)' : 'read_file first'} to understand current state.`,
+	    `2. Apply edits using ${needsSrcEdit || needsWebUiEdit || needsPromRootEdit ? 'the source tool matching the target path and edit operation (src/*_source for src/, webui/*_webui_source for web-ui/, *_prom for allowlisted prom-root files)' : 'find_replace or replace_lines'}.`,
     `3. For one-time parallel side work, use additive background primitives: background_spawn, background_status/background_progress, background_join.`,
-    `4. ${needsBuild ? 'Run: run_command({command:"npm run build", shell:true}). If it fails, STOP — do not retry.' : 'Verify your changes are correct.'}`,
+    `4. ${needsBuild ? `Run: run_command({command:"${canonicalBuildCommand}", shell:true}). If it fails, STOP — do not retry.` : 'Verify your changes are correct.'}`,
     `5. Report exactly what was changed and any issues encountered.`,
     ``,
     executorPrompt ? `ADDITIONAL EXECUTOR INSTRUCTIONS:\n${executorPrompt}` : '',
@@ -286,11 +465,17 @@ export async function dispatchApprovedProposal(
     return steps;
   })();
 
-  if (parsedSteps.length >= 2) {
+  if (usesDevSrcSelfEditRepair) {
+    planSteps.push(
+      { index: 0, description: 'Inspect the captured build failure and failed sandbox state.', status: 'pending' },
+      { index: 1, description: 'Apply the minimum repair to the approved src files only.', status: 'pending' },
+      { index: 2, description: `Run ${canonicalBuildCommand} in the repair sandbox and stop if it fails again.`, status: 'pending' },
+    );
+  } else if (parsedSteps.length >= 2) {
     parsedSteps.forEach((desc, i) => planSteps.push({ index: i, description: desc.slice(0, 300), status: 'pending' }));
     const lastDesc = (parsedSteps[parsedSteps.length - 1] || '').toLowerCase();
     if (needsBuild && !/build|compile|restart/i.test(lastDesc)) {
-      planSteps.push({ index: planSteps.length, description: 'Run npm run build to compile and verify. Stop if build fails.', status: 'pending' });
+      planSteps.push({ index: planSteps.length, description: `Run ${canonicalBuildCommand} to compile and verify. Stop immediately if build fails and hand off to a repair proposal.`, status: 'pending' });
     }
   } else {
     let stepIdx = 0;
@@ -299,21 +484,44 @@ export async function dispatchApprovedProposal(
       const verb = af.action === 'create' ? 'Create' : af.action === 'delete' ? 'Delete' : 'Edit';
       planSteps.push({ index: stepIdx++, description: `${verb} ${af.path || '?'}${af.description ? ': ' + af.description : ''}`, status: 'pending' });
     }
-    if (needsBuild) planSteps.push({ index: stepIdx++, description: 'Run npm run build to compile and verify. Stop if build fails — task will pause for assistance.', status: 'pending' });
+    if (needsBuild) planSteps.push({ index: stepIdx++, description: `Run ${canonicalBuildCommand} to compile and verify. Stop if build fails — task will pause for assistance.`, status: 'pending' });
     planSteps.push({ index: stepIdx++, description: 'Verify all changes and report summary.', status: 'pending' });
   }
 
   console.log(`[Proposals] Dispatching: "${proposal.title}" (${proposalId}) — sessionId: ${sessionId}`);
 
-  try {
-    const taskChannel: 'web' | 'telegram' = opts?.channel === 'telegram' ? 'telegram' : 'web';
-    // Resolve executor model: explicit executorProviderId/Model takes priority,
+	  try {
+	    const taskChannel: 'web' | 'telegram' = opts?.channel === 'telegram' ? 'telegram' : 'web';
+    let teamTaskContext: { callerContext: string; teamWorkspacePath?: string; agentName: string } | undefined;
+    let teamExecutorProviderStr: string | undefined;
+    if (teamExecution) {
+      const { getManagedTeam } = await import('../teams/managed-teams.js');
+      const {
+        buildTeamSubagentCallerContext,
+        resolveTeamSubagentModelRouting,
+      } = await import('../teams/team-dispatch-runtime.js');
+      const team = getManagedTeam(String(teamExecution.teamId || ''));
+      const executorAgentId = String(teamExecution.executorAgentId || '').trim();
+      if (!team) throw new Error(`Team not found for team proposal: ${teamExecution.teamId}`);
+      if (!executorAgentId || !Array.isArray(team.subagentIds) || !team.subagentIds.includes(executorAgentId)) {
+        throw new Error(`Assigned proposal executor "${executorAgentId || '(missing)'}" is not a member of team "${team.name || team.id}".`);
+      }
+      teamTaskContext = buildTeamSubagentCallerContext(
+        team.id,
+        executorAgentId,
+        fullPrompt,
+        { sourceLabel: 'TEAM PROPOSAL EXECUTION' },
+      );
+      teamExecutorProviderStr = resolveTeamSubagentModelRouting(executorAgentId).executorProvider;
+    }
+	    // Resolve executor model: explicit executorProviderId/Model takes priority,
     // then fall back to riskTier → agent_model_defaults config key.
-    let executorProviderStr: string | undefined =
-      proposal.executorProviderId && proposal.executorModel
-        ? `${proposal.executorProviderId}/${proposal.executorModel}`
-        : undefined;
-    if (!executorProviderStr && proposal.riskTier) {
+	    let executorProviderStr: string | undefined = teamExecution
+        ? teamExecutorProviderStr
+        : proposal.executorProviderId && proposal.executorModel
+          ? `${proposal.executorProviderId}/${proposal.executorModel}`
+          : undefined;
+	    if (!teamExecution && !executorProviderStr && proposal.riskTier) {
       try {
         const { getConfig } = await import('../../config/config.js');
         const cfgDefaults = (getConfig().getConfig() as any)?.agent_model_defaults || {};
@@ -322,26 +530,82 @@ export async function dispatchApprovedProposal(
         if (fromConfig) executorProviderStr = fromConfig;
       } catch { /* non-fatal — fall through to default */ }
     }
-    const task = createTask({
-      sessionId,   // 'proposal_*' prefix is what gates src-edit tools in subagent-executor
-      title: `[Proposal] ${proposal.title || 'Untitled'}`,
-      prompt: fullPrompt,
-      channel: taskChannel,
-      telegramChatId: taskChannel === 'telegram' ? opts?.telegramChatId : undefined,
-      plan: planSteps,
-      executorProvider: executorProviderStr,
-    });
-    // Mark proposal as executing with the REAL background task id.
-    markProposalExecuting(proposalId, task.id);
-    _broadcastFn?.({ type: 'proposal_executing', proposalId, title: proposal.title, sessionId, taskId: task.id, channel: taskChannel });
-    _broadcastFn?.({ type: 'bg_task_created', taskId: task.id, title: task.title });
-    launchBackgroundTaskRunner(task.id);
-    return { taskId: task.id, sessionId };
-  } catch (taskErr: any) {
-    console.error(`[Proposals] Task launch failed for ${proposalId}:`, taskErr?.message);
-    markProposalFailed(proposalId, taskErr?.message || 'Task launch failed');
-    throw taskErr;
-  }
+	    const task = createTask({
+		      sessionId,
+		      title: `[Proposal] ${proposal.title || 'Untitled'}`,
+		      prompt: fullPrompt,
+		      channel: teamExecution ? 'web' : taskChannel,
+		      telegramChatId: !teamExecution && taskChannel === 'telegram' ? opts?.telegramChatId : undefined,
+		      plan: planSteps,
+		      executorProvider: executorProviderStr,
+          agentWorkspace: devSrcWorkspace?.projectRoot || teamTaskContext?.teamWorkspacePath,
+          originatingSessionId: teamExecution?.originatingSessionId,
+          suppressOriginDelivery: Boolean(teamExecution),
+          teamSubagent: teamExecution ? {
+            teamId: String(teamExecution.teamId),
+            agentId: String(teamExecution.executorAgentId),
+            agentName: teamTaskContext?.agentName || teamExecution.executorAgentName,
+            callerContext: teamTaskContext?.callerContext,
+          } : undefined,
+		      proposalExecution: {
+	        proposalId,
+            mode: usesDevSrcSelfEditRepair
+              ? DEV_SRC_SELF_EDIT_REPAIR_MODE
+              : usesDevSrcSelfEdit
+                ? DEV_SRC_SELF_EDIT_MODE
+                : 'standard',
+            projectRoot: devSrcWorkspace?.projectRoot,
+            liveProjectRoot: devSrcWorkspace?.liveProjectRoot,
+            buildRequired: needsBuild,
+            liveFileBaselines: usesDevSrcSelfEdit ? devSrcWorkspace?.liveFileBaselines : undefined,
+            promotion: usesDevSrcSelfEdit ? { status: 'pending' } : undefined,
+		        mutationScope: proposalMutationScope,
+	            repairContext: repairContext ? { ...repairContext } : undefined,
+            teamExecution: teamExecution ? { ...teamExecution } : undefined,
+		      },
+		    });
+	    // Mark proposal as executing with the REAL background task id.
+	    markProposalExecuting(proposalId, task.id);
+      if (usesDevSrcSelfEditRepair && repairContext?.resumeOriginalTaskId) {
+        const originalTask = loadTask(String(repairContext.resumeOriginalTaskId));
+        if (originalTask?.proposalExecution?.buildFailure) {
+          originalTask.proposalExecution = {
+            ...(originalTask.proposalExecution || {}),
+            buildFailure: {
+              ...originalTask.proposalExecution.buildFailure,
+              status: 'repairing',
+              repairProposalId: proposalId,
+              repairTaskId: task.id,
+            },
+          };
+          saveTask(originalTask);
+          _broadcastFn?.({ type: 'task_panel_update', taskId: originalTask.id });
+        }
+      }
+		    _broadcastFn?.({
+          type: 'proposal_executing',
+          proposalId,
+          title: proposal.title,
+          sessionId,
+          taskId: task.id,
+          channel: teamExecution ? 'team_chat' : taskChannel,
+          teamId: teamExecution?.teamId,
+          agentId: teamExecution?.executorAgentId,
+        });
+	    _broadcastFn?.({ type: 'bg_task_created', taskId: task.id, title: task.title });
+	    launchBackgroundTaskRunner(task.id);
+	    return { taskId: task.id, sessionId };
+	  } catch (taskErr: any) {
+	    console.error(`[Proposals] Task launch failed for ${proposalId}:`, taskErr?.message);
+	    markProposalFailed(proposalId, taskErr?.message || 'Task launch failed');
+      if (repairContext?.rootProposalId) {
+        markProposalRepairing(
+          String(repairContext.rootProposalId),
+          `Repair proposal ${proposalId} could not be launched: ${taskErr?.message || 'Task launch failed'}.`,
+        );
+      }
+	    throw taskErr;
+	  }
 }
 
 // ── POST /api/proposals/:id/deny ─────────────────────────────────────────────

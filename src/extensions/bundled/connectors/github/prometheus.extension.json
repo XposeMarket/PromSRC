@@ -1,0 +1,60 @@
+{
+  "id": "github",
+  "kind": "connector",
+  "name": "GitHub",
+  "description": "Connect GitHub so Prometheus can read pull requests, issues, commits, and repository activity.",
+  "category": "Dev",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/settings/applications/new",
+  "tags": ["github", "code", "oauth"],
+  "runtime": {
+    "binding": "integrations/connectors/github"
+  },
+  "ui": {
+    "color": "#24292E",
+    "permissions": [
+      { "icon": "<>", "label": "Read pull requests, issues, and commits" },
+      { "icon": "->", "label": "Post comments with approval" },
+      { "icon": "+", "label": "Create and update issues" },
+      { "icon": "?", "label": "Search repos and code" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_github"],
+    "capabilities": ["repositories", "pull_requests", "issues"],
+    "tools": [
+      "connector_github_list_repos",
+      "connector_github_list_issues",
+      "connector_github_create_issue",
+      "connector_github_list_prs",
+      "connector_github_search"
+    ]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://github.com/settings/applications/new",
+    "docsHint": "GitHub -> Settings -> Developer settings -> OAuth Apps -> Callback URL: http://localhost:19422/auth/callback/github",
+    "callback": {
+      "port": 19422,
+      "path": "/auth/callback/github"
+    },
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "Client ID",
+        "input": "text",
+        "required": true,
+        "placeholder": "Iv1.abc123..."
+      },
+      {
+        "key": "clientSecret",
+        "label": "Client Secret",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "abc123..."
+      }
+    ]
+  }
+}

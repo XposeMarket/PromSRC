@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-creative-mode",
+  "name": "Prometheus Creative Mode",
+  "description": "Unified Prometheus Creative Mode bundle for video canvas work, HTML Motion, HyperFrames-style composition, Remotion guidance, Pretext text-fit and typography, ASCII video, GSAP/CSS/WAAPI animation, website-to-video, media analysis, templates, presets, lint/inspect, QA, and MP4 export.",
+  "emoji": "creative",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "creative mode",
+    "video canvas",
+    "Prometheus video",
+    "HTML Motion",
+    "HyperFrames",
+    "Remotion",
+    "Pretext",
+    "ASCII video",
+    "HTML-in-Canvas",
+    "drawElementImage",
+    "kinetic typography",
+    "website to video",
+    "motion template",
+    "creative export",
+    "video QA",
+    "html motion spec"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "hyperframes",
+    "remotion",
+    "pretext",
+    "ascii",
+    "animation",
+    "experimental",
+    "rendering"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "skills",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/creative-skill-map.md",
+      "type": "doc",
+      "description": "Consolidation map from older creative skills into this unified bundle."
+    },
+    {
+      "path": "references/PROMETHEUS_HTML_MOTION_SPEC.md",
+      "type": "doc",
+      "description": "Canonical Prometheus HTML Motion engineering spec for valid clips, timing units, runtime clock, lint/inspect, QA, audio, renderer identity, and standalone compatibility export."
+    }
+  ]
+}

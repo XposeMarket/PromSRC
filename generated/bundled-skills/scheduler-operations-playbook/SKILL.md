@@ -1,9 +1,8 @@
 ---
-name: Scheduler Operations Playbook
+name: scheduler-operations-playbook
 description: Runbook for managing scheduler jobs and heartbeat-driven autonomous execution with clear, repeatable recovery patterns.
 emoji: "🧩"
 version: 1.0.0
-triggers: scheduler, scheduled job, cron, cron job, schedule job, schedule task, recurring job, recurring task, one-shot, one shot, run now, run_now, heartbeat, autonomous loop, task loop, pause schedule, resume schedule, pause job, resume job, delete schedule, update schedule, list schedules, job status, task status, stalled task, failed task, retry task, rerun task, delivery failure, telegram delivery, webhook delivery, automation recovery, scheduler diagnostics, cron lifecycle
 ---
 
 # Scheduler Operations Playbook
@@ -29,10 +28,10 @@ Do **not** use this as a generic coding guide. This is operations-focused.
 
 Prometheus automation has two independent engines:
 
-1. **Scheduled jobs (`schedule_job`)**  
+1. **Scheduled jobs (`schedule_job`)**
    Time-based dispatch. Jobs fire from cron or one-shot timestamps, then run the provided `instruction_prompt` in either `main` or isolated sessions.
 
-2. **Agent heartbeats (`update_heartbeat`)**  
+2. **Agent heartbeats (`update_heartbeat`)**
    Interval-based wakeups tied to an agent, using that agent's HEARTBEAT instructions. This is continuous agent polling behavior, not cron.
 
 Treat these as separate planes. A healthy heartbeat does not prove cron is healthy, and vice versa.

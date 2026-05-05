@@ -20,8 +20,8 @@
  *   toggleProjectEditor(blockId), onProjectFileInput(event)
  */
 
-import { api } from '../api.js';
-import { showToast, showConfirm, timeAgo } from '../utils.js';
+import { api } from '../../api.js';
+import { showToast, showConfirm, timeAgo } from '../../utils.js';
 
 // ─── State ──────────────────────────────────────────────────────────────────
 let _projects = [];           // Array<ProjectRecord>

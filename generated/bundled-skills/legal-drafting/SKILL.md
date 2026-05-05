@@ -1,15 +1,8 @@
 ---
 name: legal-drafting
-description: >
-  Expert legal document drafting and contract review skill. Use this whenever someone needs help
-  with: drafting NDAs, MSAs, SOWs, freelancer agreements, SaaS terms of service, privacy policies,
-  employment agreements, contractor agreements, partnership agreements, vendor contracts, reviewing
-  contracts someone sent them, explaining legal clauses in plain English, identifying risky contract
-  terms, building a contract template library, or understanding what they're signing. Triggers on:
-  "draft an NDA", "review this contract", "what does this clause mean", "write a terms of service",
-  "create a freelancer agreement", "is this contract fair", "what should I watch out for", or any
-  legal document request. ALWAYS include disclaimer that this is not legal advice and final documents
-  should be reviewed by a qualified attorney.
+description: # Legal Drafting Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Legal Drafting Skill

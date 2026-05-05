@@ -103,14 +103,15 @@ export function bgtToast(title, body) {
 }
 
 export function showConfirm(message, onConfirm, onCancel, opts = {}) {
-  const { title = 'Confirm', confirmText = 'Confirm', cancelText = 'Cancel', danger = false } = opts;
+  const { title = 'Confirm', confirmText = 'Confirm', cancelText = 'Cancel', danger = false, details = '' } = opts;
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;animation:scToastIn 0.15s ease';
   const box = document.createElement('div');
-  box.style.cssText = 'background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:24px 24px 18px;max-width:380px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,0.18);font-family:var(--font)';
+  box.style.cssText = 'background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:24px 24px 18px;max-width:560px;width:92%;box-shadow:0 8px 40px rgba(0,0,0,0.18);font-family:var(--font)';
   box.innerHTML = `
     <div style="font-size:15px;font-weight:800;margin-bottom:10px">${escHtml(title)}</div>
     <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:18px">${escHtml(message)}</div>
+    ${details ? `<pre style="margin:0 0 18px;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);font-size:11px;line-height:1.65;color:var(--text);white-space:pre-wrap;word-break:break-word;font-family:'Cascadia Code','Fira Code','Consolas',monospace">${escHtml(details)}</pre>` : ''}
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button id="__sc-confirm-cancel" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer">${escHtml(cancelText)}</button>
       <button id="__sc-confirm-ok" style="border:none;background:${danger ? '#dc2626' : 'var(--brand)'};color:#fff;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer">${escHtml(confirmText)}</button>
@@ -367,7 +368,7 @@ export function buildVisualIframe(lang, code) {
   <iframe
     id="${id}"
     srcdoc="${encoded}"
-    sandbox="allow-scripts allow-same-origin"
+    sandbox="allow-scripts allow-same-origin allow-downloads"
     style="width:100%;min-height:${minHeight}px;border:none;display:block;background:transparent"
     loading="lazy"
     onload="${onloadHandler}"

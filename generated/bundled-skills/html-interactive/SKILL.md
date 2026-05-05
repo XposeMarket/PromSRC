@@ -1,9 +1,8 @@
 ---
-name: HTML Interactive
-description: Build rich interactive HTML widgets, dashboards, calculators, progress trackers, forms, games, and multi-panel tools directly in chat. Use when the user needs something they can interact with — click, adjust sliders, filter, toggle, step through — not just look at. Outputs a fenced ```html block rendered as a live sandboxed iframe. Use this skill when interactivity or state is required. For pure data charts use chart-visualizer. For static diagrams use svg-diagrams. Triggers on: interactive, dashboard, calculator, tracker, form, step through, simulate, adjust, toggle, filter table, sortable, progress tracker, build a tool, create a widget, make this interactive, multi-panel.
+name: html-interactive
+description: Build live interactive widgets directly in chat using a fenced `html` block. The frontend renders it as a sandboxed iframe — JS executes, event listeners fire, state persists while the widget is visible.
 emoji: "🧩"
 version: 1.0.0
-triggers: interactive, dashboard, calculator, tracker, form, step through, simulate, adjust, toggle, filter, sortable table, progress tracker, build a tool, widget, make this interactive, multi-panel, checklist, kanban, timer, countdown, configurator, comparison tool, what-if, scenario builder, interactive report, live preview
 ---
 
 # HTML Interactive

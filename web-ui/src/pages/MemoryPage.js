@@ -30,6 +30,21 @@ const CATEGORY_META = {
   misc: { label: 'Other', color: '#aab4c5' },
 };
 
+const SHUFFLE_KINDS = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation', 'flame'];
+const DEFAULT_LAYOUT_KEY = 'prometheus-memory-default-layout';
+const LEGACY_DEFAULT_SHAPE_KEY = 'prometheus-memory-default-shape';
+const MAX_MEMORY_ATTACHMENTS = 12;
+
+function createMemoryDraft() {
+  return {
+    title: '',
+    description: '',
+    content: '',
+    attachments: [],
+    submitting: false,
+  };
+}
+
 const state = {
   initialized: false,
   graphLoadedAt: 0,
@@ -44,7 +59,7 @@ const state = {
     typeFilter: '',
     search: '',
     minEdgeWeight: 0.34,
-    showLabels: true,
+    showLabels: false,
     organizeByType: false,
     repulsion: 90,
     linkStrength: 0.026,
@@ -64,7 +79,9 @@ const state = {
   selectedNodeId: null,
   detailCache: new Map(),
   dragState: null,
-  controlsCollapsed: false,
+  controlsCollapsed: true,
+  drawerMode: 'detail',
+  memoryDraft: createMemoryDraft(),
   shapeMode: 'prometheus',
   dragOverDropzone: false,
   imagePoints: null,
@@ -77,6 +94,7 @@ const state = {
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function hashString(input) { let hash = 5381; for (let i = 0; i < input.length; i += 1) hash = ((hash << 5) + hash) ^ input.charCodeAt(i); return Math.abs(hash); }
+function currentShuffleKind() { return SHUFFLE_KINDS[state.shuffleKindIndex] || 'constellation'; }
 function flameNodePath(ctx, cx, cy, r) {
   // Flame shape centered at (cx, cy), tip pointing up. r is the effective radius.
   const s = r * 1.25;
@@ -160,8 +178,14 @@ function getFollowers(nodeId, depth = 2) {
 function controlsPanelEl() { return document.getElementById('memory-side-panel'); }
 function controlsFabEl() { return document.getElementById('memory-controls-fab'); }
 function detailDrawerEl() { return document.getElementById('memory-detail-drawer'); }
+function drawerTitleEl() { return document.getElementById('memory-drawer-title'); }
 function imageInputEl() { return document.getElementById('memory-image-input'); }
 function dropOverlayEl() { return document.getElementById('memory-drop-overlay'); }
+
+function setDrawerTitle(label) {
+  const el = drawerTitleEl();
+  if (el) el.textContent = label;
+}
 
 function setControlsCollapsed(collapsed) {
   state.controlsCollapsed = !!collapsed;
@@ -180,6 +204,9 @@ function closeMemoryDetailDrawer() {
   const drawer = detailDrawerEl();
   if (drawer) drawer.style.display = 'none';
   state.selectedNodeId = null;
+  state.drawerMode = 'detail';
+  state.memoryDraft = createMemoryDraft();
+  setDrawerTitle('Node Detail');
   renderDetail(null);
 }
 
@@ -196,6 +223,16 @@ function stopNode(node) {
   node.vx = 0;
   node.vy = 0;
   node.sleeping = false;
+}
+
+function snapNodesToBase(nodes) {
+  nodes.forEach((node) => {
+    node.x = node.baseX;
+    node.y = node.baseY;
+    node.vx = 0;
+    node.vy = 0;
+    node.sleeping = true;
+  });
 }
 
 function wakeSimulation(intensity = 1) {
@@ -604,9 +641,7 @@ function rebuildRenderGraph(relayout = true) {
     state.renderEdges = [...filteredEdges];
   } else if (state.shapeMode === 'shuffle') {
     if (relayout) {
-      const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation', 'flame'];
-      state.shuffleKindIndex = (state.shuffleKindIndex + 1) % kinds.length;
-      layoutByRandomShape(visibleNodes, kinds[state.shuffleKindIndex]);
+      layoutByRandomShape(visibleNodes, currentShuffleKind());
     }
     state.renderNodes = [...visibleNodes];
     state.renderEdges = [...filteredEdges];
@@ -710,7 +745,7 @@ function tooltipHtml(node) {
   if (node.isHub) {
     return `<strong>${escHtml(node.label)}</strong><div class="meta">Type organizer hub</div><div class="body">${escHtml(node.summary || '')}</div>`;
   }
-  return `<strong>${escHtml(node.label)}</strong><div class="meta">${escHtml(node.sourceTypeLabel || node.sourceType || 'Record')} | ${escHtml(formatTime(node.timestamp))}</div><div class="body">${escHtml(node.summary || node.sourcePath || 'No summary available yet.')}</div>`;
+  return `<strong>${escHtml(node.label)}</strong><div class="meta">${escHtml(node.sourceTypeLabel || node.sourceType || 'Record')} | ${escHtml(formatTime(node.timestamp))}</div><div class="body">${escHtml(cleanReadableText(node.summary || node.sourcePath || 'No summary available yet.'))}</div>`;
 }
 
 function showTooltip(node, point) {
@@ -1008,6 +1043,216 @@ function stepSimulation() {
 
 function animate() { stepSimulation(); draw(); state.raf = requestAnimationFrame(animate); }
 
+function decodeQuotedJson(value) {
+  if (!value) return '';
+  try {
+    return JSON.parse(`"${value}"`);
+  } catch {
+    return value.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
+  }
+}
+
+function cleanReadableText(input, maxLength = 0) {
+  const text = String(input || '').replace(/\r/g, '\n').trim();
+  if (!text) return '';
+
+  const extracted = [];
+  const quotedFieldPattern = /"(content|summary|text|body|message|note|description)"\s*:\s*"((?:\\.|[^"])*)"/g;
+  for (const match of text.matchAll(quotedFieldPattern)) {
+    const decoded = decodeQuotedJson(match[2]).trim();
+    if (decoded) extracted.push(decoded);
+  }
+  if (extracted.length) {
+    const joined = extracted.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+    return maxLength && joined.length > maxLength ? `${joined.slice(0, maxLength - 3).trimEnd()}...` : joined;
+  }
+
+  const stripped = text
+    .replace(/^#{2,6}\s*\[[^\]]+\]\s+\w+\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!stripped) return '';
+  return maxLength && stripped.length > maxLength ? `${stripped.slice(0, maxLength - 3).trimEnd()}...` : stripped;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function syncMemoryDraftFromForm() {
+  if (state.drawerMode !== 'compose' || !state.detailEl) return;
+  const titleInput = state.detailEl.querySelector('[data-memory-title]');
+  const descriptionInput = state.detailEl.querySelector('[data-memory-description]');
+  const contentInput = state.detailEl.querySelector('[data-memory-content]');
+  state.memoryDraft.title = titleInput?.value || '';
+  state.memoryDraft.description = descriptionInput?.value || '';
+  state.memoryDraft.content = contentInput?.value || '';
+}
+
+function renderMemoryComposer() {
+  if (!state.detailEl) return;
+  state.drawerMode = 'compose';
+  setDrawerTitle('Add Memory');
+  const draft = state.memoryDraft;
+  state.detailEl.innerHTML = `
+    <form class="memory-compose-form" data-memory-compose-form>
+      <div class="memory-compose-help">Create a durable memory node with a title, an optional description, the full memory text, and any supporting files.</div>
+      <label class="memory-compose-field">
+        <span class="memory-compose-label">Title</span>
+        <input class="memory-compose-input" data-memory-title type="text" maxlength="140" placeholder="Give this memory a clear title" value="${escHtml(draft.title || '')}" />
+      </label>
+      <label class="memory-compose-field">
+        <span class="memory-compose-label">Description</span>
+        <input class="memory-compose-input" data-memory-description type="text" maxlength="220" placeholder="Short summary for previews and search results" value="${escHtml(draft.description || '')}" />
+      </label>
+      <label class="memory-compose-field">
+        <span class="memory-compose-label">Memory</span>
+        <textarea class="memory-compose-textarea" data-memory-content placeholder="Write the full memory here. This becomes the indexed node content.">${escHtml(draft.content || '')}</textarea>
+      </label>
+      <div class="memory-compose-field">
+        <span class="memory-compose-label">Attachments</span>
+        <div class="memory-compose-dropzone">
+          <strong>Attach screenshots, PDFs, docs, spreadsheets, or anything else that belongs with this memory.</strong>
+          <div class="memory-compose-help">Files will be stored under <code>workspace/uploads/memory/...</code> and linked to this note.</div>
+          <button type="button" class="memory-compose-file-picker" data-memory-add-files>Select Files</button>
+          <input data-memory-file-input type="file" multiple style="display:none" />
+        </div>
+        <div class="memory-compose-file-list">
+          ${draft.attachments.length
+            ? draft.attachments.map((attachment, index) => `
+                <div class="memory-compose-file-item">
+                  <div class="memory-compose-file-meta">
+                    <strong>${escHtml(attachment.file.name)}</strong>
+                    <span>${escHtml(attachment.file.type || 'file')} | ${escHtml(formatBytes(attachment.file.size || 0))}</span>
+                  </div>
+                  <button type="button" class="memory-compose-file-remove" data-memory-remove-attachment="${index}">Remove</button>
+                </div>
+              `).join('')
+            : '<div class="memory-detail-empty">No files selected yet.</div>'}
+        </div>
+      </div>
+      <div class="memory-compose-actions">
+        <button type="button" class="memory-compose-file-remove" onclick="closeMemoryDetailDrawer()">Cancel</button>
+        <button type="submit" class="memory-compose-submit"${draft.submitting ? ' disabled' : ''}>${draft.submitting ? 'Creating...' : 'Create Memory'}</button>
+      </div>
+    </form>
+  `;
+}
+
+function openAddMemoryDrawer() {
+  state.selectedNodeId = null;
+  state.memoryDraft = createMemoryDraft();
+  openMemoryDetailDrawer();
+  setControlsCollapsed(true);
+  renderMemoryComposer();
+}
+
+function removeDraftAttachment(index) {
+  syncMemoryDraftFromForm();
+  state.memoryDraft.attachments.splice(index, 1);
+  renderMemoryComposer();
+}
+
+function addDraftFiles(fileList) {
+  syncMemoryDraftFromForm();
+  const files = Array.from(fileList || []).filter((file) => file instanceof File);
+  if (!files.length) return;
+  const slotsLeft = Math.max(0, MAX_MEMORY_ATTACHMENTS - state.memoryDraft.attachments.length);
+  const nextFiles = files.slice(0, slotsLeft).map((file) => ({ file }));
+  state.memoryDraft.attachments.push(...nextFiles);
+  if (files.length > nextFiles.length) {
+    showToast('Attachment limit reached', `Only the first ${MAX_MEMORY_ATTACHMENTS} files are kept per memory note.`, 'warning', 2400);
+  }
+  renderMemoryComposer();
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.replace(/^data:[^;]+;base64,/, ''));
+    };
+    reader.onerror = () => reject(reader.error || new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function centerOnNode(node) {
+  if (!node || !state.stageEl) return;
+  const width = state.stageEl.clientWidth || 1;
+  const height = state.stageEl.clientHeight || 1;
+  state.transform.x = width / 2 - node.x * state.transform.scale;
+  state.transform.y = height / 2 - node.y * state.transform.scale;
+}
+
+async function openMemoryAttachment(absPath) {
+  const target = String(absPath || '').trim();
+  if (!target) return;
+  try {
+    await api(ENDPOINTS.OPEN_PATH, { method: 'POST', body: JSON.stringify({ path: target }) });
+  } catch (err) {
+    showToast('Open failed', err.message || 'Could not open attachment path.', 'error');
+  }
+}
+
+async function submitMemoryDraft(event) {
+  if (event?.preventDefault) event.preventDefault();
+  syncMemoryDraftFromForm();
+  const title = String(state.memoryDraft.title || '').trim();
+  const description = String(state.memoryDraft.description || '').trim();
+  const content = String(state.memoryDraft.content || '').trim();
+  if (!title) {
+    showToast('Title required', 'Give the memory a title before saving it.', 'warning');
+    return;
+  }
+  if (!content && !description && state.memoryDraft.attachments.length === 0) {
+    showToast('Nothing to save', 'Add memory text, a description, or at least one attachment.', 'warning');
+    return;
+  }
+
+  state.memoryDraft.submitting = true;
+  renderMemoryComposer();
+  try {
+    const attachments = await Promise.all(state.memoryDraft.attachments.map(async ({ file }) => ({
+      name: file.name,
+      mimeType: file.type || '',
+      base64: await fileToBase64(file),
+    })));
+    const result = await api(ENDPOINTS.MEMORY_CREATE, {
+      method: 'POST',
+      body: JSON.stringify({ title, description, content, attachments }),
+    });
+    await fetchGraph();
+    const createdNode = result?.recordId ? state.recordNodeById.get(result.recordId) : null;
+    if (createdNode && !createdNode.visible) {
+      state.controls.search = '';
+      state.controls.typeFilter = '';
+      const searchInput = document.getElementById('memory-search-input');
+      const typeFilter = document.getElementById('memory-type-filter');
+      if (searchInput) searchInput.value = '';
+      if (typeFilter) typeFilter.value = '';
+      applyFilters({ relayout: false });
+    }
+    showToast('Memory created', `${title} is now part of the memory graph.`, 'success', 2400);
+    if (result?.recordId) {
+      selectNode(result.recordId);
+      const node = state.recordNodeById.get(result.recordId);
+      if (node) centerOnNode(node);
+    } else {
+      closeMemoryDetailDrawer();
+    }
+  } catch (err) {
+    state.memoryDraft.submitting = false;
+    renderMemoryComposer();
+    showToast('Create memory failed', err.message || 'Unknown error', 'error');
+  }
+}
+
 async function loadDetail(recordId) {
   if (!recordId) return;
   if (state.detailCache.has(recordId)) return renderDetail(state.detailCache.get(recordId));
@@ -1023,6 +1268,8 @@ async function loadDetail(recordId) {
 
 function renderDetail(payload) {
   if (!state.detailEl) return;
+  state.drawerMode = 'detail';
+  setDrawerTitle('Node Detail');
   const record = payload?.record;
   if (!record) {
     state.detailEl.innerHTML = '<div class="memory-detail-empty">Select a record node to inspect its summary, source, and related records.</div>';
@@ -1030,12 +1277,23 @@ function renderDetail(payload) {
   }
   const chunks = Array.isArray(payload?.chunks) ? payload.chunks.slice(0, 2) : [];
   const related = Array.isArray(payload?.related) ? payload.related.slice(0, 6) : [];
+  const noteAttachments = Array.isArray(payload?.noteMeta?.attachments) ? payload.noteMeta.attachments : [];
   function renderParagraphs(text) {
-    if (!text) return '<em>No content available.</em>';
-    return escHtml(text).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+    const cleaned = cleanReadableText(text);
+    if (!cleaned) return '<em>No content available.</em>';
+    return escHtml(cleaned).split(/\n{2,}/).map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
   }
-  const summaryText = chunks[0]?.text || '';
-  const extraChunks = chunks.slice(1);
+  const cleanedChunks = [];
+  const seenChunkBodies = new Set();
+  chunks.forEach((chunk) => {
+    const cleaned = cleanReadableText(chunk?.text || '');
+    const dedupeKey = cleaned.replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!dedupeKey || seenChunkBodies.has(dedupeKey)) return;
+    seenChunkBodies.add(dedupeKey);
+    cleanedChunks.push({ ...chunk, text: cleaned });
+  });
+  const summaryText = cleanedChunks[0]?.text || '';
+  const extraChunks = cleanedChunks.slice(1);
   state.detailEl.innerHTML = `
     <div class="memory-detail-heading"><div><h3>${escHtml(record.title || 'Untitled record')}</h3></div><div class="memory-detail-chip">${escHtml(record.sourceType || 'record')}</div></div>
     <div class="memory-detail-meta">
@@ -1047,9 +1305,18 @@ function renderDetail(payload) {
     <div class="memory-detail-section-title">Summary</div>
     <div class="memory-detail-summary">${summaryText ? renderParagraphs(summaryText) : '<em class="memory-detail-empty-inline">No indexed summary available for this record yet.</em>'}</div>
     ${extraChunks.length ? `<div class="memory-detail-section-title">Additional Chunks</div>${extraChunks.map((chunk) => `<div class="memory-detail-chunk">${renderParagraphs(String(chunk.text || '').slice(0, 520))}</div>`).join('')}` : ''}
+    ${noteAttachments.length ? `<div class="memory-detail-section-title">Attachments</div><div class="memory-attachment-list">${noteAttachments.map((attachment) => `
+      <div class="memory-attachment-item">
+        <div class="memory-attachment-meta">
+          <strong>${escHtml(attachment.name || 'Attachment')}</strong>
+          <span>${escHtml(attachment.kind || 'file')}${attachment.sizeBytes ? ` | ${escHtml(formatBytes(attachment.sizeBytes))}` : ''}</span>
+        </div>
+        <button type="button" class="memory-attachment-open" data-memory-open-path="${escHtml(attachment.absPath || '')}">Open</button>
+      </div>
+    `).join('')}</div>` : ''}
     <div class="memory-detail-section-title">Related Records</div>
     <div class="memory-related-list">
-      ${related.map((item) => `<button type="button" class="memory-related-item" data-record-id="${escHtml(item.recordId)}"><strong>${escHtml(item.title || item.recordId)}</strong><div class="meta">${escHtml(item.sourceType || 'record')} | ${escHtml(formatTime(item.timestamp || ''))}</div><div class="body">${escHtml(item.preview || '')}</div></button>`).join('') || '<div class="memory-detail-empty">No related records returned for this node.</div>'}
+      ${related.map((item) => `<button type="button" class="memory-related-item" data-record-id="${escHtml(item.recordId)}"><strong>${escHtml(item.title || item.recordId)}</strong><div class="meta">${escHtml(item.sourceType || 'record')} | ${escHtml(formatTime(item.timestamp || ''))}</div><div class="body">${escHtml(cleanReadableText(item.preview || '', 200))}</div></button>`).join('') || '<div class="memory-detail-empty">No related records returned for this node.</div>'}
     </div>
   `;
 }
@@ -1070,6 +1337,13 @@ async function fetchGraph(options = {}) {
   }
   const data = await api(ENDPOINTS.MEMORY_GRAPH);
   processGraph(data);
+  // Freshly-created node objects start at (0,0). Always snap them to their layout
+  // base positions so they don't have to spring out from the origin — that
+  // "explosion" causes severe lag on large graphs and was especially visible on
+  // re-fetches (stale refresh, parallel activate-time fetch) where the old
+  // first-load-only gate did not apply.
+  snapNodesToBase(state.renderNodes);
+  state.simulationHeat = 0;
   state.graphLoadedAt = Date.now();
   if (state.emptyEl) state.emptyEl.style.display = state.recordNodes.length ? 'none' : 'flex';
   updateStatsText();
@@ -1150,6 +1424,9 @@ function handlePointerMove(event) {
     return;
   }
   if (state.dragState?.type === 'node') {
+    const dxFromStart = event.clientX - (state.dragState.startClientX ?? event.clientX);
+    const dyFromStart = event.clientY - (state.dragState.startClientY ?? event.clientY);
+    if (Math.hypot(dxFromStart, dyFromStart) > 4) state.dragState.moved = true;
     const world = uiToWorld(event.clientX, event.clientY);
     state.dragState.worldX = world.x - state.dragState.offsetX;
     state.dragState.worldY = world.y - state.dragState.offsetY;
@@ -1176,9 +1453,8 @@ function handlePointerDown(event) {
       followers.set(id, { x: follower.x - node.x, y: follower.y - node.y });
       stopNode(follower);
     });
-    state.dragState = { type: 'node', nodeId: node.id, worldX: node.x, worldY: node.y, offsetX: world.x - node.x, offsetY: world.y - node.y, followers };
+    state.dragState = { type: 'node', nodeId: node.id, worldX: node.x, worldY: node.y, offsetX: world.x - node.x, offsetY: world.y - node.y, followers, startClientX: event.clientX, startClientY: event.clientY, moved: false };
     state.canvas.classList.add('is-dragging');
-    selectNode(node.id);
     return;
   }
   state.dragState = { type: 'pan', startClientX: event.clientX, startClientY: event.clientY, originX: state.transform.x, originY: state.transform.y };
@@ -1187,6 +1463,8 @@ function handlePointerDown(event) {
 
 function handlePointerUp() {
   if (state.dragState?.type === 'node') {
+    const wasClick = !state.dragState.moved;
+    const clickedNodeId = state.dragState.nodeId;
     const anchor = state.recordNodeById.get(state.dragState.nodeId);
     if (anchor) {
       anchor.x = state.dragState.worldX;
@@ -1215,6 +1493,10 @@ function handlePointerUp() {
     state.renderNodes.forEach((n) => { n.vx = 0; n.vy = 0; });
     // Drop heat below 0.018 threshold — pure spring snap, no repulsion
     state.simulationHeat = 0.008;
+    state.dragState = null;
+    if (state.canvas) state.canvas.classList.remove('is-dragging');
+    if (wasClick) selectNode(clickedNodeId);
+    return;
   }
   state.dragState = null;
   if (state.canvas) state.canvas.classList.remove('is-dragging');
@@ -1245,10 +1527,11 @@ function shuffleMemoryGraph() {
   state.shuffleTimer = setTimeout(() => {
     // Zero velocities so explosion momentum doesn't overpower the spring toward new positions
     state.recordNodes.forEach((n) => { n.vx = 0; n.vy = 0; });
+    state.shuffleKindIndex = (state.shuffleKindIndex + 1) % SHUFFLE_KINDS.length;
     commitLayoutMode('shuffle', true);
-    const kinds = ['ring', 'spiral', 'diamond', 'flower', 'shell', 'bands', 'wave', 'helix', 'grid', 'vortex', 'hexgrid', 'cross', 'pyramid', 'constellation', 'flame'];
-    const kindName = kinds[state.shuffleKindIndex] || 'shape';
+    const kindName = currentShuffleKind();
     showToast('Nodes shuffled', `Settled into ${kindName} layout.`, 'success', 2200);
+    updateDefaultShapeBtn();
   }, 220);
 }
 
@@ -1265,9 +1548,10 @@ function bindControls() {
   const imageInput = imageInputEl();
 
   if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`;
+  if (showLabels) showLabels.checked = !!state.controls.showLabels;
   searchInput?.addEventListener('input', () => { state.controls.search = searchInput.value || ''; applyFilters({ relayout: false }); });
-  typeFilter?.addEventListener('change', () => { state.controls.typeFilter = typeFilter.value || ''; if (state.shapeMode !== 'image') state.shapeMode = 'prometheus'; applyFilters({ relayout: true }); });
-  edgeWeight?.addEventListener('input', () => { state.controls.minEdgeWeight = Number(edgeWeight.value || 0) / 100; if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`; if (state.shapeMode !== 'image') state.shapeMode = 'prometheus'; applyFilters({ relayout: true }); });
+  typeFilter?.addEventListener('change', () => { state.controls.typeFilter = typeFilter.value || ''; applyFilters({ relayout: true }); });
+  edgeWeight?.addEventListener('input', () => { state.controls.minEdgeWeight = Number(edgeWeight.value || 0) / 100; if (edgeWeightValue) edgeWeightValue.textContent = `${state.controls.minEdgeWeight.toFixed(2)}+`; applyFilters({ relayout: true }); });
   showLabels?.addEventListener('change', () => { state.controls.showLabels = !!showLabels.checked; });
   organizeByType?.addEventListener('change', () => { state.controls.organizeByType = !!organizeByType.checked; if (state.controls.organizeByType) state.shapeMode = 'prometheus'; applyFilters({ relayout: true }); });
   repulsion?.addEventListener('input', () => { state.controls.repulsion = Number(repulsion.value || 90); });
@@ -1284,6 +1568,22 @@ function bindControls() {
   });
 
   state.detailEl?.addEventListener('click', (event) => {
+    const addFilesButton = event.target.closest('[data-memory-add-files]');
+    if (addFilesButton) {
+      state.detailEl?.querySelector('[data-memory-file-input]')?.click();
+      return;
+    }
+    const removeAttachmentButton = event.target.closest('[data-memory-remove-attachment]');
+    if (removeAttachmentButton) {
+      const index = Number(removeAttachmentButton.getAttribute('data-memory-remove-attachment'));
+      if (Number.isInteger(index) && index >= 0) removeDraftAttachment(index);
+      return;
+    }
+    const openPathButton = event.target.closest('[data-memory-open-path]');
+    if (openPathButton) {
+      openMemoryAttachment(openPathButton.getAttribute('data-memory-open-path'));
+      return;
+    }
     const button = event.target.closest('[data-record-id]');
     if (!button) return;
     const recordId = button.getAttribute('data-record-id');
@@ -1296,6 +1596,16 @@ function bindControls() {
       state.transform.x = width / 2 - node.x * state.transform.scale;
       state.transform.y = height / 2 - node.y * state.transform.scale;
     }
+  });
+  state.detailEl?.addEventListener('change', (event) => {
+    const input = event.target.closest('[data-memory-file-input]');
+    if (!input) return;
+    addDraftFiles(input.files);
+    input.value = '';
+  });
+  state.detailEl?.addEventListener('submit', (event) => {
+    if (!event.target.closest('[data-memory-compose-form]')) return;
+    submitMemoryDraft(event);
   });
 }
 
@@ -1350,27 +1660,53 @@ function setupCanvas() {
   }
 }
 
-const DEFAULT_SHAPE_KEY = 'prometheus-memory-default-shape';
+function readSavedDefaultLayout() {
+  try {
+    const raw = localStorage.getItem(DEFAULT_LAYOUT_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore invalid storage */ }
+
+  try {
+    const legacy = localStorage.getItem(LEGACY_DEFAULT_SHAPE_KEY);
+    if (!legacy) return null;
+    const points = JSON.parse(legacy);
+    if (!Array.isArray(points) || points.length < 30) return null;
+    return { mode: 'image', points };
+  } catch {
+    return null;
+  }
+}
 
 function loadSavedDefaultShape() {
-  try {
-    const raw = localStorage.getItem(DEFAULT_SHAPE_KEY);
-    if (!raw) return false;
-    const points = JSON.parse(raw);
-    if (!Array.isArray(points) || points.length < 30) return false;
-    state.imagePoints = points;
+  const saved = readSavedDefaultLayout();
+  if (!saved || typeof saved !== 'object') return false;
+  if (saved.mode === 'image' && Array.isArray(saved.points) && saved.points.length >= 30) {
+    state.imagePoints = saved.points;
     state.shapeMode = 'image';
     updateDefaultShapeBtn();
     return true;
-  } catch { return false; }
+  }
+  if (saved.mode === 'shuffle') {
+    const index = SHUFFLE_KINDS.indexOf(String(saved.kind || ''));
+    if (index >= 0) {
+      state.shuffleKindIndex = index;
+      state.shapeMode = 'shuffle';
+      updateDefaultShapeBtn();
+      return true;
+    }
+  }
+  return false;
 }
 
 function updateDefaultShapeBtn() {
   const btn = document.getElementById('memory-set-default-btn');
   if (!btn) return;
-  const saved = !!localStorage.getItem(DEFAULT_SHAPE_KEY);
-  const inImageMode = state.shapeMode === 'image' && state.imagePoints?.length;
-  if (inImageMode && !saved) {
+  const saved = readSavedDefaultLayout();
+  const canSaveCurrent = (state.shapeMode === 'image' && state.imagePoints?.length) || state.shapeMode === 'shuffle';
+  const activeSavedLayout = !!saved
+    && ((saved.mode === 'image' && state.shapeMode === 'image')
+      || (saved.mode === 'shuffle' && state.shapeMode === 'shuffle' && saved.kind === currentShuffleKind()));
+  if (canSaveCurrent && !activeSavedLayout) {
     btn.textContent = 'Set as Default';
     btn.style.opacity = '1';
   } else if (saved) {
@@ -1383,19 +1719,34 @@ function updateDefaultShapeBtn() {
 }
 
 function toggleDefaultShape() {
-  const saved = !!localStorage.getItem(DEFAULT_SHAPE_KEY);
-  if (saved) {
-    localStorage.removeItem(DEFAULT_SHAPE_KEY);
+  const saved = readSavedDefaultLayout();
+  const canSaveImage = state.shapeMode === 'image' && state.imagePoints?.length;
+  const canSaveShuffle = state.shapeMode === 'shuffle';
+  const activeSavedLayout = !!saved
+    && ((saved.mode === 'image' && canSaveImage)
+      || (saved.mode === 'shuffle' && canSaveShuffle && saved.kind === currentShuffleKind()));
+  if (saved && activeSavedLayout) {
+    localStorage.removeItem(DEFAULT_LAYOUT_KEY);
+    localStorage.removeItem(LEGACY_DEFAULT_SHAPE_KEY);
     showToast('Default shape cleared', 'Page will start with flame layout on next load.', 'success', 2200);
-  } else if (state.shapeMode === 'image' && state.imagePoints?.length) {
+  } else if (canSaveImage) {
     try {
-      localStorage.setItem(DEFAULT_SHAPE_KEY, JSON.stringify(state.imagePoints));
+      localStorage.setItem(DEFAULT_LAYOUT_KEY, JSON.stringify({ mode: 'image', points: state.imagePoints }));
+      localStorage.removeItem(LEGACY_DEFAULT_SHAPE_KEY);
       showToast('Default shape saved', 'This image layout will be used on every page load.', 'success', 2200);
-    } catch (e) {
-      showToast('Save failed', 'Could not save to localStorage — image may be too large.', 'error');
+    } catch {
+      showToast('Save failed', 'Could not save to localStorage - image may be too large.', 'error');
+    }
+  } else if (canSaveShuffle) {
+    try {
+      localStorage.setItem(DEFAULT_LAYOUT_KEY, JSON.stringify({ mode: 'shuffle', kind: currentShuffleKind() }));
+      localStorage.removeItem(LEGACY_DEFAULT_SHAPE_KEY);
+      showToast('Default shape saved', `The ${currentShuffleKind()} layout will be used on every page load.`, 'success', 2200);
+    } catch {
+      showToast('Save failed', 'Could not save the default layout to localStorage.', 'error');
     }
   } else {
-    showToast('No image shape active', 'Upload an image first, then set it as default.', 'warning');
+    showToast('No custom shape active', 'Shuffle the nodes or upload an image first, then set it as default.', 'warning');
   }
   updateDefaultShapeBtn();
 }
@@ -1405,6 +1756,7 @@ function init() {
   state.initialized = true;
   setupCanvas();
   bindControls();
+  setControlsCollapsed(true);
   loadSavedDefaultShape();
   if (state.detailEl) renderDetail(null);
   fetchGraph().catch((err) => {
@@ -1426,8 +1778,10 @@ export async function refreshMemoryGraph(forceIndex = false) {
 }
 
 export function memoryPageActivate() {
+  const wasInitialized = state.initialized;
   init();
-  if (state.graphLoadedAt === 0 || (Date.now() - state.graphLoadedAt) > 45000) fetchGraph().catch(() => {});
+  // init() already kicks off the first fetchGraph; only refetch on later activates if stale.
+  if (wasInitialized && (Date.now() - state.graphLoadedAt) > 45000) fetchGraph().catch(() => {});
   draw();
 }
 
@@ -1435,6 +1789,7 @@ window.refreshMemoryGraph = refreshMemoryGraph;
 window.memoryPageActivate = memoryPageActivate;
 window.toggleMemoryControlsPanel = toggleMemoryControlsPanel;
 window.closeMemoryDetailDrawer = closeMemoryDetailDrawer;
+window.openAddMemoryDrawer = openAddMemoryDrawer;
 window.shuffleMemoryGraph = shuffleMemoryGraph;
 window.triggerMemoryImageInput = triggerMemoryImageInput;
 window.toggleDefaultShape = toggleDefaultShape;

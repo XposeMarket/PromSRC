@@ -1,18 +1,9 @@
 ---
 name: Ghostwriter
-description: >
-  Write long-form content in the user's voice — essays, thought leadership articles,
-  LinkedIn posts, newsletters, blog posts, op-eds, and founder stories. Use whenever
-  the user wants content written for them to publish under their name, wants to build
-  a personal brand through writing, needs to articulate a perspective, or asks for
-  help with any authored content. Triggers on: "write this for me", "write in my voice",
-  "draft a LinkedIn post", "write an article", "newsletter", "thought leadership",
-  "help me write", "blog post", "op-ed", "essay", "write a thread", "ghostwrite",
-  "content for my brand", "post about X", "write something I can publish",
-  "founder story", "write my perspective on", "help me articulate".
-emoji: ✍️
+description: Write content that sounds like the user — not like AI, not like a template — and that's worth reading.
+emoji: "🧩"
 version: 1.0.0
-triggers: ghostwrite, write in my voice, linkedin post, newsletter, blog post, thought leadership, article, op-ed, essay, write for me, write something I can publish, founder story, personal brand writing, write a thread, help me write, draft content
+triggers: ghostwrite, write in my voice, linkedin post, newsletter, blog post, thought leadership, article, op-ed, essay, write for me, write something i can publish, founder story, personal brand writing, write a thread, help me write, draft content
 ---
 
 # Ghostwriter

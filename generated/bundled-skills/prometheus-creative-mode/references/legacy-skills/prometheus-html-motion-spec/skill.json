@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-html-motion-spec",
+  "name": "Prometheus HTML Motion Spec",
+  "description": "Canonical Prometheus HTML Motion composition spec for Creative Video mode, covering root metadata, timeline attributes, timing units, asset placeholders, deterministic animation adapters, Pretext text-fit, ASCII routing, lint/inspect rules, export flow, and HyperFrames compatibility.",
+  "emoji": "video",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "Prometheus HTML Motion spec",
+    "HTML Motion spec",
+    "html motion rules",
+    "html motion timing",
+    "data-composition-id",
+    "data-frame-rate",
+    "data-track-index",
+    "HyperFrames compatibility",
+    "Prometheus video canvas spec",
+    "HTML Motion lint",
+    "HTML Motion export"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "hyperframes",
+    "spec",
+    "rendering"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "skills",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

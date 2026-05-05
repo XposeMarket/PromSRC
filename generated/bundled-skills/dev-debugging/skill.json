@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "dev-debugging",
+  "name": "Dev Debugging",
+  "description": "Use this skill when User wants Prometheus to hand off a Prometheus development/debugging task to the Codex desktop app. Default handoff is Ctrl+N, type a simple action-oriented prompt, then Enter; after submitting, always maximize Codex, capture/send screenshot proof to Telegram, write a note, and schedule Telegram follow-up timers to check the Codex window response.",
+  "emoji": "🛠️",
+  "version": "1.6.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "codex",
+    "debugging",
+    "dev handoff",
+    "prometheus debugging",
+    "codex desktop"
+  ],
+  "categories": [
+    "desktop",
+    "debugging",
+    "prometheus"
+  ],
+  "requiredTools": [
+    "desktop",
+    "write_note",
+    "timer"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

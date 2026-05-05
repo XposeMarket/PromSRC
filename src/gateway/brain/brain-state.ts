@@ -30,10 +30,24 @@ export interface BrainLatestState {
   lastDreamCompletedAt: string | null;
   /** ISO timestamp of the last dream attempt (success or fail) */
   lastDreamAttemptAt: string | null;
+  /** YYYY-MM-DD local date the last dream attempt targeted */
+  lastDreamAttemptDate: string | null;
   /** Last known dream outcome */
   lastDreamStatus: 'idle' | 'success' | 'failed';
   /** Last dream failure error, if any */
   lastDreamError: string | null;
+  /** YYYY-MM-DD local date of the last completed dream cleanup pass */
+  lastDreamCleanupDate: string | null;
+  /** ISO timestamp of the last successful dream cleanup completion */
+  lastDreamCleanupCompletedAt: string | null;
+  /** ISO timestamp of the last dream cleanup attempt */
+  lastDreamCleanupAttemptAt: string | null;
+  /** YYYY-MM-DD local date the last dream cleanup attempt targeted */
+  lastDreamCleanupAttemptDate: string | null;
+  /** Last known dream cleanup outcome */
+  lastDreamCleanupStatus: 'idle' | 'success' | 'failed';
+  /** Last dream cleanup failure error, if any */
+  lastDreamCleanupError: string | null;
   /** ISO timestamp when the current gateway session started */
   gatewayStartedAt: string;
   /** Proposal IDs submitted in the most recent dream (for dedup) */
@@ -70,6 +84,12 @@ export interface BrainDailyStatus {
   dreamFile: string | null;
   /** ISO timestamp when today's dream completed, or null */
   dreamCompletedAt: string | null;
+  /** Whether the second-pass dream cleanup has run today */
+  dreamCleanupRan: boolean;
+  /** Relative path of today's dream cleanup file, or null */
+  dreamCleanupFile: string | null;
+  /** ISO timestamp when today's dream cleanup completed, or null */
+  dreamCleanupCompletedAt: string | null;
 }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -80,7 +100,7 @@ export function getBrainDir(): string {
 
 export function ensureBrainDirs(): void {
   const base = getBrainDir();
-  for (const sub of ['thoughts', 'dreams', 'state']) {
+  for (const sub of ['thoughts', 'dreams', 'state', path.join('state', 'daily')]) {
     fs.mkdirSync(path.join(base, sub), { recursive: true });
   }
 }
@@ -110,8 +130,15 @@ function defaultLatestState(): BrainLatestState {
     lastDreamDate: null,
     lastDreamCompletedAt: null,
     lastDreamAttemptAt: null,
+    lastDreamAttemptDate: null,
     lastDreamStatus: 'idle',
     lastDreamError: null,
+    lastDreamCleanupDate: null,
+    lastDreamCleanupCompletedAt: null,
+    lastDreamCleanupAttemptAt: null,
+    lastDreamCleanupAttemptDate: null,
+    lastDreamCleanupStatus: 'idle',
+    lastDreamCleanupError: null,
     gatewayStartedAt: new Date().toISOString(),
     proposalDedupeIds: [],
     thoughtEnabled: true,
@@ -144,8 +171,12 @@ export function markGatewayStarted(): void {
 
 // ─── Daily status ─────────────────────────────────────────────────────────────
 
-function getDailyStatusPath(): string {
+function getLegacyDailyStatusPath(): string {
   return path.join(getBrainDir(), 'state', 'daily-status.json');
+}
+
+function getDailyStatusPath(date: string): string {
+  return path.join(getBrainDir(), 'state', 'daily', `${date}.json`);
 }
 
 function defaultDailyStatus(date: string): BrainDailyStatus {
@@ -155,24 +186,32 @@ function defaultDailyStatus(date: string): BrainDailyStatus {
     dreamRan: false,
     dreamFile: null,
     dreamCompletedAt: null,
+    dreamCleanupRan: false,
+    dreamCleanupFile: null,
+    dreamCleanupCompletedAt: null,
   };
 }
 
 export function loadDailyStatus(date: string): BrainDailyStatus {
   try {
-    const p = getDailyStatusPath();
-    if (!fs.existsSync(p)) return defaultDailyStatus(date);
-    const stored = JSON.parse(fs.readFileSync(p, 'utf-8')) as BrainDailyStatus;
-    // Reset automatically on a new calendar day
+    const nextPath = getDailyStatusPath(date);
+    if (fs.existsSync(nextPath)) {
+      const stored = JSON.parse(fs.readFileSync(nextPath, 'utf-8')) as BrainDailyStatus;
+      return { ...defaultDailyStatus(date), ...stored, date };
+    }
+
+    const legacyPath = getLegacyDailyStatusPath();
+    if (!fs.existsSync(legacyPath)) return defaultDailyStatus(date);
+    const stored = JSON.parse(fs.readFileSync(legacyPath, 'utf-8')) as BrainDailyStatus;
     if (stored.date !== date) return defaultDailyStatus(date);
-    return stored;
+    return { ...defaultDailyStatus(date), ...stored, date };
   } catch {
     return defaultDailyStatus(date);
   }
 }
 
 export function saveDailyStatus(status: BrainDailyStatus): void {
-  safeWrite(getDailyStatusPath(), status);
+  safeWrite(getDailyStatusPath(status.date), status);
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────

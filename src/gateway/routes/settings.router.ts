@@ -9,7 +9,12 @@ import { getOllamaClient } from '../../agents/ollama-client';
 import { getCredentialHandler } from '../../security/credential-handler';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as express from 'express';
+import {
+  getInstalledAppsInventory,
+  searchInstalledApps,
+  saveInstalledAppAlias,
+  deleteInstalledAppAlias,
+} from '../installed-apps.js';
 // providers/factory and auth/openai-oauth are loaded lazily to avoid missing-module errors
 const getProvider = (...args: any[]) => require('../../providers/factory').getProvider(...args);
 const resetProvider = (...args: any[]) => require('../../providers/factory').resetProvider(...args);
@@ -27,16 +32,32 @@ const anthropicLoadTokens  = (...args: any[]) => require('../../auth/anthropic-o
 const anthropicClearTokens = (...args: any[]) => require('../../auth/anthropic-oauth').clearTokens(...args);
 const anthropicStoreSetupToken = (...args: any[]) => require('../../auth/anthropic-oauth').storeSetupToken(...args);
 import { detectGpu } from '../gpu-detector';
+import { getApprovalQueue } from '../verification-flow';
+import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth';
+import { listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
 
 export const router = Router();
 
 const CONFIG_DIR_PATH = getConfig().getConfigDir();
 
+function normalizePathForCompare(p: string): string {
+  const resolved = path.resolve(String(p || ''));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const base = normalizePathForCompare(basePath);
+  const target = normalizePathForCompare(targetPath);
+  if (!base || !target) return false;
+  const rel = path.relative(base, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 let _requireGatewayAuth: any;
 export function initSettingsRouter(deps: { requireGatewayAuth: any }): void {
   _requireGatewayAuth = deps.requireGatewayAuth;
 }
-const requireGatewayAuth = (...args: any[]) => _requireGatewayAuth ? _requireGatewayAuth(...args) : (_requireGatewayAuthImpl as any)(...args);
+const requireGatewayAuth = (...args: any[]) => _requireGatewayAuth ? _requireGatewayAuth(...args) : (sharedRequireGatewayAuth as any)(...args);
 
 // ─── Settings API ────────────────────────────────────────────────────────────────
 
@@ -55,7 +76,9 @@ router.get('/api/settings/search', (_req, res) => {
     search_rigor: cfg.search_rigor || 'verified',
     tavily_api_key: maskIfSet(cfg.tavily_api_key),
     google_api_key: maskIfSet(cfg.google_api_key),
-    google_cx: cfg.google_cx || '',   // CSE ID is not a secret
+    // Stored in the vault for persistence, but returned resolved so the UI can
+    // keep showing the saved CSE ID without making users re-enter it.
+    google_cx: cm.resolveSecret(cfg.google_cx) || '',
     brave_api_key: maskIfSet(cfg.brave_api_key),
   });
 });
@@ -121,18 +144,30 @@ router.post('/api/settings/paths', (req, res) => {
   const { workspace_path, allowed_paths, blocked_paths } = req.body;
   const cm = getConfig();
   const current = cm.getConfig() as any;
+  const workspacePath = typeof workspace_path === 'string' ? workspace_path.trim() : '';
+  const normalizedAllowed = Array.from(new Set(
+    [
+      ...((Array.isArray(allowed_paths) ? allowed_paths : []).map((p: any) => String(p || '').trim()).filter(Boolean)),
+      ...(workspacePath ? [workspacePath] : []),
+    ].map((p) => path.resolve(p)),
+  ));
+  const normalizedBlocked = Array.from(new Set(
+    (Array.isArray(blocked_paths) ? blocked_paths : [])
+      .map((p: any) => String(p || '').trim())
+      .filter(Boolean)
+      .map((p: string) => path.resolve(p)),
+  ));
   const tools = {
     ...current.tools,
     permissions: {
       ...current.tools?.permissions,
       files: {
         ...(current.tools?.permissions?.files || {}),
-        ...(Array.isArray(allowed_paths) && { allowed_paths }),
-        ...(Array.isArray(blocked_paths) && { blocked_paths }),
+        allowed_paths: normalizedAllowed,
+        blocked_paths: normalizedBlocked,
       },
     },
   };
-  const workspacePath = typeof workspace_path === 'string' ? workspace_path.trim() : '';
   if (workspacePath) {
     try { fs.mkdirSync(workspacePath, { recursive: true }); } catch {}
   }
@@ -141,6 +176,77 @@ router.post('/api/settings/paths', (req, res) => {
     ...(workspacePath ? { workspace: { ...(current.workspace || {}), path: workspacePath } } : {}),
   } as any);
   res.json({ success: true });
+});
+
+router.get('/api/installed-apps', async (req, res) => {
+  try {
+    const filter = String(req.query?.filter || '').trim();
+    const refresh = String(req.query?.refresh || '').trim() === '1' || String(req.query?.refresh || '').trim().toLowerCase() === 'true';
+    const limitRaw = Number(req.query?.limit || 250);
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 250, 1), 1000);
+    const inventory = await getInstalledAppsInventory({ refresh });
+    const apps = filter
+      ? await searchInstalledApps(filter, { limit, refresh: false })
+      : inventory.apps.slice(0, limit);
+    res.json({
+      success: true,
+      generatedAt: inventory.generatedAt,
+      total: inventory.apps.length,
+      apps,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/api/installed-apps/search', async (req, res) => {
+  try {
+    const query = String(req.query?.query || '').trim();
+    const refresh = String(req.query?.refresh || '').trim() === '1' || String(req.query?.refresh || '').trim().toLowerCase() === 'true';
+    const limitRaw = Number(req.query?.limit || 20);
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 20, 1), 100);
+    if (!query) {
+      return res.status(400).json({ success: false, error: 'query is required' });
+    }
+    const inventory = await getInstalledAppsInventory({ refresh });
+    const apps = await searchInstalledApps(query, { limit, refresh: false });
+    res.json({
+      success: true,
+      generatedAt: inventory.generatedAt,
+      total: inventory.apps.length,
+      apps,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/api/installed-apps/aliases', async (req, res) => {
+  try {
+    const appId = String(req.body?.app_id || '').trim();
+    const alias = String(req.body?.alias || '').trim();
+    if (!appId || !alias) {
+      return res.status(400).json({ success: false, error: 'app_id and alias are required' });
+    }
+    const app = await saveInstalledAppAlias(appId, alias);
+    res.json({ success: true, app });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.delete('/api/installed-apps/aliases', async (req, res) => {
+  try {
+    const appId = String(req.body?.app_id || '').trim();
+    const alias = String(req.body?.alias || '').trim();
+    if (!appId || !alias) {
+      return res.status(400).json({ success: false, error: 'app_id and alias are required' });
+    }
+    const app = await deleteInstalledAppAlias(appId, alias);
+    res.json({ success: true, app });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 router.get('/api/settings/agent', (_req, res) => {
@@ -555,76 +661,63 @@ let useAgentMode = false;
 // Token is read from config at request time so it takes effect immediately
 // after a config save without requiring a gateway restart.
 
-function _requireGatewayAuthImpl(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction,
-): void {
-  const cfg = getConfig().getConfig() as any;
-  const configuredToken = String(cfg?.gateway?.auth_token || '').trim();
-
-  // If no token is configured, fall back to localhost-only access.
-  if (!configuredToken) {
-    const remoteIp = String(
-      req.ip ||
-      req.socket?.remoteAddress ||
-      (req.connection as any)?.remoteAddress ||
-      ''
-    );
-    const isLocalhost =
-      remoteIp === '127.0.0.1' ||
-      remoteIp === '::1' ||
-      remoteIp === '::ffff:127.0.0.1';
-    if (isLocalhost) {
-      next();
-      return;
-    }
-    res.status(401).json({ error: 'Unauthorized: configure gateway.auth_token to enable remote access to this endpoint.' });
-    return;
-  }
-
-  // Extract token from Authorization header or X-Gateway-Token header.
-  const authHeader = String(req.headers['authorization'] || '');
-  const xGatewayToken = String(req.headers['x-gateway-token'] || '');
-  let providedToken = '';
-  if (authHeader.toLowerCase().startsWith('bearer ')) {
-    providedToken = authHeader.slice('bearer '.length).trim();
-  } else if (xGatewayToken) {
-    providedToken = xGatewayToken.trim();
-  }
-
-  if (!providedToken || providedToken !== configuredToken) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-
-  next();
-}
-
-const pendingApprovals: Map<string, { id: string; action: string; reason: string }> = new Map();
-
-router.get('/api/approvals', requireGatewayAuth, (_req, res) => {
-  res.json(Array.from(pendingApprovals.values()));
+router.get('/api/approvals', requireGatewayAuth, (req, res) => {
+  const queue = getApprovalQueue();
+  const status = String(req.query.status || 'pending').trim().toLowerCase();
+  const taskId = String(req.query.taskId || '').trim();
+  const approvals = (status === 'all'
+    ? queue.listAll()
+    : queue.listAll().filter((record) => record.status === status))
+    .filter((record) => !taskId || String(record.taskId || '') === taskId)
+    .map((record) => ({
+      ...record,
+      command: String(record.toolArgs?.command || ''),
+      sourceSessionId: record.sessionId,
+    }));
+  res.json({ approvals });
 });
 
-router.post('/api/approvals/:id', requireGatewayAuth, (req, res) => {
-  const { decision } = req.body;
+function resolveApprovalRequest(req: any, res: any, decision: 'approved' | 'rejected' | undefined, resolvedBy: string) {
   const VALID_DECISIONS = ['approved', 'rejected'];
-  if (!decision || !VALID_DECISIONS.includes(decision)) {
+  const requestedDecision = decision || req.body?.decision;
+  if (!requestedDecision || !VALID_DECISIONS.includes(requestedDecision)) {
     res.status(400).json({ success: false, error: `decision must be one of: ${VALID_DECISIONS.join(', ')}` });
     return;
   }
-  const approval = pendingApprovals.get(req.params.id);
+  const queue = getApprovalQueue();
+  const approval = queue.get(req.params.id);
   if (!approval) {
     res.status(404).json({ success: false, error: 'Approval not found' });
     return;
   }
-  pendingApprovals.delete(req.params.id);
+  if (approval.status !== 'pending') {
+    res.status(409).json({ success: false, error: `Approval already ${approval.status}` });
+    return;
+  }
+  const resolved = queue.resolve(req.params.id, requestedDecision === 'approved', resolvedBy);
+  if (!resolved) {
+    res.status(409).json({ success: false, error: 'Approval could not be resolved' });
+    return;
+  }
   // Security audit: log every approval action (action name only, no payload)
   import('../../security/log-scrubber').then(({ log }) => {
-    log.security('[approvals]', decision.toUpperCase(), 'approval-id:', req.params.id, 'action:', approval.action);
+    log.security('[approvals]', requestedDecision.toUpperCase(), 'approval-id:', req.params.id, 'action:', approval.action);
   }).catch(() => {});
-  res.json({ success: true, decision });
+  res.json({ success: true, decision: requestedDecision, approval: resolved });
+}
+
+router.post('/api/approvals/:id', requireGatewayAuth, (req, res) => {
+  resolveApprovalRequest(req, res, req.body?.decision, 'web');
+});
+
+router.post('/api/approvals/:id/approve', requireGatewayAuth, (req, res) => {
+  req.body = { ...(req.body || {}), decision: 'approved' };
+  resolveApprovalRequest(req, res, 'approved', 'web');
+});
+
+router.post('/api/approvals/:id/deny', requireGatewayAuth, (req, res) => {
+  req.body = { ...(req.body || {}), decision: 'rejected' };
+  resolveApprovalRequest(req, res, 'rejected', 'web');
 });
 
 // ─── Memory API (stub) ───────────────────────────────────────────────────────────
@@ -647,13 +740,19 @@ router.post('/api/open-path', requireGatewayAuth, async (req, res) => {
   const fp = (req.body?.path || '') as string;
   if (!fp) { res.status(400).json({ ok: false, error: 'Path required' }); return; }
 
-  // Resolve and validate — must be inside workspace or config dir
+  // Resolve and validate against workspace, config dir, and configured
+  // file allowlist so Settings > Security governs explorer access too.
   const resolvedFp = path.resolve(fp);
   const workspacePath = getConfig().getWorkspacePath();
   const configDirPath = getConfig().getConfigDir();
-  const isInWorkspace = resolvedFp.startsWith(path.resolve(workspacePath));
-  const isInConfigDir = resolvedFp.startsWith(path.resolve(configDirPath));
-  if (!isInWorkspace && !isInConfigDir) {
+  const cfg = getConfig().getConfig() as any;
+  const allowedPaths = Array.isArray(cfg?.tools?.permissions?.files?.allowed_paths)
+    ? cfg.tools.permissions.files.allowed_paths
+    : [];
+  const isInWorkspace = isPathInside(workspacePath, resolvedFp);
+  const isInConfigDir = isPathInside(configDirPath, resolvedFp);
+  const isInAllowedPath = allowedPaths.some((allowed: string) => isPathInside(allowed, resolvedFp));
+  if (!isInWorkspace && !isInConfigDir && !isInAllowedPath) {
     res.status(403).json({ ok: false, error: 'Path is outside allowed directories' });
     return;
   }
@@ -699,12 +798,7 @@ function preserveMaskedProviderSecrets(nextLlm: any, currentLlm: any): any {
   const nextProviders = out.providers || {};
   const currentProviders = (currentLlm && currentLlm.providers) || {};
 
-  const secretPaths: Array<[string, string]> = [
-    ['openai', 'api_key'],
-    ['lm_studio', 'api_key'],
-    ['perplexity', 'api_key'],
-    ['gemini', 'api_key'],
-  ];
+  const secretPaths = listProviderSecretFieldPaths();
 
   for (const [providerId, field] of secretPaths) {
     const nextVal = nextProviders?.[providerId]?.[field];
@@ -769,6 +863,7 @@ router.post('/api/settings/provider', (req, res) => {
       },
     };
     const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
+    const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
     const legacyModelSync = activeModel
       ? {
           models: {
@@ -778,8 +873,150 @@ router.post('/api/settings/provider', (req, res) => {
           },
         }
       : {};
-    configManager.updateConfig({ llm: mergedLlm, ...legacyModelSync } as any);
+    const legacyOllamaSync = legacyOllamaEndpoint
+      ? {
+          ollama: {
+            ...((configManager.getConfig() as any).ollama || {}),
+            endpoint: legacyOllamaEndpoint,
+          },
+        }
+      : {};
+    configManager.updateConfig({ llm: mergedLlm, ...legacyModelSync, ...legacyOllamaSync } as any);
     resetProvider();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/settings/bulk  — save the main Settings modal in one atomic-ish
+// config update. The UI previously fired six POSTs in parallel; every route
+// rewrote config.json, so whichever response finished last could clobber parts
+// of the others and each fetch had its own retry/timeout path.
+router.post('/api/settings/bulk', (req, res) => {
+  try {
+    const body = req.body || {};
+    const configManager = getConfig();
+    const current = configManager.getConfig() as any;
+    const updates: Record<string, any> = {};
+
+    if (body.paths) {
+      const workspacePath = typeof body.paths.workspace_path === 'string' ? body.paths.workspace_path.trim() : '';
+      const normalizedAllowed = Array.from(new Set(
+        [
+          ...((Array.isArray(body.paths.allowed_paths) ? body.paths.allowed_paths : []).map((p: any) => String(p || '').trim()).filter(Boolean)),
+          ...(workspacePath ? [workspacePath] : []),
+        ].map((p) => path.resolve(p)),
+      ));
+      const normalizedBlocked = Array.from(new Set(
+        (Array.isArray(body.paths.blocked_paths) ? body.paths.blocked_paths : [])
+          .map((p: any) => String(p || '').trim())
+          .filter(Boolean)
+          .map((p: string) => path.resolve(p)),
+      ));
+      updates.tools = {
+        ...current.tools,
+        permissions: {
+          ...current.tools?.permissions,
+          files: {
+            ...(current.tools?.permissions?.files || {}),
+            allowed_paths: normalizedAllowed,
+            blocked_paths: normalizedBlocked,
+          },
+        },
+      };
+      if (workspacePath) {
+        try { fs.mkdirSync(workspacePath, { recursive: true }); } catch {}
+        updates.workspace = { ...(current.workspace || {}), path: workspacePath };
+      }
+    }
+
+    if (body.search) {
+      const { preferred_provider, search_rigor, tavily_api_key, google_api_key, google_cx, brave_api_key } = body.search;
+      const isNew = (v: any) => v !== undefined && v !== '' && v !== '••••••••';
+      updates.search = {
+        ...((current.search || {})),
+        ...(preferred_provider !== undefined && { preferred_provider }),
+        ...(search_rigor !== undefined && { search_rigor }),
+        ...(isNew(tavily_api_key) && { tavily_api_key }),
+        ...(isNew(google_api_key) && { google_api_key }),
+        ...(google_cx !== undefined && { google_cx }),
+        ...(isNew(brave_api_key) && { brave_api_key }),
+      };
+    }
+
+    if (body.agent_policy) {
+      const p = body.agent_policy;
+      updates.agent_policy = {
+        ...(current.agent_policy || {}),
+        ...(p.force_web_for_fresh !== undefined && { force_web_for_fresh: p.force_web_for_fresh }),
+        ...(p.memory_fallback_on_search_failure !== undefined && { memory_fallback_on_search_failure: p.memory_fallback_on_search_failure }),
+        ...(p.auto_store_web_facts !== undefined && { auto_store_web_facts: p.auto_store_web_facts }),
+        ...(p.natural_language_tool_router !== undefined && { natural_language_tool_router: p.natural_language_tool_router }),
+        ...(p.retrieval_mode !== undefined && { retrieval_mode: p.retrieval_mode }),
+      };
+    }
+
+    if (body.model) {
+      const primary = body.model.primary || current.models?.primary;
+      updates.models = {
+        primary,
+        roles: { ...(current.models?.roles || {}), ...(body.model.roles || {}) },
+      };
+      if (body.model.ollama_endpoint) {
+        updates.ollama = { ...(current.ollama || {}), endpoint: body.model.ollama_endpoint };
+      }
+    }
+
+    let providerChanged = false;
+    if (body.llm) {
+      const llmIncoming = sanitizeLLMConfig(body.llm);
+      if (!llmIncoming?.provider) { res.status(400).json({ success: false, error: 'Missing llm.provider' }); return; }
+      const currentLlm = current.llm || {};
+      const llm = preserveMaskedProviderSecrets(llmIncoming, currentLlm);
+      const mergedLlm = {
+        ...currentLlm,
+        ...llm,
+        providers: {
+          ...(currentLlm.providers || {}),
+          ...(llm.providers || {}),
+        },
+      };
+      updates.llm = mergedLlm;
+      const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
+      const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
+      if (activeModel) {
+        updates.models = {
+          ...((updates.models || current.models || {})),
+          primary: activeModel,
+          roles: { manager: activeModel, executor: activeModel, verifier: activeModel },
+        };
+      }
+      if (legacyOllamaEndpoint) {
+        updates.ollama = { ...((updates.ollama || current.ollama || {})), endpoint: legacyOllamaEndpoint };
+      }
+      providerChanged = true;
+    }
+
+    if (body.session) {
+      const existing = (current.session || {}) as Record<string, any>;
+      const d = getSessionDefaults();
+      const s = body.session;
+      updates.session = {
+        ...existing,
+        maxMessages: toBoundedInt(s.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
+        compactionThreshold: toBoundedFloat(s.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
+        memoryFlushThreshold: toBoundedFloat(s.memoryFlushThreshold ?? existing.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
+        rollingCompactionEnabled: s.rollingCompactionEnabled !== undefined ? !!s.rollingCompactionEnabled : (existing.rollingCompactionEnabled !== false),
+        rollingCompactionMessageCount: toBoundedInt(s.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount, 10, 120, d.rollingCompactionMessageCount),
+        rollingCompactionToolTurns: toBoundedInt(s.rollingCompactionToolTurns ?? existing.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
+        rollingCompactionSummaryMaxWords: toBoundedInt(s.rollingCompactionSummaryMaxWords ?? existing.rollingCompactionSummaryMaxWords, 80, 500, d.rollingCompactionSummaryMaxWords),
+        rollingCompactionModel: String(s.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
+      };
+    }
+
+    configManager.updateConfig(updates as any);
+    if (providerChanged) resetProvider();
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });

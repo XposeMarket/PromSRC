@@ -2,7 +2,7 @@
 name: Web Scraper
 description: Extract structured data from websites using Prometheus-native tools (browser_extract_structured, browser_scroll_collect) or Python scripts (Playwright, BeautifulSoup). Use for data extraction, text collection, crawling, and handling JavaScript-rendered content.
 emoji: 🕷️
-version: 1.1.0
+version: 1.2.0
 triggers: scrape, crawl, extract from website, browse page, get data from site, parse HTML, playwright, puppeteer, spider, web extraction, screenshot, automate browser, fetch page content, harvest data, extract structured, browser_extract_structured
 ---
 
@@ -87,7 +87,10 @@ browser_scroll_collect({
 - Automatic deduplication across positions
 - Built-in delays to let content load
 - Early stopping conditions
+- Prefer `browser_scroll_collect(...)` over repeated manual `browser_scroll(...)` calls when the objective is collection, not UI steering.
 - No refs returned — good for bulk text collection
+
+**Automation guard note:** some browser sessions enforce a blind-scroll guard. Repeated `browser_scroll(...)` calls may be blocked until the page has a real interaction anchor (click, fill, or other meaningful act). When that happens, do not brute-force more scroll retries — first interact with the page, or switch to `browser_scroll_collect(...)` / structured extraction if collection is the real goal.
 
 ### 3. Full Page Text — `browser_get_page_text()`
 
@@ -331,6 +334,8 @@ Before writing any scraper:
 - [ ] What's the output format and destination?
 - [ ] Are there pagination or infinite scroll elements to handle?
 - [ ] Will login/cookies be required?
+- [ ] If scrolling is needed for collection, should this use `browser_scroll_collect(...)` instead of repeated single-scroll loops?
+- [ ] If manual `browser_scroll(...)` is needed, what real page interaction will anchor the session first?
 
 ---
 
@@ -343,3 +348,12 @@ Before writing any scraper:
 - ❌ Never scrape at a rate that degrades the target server
 - ❌ Never scrape behind a login without permission
 - ❌ Never store or share personal data scraped from public pages without legal basis
+
+
+---
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-04-23 | v1.2.0: Added blind-scroll guard guidance to scraper planning. Documented that repeated manual `browser_scroll(...)` calls can be blocked until a real interaction anchors the page, and added checklist prompts to choose `browser_scroll_collect(...)` or an explicit anchor-first plan. |

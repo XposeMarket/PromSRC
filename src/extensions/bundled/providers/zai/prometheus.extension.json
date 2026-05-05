@@ -1,0 +1,66 @@
+{
+  "id": "zai",
+  "kind": "provider",
+  "name": "Z.AI / GLM",
+  "description": "Z.AI GLM models through the Coding Plan compatible API.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://z.ai/",
+  "tags": ["zai", "glm", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["glm-5.1", "glm-5", "glm-5v-turbo", "glm-5-turbo", "glm-4.7"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#2563EB"
+  },
+  "ownership": {
+    "providerIds": ["zai"],
+    "modelPrefixes": ["glm-"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "zai-..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "glm-5.1"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.z.ai/api/coding/paas/v4"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.z.ai/api/coding/paas/v4",
+      "model": "glm-5.1"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

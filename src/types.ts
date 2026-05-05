@@ -120,6 +120,7 @@ export interface VerifierOutput {
 export interface ToolResult {
   success: boolean;
   data?: any;
+  artifacts?: any[];
   error?: string;
   stdout?: string;
   stderr?: string;
@@ -151,6 +152,38 @@ export interface AgentToolPolicy {
   profile?: 'minimal' | 'coding' | 'web' | 'full';
 }
 
+export type AgentPersonalityHumor = 'none' | 'dry' | 'light' | 'playful' | 'sharp';
+export type AgentPersonalityLevel = 'low' | 'balanced' | 'high';
+export type AgentPersonalityWarmth = 'reserved' | 'steady' | 'warm';
+export type AgentPersonalityDirectness = 'gentle' | 'balanced' | 'blunt';
+
+export interface AgentPersonality {
+  /** Preset key or freeform archetype, e.g. "steady", "critic", "spark" */
+  archetype: string;
+  /** Short natural-language voice summary */
+  tone: string;
+  humor: AgentPersonalityHumor;
+  seriousness: AgentPersonalityLevel;
+  warmth: AgentPersonalityWarmth;
+  directness: AgentPersonalityDirectness;
+  /** Subtle habits that make this agent recognizable without becoming a bit */
+  quirks?: string[];
+  /** Things this agent must not do in its voice/personality */
+  avoid?: string[];
+}
+
+export interface AgentIdentity {
+  /** Human-facing name used in prompts and UI */
+  displayName: string;
+  /** Optional shorter handle used in chat/team references */
+  shortName?: string;
+  /** Why Prometheus chose this name/style */
+  namingRationale?: string;
+  personality?: AgentPersonality;
+  /** Extra prose guidance layered into system_prompt.md */
+  voiceGuidelines?: string;
+}
+
 export interface AgentDefinition {
   /** Unique ID for this agent - used in bindings and spawn calls */
   id: string;
@@ -173,12 +206,28 @@ export interface AgentDefinition {
   /** Emoji shown in UI and in agent output prefix */
   emoji?: string;
 
+  /** Optional personality/name identity layer for this agent */
+  identity?: AgentIdentity;
+
   /**
    * Absolute path to this agent's workspace directory.
    * If omitted, defaults to: <configDir>/../agents/<id>/workspace
    * The directory will be created automatically if it doesn't exist.
    */
   workspace?: string;
+
+  /**
+   * Optional workspace root used for file tools and command execution.
+   * This is separate from `workspace`, which remains the agent's
+   * identity/artifact directory.
+   */
+  executionWorkspace?: string;
+
+  /**
+   * Absolute or workspace-relative paths this agent is allowed to work in.
+   * Defaults to the main workspace when omitted.
+   */
+  allowedWorkPaths?: string[];
 
   /**
    * Model override for this agent.
@@ -285,6 +334,13 @@ export interface PrometheusConfig {
       verifier: string;
     };
   };
+  image_generation?: {
+    provider?: string;
+    model?: string;
+    save_to_workspace?: boolean;
+    default_output_dir?: string;
+    providers?: Record<string, Record<string, unknown> | undefined>;
+  };
   /**
    * Per-agent-type model defaults. Consulted at spawn time when an agent has
    * no explicit model override. Falls back to models.primary if unset.
@@ -385,7 +441,7 @@ export interface PrometheusConfig {
   orchestration?: {
     enabled: boolean;
     secondary: {
-      provider: ProviderID | '';
+      provider: string | '';
       model: string;
     };
     triggers: {
@@ -432,8 +488,7 @@ export interface PrometheusConfig {
       watchdog_no_progress_cycles?: number;
       checkpointing_enabled?: boolean;
     };
-    // false = conservative 4B delegate_to_specialist (sequential)
-    // true  = full multi-agent subagent_spawn (parallel, Claude Cowork-style)
+    // true = full multi-agent subagent_spawn (parallel, Claude Cowork-style)
     subagent_mode?: boolean;
   };
   hooks?: {
@@ -470,23 +525,20 @@ export type LocalClawConfig = PrometheusConfig;
 
 // ─── Multi-Provider LLM Config ──────────────────────────────────────────────
 
-export type ProviderID = 'ollama' | 'llama_cpp' | 'lm_studio' | 'openai' | 'openai_codex';
+export type ProviderID = string;
 
 export interface OllamaProviderConfig    { endpoint: string; model: string; }
 export interface LlamaCppProviderConfig  { endpoint: string; model: string; api_key?: string; }
 export interface LMStudioProviderConfig  { endpoint: string; model: string; api_key?: string; }
 export interface OpenAIProviderConfig    { api_key: string;  model: string; }
-export interface OpenAICodexProviderConfig { model: string; } // token managed by auth/openai-oauth.ts
+export interface OpenAICodexProviderConfig {
+  model: string;
+} // token managed by auth/openai-oauth.ts
+export type GenericProviderConfig = Record<string, unknown>;
 
 export interface LLMConfig {
   provider: ProviderID;
-  providers: {
-    ollama?:       OllamaProviderConfig;
-    llama_cpp?:    LlamaCppProviderConfig;
-    lm_studio?:    LMStudioProviderConfig;
-    openai?:       OpenAIProviderConfig;
-    openai_codex?: OpenAICodexProviderConfig;
-  };
+  providers: Record<string, GenericProviderConfig | undefined>;
 }
 
 export interface Skill {

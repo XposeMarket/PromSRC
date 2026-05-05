@@ -1,9 +1,8 @@
 ---
-name: Git Workflow
-description: Execute git and GitHub CLI operations correctly. Use for committing, pushing, branching, diffing, creating PRs, resolving conflicts, or any source control task. Triggers on: git, commit, push, branch, PR, pull request, GitHub, version control, save work, sync changes, merge, rebase, stash.
-emoji: 🌿
+name: git-workflow
+description: Don't guess git commands. Use this reference for all git and GitHub CLI operations.
+emoji: "🧩"
 version: 1.0.0
-triggers: git, commit, push, pull, branch, PR, pull request, merge, rebase, stash, diff, GitHub, version control, save work, sync changes, checkout, clone
 ---
 
 # Git Workflow

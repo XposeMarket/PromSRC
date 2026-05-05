@@ -1,0 +1,66 @@
+{
+  "id": "xiaomi",
+  "kind": "provider",
+  "name": "Xiaomi MiMo",
+  "description": "Xiaomi MiMo hosted models through the Xiaomi API.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://platform.xiaomimimo.com/",
+  "tags": ["xiaomi", "mimo", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["mimo-v2-pro", "mimo-v2-omni", "mimo-v2-flash"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#EA580C"
+  },
+  "ownership": {
+    "providerIds": ["xiaomi"],
+    "modelPrefixes": ["mimo-"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["XIAOMI_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "mi_..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "mimo-v2-pro"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://api.xiaomimimo.com/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2-pro"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

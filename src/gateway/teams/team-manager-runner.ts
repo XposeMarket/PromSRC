@@ -21,7 +21,14 @@ import {
 } from './managed-teams';
 import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config';
 import { runTeamAgentViaChat } from './team-dispatch-runtime';
-import { runCoordinatorReview, runCoordinatorConversation, runSubagentResultVerification } from './team-coordinator';
+import {
+  runCoordinatorReview,
+  runCoordinatorConversation,
+  runCoordinatorConversationDetailed,
+  runSubagentResultVerification,
+  type CoordinatorConversationOptions,
+  type CoordinatorConversationResult,
+} from './team-coordinator';
 import { getCronSchedulerInstance } from '../scheduling/cron-scheduler';
 import { claimAgentForTeamWorkspace } from './team-workspace';
 
@@ -385,10 +392,23 @@ export async function handleManagerConversation(
   userMessage: string,
   broadcastFn?: (data: object) => void,
   autoContinue: boolean = false,
+  options: CoordinatorConversationOptions = {},
 ): Promise<void> {
   const team = getManagedTeam(teamId);
   if (!team) return;
-  await runCoordinatorConversation(teamId, userMessage, broadcastFn, autoContinue);
+  await runCoordinatorConversation(teamId, userMessage, broadcastFn, autoContinue, options);
+}
+
+export async function handleManagerConversationDetailed(
+  teamId: string,
+  userMessage: string,
+  broadcastFn?: (data: object) => void,
+  autoContinue: boolean = false,
+  options: CoordinatorConversationOptions = {},
+): Promise<CoordinatorConversationResult | null> {
+  const team = getManagedTeam(teamId);
+  if (!team) return null;
+  return runCoordinatorConversationDetailed(teamId, userMessage, broadcastFn, autoContinue, options);
 }
 
 export async function verifySubagentResult(

@@ -183,14 +183,14 @@ function _renderCronCard(job) {
         <div style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;margin-top:2px">
           <strong>Assigned to:</strong>
           ${subagentId
-            ? `<button onclick="event.stopPropagation(); openAgentSettings('${subagentId}')"
-                 title="Open agent settings"
+            ? `<button onclick="event.stopPropagation(); (window.openScheduleOwnerAgent ? openScheduleOwnerAgent('${subagentId}') : openAgentSettings('${subagentId}'))"
+                 title="Open in Subagents"
                  style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--brand,#6c8ebf);
                         background:color-mix(in srgb,var(--brand,#6c8ebf) 10%,transparent);
                         color:var(--brand,#6c8ebf);border-radius:999px;padding:2px 9px;font-size:10px;
                         font-weight:700;cursor:pointer;font-family:monospace;white-space:nowrap">
                  🤖 ${escHtml(subagentId)}</button>`
-            : `<span style="font-size:10px;color:var(--muted);font-style:italic">Main agent (default)</span>`
+            : `<span style="font-size:10px;color:var(--muted);font-style:italic">Owner agent will be assigned on next save/run</span>`
           }
         </div>
       </div>
@@ -337,7 +337,7 @@ async function _loadScheduleModalData() {
   try {
     const agentsResult = await api('/api/agents');
     const sel = document.getElementById('schedule-subagent');
-    sel.innerHTML = '<option value="">Main agent (default)</option>';
+    sel.innerHTML = '<option value="">Create dedicated schedule agent</option>';
     window._agentsCache = window._agentsCache || {};
     if (agentsResult.agents && Array.isArray(agentsResult.agents)) {
       for (const a of agentsResult.agents) {

@@ -1,0 +1,58 @@
+{
+  "id": "salesforce",
+  "kind": "connector",
+  "name": "Salesforce",
+  "description": "Connect Salesforce so Prometheus can read accounts, opportunities, and contact records.",
+  "category": "CRM",
+  "enabledByDefault": true,
+  "docsUrl": "https://login.salesforce.com/",
+  "tags": ["salesforce", "crm", "oauth"],
+  "runtime": {
+    "binding": "integrations/connectors/salesforce"
+  },
+  "ui": {
+    "color": "#00A1E0",
+    "permissions": [
+      { "icon": "@", "label": "Read accounts, contacts, and opportunities" },
+      { "icon": "=", "label": "Read pipeline and forecast data" },
+      { "icon": "+", "label": "Update records and log activity with approval" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_salesforce"],
+    "capabilities": ["crm", "pipeline", "sales"],
+    "tools": [
+      "connector_salesforce_query",
+      "connector_salesforce_search",
+      "connector_salesforce_create_record",
+      "connector_salesforce_get_record"
+    ]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://login.salesforce.com/",
+    "docsHint": "Salesforce -> Setup -> App Manager -> New Connected App -> Enable OAuth -> Callback: http://localhost:19427/auth/callback/salesforce",
+    "callback": {
+      "port": 19427,
+      "path": "/auth/callback/salesforce"
+    },
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "Consumer Key",
+        "input": "text",
+        "required": true,
+        "placeholder": "abc123..."
+      },
+      {
+        "key": "clientSecret",
+        "label": "Consumer Secret",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "abc123..."
+      }
+    ]
+  }
+}

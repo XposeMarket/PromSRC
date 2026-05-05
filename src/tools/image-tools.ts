@@ -33,6 +33,10 @@ function getSupabaseConfig(): { url: string; key: string } | null {
   return { url, key };
 }
 
+function bufferToFetchBody(buffer: Buffer): RequestInit['body'] {
+  return buffer as unknown as RequestInit['body'];
+}
+
 function safeFilename(original: string, ext: string): string {
   const base = original
     .toLowerCase()
@@ -139,7 +143,7 @@ export const uploadImageTool = {
           'Content-Type': mimeType,
           'x-upsert': 'true',
         },
-        body: imageBuffer,
+        body: bufferToFetchBody(imageBuffer),
       });
 
       if (!response.ok) {
@@ -234,7 +238,7 @@ export const fetchImageTool = {
           'Content-Type': mimeType,
           'x-upsert': 'true',
         },
-        body: imageBuffer,
+        body: bufferToFetchBody(imageBuffer),
       });
 
       if (!uploadResponse.ok) {

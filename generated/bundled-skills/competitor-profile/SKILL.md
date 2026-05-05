@@ -1,6 +1,6 @@
 ---
 name: competitor-profile
-description: Lead  Competitor
+description: Use this skill to build a comprehensive intelligence dossier on a specific competitor or company. Uses web_search, web_fetch, and optionally deploy_analysis_team for full website audits.
 emoji: "🧩"
 version: 1.0.0
 ---

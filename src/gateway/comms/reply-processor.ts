@@ -76,11 +76,31 @@ export function isGreetingLikeMessage(text: string): boolean {
   return /^(hi|hello|hey|yo|sup|howdy|good (morning|afternoon|evening)|hey (claw|prom|prometheus)|hello (claw|prom|prometheus)|hi (claw|prom|prometheus)|how are you)[!.?\s]*$/i.test(raw);
 }
 
+export function stripInternalToolNotes(text: string): string {
+  const raw = String(text || '').replace(/\r\n/g, '\n');
+  if (!raw) return '';
+
+  const withoutToolNoteParagraphs = raw
+    .split(/\n{2,}/)
+    .filter((paragraph) => {
+      const p = paragraph.trim();
+      if (!p) return false;
+      if (/\[tool-note:[^\]]+\]/i.test(p)) return false;
+      if (/^\[Auto-screenshot after desktop_[^\]]+\]/i.test(p)) return false;
+      if (/^\[SYSTEM:\s*(?:desktop|browser|DOM|tool)\b/i.test(p)) return false;
+      if (/^\[(?:CREATIVE_DIRECT_FRAME_OBSERVATION|BROWSER_|DESKTOP_)/i.test(p)) return false;
+      return true;
+    })
+    .join('\n\n');
+
+  return withoutToolNoteParagraphs.trim();
+}
+
 export function sanitizeFinalReply(
   text: string,
   opts: { preflightReason?: string } = {},
 ): string {
-  const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+  const raw = stripInternalToolNotes(text).trim();
   if (!raw) return '';
 
   const metaPatterns: RegExp[] = [

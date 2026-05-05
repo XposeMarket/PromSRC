@@ -1,0 +1,58 @@
+{
+  "id": "notion",
+  "kind": "connector",
+  "name": "Notion",
+  "description": "Connect Notion so Prometheus can read pages, databases, and workspace documents.",
+  "category": "Docs",
+  "enabledByDefault": true,
+  "docsUrl": "https://www.notion.so/my-integrations",
+  "tags": ["notion", "docs", "oauth"],
+  "runtime": {
+    "binding": "integrations/connectors/notion"
+  },
+  "ui": {
+    "color": "#000000",
+    "permissions": [
+      { "icon": "[]", "label": "Read pages, databases, and blocks" },
+      { "icon": "+", "label": "Create and update pages with approval" },
+      { "icon": "?", "label": "Search across the workspace" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_notion"],
+    "capabilities": ["documents", "knowledge_base"],
+    "tools": [
+      "connector_notion_search",
+      "connector_notion_get_page",
+      "connector_notion_create_page",
+      "connector_notion_query_database"
+    ]
+  },
+  "setup": {
+    "authType": "oauth",
+    "statusMode": "oauth_connector",
+    "docsUrl": "https://www.notion.so/my-integrations",
+    "docsHint": "Notion -> My Integrations -> New public integration -> Redirect URI: http://localhost:19423/auth/callback/notion",
+    "callback": {
+      "port": 19423,
+      "path": "/auth/callback/notion"
+    },
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "Client ID",
+        "input": "text",
+        "required": true,
+        "placeholder": "abc123..."
+      },
+      {
+        "key": "clientSecret",
+        "label": "Client Secret",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "secret_..."
+      }
+    ]
+  }
+}

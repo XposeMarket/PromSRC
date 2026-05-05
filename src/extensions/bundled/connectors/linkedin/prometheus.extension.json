@@ -1,0 +1,32 @@
+{
+  "id": "linkedin",
+  "kind": "connector",
+  "name": "LinkedIn",
+  "description": "Connect LinkedIn through the Prometheus browser session for feed, audience, and publishing workflows.",
+  "category": "Social",
+  "enabledByDefault": true,
+  "docsUrl": "https://www.linkedin.com/",
+  "tags": ["linkedin", "social", "browser session"],
+  "runtime": {
+    "binding": "gateway/connections/browser-session:linkedin"
+  },
+  "ui": {
+    "color": "#0A66C2",
+    "permissions": [
+      { "icon": "[]", "label": "Read posts and engagement metrics" },
+      { "icon": "@", "label": "Read connections and profile views" },
+      { "icon": "->", "label": "Post content with approval" }
+    ]
+  },
+  "ownership": {
+    "capabilities": ["social", "publishing", "browser_session"]
+  },
+  "setup": {
+    "authType": "browser_session",
+    "statusMode": "generic",
+    "browserLogin": {
+      "url": "https://www.linkedin.com/login",
+      "checkUrl": "https://www.linkedin.com/feed/"
+    }
+  }
+}

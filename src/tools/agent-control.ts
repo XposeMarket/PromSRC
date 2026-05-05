@@ -40,8 +40,11 @@ export async function executeAgentList(_args: any): Promise<ToolResult> {
     const tagStr = tags.length ? `  [${tags.join(' | ')}]` : '';
     lines.push(`• ${agent.emoji ?? '🤖'} ${agent.name} (id: ${agent.id})${tagStr}`);
     if (agent.description) lines.push(`  ${agent.description}`);
+    if (agent.identity?.personality?.archetype) lines.push(`  Personality: ${agent.identity.personality.archetype}`);
     if (agent.model) lines.push(`  Model: ${agent.model}`);
     if (agent.workspace) lines.push(`  Workspace: ${agent.workspace}`);
+    if (agent.executionWorkspace) lines.push(`  Execution Workspace: ${agent.executionWorkspace}`);
+    if (agent.allowedWorkPaths?.length) lines.push(`  Allowed Work Paths: ${agent.allowedWorkPaths.join(', ')}`);
     if (agent.bindings?.length) {
       const bindingStr = agent.bindings
         .map((b: any) => `${b.channel}${b.peerId ? `:${b.peerId}` : ''}`)
@@ -106,8 +109,14 @@ export async function executeAgentInfo(args: any): Promise<ToolResult> {
     `ID: ${agent.id}`,
   ];
   if (agent.description)   lines.push(`Description: ${agent.description}`);
+  if (agent.identity?.displayName) lines.push(`Identity: ${agent.identity.displayName}`);
+  if (agent.identity?.personality?.archetype) {
+    lines.push(`Personality: ${agent.identity.personality.archetype} (${agent.identity.personality.tone || 'no tone recorded'})`);
+  }
   if (agent.model)         lines.push(`Model: ${agent.model}`);
   if (agent.workspace)     lines.push(`Workspace: ${agent.workspace}`);
+  if (agent.executionWorkspace) lines.push(`Execution Workspace: ${agent.executionWorkspace}`);
+  if (agent.allowedWorkPaths?.length) lines.push(`Allowed Work Paths: ${agent.allowedWorkPaths.join(', ')}`);
   if (agent.maxSteps)      lines.push(`Max Steps: ${agent.maxSteps}`);
   if (agent.bindings?.length) {
     lines.push(`Bindings:`);

@@ -22,8 +22,7 @@
  * Use at your own discretion — see OpenClaw docs for current policy status.
  */
 
-import fs from 'fs';
-import path from 'path';
+import { spawnSync } from 'child_process';
 import { getVault } from '../security/vault';
 import { log } from '../security/log-scrubber';
 
@@ -35,8 +34,40 @@ const VAULT_KEY = 'anthropic.oauth_tokens';
 export const ANTHROPIC_API_BASE = 'https://api.anthropic.com';
 export const ANTHROPIC_API_VERSION = '2023-06-01';
 
-// Beta headers needed for OAuth auth (same as Claude Code sends)
-const OAUTH_BETA_HEADERS = 'oauth-2025-04-20';
+// OAuth requests behave much more reliably when we mirror Claude Code's
+// header shape instead of sending only the bare oauth beta.
+const OAUTH_BETA_HEADERS = [
+  'claude-code-20250219',
+  'oauth-2025-04-20',
+  'fine-grained-tool-streaming-2025-05-14',
+];
+const CLAUDE_CLI_VERSION_FALLBACK = '2.1.75';
+let cachedClaudeCliVersion: string | null = null;
+
+function detectClaudeCliVersion(): string {
+  if (cachedClaudeCliVersion) return cachedClaudeCliVersion;
+
+  for (const command of ['claude', 'claude-code']) {
+    try {
+      const result = spawnSync(command, ['--version'], {
+        encoding: 'utf8',
+        timeout: 5_000,
+        windowsHide: true,
+      });
+      const stdout = String(result.stdout || '').trim();
+      const version = stdout.split(/\s+/)[0] || '';
+      if (/^\d/.test(version)) {
+        cachedClaudeCliVersion = version;
+        return version;
+      }
+    } catch {
+      // Fall through to the next command or the static fallback.
+    }
+  }
+
+  cachedClaudeCliVersion = CLAUDE_CLI_VERSION_FALLBACK;
+  return cachedClaudeCliVersion;
+}
 
 // ─── Token Storage ──────────────────────────────────────────────────────────────
 
@@ -149,14 +180,17 @@ export function buildAuthHeaders(configDir: string): Record<string, string> {
   if (!tokens) throw new Error('No Anthropic credentials configured.');
 
   const headers: Record<string, string> = {
-    'Content-Type':      'application/json',
+    'Content-Type': 'application/json',
     'anthropic-version': ANTHROPIC_API_VERSION,
   };
 
   if (tokens.auth_type === 'setup_token') {
-    // OAuth tokens use Bearer auth + OAuth beta header
+    // OAuth tokens are routed more reliably when Prometheus mirrors the
+    // Claude Code header shape instead of sending only Bearer + oauth beta.
     headers['Authorization'] = `Bearer ${tokens.access_token}`;
-    headers['anthropic-beta'] = OAUTH_BETA_HEADERS;
+    headers['anthropic-beta'] = OAUTH_BETA_HEADERS.join(',');
+    headers['user-agent'] = `claude-cli/${detectClaudeCliVersion()}`;
+    headers['x-app'] = 'cli';
   } else {
     // API keys use x-api-key header
     headers['x-api-key'] = tokens.access_token;

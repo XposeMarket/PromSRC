@@ -14,14 +14,15 @@
  */
 
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo } from './LLMProvider';
-import { loadTokens, getValidToken } from '../auth/openai-oauth';
+import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { contentToString } from './content-utils';
 import { getConfig } from '../config/config';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 
-// Models available via Codex OAuth (latest first; flagship = gpt-5.4-codex)
+// Models available via Codex OAuth (latest first; includes standard GPT and Codex variants)
 export const CODEX_MODELS = [
+  'gpt-5.5',
   'gpt-5.4-codex',
   'gpt-5.4-codex-mini',
   'gpt-5.4',
@@ -36,6 +37,26 @@ export const CODEX_MODELS = [
   'gpt-5.1-codex',
   'gpt-5.1',
 ];
+
+const CHATGPT_ACCOUNT_CODEX_MODEL_FALLBACKS: Record<string, string> = {
+  'gpt-5.5': 'gpt-5.4',
+  'gpt-5.4-codex': 'gpt-5.4',
+  'gpt-5.4-codex-mini': 'gpt-5.4-mini',
+  'gpt-5.3-codex': 'gpt-5.3',
+  'gpt-5.3-codex-spark': 'gpt-5.3',
+  'gpt-5.2-codex': 'gpt-5.2',
+  'gpt-5.1-codex-max': 'gpt-5.1',
+  'gpt-5.1-codex-mini': 'gpt-5.1',
+  'gpt-5.1-codex': 'gpt-5.1',
+};
+
+function getChatgptAccountCompatibleModel(model: string): string {
+  return CHATGPT_ACCOUNT_CODEX_MODEL_FALLBACKS[String(model || '').trim()] || String(model || '').trim();
+}
+
+function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string): boolean {
+  return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
+}
 
 // Reasoning effort levels accepted by the Codex Responses API.
 // Maps Prometheus-internal "think" hints → the literal effort string sent in the request body.
@@ -64,14 +85,12 @@ export class OpenAICodexAdapter implements LLMProvider {
     const accountId = tokens?.account_id || '';
 
     const headers: Record<string, string> = {
+      ...buildCodexCloudflareHeaders(token, accountId),
       'Content-Type':      'application/json',
       'Authorization':     `Bearer ${token}`,
       'OpenAI-Beta':       'responses=experimental',
       'Accept':            'text/event-stream',
     };
-    if (accountId) {
-      headers['chatgpt-account-id'] = accountId;
-    }
     return headers;
   }
 
@@ -191,55 +210,67 @@ export class OpenAICodexAdapter implements LLMProvider {
 
     const hasTools = Array.isArray(options?.tools) && options!.tools!.length > 0;
     const toolChoice = hasTools ? 'auto' : 'auto';
+    const input = this.buildInput(messages);
 
-    const body: any = {
-      model,
-      store: false,
-      input: this.buildInput(messages),
-      stream: true,
-      tool_choice: toolChoice,
-      parallel_tool_calls: true,
-    };
-    if (instructions) body.instructions = instructions;
-    // Reasoning effort support (Codex reasoning models).
-    // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
-    const cfgRoot = getConfig().getConfig() as any;
-    const codexCfg = cfgRoot?.llm?.providers?.openai_codex || {};
-    const configuredEffort = typeof codexCfg.reasoning_effort === 'string' ? codexCfg.reasoning_effort.trim() : '';
-    if (options?.think !== false && (options?.think || configuredEffort)) {
-      const rawEffort = options?.think
-        ? (typeof options.think === 'string' ? options.think : 'medium')
-        : configuredEffort;
-      const effort = CODEX_EFFORT_MAP[rawEffort] || 'medium';
-      if (effort !== 'none') {
-        body.reasoning = { effort, summary: 'auto' };
+    const runRequest = async (requestedModel: string, allowFallback: boolean): Promise<ChatResult> => {
+      const body: any = {
+        model: requestedModel,
+        store: false,
+        input,
+        stream: true,
+        tool_choice: toolChoice,
+        parallel_tool_calls: true,
+      };
+      if (instructions) body.instructions = instructions;
+      // Reasoning effort support (Codex reasoning models).
+      // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
+      const cfgRoot = getConfig().getConfig() as any;
+      const codexCfg = cfgRoot?.llm?.providers?.openai_codex || {};
+      const configuredEffort = typeof codexCfg.reasoning_effort === 'string' ? codexCfg.reasoning_effort.trim() : '';
+      if (options?.think !== false && (options?.think || configuredEffort)) {
+        const rawEffort = options?.think
+          ? (typeof options.think === 'string' ? options.think : 'medium')
+          : configuredEffort;
+        const effort = CODEX_EFFORT_MAP[rawEffort] || 'medium';
+        if (effort !== 'none') {
+          body.reasoning = { effort, summary: 'auto' };
+        }
       }
-    }
-    if (Array.isArray(options?.tools) && options!.tools!.length) {
-      body.tools = options!.tools.map((t: any) => ({
-        type: 'function',
-        name: t.function?.name || t.name,
-        description: t.function?.description || t.description || '',
-        parameters: t.function?.parameters || t.parameters || {},
-      }));
-    }
+      if (Array.isArray(options?.tools) && options!.tools!.length) {
+        body.tools = options!.tools.map((t: any) => ({
+          type: 'function',
+          name: t.function?.name || t.name,
+          description: t.function?.description || t.description || '',
+          parameters: t.function?.parameters || t.parameters || {},
+        }));
+      }
 
-    const response = await fetch(CODEX_ENDPOINT, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000),
-    });
+      const response = await fetch(CODEX_ENDPOINT, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
-    }
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        const fallbackModel = getChatgptAccountCompatibleModel(requestedModel);
+        if (
+          allowFallback
+          && fallbackModel
+          && fallbackModel !== requestedModel
+          && isUnsupportedChatgptAccountCodexModel(response.status, text)
+        ) {
+          console.warn(`[openai_codex] Model "${requestedModel}" is unsupported for this ChatGPT account. Retrying with "${fallbackModel}".`);
+          return runRequest(fallbackModel, false);
+        }
+        throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
+      }
 
-	    // Parse SSE stream to extract the completed response
-	    const result = await this.parseSSEStream(response, options?.onToken, options?.onThinking, options?.onReasoningSummary);
-	    return result;
-	  }
+      return this.parseSSEStream(response, options?.onToken, options?.onThinking, options?.onReasoningSummary);
+    };
+
+    return runRequest(String(model || '').trim(), true);
+  }
 
 	  private async parseSSEStream(
 	    response: Response,
@@ -414,6 +445,7 @@ export class OpenAICodexAdapter implements LLMProvider {
     messages.push({ role: 'user', content: prompt });
     const result = await this.chat(messages, model, {
       max_tokens:  options?.max_tokens,
+      think:       options?.think,
     });
     return { response: contentToString(result.message.content) };
   }
@@ -424,13 +456,8 @@ export class OpenAICodexAdapter implements LLMProvider {
 
 	  async testConnection(): Promise<boolean> {
 	    try {
-	      const raw = getConfig().getConfig() as any;
-	      const model = String(raw?.llm?.providers?.openai_codex?.model || 'gpt-5.4-codex').trim() || 'gpt-5.4-codex';
-	      const result = await Promise.race([
-	        this.chat([{ role: 'user', content: 'Reply with pong only.' }], model),
-	        new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
-	      ]);
-	      return !!result;
+	      const token = await getValidToken(this.configDir);
+	      return !!String(token || '').trim();
 	    } catch {
 	      return false;
 	    }

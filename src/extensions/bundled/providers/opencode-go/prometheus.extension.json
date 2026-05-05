@@ -1,0 +1,66 @@
+{
+  "id": "opencode-go",
+  "kind": "provider",
+  "name": "OpenCode Go",
+  "description": "OpenCode Go hosted gateway for GLM, Kimi, Qwen, and MiMo model access.",
+  "category": "Gateway",
+  "enabledByDefault": true,
+  "docsUrl": "https://opencode.ai/auth",
+  "tags": ["opencode-go", "gateway", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "mimo-v2-pro", "mimo-v2-omni", "qwen3.6-plus", "qwen3.5-plus"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#1D4ED8"
+  },
+  "ownership": {
+    "providerIds": ["opencode-go"],
+    "modelPrefixes": ["kimi-", "glm-", "mimo-", "qwen"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["OPENCODE_GO_API_KEY"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "open_..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "kimi-k2.6"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://opencode.ai/zen/go/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://opencode.ai/zen/go/v1",
+      "model": "kimi-k2.6"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

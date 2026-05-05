@@ -1,0 +1,61 @@
+{
+  "id": "gemini",
+  "kind": "provider",
+  "name": "Google Gemini",
+  "description": "Google Gemini models via API key authentication.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://ai.google.dev/",
+  "tags": ["google", "gemini", "api"],
+  "runtime": {
+    "binding": "providers/gemini-adapter"
+  },
+  "ui": {
+    "color": "#2563EB"
+  },
+  "ownership": {
+    "providerIds": ["gemini"],
+    "modelPrefixes": ["gemini-"],
+    "capabilities": ["llm", "api_key_auth"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "AIza..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "gemini-2.5-pro"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "model": "gemini-2.5-pro"
+    },
+    "schema": {
+      "api_key": "string",
+      "model": "string"
+    },
+    "uiHints": {
+      "api_key": {
+        "label": "API Key",
+        "help": "Google AI Studio or Gemini API key."
+      },
+      "model": {
+        "label": "Model",
+        "help": "Default Gemini model."
+      }
+    }
+  }
+}

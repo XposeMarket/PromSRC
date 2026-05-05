@@ -1,0 +1,66 @@
+{
+  "id": "huggingface",
+  "kind": "provider",
+  "name": "Hugging Face",
+  "description": "Hugging Face router for hosted open models.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://huggingface.co/inference-api",
+  "tags": ["huggingface", "router", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "chatCompletionsPath": "/chat/completions",
+      "modelsPath": "/models",
+      "staticModels": ["moonshotai/Kimi-K2.5", "Qwen/Qwen3.5-397B-A17B", "Qwen/Qwen3.5-35B-A3B", "deepseek-ai/DeepSeek-V3.2", "MiniMaxAI/MiniMax-M2.5", "zai-org/GLM-5", "XiaomiMiMo/MiMo-V2-Flash"],
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#F59E0B"
+  },
+  "ownership": {
+    "providerIds": ["huggingface"],
+    "modelPrefixes": ["moonshotai/", "Qwen/", "deepseek-ai/", "MiniMaxAI/", "zai-org/", "XiaomiMiMo/"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+  },
+  "setup": {
+    "authType": "api_key",
+    "envVars": ["HF_TOKEN"],
+    "statusMode": "generic",
+    "fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "input": "password",
+        "required": true,
+        "secret": true,
+        "placeholder": "hf_..."
+      },
+      {
+        "key": "model",
+        "label": "Model",
+        "input": "text",
+        "required": true,
+        "placeholder": "moonshotai/Kimi-K2.5"
+      },
+      {
+        "key": "endpoint",
+        "label": "Endpoint Override",
+        "input": "text",
+        "placeholder": "https://router.huggingface.co/v1"
+      }
+    ]
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "https://router.huggingface.co/v1",
+      "model": "moonshotai/Kimi-K2.5"
+    },
+    "schema": {
+      "api_key": "string",
+      "endpoint": "string?",
+      "model": "string"
+    }
+  }
+}

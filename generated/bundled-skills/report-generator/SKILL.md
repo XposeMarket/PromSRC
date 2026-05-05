@@ -1,9 +1,8 @@
 ---
-name: Report Generator
-description: Turn structured data, research results, or task outputs into clean formatted reports. Use whenever the user wants a summary, writeup, briefing, or formatted document from raw data or completed work. Also triggers automatically after any research task, data pipeline, or multi-agent workflow to produce a readable deliverable. Triggers on: generate report, write report, summarize results, create summary, format output, write up findings, produce briefing, make a document, turn this into a report, output report, markdown report, HTML report.
-emoji: 📄
+name: report-generator
+description: Turn any structured data or completed task output into a clean, readable report. Choose format based on destination.
+emoji: "🧩"
 version: 1.0.0
-triggers: generate report, write report, summarize results, create summary, format output, write up findings, briefing, make a document, turn into report, markdown report, HTML report, weekly report, status report, findings, output document
 ---
 
 # Report Generator

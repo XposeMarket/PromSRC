@@ -1,9 +1,8 @@
 ---
-name: Database Query
-description: Generate, explain, debug, and optimize SQL queries. Supports PostgreSQL, SQLite, and Supabase (via MCP). Covers SELECT, INSERT, UPDATE, DELETE, JOINs, aggregations, CTEs, window functions, indexes, and schema design. Triggers on any database or SQL-related request.
-emoji: 🗄️
+name: database-query
+description: Use this skill for all SQL and database tasks — from simple lookups to complex analytical queries and schema design.
+emoji: "🧩"
 version: 1.0.0
-triggers: sql, query, database, postgres, postgresql, sqlite, supabase, select from, join, group by, aggregate, schema, table, migration, index, explain, slow query, optimize query, db query, insert into, update table
 ---
 
 # Database Query

@@ -1,0 +1,33 @@
+{
+  "id": "instagram",
+  "kind": "connector",
+  "name": "Instagram",
+  "description": "Connect Instagram through the Prometheus browser session for analytics, engagement, and social coaching workflows.",
+  "category": "Social",
+  "enabledByDefault": true,
+  "docsUrl": "https://www.instagram.com/",
+  "tags": ["instagram", "social", "browser session"],
+  "runtime": {
+    "binding": "gateway/connections/browser-session:instagram"
+  },
+  "ui": {
+    "color": "#E1306C",
+    "permissions": [
+      { "icon": "[]", "label": "Read posts, reels, and stories analytics" },
+      { "icon": "=", "label": "Read reach, impressions, and engagement" },
+      { "icon": "@", "label": "Read follower count and growth trends" },
+      { "icon": "#", "label": "Read comments on your posts" }
+    ]
+  },
+  "ownership": {
+    "capabilities": ["social", "analytics", "browser_session"]
+  },
+  "setup": {
+    "authType": "browser_session",
+    "statusMode": "generic",
+    "browserLogin": {
+      "url": "https://www.instagram.com/accounts/login/",
+      "checkUrl": "https://www.instagram.com/"
+    }
+  }
+}

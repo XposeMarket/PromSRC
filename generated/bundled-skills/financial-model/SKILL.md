@@ -1,9 +1,8 @@
 ---
-name: Financial Model
-description: Build, explain, and analyze financial models — P&L, unit economics, revenue projections, LTV/CAC, burn rate, runway, and scenario analysis. Outputs as structured tables, markdown, or generates Excel/CSV files. Triggers on any financial modeling, forecasting, or business math request.
-emoji: 💰
+name: financial-model
+description: Use this skill for financial modeling, business metric analysis, and projections. Outputs clean tables and optionally generates Excel/CSV files.
+emoji: "🧩"
 version: 1.0.0
-triggers: financial model, p&l, revenue projection, unit economics, ltv, cac, burn rate, runway, forecast, mrr, arr, revenue model, pro forma, business model, saas metrics, cogs, gross margin, break even, payback period, financial projection
 ---
 
 # Financial Model

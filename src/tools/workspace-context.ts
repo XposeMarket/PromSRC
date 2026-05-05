@@ -31,7 +31,29 @@ import path from 'path';
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
-const workspaceStorage = new AsyncLocalStorage<string>();
+interface WorkspaceScope {
+  workspacePath: string;
+  allowedPaths: string[];
+}
+
+const workspaceStorage = new AsyncLocalStorage<WorkspaceScope>();
+
+function normalizePath(p: string): string {
+  return path.resolve(String(p || ''));
+}
+
+function dedupePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of paths) {
+    const resolved = normalizePath(raw);
+    const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(resolved);
+  }
+  return out;
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -45,9 +67,17 @@ const workspaceStorage = new AsyncLocalStorage<string>();
  *     await reactor.run(task, options);
  *   });
  */
-export function runWithWorkspace<T>(workspacePath: string, fn: () => Promise<T>): Promise<T> {
-  const resolved = path.resolve(workspacePath);
-  return workspaceStorage.run(resolved, fn);
+export function runWithWorkspace<T>(
+  workspacePath: string,
+  fn: () => Promise<T>,
+  allowedPaths?: string[],
+): Promise<T> {
+  const resolved = normalizePath(workspacePath);
+  const scope: WorkspaceScope = {
+    workspacePath: resolved,
+    allowedPaths: dedupePaths([resolved, ...(allowedPaths || [])]),
+  };
+  return workspaceStorage.run(scope, fn);
 }
 
 /**
@@ -55,7 +85,17 @@ export function runWithWorkspace<T>(workspacePath: string, fn: () => Promise<T>)
  * Falls back to the global config workspace if called outside a scoped context.
  */
 export function getActiveWorkspace(globalFallback: string): string {
-  return workspaceStorage.getStore() ?? path.resolve(globalFallback);
+  return workspaceStorage.getStore()?.workspacePath ?? path.resolve(globalFallback);
+}
+
+export function hasActiveWorkspaceScope(): boolean {
+  return !!workspaceStorage.getStore();
+}
+
+export function getActiveAllowedWorkspaces(globalFallback: string, configuredAllowedPaths: string[] = []): string[] {
+  const scope = workspaceStorage.getStore();
+  if (scope) return scope.allowedPaths;
+  return dedupePaths([globalFallback, ...configuredAllowedPaths]);
 }
 
 /**
@@ -72,4 +112,14 @@ export function isPathInWorkspace(workspaceRoot: string, targetPath: string): bo
   if (base === target) return true;
   const rel = path.relative(base, target);
   return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+export function isPathInAnyWorkspace(workspaceRoots: string[], targetPath: string): boolean {
+  return workspaceRoots.some((root) => {
+    try {
+      return isPathInWorkspace(root, targetPath);
+    } catch {
+      return false;
+    }
+  });
 }

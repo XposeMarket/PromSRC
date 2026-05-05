@@ -21,6 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, execSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
+import { flushSession } from './session';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -217,6 +218,8 @@ export function runBuild(): BuildResult {
 interface ShutdownHooks {
   stopTelegram?: () => void;
   stopCron?: () => void;
+  stopTimers?: () => void;
+  stopInternalWatches?: () => void;
   stopHeartbeat?: () => void;
   stopBrain?: () => void;
   closeHttpServer?: () => Promise<void>;
@@ -330,6 +333,12 @@ async function shutdownGateway(): Promise<void> {
   try { _shutdownHooks.stopCron?.(); } catch (e: any) {
     console.warn('[lifecycle] Cron stop error:', e.message);
   }
+  try { _shutdownHooks.stopTimers?.(); } catch (e: any) {
+    console.warn('[lifecycle] Timer stop error:', e.message);
+  }
+  try { _shutdownHooks.stopInternalWatches?.(); } catch (e: any) {
+    console.warn('[lifecycle] Internal watch stop error:', e.message);
+  }
   try { _shutdownHooks.stopHeartbeat?.(); } catch (e: any) {
     console.warn('[lifecycle] Heartbeat stop error:', e.message);
   }
@@ -382,6 +391,13 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   console.log(`[lifecycle] Title: ${ctx.title || '(none)'}`);
 
   // Step 1: Write context for the next boot
+  if (restartCtx.previousSessionId) {
+    try {
+      flushSession(restartCtx.previousSessionId);
+    } catch (err: any) {
+      console.warn(`[lifecycle] Could not flush previous session before restart: ${String(err?.message || err)}`);
+    }
+  }
   writeRestartContext(restartCtx);
 
   // Step 2: Shut down current gateway

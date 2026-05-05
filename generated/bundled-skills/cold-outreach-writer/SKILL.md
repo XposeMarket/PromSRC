@@ -1,15 +1,7 @@
 ---
 name: Cold Outreach Writer
-description: >
-  Write cold email and DM sequences that get responses — multi-touch, personalized,
-  objection-aware, channel-appropriate. Use whenever the user needs to reach out to
-  prospects, build a sales sequence, write cold emails, draft LinkedIn DMs, create
-  outreach templates, or wants to improve reply rates. Triggers on: "cold email",
-  "cold outreach", "sales email", "outreach sequence", "LinkedIn DM", "email sequence",
-  "prospecting", "write an intro email", "reach out to leads", "outreach template",
-  "follow-up email", "sales sequence", "multi-touch", "email campaign", "improve reply rate",
-  "write to prospects", "outbound", "cold message", "drip sequence".
-emoji: 📨
+description: Cold Outreach Writer
+emoji: "🧩"
 version: 1.0.0
 triggers: cold email, cold outreach, sales email, outreach sequence, linkedin dm, prospecting, email sequence, intro email, reach out to leads, outreach template, follow-up email, sales sequence, multi-touch, email campaign, reply rate, outbound, cold message, drip sequence
 ---
@@ -152,7 +144,7 @@ Working on something in this space that [1 sentence on what you do]. Happy to sh
 
 ```
 Day 1  — Email 1: Personalized hook + value prop + low-ask CTA
-Day 3  — Email 2: Different angle. New proof point or pain framing. 
+Day 3  — Email 2: Different angle. New proof point or pain framing.
 Day 7  — Email 3: Content/insight share. No direct pitch.
 Day 14 — Email 4: "Last try" framing. Direct + honest.
 Day 21 — Email 5: Breakup email. Closes loop, sometimes generates replies.
@@ -186,7 +178,7 @@ RULE 5: If they're a 1st connection — reference the connection.
 
 ```
 Message 1 (connection request note or first message):
-"[Name], saw your post on [topic] — [one genuine observation]. 
+"[Name], saw your post on [topic] — [one genuine observation].
 Would love to connect if you're open to it."
 
 Message 2 (after they connect/reply):

@@ -1,0 +1,51 @@
+{
+  "id": "anthropic",
+  "kind": "provider",
+  "name": "Anthropic",
+  "description": "Anthropic Claude provider using Prometheus desktop authentication and setup token flow.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://docs.anthropic.com/",
+  "tags": ["anthropic", "claude", "desktop auth"],
+  "runtime": {
+    "binding": "providers/anthropic-adapter"
+  },
+  "ui": {
+    "color": "#D97706"
+  },
+  "ownership": {
+    "providerIds": ["anthropic"],
+    "modelPrefixes": ["claude-"],
+    "capabilities": ["llm", "setup_token_auth"]
+  },
+  "setup": {
+    "authType": "oauth_setup_token",
+    "statusMode": "anthropic_setup_token"
+  },
+  "config": {
+    "defaults": {
+      "model": "claude-sonnet-4-6",
+      "extended_thinking": false,
+      "thinking_budget": 10000
+    },
+    "schema": {
+      "model": "string",
+      "extended_thinking": "boolean?",
+      "thinking_budget": "number?"
+    },
+    "uiHints": {
+      "model": {
+        "label": "Model",
+        "help": "Default Claude model."
+      },
+      "extended_thinking": {
+        "label": "Extended Thinking",
+        "help": "Enable deeper reasoning for supported Claude models."
+      },
+      "thinking_budget": {
+        "label": "Thinking Budget",
+        "help": "Token budget for extended thinking."
+      }
+    }
+  }
+}

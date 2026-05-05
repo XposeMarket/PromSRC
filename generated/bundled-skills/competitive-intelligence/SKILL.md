@@ -1,17 +1,9 @@
 ---
 name: Competitive Intelligence
-description: >
-  Deep-dive competitor analysis covering pricing, features, positioning, strengths,
-  weaknesses, and win/loss patterns. Use whenever the user wants to understand the
-  competitive landscape, compare themselves to rivals, build a battle card, research
-  a competitor, analyze a market, or prepare for a sales conversation. Triggers on:
-  "who are our competitors", "competitive analysis", "how does X compare to Y",
-  "competitor research", "battle card", "win/loss analysis", "what is [company] doing",
-  "competitive landscape", "market map", "competitive positioning", "how do we stack up",
-  "what are [competitor]'s weaknesses", "benchmark against competitors".
-emoji: 🔍
+description: Structured process for turning scattered competitor information into a clear, actionable picture of the competitive landscape.
+emoji: "🧩"
 version: 2.0.0
-triggers: competitive analysis, competitor research, battle card, win loss, competitive landscape, market map, how do we compare, competitive positioning, benchmark, rival, competitor pricing, competitor features, how does X compare
+triggers: competitive analysis, competitor research, battle card, win loss, competitive landscape, market map, how do we compare, competitive positioning, benchmark, rival, competitor pricing, competitor features, how does x compare
 ---
 
 # Competitive Intelligence

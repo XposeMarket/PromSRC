@@ -63,15 +63,23 @@
   flex-direction: column;
   align-items: stretch;
   gap: 0;
-  border: 1px solid rgba(255,255,255,0.10);
+  border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  background: rgba(255,255,255,0.06);
+  background: color-mix(in srgb, var(--panel-2) 74%, transparent);
   margin-bottom: 8px;
   overflow: hidden;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
-.project-card:hover { border-color: rgba(255,255,255,0.20); background: rgba(255,255,255,0.09); box-shadow: 0 3px 10px rgba(0,0,0,0.25); }
-.project-card.active-project { border-color: #3a5080; background: rgba(76,141,255,0.12); }
+.project-card:hover {
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.project-card.active-project {
+  border-color: var(--flame-border);
+  background: color-mix(in srgb, var(--flame-glow) 55%, var(--panel) 45%);
+  box-shadow: 0 0 0 1px rgba(249,115,22,0.08);
+}
 
 .project-card-header {
   display: flex;
@@ -85,13 +93,14 @@
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: rgba(76,141,255,0.15);
-  border: 1px solid #3a5080;
+  background: color-mix(in srgb, var(--flame-glow) 65%, var(--panel-2) 35%);
+  border: 1px solid var(--flame-border);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   font-size: 15px;
+  color: var(--text);
 }
 .project-card-meta { flex: 1; min-width: 0; }
 .project-card-name {
@@ -110,10 +119,10 @@
 .project-card-add-btn {
   width: 24px;
   height: 24px;
-  border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(255,255,255,0.08);
-  color: #9a9890;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -178,9 +187,12 @@ body.projects-edit-mode .project-card-delete-btn { display: flex; }
   transition: background 0.12s ease;
 }
 .project-session-item:last-child { border-bottom: none; }
-.project-session-item:hover { background: rgba(22,104,227,0.06); }
-.project-session-item.active-session { background: #e8f2ff; color: #0d4faf; font-weight: 700; }
-:root[data-theme="dark"] .project-session-item.active-session { background: rgba(76,141,255,0.12); color: #7db3ff; }
+.project-session-item:hover { background: color-mix(in srgb, var(--panel) 82%, transparent); }
+.project-session-item.active-session {
+  background: color-mix(in srgb, var(--flame-glow) 55%, var(--panel) 45%);
+  color: var(--text);
+  font-weight: 700;
+}
 
 .project-session-dot {
   width: 5px;
@@ -470,9 +482,9 @@ body.in-project-session .project-editors-wrap { display: flex; }
   user-select: none;
 }
 .channel-hub-card:hover {
-  border-color: #c2d6f4;
-  box-shadow: 0 3px 10px rgba(15,60,120,0.07);
-  background: var(--bg-soft);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-sm);
+  background: var(--panel-2);
 }
 .channel-hub-card-empty {
   opacity: 0.55;
@@ -487,13 +499,15 @@ body.in-project-session .project-editors-wrap { display: flex; }
 .channel-hub-card-icon {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  border: 1px solid transparent;
+  border-radius: 8px;
+  border: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 18px;
   flex-shrink: 0;
+  background: color-mix(in srgb, var(--panel-2) 82%, transparent);
+  color: var(--text);
 }
 
 .channel-hub-card-body {
