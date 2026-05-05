@@ -23,8 +23,9 @@
     "start:compiled": "node dist/cli/index.js",
     "electron": "electron .",
     "build:win": "npm run patch:electron-native && electron-builder --win --config electron-builder.yml",
-    "build:public": "npm run build:backend && node scripts/copy-extension-descriptors.js && npm run prepare:public && npm run check:web-ui && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml",
-    "release": "npm run build:backend && node scripts/copy-extension-descriptors.js && npm run prepare:public && npm run check:web-ui && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml --publish=always",
+    "verify:public-release": "node scripts/verify-public-release.js",
+    "build:public": "npm run build:backend && node scripts/copy-extension-descriptors.js && npm run prepare:public && npm run check:web-ui && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml && npm run verify:public-release",
+    "release": "npm run build:public && electron-builder --win --config electron-builder-public.yml --prepackaged release-public/win-unpacked --publish=always",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [

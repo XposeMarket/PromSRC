@@ -13,11 +13,46 @@ files:
   - assets/**/*
   - bin/**/*
   - scripts/**/*
-  - workspace/**/*
-  - .prometheus/**/*
   - node_modules/**/*
   - package.json
   - tsconfig.json
+  # Exclude runtime/private/local state and release artifacts.
+  - "!workspace/**/*"
+  - "!.prometheus/**/*"
+  - "!teams/**/*"
+  - "!.claude/**/*"
+  - "!.cursor/**/*"
+  - "!.vscode/**/*"
+  - "!.pip-cache/**/*"
+  - "!.pip-tmp/**/*"
+  - "!.tmp-py/**/*"
+  - "!release/**/*"
+  - "!release-public/**/*"
+  - "!output/**/*"
+  - "!tmp/**/*"
+  - "!*.log"
+  - "!*.docx"
+  - "!*.zip"
+  - "!*.mp4"
+  - "!*.png"
+  - "!eng.traineddata"
+  - "!CIS.docx"
+  - "!Prometheus_CIS_Plan.docx"
+  - "!Prometheus_Teams_CIS_Master_Plan.docx"
+  - "!prometheus_browser_intelligence.docx"
+  - "!skills.zip"
+  - "!Context.md"
+  - "!PROPOSALS_ANALYSIS.md"
+  - "!Prometheus_Teams_CIS_Master_Plan.md"
+  - "!apply-local-llm-patch.js"
+  - "!b5-server-v2.js"
+  - "!write-chat-helpers.js"
+  - "!patch-server-v2.js"
+  - "!rebrand-html.js"
+  - "!rebrand-src.js"
+  - "!test-ollama.mjs"
+  - "!check-build.bat"
+  - "!start-gateway.bat"
   # Exclude heavy/unnecessary stuff
   - "!node_modules/.cache/**/*"
   - "!**/*.map"
