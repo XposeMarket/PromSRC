@@ -160,7 +160,6 @@ function buildScheduledTaskPlan(job: CronJob): TaskPlanStep[] {
 type JobRunStatus = 'ok' | 'success' | 'error';
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
-const SUBAGENT_SCHEDULE_TIMEOUT_MS = 5 * 60 * 1000;
 const TASK_TERMINAL_STATUSES = new Set(['complete', 'failed', 'needs_assistance', 'awaiting_user_input', 'paused', 'stalled']);
 const RUN_HISTORY_COMPACTION_DELAY_MS = 15 * 1000;
 
@@ -991,7 +990,6 @@ export class CronScheduler {
               teamSubagentId,
               effectivePrompt,
               teamId,
-              SUBAGENT_SCHEDULE_TIMEOUT_MS,
               'cron'
             );
             scheduledSubagentTaskId = teamResult.taskId;

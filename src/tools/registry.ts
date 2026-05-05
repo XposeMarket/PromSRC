@@ -2,7 +2,7 @@ import { ToolResult } from '../types.js';
 import { shellTool } from './shell.js';
 import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool } from './files.js';
 import { webSearchTool, webFetchTool } from './web.js';
-// skill tools are handled in subagent-executor.ts, not the registry
+import { allSkillTools } from './skills.js';
 import { timeNowTool } from './time.js';
 import { personaReadTool, personaUpdateTool } from './persona.js';
 import { agentListTool, agentInfoTool } from './agent-control.js';
@@ -241,7 +241,10 @@ class ToolRegistry {
     // (memory_browse, memory_write, memory_read over USER.md/SOUL.md/MEMORY.md).
     // Time tool (system clock — no network)
     this.registerSafe(timeNowTool);
-    // Skills tools (list/enable/disable/create — executed via subagent-executor, not registry)
+    // Skill tools are core for standalone Reactor agents as well as the main chat runtime.
+    for (const tool of allSkillTools) {
+      this.registerSafe(tool);
+    }
     if (!isPublicDistributionBuild()) {
       const { selfUpdateTool } = require('./self-update.js');
       const { readSourceTool, listSourceTool, sourceStatsTool, webUiSourceStatsTool } = require('./source-access.js');

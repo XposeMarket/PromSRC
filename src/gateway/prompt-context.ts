@@ -881,16 +881,17 @@ Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct
   Auto-reverts after turn end — never switch back manually.
 
 ${BG_AGENT_RUNTIME_HINT}`;
+  const baseMenu = `${menu}\n\n${TOOL_BLOCKS.skills}`;
 
-  if (activatedCategories.size === 0) return menu;
+  if (activatedCategories.size === 0) return baseMenu;
 
   const activePolicies: string[] = [];
   for (const cat of activatedCategories) {
     if (CATEGORY_POLICIES[cat]) activePolicies.push(CATEGORY_POLICIES[cat]);
   }
 
-  if (activePolicies.length === 0) return menu;
-  return menu + '\n\n' + activePolicies.join('\n\n');
+  if (activePolicies.length === 0) return baseMenu;
+  return baseMenu + '\n\n' + activePolicies.join('\n\n');
 }
 
 // ─── buildPersonalityContext ──────────────────────────────────────────────────────

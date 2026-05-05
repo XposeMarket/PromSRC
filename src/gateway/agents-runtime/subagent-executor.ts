@@ -167,9 +167,9 @@ import {
 import { buildConnectorStatus } from '../tool-builder';
 import { handleConnectorTool } from '../tools/handlers/connector-handlers';
 import { appendJournal, createTask, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus } from '../tasks/task-store';
-import { bindTaskRunToSession } from '../tasks/task-run-mirror';
+import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
 import type { SkillWindow } from '../prompt-context';
-import { isToolHiddenInPublicBuild } from '../../runtime/distribution.js';
+import { isToolHiddenInPublicBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { getApprovalQueue } from '../verification-flow.js';
 import { DEV_SRC_SELF_EDIT_MODE, DEV_SRC_SELF_EDIT_REPAIR_MODE } from '../proposals/dev-src-self-edit.js';
 import {
@@ -203,7 +203,7 @@ export interface ExecuteToolDeps {
   sanitizeAgentId: (value: any) => string;
   normalizeAgentsForSave: (agents: any[]) => any[];
   buildTeamDispatchContext: (teamId: string, agentId: string, baseTask: string, extraContext?: string) => string;
-  runTeamAgentViaChat: (agentId: string, task: string, teamId: string, timeout?: number) => Promise<any>;
+  runTeamAgentViaChat: (agentId: string, task: string, teamId: string) => Promise<any>;
   broadcastTeamEvent: (data: any) => void;
   bindTeamNotificationTargetFromSession: (teamId: string, sessionId: string, source: string) => void;
   pauseManagedTeamInternal: (teamId: string, reason?: string) => any;
@@ -629,6 +629,99 @@ function resolveTaskForSession(sessionId: string) {
   }
 }
 
+function shouldStartTeamStatusTaskMirror(phase: string, currentTask: string, blockedReason: string): boolean {
+  const normalizedPhase = String(phase || '').trim().toLowerCase();
+  const taskText = String(currentTask || '').trim();
+  const blockedText = String(blockedReason || '').trim();
+  if (!taskText && !blockedText) return false;
+  if (['ready', 'idle', 'done', 'complete', 'completed', 'standby', 'standing_by'].includes(normalizedPhase)) {
+    return false;
+  }
+  return [
+    'executing',
+    'running',
+    'planning',
+    'reviewing',
+    'verifying',
+    'checking',
+    'working',
+    'blocked',
+    'waiting_for_context',
+  ].includes(normalizedPhase) || !!taskText;
+}
+
+function maybeStartTeamStatusTaskMirror(
+  sessionId: string,
+  deps: ExecuteToolDeps,
+  noteContext: {
+    teamId: string;
+    authorId: string;
+    conversationMode: 'manager' | 'member_room' | 'member_direct' | 'dispatch';
+  },
+  agentName: string,
+  phase: string,
+  currentTask: string,
+  blockedReason: string,
+): string | undefined {
+  if (getTaskRunBinding(sessionId)?.taskId) return undefined;
+  if (!shouldStartTeamStatusTaskMirror(phase, currentTask, blockedReason)) return undefined;
+
+  const taskText = String(currentTask || blockedReason || 'Team member work').trim();
+  const title = `${agentName || noteContext.authorId}: ${taskText.slice(0, 80)}`;
+  const task = createTask({
+    title,
+    prompt: taskText,
+    sessionId,
+    channel: 'web',
+    plan: [{
+      index: 0,
+      description: taskText.slice(0, 160) || title,
+      status: 'pending',
+    }],
+    teamSubagent: {
+      teamId: noteContext.teamId,
+      agentId: noteContext.authorId,
+      agentName,
+    },
+  });
+  updateTaskStatus(task.id, 'running');
+  setTaskStepRunning(task.id, 0);
+  appendJournal(task.id, {
+    type: 'status_push',
+    content: `Task mirror started from update_my_status: ${String(phase || 'running')}${taskText ? ` | ${taskText}` : ''}`,
+  });
+  bindTaskRunToSession(sessionId, {
+    taskId: task.id,
+    source: 'team_status',
+    teamId: noteContext.teamId,
+    agentId: noteContext.authorId,
+  });
+  try {
+    deps.broadcastWS?.({
+      type: 'task_running',
+      taskId: task.id,
+      title,
+      source: 'team_status',
+      sessionId,
+      teamId: noteContext.teamId,
+      agentId: noteContext.authorId,
+      agentName,
+    });
+    deps.broadcastWS?.({ type: 'task_panel_update', taskId: task.id, teamId: noteContext.teamId, agentId: noteContext.authorId });
+    deps.broadcastTeamEvent?.({
+      type: 'task_running',
+      taskId: task.id,
+      teamId: noteContext.teamId,
+      agentId: noteContext.authorId,
+      agentName,
+      taskSummary: taskText,
+      source: 'team_status',
+      startedAt: task.startedAt,
+    });
+  } catch {}
+  return task.id;
+}
+
 function getSourceVerificationCommandForSession(sessionId: string): string {
   const task = resolveTaskForSession(sessionId);
   const explicit = String(task?.proposalExecution?.repairContext?.canonicalBuildCommand || '').trim();
@@ -671,15 +764,52 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	  // (one level up from workspace) so edits land in the actual source tree.
 	  // All other paths resolve to workspace as normal.
 	  const _isProposalSession = isProposalExecutionSession(sessionId);
+  function hasPrometheusSourceShape(candidateRoot: string): boolean {
+    const root = path.resolve(String(candidateRoot || ''));
+    return fs.existsSync(path.join(root, 'package.json'))
+      && fs.existsSync(path.join(root, 'src'))
+      && fs.existsSync(path.join(root, 'web-ui'));
+  }
+  function candidateProjectRootsFromAllowedWorkspaces(configuredWorkspace: string): string[] {
+    if (!hasActiveWorkspaceScope()) return [];
+    const roots = getActiveAllowedWorkspaces(configuredWorkspace, []);
+    const candidates: string[] = [];
+    for (const rawRoot of roots) {
+      const allowedRoot = path.resolve(String(rawRoot || ''));
+      if (!allowedRoot) continue;
+      candidates.push(allowedRoot);
+      const base = path.basename(allowedRoot).toLowerCase();
+      if (base === 'src' || base === 'web-ui') {
+        candidates.push(path.dirname(allowedRoot));
+      }
+    }
+    return candidates;
+  }
 	  function resolveProjectRootForSourceAccess(): string {
       const proposalTask = resolveProposalExecutionTask();
       const explicitProjectRoot = String(proposalTask?.proposalExecution?.projectRoot || '').trim();
       if (explicitProjectRoot) {
         return path.resolve(explicitProjectRoot);
       }
-	    if (String(sessionId || '').startsWith('team_dispatch_')) {
-	      return getConfig().getWorkspacePath() || path.resolve(workspacePath, '..');
-	    }
+      const configuredWorkspace = path.resolve(getConfig().getWorkspacePath() || workspacePath);
+      const workspaceRoot = path.resolve(workspacePath);
+      const scopedCandidates = candidateProjectRootsFromAllowedWorkspaces(configuredWorkspace);
+      const candidates = hasActiveWorkspaceScope()
+        ? scopedCandidates
+        : [
+            resolvePrometheusRoot(),
+            path.dirname(configuredWorkspace),
+            configuredWorkspace,
+            path.dirname(workspaceRoot),
+          ];
+      const seen = new Set<string>();
+      for (const candidate of candidates) {
+        const resolved = path.resolve(candidate);
+        const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (hasPrometheusSourceShape(resolved)) return resolved;
+      }
 	    return path.resolve(workspacePath, '..');
 	  }
   const PROM_ROOT_ALLOWED_ROOT_FILES = new Set([
@@ -1775,7 +1905,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const task = String(args?.task || '').trim();
         const context = args?.context ? String(args.context) : undefined;
         const background = args?.background === true;
-        const timeoutMs = Math.max(5000, Math.min(1800000, Number(args?.timeout_ms) || 300000));
         if (!teamId || !agentId || !task) {
           return { name, args, result: 'ERROR: dispatch_team_agent requires team_id, agent_id, and task', error: true };
         }
@@ -1836,7 +1965,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               startedAt: Date.now(),
             });
           }
-          const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId, timeoutMs);
+          const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId);
           if (dispatchRecord) {
             updateTeamDispatchRecord(teamId, dispatchRecord.id, {
               status: result.success ? 'completed' : 'failed',
@@ -2075,11 +2204,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
         let ok = false;
         let data: any = { team_id: teamId, action };
+        let shouldMirrorGoalUpdateToChat = action !== 'set_focus';
         if (action === 'set_focus') {
           const value = String(args?.value || args?.focus || '').trim();
           if (!value) return { name, args, result: 'ERROR: set_focus requires value', error: true };
+          const currentFocus = String((team as any)?.currentFocus || (team as any)?.roomState?.runGoal || '').trim();
+          if (currentFocus && currentFocus === value) {
+            return { name, args, result: JSON.stringify({ success: true, unchanged: true, ...data, focus: value }, null, 2), error: false };
+          }
           ok = updateTeamFocus(teamId, value);
           data.focus = value;
+          shouldMirrorGoalUpdateToChat = args?.announce === true || args?.mirror_to_chat === true;
         } else if (action === 'set_mission') {
           const value = String(args?.value || args?.mission || '').trim();
           if (!value) return { name, args, result: 'ERROR: set_mission requires value', error: true };
@@ -2127,9 +2262,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `ERROR: Unknown manage_team_goal action "${actionRaw}".`, error: true };
         }
         if (ok) {
-          const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: `Goal update (${action}): ${JSON.stringify(data).slice(0, 500)}` });
           deps.broadcastTeamEvent({ type: 'team_goal_updated', teamId, teamName: team.name, action, data });
-          deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg });
+          if (shouldMirrorGoalUpdateToChat) {
+            const chatMsg = appendTeamChat(teamId, { from: 'manager', fromName: 'Manager', content: `Goal update (${action}): ${JSON.stringify(data).slice(0, 500)}` });
+            deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg });
+          }
         }
         return { name, args, result: JSON.stringify({ success: ok, ...data }, null, 2), error: !ok };
       }
@@ -6018,7 +6155,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           const action = String(args.action || '').trim().toLowerCase();
           if (!action) {
-            return { name, args, result: 'team_manage requires action: list|create|start|trigger_review|dispatch|pause|resume', error: true };
+            return { name, args, result: 'team_manage requires action: list|create|set_allowed_work_paths|start|trigger_review|dispatch|pause|resume', error: true };
           }
 
           if (action === 'list') {
@@ -6028,6 +6165,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               description: t.description,
               emoji: t.emoji,
               subagentIds: t.subagentIds,
+              allowedWorkPaths: Array.isArray((t as any).allowedWorkPaths) ? (t as any).allowedWorkPaths : [],
               teamContext: String(t.teamContext || '').slice(0, 220),
               reviewTrigger: t.manager.reviewTrigger,
               paused: t.manager?.paused === true,
@@ -6079,6 +6217,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
               : 'after_each_run') as 'after_each_run' | 'after_all_runs' | 'daily' | 'manual';
 
             const purposeStr = args.purpose ? String(args.purpose).slice(0, 1000) : undefined;
+            const allowedWorkPaths = Array.isArray(args.allowed_work_paths)
+              ? args.allowed_work_paths.map((v: any) => String(v).trim()).filter(Boolean)
+              : Array.isArray(args.allowedWorkPaths)
+                ? args.allowedWorkPaths.map((v: any) => String(v).trim()).filter(Boolean)
+                : [];
 	            const team = createManagedTeam({
               name: teamName.slice(0, 80),
               description: String(args.description || '').slice(0, 300),
@@ -6090,6 +6233,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 args.manager_system_prompt || `You are the manager of the "${teamName}" team. Your purpose is: ${purposeStr || teamContext}`
               ).slice(0, 2000),
               managerModel: args.manager_model ? String(args.manager_model) : undefined,
+              allowedWorkPaths,
               reviewTrigger,
 	              originatingSessionId: args.originating_session_id ? String(args.originating_session_id) : undefined,
 	            });
@@ -6143,6 +6287,35 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 kickoffAfterSeconds: kickoffInitial ? kickoffSeconds : null,
                 kickoffAt,
               }, null, 2),
+              error: false,
+            };
+          }
+
+          if (action === 'set_allowed_work_paths' || action === 'set_allowed_paths' || action === 'update_allowed_work_paths') {
+            const teamId = String(args.team_id || args.teamId || '').trim();
+            if (!teamId) return { name, args, result: 'team_manage(set_allowed_work_paths) requires team_id', error: true };
+            const team = getManagedTeam(teamId);
+            if (!team) return { name, args, result: `Team not found: ${teamId}`, error: true };
+            const rawPaths = Array.isArray(args.allowed_work_paths)
+              ? args.allowed_work_paths
+              : Array.isArray(args.allowedWorkPaths)
+                ? args.allowedWorkPaths
+                : Array.isArray(args.paths)
+                  ? args.paths
+                  : [];
+            team.allowedWorkPaths = rawPaths.map((v: any) => String(v).trim()).filter(Boolean);
+            team.updatedAt = Date.now();
+            saveManagedTeam(team);
+            deps.broadcastTeamEvent({
+              type: 'team_updated',
+              teamId: team.id,
+              teamName: team.name,
+              allowedWorkPaths: team.allowedWorkPaths,
+            });
+            return {
+              name,
+              args,
+              result: JSON.stringify({ success: true, action, team_id: team.id, allowedWorkPaths: team.allowedWorkPaths }, null, 2),
               error: false,
             };
           }
@@ -6259,7 +6432,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                   context,
                 });
                 const startedAt = Date.now();
-                const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId, 300000);
+                const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId);
                 const finishedAt = Date.now();
                 recordAgentRun({
                   agentId,
@@ -8529,20 +8702,36 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }
             const fromAgentId = noteContext.authorId;
             const fromAgent = getAgentById(fromAgentId) as any;
+            const phase = String(args.phase || 'running').trim() || 'running';
+            const currentTask = String(args.current_task || '').trim();
+            const blockedReason = String(args.blocked_reason || '').trim();
+            const agentName = String(fromAgent?.name || fromAgentId).trim();
             const status = updateTeamMemberState(noteContext.teamId, fromAgentId, {
-              status: args.phase || 'running',
-              currentTask: args.current_task,
-              blockedReason: args.blocked_reason,
+              status: phase,
+              currentTask,
+              blockedReason,
               lastResult: args.result,
             });
             if (!status) return { name, args, result: `ERROR: Could not update status for ${fromAgentId}.`, error: true };
+            const mirroredTaskId = maybeStartTeamStatusTaskMirror(
+              sessionId,
+              deps,
+              noteContext,
+              agentName,
+              phase,
+              currentTask,
+              blockedReason,
+            );
             const summaryParts = [String(status.status)];
             if (status.currentTask) summaryParts.push(String(status.currentTask));
             if (status.blockedReason) summaryParts.push(`blocked: ${String(status.blockedReason)}`);
             if (status.lastResult) summaryParts.push(`result: ${String(status.lastResult).slice(0, 120)}`);
+            const normalizedStatus = String(status.status || '').toLowerCase();
+            const isAttentionStatus = normalizedStatus === 'blocked' || normalizedStatus === 'waiting_for_context';
+            const shouldMirrorStatusToChat = args?.announce === true || args?.mirror_to_chat === true || isAttentionStatus;
             appendTeamRoomMessage(noteContext.teamId, {
               actorType: 'member',
-              actorName: String(fromAgent?.name || fromAgentId).trim(),
+              actorName: agentName,
               actorId: fromAgentId,
               content: `Status update: ${summaryParts.join(' | ')}`,
               category: 'status',
@@ -8552,8 +8741,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 source: 'update_my_status',
               },
             }, {
-              mirrorToChat: noteContext.conversationMode !== 'member_direct',
+              mirrorToChat: noteContext.conversationMode !== 'member_direct' && shouldMirrorStatusToChat,
             });
+            if (mirroredTaskId) {
+              return {
+                name,
+                args,
+                result: `Status updated: ${status.status}${status.currentTask ? ' - ' + status.currentTask.slice(0, 60) : ''} | task mirror: ${mirroredTaskId}`,
+                error: false,
+              };
+            }
             return { name, args, result: `Status updated: ${status.status}${status.currentTask ? ' — ' + status.currentTask.slice(0, 60) : ''}`, error: false };
           } catch (err: any) {
             return { name, args, result: `update_my_status error: ${err.message}`, error: true };

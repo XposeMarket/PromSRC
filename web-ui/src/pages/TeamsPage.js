@@ -240,7 +240,7 @@ function getLeadingTeamChatTarget(text, teamOrId) {
   const leadingOffset = raw.length - trimmed.length;
   const mentions = findTeamChatMentions(raw, teamOrId);
   const leading = mentions.find((mention) => mention.start === leadingOffset);
-  if (!leading) return { type: 'room', targetId: '', targetLabel: '', routedMessage: raw.trim() };
+  if (!leading) return { type: 'team', targetId: '', targetLabel: 'team', routedMessage: raw.trim() };
   const routedMessage = raw.slice(leading.end).trim() || raw.trim();
   return {
     type: leading.participant.type,
@@ -248,6 +248,22 @@ function getLeadingTeamChatTarget(text, teamOrId) {
     targetLabel: leading.participant.label,
     routedMessage,
   };
+}
+
+function bindTeamChatInputListeners(input, teamId) {
+  if (!input) return;
+  if (input.dataset.teamChatBound === teamId) return;
+  input.dataset.teamChatBound = teamId;
+  input.addEventListener('input', () => {
+    teamChatDraftByTeam[teamId] = input.value || '';
+    resizeTeamChatInput();
+    refreshTeamChatMentionState(teamId);
+  });
+  input.addEventListener('keydown', (event) => handleTeamChatInputKeydown(event, teamId));
+  input.addEventListener('click', () => refreshTeamChatMentionState(teamId));
+  input.addEventListener('keyup', () => refreshTeamChatMentionState(teamId));
+  input.addEventListener('scroll', () => syncTeamChatInputMirror(teamId));
+  syncTeamChatInputMirror(teamId);
 }
 
 function syncTeamChatInputMirror(teamId) {
@@ -1239,8 +1255,8 @@ function refreshTeamChatComposerState(teamId) {
   const placeholder = document.getElementById('team-chat-input-placeholder');
   if (placeholder) {
     placeholder.textContent = busy
-      ? 'Queue a room note, or type @team, @manager, or @someone...'
-      : 'Post a room note, or type @team, @manager, or @someone...';
+      ? 'Queue a message for the team, or use @manager or @someone...'
+      : 'Message the team, or use @manager or @someone...';
   }
 }
 
@@ -1443,6 +1459,7 @@ function renderActiveTeamChat(teamId, opts = {}) {
   // and avoids the scroll-jump that comes from replacing the whole tab.
   if (msgElBefore && inputBefore) {
     msgElBefore.innerHTML = _renderTeamChatMessagesInner(team);
+    bindTeamChatInputListeners(inputBefore, teamId);
     refreshTeamChatComposerState(teamId);
     requestAnimationFrame(() => {
       const el = document.getElementById('team-chat-messages');
@@ -1466,15 +1483,7 @@ function renderActiveTeamChat(teamId, opts = {}) {
   const inputAfter = document.getElementById('team-chat-input');
   if (inputAfter) {
     inputAfter.value = teamChatDraftByTeam[teamId] || '';
-    inputAfter.addEventListener('input', () => {
-      teamChatDraftByTeam[teamId] = inputAfter.value || '';
-      resizeTeamChatInput();
-      refreshTeamChatMentionState(teamId);
-    });
-    inputAfter.addEventListener('keydown', (event) => handleTeamChatInputKeydown(event, teamId));
-    inputAfter.addEventListener('click', () => refreshTeamChatMentionState(teamId));
-    inputAfter.addEventListener('keyup', () => refreshTeamChatMentionState(teamId));
-    inputAfter.addEventListener('scroll', () => syncTeamChatInputMirror(teamId));
+    bindTeamChatInputListeners(inputAfter, teamId);
     resizeTeamChatInput();
     refreshTeamChatMentionState(teamId);
     refreshTeamChatComposerState(teamId);
@@ -3527,7 +3536,7 @@ function _renderTeamChatMessagesInner(team) {
     ? `<button onclick="showMoreTeamChat('${team.id}')" style="align-self:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;margin-bottom:4px">+ Show ${Math.min(20, hiddenCount)} earlier ${hiddenCount === 1 ? 'message' : 'messages'} (${hiddenCount} hidden)</button>`
     : '';
   const empty = msgs.length === 0 && !hasBackgroundManagerStream && liveDispatches.length === 0 && liveManagerStreams.length === 0 && liveMemberStreams.length === 0
-    ? '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Team room is quiet. Type normally to post a room note, or use @team, @manager, or @someone to address a participant directly.</div>'
+    ? '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">Team room is quiet. Type normally to message the whole team, or use @manager or @someone to address a participant directly.</div>'
     : '';
   return `
     ${showMoreBtn}
@@ -3571,7 +3580,7 @@ function renderTeamChatTab(team) {
         <div id="team-chat-mention-popover" style="display:none;position:absolute;left:0;right:0;bottom:calc(100% + 10px);z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 38px rgba(0,0,0,0.22);overflow:hidden"></div>
         <div style="position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden">
           <div id="team-chat-input-mirror" aria-hidden="true" style="position:absolute;inset:0;padding:12px 14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;pointer-events:none;color:var(--text);overflow:hidden"></div>
-          <div id="team-chat-input-placeholder" style="position:absolute;left:14px;right:14px;top:12px;font-size:13px;line-height:1.6;color:var(--muted);pointer-events:none">${isSending ? 'Queue a room note, or type @team, @manager, or @someone...' : 'Post a room note, or type @team, @manager, or @someone...'}</div>
+          <div id="team-chat-input-placeholder" style="position:absolute;left:14px;right:14px;top:12px;font-size:13px;line-height:1.6;color:var(--muted);pointer-events:none">${isSending ? 'Queue a message for the team, or use @manager or @someone...' : 'Message the team, or use @manager or @someone...'}</div>
           <textarea id="team-chat-input" rows="3" spellcheck="true" style="position:relative;z-index:1;width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:transparent;caret-color:var(--text);outline:none;min-height:64px"></textarea>
         </div>
       </div>

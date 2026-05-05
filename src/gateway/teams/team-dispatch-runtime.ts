@@ -15,6 +15,7 @@ import { getTeamWorkspacePath, buildWorkspaceContextBlock, ensureTeamWorkspace, 
 import { loadTask, saveTask } from '../tasks/task-store';
 import { bindTaskRunToSession, clearTaskRunBinding, completeNextOpenTaskStep } from '../tasks/task-run-mirror';
 import { getRuntimeToolCategories } from '../tool-builder';
+import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
 // These are injected at runtime to avoid circular imports with server-v2.ts
@@ -100,6 +101,7 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
   if (teamId) {
     try { teamWorkspacePath = ensureTeamWorkspace(teamId); } catch {}
   }
+  const allowedWorkPaths = resolveTeamAgentAllowedWorkPaths(team, teamWorkspacePath);
 
   let agentRoleBlock = '';
   if (agent) {
@@ -157,6 +159,8 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
           ``,
           `This is the team workspace for "${team?.name || teamId}". Write ALL task outputs and shared`,
           `files here. Do NOT write to your own agent workspace or any other path.`,
+          `Allowed work paths for reading/building/reference:`,
+          ...allowedWorkPaths.map((p) => `  - ${p}`),
           `  -> Check existing files here before creating new ones.`,
           `  -> Prior run context: memory.json, last_run.json, pending.json are in this directory.`,
         ].join('\n')
@@ -197,6 +201,35 @@ export interface BgAgentEntry {
 }
 export const _bgAgentResults = new Map<string, BgAgentEntry>();
 
+function normalizePathForCompare(p: string): string {
+  const resolved = path.resolve(String(p || ''));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function resolveTeamAgentAllowedWorkPaths(team: any, teamWorkspacePath?: string | null): string[] {
+  const mainWorkspace = getConfig().getWorkspacePath();
+  const rawValues = [
+    ...(Array.isArray(team?.allowedWorkPaths) ? team.allowedWorkPaths : []),
+    ...(Array.isArray(team?.allowed_work_paths) ? team.allowed_work_paths : []),
+  ];
+  const roots = [
+    mainWorkspace,
+    ...(teamWorkspacePath ? [teamWorkspacePath] : []),
+  ];
+  for (const raw of rawValues) {
+    const value = String(raw || '').trim();
+    if (!value) continue;
+    roots.push(path.isAbsolute(value) ? value : path.join(mainWorkspace, value));
+  }
+  const seen = new Set<string>();
+  return roots.map((p) => path.resolve(p)).filter((resolved) => {
+    const key = normalizePathForCompare(resolved);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export interface RunAgentResult {
   success: boolean;
   result: string;
@@ -227,7 +260,6 @@ export async function runTeamAgentViaChat(
   agentId: string,
   task: string,
   teamId: string,
-  timeoutMs = 300000,
   trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
 ): Promise<RunAgentResult> {
   if (!_dispatchDeps) {
@@ -257,6 +289,7 @@ export async function runTeamAgentViaChat(
   if (teamId) {
     try { teamWorkspacePath = ensureTeamWorkspace(teamId); } catch {}
   }
+  const allowedWorkPaths = resolveTeamAgentAllowedWorkPaths(team, teamWorkspacePath);
 
   // Load agent role from the team-scoped identity directory.
   // ensureTeamAgentIdentity bootstraps system_prompt.md from the global agent workspace
@@ -413,6 +446,7 @@ export async function runTeamAgentViaChat(
   if (teamWorkspacePath) {
     deps.setWorkspace(sessionId, teamWorkspacePath);
     cronTask.agentWorkspace = teamWorkspacePath;
+    cronTask.agentAllowedWorkPaths = allowedWorkPaths;
   }
   if (agentRouting.modelOverride) {
     cronTask.executorProvider = agentRouting.providerOverride
@@ -556,39 +590,38 @@ export async function runTeamAgentViaChat(
     teamId,
     agentId,
   });
-  let runTimeoutHandle: NodeJS.Timeout | undefined;
+  const abortSignal = { aborted: false };
+  const runtimeId = registerLiveRuntime({
+    kind: 'team_member',
+    label: `Team dispatch - ${agentName}`,
+    sessionId,
+    taskId: cronTask.id,
+    teamId,
+    agentId,
+    source: trigger,
+    detail: task.slice(0, 160),
+    abortSignal,
+  });
   _activeAgentSessions.add(sessionId);
   try {
-    const abortSignal = { aborted: false };
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      runTimeoutHandle = setTimeout(() => {
-        abortSignal.aborted = true;
-        reject(new Error(`Team agent timeout after ${timeoutMs}ms`));
-      }, timeoutMs);
-      if (typeof (runTimeoutHandle as any)?.unref === 'function') (runTimeoutHandle as any).unref();
-    });
-    const result = await Promise.race<any>([
-      deps.handleChat(
-        task,
-        sessionId,
-        (event, data) => broadcastTeamTaskEvent({
-          type: 'task_stream_event',
-          eventType: event,
-          data,
-        }),
-        undefined,
-        abortSignal,
-        callerContext,
-        agentRouting.modelOverride,
-        'team_subagent',
-        undefined,
-        undefined,
-        undefined,
-        agentRouting.providerOverride,
-      ),
-      timeoutPromise,
-    ]);
-    if (runTimeoutHandle) clearTimeout(runTimeoutHandle);
+    const result = await deps.handleChat(
+      task,
+      sessionId,
+      (event, data) => broadcastTeamTaskEvent({
+        type: 'task_stream_event',
+        eventType: event,
+        data,
+      }),
+      undefined,
+      abortSignal,
+      callerContext,
+      agentRouting.modelOverride,
+      'team_subagent',
+      undefined,
+      undefined,
+      undefined,
+      agentRouting.providerOverride,
+    );
 
     const finalTask = loadTask(cronTask.id);
     const resultText = String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
@@ -728,7 +761,7 @@ export async function runTeamAgentViaChat(
       taskId: cronTask.id,
     };
   } finally {
-    if (runTimeoutHandle) clearTimeout(runTimeoutHandle);
+    finishLiveRuntime(runtimeId);
     _activeAgentSessions.delete(sessionId);
     clearTaskRunBinding(sessionId, cronTask.id);
     if (teamId) {

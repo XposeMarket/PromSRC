@@ -334,6 +334,10 @@ export interface ManagedTeam {
   // Links to AgentDefinition IDs in config.agents[]
   subagentIds: string[];
 
+  // Extra filesystem roots shared by every team member. The main workspace
+  // and team workspace are always allowed at runtime.
+  allowedWorkPaths?: string[];
+
   // ── Structured Goal Model ──────────────────────────────────────────────────
   // `teamContext` is retained for backward compatibility but is now secondary.
   // The structured fields below are the source of truth for goal tracking.
@@ -1054,6 +1058,9 @@ function normalizeTeamRoomState(team: any): { state: TeamRoomState; changed: boo
 }
 
 function syncLegacyTeamFields(team: ManagedTeam): void {
+  if (!Array.isArray(team.allowedWorkPaths)) {
+    team.allowedWorkPaths = [];
+  }
   const roomState = team.roomState;
   if (!roomState) return;
   const purpose = String(roomState.purpose || team.purpose || team.mission || team.teamContext || team.description || '').trim().slice(0, 2000);
@@ -1178,6 +1185,7 @@ export function loadManagedTeamStore(): ManagedTeamStore {
         pendingChanges: pendingNormalized,
         changeHistory: historyNormalized,
         contextReferences: refsNormalized,
+        allowedWorkPaths: Array.isArray(team.allowedWorkPaths) ? team.allowedWorkPaths.map(String).filter(Boolean) : [],
         // Ensure runHistory is always an array (backwards-compat with older JSON)
         runHistory: Array.isArray(team.runHistory) ? team.runHistory : [],
       } as ManagedTeam;
@@ -1305,6 +1313,7 @@ export function createManagedTeam(input: {
   managerModel?: string;
   reviewTrigger?: ManagedTeam['manager']['reviewTrigger'];
   originatingSessionId?: string;
+  allowedWorkPaths?: string[];
 }): ManagedTeam {
   const now = Date.now();
   const purposeOrContext = input.purpose || input.teamContext || input.description || '';
@@ -1322,6 +1331,7 @@ export function createManagedTeam(input: {
       paused: false,
     },
     subagentIds: input.subagentIds,
+    allowedWorkPaths: Array.isArray(input.allowedWorkPaths) ? input.allowedWorkPaths.map(String).filter(Boolean) : [],
     teamContext: input.teamContext,
     teamMode: 'autonomous',
     purpose: purposeOrContext,

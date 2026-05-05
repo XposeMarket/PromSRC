@@ -22,6 +22,7 @@ import { ensureTeamWorkspace, ensureTeamAgentIdentity, getTeamWorkspacePath } fr
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { _activeAgentSessions, type RunAgentResult } from './team-dispatch-runtime';
 import { getRuntimeToolCategories } from '../tool-builder';
+import { runWithWorkspace } from '../../tools/workspace-context';
 
 type HandleChatFn = (
   message: string,
@@ -160,7 +161,7 @@ function buildAutoWakePrompt(reason?: string): string {
     `You have new teammate messages waiting in the team room.`,
     why ? `Wake reason: ${why}` : '',
     `Review your queued messages and the recent room context, then reply only if you have something useful to add.`,
-    `Update your status if it changed, and say clearly if you are ready to be dispatched or if you need manager context.`,
+    `Do not repeat readiness acknowledgements. Update your status only for a material change, blocker, or manager-needed state.`,
   ].filter(Boolean).join('\n');
 }
 
@@ -450,6 +451,35 @@ function resolveTeamMemberModelRouting(agentId: string): { providerOverride?: st
   return parseProviderModel(resolved.model);
 }
 
+function normalizePathForCompare(p: string): string {
+  const resolved = path.resolve(String(p || ''));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function resolveTeamMemberAllowedWorkPaths(agentId: string, teamId: string): string[] {
+  void agentId;
+  const team = getManagedTeam(teamId) as any;
+  const mainWorkspace = getConfig().getWorkspacePath();
+  const teamWorkspace = getTeamWorkspacePath(teamId);
+  const rawValues = [
+    ...(Array.isArray(team?.allowedWorkPaths) ? team.allowedWorkPaths : []),
+    ...(Array.isArray(team?.allowed_work_paths) ? team.allowed_work_paths : []),
+  ];
+  const roots = [mainWorkspace, teamWorkspace];
+  for (const raw of rawValues) {
+    const value = String(raw || '').trim();
+    if (!value) continue;
+    roots.push(path.isAbsolute(value) ? value : path.join(mainWorkspace, value));
+  }
+  const seen = new Set<string>();
+  return roots.map((p) => path.resolve(p)).filter((resolved) => {
+    const key = normalizePathForCompare(resolved);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function buildTeamMemberToolFilter(
   deps: TeamMemberRoomDeps,
   mode: 'room' | 'direct' = 'room',
@@ -481,6 +511,7 @@ function buildTeamMemberCallerContext(teamId: string, agentId: string, prompt: s
   const agent = getAgentById(agentId) as any;
   const agentName = String(agent?.name || agentId).trim();
   const workspacePath = getTeamWorkspacePath(teamId);
+  const allowedWorkPaths = resolveTeamMemberAllowedWorkPaths(agentId, teamId);
   const roomSummary = team ? buildTeamRoomSummary(team, {
     agentId,
     limitMessages: 18,
@@ -522,6 +553,8 @@ function buildTeamMemberCallerContext(teamId: string, agentId: string, prompt: s
           `[TEAM WORKSPACE]`,
           workspacePath,
           `Use this shared workspace if you need to inspect files or verify something for the team.`,
+          `Allowed work paths:`,
+          ...allowedWorkPaths.map((p) => `  - ${p}`),
         ].join('\n')
       : '',
     roleBlock ? `\n${roleBlock}` : '',
@@ -533,11 +566,11 @@ function buildTeamMemberCallerContext(teamId: string, agentId: string, prompt: s
     `[ROOM COLLABORATION RULES]`,
     `- Use talk_to_teammate to coordinate with other members or the manager.`,
     `- Use request_context or request_manager_help when you need manager input, a decision, or another teammate assigned.`,
-    `- Use post_to_team_chat when you want your note visible to the whole room immediately.`,
-    `- Use update_my_status to mark yourself planning, ready, waiting_for_context, blocked, or reviewing.`,
+    `- Your final reply is automatically posted to the team room. Do not also call post_to_team_chat for the same message.`,
+    `- Use update_my_status only when your state materially changed or you are blocked/waiting for context; do not call it just to say hello or repeat that you are ready.`,
     `- Use update_team_goal if you want to propose or refine plan items.`,
     `- Use share_artifact when you create or discover something the whole team should be able to reuse.`,
-    `- If you are ready for execution, say exactly what you're ready to do and update your status to ready.`,
+    `- If you are ready for execution, say exactly what you're ready to do. Update your status only if it was previously blocked, waiting, or stale.`,
     `- If you need something from the manager, ask plainly and update your status to waiting_for_context or blocked.`,
   ].filter(Boolean).join('\n');
 }
@@ -547,6 +580,7 @@ function buildTeamMemberDirectCallerContext(teamId: string, agentId: string, thr
   const agent = getAgentById(agentId) as any;
   const agentName = String(agent?.name || agentId).trim();
   const workspacePath = getTeamWorkspacePath(teamId);
+  const allowedWorkPaths = resolveTeamMemberAllowedWorkPaths(agentId, teamId);
   const roleBlock = readTeamMemberRoleBlock(teamId, agentId, agentName);
   const roomSummary = team ? buildTeamRoomSummary(team, {
     agentId,
@@ -598,6 +632,8 @@ function buildTeamMemberDirectCallerContext(teamId: string, agentId: string, thr
           `[TEAM WORKSPACE]`,
           workspacePath,
           `Use the shared workspace if you need to quickly inspect or verify something for this direct conversation.`,
+          `Allowed work paths:`,
+          ...allowedWorkPaths.map((p) => `  - ${p}`),
         ].join('\n')
       : '',
     roleBlock ? `\n${roleBlock}` : '',
@@ -758,7 +794,9 @@ export async function runTeamMemberRoomTurn(
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
-    const result = await deps.handleChat(
+    const result = await runWithWorkspace(
+      getTeamWorkspacePath(teamId),
+      () => deps.handleChat(
       String(prompt || '').trim(),
       sessionId,
       trackingSse,
@@ -771,6 +809,8 @@ export async function runTeamMemberRoomTurn(
       undefined,
       undefined,
       agentRouting.providerOverride,
+      ),
+      resolveTeamMemberAllowedWorkPaths(agentId, teamId),
     );
 
     const responseText = String(result.text || '').trim() || `${agentName} is ready for the next step.`;
@@ -982,7 +1022,9 @@ export async function runTeamMemberDirectTurn(
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
-    const result = await deps.handleChat(
+    const result = await runWithWorkspace(
+      getTeamWorkspacePath(teamId),
+      () => deps.handleChat(
       prompt,
       thread.sessionId,
       trackingSse,
@@ -995,6 +1037,8 @@ export async function runTeamMemberDirectTurn(
       undefined,
       undefined,
       agentRouting.providerOverride,
+      ),
+      resolveTeamMemberAllowedWorkPaths(agentId, teamId),
     );
 
     const responseText = String(result.text || '').trim() || `${agentName} is here and ready to help.`;

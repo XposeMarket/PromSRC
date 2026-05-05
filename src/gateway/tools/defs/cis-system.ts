@@ -146,7 +146,7 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'request_team_member_turn',
-        description: 'Invite a managed-team member into the shared team room for planning, discussion, clarification, or readiness checks without starting an execution dispatch. The member uses their persistent room session and posts their reply into team chat. Use background=true to ask multiple members in parallel, then collect with get_agent_result(task_id) if needed.',
+        description: 'Invite a managed-team member into the shared team room for planning, discussion, clarification, or readiness checks without starting an execution dispatch. The member uses their persistent room session and posts their reply into team chat. Use background=true to ask multiple members in parallel; when doing that, create an internal_watch(target.type="task") for each returned task_id so the coordinator/main chat resumes when answers are ready instead of polling.',
         parameters: {
           type: 'object',
           required: ['team_id', 'agent_id', 'prompt'],
@@ -215,7 +215,7 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'reply_to_team',
-        description: 'Reply to a team coordinator\'s message. Use this when a team has sent you (the main agent) a planning question, error report, or other message that needs a response. Your reply will appear in the team chat and auto-resume the coordinator if they are waiting.',
+        description: 'Reply to a team coordinator\'s message. Use this when a team has sent you (the main agent) a planning question, error report, or other message that needs a response. Your reply will appear in the team chat and auto-resume the coordinator if they are waiting. If the user wants the whole team to answer, prefix the message with [BROADCAST_TO_TEAM]. If the user wants one member to answer, prefix with [ASK_AGENT:<agent id or name>]. If no member is named, default to [BROADCAST_TO_TEAM]. Ask the coordinator to use background member turns plus internal_watch when waiting for member answers.',
         parameters: {
           type: 'object',
           required: ['team_id', 'message'],

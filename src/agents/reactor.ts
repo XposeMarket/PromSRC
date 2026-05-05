@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { OllamaClient } from './ollama-client.js';
 import { getToolRegistry, ToolProfile } from '../tools/registry.js';
+import { executeSkillTool } from '../tools/skills.js';
 import { buildSystemPrompt, selectSkillSlugsForMessage } from '../config/soul-loader.js';
 import { AgentRole } from '../types.js';
 import { runWithWorkspace, getActiveWorkspace } from '../tools/workspace-context.js';
@@ -114,6 +115,17 @@ const CODING_HINT_RE = /\b(code|script|file|folder|directory|path|repo|repositor
 const SKILL_HINT_RE = /\b(skill|clawhub)\b/i;
 const GENERIC_REPEAT_WINDOW = 6;
 const GENERIC_REPEAT_THRESHOLD = 3;
+
+const SKILL_RUNTIME_GUIDE = `
+SKILLS:
+- Skill tools are core tools: skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create.
+- For greetings, small talk, quick Q&A, or confirmations, respond directly without skill_list.
+- Before browser/desktop automation, file edits, or other execution-heavy work, call skill_list first.
+- If a relevant skill exists, call skill_read(id) and follow it before acting.
+- For bundled templates/examples/schemas/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed.
+- Use skill_inspect(id) for normalized metadata/provenance.
+- When creating reusable workflows, prefer skill_create_bundle if resources or rich metadata would help; use skill_create only for simple one-file playbooks.
+`.trim();
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -285,6 +297,24 @@ export async function runNodeCallSandbox(
   sandbox.report = (msg: string) => {
     output.push(`[step] ${msg}`);
   };
+  const runSkillTool = async (toolName: string, args: any = {}) => {
+    const result = await executeSkillTool(toolName, args || {});
+    if (!result.success) throw new Error(result.error || `${toolName} failed`);
+    return result.stdout || result.data || 'ok';
+  };
+  sandbox.skill_list = (args: any = {}) => runSkillTool('skill_list', args);
+  sandbox.skill_read = (args: any = {}) => runSkillTool('skill_read', args);
+  sandbox.skill_resource_list = (args: any = {}) => runSkillTool('skill_resource_list', args);
+  sandbox.skill_resource_read = (args: any = {}) => runSkillTool('skill_resource_read', args);
+  sandbox.skill_import_bundle = (args: any = {}) => runSkillTool('skill_import_bundle', args);
+  sandbox.skill_inspect = (args: any = {}) => runSkillTool('skill_inspect', args);
+  sandbox.skill_manifest_write = (args: any = {}) => runSkillTool('skill_manifest_write', args);
+  sandbox.skill_create_bundle = (args: any = {}) => runSkillTool('skill_create_bundle', args);
+  sandbox.skill_resource_write = (args: any = {}) => runSkillTool('skill_resource_write', args);
+  sandbox.skill_resource_delete = (args: any = {}) => runSkillTool('skill_resource_delete', args);
+  sandbox.skill_export_bundle = (args: any = {}) => runSkillTool('skill_export_bundle', args);
+  sandbox.skill_update_from_source = (args: any = {}) => runSkillTool('skill_update_from_source', args);
+  sandbox.skill_create = (args: any = {}) => runSkillTool('skill_create', args);
 
   vm.createContext(sandbox);
 
@@ -488,7 +518,7 @@ Web search (built-in):
 - For multi-line code, write it all in one node_call block. Keep code compact (no extra variables).
 `.trim();
 
-  return [soul, executeInstructions].filter(Boolean).join('\n\n---\n\n');
+  return [soul, SKILL_RUNTIME_GUIDE, executeInstructions].filter(Boolean).join('\n\n---\n\n');
 }
 
 function buildNativeToolSystemPrompt(
@@ -526,7 +556,7 @@ RULES:
 3. Destructive ops without confirmed intent: include open_confirm in your response before mutating.
 4. Never claim done without a successful tool result.
 `.trim();
-  return [soul, toolInstructions].filter(Boolean).join('\n\n---\n\n');
+  return [soul, SKILL_RUNTIME_GUIDE, toolInstructions].filter(Boolean).join('\n\n---\n\n');
 }
 
 /**

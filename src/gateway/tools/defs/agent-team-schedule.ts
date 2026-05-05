@@ -478,7 +478,7 @@ export function getAgentTeamScheduleTools(): any[] {
         name: 'internal_watch',
         description:
           'Create, list, or cancel bounded internal watches that ping/resume this chat when an internal condition changes. ' +
-          'Use after triggering background work, schedule_job(run_now), collectors, build/restart checks, or file-producing jobs so Prometheus does not have to manually poll. ' +
+          'Use after triggering background work, request_team_member_turn(background=true), dispatch_team_agent(background=true), schedule_job(run_now), collectors, build/restart checks, or file-producing jobs so Prometheus does not have to manually poll. ' +
           'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once.',
         parameters: {
           type: 'object',

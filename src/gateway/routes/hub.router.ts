@@ -12,6 +12,7 @@ import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SkillsManager } from '../skills-runtime/skills-manager';
+import { getConfig } from '../../config/config.js';
 
 export const router = Router();
 
@@ -21,9 +22,13 @@ export function setHubRouterDeps(deps: { skillsManager: InstanceType<typeof Skil
 }
 
 function getAuditLogPath(): string {
-  const dataDir = process.env.PROMETHEUS_DATA_DIR;
-  if (dataDir) return path.join(dataDir, 'audit-log.jsonl');
-  return path.join(process.cwd(), '.prometheus', 'audit-log.jsonl');
+  try {
+    return path.join(getConfig().getConfigDir(), 'audit-log.jsonl');
+  } catch {
+    const dataDir = process.env.PROMETHEUS_DATA_DIR;
+    if (dataDir) return path.join(dataDir, '.prometheus', 'audit-log.jsonl');
+    return path.join(process.cwd(), '.prometheus', 'audit-log.jsonl');
+  }
 }
 
 function rangeStart(range: string): number {

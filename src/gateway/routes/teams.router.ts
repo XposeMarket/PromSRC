@@ -20,7 +20,7 @@ import {
   verifySubagentResult,
 } from '../teams/team-manager-runner';
 import { routeTeamEvent } from '../teams/team-event-router';
-import { scheduleTeamMemberAutoWake, scheduleTeamMemberDirectWake } from '../teams/team-member-room';
+import { runTeamMemberRoomTurn, scheduleTeamMemberAutoWake, scheduleTeamMemberDirectWake } from '../teams/team-member-room';
 import { dismissTeamSuggestion } from '../teams/team-detector';
 import { buildTeamDispatchTask, runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
 import { claimAgentForTeamWorkspace } from '../teams/team-workspace';
@@ -129,7 +129,7 @@ function resolveTeamChatRouteTarget(team: any, rawMessage: string, body: any): T
 
   const leading = String(rawMessage || '').trimStart();
   if (!leading.startsWith('@')) {
-    return { type: 'room', routedMessage: original };
+    return { type: 'team', targetLabel: 'team', routedMessage: original };
   }
 
   const afterAt = leading.slice(1);
@@ -153,10 +153,66 @@ function resolveTeamChatRouteTarget(team: any, rawMessage: string, body: any): T
     };
   }
 
-  return { type: 'room', routedMessage: original };
+  return { type: 'team', targetLabel: 'team', routedMessage: original };
 }
 
 // ─── Teams API ───────────────────────────────────────────────────────────────────
+
+function buildTeamBroadcastMemberPrompt(broadcastText: string): string {
+  return [
+    `[TEAM BROADCAST FROM OWNER]`,
+    `The team owner addressed @team:`,
+    broadcastText,
+    ``,
+    `Reply once in the shared room. Be conversational and useful.`,
+    `Do not start execution work unless the owner explicitly asked for work to begin.`,
+  ].join('\n');
+}
+
+async function deliverTeamBroadcastToMembers(
+  teamId: string,
+  team: any,
+  broadcastText: string,
+): Promise<{ deliveredCount: number; completedCount: number }> {
+  const memberAgentIds: string[] = [];
+  for (const memberAgentId of Array.isArray(team?.subagentIds) ? team.subagentIds : []) {
+    if (!memberAgentId) continue;
+    if (team.agentPauseStates?.[memberAgentId]?.paused === true) continue;
+    queueAgentMessage(
+      teamId,
+      memberAgentId,
+      `[From Team Owner to @team] ${broadcastText}`,
+    );
+    memberAgentIds.push(memberAgentId);
+  }
+
+  const prompt = buildTeamBroadcastMemberPrompt(broadcastText);
+  const results = await Promise.allSettled(
+    memberAgentIds.map((memberAgentId) =>
+      runTeamMemberRoomTurn(teamId, memberAgentId, prompt, {
+        autoWakeReason: 'The team owner addressed the whole team in the room.',
+        autoWakeSource: 'manager_message',
+      })
+    ),
+  );
+
+  return {
+    deliveredCount: memberAgentIds.length,
+    completedCount: results.filter((result) => result.status === 'fulfilled').length,
+  };
+}
+
+function buildPostTeamBroadcastManagerPrompt(broadcastText: string, deliveredCount: number, completedCount: number): string {
+  return [
+    `[TEAM BROADCAST MEMBERS RESPONDED]`,
+    `The team owner addressed @team. The system delivered the message to ${deliveredCount} unpaused member(s), and ${completedCount} member room turn(s) have settled.`,
+    `Review the current team room messages before replying. The members have already had their chance to answer, so do not call request_team_member_turn for this broadcast and do not re-ask members to weigh in.`,
+    `Reply last as the manager with a concise synthesis or acknowledgement if useful.`,
+    ``,
+    `[OWNER MESSAGE]`,
+    broadcastText,
+  ].join('\n');
+}
 
 export function pauseManagedTeamInternal(teamId: string, reason?: string) { return _pauseManagedTeamInternal(teamId, reason); }
 export function resumeManagedTeamInternal(teamId: string) { return _resumeManagedTeamInternal(teamId); }
@@ -292,6 +348,7 @@ router.post('/api/teams', (req, res) => {
       reviewTrigger,
       kickoffInitialReview,
       kickoffAfterSeconds,
+      allowedWorkPaths,
     } = req.body;
     if (!name || !subagentIds || !teamContext) {
       return res.status(400).json({ success: false, error: 'name, subagentIds, and teamContext are required' });
@@ -304,6 +361,7 @@ router.post('/api/teams', (req, res) => {
       teamContext: String(teamContext).slice(0, 1000),
       managerSystemPrompt: String(managerSystemPrompt || `You are the manager of the "${name}" team. Your goal is: ${teamContext}`).slice(0, 2000),
       managerModel: managerModel ? String(managerModel) : undefined,
+      allowedWorkPaths: Array.isArray(allowedWorkPaths) ? allowedWorkPaths.map(String).filter(Boolean) : [],
 	      reviewTrigger: reviewTrigger || 'after_each_run',
 	    });
 	    for (const agentId of team.subagentIds || []) {
@@ -371,10 +429,15 @@ router.put('/api/teams/:id', (req, res) => {
     if (req.body?.sessionId) {
       _bindTeamNotificationTargetFromSession(team.id, String(req.body.sessionId), 'api_team_chat');
     }
-    const allowed = ['name', 'description', 'emoji', 'teamContext', 'contextNotes', 'contextReferences', 'subagentIds'];
+    const allowed = ['name', 'description', 'emoji', 'teamContext', 'contextNotes', 'contextReferences', 'subagentIds', 'allowedWorkPaths'];
 	    for (const key of allowed) {
 	      if (req.body[key] !== undefined) (team as any)[key] = req.body[key];
 	    }
+    if (req.body?.allowedWorkPaths !== undefined) {
+      team.allowedWorkPaths = Array.isArray(req.body.allowedWorkPaths)
+        ? req.body.allowedWorkPaths.map(String).filter(Boolean)
+        : [];
+    }
 	    if (Array.isArray(req.body?.subagentIds)) {
 	      for (const agentId of team.subagentIds || []) {
 	        claimAgentForTeamWorkspace(team.id, agentId);
@@ -705,21 +768,16 @@ router.post('/api/teams/:id/chat', async (req, res) => {
 
     if (routeTarget.type === 'team') {
       const broadcastText = routeTarget.routedMessage || content;
-      for (const memberAgentId of Array.isArray(team.subagentIds) ? team.subagentIds : []) {
-        if (!memberAgentId) continue;
-        if (team.agentPauseStates?.[memberAgentId]?.paused === true) continue;
-        queueAgentMessage(
-          req.params.id,
-          memberAgentId,
-          `[From Team Owner to @team] ${broadcastText}`,
+      void (async () => {
+        const delivery = await deliverTeamBroadcastToMembers(req.params.id, team, broadcastText);
+        const managerPrompt = buildPostTeamBroadcastManagerPrompt(
+          broadcastText,
+          delivery.deliveredCount,
+          delivery.completedCount,
         );
-        scheduleTeamMemberAutoWake(req.params.id, memberAgentId, {
-          reason: 'The team owner addressed the whole team in the room.',
-          source: 'manager_message',
-        });
-      }
-      handleManagerConversation(req.params.id, routeTarget.routedMessage || content, broadcastTeamEvent).catch(err =>
-        console.error('[Teams] Manager conversation failed:', err.message)
+        await handleManagerConversation(req.params.id, managerPrompt, broadcastTeamEvent);
+      })().catch(err =>
+        console.error('[Teams] Team broadcast flow failed:', err.message)
       );
       return;
     }
@@ -847,7 +905,7 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
           context: mergedContext || undefined,
         });
         const startedAt = Date.now();
-        const result = await runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, req.params.id, 300000);
+        const result = await runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, req.params.id);
         const finishedAt = Date.now();
         recordAgentRun({
           agentId, agentName: result.agentName, trigger: 'team_dispatch', taskId: result.taskId,
@@ -1626,26 +1684,24 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
       return;
     }
 
+    let teamBroadcastDelivery: { deliveredCount: number; completedCount: number } | null = null;
     if (routeTarget.type === 'team') {
       const broadcastText = routeTarget.routedMessage || content;
-      for (const memberAgentId of Array.isArray(team.subagentIds) ? team.subagentIds : []) {
-        if (!memberAgentId) continue;
-        if (team.agentPauseStates?.[memberAgentId]?.paused === true) continue;
-        queueAgentMessage(
-          req.params.id,
-          memberAgentId,
-          `[From Team Owner to @team] ${broadcastText}`,
-        );
-        scheduleTeamMemberAutoWake(req.params.id, memberAgentId, {
-          reason: 'The team owner addressed the whole team in the room.',
-          source: 'manager_message',
-        });
-      }
+      sendSSE('info', { message: 'Broadcasting to team members before manager reply...' });
+      teamBroadcastDelivery = await deliverTeamBroadcastToMembers(req.params.id, team, broadcastText);
     }
+
+    const managerInput = routeTarget.type === 'team'
+      ? buildPostTeamBroadcastManagerPrompt(
+          routeTarget.routedMessage || content,
+          teamBroadcastDelivery?.deliveredCount || 0,
+          teamBroadcastDelivery?.completedCount || 0,
+        )
+      : routeTarget.routedMessage || content;
 
     const result = await handleManagerConversationDetailed(
       req.params.id,
-      routeTarget.routedMessage || content,
+      managerInput,
       broadcastTeamEvent,
       false,
       {
