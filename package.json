@@ -1,6 +1,6 @@
 {
   "name": "prometheus",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
   "main": "electron/main.js",
   "bin": {
