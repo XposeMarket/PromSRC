@@ -20,6 +20,8 @@
     "postbuild": "node scripts/copy-extension-descriptors.js",
     "patch:electron-native": "node scripts/patch-electron-native-deps.js",
     "prepare:public": "node scripts/prepare-public-build.js",
+    "prepare:public-web": "node scripts/prepare-public-build.js --web-only",
+    "bundle:public-skills": "node scripts/prepare-public-build.js --skills-only",
     "dev": "tsx src/cli/index.ts",
     "start": "tsx src/cli/index.ts",
     "gateway": "tsx src/gateway/server-v2.ts",
@@ -28,7 +30,7 @@
     "electron": "electron .",
     "build:win": "npm run patch:electron-native && electron-builder --win --config electron-builder.yml",
     "verify:public-release": "node scripts/verify-public-release.js",
-    "build:public": "npm run build:backend && node scripts/copy-extension-descriptors.js && npm run prepare:public && npm run check:web-ui && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml && npm run verify:public-release",
+    "build:public": "npm run build:backend && node scripts/copy-extension-descriptors.js && npm run prepare:public-web && npm run check:web-ui && npm run patch:electron-native && electron-builder --win --config electron-builder-public.yml && npm run verify:public-release",
     "release": "npm run build:public && electron-builder --win --config electron-builder-public.yml --prepackaged release-public/win-unpacked --publish=always",
     "postinstall": "node scripts/postinstall.js"
   },
