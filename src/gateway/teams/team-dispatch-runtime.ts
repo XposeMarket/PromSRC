@@ -14,8 +14,9 @@ import {
 import { getTeamWorkspacePath, buildWorkspaceContextBlock, ensureTeamWorkspace, ensureTeamAgentIdentity } from './team-workspace';
 import { loadTask, saveTask } from '../tasks/task-store';
 import { bindTaskRunToSession, clearTaskRunBinding, completeNextOpenTaskStep } from '../tasks/task-run-mirror';
-import { getRuntimeToolCategories } from '../tool-builder';
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { registerBrowserSessionMetadata } from '../browser-tools';
+import { setActivatedToolCategories } from '../session';
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
 // These are injected at runtime to avoid circular imports with server-v2.ts
@@ -178,6 +179,7 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
     `- request_context / request_manager_help: ask the manager for missing context or escalation.`,
     `- share_artifact: publish reusable outputs/files/findings into shared team state.`,
     `- update_team_goal: propose or update plan items when your work reveals a better next step.`,
+    `- Do not call write_proposal from a team member turn. If your work is proposal-ready, send the manager a complete proposal-ready handoff with execution_mode (code_change/action/review), title, summary, affected files/resources, execution_steps, executor_prompt, evidence paths, risks, and acceptance tests.`,
     ``,
     `[ESCALATION]`,
     `Post blockers or errors to team chat so the manager can act on them.`,
@@ -230,6 +232,10 @@ function resolveTeamAgentAllowedWorkPaths(team: any, teamWorkspacePath?: string 
   });
 }
 
+function getUnifiedTeamMemberSessionId(teamId: string, agentId: string): string {
+  return `team_room_member_${String(teamId || '').trim()}___AGENT___${String(agentId || '').trim()}`;
+}
+
 export interface RunAgentResult {
   success: boolean;
   result: string;
@@ -270,7 +276,22 @@ export async function runTeamAgentViaChat(
   const agentName = agent?.name ?? agentId;
   const startedAt = Date.now();
   const team = teamId ? getManagedTeam(teamId) : null;
-  const sessionId = `team_dispatch_${agentId}_${Date.now()}`;
+  const sessionId = getUnifiedTeamMemberSessionId(teamId, agentId);
+  const dispatchRuntimeSessionId = `team_dispatch_${agentId}_${Date.now()}`;
+  registerBrowserSessionMetadata(sessionId, {
+    ownerType: 'team-agent',
+    ownerId: agentId,
+    label: `Team Subagent (${team?.name || teamId || 'Team'} / ${agentName})`,
+    taskPrompt: task,
+    spawnerSessionId: teamId,
+  });
+  registerBrowserSessionMetadata(dispatchRuntimeSessionId, {
+    ownerType: 'team-agent',
+    ownerId: agentId,
+    label: `Team Dispatch (${team?.name || teamId || 'Team'} / ${agentName})`,
+    taskPrompt: task,
+    spawnerSessionId: teamId,
+  });
   const resolveAgentModelRouting = (): { providerOverride?: string; modelOverride?: string } => {
     const cfg = getConfig().getConfig() as any;
     const resolved = resolveConfiguredAgentModel(cfg, agent, {
@@ -333,13 +354,6 @@ export async function runTeamAgentViaChat(
     }
   } catch {}
 
-	  // Team-dispatched agents run with the same runtime category surface as main chat.
-	  // Approval policy still gates commit-tier actions such as shell, GitHub, and Vercel.
-	  try {
-	    const { setActivatedToolCategories } = require('../session');
-	    setActivatedToolCategories(sessionId, getRuntimeToolCategories());
-	  } catch { /* non-fatal */ }
-
   // Create task record
   const cronTask = deps.createTask({
     title: `${agentName}: ${task.slice(0, 80)}`,
@@ -347,6 +361,12 @@ export async function runTeamAgentViaChat(
     sessionId,
     channel: 'web',
     plan: [{ index: 0, description: task.slice(0, 120), status: 'pending' }],
+    teamSubagent: {
+      teamId,
+      agentId,
+      agentName,
+      callerContext: '',
+    },
   });
   deps.updateTaskStatus(cronTask.id, 'running');
   deps.setTaskStepRunning(cronTask.id, 0);
@@ -358,6 +378,17 @@ export async function runTeamAgentViaChat(
     agentName,
     taskSummary: task,
     startedAt,
+  });
+  deps.broadcastTeamEvent({
+    type: 'team_member_stream_start',
+    teamId,
+    teamName: team?.name || teamId,
+    streamId: cronTask.id,
+    agentId,
+    agentName,
+    startedAt,
+    taskId: cronTask.id,
+    source: 'team_dispatch',
   });
 
   // Drain any queued messages for this agent
@@ -459,6 +490,12 @@ export async function runTeamAgentViaChat(
     agentName,
     callerContext,
   };
+  cronTask.status = 'running';
+  cronTask.currentStepIndex = 0;
+  cronTask.plan = (Array.isArray(cronTask.plan) ? cronTask.plan : []).map((step: any, index: number) => ({
+    ...step,
+    status: index === 0 ? 'running' : step.status,
+  }));
   saveTask(cronTask);
 
   let stepCount = 0;
@@ -582,6 +619,20 @@ export async function runTeamAgentViaChat(
       captureTaskStreamEvent(String(payload.eventType || ''), payload.data);
     }
     deps.broadcastTeamEvent(payload);
+    if (payload.type === 'task_stream_event') {
+      deps.broadcastTeamEvent({
+        type: 'team_member_stream_event',
+        teamId,
+        teamName: team?.name || teamId,
+        streamId: cronTask.id,
+        agentId,
+        agentName,
+        eventType: payload.eventType,
+        data: payload.data,
+        taskId: cronTask.id,
+        source: 'team_dispatch',
+      });
+    }
   };
 
   bindTaskRunToSession(sessionId, {
@@ -603,6 +654,11 @@ export async function runTeamAgentViaChat(
     abortSignal,
   });
   _activeAgentSessions.add(sessionId);
+  _activeAgentSessions.add(dispatchRuntimeSessionId);
+  // Reset activated tool categories so this dispatch matches main-chat behavior.
+  // Without this, sessions retain ALL categories from prior runs and ship 270+
+  // tools, which trips Anthropic's OAuth subscription gate.
+  try { setActivatedToolCategories(sessionId, []); } catch {}
   try {
     const result = await deps.handleChat(
       task,
@@ -646,15 +702,22 @@ export async function runTeamAgentViaChat(
         || resultText.length < 100;
       const isMainlyFileList = /^\s*\[\s*(?:DIR|FILE)\s*\]/m.test(resultText) && resultText.split('\n').filter(l => /\[\s*(?:DIR|FILE)\s*\]/.test(l)).length > resultText.split('\n').length * 0.5;
 
-      // Check for hollow work: claimed research but returned categories/assumptions instead of specific data
+      const hasAuthBlockerEvidence = /(?:auth|authenticated|authentication|login|logged[-\s]?out|session|redirect(?:ed)?|flow\/login|not\s+logged\s+in|re-?authenticate)/i.test(resultText)
+        && /(?:blocked|blocker|cannot|could not|0\s*(?:bookmarks|items|candidates)|zero\s*(?:bookmarks|items|candidates)|no\s+(?:accessible\s+)?(?:bookmarks|items|candidates))/i.test(resultText);
+
+      // Check for hollow work: claimed research but returned categories/assumptions instead of specific data.
+      // A verified blocker report is substantive control-plane work, even when it contains zero collected items.
       const hasGenericCategories = /^(restaurants|contractors|salons|businesses|companies|services|types|categories|categories of)/im.test(resultText.slice(0, 500));
       const lacksSpecificNames = !/[A-Z][a-z]+\s+(?:[A-Z][a-z]+)?[\s,].*?(?:website|url|phone|contact|email|address)/i.test(resultText);
       const allVariesOrAssumed = (resultText.match(/varies|assumed|likely|probably|may have|could be|not specified/gi) || []).length > 5;
-      const isHollowWork = (hasGenericCategories || lacksSpecificNames || allVariesOrAssumed) && resultText.length > 200;
+      const isHollowWork = !hasAuthBlockerEvidence && (hasGenericCategories || lacksSpecificNames || allVariesOrAssumed) && resultText.length > 200;
 
       if (isSuspiciouslyEmpty || isMainlyFileList) {
         resultWarning = `⚠️ INCOMPLETE: Result appears to be mostly file listings or placeholder text for a complex task. The agent may not have executed the research/gathering properly.`;
         console.warn(`[TeamDispatch] Suspicious result for complex task "${agentId}": ${resultText.slice(0, 200)}`);
+      } else if (hasAuthBlockerEvidence) {
+        resultWarning = '';
+        console.info(`[TeamDispatch] Accepted blocker artifact for complex task "${agentId}": ${resultText.slice(0, 200)}`);
       } else if (isHollowWork) {
         resultWarning = `⚠️ HOLLOW WORK: Result contains generic categories/assumptions instead of specific extracted data (actual company names, websites, contact info). Agent reported research done but did not deliver substantive lead data.`;
         console.warn(`[TeamDispatch] Hollow work detected for complex task "${agentId}": result has categories/assumptions but no specific extracted data`);
@@ -694,6 +757,19 @@ export async function runTeamAgentViaChat(
       teamId,
       agentId,
       summary: resultText.slice(0, 200),
+    });
+    deps.broadcastTeamEvent({
+      type: 'team_member_stream_done',
+      teamId,
+      teamName: team?.name || teamId,
+      streamId: cronTask.id,
+      agentId,
+      agentName,
+      success,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      completedAt: Date.now(),
+      taskId: cronTask.id,
+      source: 'team_dispatch',
     });
 
     return {
@@ -748,6 +824,19 @@ export async function runTeamAgentViaChat(
       startedAt,
       summary: String(err?.message ?? err).slice(0, 200),
     });
+    deps.broadcastTeamEvent({
+      type: 'team_member_stream_done',
+      teamId,
+      teamName: team?.name || teamId,
+      streamId: cronTask.id,
+      agentId,
+      agentName,
+      success: false,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      completedAt: Date.now(),
+      taskId: cronTask.id,
+      source: 'team_dispatch',
+    });
     return {
       success: false,
       result: '',
@@ -763,6 +852,7 @@ export async function runTeamAgentViaChat(
   } finally {
     finishLiveRuntime(runtimeId);
     _activeAgentSessions.delete(sessionId);
+    _activeAgentSessions.delete(dispatchRuntimeSessionId);
     clearTaskRunBinding(sessionId, cronTask.id);
     if (teamId) {
       try {

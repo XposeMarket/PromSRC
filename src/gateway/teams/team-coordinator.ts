@@ -24,7 +24,6 @@ import { getAgentById, getConfig } from '../../config/config';
 import { setWorkspace } from '../session';
 import { getTeamWorkspacePath, readTeamMemoryContext, ensureTeamInfoFile } from './team-workspace';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
-import { getRuntimeToolCategories } from '../tool-builder';
 
 type HandleChatFn = (
   message: string,
@@ -36,6 +35,9 @@ type HandleChatFn = (
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent',
   toolFilter?: string[],
+  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+  reasoningOptions?: undefined,
+  providerOverride?: string,
 ) => Promise<{ type: string; text: string; thinking?: string }>;
 
 const TEAM_MANAGER_TOOL_FILTER: string[] | undefined = undefined;
@@ -66,6 +68,7 @@ export interface CoordinatorConversationOptions {
   replyTargetType?: 'room' | 'team' | 'manager' | 'member' | 'user';
   replyTargetId?: string;
   replyTargetLabel?: string;
+  attachments?: Array<{ base64: string; mimeType: string; name: string }>;
 }
 
 export interface CoordinatorConversationResult {
@@ -127,6 +130,22 @@ function createTeamManagerTurnTracker(teamId: string, turn: number): TeamManager
     replyText: '',
     processEntries: [],
   };
+}
+
+function getTeamManagerTerminalMarker(text: string): 'goal_complete' | 'needs_input' | 'waiting_main_agent' | null {
+  const upper = String(text || '').toUpperCase();
+  const markers = [
+    upper.includes('[GOAL_COMPLETE]') ? 'goal_complete' : null,
+    upper.includes('[NEEDS_INPUT]') ? 'needs_input' : null,
+    upper.includes('[WAITING_MAIN_AGENT]') ? 'waiting_main_agent' : null,
+  ].filter(Boolean) as Array<'goal_complete' | 'needs_input' | 'waiting_main_agent'>;
+  if (markers.length === 0) return null;
+  if (markers.length > 1) {
+    // Blocked/waiting states are safer than accidentally declaring a blocked run complete.
+    if (markers.includes('waiting_main_agent')) return 'waiting_main_agent';
+    if (markers.includes('needs_input')) return 'needs_input';
+  }
+  return markers[0];
 }
 
 function pushTeamManagerProcessEntry(
@@ -333,10 +352,7 @@ function getCoordSessionId(teamId: string): string {
 }
 
 function prepareTeamManagerToolScope(sessionId: string): void {
-  try {
-    const { setActivatedToolCategories } = require('../session');
-    setActivatedToolCategories(sessionId, getRuntimeToolCategories());
-  } catch { /* non-fatal */ }
+  void sessionId;
 }
 
 function buildTeamCallerContext(teamId: string): string {
@@ -396,7 +412,7 @@ function buildTeamCallerContext(teamId: string): string {
   }
   const goalContext = goalLines.join('\n');
 
-  // Read cross-run memory files (memory.json, last_run.json, pending.json)
+  // Inject cross-run memory files (memory.json, last_run.json, pending.json)
   let memoryContext = '';
   try {
     ensureTeamInfoFile(team);
@@ -428,10 +444,17 @@ function buildTeamCallerContext(teamId: string): string {
     managerInbox ? `\n[SUBAGENT MESSAGES WAITING FOR MANAGER]\n${managerInbox}` : '',
     teamContext ? `\nAdditional team context:\n${teamContext}` : '',
     threadContext,
-    memoryContext ? `\n[CROSS-RUN MEMORY]\n${memoryContext}` : `\n[CROSS-RUN MEMORY]\n(memory files not yet initialized — write them at end of this run)`,
+    memoryContext ? `\n[CROSS-RUN MEMORY — SYSTEM-INJECTED FILE SNAPSHOTS]\n${memoryContext}` : `\n[CROSS-RUN MEMORY]\n(memory files not yet initialized — write them at end of this run)`,
     ``,
     `COORDINATOR WORKFLOW (purpose → task → execute → validate → write back):`,
-    `STEP 1 — DERIVE THIS RUN'S TASK: Read the cross-run memory above. If the user gave a concrete run/start objective, decide what THIS specific run should accomplish. Only call manage_team_goal(action="update_focus", focus="<derived task>") when you are actually changing the team's execution focus for a real run; do not update focus for greetings, status checks, wake-up requests, or ordinary conversation.`,
+    `RUN STATE CONTRACT: Choose exactly one state for this turn and keep it consistent.`,
+    `  - normal_execution: work can continue; dispatch only unblocked lanes.`,
+    `  - blocker_only_verification: only produce blocker/standby artifacts because the user explicitly asked to test all lanes despite an upstream blocker.`,
+    `  - blocked_waiting_for_input: a hard blocker prevents useful next work; update memory once, message the main agent/user once, then end [WAITING_MAIN_AGENT] or [NEEDS_INPUT].`,
+    `  - paused: do not dispatch new work or synthesize completion. Acknowledge pause only if needed.`,
+    `  - complete: all useful work for the current objective is done and memory is updated; end [GOAL_COMPLETE].`,
+    `If a collection/auth/session blocker happens in an upstream lane, default to blocked_waiting_for_input. Do NOT continue Nolan/Mira/Ari just to create downstream blocker artifacts unless the owner explicitly requested blocker-only lane verification.`,
+    `STEP 1 — DERIVE THIS RUN'S TASK: Use the system-injected cross-run memory snapshots above as already-read context. Do not call file_stats or read_file for team_info.md, memory.json, last_run.json, or pending.json just to inspect current memory. If the user gave a concrete run/start objective, decide what THIS specific run should accomplish. Only call manage_team_goal(action="update_focus", focus="<derived task>") when you are actually changing the team's execution focus for a real run; do not update focus for greetings, status checks, wake-up requests, or ordinary conversation.`,
     `STEP 2 — COLLABORATE BEFORE EXECUTION WHEN NEEDED: If you need a member's plan, judgment, readiness check, or clarification before assigning concrete work, use request_team_member_turn so they speak in the shared room first. Use background=true when you want multiple members to weigh in concurrently.`,
     `STEP 3 — EXECUTE: Once work is concrete, dispatch agents with specific tasks derived from STEP 1. Don't re-do work that's already in memory.json as completed.`,
     `STEP 4 — VALIDATE RESULTS: After EACH agent completes, carefully review their output:`,
@@ -447,12 +470,11 @@ function buildTeamCallerContext(teamId: string): string {
     `MANAGER RULES:`,
     `1. Use request_team_member_turn when you want a member to think with the team in-room before execution. Use dispatch_team_agent when the member is ready for actual execution work. Always pass team_id="${team.id}" and the agent_id from the list above.`,
     `2. Your text response will be posted to the team chat as the Manager.`,
-    `2a. If the current prompt says [TEAM BROADCAST MEMBERS RESPONDED], the addressed members already had their room turns. Do not call request_team_member_turn for that message; reply last as manager with a concise synthesis or acknowledgement if useful.`,
-    `2b. If the current prompt or main-agent reply says [BROADCAST_TO_TEAM], treat it as an owner/main-agent message to the whole team: ask the relevant members with request_team_member_turn(background=true), then create an internal_watch(target.type="task") for each returned task_id so this coordinator resumes when their answers are ready. Synthesize after the watches fire; do not busy-poll.`,
-    `2c. If the current prompt or main-agent reply says [ASK_AGENT:<agent id or name>], route only to that member with request_team_member_turn(background=true) and create an internal_watch on the returned task_id. If the name is ambiguous, ask the main agent or owner to clarify.`,
-    `2d. If the user/main agent names no specific member while asking the team something, default to the [BROADCAST_TO_TEAM] behavior.`,
+    `2a. If the current prompt says [TEAM BROADCAST MEMBERS RESPONDED], the addressed members already had their room turns through the system-level broadcast path. Do not call request_team_member_turn for that message; reply last as manager with a concise synthesis or acknowledgement if useful.`,
+    `2b. Raw [BROADCAST_TO_TEAM] and [ASK_AGENT:<agent id or name>] tags are routing directives for the main-agent/team bridge. If one reaches you without a [TEAM BROADCAST MEMBERS RESPONDED] block, do not manually fan it out; ask the main agent to resend through reply_to_team or clarify the intended route.`,
+    `2c. If the user/main agent names no specific member while asking the team something, the default audience is @team. The system should deliver that to members before you synthesize.`,
     `3. This session is isolated from the main user chat — act now, do not defer.`,
-    `4. After a subagent completes, the result is returned as the tool output — VALIDATE IT CAREFULLY before accepting it. RED FLAGS that require re-dispatch:`,
+    `4. After a subagent completes, the result is returned as the tool output — VALIDATE IT CAREFULLY before accepting it. A verified auth/session/blocker artifact is VALID_BLOCKER_ARTIFACT, not hollow work. RED FLAGS that require re-dispatch:`,
     `   ⚠️ Result starts with "⚠️ INCOMPLETE" — agent did NOT properly execute`,
     `   ⚠️ Result is mostly file listings ([DIR], [FILE]) with no actual findings`,
     `   ⚠️ Result is just "Done." or "Task complete." with no substantive output`,
@@ -470,21 +492,30 @@ function buildTeamCallerContext(teamId: string): string {
     `   ✓ stepCount > 0 (agent called tools and gathered data)`,
     `   ✓ Result length > 500 chars with substantive, specific content (not generic categories)`,
     `   ✓ No warning prefix in the result`,
+    `   ✓ VALID_BLOCKER_ARTIFACT: output contains concrete blocker evidence, artifact path, no fabricated data, and clear unblock requirements. Accept it as blocker work, stop dependent lanes by default, and ask for input/auth fix once.`,
     `5. Be concise and action-oriented. Post status updates to keep the team owner informed.`,
-    `6. Work CONTINUOUSLY toward this run's derived task. Keep dispatching agents, reviewing results, and re-dispatching if needed until work is actually SUBSTANTIVELY DONE.`,
-    `7. NEVER accept suspicious results — if you see ANY red flag above, immediately re-dispatch that agent with: "Your previous output was not substantive. Actually execute the task and return real findings."`,
-    `8. When this run is complete (all tasks substantively done + memory files updated), end with: [GOAL_COMPLETE]`,
-    `8. If you need the team owner to make a decision or provide input, end with: [NEEDS_INPUT]`,
+    `6. Work continuously only while the current run state is normal_execution. If a hard upstream blocker appears, stop dependent lanes unless blocker_only_verification was explicitly requested.`,
+    `7. NEVER accept suspicious results — if you see ANY red flag above, immediately re-dispatch that agent with: "Your previous output was not substantive. Actually execute the task and return real findings." Do not re-dispatch VALID_BLOCKER_ARTIFACT results.`,
+    `8. Emit only one terminal marker per manager response: [GOAL_COMPLETE], [NEEDS_INPUT], or [WAITING_MAIN_AGENT]. Do not later switch a blocked run to [GOAL_COMPLETE] unless a real unblock happened.`,
+    `8a. When this run is complete (all tasks substantively done + memory files updated), end with: [GOAL_COMPLETE]`,
+    `8b. If you need the team owner to make a decision or provide input, end with: [NEEDS_INPUT]`,
     `9. You are the ONLY bridge between this team and the main Prometheus agent. Use message_main_agent(team_id="${team.id}", message="...") to communicate.`,
     `10. NEVER pause or give up before first messaging the main agent. Errors, blockers, missing credentials — all go to the main agent first.`,
     `11. Do NOT create new teams. Explain to the main agent what team would help and why.`,
-    `12. When waiting for a main agent reply, post [WAITING_MAIN_AGENT] to pause. You will auto-resume when their reply arrives.`,
+    `12. When waiting for a main agent reply, post [WAITING_MAIN_AGENT] to pause. Send one clear message_main_agent escalation; do not repeat equivalent escalations in later turns unless new evidence appears. You will auto-resume when their reply arrives.`,
     `13. Use manage_team_goal to update focus, log completed work, and manage milestones during real execution runs. Do not call it just because the owner sent a new chat message.`,
     `14. Use manage_team_goal with pause_agent/unpause_agent to control which agents are active.`,
     `15. request_team_member_turn, dispatch_team_agent, and internal_watch are available in this coordinator session. Do NOT claim tooling limitations or say a tool is unavailable unless you actually called it and received an explicit tool error in this turn.`,
-    `16. Update memory.json, last_run.json, and pending.json before [GOAL_COMPLETE]. Include room discussions, dispatches, subagent results, verification decisions, files touched, unresolved items, and timestamp.`,
-    `17. PROPOSALS: You have write_proposal available. Use it selectively:`,
-    `    - Use write_proposal for changes that require human approval: src/ code edits, new features, major config changes, risky operations.`,
+    `16. Update memory.json, last_run.json, and pending.json before [GOAL_COMPLETE]. Use the injected snapshots as the base content and write directly; avoid file_stats/read_file on those three files unless the snapshot is explicitly truncated or you need to recover from a write error. Include room discussions, dispatches, subagent results, verification decisions, files touched, unresolved items, and timestamp.`,
+    `17. PROPOSALS: You are the only team actor allowed to create proposals with write_proposal.`,
+    `    - Subagents may research, source-map, and prepare proposal-ready summaries/artifacts, but they must not submit proposals themselves.`,
+    `    - When a validated team result recommends src/ code edits, a new feature, major config changes, or another human-approved change, YOU should create the pending proposal with write_proposal unless the owner explicitly disabled proposal creation for this run.`,
+    `    - Every executable proposal must choose execution_mode: code_change, action, or review.`,
+    `    - Use execution_mode=code_change only for Prometheus dev self-edits under exact src/ and/or web-ui/ affected_files; include execution_steps, executor_prompt, risk_tier, and src proposal headings.`,
+    `    - Use execution_mode=action for approved one-shot actions such as starting a team/run, creating an artifact, scheduling a job, or performing a bounded workflow exactly once.`,
+    `    - Use execution_mode=review for read-mostly verification/audit/report proposals; do not mutate during review unless the proposal explicitly approves that exact mutation.`,
+    `    - Do not ask for separate permission merely to create a pending proposal when the owner asked the team to find/build proposal candidates; write_proposal itself queues the work for human approval.`,
+    `    - If the owner says proposal creation is disabled, controlled-test only, do not create proposals, or asks for research/plans only, write a proposal-ready summary artifact instead and clearly state that no proposal was submitted.`,
     `    - For direct source edits, dispatch a suitably scoped subagent or write a proposal instead of assuming manager-local source_write access.`,
     `    - Workspace files (team JSON, markdown, outputs) can always be edited directly — no proposal needed.`,
     `    - NOT everything needs a proposal. Only gate actions where a human should verify before execution.`,
@@ -523,6 +554,7 @@ export async function runCoordinatorConversation(
   const workspacePath = getConfig().getWorkspacePath();
   let currentMessage = userMessage;
   const maxTurns = autoContinue ? SAFETY_MAX_TURNS : 1;
+  const runStartedAt = Date.now();
   let consecutiveIdleTurns = 0; // turns without any member-room or dispatch activity
   const abortSignal = { aborted: false };
   const runtimeId = registerLiveRuntime({
@@ -540,6 +572,10 @@ export async function runCoordinatorConversation(
 	    if (abortSignal.aborted) break;
     // Check if team was paused (user clicked Stop)
     const freshTeam = getManagedTeam(teamId);
+    if (Number((freshTeam as any)?.manager?.runAbortRequestedAt || 0) >= runStartedAt) {
+      abortSignal.aborted = true;
+      break;
+    }
     if (!freshTeam || freshTeam.manager?.paused === true) {
       console.log(`[TeamCoordinator] Team "${teamId}" paused — stopping continuation.`);
       break;
@@ -592,13 +628,14 @@ export async function runCoordinatorConversation(
 	      const result = await _deps.handleChat(
 	        currentMessage,
 	        sessionId,
-        trackingSse,
-        undefined,
-        abortSignal,
+	        trackingSse,
+	        undefined,
+	        abortSignal,
         callerContext,
         undefined,
         'team_manager',
         TEAM_MANAGER_TOOL_FILTER,
+        turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	      );
 
 	      responseText = String(result.text || '').trim();
@@ -608,6 +645,12 @@ export async function runCoordinatorConversation(
 	          ? `${streamTracker.thinking}\n\n${resultThinking}`
 	          : resultThinking;
 	      }
+      const teamAfterManagerTurn = getManagedTeam(teamId);
+      if (!teamAfterManagerTurn || teamAfterManagerTurn.manager?.paused === true) {
+        console.log(`[TeamCoordinator] Team "${teamId}" paused during manager turn — suppressing manager continuation.`);
+        closeStream('paused');
+        break;
+      }
 	      if (responseText) {
 	        captureTeamManagerStreamEvent(streamTracker, 'final', { text: responseText });
 	        broadcastTeamManagerStreamEvent(bfn, team, streamTracker, turn + 1, 'conversation', autoContinue, 'final', { text: responseText });
@@ -663,8 +706,8 @@ export async function runCoordinatorConversation(
     if (abortSignal.aborted) break;
 
     // Check for explicit stop signals from the coordinator
-    const upperResponse = responseText.toUpperCase();
-    if (upperResponse.includes('[GOAL_COMPLETE]')) {
+    const terminalMarker = getTeamManagerTerminalMarker(responseText);
+    if (terminalMarker === 'goal_complete') {
       console.log(`[TeamCoordinator] Goal complete signal — stopping. (${turn + 1} turn(s))`);
       const doneEvent = {
         teamId,
@@ -686,7 +729,7 @@ export async function runCoordinatorConversation(
       }
       break;
     }
-    if (upperResponse.includes('[NEEDS_INPUT]')) {
+    if (terminalMarker === 'needs_input') {
       console.log(`[TeamCoordinator] Needs input signal — pausing. (${turn + 1} turn(s))`);
       bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'needs_input', turns: turn + 1 });
       try {
@@ -696,7 +739,7 @@ export async function runCoordinatorConversation(
       }
       break;
     }
-    if (upperResponse.includes('[WAITING_MAIN_AGENT]')) {
+    if (terminalMarker === 'waiting_main_agent') {
       console.log(`[TeamCoordinator] Waiting for main agent reply — suspending. (${turn + 1} turn(s))`);
       bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'waiting_main_agent', turns: turn + 1 });
       break;
@@ -744,7 +787,7 @@ export async function runCoordinatorConversation(
       `Your previous turn has ended. Review the team chat for any new results from agents you dispatched or members you invited into the room.`,
       ``,
       `Continue working toward this run's derived task. Invite members into the room or dispatch more agents as needed, review results, and make progress.`,
-      `When this run's task is fully complete AND memory files are updated (memory.json, last_run.json, pending.json), end with [GOAL_COMPLETE].`,
+      `When this run's task is fully complete AND memory files are updated (memory.json, last_run.json, pending.json), end with [GOAL_COMPLETE]. Use the injected memory snapshots as your base and avoid re-reading those files unless needed for error recovery.`,
       `If you need the team owner to make a decision, end with [NEEDS_INPUT].`,
       `If you sent a message to the main agent and are waiting, end with [WAITING_MAIN_AGENT].`,
     ].join('\n');
@@ -781,6 +824,7 @@ export async function runCoordinatorConversationDetailed(
   let turnsCompleted = 0;
   let finalReason = autoContinue ? 'natural_stop' : 'single_turn';
   let lastManagerMessage = '';
+  const runStartedAt = Date.now();
   const runtimeId = registerLiveRuntime({
     kind: 'team_manager',
     label: `Team manager - ${team.name}`,
@@ -799,6 +843,11 @@ export async function runCoordinatorConversationDetailed(
       }
 
       const freshTeam = getManagedTeam(teamId);
+      if (Number((freshTeam as any)?.manager?.runAbortRequestedAt || 0) >= runStartedAt) {
+        abortSignal.aborted = true;
+        finalReason = 'aborted';
+        break;
+      }
       if (!freshTeam || freshTeam.manager?.paused === true) {
         console.log(`[TeamCoordinator] Team "${teamId}" paused - stopping continuation.`);
         finalReason = 'paused';
@@ -846,6 +895,7 @@ export async function runCoordinatorConversationDetailed(
           undefined,
           'team_manager',
           TEAM_MANAGER_TOOL_FILTER,
+          turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	        );
 
 	        responseText = String(result.text || '').trim();
@@ -855,6 +905,12 @@ export async function runCoordinatorConversationDetailed(
 	            ? `${streamTracker.thinking}\n\n${resultThinking}`
 	            : resultThinking;
 	        }
+        const teamAfterManagerTurn = getManagedTeam(teamId);
+        if (!teamAfterManagerTurn || teamAfterManagerTurn.manager?.paused === true) {
+          console.log(`[TeamCoordinator] Team "${teamId}" paused during manager turn - suppressing manager continuation.`);
+          finalReason = 'paused';
+          break;
+        }
 	        if (responseText) {
 	          captureTeamManagerStreamEvent(streamTracker, 'final', { text: responseText });
 	        }
@@ -927,8 +983,8 @@ export async function runCoordinatorConversationDetailed(
         break;
       }
 
-      const upperResponse = responseText.toUpperCase();
-      if (upperResponse.includes('[GOAL_COMPLETE]')) {
+      const terminalMarker = getTeamManagerTerminalMarker(responseText);
+      if (terminalMarker === 'goal_complete') {
         console.log(`[TeamCoordinator] Goal complete signal - stopping. (${turn + 1} turn(s))`);
         finalReason = 'goal_complete';
         const doneEvent = {
@@ -951,7 +1007,7 @@ export async function runCoordinatorConversationDetailed(
         }
         break;
       }
-      if (upperResponse.includes('[NEEDS_INPUT]')) {
+      if (terminalMarker === 'needs_input') {
         console.log(`[TeamCoordinator] Needs input signal - pausing. (${turn + 1} turn(s))`);
         finalReason = 'needs_input';
         bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'needs_input', turns: turn + 1 });
@@ -962,7 +1018,7 @@ export async function runCoordinatorConversationDetailed(
         }
         break;
       }
-      if (upperResponse.includes('[WAITING_MAIN_AGENT]')) {
+      if (terminalMarker === 'waiting_main_agent') {
         console.log(`[TeamCoordinator] Waiting for main agent reply - suspending. (${turn + 1} turn(s))`);
         finalReason = 'waiting_main_agent';
         bfn({ type: 'team_coordinator_done', teamId, teamName: team.name, reason: 'waiting_main_agent', turns: turn + 1 });
@@ -1009,7 +1065,7 @@ export async function runCoordinatorConversationDetailed(
         `Your previous turn has ended. Review the team chat for any new results from agents you dispatched or members you invited into the room.`,
         ``,
         `Continue working toward this run's derived task. Invite members into the room or dispatch more agents as needed, review results, and make progress.`,
-        `When this run's task is fully complete AND memory files are updated (memory.json, last_run.json, pending.json), end with [GOAL_COMPLETE].`,
+        `When this run's task is fully complete AND memory files are updated (memory.json, last_run.json, pending.json), end with [GOAL_COMPLETE]. Use the injected memory snapshots as your base and avoid re-reading those files unless needed for error recovery.`,
         `If you need the team owner to make a decision, end with [NEEDS_INPUT].`,
         `If you sent a message to the main agent and are waiting, end with [WAITING_MAIN_AGENT].`,
       ].join('\n');

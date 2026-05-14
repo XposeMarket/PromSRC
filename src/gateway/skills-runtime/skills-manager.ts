@@ -7,6 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import {
   getSkillOverlayPath,
   getSkillProvenancePath,
@@ -19,7 +20,23 @@ import {
   type LoadedSkillPackage,
   type SkillPermissions,
   type SkillResource,
+  type SkillLifecycleState,
+  type SkillOwnershipState,
 } from './skill-package';
+import {
+  assertSkillScanAllowed,
+  ensureSkillSafetyDirs,
+  scanSkillDirectory,
+  scanSkillText,
+  type SkillSafetyScan,
+} from './skill-safety';
+import {
+  resolveSkillEligibility,
+  type SkillAssignment,
+  type SkillEligibility,
+  type SkillRequires,
+  type SkillToolBinding,
+} from './skill-eligibility';
 
 export interface Skill {
   id: string;
@@ -31,9 +48,16 @@ export interface Skill {
   triggers: string[];
   categories: string[];
   requiredTools: string[];
+  requires?: SkillRequires;
+  assignment?: SkillAssignment;
+  toolBinding?: SkillToolBinding;
   permissions: SkillPermissions;
   resources: SkillResource[];
   status: 'ready' | 'needs_setup' | 'blocked';
+  eligibility: SkillEligibility;
+  safety: SkillSafetyScan;
+  lifecycle: SkillLifecycleState;
+  ownership: SkillOwnershipState;
   executionEnabled: boolean;
   riskLevel?: string;
   instructions: string;
@@ -50,6 +74,27 @@ export interface Skill {
   provenance?: Record<string, unknown>;
 }
 
+export interface SkillChangeMetadata {
+  changeType?: string;
+  evidence?: string[];
+  appliedBy?: string;
+  reason?: string;
+}
+
+export interface SkillChangeLedgerEntry {
+  timestamp: string;
+  skillId: string;
+  changeType: string;
+  evidence: string[];
+  beforeHash: string;
+  afterHash: string;
+  appliedBy: string;
+  status: 'active';
+  snapshotDir?: string;
+  changedPaths: string[];
+  reason?: string;
+}
+
 function normalizeSkillMatchText(value: string): string {
   return String(value || '')
     .toLowerCase()
@@ -59,12 +104,27 @@ function normalizeSkillMatchText(value: string): string {
     .trim();
 }
 
+const SKILL_TRIGGER_STOPWORDS = new Set([
+  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
+  'me', 'my', 'our', 'this', 'that', 'please',
+]);
+
+function normalizeSkillMatchTextLoose(value: string): string {
+  return normalizeSkillMatchText(value)
+    .split(' ')
+    .filter((word) => word && !SKILL_TRIGGER_STOPWORDS.has(word))
+    .join(' ');
+}
+
 function skillTriggerMatchesText(trigger: string, rawText: string, words: string[]): boolean {
   const normalizedTrigger = normalizeSkillMatchText(trigger);
   if (!normalizedTrigger) return false;
   const normalizedText = normalizeSkillMatchText(rawText);
   if (normalizedTrigger.includes(' ')) {
-    return normalizedText.includes(normalizedTrigger);
+    if (normalizedText.includes(normalizedTrigger)) return true;
+    const looseTrigger = normalizeSkillMatchTextLoose(trigger);
+    const looseText = normalizeSkillMatchTextLoose(rawText);
+    return looseTrigger.length >= 4 && looseText.includes(looseTrigger);
   }
   return words.some((word) => {
     const normalizedWord = normalizeSkillMatchText(word);
@@ -77,6 +137,7 @@ function skillTriggerMatchesText(trigger: string, rawText: string, words: string
 export class SkillsManager {
   private skillsDir: string;
   private skills: Map<string, Skill> = new Map();
+  private lastScanAt = 0;
 
   constructor(workspaceOrSkillsDir: string) {
     this.skillsDir = workspaceOrSkillsDir.endsWith('skills')
@@ -84,6 +145,7 @@ export class SkillsManager {
       : path.join(workspaceOrSkillsDir, 'skills');
 
     fs.mkdirSync(this.skillsDir, { recursive: true });
+    ensureSkillSafetyDirs(this.skillsDir);
     this.scanSkills();
   }
 
@@ -91,6 +153,7 @@ export class SkillsManager {
 
   scanSkills(): void {
     this.skills.clear();
+    this.lastScanAt = Date.now();
 
     if (!fs.existsSync(this.skillsDir)) return;
 
@@ -101,13 +164,29 @@ export class SkillsManager {
       try {
         const pkg = loadSkillPackage(path.join(this.skillsDir, entry.name), entry.name);
         if (!pkg) continue;
-        this.skills.set(pkg.id, pkg);
+        const safety = scanSkillDirectory(pkg.rootDir);
+        const eligibility = resolveSkillEligibility({
+          status: pkg.status,
+          safety,
+          requires: pkg.requires,
+          permissions: pkg.permissions,
+        });
+        this.skills.set(pkg.id, {
+          ...pkg,
+          safety,
+          eligibility,
+        });
       } catch (e) {
         console.error(`[Skills] Failed to load ${entry.name}:`, e);
       }
     }
 
     console.log(`[Skills] ${this.skills.size} skills in ${this.skillsDir}`);
+  }
+
+  scanSkillsIfStale(maxAgeMs = 30_000): void {
+    if (Date.now() - this.lastScanAt < maxAgeMs && this.skills.size > 0) return;
+    this.scanSkills();
   }
 
   getAll(): Skill[] {
@@ -123,6 +202,21 @@ export class SkillsManager {
 
   listResources(id: string): SkillResource[] {
     return this.get(id)?.resources || [];
+  }
+
+  getAssignedToAgent(agentId: string): Skill[] {
+    const id = String(agentId || '').trim();
+    if (!id) return [];
+    return this.getAll().filter((skill) => {
+      const assigned = skill.assignment?.assignedAgents || [];
+      return assigned.includes(id) || skill.assignment?.preferredAgent === id;
+    });
+  }
+
+  getAssignedToTeam(teamId: string): Skill[] {
+    const id = String(teamId || '').trim();
+    if (!id) return [];
+    return this.getAll().filter((skill) => (skill.assignment?.assignedTeams || []).includes(id));
   }
 
   readResource(
@@ -142,7 +236,6 @@ export class SkillsManager {
       id: skill.id,
       name: skill.name,
       description: skill.description,
-      emoji: skill.emoji,
       version: skill.version,
       kind: skill.kind,
       manifestSource: skill.manifestSource,
@@ -157,8 +250,15 @@ export class SkillsManager {
       triggers: skill.triggers,
       categories: skill.categories,
       requiredTools: skill.requiredTools,
+      requires: skill.requires,
+      assignment: skill.assignment,
+      toolBinding: skill.toolBinding,
       permissions: skill.permissions,
       status: skill.status,
+      eligibility: skill.eligibility,
+      safety: skill.safety,
+      lifecycle: skill.lifecycle,
+      ownership: skill.ownership,
       executionEnabled: skill.executionEnabled,
       riskLevel: skill.riskLevel,
       resources: skill.resources,
@@ -167,23 +267,34 @@ export class SkillsManager {
     };
   }
 
-  writeManifestOverlay(id: string, manifest: Record<string, unknown>): Skill {
+  writeManifestOverlay(id: string, manifest: Record<string, unknown>, metadata?: SkillChangeMetadata): Skill {
     const existing = this.get(id);
     const skillId = sanitizeSkillId(String(manifest?.id || existing?.id || id));
     const rootDir = existing?.rootDir || path.join(this.skillsDir, skillId);
     if (!fs.existsSync(rootDir)) throw new Error(`Skill "${id}" not found`);
+    const beforeHash = hashSkillDirectory(rootDir);
+    const snapshotDir = this.snapshotSkill(existing || null, rootDir, 'manifest-overlay');
     const overlayPath = getSkillOverlayPath(rootDir, skillId);
     fs.mkdirSync(path.dirname(overlayPath), { recursive: true });
+    const { emoji: _emoji, ...manifestWithoutEmoji } = manifest || {};
     const normalized = {
       schemaVersion: 'prometheus-skill-bundle-v1',
       entrypoint: 'SKILL.md',
-      ...manifest,
+      ...manifestWithoutEmoji,
       id: skillId,
     };
+    assertSkillScanAllowed(scanSkillText(JSON.stringify(normalized, null, 2), 'skill.json overlay'), `Manifest overlay for "${skillId}"`);
     fs.writeFileSync(overlayPath, JSON.stringify(normalized, null, 2) + '\n', 'utf-8');
     this.scanSkills();
     const updated = this.get(skillId);
     if (!updated) throw new Error(`Manifest written but skill "${skillId}" could not be loaded`);
+    this.recordSkillChange(updated.id, {
+      beforeHash,
+      afterHash: hashSkillDirectory(updated.rootDir),
+      changedPaths: [path.relative(updated.rootDir, overlayPath).replace(/\\/g, '/') || 'skill.json'],
+      snapshotDir,
+      metadata: { changeType: 'manifest_overlay', ...metadata },
+    });
     return updated;
   }
 
@@ -231,7 +342,6 @@ export class SkillsManager {
       '---',
       `name: ${data.name}`,
       `description: ${data.description}`,
-      `emoji: "${data.emoji || '🧩'}"`,
       'version: 1.0.0',
     ];
     if (data.triggers?.length) {
@@ -239,6 +349,7 @@ export class SkillsManager {
     }
     lines.push('---');
     const content = lines.join('\n') + '\n\n' + data.instructions;
+    assertSkillScanAllowed(scanSkillText(content, 'SKILL.md'), `Skill "${id}"`);
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf-8');
 
     this.scanSkills();
@@ -260,15 +371,25 @@ export class SkillsManager {
     categories?: string[];
     requiredTools?: string[];
     permissions?: SkillPermissions;
+    requires?: SkillRequires;
+    assignment?: SkillAssignment;
+    toolBinding?: SkillToolBinding;
     resources?: Array<{ path: string; content: string; type?: string; description?: string }>;
     overwrite?: boolean;
   }): Skill {
     const id = sanitizeSkillId(data.id);
     if (!id) throw new Error('Invalid skill ID');
     const skillDir = path.join(this.skillsDir, id);
+    const existing = this.get(id);
+    const beforeHash = existing ? hashSkillDirectory(existing.rootDir) : '';
+    const snapshotDir = existing ? this.snapshotSkill(existing, existing.rootDir, 'bundle-overwrite') : undefined;
     if (fs.existsSync(skillDir)) {
       if (!data.overwrite) throw new Error(`Skill "${id}" already exists. Pass overwrite:true to replace it.`);
       fs.rmSync(skillDir, { recursive: true, force: true });
+    }
+    assertSkillScanAllowed(scanSkillText(String(data.instructions || '').trim(), 'SKILL.md'), `Skill bundle "${id}"`);
+    for (const resource of data.resources || []) {
+      assertSkillScanAllowed(scanSkillText(String(resource.content || ''), resource.path), `Skill bundle "${id}" resource "${resource.path}"`);
     }
     fs.mkdirSync(skillDir, { recursive: true });
 
@@ -278,12 +399,14 @@ export class SkillsManager {
       id,
       name: data.name,
       description: data.description || '',
-      emoji: data.emoji || '🧩',
       version: data.version || '1.0.0',
       entrypoint: 'SKILL.md',
       triggers: data.triggers || [],
       categories: data.categories || [],
       requiredTools: data.requiredTools || [],
+      requires: data.requires,
+      assignment: data.assignment,
+      toolBinding: data.toolBinding,
       permissions: data.permissions || {
         workspaceRead: true,
         workspaceWrite: true,
@@ -311,6 +434,13 @@ export class SkillsManager {
     this.scanSkills();
     const skill = this.get(id);
     if (!skill) throw new Error('Bundle creation failed');
+    this.recordSkillChange(skill.id, {
+      beforeHash,
+      afterHash: hashSkillDirectory(skill.rootDir),
+      changedPaths: ['SKILL.md', 'skill.json', ...(data.resources || []).map((resource) => normalizeSkillRelativePathForWrite(resource.path) || resource.path)],
+      snapshotDir,
+      metadata: { changeType: existing ? 'bundle_overwrite' : 'skill_created', appliedBy: 'skill_create_bundle' },
+    });
     return skill;
   }
 
@@ -318,10 +448,13 @@ export class SkillsManager {
     id: string,
     relPath: string,
     content: string,
-    options?: { type?: string; description?: string; addToManifest?: boolean },
+    options?: { type?: string; description?: string; addToManifest?: boolean; change?: SkillChangeMetadata },
   ): Skill {
     const skill = this.get(id);
     if (!skill) throw new Error(`Skill "${id}" not found`);
+    assertSkillScanAllowed(scanSkillText(content, relPath), `Skill "${id}" resource "${relPath}"`);
+    const beforeHash = hashSkillDirectory(skill.rootDir);
+    const snapshotDir = this.snapshotSkill(skill, skill.rootDir, 'resource-write', [relPath]);
     this.writeResourceFile(skill.rootDir, relPath, content);
     if (options?.addToManifest !== false) {
       this.upsertNativeManifestResource(skill, relPath, options?.type, options?.description);
@@ -329,12 +462,22 @@ export class SkillsManager {
     this.scanSkills();
     const updated = this.get(skill.id);
     if (!updated) throw new Error(`Resource written but skill "${skill.id}" could not be loaded`);
+    const safeRel = normalizeSkillRelativePathForWrite(relPath) || relPath;
+    this.recordSkillChange(updated.id, {
+      beforeHash,
+      afterHash: hashSkillDirectory(updated.rootDir),
+      changedPaths: options?.addToManifest === false ? [safeRel] : [safeRel, 'skill.json'],
+      snapshotDir,
+      metadata: { changeType: inferSkillChangeType(safeRel), ...options?.change },
+    });
     return updated;
   }
 
-  deleteResource(id: string, relPath: string, options?: { removeFromManifest?: boolean }): Skill {
+  deleteResource(id: string, relPath: string, options?: { removeFromManifest?: boolean; change?: SkillChangeMetadata }): Skill {
     const skill = this.get(id);
     if (!skill) throw new Error(`Skill "${id}" not found`);
+    const beforeHash = hashSkillDirectory(skill.rootDir);
+    const snapshotDir = this.snapshotSkill(skill, skill.rootDir, 'resource-delete', [relPath]);
     const safeRel = normalizeSkillRelativePathForWrite(relPath);
     if (!safeRel) throw new Error('Invalid resource path');
     const abs = resolveSkillRelativePath(skill.rootDir, safeRel);
@@ -344,6 +487,13 @@ export class SkillsManager {
     this.scanSkills();
     const updated = this.get(skill.id);
     if (!updated) throw new Error(`Resource deleted but skill "${skill.id}" could not be loaded`);
+    this.recordSkillChange(updated.id, {
+      beforeHash,
+      afterHash: hashSkillDirectory(updated.rootDir),
+      changedPaths: options?.removeFromManifest === false ? [safeRel] : [safeRel, 'skill.json'],
+      snapshotDir,
+      metadata: { changeType: 'resource_delete', ...options?.change },
+    });
     return updated;
   }
 
@@ -388,6 +538,23 @@ export class SkillsManager {
     return this.importBundles(source, { overwrite: options?.overwrite !== false });
   }
 
+  listChangeLedger(skillId?: string, limit = 20): SkillChangeLedgerEntry[] {
+    const filePath = this.getLedgerPath();
+    if (!fs.existsSync(filePath)) return [];
+    const entries: SkillChangeLedgerEntry[] = [];
+    for (const line of fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as SkillChangeLedgerEntry;
+        if (skillId && parsed.skillId !== sanitizeSkillId(skillId)) continue;
+        entries.push(parsed);
+      } catch {}
+    }
+    return entries
+      .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
+      .slice(0, Math.max(1, Math.floor(Number(limit) || 20)));
+  }
+
   async importBundle(source: string, options?: { id?: string; overwrite?: boolean }): Promise<Skill> {
     const installed = await this.importBundles(source, options);
     if (installed.length !== 1) {
@@ -413,6 +580,7 @@ export class SkillsManager {
         const pkg = loadSkillPackage(root, options?.id || path.basename(root));
         if (!pkg) continue;
         if (!pkg.validation.ok) throw new Error(`Invalid skill bundle "${pkg.id}": ${pkg.validation.errors.join('; ')}`);
+        assertSkillScanAllowed(scanSkillDirectory(root), `Imported skill bundle "${pkg.id}"`);
 
         const id = sanitizeSkillId(options?.id || pkg.id);
         const targetDir = path.join(this.skillsDir, id);
@@ -449,6 +617,87 @@ export class SkillsManager {
     }
   }
 
+  private getHistoryRoot(): string {
+    return path.join(this.skillsDir, '.history');
+  }
+
+  private getLedgerPath(): string {
+    return path.join(this.getHistoryRoot(), 'skill-change-ledger.jsonl');
+  }
+
+  private snapshotSkill(skill: Skill | null, rootDir: string, reason: string, extraRelPaths: string[] = []): string | undefined {
+    try {
+      if (!fs.existsSync(rootDir)) return undefined;
+      const skillId = sanitizeSkillId(skill?.id || path.basename(rootDir));
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const snapshotDir = path.join(this.getHistoryRoot(), skillId, `${stamp}-${sanitizeSkillId(reason)}`);
+      fs.mkdirSync(snapshotDir, { recursive: true });
+      const rels = Array.from(new Set([
+        'SKILL.md',
+        'skill.md',
+        'skill.json',
+        skill?.entrypoint,
+        skill?.manifestPath ? path.relative(rootDir, skill.manifestPath).replace(/\\/g, '/') : undefined,
+        skill?.overlayPath ? path.relative(rootDir, skill.overlayPath).replace(/\\/g, '/') : undefined,
+        ...extraRelPaths,
+      ].filter(Boolean) as string[]));
+
+      const copied: string[] = [];
+      for (const rel of rels) {
+        const abs = path.isAbsolute(rel) ? rel : resolveSkillRelativePath(rootDir, rel);
+        if (!abs || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) continue;
+        const outName = path.isAbsolute(rel)
+          ? path.join('__external', path.basename(abs))
+          : rel;
+        const target = path.join(snapshotDir, outName);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(abs, target);
+        copied.push(outName.replace(/\\/g, '/'));
+      }
+      fs.writeFileSync(path.join(snapshotDir, 'snapshot.json'), JSON.stringify({
+        skillId,
+        reason,
+        createdAt: new Date().toISOString(),
+        rootDir,
+        copied,
+        hash: hashSkillDirectory(rootDir),
+      }, null, 2) + '\n', 'utf-8');
+      return snapshotDir;
+    } catch (err: any) {
+      console.warn(`[Skills] Snapshot failed: ${err?.message || err}`);
+      return undefined;
+    }
+  }
+
+  private recordSkillChange(skillId: string, input: {
+    beforeHash: string;
+    afterHash: string;
+    changedPaths: string[];
+    snapshotDir?: string;
+    metadata?: SkillChangeMetadata;
+  }): void {
+    try {
+      const entry: SkillChangeLedgerEntry = {
+        timestamp: new Date().toISOString(),
+        skillId: sanitizeSkillId(skillId),
+        changeType: sanitizeLedgerToken(input.metadata?.changeType || 'skill_update'),
+        evidence: normalizeEvidence(input.metadata?.evidence),
+        beforeHash: input.beforeHash || '',
+        afterHash: input.afterHash || '',
+        appliedBy: String(input.metadata?.appliedBy || 'skill_manager').slice(0, 120),
+        status: 'active',
+        snapshotDir: input.snapshotDir,
+        changedPaths: Array.from(new Set(input.changedPaths.map((p) => String(p || '').replace(/\\/g, '/')).filter(Boolean))).slice(0, 40),
+        reason: input.metadata?.reason ? String(input.metadata.reason).slice(0, 1000) : undefined,
+      };
+      const ledgerPath = this.getLedgerPath();
+      fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+      fs.appendFileSync(ledgerPath, JSON.stringify(entry) + '\n', 'utf-8');
+    } catch (err: any) {
+      console.warn(`[Skills] Ledger write failed: ${err?.message || err}`);
+    }
+  }
+
   private writeResourceFile(rootDir: string, relPath: string, content: string): void {
     const safeRel = normalizeSkillRelativePathForWrite(relPath);
     if (!safeRel) throw new Error('Invalid resource path');
@@ -470,7 +719,6 @@ export class SkillsManager {
       id: skill.id,
       name: skill.name,
       description: skill.description,
-      emoji: skill.emoji,
       version: skill.version || '1.0.0',
       entrypoint: skill.entrypoint || 'SKILL.md',
       triggers: skill.triggers || [],
@@ -514,9 +762,12 @@ export class SkillsManager {
     if (!all.length) return 'No skills installed.';
     return all.map(s => {
       const parts = [
-        `${s.emoji} ${s.id}`,
+        `${s.id}`,
         s.kind === 'bundle' ? `v${s.version} [bundle: ${s.resources.length} resources]` : '[simple]',
         s.requiredTools.length ? `[tools: ${s.requiredTools.join(',')}]` : '',
+        s.toolBinding?.recommendedToolCategories?.length ? `[tool-cats: ${s.toolBinding.recommendedToolCategories.join(',')}]` : '',
+        s.assignment?.preferredAgent ? `[agent: ${s.assignment.preferredAgent}]` : '',
+        s.eligibility.status !== 'ready' ? `[${s.eligibility.status}: ${s.eligibility.reasons.join('; ').slice(0, 120)}]` : '',
         s.triggers.length ? `[triggers: ${s.triggers.join(',')}]` : '',
         `- ${s.description.slice(0, 100) || '(no description)'}`,
       ].filter(Boolean);
@@ -527,18 +778,37 @@ export class SkillsManager {
   buildTurnContext(_messageText: string, _maxCharsPerSkill = 3000): string {
     const all = this.getAll();
     if (!all.length) return '';
+    const matchedSkills = this.findMatchingSkillsForMessage(_messageText)
+      .map((id) => this.get(id))
+      .filter((skill): skill is Skill => !!skill)
+      .slice(0, 5);
+    const matchedBlock = matchedSkills.length
+      ? (
+        `\n\n[MATCHING_SKILLS]\n` +
+        `The user's message matches skill trigger metadata. These skills are not active instructions yet; if one is relevant, call skill_read(id) before acting.\n` +
+        matchedSkills.map((s) => {
+          const triggerPreview = s.triggers.length ? ` [triggers: ${s.triggers.slice(0, 6).join(', ')}]` : '';
+          return `- ${s.id}${triggerPreview} - ${s.description.slice(0, 140) || s.name}`;
+        }).join('\n')
+      )
+      : '';
 
     return (
       `[SKILLS] You have ${all.length} reusable skill playbook${all.length !== 1 ? 's' : ''}.\n` +
       `For greetings, small talk, quick Q&A, or confirmations: respond directly - do NOT call skill_list.\n` +
       `Before browser/desktop automation, file edits, or other execution-heavy work: call skill_list first.\n` +
       `If a relevant skill exists, call skill_read(id) and follow it before acting.\n` +
+      `If a skill declares toolBinding metadata, treat requiredTools and defaultWorkflow as the expected operating contract; activate missing tool categories before using the workflow.\n` +
+      `If a skill declares assignment.preferredAgent or assignedAgents/assignedTeams, consider routing substantial work to that agent/team when the task matches.\n` +
+      `During and after real work, treat skills as living workflow playbooks: notice missing triggers, clearer steps, better tool order, reusable examples, templates, guardrails, and resources that would make the skill more useful next time.\n` +
+      `When a completed workflow seems reusable but no skill fit, briefly offer to turn it into a skill or record it as a candidate; do not interrupt casual conversation with skill maintenance chatter.\n` +
       `For bundled skill templates/examples/schemas/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed.\n` +
       `Use skill_inspect(id) for normalized metadata/provenance, and skill_manifest_write(id,manifest) to enrich imported skills with overlays.\n` +
       `Use skill_import_bundle(source) for directory/zip/GitHub skill bundles; skill_update_from_source(id) to refresh imported bundles; skill_export_bundle(id) to package one.\n` +
       `Use skill_create_bundle for reusable workflows that need templates/schemas/examples/references; skill_resource_write/delete to maintain bundle resources; use skill_create only for simple one-file playbooks.\n` +
       `skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create are core tools.\n` +
-      `Save new reusable workflows with skill_create_bundle when resources or rich metadata would help.`
+      `Save new reusable workflows with skill_create_bundle when resources or rich metadata would help.` +
+      matchedBlock
     );
   }
 
@@ -693,4 +963,70 @@ function inferResourceTypeForWrite(relPath: string): string {
   if (top === 'prompts' || top === 'prompt-fragments') return 'prompt-fragment';
   if (top === 'data' || top === 'fixtures') return 'data';
   return 'doc';
+}
+
+function sanitizeLedgerToken(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'skill_update';
+}
+
+function normalizeEvidence(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 20);
+  }
+  const value = String(raw || '').trim();
+  return value ? [value] : [];
+}
+
+function inferSkillChangeType(relPath: string): string {
+  const normalized = String(relPath || '').replace(/\\/g, '/').toLowerCase();
+  if (normalized.endsWith('skill.md') || normalized.endsWith('skill.md')) return 'instructions_update';
+  if (normalized.includes('/examples/') || normalized.startsWith('examples/')) return 'example_update';
+  if (normalized.includes('/templates/') || normalized.startsWith('templates/')) return 'template_update';
+  if (normalized.includes('/schemas/') || normalized.startsWith('schemas/')) return 'schema_update';
+  if (normalized.endsWith('skill.json')) return 'manifest_update';
+  return 'resource_update';
+}
+
+function hashSkillDirectory(rootDir: string): string {
+  try {
+    if (!fs.existsSync(rootDir)) return '';
+    const files: string[] = [];
+    const stack = [rootDir];
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current) continue;
+      let entries: fs.Dirent[] = [];
+      try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (entry.name === '.git' || entry.name === 'node_modules') continue;
+        const abs = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(abs);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        const rel = path.relative(rootDir, abs).replace(/\\/g, '/');
+        if (rel.startsWith('.history/')) continue;
+        if (!canReadSkillResource(rel) && path.basename(rel).toLowerCase() !== 'skill.json') continue;
+        files.push(abs);
+      }
+    }
+    const h = crypto.createHash('sha256');
+    for (const abs of files.sort()) {
+      const rel = path.relative(rootDir, abs).replace(/\\/g, '/');
+      h.update(rel);
+      h.update('\0');
+      h.update(fs.readFileSync(abs));
+      h.update('\0');
+    }
+    return h.digest('hex').slice(0, 16);
+  } catch {
+    return '';
+  }
 }

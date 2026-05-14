@@ -1,13 +1,18 @@
 import path from 'path';
-import { spawn } from 'child_process';
 import { getConfig } from '../config/config.js';
 import { ToolResult } from '../types.js';
 import { log } from '../security/log-scrubber.js';
 import { getActiveAllowedWorkspaces, getActiveWorkspace } from './workspace-context.js';
+import { getProcessSupervisor } from '../gateway/process/supervisor.js';
 
 export interface ShellToolArgs {
   command: string;
   cwd?: string;
+  background?: boolean;
+  timeoutMs?: number;
+  timeout_ms?: number;
+  noOutputTimeoutMs?: number;
+  no_output_timeout_ms?: number;
 }
 
 // ── Path confinement helper ───────────────────────────────────────────────────
@@ -50,7 +55,7 @@ function containsOutOfScopeAbsPath(command: string, allowedPaths: string[]): boo
   return false;
 }
 
-export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
+export function validateShellRequest(args: ShellToolArgs): { ok: true; cwd: string; command: string } | { ok: false; result: ToolResult } {
   const config = getConfig().getConfig();
   const permissions = config.tools.permissions.shell;
   const filePermissions = config.tools.permissions.files;
@@ -66,15 +71,21 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
     if (!isPathInsideAnyDir(allowedPaths, cwd)) {
       log.warn('[shell] Blocked: cwd outside workspace:', cwd);
       return {
-        success: false,
-        error: `Security: Command execution outside allowed paths is not allowed. Allowed: ${allowedPaths.join(', ')}, Requested: ${cwd}`
+        ok: false,
+        result: {
+          success: false,
+          error: `Security: Command execution outside allowed paths is not allowed. Allowed: ${allowedPaths.join(', ')}, Requested: ${cwd}`
+        }
       };
     }
     if (isPathInsideAnyDir(blockedPaths, cwd)) {
       log.warn('[shell] Blocked: cwd inside blocked path:', cwd);
       return {
-        success: false,
-        error: `Security: Command execution inside blocked paths is not allowed. Requested: ${cwd}`
+        ok: false,
+        result: {
+          success: false,
+          error: `Security: Command execution inside blocked paths is not allowed. Requested: ${cwd}`
+        }
       };
     }
 
@@ -82,8 +93,11 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
     if (containsOutOfScopeAbsPath(args.command, allowedPaths)) {
       log.warn('[shell] Blocked: command references path outside allowed paths:', args.command.slice(0, 120));
       return {
-        success: false,
-        error: `Security: Command references a path outside allowed paths.`
+        ok: false,
+        result: {
+          success: false,
+          error: `Security: Command references a path outside allowed paths.`
+        }
       };
     }
     if (blockedPaths.length > 0) {
@@ -94,8 +108,11 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
       if (matches.some((match) => isPathInsideAnyDir(blockedPaths, match))) {
         log.warn('[shell] Blocked: command references blocked path:', args.command.slice(0, 120));
         return {
-          success: false,
-          error: `Security: Command references a blocked path.`
+          ok: false,
+          result: {
+            success: false,
+            error: `Security: Command references a blocked path.`
+          }
         };
       }
     }
@@ -106,8 +123,11 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
     if (args.command.includes(pattern)) {
       log.warn('[shell] Blocked pattern match:', pattern);
       return {
-        success: false,
-        error: `Security: Command blocked due to dangerous pattern: "${pattern}"`
+        ok: false,
+        result: {
+          success: false,
+          error: `Security: Command blocked due to dangerous pattern: "${pattern}"`
+        }
       };
     }
   }
@@ -129,37 +149,47 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
     if (pattern.test(args.command)) {
       log.warn('[shell] Blocked dangerous command:', label);
       return {
-        success: false,
-        error: `Security: Potentially destructive command detected (${label}): ${args.command.slice(0, 80)}`
+        ok: false,
+        result: {
+          success: false,
+          error: `Security: Potentially destructive command detected (${label}): ${args.command.slice(0, 80)}`
+        }
       };
     }
   }
 
+  return { ok: true, cwd, command: args.command };
+}
+
+export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
+  const validation = validateShellRequest(args);
+  if (!validation.ok) return validation.result;
+  const timeoutMs = Number(args.timeoutMs ?? args.timeout_ms ?? 120000);
+  const noOutputTimeoutMs = args.noOutputTimeoutMs ?? args.no_output_timeout_ms;
+  const supervisor = getProcessSupervisor();
   try {
-    const output = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
-      const isWindows = process.platform === 'win32';
-      const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/bash');
-      const shellArgs = isWindows ? ['/d', '/s', '/c', args.command] : ['-lc', args.command];
-      const child = spawn(shell, shellArgs, {
-        cwd,
-        env: process.env,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      const cap = (current: string, chunk: Buffer | string) => (current + String(chunk)).slice(0, 120000);
-      child.stdout?.on('data', chunk => { stdout = cap(stdout, chunk); });
-      child.stderr?.on('data', chunk => { stderr = cap(stderr, chunk); });
-      child.on('close', code => resolve({ stdout, stderr, code }));
-      child.on('error', err => resolve({ stdout, stderr: String(err?.message || err), code: 1 }));
+    const run = await supervisor.spawn({
+      command: validation.command,
+      cwd: validation.cwd,
+      mode: args.background ? 'background' : 'foreground',
+      timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 120000,
+      noOutputTimeoutMs: noOutputTimeoutMs == null ? undefined : Number(noOutputTimeoutMs),
     });
+    if (args.background) {
+      return {
+        success: true,
+        stdout: `Started background command ${run.runId}`,
+        data: { runId: run.runId, run: run.record },
+      };
+    }
+    const output = await run.wait();
     return {
-      success: output.code === 0,
-      stdout: output.stdout.trim(),
-      stderr: output.stderr.trim(),
-      exitCode: output.code ?? 0,
-      error: output.code === 0 ? undefined : output.stderr.trim() || `Command exited with ${output.code ?? 'unknown status'}`,
+      success: output.exitCode === 0,
+      stdout: output.stdout,
+      stderr: output.stderr,
+      exitCode: output.exitCode ?? 0,
+      data: { runId: output.runId, run: supervisor.get(output.runId) },
+      error: output.exitCode === 0 ? undefined : output.stderr || `Command exited with ${output.exitCode ?? 'unknown status'}`,
     };
   } catch (error: any) {
     return {
@@ -174,10 +204,13 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
 
 export const shellTool = {
   name: 'shell',
-  description: 'Execute terminal commands in the workspace',
+  description: 'Execute terminal commands in the workspace through Prometheus supervised command runs',
   execute: executeShell,
   schema: {
     command: 'string (required) - The command to execute',
-    cwd: 'string (optional) - Working directory, defaults to workspace'
+    cwd: 'string (optional) - Working directory, defaults to workspace',
+    background: 'boolean (optional) - If true, starts the command and returns a runId immediately',
+    timeoutMs: 'number (optional) - Foreground timeout in milliseconds',
+    noOutputTimeoutMs: 'number (optional) - Kill if no output arrives within this many milliseconds'
   }
 };

@@ -16,6 +16,15 @@ import fs from 'fs';
 import { ToolResult } from '../types.js';
 import { SkillsManager } from '../gateway/skills-runtime/skills-manager.js';
 import { resolveSkillsRoot } from '../skills/store.js';
+import { getConfig } from '../config/config.js';
+import { scanSkillDirectory } from '../gateway/skills-runtime/skill-safety.js';
+import {
+  applySkillCuratorSuggestion,
+  listSkillCuratorSuggestions,
+  rejectSkillCuratorSuggestion,
+  runSkillCurator,
+  type SkillCuratorMode,
+} from '../gateway/skills-runtime/skill-curator.js';
 
 let defaultSkillsManager: SkillsManager | null = null;
 
@@ -207,7 +216,7 @@ export const skillResourceReadTool = {
   schema: {
     id: 'string (required) - skill id from skill_list',
     path: 'string (required) - resource path from skill_resource_list',
-    max_chars: 'number (optional) - maximum characters to return',
+    max_chars: 'number (optional) - explicit cap; omit to return the full resource',
   },
   jsonSchema: {
     type: 'object',
@@ -330,6 +339,9 @@ export const skillCreateBundleTool = {
         triggers: parseCsv(args?.triggers),
         categories: parseCsv(args?.categories),
         requiredTools: parseCsv(args?.requiredTools || args?.required_tools),
+        requires: args?.requires && typeof args.requires === 'object' ? args.requires : undefined,
+        assignment: args?.assignment && typeof args.assignment === 'object' ? args.assignment : undefined,
+        toolBinding: args?.toolBinding && typeof args.toolBinding === 'object' ? args.toolBinding : undefined,
         permissions: args?.permissions && typeof args.permissions === 'object' ? args.permissions : undefined,
         resources: Array.isArray(args?.resources) ? args.resources : undefined,
         overwrite: args?.overwrite === true,
@@ -358,6 +370,9 @@ export const skillCreateBundleTool = {
       triggers: { type: 'string' },
       categories: { type: 'string' },
       requiredTools: { type: 'string' },
+      requires: { type: 'object' },
+      assignment: { type: 'object' },
+      toolBinding: { type: 'object' },
       permissions: { type: 'object' },
       resources: { type: 'array' },
       overwrite: { type: 'boolean' },
@@ -499,6 +514,81 @@ export const skillUpdateFromSourceTool = {
   },
 };
 
+export const skillScanTool = {
+  name: 'skill_scan',
+  description: 'Run the Prometheus skill safety scanner against an installed skill.',
+  execute: async (args: any): Promise<ToolResult> => {
+    const sm = getDefaultSkillsManager();
+    const id = String(args?.id || args?.skill_id || '').trim();
+    if (!id) return skillErr('id is required.');
+    sm.scanSkills();
+    const skill = sm.get(id);
+    if (!skill) return skillErr(`Skill "${id}" not found.`);
+    const scan = scanSkillDirectory(skill.rootDir);
+    return skillOk(JSON.stringify(scan, null, 2), scan);
+  },
+  schema: { id: 'string (required) - installed skill id' },
+  jsonSchema: {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string' } },
+    additionalProperties: true,
+  },
+};
+
+export const skillCuratorTool = {
+  name: 'skill_curator',
+  description: 'Inspect or run the dedicated Brain Skill Curator. Actions: status, run, apply, reject.',
+  execute: async (args: any): Promise<ToolResult> => {
+    const sm = getDefaultSkillsManager();
+    const workspacePath = getConfig().getWorkspacePath();
+    const action = String(args?.action || 'status').trim().toLowerCase();
+    try {
+      if (action === 'status') {
+        const suggestions = listSkillCuratorSuggestions(workspacePath);
+        return skillOk(JSON.stringify({ suggestions }, null, 2), { suggestions });
+      }
+      if (action === 'run') {
+        const rawMode = String(args?.mode || 'pending').trim();
+        const mode: SkillCuratorMode = rawMode === 'dry-run' || rawMode === 'auto-safe' ? rawMode : 'pending';
+        const result = runSkillCurator({ workspacePath, skillsManager: sm, mode });
+        return skillOk(JSON.stringify(result, null, 2), result);
+      }
+      if (action === 'apply') {
+        const id = String(args?.id || '').trim();
+        if (!id) return skillErr('id is required for apply.');
+        const result = applySkillCuratorSuggestion(workspacePath, sm, id);
+        if (!result) return skillErr(`Suggestion "${id}" not found.`);
+        return skillOk(`Applied skill curator suggestion ${id}.`, result);
+      }
+      if (action === 'reject') {
+        const id = String(args?.id || '').trim();
+        if (!id) return skillErr('id is required for reject.');
+        const result = rejectSkillCuratorSuggestion(workspacePath, id);
+        if (!result) return skillErr(`Suggestion "${id}" not found.`);
+        return skillOk(`Rejected skill curator suggestion ${id}.`, result);
+      }
+      return skillErr(`Unknown skill_curator action: ${action}`);
+    } catch (err: any) {
+      return skillErr(`skill_curator failed: ${err.message}`);
+    }
+  },
+  schema: {
+    action: 'status|run|apply|reject',
+    mode: 'dry-run|pending|auto-safe (for action=run)',
+    id: 'string (for apply/reject)',
+  },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string' },
+      mode: { type: 'string' },
+      id: { type: 'string' },
+    },
+    additionalProperties: true,
+  },
+};
+
 export const allSkillTools = [
   skillListTool,
   skillReadTool,
@@ -512,6 +602,8 @@ export const allSkillTools = [
   skillResourceDeleteTool,
   skillExportBundleTool,
   skillUpdateFromSourceTool,
+  skillScanTool,
+  skillCuratorTool,
   skillCreateTool,
 ];
 

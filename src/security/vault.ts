@@ -144,14 +144,7 @@ export class SecretVault {
 
   private loadOrInit(): void {
     this.masterKey = this.loadOrCreateMasterKey();
-    if (fs.existsSync(this.vaultPath)) {
-      try {
-        const raw = fs.readFileSync(this.vaultPath, 'utf-8');
-        this.data = JSON.parse(raw) as VaultMetadata;
-      } catch {
-        this.data = { version: 1, entries: {} };
-      }
-    }
+    this.data = this.readDiskData();
   }
 
   private loadOrCreateMasterKey(): Buffer {
@@ -194,8 +187,33 @@ export class SecretVault {
 
   // ── Persistence ───────────────────────────────────────────────────────────
 
-  private persist(): void {
-    fs.writeFileSync(this.vaultPath, JSON.stringify(this.data, null, 2), { mode: 0o600 });
+  private readDiskData(): VaultMetadata {
+    if (!fs.existsSync(this.vaultPath)) return { version: 1, entries: {} };
+    try {
+      const raw = fs.readFileSync(this.vaultPath, 'utf-8');
+      const parsed = JSON.parse(raw) as VaultMetadata;
+      if (parsed?.version !== 1 || !parsed.entries || typeof parsed.entries !== 'object') {
+        return { version: 1, entries: {} };
+      }
+      return parsed;
+    } catch {
+      return { version: 1, entries: {} };
+    }
+  }
+
+  private refreshFromDisk(): void {
+    this.data = this.readDiskData();
+  }
+
+  private persist(options: { mergeExisting?: boolean } = {}): void {
+    const mergeExisting = options.mergeExisting ?? true;
+    const next: VaultMetadata = mergeExisting
+      ? { version: 1, entries: { ...this.readDiskData().entries, ...this.data.entries } }
+      : this.data;
+    const tmpPath = `${this.vaultPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(next, null, 2), { mode: 0o600 });
+    fs.renameSync(tmpPath, this.vaultPath);
+    this.data = next;
   }
 
   // ── Audit ─────────────────────────────────────────────────────────────────
@@ -230,6 +248,7 @@ export class SecretVault {
    * Returns null if missing or expired.
    */
   get(key: string, caller = 'unknown'): SecretValue | null {
+    this.refreshFromDisk();
     const entry = this.data.entries[key];
     if (!entry) return null;
     if (entry.expiresAt > 0 && Date.now() > entry.expiresAt) {
@@ -247,6 +266,7 @@ export class SecretVault {
 
   /** Check existence without decrypting or emitting a GET audit event */
   has(key: string): boolean {
+    this.refreshFromDisk();
     const entry = this.data.entries[key];
     if (!entry) return false;
     if (entry.expiresAt > 0 && Date.now() > entry.expiresAt) {
@@ -257,15 +277,17 @@ export class SecretVault {
   }
 
   delete(key: string, caller = 'unknown'): void {
+    this.refreshFromDisk();
     if (this.data.entries[key]) {
       delete this.data.entries[key];
-      this.persist();
+      this.persist({ mergeExisting: false });
       this.audit('DEL', key, caller);
     }
   }
 
   /** List all live key names — never values */
   keys(): string[] {
+    this.refreshFromDisk();
     return Object.keys(this.data.entries).filter((k) => {
       const e = this.data.entries[k];
       return !(e.expiresAt > 0 && Date.now() > e.expiresAt);
@@ -277,6 +299,7 @@ export class SecretVault {
    * Returns false if key doesn't exist.
    */
   rotate(key: string, newValue: string, caller = 'unknown'): boolean {
+    this.refreshFromDisk();
     const existing = this.data.entries[key];
     if (!existing) return false;
     const ttlMs = existing.expiresAt > 0
@@ -290,19 +313,35 @@ export class SecretVault {
   /** Factory-reset: wipe all entries */
   clear(caller = 'unknown'): void {
     this.data = { version: 1, entries: {} };
-    this.persist();
+    this.persist({ mergeExisting: false });
     this.audit('CLEAR', '*', caller);
   }
 }
 
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
-let _vault: SecretVault | null = null;
+const _vaults = new Map<string, SecretVault>();
+let _defaultVaultKey: string | null = null;
 
 export function getVault(configDir?: string): SecretVault {
-  if (!_vault) {
-    if (!configDir) throw new Error('[Vault] configDir required for first initialisation');
-    _vault = new SecretVault(configDir);
+  if (configDir) {
+    const resolved = path.resolve(configDir);
+    let vault = _vaults.get(resolved);
+    if (!vault) {
+      vault = new SecretVault(resolved);
+      _vaults.set(resolved, vault);
+    }
+    if (!_defaultVaultKey) _defaultVaultKey = resolved;
+    return vault;
   }
-  return _vault;
+
+  if (!_defaultVaultKey) {
+    throw new Error('[Vault] configDir required for first initialisation');
+  }
+
+  const vault = _vaults.get(_defaultVaultKey);
+  if (!vault) {
+    throw new Error('[Vault] default vault unavailable');
+  }
+  return vault;
 }

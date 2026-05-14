@@ -7,7 +7,7 @@ import fs from 'fs';
 import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
 import { getConfig } from '../config/config';
-import { getActivatedToolCategories, isBusinessContextEnabled } from './session';
+import { getActivatedSkillIds, getActivatedToolCategories, isBusinessContextEnabled } from './session';
 import { searchMemoryIndex } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 
@@ -38,38 +38,7 @@ export interface SkillWindow {
 }
 
 export interface BuildPersonalityContextOptions {
-  profile?: 'default' | 'switch_model' | 'local_llm' | 'creative_design' | 'creative_image' | 'creative_canvas' | 'creative_video' | 'teach_mode';
-}
-
-function loadCreativeRuntimeGuide(profile: NonNullable<BuildPersonalityContextOptions['profile']>): string {
-  const docName = profile === 'creative_video'
-    ? 'video-mode.md'
-    : profile === 'creative_design'
-      ? 'design-mode.md'
-      : 'image-mode.md';
-  const toolDocName = profile === 'creative_video'
-    ? 'video-tools.md'
-    : profile === 'creative_image' || profile === 'creative_canvas'
-      ? 'image-tools.md'
-      : '';
-  const readFirst = (candidates: string[]): string => {
-    for (const candidate of candidates) {
-      try {
-        if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf8').slice(0, 9000);
-      } catch {}
-    }
-    return '';
-  };
-  const guide = readFirst([
-    path.resolve(process.cwd(), 'workspace', 'creatives', 'modes', docName),
-    path.resolve(process.cwd(), 'src', 'gateway', 'creative', 'prompts', docName),
-    path.resolve(process.cwd(), 'dist', 'gateway', 'creative', 'prompts', docName),
-  ]);
-  const tools = toolDocName ? readFirst([
-    path.resolve(process.cwd(), 'src', 'gateway', 'creative', 'tool-docs', toolDocName),
-    path.resolve(process.cwd(), 'dist', 'gateway', 'creative', 'tool-docs', toolDocName),
-  ]) : '';
-  return [guide, tools].filter(Boolean).join('\n\n');
+  profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode';
 }
 
 const BOOT_COMPACTION_EXCLUDE_SESSION_RE = /^(startup_connection_probe_|brain_|auto_boot_|auto_restart_|task_|cron_|background_|team_dispatch_|subagent_chat_)/i;
@@ -537,7 +506,12 @@ function buildRetrievedMemoryContext(workspacePath: string, messageText: string,
       `reason=${routing.reason}`,
       `results=${result.hits.length}`,
       `[MEMORY_RETRIEVED]`,
-      ...result.hits.map((h) => `- score=${h.score} | record=${h.recordId} | source=${h.sourceType} | path=${h.sourcePath} | ${h.preview}`),
+      ...result.hits.map((h) => {
+        const citation = h.citation
+          ? ` | citation=${h.citation.sourcePath}${h.citation.sourceStartLine ? `:${h.citation.sourceStartLine}` : ''} | authority=${h.citation.authority} | status=${h.citation.status}`
+          : ` | source=${h.sourceType} | path=${h.sourcePath}`;
+        return `- score=${h.score} | layer=${h.layer || 'evidence'} | record=${h.recordId}${citation} | ${h.preview}`;
+      }),
       `For deeper evidence, call memory_read_record(record_id).`,
     ];
     return lines.join('\n');
@@ -651,17 +625,17 @@ export function readMemorySnippets(workspacePath: string, categories: string[]):
 // These constants are consumed by buildPersonalityContext. Exported so
 // consumers can extend or inspect them without importing server-v2.
 export const TOOL_BLOCKS: Record<string, string> = {
-  web: `WEB: web_search(query, max_results?, multi_engine?)→snippets+URLs. web_fetch(url)→full page text. Search first, then fetch.
+  web: `WEB: web_search_multi(query,max_results?)→all configured providers. web_search_single(query,provider?,max_results?)→one provider (default Settings preferred; provider=tinyfish|tavily|google|brave|ddg). web_search(query,max_results?,multi_engine?,provider?)→legacy combined tool. web_fetch(url)→full page text. Search first, then fetch.
 Strategy: for complex topics call web_search 2–3× with different query angles; scan snippets; web_fetch the 1–3 most relevant URLs.
-multi_engine:true queries all configured providers in parallel for broader coverage.
+Use web_search_single with provider:"tavily" to test Tavily-only; use web_search_single with provider:"google" to test Google-only. Use web_search_multi for broad coverage.
 Site search: web_search("site:reddit.com keyword"). Fallback: web_fetch a direct URL (reuters.com, apnews.com, bbc.com).
 Fetch routing: web_fetch for static pages; browser_get_page_text for JS-heavy or login-gated pages.`,
 
-  browser: `BROWSER: browser_open(url)→compact ack unless observe="snapshot". browser_snapshot()→refresh DOM refs. browser_vision_screenshot()→viewport image. browser_click(@ref|element). browser_fill(@ref|element,text). browser_drag(from_ref|coords→to_ref|coords). browser_upload_file(ref?|selector,file_path|file_paths). browser_press_key(key). browser_wait(ms). browser_click_and_download(@ref). browser_get_page_text(element?)→full text incl. iframes or saved element details (use when <12 elements or when reading a named element). download_url(url,filename?). download_media(url,audio_only?). generate_image(prompt, aspect_ratio?, provider?, model?). browser_close(). Chrome persistent profile (pre-logged-in).
+  browser: `BROWSER: browser_open(url)→compact ack unless observe="snapshot". browser_snapshot()→refresh DOM refs. browser_vision_screenshot()→viewport image. browser_click(@ref|element). browser_fill(@ref|element,text). browser_drag(from_ref|coords→to_ref|coords). browser_upload_file(ref?|selector,file_path|file_paths). browser_press_key(key). browser_wait(ms). browser_click_and_download(@ref). browser_get_page_text(element?)→full text incl. iframes or saved element details (use when <12 elements or when reading a named element). download_url(url,filename?). download_media(url,audio_only?). generate_image(prompt, aspect_ratio?, provider?, model?). generate_video(prompt, image?, video?, mode?, duration?, resolution?). browser_close(). Chrome persistent profile (pre-logged-in).
 RULES: visual-first workflow. Vision screenshots are highest-confidence on dynamic/SPA UIs. If DOM refs or JS-derived assumptions are uncertain, stale, or contradictory, take a fresh browser_vision_screenshot and trust that evidence first. After browser actions, prefer a fresh browser_snapshot (or browser_vision_screenshot when UI is ambiguous) before the next decision only when state likely changed or you need updated state; use observe="none" on cheap deterministic actions when a tiny ack is sufficient. Treat browser_run_js as fallback for cases where snapshot/vision still cannot identify the target. Composer fills show "COMPOSER SUBMIT BUTTON: @N" — click it immediately, nothing else. j/k nav: call browser_get_focused_item only when focus is unclear or you need to confirm position after navigation. Use ⌨️ SITE SHORTCUTS when shown; save new ones with save_site_shortcut().
 MEDIA SELECTION: when choosing an image/video on X, Google Images, or similar pages, first enumerate candidates via browser_snapshot/browser_extract_structured using nearby text, alt text, username, timestamp, href, or src. Rank candidates by text match to the request, then take browser_vision_screenshot to visually confirm the intended item before downloading. Prefer download_url for direct asset URLs and browser_click_and_download for browser-triggered downloads.`,
 
-  desktop: `DESKTOP: desktop_get_monitors()→monitor indices+bounds. desktop_screenshot()→screen+monitors+screenshot_id (capture=all|primary|monitor_index=N). desktop_window_screenshot(name|handle|active)→single app window crop+screenshot_id. desktop_click(x,y, coordinate_space?, screenshot_id?, verify?) is an actual mouse click at those coordinates; never call it without numeric x and y. If the target point is not known yet, take a screenshot first, then click with coordinates from that image. desktop_scroll/drag use the same targeting model and optional verification. desktop_type/press_key. desktop_find_window/focus_window. Clipboard get/set. desktop_list_installed_apps(filter?) and desktop_find_installed_app(query) return stable app_id values; prefer desktop_launch_app(app_id=...) over guessing raw app names. Screenshot/get_monitors first; prefer coordinate_space="capture" with screenshot_id when clicking from screenshot pixels, or coordinate_space="window" for app-local coords. Leave verify on auto unless speed matters. Focus before click/type. After desktop actions, prefer another screenshot before choosing the next action when the UI likely changed or the outcome is ambiguous.`,
+  desktop: `DESKTOP: desktop_get_monitors()→monitor indices+bounds. desktop_screenshot()→screen+monitors+screenshot_id (capture=all|primary|monitor_index=N). desktop_window_screenshot(name|handle|active)→single app window crop+screenshot_id. desktop_click(x,y, coordinate_space?, screenshot_id?, verify?) is an actual mouse click at those coordinates; never call it without numeric x and y. If the target point is not known yet, take a screenshot first, then click with coordinates from that image. desktop_scroll/drag use the same targeting model and optional verification. desktop_type/press_key. desktop_find_window/focus_window. Clipboard get/set. desktop_list_installed_apps(filter?) and desktop_find_installed_app(query) return stable app_id values; prefer desktop_launch_app(app_id=...) over guessing raw app names. Screenshot/get_monitors first; prefer coordinate_space="capture" with screenshot_id when clicking from screenshot pixels, or coordinate_space="window" for app-local coords. Leave verify on auto unless speed matters. Focus before click/type. After desktop actions, prefer another screenshot before choosing the next action when the UI likely changed or the outcome is ambiguous. Non-interrupting background desktop work requires an isolated worker target: use desktop_background_status, desktop_background_prepare_sandbox, then desktop_background_command instead of host desktop clicks/keys.`,
 
   files: isPublicDistributionBuild()
     ? `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
@@ -676,6 +650,7 @@ WORKSPACE ONLY: In the public app, file tools operate on the user workspace and 
   task: `TASK: task_control(action,...) — list/get/resume/rerun/pause/delete. task_control(list) returns active tasks AND cron jobs in one call. Do NOT use read_file for task state.`,
 
   schedule: `SCHEDULE: schedule_job(action,...) — list/create/update/pause/resume/delete/run_now. Confirm before mutating.
+Use team_id to schedule a managed team run: the team manager wakes first, derives the run from team goal/memory, and dispatches members. Otherwise scheduled jobs are owned by schedule-owner subagents by default. If subagent_id is omitted, one is created/assigned automatically; do not claim a schedule is assigned to the raw main session.
 instruction_prompt must be FULLY SELF-CONTAINED — write as if briefing a fresh agent with zero context. Include: target URL/account, exact step-by-step actions, constraints, success criteria. Labels like "Post to X daily" are invalid — give the agent nothing to act on.`,
 
   browser_vision: `VISION MODE: Few DOM elements — canvas/WebGL/SPA. browser_vision_screenshot()→viewport PNG. browser_vision_click(x,y)→pixel coords from image. browser_vision_type(x,y,text)→focus+type. Vision screenshot is the primary source of truth in this mode. Workflow: screenshot → pick coords → click/type. Switch back to browser_click(@ref) when element count exceeds 10.`,
@@ -683,7 +658,8 @@ instruction_prompt must be FULLY SELF-CONTAINED — write as if briefing a fresh
   shell: `SHELL: run_command(command)→stdout/stderr/exit. For terminal tasks (git/npm/python/curl). Use browser_* for websites, desktop_* for UI interaction.`,
 
   memory: `MEMORY: memory_browse(file)→categories. memory_write(file,category,content)→add/update fact. memory_read(file)→full contents. file="user"|"soul"|"memory". Use user for user profile facts, soul for operating rules, memory for durable long-term context and decisions.
-LONG-TERM RETRIEVAL: memory_search(query, mode?, ...filters)→ranked hits from indexed audit history. memory_read_record(record_id)→full source record. memory_search_project(project_id, query) and memory_search_timeline(query, date_from?, date_to?) for scoped retrieval. memory_get_related(record_id) expands to connected context.
+LONG-TERM RETRIEVAL: memory_search(query, mode?, ...filters)→SQLite/FTS/vector-ranked hits with operational/evidence layers, citations, authority, status, and source spans when available. memory_read_record(record_id)→full source record. memory_search_project(project_id, query) and memory_search_timeline(query, date_from?, date_to?) for scoped retrieval. memory_get_related(record_id) expands to connected context.
+OBSIDIAN: Obsidian is an optional external app connector. After it is connected in the Connections panel and external_apps is active, connector_obsidian_status/connect_vault/sync/writeback link local vault notes into Prometheus as obsidian_note evidence. Notes tagged #prometheus/memory, #prometheus/decision, #prometheus/preference, #prometheus/rule, or with prometheus-memory frontmatter can be promoted into operational memory.
 TRIGGERS: use retrieval when user asks about previous discussions, older decisions, historical project context, what changed over time, or "what did we decide" questions.
 GRAPH/DIAGNOSTICS: memory_graph_snapshot() returns relation graph nodes/edges; memory_index_refresh() forces reindex from workspace/audit.
 SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=project-scoped; timeline=chronological history.`,
@@ -694,9 +670,9 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   media_quality: `MEDIA QUALITY: image_check_contrast, image_check_text_overflow, image_detect_empty_regions, image_get_bounds_summary, image_get_element_at_point, image_get_overlaps, video_render_frame, video_render_contact_sheet, video_check_audio_sync, and video_check_caption_timing validate visual/video output. Activate when checking layout polish, frame rendering, captions, or audio timing.`,
 
-  automations: `AUTOMATIONS: schedule_job(action,...) creates/updates/lists/pauses/resumes/deletes recurring or one-off jobs. schedule_job_detail/history/log_search/outputs/patch/stuck_control inspect and repair scheduled runs. Confirm before mutating existing jobs. Prompts must be self-contained for a fresh future agent.`,
+  automations: `AUTOMATIONS: schedule_job(action,...) creates/updates/lists/pauses/resumes/deletes recurring or one-off jobs. Pass team_id for manager-led team schedules; the manager wakes first and dispatches agents from team goal/memory. Other new and updated schedules are schedule-owner-subagent backed; omitted subagent_id is auto-assigned. schedule_job_detail/history/log_search/outputs/patch/stuck_control inspect and repair scheduled runs. Confirm before mutating existing jobs. Prompts must be self-contained for a fresh future agent.`,
 
-  external_apps: `EXTERNAL APPS: connector_list is core for discovery. Activate external_apps for connected Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, and GA4 tools. Check connector_list first when connection status matters.`,
+  external_apps: `EXTERNAL APPS: connector_list is core for discovery. Activate external_apps for connected Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, and Obsidian tools. Check connector_list first when connection status matters.`,
 
   social_intelligence: `SOCIAL INTELLIGENCE: social_intel(platform, handle, mode?) analyzes social profiles and persists structured findings under entities/social. Use for profile metrics, engagement analysis, growth trajectory, and content recommendations.`,
 
@@ -704,7 +680,7 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   mcp_server_tools: `MCP SERVER TOOLS: dynamic tools from connected MCP servers appear as mcp__serverId__toolName. Use mcp_server_manage(action:"list_tools") or integration_admin first when you need to inspect available MCP tools. Use only trusted connected servers.`,
 
-  creative_mode: `CREATIVE MODE: enter_creative_mode and exit_creative_mode control dedicated creative runtimes. switch_creative_mode remains core and is the preferred router when choosing design/image/video mode.`,
+  creative_mode: `CREATIVE TOOLS: normal main-chat creative editor tools. Use creative_* and hyperframes_* directly for editable image/video/canvas/studio work, and use Creative/HyperFrames skills for workflow guidance. Workspace selection is editor state, not an assistant runtime mode. Use generate_image/generate_video for one-shot AI media without opening an editable workspace.`,
 
   debug: isPublicDistributionBuild()
     ? `DEBUG: Use workspace files, logs, and visible runtime state to diagnose issues in the public app build.`
@@ -719,7 +695,7 @@ WHEN TO USE EACH:
   → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles (planner+builder+verifier etc.)
 TEAM OPS: Do NOT call team_manage directly from main chat — ask_team_coordinator handles it. reply_to_team(team_id, msg) is the only direct team call — use it when a coordinator is waiting on your reply.`,
 
-  skills: `SKILLS: Before browser/desktop actions, file edits, or multi-step execution, call skill_list() first. If relevant, call skill_read(id) and follow it. For bundled skills, use skill_resource_list(id) and skill_resource_read(id,path) to load references/templates/examples only as needed. Use skill_inspect(id) for normalized metadata/provenance. Use skill_manifest_write(id,manifest), skill_resource_write(id,path,content), skill_resource_delete(id,path), skill_import_bundle(source), skill_export_bundle(id), skill_update_from_source(id), and skill_create_bundle(...) when managing reusable bundle skills. For conversational replies, respond directly. Skill tools are core tools (always available).`,
+  skills: `SKILLS: Before browser/desktop actions, file edits, or multi-step execution, call skill_list() first. If relevant, call skill_read(id) and follow it. Treat skills as living workflow playbooks: while working, notice missing triggers, clearer steps, better tool order, reusable examples, templates, guardrails, and resources that would make the skill more useful next time. When a completed workflow is clearly reusable but no skill fit, briefly offer to turn it into a skill or add it to an existing skill as a resource/template. For bundled skills, use skill_resource_list(id) and skill_resource_read(id,path) to load references/templates/examples only as needed. Use skill_inspect(id) for normalized metadata/provenance. Use skill_manifest_write(id,manifest), skill_resource_write(id,path,content), skill_resource_delete(id,path), skill_import_bundle(source), skill_export_bundle(id), skill_update_from_source(id), and skill_create_bundle(...) when managing reusable bundle skills. For conversational replies, respond directly and do not force skill maintenance chatter. Skill tools are core tools (always available).`,
 
   agent_builder: `AGENT BUILDER (localhost:3005): search_workflow_templates(query) first → architect_workflow() only if no match → verify_workflow_credentials → deploy_workflow → create_node_subagent if needed.
 STOP if credentials missing — tell user exactly what's needed with add_credential_url links. Workflows run inside Agent Builder — use execute_workflow_template(), NOT browser_* tools.`,
@@ -787,11 +763,13 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     const data = (cfg.getConfig() as any);
     const s = data.search || {};
     const preferred = String(s.preferred_provider || 'ddg').toLowerCase();
+    const tinyfishKey = cfg.resolveSecret(s.tinyfish_api_key);
     const tavilyKey = cfg.resolveSecret(s.tavily_api_key);
     const googleKey = cfg.resolveSecret(s.google_api_key);
     const googleCx = cfg.resolveSecret(s.google_cx);
     const braveKey = cfg.resolveSecret(s.brave_api_key);
     const ps: string[] = [];
+    if (tinyfishKey) ps.push(preferred === 'tinyfish' ? 'TinyFish (primary)' : 'TinyFish');
     if (tavilyKey) ps.push(preferred === 'tavily' ? 'Tavily (primary)' : 'Tavily');
     if (googleKey && googleCx) ps.push(preferred === 'google' ? 'Google (primary)' : 'Google');
     if (braveKey)  ps.push(preferred === 'brave'  ? 'Brave (primary)'  : 'Brave');
@@ -811,13 +789,13 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['media_quality', 'media_quality (layout/video QA: contrast, overflow, frame renders, caption/audio timing)'],
     ['automations', 'automations (schedule_job plus schedule detail/history/outputs/patch/stuck control)'],
     ['integration_admin', 'integration_admin (MCP server setup, webhooks, integration quick setup)'],
-    ['external_apps', 'external_apps (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4)'],
-    ['connectors', 'connectors (34 tools: Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4 — use connector_list to see what\'s connected)'],
+    ['external_apps', 'external_apps (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian)'],
+    ['connectors', 'connectors (external app tools including Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian — use connector_list to see what\'s connected)'],
     ['social_intelligence', 'social_intelligence (social profile analysis and recommendations)'],
     ['proposal_admin', 'proposal_admin (edit pending proposals before approval)'],
     ['mcp_server_tools', 'mcp_server_tools (dynamic mcp__server__tool functions from connected servers)'],
     ['composite_tools', 'composite_tools (saved multi-step tools and composite management)'],
-    ['creative_mode', 'creative_mode (enter/exit dedicated creative runtimes)'],
+    ['creative_mode', 'creative_mode (creative editor tools)'],
   ];
   const allowedCategoryIds: Set<string> = new Set(getPublicBuildAllowedCategories([
     'browser_automation',
@@ -850,12 +828,17 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
 
 [FILE EDIT ROUTING] For workspace edits, activate/use file_ops and follow: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts as the default file editor.
 
+[PROPOSAL LANES] When using write_proposal, set execution_mode explicitly:
+- code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings.
+- action: approve and perform/trigger/create something exactly once. Use for team starts, scheduled runs, artifacts, and bounded workflows. Include 3-7 execution_steps and requires_build=false.
+- review: read-mostly verification/audit/report. Do not mutate unless the proposal explicitly approves that exact mutation. Include evidence/resource refs and 3-7 execution_steps.
+
 [SEARCH] Providers: ${searchProviders}.
 WHEN: freshness (today/latest/current/price), high-stakes facts, named entity lookup, uncertainty ("not sure if…"). Skip for timeless well-known facts.
 HOW: complex topics → call web_search 2–3× with different angles (not the same query twice). Scan snippets → web_fetch the 1–3 most relevant URLs. Add site:domain.com to target a source.
 FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
 ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.
-web_search runs all configured API providers in parallel by default (pass multi_engine:false to use single-provider fallback chain).
+For broad coverage use web_search_multi(query,max_results?) or web_search(..., provider:"multi"). For provider checks use web_search_single(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
 
 [WRITE NOTE] write_note(content, tag?) is always available — use it to preserve context between sessions.
 WHEN TO WRITE: something was discussed, decided, or discovered that future sessions should know about; a file/task/plan step completed; data gathered from browser/desktop/API mid-task.
@@ -881,7 +864,13 @@ Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct
   Auto-reverts after turn end — never switch back manually.
 
 ${BG_AGENT_RUNTIME_HINT}`;
-  const baseMenu = `${menu}\n\n${TOOL_BLOCKS.skills}`;
+  const activeCategoryList = Array.from(activatedCategories)
+    .map((category) => String(category || '').trim())
+    .filter(Boolean);
+  const activeCategoryHint = activeCategoryList.length > 0
+    ? `\n\n[ACTIVE_TOOL_CATEGORIES] Already active for this session: ${activeCategoryList.join(', ')}. Do not request these categories again; use their tools directly when relevant.`
+    : '';
+  const baseMenu = `${menu}${activeCategoryHint}\n\n${TOOL_BLOCKS.skills}`;
 
   if (activatedCategories.size === 0) return baseMenu;
 
@@ -892,6 +881,58 @@ ${BG_AGENT_RUNTIME_HINT}`;
 
   if (activePolicies.length === 0) return baseMenu;
   return baseMenu + '\n\n' + activePolicies.join('\n\n');
+}
+
+function stripSkillEmojiFrontmatter(content: string): string {
+  const raw = String(content || '');
+  if (!raw.startsWith('---')) return raw;
+  const end = raw.indexOf('\n---', 3);
+  if (end < 0) return raw;
+  const frontmatter = raw.slice(0, end)
+    .split('\n')
+    .filter((line) => !/^\s*emoji\s*:/i.test(line))
+    .join('\n');
+  return frontmatter + raw.slice(end);
+}
+
+function buildActiveSkillsContext(sessionId: string, skillsManager: SkillsManager): string {
+  const skillIds = Array.from(getActivatedSkillIds(sessionId));
+  if (!skillIds.length) return '';
+
+  const blocks: string[] = [];
+  for (const skillId of skillIds) {
+    const skill = skillsManager.get(skillId);
+    if (!skill) continue;
+    let content = '';
+    try {
+      content = stripSkillEmojiFrontmatter(fs.readFileSync(skill.filePath, 'utf-8'));
+    } catch {
+      content = skill.instructions || '';
+    }
+    const resources = Array.isArray(skill.resources) && skill.resources.length
+      ? [
+        '',
+        'Resources available via skill_resource_read:',
+        ...skill.resources.slice(0, 24).map((r: any) => `- ${r.path}${r.description ? ` - ${r.description}` : ''}`),
+      ].join('\n')
+      : '';
+    const header = [
+      `### ${skill.name || skill.id} (${skill.id})`,
+      skill.description ? `Description: ${skill.description}` : '',
+      Array.isArray(skill.requiredTools) && skill.requiredTools.length ? `Required tools: ${skill.requiredTools.join(', ')}` : '',
+    ].filter(Boolean).join('\n');
+    const block = `${header}\n\n${String(content || '').trim()}${resources}`.trim();
+    if (!block) continue;
+    blocks.push(block);
+  }
+
+  if (!blocks.length) return '';
+  return [
+    '[ACTIVE_SKILLS]',
+    'These skills were already read in this chat session. Treat the full skill text below as active instructions on every turn. Do not call skill_read for them again unless the user asks to refresh/check the skill, or you need a specific bundled resource.',
+    '',
+    blocks.join('\n\n'),
+  ].join('\n');
 }
 
 // ─── buildPersonalityContext ──────────────────────────────────────────────────────
@@ -911,41 +952,6 @@ export async function buildPersonalityContext(
 ): Promise<string> {
   const profile = options?.profile || 'default';
 
-  if (profile === 'creative_design' || profile === 'creative_image' || profile === 'creative_canvas' || profile === 'creative_video') {
-    const creativeModeLabel = profile === 'creative_design'
-      ? 'Prometheus Design'
-      : profile === 'creative_image' || profile === 'creative_canvas'
-        ? 'Prometheus Image'
-        : 'Prometheus Video';
-    const creativeDoc = loadCreativeRuntimeGuide(profile);
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md', 3000);
-    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', 4000);
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    const skillCount = skillsManager.getAll().length;
-    const creativeSkillHint = skillCount > 0
-      ? `[SKILLS]\n${skillCount} reusable skill playbook${skillCount !== 1 ? 's are' : ' is'} available. Skill tools are core in Creative Mode with main-chat parity: every skill_* tool exposed by the runtime is allowed here. Use skill_list and skill_read when you need more creative instructions, references, patterns, or ideas. For bundled skills, use skill_resource_list and skill_resource_read to load only the specific resources you need, including templates, examples, docs, schemas, prompts, data, and references. Use skill_inspect when routing/metadata matters. When creating or maintaining reusable creative skills/bundles, use the bundle/resource/manifest/import/export/update/create skill tools as appropriate.`
-      : '';
-    let projectContextBlock = '';
-    try {
-      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
-      if (findProjectBySessionId(sessionId)) {
-        projectContextBlock = buildProjectContextBlock(sessionId) || '';
-      }
-    } catch {}
-    const parts = [
-      `[CREATIVE_MODE]\nActive mode: ${creativeModeLabel}\nStay in this specialized mode across turns until the user explicitly exits it or you intentionally call exit_creative_mode because the specialized workflow is clearly finished. Do not exit just because one edit, render, or export completed.\nCanvas is the primary workspace in this mode.\nOnly exit by calling exit_creative_mode when you are confident the user no longer needs this mode.`,
-      creativeDoc ? `[CREATIVE_RUNTIME_GUIDE]\n${creativeDoc}` : '',
-      user ? `[USER]\n${user}` : '',
-      soul ? `[SOUL]\n${soul}` : '',
-      business ? `[BUSINESS]\n${business}` : '',
-      projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
-      creativeSkillHint,
-    ].filter(Boolean);
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
-  }
-
   // ── Path LOCAL_LLM: tiny prompt for small local model primaries ───────────────
   // Activated only when isLocalPrimary() is true in chat.router.ts.
   // Returns a minimal personality context — time + condensed USER.md +
@@ -957,9 +963,10 @@ export async function buildPersonalityContext(
     const timeString  = formatLocalModelTime();
     const userMemory  = loadCondensedMemoryProfile(workspacePath);
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath, 900) : '';
+    const activeSkillCtxLocal = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return buildLocalModelPersonalityCtx(timeString, userMemory) + (business ? `\n\n[BUSINESS]\n${business}` : '');
+    return buildLocalModelPersonalityCtx(timeString, userMemory) + (business ? `\n\n[BUSINESS]\n${business}` : '') + (activeSkillCtxLocal ? `\n\n${activeSkillCtxLocal}` : '');
   }
 
   if (profile === 'teach_mode') {
@@ -980,6 +987,8 @@ export async function buildPersonalityContext(
     ].filter(Boolean);
     const skillCtxTeach = skillsManager.buildTurnContext(messageText);
     if (skillCtxTeach) parts.push(skillCtxTeach);
+    const activeSkillCtxTeach = buildActiveSkillsContext(sessionId, skillsManager);
+    if (activeSkillCtxTeach) parts.push(activeSkillCtxTeach);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
@@ -1015,6 +1024,8 @@ export async function buildPersonalityContext(
     ].filter(Boolean);
     const skillCtx = skillsManager.buildTurnContext(messageText);
     if (skillCtx) parts.push(skillCtx);
+    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    if (activeSkillCtx) parts.push(activeSkillCtx);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
@@ -1046,6 +1057,8 @@ export async function buildPersonalityContext(
     ].filter(Boolean);
     const skillCtx = skillsManager.buildTurnContext(messageText);
     if (skillCtx) parts.push(skillCtx);
+    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    if (activeSkillCtx) parts.push(activeSkillCtx);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
   }
@@ -1099,6 +1112,8 @@ export async function buildPersonalityContext(
     // Autonomous agents: same hint + pinned skills as interactive chat.
     const skillCtx = skillsManager.buildTurnContext(messageText);
     if (skillCtx) parts.push(skillCtx);
+    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    if (activeSkillCtx) parts.push(activeSkillCtx);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
   }
@@ -1144,6 +1159,8 @@ export async function buildPersonalityContext(
     // First turn: still get the skills hint + any pinned skills.
     const skillCtxT1 = skillsManager.buildTurnContext(messageText);
     if (skillCtxT1) parts.push(skillCtxT1);
+    const activeSkillCtxT1 = buildActiveSkillsContext(sessionId, skillsManager);
+    if (activeSkillCtxT1) parts.push(activeSkillCtxT1);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
   }
@@ -1193,6 +1210,8 @@ export async function buildPersonalityContext(
   // Skills: one-liner hint + any pinned skills injected in full.
   const skillCtx = skillsManager.buildTurnContext(messageText);
   if (skillCtx) parts.push(skillCtx);
+  const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+  if (activeSkillCtx) parts.push(activeSkillCtx);
 
   await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
   return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';

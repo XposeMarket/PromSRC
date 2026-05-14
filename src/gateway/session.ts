@@ -19,6 +19,38 @@ export interface ChatMessage {
   toolLog?: string; // compact tool call summary for this turn (injected by chat.router after turn completes)
 }
 
+export type MainChatGoalStatus = 'active' | 'paused' | 'blocked' | 'done' | 'cleared' | 'failed';
+
+export interface MainChatGoalState {
+  id: string;
+  sessionId: string;
+  goal: string;
+  status: MainChatGoalStatus;
+  turnsUsed: number;
+  goalSummaryTurn: number;
+  createdAt: number;
+  updatedAt: number;
+  lastTurnAt?: number;
+  completedAt?: number;
+  lastVerdict?: 'done' | 'continue' | 'blocked' | 'failed';
+  lastReason?: string;
+  blockedReason?: string;
+  pausedReason?: string;
+  failureReason?: string;
+  progressSummary?: string;
+  deniedActions?: Array<{
+    at: number;
+    toolName: string;
+    category: string;
+    reason: string;
+    safeAlternative: string;
+  }>;
+  lastSummaryAt?: number;
+  lastSummaryMessageIndex?: number;
+  consecutiveJudgeFailures: number;
+  consecutiveRuntimeFailures: number;
+}
+
 export type CreativeMode = 'design' | 'image' | 'canvas' | 'video';
 
 export type CreativeReferenceAuthority = 'primary' | 'supporting' | 'secondary' | 'low' | 'unknown';
@@ -77,12 +109,15 @@ export interface Session {
   contextSummaryUpdatedAt?: number;
   tags?: string[];
   activatedToolCategories?: string[];
+  activatedSkillIds?: string[];
   businessContextEnabled?: boolean;
   creativeMode?: CreativeMode | null;
   creativeReferences?: CreativeReferenceRecord[];
   canvasProjectRoot?: string | null;
   canvasProjectLabel?: string | null;
   canvasProjectLink?: CanvasProjectLink | null;
+  mainChatGoal?: MainChatGoalState | null;
+  mainChatGoalHistory?: MainChatGoalState[];
 }
 
 export interface SessionMutationScope {
@@ -102,6 +137,7 @@ export interface SessionSummary {
   canvasProjectRoot?: string | null;
   canvasProjectLabel?: string | null;
   canvasProjectLink?: CanvasProjectLink | null;
+  mainChatGoal?: MainChatGoalState | null;
 }
 
 export interface SessionSearchResult extends SessionSummary {
@@ -129,7 +165,7 @@ export const PRE_COMPACTION_SUMMARY_PROMPT = 'Before continuing: summarize the c
 const API_HISTORY_PRUNE_THRESHOLD_CHARS = 3000;
 const API_HISTORY_PRUNE_KEEP_CHARS = 2500;
 const SESSION_CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const AUTO_SESSION_ID_RE = /^(task_|cron_|brain_)/i;
+const AUTO_SESSION_ID_RE = /^(task_|cron_|brain_|auto_)/i;
 const INTERNAL_SESSION_ID_RE = /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_)/i;
 const SESSION_SAVE_DEBOUNCE_MS = 500;
 const sessionSaveTimers = new Map<string, NodeJS.Timeout>();
@@ -175,6 +211,28 @@ function scrubPersistedData(value: any): any {
     return out;
   }
   return value;
+}
+
+function scrubMainChatGoal(goal: MainChatGoalState | null | undefined): MainChatGoalState | null | undefined {
+  if (!goal) return goal;
+  return {
+    ...goal,
+    goal: scrubPersistedText(goal.goal),
+    lastReason: goal.lastReason ? scrubPersistedText(goal.lastReason) : goal.lastReason,
+    blockedReason: goal.blockedReason ? scrubPersistedText(goal.blockedReason) : goal.blockedReason,
+    pausedReason: goal.pausedReason ? scrubPersistedText(goal.pausedReason) : goal.pausedReason,
+    failureReason: goal.failureReason ? scrubPersistedText(goal.failureReason) : goal.failureReason,
+    progressSummary: goal.progressSummary ? scrubPersistedText(goal.progressSummary) : goal.progressSummary,
+    deniedActions: Array.isArray(goal.deniedActions)
+      ? goal.deniedActions.map((item) => ({
+          ...item,
+          toolName: scrubPersistedText(item.toolName),
+          category: scrubPersistedText(item.category),
+          reason: scrubPersistedText(item.reason),
+          safeAlternative: scrubPersistedText(item.safeAlternative),
+        }))
+      : goal.deniedActions,
+  };
 }
 
 export function normalizeCreativeMode(input: any): CreativeMode | null {
@@ -256,6 +314,76 @@ function normalizeCreativeReferences(input: any): CreativeReferenceRecord[] {
     .map(normalizeCreativeReferenceRecord)
     .filter((item): item is CreativeReferenceRecord => !!item)
     .slice(0, 120);
+}
+
+function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState | null {
+  if (!input || typeof input !== 'object') return null;
+  const goal = String(input.goal || '').trim();
+  if (!goal) return null;
+  const rawStatus = String(input.status || 'active').trim().toLowerCase();
+  const status: MainChatGoalStatus = (
+    rawStatus === 'active'
+    || rawStatus === 'paused'
+    || rawStatus === 'blocked'
+    || rawStatus === 'done'
+    || rawStatus === 'cleared'
+    || rawStatus === 'failed'
+  ) ? rawStatus : 'active';
+  const now = Date.now();
+  const deniedActionsRaw = Array.isArray(input.deniedActions)
+    ? input.deniedActions
+    : (Array.isArray(input.denied_actions) ? input.denied_actions : []);
+  const deniedActions = deniedActionsRaw
+    .map((item: any) => ({
+      at: Number.isFinite(Number(item?.at)) ? Number(item.at) : now,
+      toolName: String(item?.toolName || item?.tool_name || '').trim().slice(0, 120),
+      category: String(item?.category || '').trim().slice(0, 120),
+      reason: String(item?.reason || '').trim().slice(0, 600),
+      safeAlternative: String(item?.safeAlternative || item?.safe_alternative || '').trim().slice(0, 600),
+    }))
+    .filter((item: any) => item.toolName || item.category || item.reason)
+    .slice(-20);
+  return {
+    id: String(input.id || `goal_${now}_${Math.random().toString(16).slice(2, 8)}`),
+    sessionId: String(input.sessionId || input.session_id || sessionId),
+    goal,
+    status,
+    turnsUsed: Math.max(0, Math.floor(Number(input.turnsUsed ?? input.turns_used ?? 0) || 0)),
+    goalSummaryTurn: Math.max(0, Math.floor(Number(input.goalSummaryTurn ?? input.goal_summary_turn ?? 0) || 0)),
+    createdAt: Number.isFinite(Number(input.createdAt ?? input.created_at)) ? Number(input.createdAt ?? input.created_at) : now,
+    updatedAt: Number.isFinite(Number(input.updatedAt ?? input.updated_at)) ? Number(input.updatedAt ?? input.updated_at) : now,
+    lastTurnAt: Number.isFinite(Number(input.lastTurnAt ?? input.last_turn_at)) ? Number(input.lastTurnAt ?? input.last_turn_at) : undefined,
+    completedAt: Number.isFinite(Number(input.completedAt ?? input.completed_at)) ? Number(input.completedAt ?? input.completed_at) : undefined,
+    lastVerdict: ['done', 'continue', 'blocked', 'failed'].includes(String(input.lastVerdict || input.last_verdict || ''))
+      ? String(input.lastVerdict || input.last_verdict) as MainChatGoalState['lastVerdict']
+      : undefined,
+    lastReason: typeof input.lastReason === 'string' ? input.lastReason : (typeof input.last_reason === 'string' ? input.last_reason : undefined),
+    blockedReason: typeof input.blockedReason === 'string' ? input.blockedReason : (typeof input.blocked_reason === 'string' ? input.blocked_reason : undefined),
+    pausedReason: typeof input.pausedReason === 'string' ? input.pausedReason : (typeof input.paused_reason === 'string' ? input.paused_reason : undefined),
+    failureReason: typeof input.failureReason === 'string' ? input.failureReason : (typeof input.failure_reason === 'string' ? input.failure_reason : undefined),
+    progressSummary: typeof input.progressSummary === 'string' ? input.progressSummary : (typeof input.progress_summary === 'string' ? input.progress_summary : undefined),
+    deniedActions,
+    lastSummaryAt: Number.isFinite(Number(input.lastSummaryAt ?? input.last_summary_at)) ? Number(input.lastSummaryAt ?? input.last_summary_at) : undefined,
+    lastSummaryMessageIndex: Number.isFinite(Number(input.lastSummaryMessageIndex ?? input.last_summary_message_index))
+      ? Math.max(0, Math.floor(Number(input.lastSummaryMessageIndex ?? input.last_summary_message_index)))
+      : undefined,
+    consecutiveJudgeFailures: Math.max(0, Math.floor(Number(input.consecutiveJudgeFailures ?? input.consecutive_judge_failures ?? 0) || 0)),
+    consecutiveRuntimeFailures: Math.max(0, Math.floor(Number(input.consecutiveRuntimeFailures ?? input.consecutive_runtime_failures ?? 0) || 0)),
+  };
+}
+
+function normalizeMainChatGoalHistory(input: any, sessionId: string): MainChatGoalState[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  return input
+    .map((item) => normalizeMainChatGoal(item, sessionId))
+    .filter((item): item is MainChatGoalState => !!item)
+    .filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .slice(-200);
 }
 
 function getSessionPath(id: string): string {
@@ -359,6 +487,7 @@ function buildSessionSummary(session: Session): SessionSummary {
       canvasProjectRoot: null,
       canvasProjectLabel: null,
       canvasProjectLink: null,
+      mainChatGoal: null,
     };
   }
   const title = getSessionTitleFromHistory(session.history);
@@ -374,6 +503,7 @@ function buildSessionSummary(session: Session): SessionSummary {
     canvasProjectRoot: session.canvasProjectRoot || null,
     canvasProjectLabel: session.canvasProjectLabel || null,
     canvasProjectLink: normalizeCanvasProjectLink(session.canvasProjectLink),
+    mainChatGoal: session.mainChatGoal || null,
   };
 }
 
@@ -421,6 +551,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
         ? data.canvasProjectLabel
         : null,
       canvasProjectLink: normalizeCanvasProjectLink(data?.canvasProjectLink),
+      mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
     };
   } catch {
     return null;
@@ -481,12 +612,15 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       contextStartIndex: Number.isFinite(Number(data?.contextStartIndex)) ? Math.max(0, Math.floor(Number(data.contextStartIndex))) : undefined,
       contextSummaryUpdatedAt: Number.isFinite(Number(data?.contextSummaryUpdatedAt)) ? Number(data.contextSummaryUpdatedAt) : undefined,
       activatedToolCategories: Array.isArray(data?.activatedToolCategories) ? data.activatedToolCategories : [],
+      activatedSkillIds: Array.isArray(data?.activatedSkillIds) ? data.activatedSkillIds : [],
       businessContextEnabled: data?.businessContextEnabled === true,
       creativeMode: normalizeCreativeMode(data?.creativeMode),
       creativeReferences: normalizeCreativeReferences(data?.creativeReferences),
       canvasProjectRoot: typeof data?.canvasProjectRoot === 'string' && data.canvasProjectRoot.trim() ? data.canvasProjectRoot : null,
       canvasProjectLabel: typeof data?.canvasProjectLabel === 'string' && data.canvasProjectLabel.trim() ? data.canvasProjectLabel : null,
       canvasProjectLink: normalizeCanvasProjectLink(data?.canvasProjectLink),
+      mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
+      mainChatGoalHistory: normalizeMainChatGoalHistory(data?.mainChatGoalHistory, sessionId),
     };
   } catch {
     return null;
@@ -723,6 +857,75 @@ export function recordSessionCompaction(
   saveSession(sessionId);
 }
 
+export function getMainChatGoal(sessionId: string): MainChatGoalState | null {
+  return getSession(sessionId).mainChatGoal || null;
+}
+
+export function setMainChatGoal(sessionId: string, goal: MainChatGoalState | null): MainChatGoalState | null {
+  const session = getSession(sessionId);
+  session.mainChatGoal = goal ? normalizeMainChatGoal({ ...goal, sessionId }, sessionId) : null;
+  session.lastActiveAt = Date.now();
+  saveSession(sessionId);
+  return session.mainChatGoal || null;
+}
+
+export function updateMainChatGoal(
+  sessionId: string,
+  updater: (goal: MainChatGoalState | null, session: Session) => MainChatGoalState | null,
+): MainChatGoalState | null {
+  const session = getSession(sessionId);
+  const next = updater(session.mainChatGoal || null, session);
+  session.mainChatGoal = next ? normalizeMainChatGoal({ ...next, sessionId }, sessionId) : null;
+  session.lastActiveAt = Date.now();
+  saveSession(sessionId);
+  return session.mainChatGoal || null;
+}
+
+export function archiveMainChatGoal(sessionId: string, goal: MainChatGoalState | null | undefined): void {
+  if (!goal) return;
+  const session = getSession(sessionId);
+  const normalized = normalizeMainChatGoal(goal, sessionId);
+  if (!normalized) return;
+  const history = Array.isArray(session.mainChatGoalHistory) ? session.mainChatGoalHistory : [];
+  const filtered = history.filter((item) => item.id !== normalized.id);
+  filtered.push({ ...normalized, updatedAt: Date.now() });
+  session.mainChatGoalHistory = filtered.slice(-200);
+  saveSession(sessionId);
+}
+
+export function listMainChatGoalRecords(): Array<MainChatGoalState & {
+  current: boolean;
+  sessionTitle: string;
+  sessionLastActiveAt: number;
+}> {
+  const summaries = listSessionSummaries();
+  const out: Array<MainChatGoalState & { current: boolean; sessionTitle: string; sessionLastActiveAt: number }> = [];
+  for (const summary of summaries) {
+    let session: Session | null = null;
+    try {
+      session = getSession(summary.id);
+    } catch {
+      session = readSessionFileForSearch(summary.id);
+    }
+    if (!session) continue;
+    const seen = new Set<string>();
+    const pushGoal = (goal: MainChatGoalState | null | undefined, current: boolean) => {
+      const normalized = normalizeMainChatGoal(goal, summary.id);
+      if (!normalized || seen.has(normalized.id)) return;
+      seen.add(normalized.id);
+      out.push({
+        ...normalized,
+        current,
+        sessionTitle: summary.title,
+        sessionLastActiveAt: summary.lastActiveAt,
+      });
+    };
+    pushGoal(session.mainChatGoal, true);
+    for (const goal of session.mainChatGoalHistory || []) pushGoal(goal, false);
+  }
+  return out.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+}
+
 /**
  * Replaces session history with a single summary message after rolling compaction.
  * This is the critical step that actually resets the message count so compaction
@@ -870,6 +1073,7 @@ export function getSession(id: string): Session {
           ? Number(data.contextSummaryUpdatedAt)
           : undefined,
         activatedToolCategories: Array.isArray(data.activatedToolCategories) ? data.activatedToolCategories : [],
+        activatedSkillIds: Array.isArray(data.activatedSkillIds) ? data.activatedSkillIds : [],
         businessContextEnabled: data.businessContextEnabled === true,
         creativeMode: normalizeCreativeMode(data.creativeMode),
         creativeReferences: normalizeCreativeReferences(data.creativeReferences),
@@ -880,6 +1084,8 @@ export function getSession(id: string): Session {
           ? data.canvasProjectLabel
           : null,
         canvasProjectLink: normalizeCanvasProjectLink(data.canvasProjectLink),
+        mainChatGoal: normalizeMainChatGoal(data.mainChatGoal, id),
+        mainChatGoalHistory: normalizeMainChatGoalHistory(data.mainChatGoalHistory, id),
       };
       sessions.set(id, session);
       return session;
@@ -901,12 +1107,16 @@ export function getSession(id: string): Session {
     latestContextSummary: undefined,
     contextStartIndex: 0,
     contextSummaryUpdatedAt: undefined,
+    activatedToolCategories: [],
+    activatedSkillIds: [],
     businessContextEnabled: false,
     creativeMode: null,
     creativeReferences: [],
     canvasProjectRoot: null,
     canvasProjectLabel: null,
     canvasProjectLink: null,
+    mainChatGoal: null,
+    mainChatGoalHistory: [],
   };
   sessions.set(id, session);
   saveSession(id);
@@ -1059,6 +1269,28 @@ export function getHistory(id: string, maxTurns: number = 10): ChatMessage[] {
 const API_HISTORY_CONTENT_CAP_RECENT_CHARS = 3000;  // last 2 turns
 const API_HISTORY_CONTENT_CAP_OLDER_CHARS  = 1200;  // all older turns
 
+function buildActiveGoalSummaryMessage(session: Session): ChatMessage | null {
+  const goal = session.mainChatGoal && ['active', 'paused', 'blocked'].includes(session.mainChatGoal.status)
+    ? session.mainChatGoal
+    : null;
+  const progress = String(goal?.progressSummary || '').trim();
+  if (!goal || !progress) return null;
+  return {
+    role: 'assistant',
+    content: [
+      '[Active goal progress summary]',
+      `Goal: ${goal.goal}`,
+      `Status: ${goal.status}`,
+      `Turns used: ${goal.turnsUsed}`,
+      goal.lastReason ? `Last reason: ${goal.lastReason}` : '',
+      '',
+      progress,
+    ].filter(Boolean).join('\n'),
+    timestamp: Number(goal.lastSummaryAt || goal.updatedAt || Date.now()),
+    channel: 'system',
+  };
+}
+
 export function getHistoryForApiCall(
   id: string,
   maxTurns: number = 60,
@@ -1076,6 +1308,8 @@ export function getHistoryForApiCall(
     ? Math.max(0, Math.floor(Number(session.contextStartIndex)))
     : 0;
 
+  const goalSummaryMsg = buildActiveGoalSummaryMessage(session);
+
   if (summary) {
     const summaryMsg: ChatMessage = {
       role: 'assistant',
@@ -1084,12 +1318,15 @@ export function getHistoryForApiCall(
       channel: 'system',
     };
     const since = base < rawMessages.length ? rawMessages.slice(base) : [];
-    messages = [summaryMsg, ...since];
+    messages = goalSummaryMsg ? [summaryMsg, goalSummaryMsg, ...since] : [summaryMsg, ...since];
     if (messages.length > maxMessages) {
-      messages = [summaryMsg, ...messages.slice(-(maxMessages - 1))];
+      const preserved = goalSummaryMsg ? [summaryMsg, goalSummaryMsg] : [summaryMsg];
+      messages = [...preserved, ...messages.slice(-(maxMessages - preserved.length))];
     }
   } else {
-    messages = rawMessages.slice(-maxMessages);
+    messages = goalSummaryMsg
+      ? [goalSummaryMsg, ...rawMessages.slice(-(maxMessages - 1))]
+      : rawMessages.slice(-maxMessages);
   }
 
   const recentCutoff = messages.length - 4; // last 2 turns = 4 messages
@@ -1163,6 +1400,29 @@ export function clearHistory(id: string): void {
   session.pendingCompaction = false;
   session.pendingMemoryFlush = false;
   session.contextTokenEstimate = 0;
+  session.latestContextSummary = undefined;
+  session.contextStartIndex = 0;
+  session.contextSummaryUpdatedAt = undefined;
+  session.lastActiveAt = Date.now();
+  saveSession(id);
+}
+
+export function replaceHistory(id: string, history: ChatMessage[]): void {
+  const session = getSession(id);
+  session.history = (Array.isArray(history) ? history : [])
+    .map((msg: any) => {
+      const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : 'user';
+      return {
+        ...msg,
+        role,
+        content: String(msg?.content || ''),
+        timestamp: Number.isFinite(Number(msg?.timestamp)) ? Number(msg.timestamp) : Date.now(),
+      } as ChatMessage;
+    })
+    .filter((msg) => msg.content.trim().length > 0);
+  session.pendingCompaction = false;
+  session.pendingMemoryFlush = false;
+  session.contextTokenEstimate = estimateHistoryTokens(session.history);
   session.latestContextSummary = undefined;
   session.contextStartIndex = 0;
   session.contextSummaryUpdatedAt = undefined;
@@ -1370,6 +1630,10 @@ function scrubSession(session: Session): Session {
     latestContextSummary: session.latestContextSummary
       ? scrubPersistedText(session.latestContextSummary)
       : session.latestContextSummary,
+    mainChatGoal: scrubMainChatGoal(session.mainChatGoal),
+    mainChatGoalHistory: Array.isArray(session.mainChatGoalHistory)
+      ? session.mainChatGoalHistory.map((goal) => scrubMainChatGoal(goal)).filter(Boolean) as MainChatGoalState[]
+      : session.mainChatGoalHistory,
     history: session.history.map(msg => ({
       ...msg,
       content: scrubPersistedText(msg.content),
@@ -1481,6 +1745,37 @@ export function setActivatedToolCategories(id: string, categories: string[]): vo
 export function getActivatedToolCategories(id: string): Set<string> {
   const session = getSession(id);
   return new Set(session.activatedToolCategories || []);
+}
+
+function normalizeSessionSkillId(input: string): string {
+  return String(input || '').trim();
+}
+
+export function activateSkillForSession(id: string, skillId: string): void {
+  const normalized = normalizeSessionSkillId(skillId);
+  if (!normalized) return;
+  const session = getSession(id);
+  if (!session.activatedSkillIds) session.activatedSkillIds = [];
+  if (!session.activatedSkillIds.includes(normalized)) {
+    session.activatedSkillIds.push(normalized);
+    saveSession(id);
+  }
+}
+
+export function setActivatedSkillIds(id: string, skillIds: string[]): void {
+  const session = getSession(id);
+  const next = Array.from(new Set(
+    (skillIds || [])
+      .map(normalizeSessionSkillId)
+      .filter(Boolean),
+  ));
+  session.activatedSkillIds = next;
+  saveSession(id);
+}
+
+export function getActivatedSkillIds(id: string): Set<string> {
+  const session = getSession(id);
+  return new Set(session.activatedSkillIds || []);
 }
 
 export function setBusinessContextEnabled(id: string, enabled: boolean): boolean {

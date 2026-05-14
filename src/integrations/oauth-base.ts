@@ -87,7 +87,10 @@ export abstract class OAuthConnector {
   }
 
   isConnected(): boolean {
-    return this.loadTokens() !== null;
+    const tokens = this.loadTokens();
+    if (!tokens?.access_token || typeof tokens.expires_at !== 'number') return false;
+    if (Date.now() <= tokens.expires_at - 5 * 60 * 1000) return true;
+    return !!tokens.refresh_token && this.hasCredentials();
   }
 
   private updateConnectionsFile(connected: boolean, accountEmail?: string): void {
@@ -113,13 +116,18 @@ export abstract class OAuthConnector {
     let tokens = this.loadTokens();
     if (!tokens) throw new Error(`${this.cfg.name} not connected. Connect via the Connections panel.`);
     if (Date.now() > tokens.expires_at - 5 * 60 * 1000) {
+      this.loadCredentialsFromVault();
       tokens = await this.refreshTokens(tokens);
     }
     return tokens.access_token;
   }
 
   async refreshTokens(existing: ConnectorTokens): Promise<ConnectorTokens> {
+    this.loadCredentialsFromVault();
     if (!existing.refresh_token) throw new Error(`No refresh token for ${this.cfg.name}.`);
+    if (!this.cfg.clientId) {
+      throw new Error(`${this.cfg.name} OAuth credentials are missing. Re-enter Client ID and Client Secret in the Connections panel.`);
+    }
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: existing.refresh_token,
@@ -154,14 +162,14 @@ export abstract class OAuthConnector {
   // Load credentials from vault if env vars weren't set at startup time.
   // Mutates cfg so subsequent calls (handleCallback, refreshTokens) use them too.
   private loadCredentialsFromVault(): void {
-    if (this.cfg.clientId) return; // already have credentials
+    if (this.cfg.clientId && this.cfg.clientSecret) return; // already have credentials
     try {
       const vaultKey = `integration.${this.cfg.id}.credentials`;
       const secret = getVault(this.configDir).get(vaultKey, `creds:load:${this.cfg.id}`);
       if (!secret) return;
       const creds = JSON.parse(secret.expose()) as { clientId?: string; clientSecret?: string; apiKey?: string };
-      if (creds.clientId) this.cfg.clientId = creds.clientId;
-      if (creds.clientSecret) this.cfg.clientSecret = creds.clientSecret;
+      if (!this.cfg.clientId && creds.clientId) this.cfg.clientId = creds.clientId;
+      if (!this.cfg.clientSecret && creds.clientSecret) this.cfg.clientSecret = creds.clientSecret;
     } catch { /* vault not ready or no creds stored */ }
   }
 

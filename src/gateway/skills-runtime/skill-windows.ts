@@ -43,6 +43,7 @@ export function setSkillRecoveryFn(fn: () => void): void { _recoverFn = fn; }
 
 export function recoverSkillsIfEmpty(): void {
   if (!_skillsManager) return;
+  if (_skillsManager.getAll().length > 0) return;
   _skillsManager.scanSkills();
   if (_skillsManager.getAll().length > 0) return;
   if (_recoverFn) _recoverFn();

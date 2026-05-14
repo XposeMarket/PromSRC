@@ -9,7 +9,7 @@
  *   ?agentId=string    — filter by agent
  *   ?toolName=string   — partial match on tool name
  *   ?tier=read|propose|commit
- *   ?status=auto|approved|rejected|pending
+ *   ?status=auto|auto_allowed|approved|rejected|pending
  *   ?limit=number      — default 200, max 500
  *   ?offset=number     — for pagination
  */

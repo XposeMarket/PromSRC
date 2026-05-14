@@ -12,6 +12,7 @@
 import path from 'path';
 import fs from 'fs';
 import { getConfig } from '../../config/config';
+import { getProcessSupervisor } from '../process/supervisor';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, getActivatedToolCategories } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
@@ -257,11 +258,14 @@ function normalizeWorkspacePathAliases(rawCmd: string, workspacePath: string): s
 export function isAllowedShellSegment(segment: string): boolean {
   const cleaned = segment.trim().replace(/^\(+/, '');
   if (!cleaned) return true;
+  if (/^\$[A-Za-z_][\w:.-]*\s*=/.test(cleaned)) return true;
   const token = (cleaned.match(/^[^\s]+/)?.[0] || '').toLowerCase();
   const allowed = new Set([
     'cd', 'if', 'set', 'echo', 'dir', 'ls', 'pwd', 'cat', 'type', 'more', 'find', 'findstr', 'where', 'whoami',
     'rg', 'grep', 'egrep', 'fgrep', 'wc', 'cut', 'tr', 'sort', 'uniq', 'head', 'tail', 'tee',
     'basename', 'dirname', 'realpath', 'stat', 'du', 'df', 'date', 'uname', 'env', 'printenv', 'which',
+    'select-string', 'get-content', 'get-childitem', 'get-item', 'get-location', 'resolve-path',
+    'where-object', 'foreach-object', 'measure-object', 'out-string', 'convertto-json', 'convertfrom-json',
 	    'git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'python', 'python3', 'pip', 'pip3', 'tsc', 'ts-node',
 	    'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'dotnet', 'docker', 'kubectl', 'az', 'aws',
 	    'curl', 'wget', 'cmd', 'powershell', 'pwsh', 'vercel', 'ffmpeg', 'ffprobe', 'magick',
@@ -279,59 +283,20 @@ async function runCommandCaptured(
   cwd: string,
   timeoutMs = 120000,
 ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
-  const { spawn } = await import('child_process');
   const resolvedCwd = path.resolve(String(cwd || getConfig().getWorkspacePath() || process.cwd()));
-  return await new Promise(resolve => {
-    const shell = isWindows ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || '/bin/bash');
-    const shellArgs = isWindows ? ['/d', '/s', '/c', command] : ['-lc', command];
-    const child = spawn(shell, shellArgs, {
-      cwd: resolvedCwd,
-      env: process.env,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    const maxOutputChars = 120000;
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timedOut = false;
-
-    const capture = (existing: string, chunk: Buffer | string): string => {
-      if (existing.length >= maxOutputChars) return existing;
-      const next = existing + String(chunk);
-      if (next.length <= maxOutputChars) return next;
-      return next.slice(0, maxOutputChars);
-    };
-
-    const finish = (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code, timedOut });
-    };
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        child.kill();
-      } catch {
-        // ignore
-      }
-    }, timeoutMs);
-
-    child.stdout.on('data', chunk => {
-      stdout = capture(stdout, chunk);
-    });
-    child.stderr.on('data', chunk => {
-      stderr = capture(stderr, chunk);
-    });
-    child.on('error', err => {
-      stderr = capture(stderr, err.message || String(err));
-      finish(null);
-    });
-    child.on('close', code => finish(code));
+  const run = await getProcessSupervisor().spawn({
+    command,
+    cwd: resolvedCwd,
+    mode: 'foreground',
+    timeoutMs,
   });
+  const exit = await run.wait();
+  return {
+    stdout: exit.stdout.trim(),
+    stderr: exit.stderr.trim(),
+    code: exit.exitCode,
+    timedOut: exit.timedOut,
+  };
 }
 
 const BLOCKED_PATTERNS = ['del ', 'rm ', 'format', 'shutdown', 'restart', 'rmdir', 'rd ', 'taskkill', 'reg '];
@@ -341,7 +306,7 @@ export type SubagentProfile = 'file_editor' | 'researcher' | 'shell_runner' | 'r
 const TOOL_PROFILES: Record<SubagentProfile, Set<string>> = {
   file_editor:  new Set(['read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'list_files', 'mkdir', 'list_directory']),
   researcher:   new Set(['read_file', 'list_files', 'web_search', 'web_fetch']),
-  shell_runner: new Set(['run_command', 'read_file', 'list_files']),
+  shell_runner: new Set(['run_command', 'start_process', 'process_status', 'process_log', 'process_wait', 'process_kill', 'process_submit', 'read_file', 'list_files']),
   reader_only:  new Set(['read_file', 'list_files']),
 };
 
@@ -507,7 +472,7 @@ export async function buildPersonalityContext(
   historyLength: number,
   skillsManager: any,
   extraCats?: Set<string>,
-  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'creative_design' | 'creative_image' | 'creative_canvas' | 'creative_video' | 'teach_mode' },
+  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' },
 ): Promise<string> {
   return _buildPersonalityContext(
     sessionId,

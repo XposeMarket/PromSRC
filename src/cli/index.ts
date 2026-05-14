@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn, type ChildProcess } from 'child_process';
 import readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
 import { getConfig } from '../config/config';
@@ -76,6 +76,354 @@ function runStep(label: string, command: string, cwd: string): boolean {
     console.error(`[update] Step failed: ${label}`);
     if (err?.message) console.error(`[update] ${err.message}`);
     return false;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function gatewaySupervisorEnabled(): boolean {
+  return process.env.PROMETHEUS_SUPERVISOR === '1'
+    && process.env.PROMETHEUS_SUPERVISED_GATEWAY_CHILD !== '1'
+    && process.env.PROMETHEUS_DISABLE_GATEWAY_SUPERVISOR !== '1';
+}
+
+function gatewaySupervisorRestartEnabled(): boolean {
+  return process.env.PROMETHEUS_SUPERVISOR_RESTART === '1';
+}
+
+function gatewayChildArgs(): string[] {
+  const entry = process.argv[1];
+  const passthroughArgs = process.argv.slice(2).length > 0 ? process.argv.slice(2) : ['gateway', 'start'];
+  return [...process.execArgv, entry, ...passthroughArgs];
+}
+
+function killGatewayChild(child: ChildProcess): void {
+  if (!child.pid || child.killed) return;
+  if (process.platform === 'win32') {
+    try {
+      execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore', timeout: 5000 });
+      return;
+    } catch {}
+  }
+  try { child.kill('SIGTERM'); } catch {}
+  setTimeout(() => {
+    try {
+      if (!child.killed) child.kill('SIGKILL');
+    } catch {}
+  }, 2500).unref?.();
+}
+
+async function checkGatewayHealth(timeoutMs = 2500): Promise<boolean> {
+  try {
+    const res = await fetch('http://127.0.0.1:18789/api/health', {
+      signal: AbortSignal.timeout(timeoutMs),
+      cache: 'no-store',
+    } as any);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+interface GatewayRuntimeStatus {
+  pid?: number;
+  timestamp?: number;
+  reason?: string;
+  modelBusy?: boolean;
+  lastMainSessionId?: string;
+}
+
+function readGatewayRuntimeStatus(): GatewayRuntimeStatus | null {
+  try {
+    const p = path.join(resolveInstallRoot(), '.prometheus', 'gateway-runtime-status.json');
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf-8')) as GatewayRuntimeStatus;
+  } catch {
+    return null;
+  }
+}
+
+function shouldDeferGatewayRestart(status: GatewayRuntimeStatus | null): boolean {
+  if (!status || !Number.isFinite(Number(status.timestamp))) return false;
+  const ageMs = Date.now() - Number(status.timestamp);
+  if (ageMs < 20_000) return true;
+  if (status.modelBusy && ageMs < 15 * 60_000) return true;
+  return false;
+}
+
+function getGatewayPortOwnerPids(port = 18789): number[] {
+  if (process.platform === 'win32') {
+    try {
+      const out = execSync(
+        `powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"`,
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 },
+      );
+      return Array.from(new Set(
+        out
+          .split(/\r?\n/)
+          .map(line => Number(line.trim()))
+          .filter(pid => Number.isFinite(pid) && pid > 0),
+      ));
+    } catch {
+      return [];
+    }
+  }
+
+  try {
+    const out = execSync(`lsof -ti tcp:${port} -sTCP:LISTEN`, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    });
+    return Array.from(new Set(
+      out
+        .split(/\r?\n/)
+        .map(line => Number(line.trim()))
+        .filter(pid => Number.isFinite(pid) && pid > 0),
+    ));
+  } catch {
+    return [];
+  }
+}
+
+function killPidTree(pid: number): void {
+  if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) return;
+  if (process.platform === 'win32') {
+    try {
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', timeout: 5000 });
+      return;
+    } catch {}
+  }
+  try { process.kill(pid, 'SIGTERM'); } catch {}
+  setTimeout(() => {
+    try { process.kill(pid, 'SIGKILL'); } catch {}
+  }, 2500).unref?.();
+}
+
+async function clearUnhealthyGatewayPort(exemptPids: number[] = []): Promise<void> {
+  if (await checkGatewayHealth(1200)) return;
+  const exempt = new Set([process.pid, ...exemptPids.filter(pid => Number.isFinite(pid))]);
+  const owners = getGatewayPortOwnerPids().filter(pid => !exempt.has(pid));
+  if (owners.length === 0) return;
+  console.error(`[GatewaySupervisor] Port 18789 is held by an unhealthy gateway process (${owners.join(', ')}). Terminating it before restart...`);
+  for (const pid of owners) killPidTree(pid);
+  await sleep(1500);
+}
+
+async function ensureGatewayForCli(): Promise<boolean> {
+  if (await checkGatewayHealth(1000)) return true;
+  const entry = process.argv[1];
+  const child = spawn(process.execPath, [...process.execArgv, entry, 'gateway', 'start'], {
+    cwd: process.cwd(),
+    env: process.env,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  for (let i = 0; i < 40; i++) {
+    await sleep(500);
+    if (await checkGatewayHealth(1000)) return true;
+  }
+  return false;
+}
+
+function resolveGatewayEntryForTerminal(): string {
+  const jsEntry = path.join(__dirname, '..', 'gateway', 'server-v2.js');
+  if (fs.existsSync(jsEntry)) return jsEntry;
+  const tsEntry = path.join(__dirname, '..', 'gateway', 'server-v2.ts');
+  if (fs.existsSync(tsEntry)) return tsEntry;
+  return jsEntry;
+}
+
+function appendStreamToStartupLog(stream: NodeJS.ReadableStream | null, capture: (line: string) => void): void {
+  if (!stream) return;
+  let buffer = '';
+  stream.on('data', (chunk: Buffer | string) => {
+    buffer += chunk.toString();
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+    for (const line of lines) capture(line);
+  });
+  stream.on('end', () => {
+    if (buffer.trim()) capture(buffer);
+    buffer = '';
+  });
+}
+
+function buildTerminalStatusBoard(): any {
+  const cfg = getConfig();
+  const liveConfig = cfg.getConfig() as any;
+  const activeProvider = liveConfig?.llm?.provider || 'ollama';
+  const model =
+    liveConfig?.llm?.providers?.[activeProvider]?.model ||
+    liveConfig?.models?.primary ||
+    'unknown';
+  return {
+    host: liveConfig?.gateway?.host || '127.0.0.1',
+    port: liveConfig?.gateway?.port || 18789,
+    model,
+    workspace: cfg.getWorkspacePath(),
+    skillsTotal: 0,
+    skillsEnabled: 0,
+    searchStatus: 'Checking...',
+    memoryFiles: 'SOUL.md + USER.md + MEMORY.md',
+    gpuInfo: 'Detecting GPU...',
+    cronJobCount: 0,
+  };
+}
+
+async function waitForGatewayHealthAndNotify(
+  child: ChildProcess,
+  notifyServerReady: (opts: any) => void,
+  capture: (line: string) => void,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 180_000) {
+    if (child.exitCode !== null) {
+      capture(`[Gateway] Child exited before becoming ready (code=${child.exitCode}).`);
+      throw new Error('Gateway child exited before becoming ready');
+    }
+    if (await checkGatewayHealth(10_000)) {
+      notifyServerReady(buildTerminalStatusBoard());
+      return;
+    }
+    await sleep(500);
+  }
+  capture('[Gateway] Still waiting for /api/health after 180s.');
+  throw new Error('Gateway did not become healthy within 180s');
+}
+
+async function runMissionThroughGateway(mission: string): Promise<void> {
+  const ready = await ensureGatewayForCli();
+  if (!ready) {
+    console.error('Gateway did not become ready at http://127.0.0.1:18789');
+    process.exitCode = 1;
+    return;
+  }
+
+  const sessionId = `cli_${Date.now()}`;
+  console.log(`Prometheus Agent`);
+  console.log(`Mission: ${mission}`);
+  console.log(`Session: ${sessionId}`);
+  console.log(`UI: http://127.0.0.1:18789\n`);
+
+  const res = await fetch('http://127.0.0.1:18789/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId,
+      message: mission,
+      callerContext: '[CLI MISSION] Started from `prometheus agent`; treat this as a real coding/workspace task and use tools as needed.',
+    }),
+  } as any);
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '');
+    console.error(`Gateway request failed (${res.status}): ${text}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const reader = (res.body as any).getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalText = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split(/\n\n/);
+    buffer = chunks.pop() || '';
+    for (const chunk of chunks) {
+      const event = (chunk.match(/^event:\s*(.+)$/m)?.[1] || '').trim();
+      const dataRaw = (chunk.match(/^data:\s*([\s\S]*)$/m)?.[1] || '').trim();
+      if (!dataRaw) continue;
+      let data: any = null;
+      try { data = JSON.parse(dataRaw); } catch { continue; }
+      if (event === 'final' && data?.text) {
+        finalText = String(data.text || '');
+      } else if (event === 'progress_state' && Array.isArray(data?.items)) {
+        const active = data.items.find((item: any) => item?.status === 'in_progress');
+        if (active?.text) console.log(`[progress] ${active.text}`);
+      } else if (event === 'error') {
+        console.error(`[error] ${data?.message || 'Unknown error'}`);
+      }
+    }
+  }
+  if (finalText) {
+    console.log('\nFinal:\n');
+    console.log(finalText);
+  }
+}
+
+async function runSupervisedGateway(): Promise<void> {
+  let stopping = false;
+  let restartCount = 0;
+  let child: ChildProcess | null = null;
+
+  const launch = async () => {
+    await clearUnhealthyGatewayPort(child?.pid ? [child.pid] : []);
+    child = spawn(process.execPath, gatewayChildArgs(), {
+      cwd: process.cwd(),
+      env: { ...process.env, PROMETHEUS_SUPERVISED_GATEWAY_CHILD: '1' },
+      stdio: 'inherit',
+      windowsHide: false,
+    });
+    child.on('exit', (code, signal) => {
+      if (stopping) return;
+      restartCount++;
+      const delayMs = Math.min(10_000, 1000 + restartCount * 1000);
+      console.error(`[GatewaySupervisor] Gateway exited (${signal || (code ?? 'unknown')}). Restarting in ${delayMs}ms...`);
+      setTimeout(() => {
+        launch().catch((err: any) => {
+          console.error(`[GatewaySupervisor] Restart failed: ${err?.message || err}`);
+        });
+      }, delayMs);
+    });
+  };
+
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    if (child) killGatewayChild(child);
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+
+  await launch();
+  await sleep(20_000);
+
+  let consecutiveFailures = 0;
+  while (!stopping) {
+    await sleep(15_000);
+    if (stopping) break;
+    const healthy = await checkGatewayHealth();
+    if (healthy) {
+      consecutiveFailures = 0;
+      continue;
+    }
+    const runtimeStatus = readGatewayRuntimeStatus();
+    if (shouldDeferGatewayRestart(runtimeStatus)) {
+      consecutiveFailures = 0;
+      const ageMs = runtimeStatus?.timestamp ? Date.now() - Number(runtimeStatus.timestamp) : -1;
+      const state = runtimeStatus?.modelBusy ? 'active model turn' : 'fresh runtime heartbeat';
+      console.error(`[GatewaySupervisor] Health check timed out, but gateway has ${state} (${Math.max(0, Math.round(ageMs / 1000))}s ago). Waiting instead of restarting.`);
+      continue;
+    }
+    consecutiveFailures++;
+    if (consecutiveFailures < 3) continue;
+
+    consecutiveFailures = 0;
+    if (!gatewaySupervisorRestartEnabled()) {
+      console.error('[GatewaySupervisor] Gateway health checks timed out. Auto-restart is disabled; leaving the gateway process running. Set PROMETHEUS_SUPERVISOR_RESTART=1 to enable restart-on-failed-health.');
+      continue;
+    }
+    restartCount++;
+    console.error('[GatewaySupervisor] Gateway health checks timed out. Restarting frozen gateway process...');
+    if (child) killGatewayChild(child);
   }
 }
 
@@ -399,6 +747,10 @@ gateway
     // ── Check if already running (skip during hot restart — old server is shutting down) ──
     if (!process.env.PROMETHEUS_HOT_RESTART) {
       try {
+        if (await checkGatewayHealth(1200)) {
+          console.log('Gateway is already running at http://127.0.0.1:18789');
+          return;
+        }
         const res = await fetch('http://127.0.0.1:18789/api/status', {
           signal: AbortSignal.timeout(1200),
         });
@@ -412,28 +764,37 @@ gateway
     }
 
     // ── Collect any cached update notice ─────────────────────────────────────
-    let updateNotice: string | undefined;
-    const _origLog = console.log;
-    console.log = (...args: any[]) => {
-      const line = args.join(' ');
-      if (line.startsWith('[Update]') || line.startsWith('[update]')) {
-        updateNotice = line.replace(/^\[Update\]\s*/i, '').trim();
-      }
-      // suppress from terminal — it will appear in the status board if needed
-    };
-    maybeNotifyUpdate();
-    console.log = _origLog;
+    if (gatewaySupervisorEnabled()) {
+      await runSupervisedGateway();
+      return;
+    }
 
     // ── Phase 1: suppress logs + start animated loading screen ───────────────
-    const { suppressStartupLogs, runLoadingScreen } = require('../gateway/terminal-ui');
+    const { suppressStartupLogs, runLoadingScreen, notifyServerReady, captureStartupLog } = require('../gateway/terminal-ui');
     suppressStartupLogs();
 
-    // Boot server-v2 (async; it calls notifyServerReady() from inside listen())
-    require('../gateway/server-v2');
+    const loading = runLoadingScreen();
+
+    await clearUnhealthyGatewayPort();
+    const gatewayEntry = resolveGatewayEntryForTerminal();
+    captureStartupLog(`[Gateway] Starting child process: ${gatewayEntry}`);
+    const child = spawn(process.execPath, [...process.execArgv, gatewayEntry], {
+      cwd: resolveInstallRoot(),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    appendStreamToStartupLog(child.stdout, captureStartupLog);
+    appendStreamToStartupLog(child.stderr, captureStartupLog);
+    child.on('exit', (code, signal) => {
+      captureStartupLog(`[Gateway] Child exited: ${signal || code}`);
+    });
+
+    await waitForGatewayHealthAndNotify(child, notifyServerReady, captureStartupLog);
 
     // Run the loading screen — it blocks until server is ready, then shows
     // Phase 2 (status board) and Phase 3 (interactive menu) automatically.
-    await runLoadingScreen();
+    await loading;
   });
 
 gateway
@@ -456,12 +817,7 @@ program
   .description('Run a mission via the gateway (starts gateway if needed)')
   .option('-p, --priority <number>', 'Job priority', '0')
   .action(async (mission: string) => {
-    console.log('Prometheus Agent');
-    console.log(`Mission: ${mission}\n`);
-    console.log('The CLI agent command now routes through the gateway.');
-    console.log('Start the gateway and send your mission via the web UI or Telegram.');
-    console.log('\n  prom gateway start');
-    console.log('  http://localhost:18789');
+    await runMissionThroughGateway(mission);
   });
 
 // ---- JOBS ----

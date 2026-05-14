@@ -20,9 +20,10 @@
 
 import { api } from '../api.js';
 import { escHtml, bgtToast } from '../utils.js';
+import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, hasLoadedCredentialedModelProviderIds, isCredentialedModelProviderId } from './model-provider-credentials.js';
 
 // ── Built-in fallbacks (mirror SettingsPage) ────────────────────────────────
-const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini'];
+const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini', 'xai'];
 
 const BUILTIN_LABELS = {
   ollama:       'Ollama (local)',
@@ -33,6 +34,7 @@ const BUILTIN_LABELS = {
   anthropic:    'Anthropic Claude',
   perplexity:   'Perplexity AI',
   gemini:       'Google Gemini',
+  xai:          'xAI Grok',
 };
 
 const BUILTIN_STATIC_MODELS = {
@@ -41,6 +43,7 @@ const BUILTIN_STATIC_MODELS = {
   anthropic:    ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+  xai:          ['grok-4.20-reasoning', 'grok-4-1-fast-reasoning'],
 };
 
 const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity']);
@@ -124,18 +127,12 @@ function _parseAgentModel(raw) {
 }
 
 function _providerOptionsHtml(currentProvider) {
-  const items = (_catalogCache || []);
+  const items = filterCredentialedProviderCatalogItems(_catalogCache || []);
   const opts = [`<option value="">— Use global default —</option>`];
   for (const p of items) {
     const label = p.name || BUILTIN_LABELS[p.id] || p.id;
     const cat = p.category ? ` · ${p.category}` : '';
     opts.push(`<option value="${escHtml(p.id)}" ${p.id===currentProvider?'selected':''}>${escHtml(label)}${escHtml(cat)}</option>`);
-  }
-  if (items.length === 0) {
-    // Fallback: builtins
-    for (const id of BUILTIN_PROVIDER_IDS) {
-      opts.push(`<option value="${escHtml(id)}" ${id===currentProvider?'selected':''}>${escHtml(BUILTIN_LABELS[id] || id)}</option>`);
-    }
   }
   return opts.join('');
 }
@@ -188,7 +185,11 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
 
 export function renderAgentModelPicker(agent, prefix) {
   const id = agent.id;
-  const { provider, model } = _parseAgentModel(agent.model);
+  const parsed = _parseAgentModel(agent.model);
+  const credentialIdsLoaded = hasLoadedCredentialedModelProviderIds();
+  const canUseProvider = !parsed.provider || !credentialIdsLoaded || isCredentialedModelProviderId(parsed.provider);
+  const provider = canUseProvider ? parsed.provider : '';
+  const model = canUseProvider ? parsed.model : '';
   const eff = String(agent.effectiveModel || '').trim();
   const effSrc = String(agent.effectiveModelSource || '').trim();
   const llm = _llmCache || { providers: {} };
@@ -233,7 +234,7 @@ export function renderAgentModelPicker(agent, prefix) {
  * providers and the reasoning row reflects actual server state.
  */
 export async function agentModelPickerHydrate(prefix, agent) {
-  await Promise.all([_fetchCatalog(false), _fetchLlm(true)]);
+  await Promise.all([_fetchCatalog(false), _fetchLlm(true), fetchCredentialedModelProviderIds()]);
   const wrap = document.getElementById(`${prefix}-wrap-${agent.id}`);
   if (!wrap) return;
   // Replace the whole inner HTML so provider+model dropdowns get the
@@ -379,6 +380,7 @@ export function registerAgentModelPickerOnSaved(prefix, callback) {
   window.__agentModelPickerOnSaved[prefix] = callback;
 }
 
-// Pre-warm caches so the first picker render shows the full provider list.
+// Pre-warm caches so the first hydrated picker uses the credentialed provider list.
 _fetchCatalog(false);
 _fetchLlm(false);
+fetchCredentialedModelProviderIds();

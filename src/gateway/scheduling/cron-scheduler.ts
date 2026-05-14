@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { addMessage, clearHistory, getSession, setWorkspace } from '../session';
+import { addMessage, clearHistory, flushSession, getSession, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
@@ -40,7 +40,7 @@ import {
   type ManagedTeam,
 } from '../teams/managed-teams';
 import { runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
-import { triggerManagerReview } from '../teams/team-manager-runner';
+import { handleManagerConversationDetailed, triggerManagerReview } from '../teams/team-manager-runner';
 import { broadcastTeamEvent } from '../comms/broadcaster';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 import {
@@ -65,6 +65,9 @@ export interface CronJob {
   systemEventText?: string;                  // used when payloadKind=systemEvent
   model?: string;                            // optional per-job model override
   subagent_id?: string;      // optional: ID of a subagent definition in workspace/.prometheus/subagents/
+  team_id?: string;          // optional: managed team ID for manager-led scheduled team runs
+  assignmentTarget?: 'main' | 'subagent' | 'team';
+  deliverToMainChannel?: boolean;
   runAt: string | null;      // ISO timestamp for one-shots
   enabled: boolean;
   priority: number;          // lower number = higher priority
@@ -230,6 +233,22 @@ function seedSubagentChatSessionFromStore(agentId: string, sessionId: string, wo
       maxMessages: 120,
     });
   }
+}
+
+function shouldDeliverStandaloneScheduleToMain(job: CronJob, subagentId: string, teamId: string | null): boolean {
+  if (!subagentId || teamId) return false;
+  const normalizedSubagentId = String(subagentId || '').trim().toLowerCase();
+  if (normalizedSubagentId === 'main') return true;
+  if (job.deliverToMainChannel === true) return true;
+  if (job.deliverToMainChannel === false) return false;
+
+  const assignmentTarget = String(job.assignmentTarget || '').trim().toLowerCase();
+  if (assignmentTarget === 'main') return true;
+  if (assignmentTarget === 'subagent' || assignmentTarget === 'team') return false;
+  if (job.sessionTarget === 'main') return true;
+
+  const agent = getAgentById(subagentId) as any;
+  return agent?.subagentType === 'schedule_owner' && String(agent?.scheduleId || '') === job.id;
 }
 
 function setTaskPlanFromProgress(taskId: string, data: any): void {
@@ -479,6 +498,31 @@ function hydrateManagedTeamFromWorkspaceInfo(agentId: string): ManagedTeam | nul
   return null;
 }
 
+function buildScheduledTeamRunPrompt(team: ManagedTeam, job: CronJob, effectivePrompt: string): string {
+  const purpose = String(
+    (team as any).purpose
+    || team.mission
+    || team.teamContext
+    || team.description
+    || '(no purpose set)',
+  ).trim();
+  const runTask = String(effectivePrompt || job.prompt || '').trim() || 'Use the team purpose and memory to choose the next useful run task.';
+
+  return [
+    `[SCHEDULED TEAM RUN: ${job.name}]`,
+    ``,
+    `This scheduled run is for the whole managed team, not a single member.`,
+    `Read the team purpose, room state, memory files, and the scheduled run task below. Then decide which subagents should run now and with what instructions.`,
+    `Do not launch every subagent by default. Dispatch only the right agents for this run, review their results, update team memory, and stop when useful progress has been made or owner input is needed.`,
+    ``,
+    `Team: ${team.name} (${team.id})`,
+    `Team purpose: ${purpose}`,
+    ``,
+    `Scheduled run task:`,
+    runTask,
+  ].join('\n');
+}
+
 // ─── Minimal Cron Parser ───────────────────────────────────────────────────────
 // Supports: * * * * * (min hour dom month dow)
 // Patterns covered:
@@ -587,12 +631,36 @@ export class CronScheduler {
       const raw = fs.readFileSync(this.storePath, 'utf-8');
       const parsed = JSON.parse(raw);
       const jobs = Array.isArray(parsed.jobs)
-        ? parsed.jobs.map((j: any) => ({
-            ...j,
-            sessionTarget: j?.sessionTarget === 'main' ? 'main' : 'isolated',
-            payloadKind: j?.payloadKind === 'systemEvent' ? 'systemEvent' : 'agentTurn',
-            lastOutputSessionId: j?.lastOutputSessionId ?? j?.sessionId ?? null,
-          }))
+        ? parsed.jobs.map((j: any) => {
+            const subagentId = typeof j?.subagent_id === 'string' && j.subagent_id.trim()
+              ? j.subagent_id.trim()
+              : undefined;
+            const teamId = typeof j?.team_id === 'string' && j.team_id.trim()
+              ? j.team_id.trim()
+              : undefined;
+            const rawAssignmentTarget = String(j?.assignmentTarget || '').trim().toLowerCase();
+            const assignmentTarget = rawAssignmentTarget === 'main' || rawAssignmentTarget === 'subagent' || rawAssignmentTarget === 'team'
+              ? rawAssignmentTarget as CronJob['assignmentTarget']
+              : undefined;
+            const sessionTarget = j?.sessionTarget === 'main' ? 'main' : 'isolated';
+            const legacyMainJob = !teamId
+              && (subagentId === 'main' || (sessionTarget === 'main' && (!assignmentTarget || assignmentTarget === 'main')));
+            const rawStatus = String(j?.status || '').trim().toLowerCase();
+            const normalizedStatus = rawStatus === 'running' || rawStatus === 'queued'
+              ? 'scheduled'
+              : (rawStatus === 'paused' || rawStatus === 'completed' ? rawStatus : 'scheduled');
+            return {
+              ...j,
+              status: normalizedStatus,
+              sessionTarget,
+              subagent_id: subagentId,
+              team_id: teamId,
+              assignmentTarget: legacyMainJob ? 'main' : assignmentTarget,
+              deliverToMainChannel: legacyMainJob ? true : j?.deliverToMainChannel,
+              payloadKind: j?.payloadKind === 'systemEvent' ? 'systemEvent' : 'agentTurn',
+              lastOutputSessionId: j?.lastOutputSessionId ?? j?.sessionId ?? null,
+            };
+          })
         : [];
       return {
         heartbeat: { ...this.defaultStore().heartbeat, ...(parsed.heartbeat || {}) },
@@ -688,6 +756,11 @@ export class CronScheduler {
       systemEventText: typeof partial.systemEventText === 'string' ? partial.systemEventText : undefined,
       model: typeof partial.model === 'string' ? partial.model : undefined,
       subagent_id: typeof partial.subagent_id === 'string' ? partial.subagent_id : undefined,
+      team_id: typeof (partial as any).team_id === 'string' ? (partial as any).team_id : undefined,
+      assignmentTarget: partial.assignmentTarget === 'main' || partial.assignmentTarget === 'subagent' || partial.assignmentTarget === 'team'
+        ? partial.assignmentTarget
+        : undefined,
+      deliverToMainChannel: partial.deliverToMainChannel === true,
       runAt: partial.runAt || null,
       enabled: partial.enabled !== false,
       priority: typeof partial.priority === 'number' ? partial.priority : this.store.jobs.length,
@@ -900,8 +973,10 @@ export class CronScheduler {
       ? mainSessionId
       : `cron_${job.id}_${Date.now()}`;
     const isolatedRunSession = job.sessionTarget !== 'main';
+    const scheduledTeamId = String((job as any).team_id || '').trim();
+    let scheduledTeam = scheduledTeamId ? getManagedTeam(scheduledTeamId) : null;
     let teamSubagentId = String(job.subagent_id || '').trim();
-    if (!teamSubagentId) {
+    if (!scheduledTeamId && !teamSubagentId) {
       try {
         const owner = ensureScheduleOwnerAgent({
           scheduleId: job.id,
@@ -910,6 +985,8 @@ export class CronScheduler {
           model: job.model,
         });
         job.subagent_id = owner.agentId;
+        job.assignmentTarget = 'main';
+        job.deliverToMainChannel = true;
         teamSubagentId = owner.agentId;
         this.saveStore();
         this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });
@@ -918,8 +995,8 @@ export class CronScheduler {
         console.warn(`[CronScheduler] Failed to create schedule owner for "${job.name}":`, err?.message || err);
       }
     }
-    let teamId = teamSubagentId ? getAgentTeamId(teamSubagentId) : null;
-    let team = teamId ? getManagedTeam(teamId) : null;
+    let teamId = scheduledTeam?.id || (teamSubagentId ? getAgentTeamId(teamSubagentId) : null);
+    let team = scheduledTeam || (teamId ? getManagedTeam(teamId) : null);
     if (!team && teamSubagentId) {
       team = hydrateManagedTeamFromWorkspaceInfo(teamSubagentId);
       teamId = team?.id || null;
@@ -978,7 +1055,104 @@ export class CronScheduler {
           effectivePrompt = effectivePrompt + selfLearnInstruction;
         }
 
-        if (teamSubagentId) {
+        if (scheduledTeamId) {
+          if (!team) {
+            throw new Error(`Scheduled team not found: ${scheduledTeamId}`);
+          }
+          const scheduledAt = Date.now();
+          const managerSessionId = `team_coord_${team.id}`;
+          const cronTask = createTask({
+            title: job.name,
+            prompt: effectivePrompt,
+            sessionId: managerSessionId,
+            channel: 'web',
+            scheduleId: job.id,
+            taskKind: 'scheduled',
+            plan: buildScheduledTaskPlan(job),
+          });
+          scheduledSubagentTaskId = cronTask.id;
+          activeCronTaskId = cronTask.id;
+          updateTaskStatus(cronTask.id, 'running');
+          setTaskStepRunning(cronTask.id, 0);
+          const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt });
+          activeRunId = runId;
+          activeScheduledAt = scheduledAt;
+          try {
+            const linkedTask = loadTask(cronTask.id);
+            if (linkedTask) {
+              linkedTask.scheduleRunId = runId;
+              saveTask(linkedTask);
+            }
+          } catch {}
+          this.deps.broadcast({ type: 'task_running', taskId: cronTask.id, jobId: job.id, jobName: job.name });
+          this.deps.broadcast({
+            type: 'cron_task_spawned',
+            jobId: job.id,
+            jobName: job.name,
+            taskId: cronTask.id,
+            teamId: team.id,
+          });
+          const chatMessage = appendTeamChat(team.id, {
+            from: 'user',
+            fromName: 'Scheduler',
+            content: `Scheduled team run started (${job.name}).`,
+            metadata: {
+              source: 'schedule',
+              scheduleId: job.id,
+              scheduleName: job.name,
+              taskId: cronTask.id,
+              runId,
+            },
+          });
+          broadcastTeamEvent({
+            type: 'team_chat_message',
+            teamId: team.id,
+            teamName: team.name,
+            chatMessage,
+            text: chatMessage?.content || '',
+          });
+
+          const managerPrompt = buildScheduledTeamRunPrompt(team, job, effectivePrompt);
+          const managerResult = await handleManagerConversationDetailed(
+            team.id,
+            managerPrompt,
+            broadcastTeamEvent,
+            true,
+          );
+          const reason = String(managerResult?.reason || 'completed');
+          const turns = Number(managerResult?.turns || 0);
+          const managerMessage = String(managerResult?.managerMessage || '').trim();
+          resultText = managerMessage
+            ? `Team manager scheduled run finished (${reason}, ${turns} turn(s)): ${managerMessage}`
+            : `Team manager scheduled run finished (${reason}, ${turns} turn(s)).`;
+          const taskSuccess = reason !== 'error' && !/^\s*ERROR:/i.test(resultText);
+          mutatePlan(cronTask.id, [{
+            op: 'complete',
+            step_index: 0,
+            notes: resultText.slice(0, 200),
+          }]);
+          updateTaskStatus(cronTask.id, taskSuccess ? 'complete' : 'failed', {
+            finalSummary: resultText,
+          });
+          appendJournal(cronTask.id, {
+            type: 'status_push',
+            content: taskSuccess ? `Done: ${resultText.slice(0, 200)}` : `Failed: ${resultText.slice(0, 200)}`,
+          });
+          this.deps.broadcast({ type: 'task_complete', taskId: cronTask.id, summary: resultText });
+          this.deps.broadcast({ type: 'task_step_done', taskId: cronTask.id, stepIndex: 0 });
+          try {
+            completeScheduledRun({
+              scheduleId: job.id,
+              runId,
+              taskId: cronTask.id,
+              success: taskSuccess,
+              summary: resultText.slice(0, 400),
+              stepCount: Math.max(1, turns),
+              errorIfAny: !taskSuccess ? resultText.slice(0, 200) : undefined,
+              scheduledAt,
+            });
+          } catch { /* best effort */ }
+        } else if (teamSubagentId) {
           const scheduledAt = Date.now();
           const agentDef = getAgentById(teamSubagentId);
           let runId = '';
@@ -1531,11 +1705,81 @@ export class CronScheduler {
     }
 
     let automatedSession: AutomatedSession | null = null;
+    const createAutomatedOutputSession = (): AutomatedSession => {
+      const sessionId = `auto_${job.id}_${Date.now()}`;
+      const title = `${job.name} - ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
+      const session: AutomatedSession = {
+        id: sessionId,
+        title,
+        jobName: job.name,
+        jobId: job.id,
+        automated: true,
+        createdAt: Date.now(),
+        history: [
+          { role: 'user', content: `[Automated Task: ${job.name}]\n\n${job.prompt}` },
+          { role: 'ai', content: resultText },
+        ],
+      };
+      try {
+        setWorkspace(sessionId, getConfig().getWorkspacePath());
+        clearHistory(sessionId);
+        addMessage(sessionId, {
+          role: 'user',
+          content: `[Automated Task: ${job.name}]\n\n${job.prompt}`,
+          timestamp: Date.now() - 1,
+          channel: 'system',
+        }, {
+          disableCompactionCheck: true,
+          disableMemoryFlushCheck: true,
+        });
+        addMessage(sessionId, {
+          role: 'assistant',
+          content: resultText,
+          timestamp: Date.now(),
+          channel: 'system',
+        }, {
+          disableCompactionCheck: true,
+          disableMemoryFlushCheck: true,
+        });
+        flushSession(sessionId);
+      } catch (persistErr: any) {
+        console.warn(`[CronScheduler] Failed to persist automated session ${sessionId}:`, persistErr?.message || persistErr);
+      }
+      job.lastOutputSessionId = sessionId;
+      console.log(`[CronScheduler] Job "${job.name}" produced output -> auto session ${sessionId}`);
+
+      this.deps.broadcast({
+        type: 'session_notification',
+        notificationId: `schedule_${job.id}_${Date.now()}`,
+        sessionId,
+        text: resultText,
+        title,
+        source: 'schedule',
+        automatedSession: session,
+      });
+
+      if (this.deps.deliverTelegram) {
+        const tgMsg = `<b>${job.name}</b>\n\n${resultText}`;
+        if (containsObsoleteProductBrand(tgMsg)) {
+          console.error(`[CronScheduler] Telegram delivery blocked: ${buildObsoleteBrandBlockMessage('Cron delivery payload')}`);
+        } else {
+          this.deps.deliverTelegram?.(tgMsg)?.catch(err =>
+            console.error(`[CronScheduler] Telegram delivery failed:`, err.message)
+          );
+        }
+      }
+      return session;
+    };
 
     const shouldRouteToTeam = !!(teamId && teamSubagentId);
+    const shouldRouteToTeamManager = !!(teamId && !teamSubagentId && job.assignmentTarget === 'team');
     const shouldRouteToStandaloneSubagent = !!(teamSubagentId && !teamId);
+    const shouldAlsoDeliverStandaloneToMain = shouldDeliverStandaloneScheduleToMain(job, teamSubagentId, teamId);
 
-    if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToTeam) {
+    if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToTeamManager) {
+      job.lastOutputSessionId = null;
+      console.log(`[CronScheduler] Job "${job.name}" completed as team-manager schedule for ${teamId}`);
+    } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToTeam) {
       try {
         const success = runStatus !== 'error';
         const chatMessage = appendTeamChat(teamId!, {
@@ -1573,40 +1817,15 @@ export class CronScheduler {
         console.error(`[CronScheduler] Failed to route "${job.name}" output to team chat:`, teamRouteErr?.message || teamRouteErr);
       }
     } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToStandaloneSubagent) {
-      job.lastOutputSessionId = null;
+      if (shouldAlsoDeliverStandaloneToMain) {
+        automatedSession = createAutomatedOutputSession();
+        console.log(`[CronScheduler] Job "${job.name}" also delivered main-channel output for owner subagent ${teamSubagentId}`);
+      } else {
+        job.lastOutputSessionId = null;
+      }
       console.log(`[CronScheduler] Job "${job.name}" produced output -> routed to subagent ${teamSubagentId} task ${scheduledSubagentTaskId || 'unknown'}`);
     } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent') {
-      // Create an automated chat session with the output
-      const sessionId = `auto_${job.id}_${Date.now()}`;
-      const title = `🕐 ${job.name} — ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
-
-      automatedSession = {
-        id: sessionId,
-        title,
-        jobName: job.name,
-        jobId: job.id,
-        automated: true,
-        createdAt: Date.now(),
-        history: [
-          { role: 'user', content: `[Automated Task: ${job.name}]\n\n${job.prompt}` },
-          { role: 'ai', content: resultText },
-        ],
-      };
-
-      job.lastOutputSessionId = sessionId;
-      console.log(`[CronScheduler] Job "${job.name}" produced output → auto session ${sessionId}`);
-
-      // Deliver to Telegram if available
-      if (this.deps.deliverTelegram) {
-        const tgMsg = `\ud83d\udd50 <b>${job.name}</b>\n\n${resultText}`;
-        if (containsObsoleteProductBrand(tgMsg)) {
-          console.error(`[CronScheduler] Telegram delivery blocked: ${buildObsoleteBrandBlockMessage('Cron delivery payload')}`);
-        } else {
-          this.deps.deliverTelegram(tgMsg).catch(err =>
-            console.error(`[CronScheduler] Telegram delivery failed:`, err.message)
-          );
-        }
-      }
+      automatedSession = createAutomatedOutputSession();
     } else {
       console.log(`[CronScheduler] Job "${job.name}" → HEARTBEAT_OK (suppressed)`);
     }
@@ -1700,6 +1919,7 @@ export class CronScheduler {
    * Return the current list of all jobs.
    */
   getJobs(): CronJob[] {
+    this.repairStaleRunningJobStatuses();
     return this.store.jobs;
   }
 
@@ -1707,6 +1927,7 @@ export class CronScheduler {
    * Get job status and pause info
    */
   getJobStatus(id: string): { job: CronJob | null; isPaused: boolean; pauseReason?: string } {
+    this.repairStaleRunningJobStatuses();
     const job = this.store.jobs.find(j => j.id === id);
     return {
       job: job || null,
@@ -1716,6 +1937,20 @@ export class CronScheduler {
   }
 
   // ─── Broadcast Helper ─────────────────────────────────────────────────────────
+
+  private repairStaleRunningJobStatuses(): void {
+    let changed = false;
+    for (const job of this.store.jobs) {
+      if (job.status !== 'running') continue;
+      if (this.runningJobId === job.id) continue;
+      job.status = 'scheduled';
+      job.pausedReason = undefined;
+      changed = true;
+    }
+    if (changed) {
+      this.saveStore();
+    }
+  }
 
   private broadcastUpdate(): void {
     this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });

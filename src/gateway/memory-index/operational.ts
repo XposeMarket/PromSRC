@@ -45,7 +45,7 @@ export interface OperationalRecord {
   updatedAt: string;
   day: string;
 
-  sourceRefs: Array<{ sourceType: string; sourcePath: string; confidence: number }>;
+  sourceRefs: Array<{ sourceType: string; sourcePath: string; confidence: number; sourceSection?: string; sourceStartLine?: number; sourceEndLine?: number }>;
 
   entities: {
     people: string[];
@@ -157,6 +157,10 @@ function cosine(a: number[], b: number[]): number {
   return den ? dot / den : 0;
 }
 function dayStr(tsMs: number): string { try { return new Date(tsMs).toISOString().slice(0, 10); } catch { return ''; } }
+function lineAtOffset(text: string, offset: number): number {
+  const capped = Math.max(0, Math.min(String(text || '').length, offset));
+  return String(text || '').slice(0, capped).split('\n').length;
+}
 function opId(canonicalKey: string): string {
   return `opr_${crypto.createHash('sha1').update(canonicalKey).digest('hex').slice(0, 16)}`;
 }
@@ -478,9 +482,9 @@ function parseMemoryRootFiles(auditRoot: string): OperationalRecord[] {
     // Parse markdown sections: ## Heading\n items
     const sectionRegex = /^#{1,3}\s+(.+)$/gm;
     let sectionMatch: RegExpExecArray | null;
-    const sections: Array<{ name: string; start: number }> = [];
+    const sections: Array<{ name: string; start: number; headingStart: number }> = [];
     while ((sectionMatch = sectionRegex.exec(raw)) !== null) {
-      sections.push({ name: sectionMatch[1].trim(), start: sectionMatch.index + sectionMatch[0].length });
+      sections.push({ name: sectionMatch[1].trim(), start: sectionMatch.index + sectionMatch[0].length, headingStart: sectionMatch.index });
     }
 
     for (let i = 0; i < sections.length; i++) {
@@ -521,7 +525,14 @@ function parseMemoryRootFiles(auditRoot: string): OperationalRecord[] {
         createdAt: updatedAt,
         updatedAt,
         day: dayStr(st.mtimeMs),
-        sourceRefs: [{ sourceType: 'memory_root', sourcePath: `memory/root/${fname}`, confidence: 1.0 }],
+        sourceRefs: [{
+          sourceType: 'memory_root',
+          sourcePath: `memory/root/${fname}`,
+          confidence: 1.0,
+          sourceSection: sec.name,
+          sourceStartLine: lineAtOffset(raw, sec.headingStart),
+          sourceEndLine: lineAtOffset(raw, end),
+        }],
         entities,
         projectId: null,
         sessionIds: [],
@@ -666,6 +677,119 @@ function parseChatCompactionFiles(auditRoot: string): OperationalRecord[] {
         tags: ['conversation_summary', 'chat_compaction'],
       });
     }
+  }
+
+  return out;
+}
+
+function listMarkdownFilesRecursive(rootDir: string): string[] {
+  if (!fs.existsSync(rootDir)) return [];
+  const out: string[] = [];
+  const stack = [rootDir];
+  while (stack.length) {
+    const cur = stack.pop() as string;
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(cur, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const abs = path.join(cur, entry.name);
+      if (entry.isDirectory()) stack.push(abs);
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) out.push(abs);
+    }
+  }
+  return out;
+}
+
+function parseObsidianMeta(raw: string): { meta: any; body: string } {
+  const match = String(raw || '').match(/^<!--\s*PROMETHEUS_OBSIDIAN_META\s*\n([\s\S]*?)\n-->\s*/);
+  if (!match) return { meta: {}, body: String(raw || '').trim() };
+  try {
+    return { meta: JSON.parse(match[1]), body: String(raw || '').slice(match[0].length).trim() };
+  } catch {
+    return { meta: {}, body: String(raw || '').slice(match[0].length).trim() };
+  }
+}
+
+function obsidianRecordType(meta: any): OperationalRecordType | null {
+  const tags = Array.isArray(meta?.tags) ? meta.tags.map((tag: any) => String(tag || '').toLowerCase()) : [];
+  const explicit = String(meta?.memoryType || meta?.frontmatter?.['prometheus-memory-type'] || '').toLowerCase().trim();
+  const marked = Boolean(meta?.obsidianMemory) || tags.some((tag: string) => tag === 'prometheus' || tag.startsWith('prometheus/'));
+  if (!marked && !explicit) return null;
+  const haystack = [explicit, ...tags].join(' ');
+  if (/decision/.test(haystack)) return 'decision';
+  if (/preference|pref/.test(haystack)) return 'preference';
+  if (/workflow|rule|policy|process/.test(haystack)) return 'workflow_rule';
+  if (/entity/.test(haystack)) return 'entity_fact';
+  return 'project_fact';
+}
+
+function parseObsidianFiles(auditRoot: string): OperationalRecord[] {
+  const out: OperationalRecord[] = [];
+  const rootDir = path.join(auditRoot, 'obsidian', 'vaults');
+  if (!fs.existsSync(rootDir)) return out;
+
+  for (const abs of listMarkdownFilesRecursive(rootDir)) {
+    let raw = ''; try { raw = fs.readFileSync(abs, 'utf-8'); } catch { continue; }
+    const { meta, body } = parseObsidianMeta(raw);
+    const recType = obsidianRecordType(meta);
+    if (!recType) continue;
+
+    const st = fs.statSync(abs);
+    const sourcePath = path.relative(auditRoot, abs).replace(/\\/g, '/');
+    const title = String(meta?.title || path.basename(abs, '.md')).trim();
+    const relativePath = String(meta?.relativePath || '').trim();
+    const vaultId = String(meta?.vaultId || 'vault').trim();
+    const vaultName = String(meta?.vaultName || 'Obsidian').trim();
+    const projectId = String(meta?.projectId || meta?.frontmatter?.projectId || meta?.frontmatter?.project || '').trim() || null;
+    const cleanBody = body
+      .replace(/^#\s+.+$/m, '')
+      .replace(/^Source:\s+.+$/m, '')
+      .replace(/^Tags:\s+.+$/m, '')
+      .replace(/^Links:\s+.+$/m, '')
+      .replace(/^##\s+Obsidian Note\s*$/m, '')
+      .trim();
+    const summary = cleanBody.split(/\n{2,}/).map((part) => part.trim()).find(Boolean) || title;
+    const canonicalKey = `obsidian:${recType}:${vaultId}:${shortHash(relativePath || sourcePath)}`;
+    const tags = Array.isArray(meta?.tags) ? meta.tags.map((tag: any) => String(tag || '').replace(/^#/, '').trim()).filter(Boolean) : [];
+    const exactTerms = uniqTop([
+      ...terms(title),
+      ...terms(relativePath),
+      ...tags.flatMap((tag: string) => terms(tag)),
+    ], 16);
+    const entities = extractEntities(`${title}\n${cleanBody}`, { projectId });
+    if (projectId && !entities.projects.includes(projectId)) entities.projects.push(projectId);
+    const createdMs = Date.parse(String(meta?.frontmatter?.created || ''));
+    const updatedMs = Number(meta?.sourceMtimeMs || st.mtimeMs);
+
+    out.push({
+      id: opId(canonicalKey),
+      canonicalKey,
+      recordType: recType,
+      title,
+      summary: summary.slice(0, 300),
+      body: [`Obsidian vault: ${vaultName}.`, relativePath ? `Path: ${relativePath}.` : '', cleanBody].filter(Boolean).join('\n').slice(0, 1400),
+      createdAt: new Date(Number.isFinite(createdMs) ? createdMs : st.mtimeMs).toISOString(),
+      updatedAt: new Date(Number.isFinite(updatedMs) ? updatedMs : st.mtimeMs).toISOString(),
+      day: dayStr(Number.isFinite(updatedMs) ? updatedMs : st.mtimeMs),
+      sourceRefs: [{
+        sourceType: 'obsidian_note',
+        sourcePath,
+        confidence: 0.95,
+        sourceSection: title,
+        sourceStartLine: 1,
+        sourceEndLine: raw.split('\n').length,
+      }],
+      entities,
+      projectId,
+      sessionIds: [],
+      subject: relativePath || title,
+      confidence: 0.92,
+      durability: recType === 'decision' || recType === 'workflow_rule' ? 0.9 : 0.78,
+      supersedes: [],
+      supersededBy: [],
+      relatedIds: [],
+      exactTerms,
+      tags: ['obsidian', recType, ...tags].slice(0, 24),
+    });
   }
 
   return out;
@@ -849,6 +973,7 @@ export function refreshOperationalIndex(
     ...parseTaskFiles(auditRoot),
     ...parseMemoryRootFiles(auditRoot),
     ...parseChatCompactionFiles(auditRoot),
+    ...parseObsidianFiles(auditRoot),
     ...parseProjectFiles(auditRoot),
   ];
 

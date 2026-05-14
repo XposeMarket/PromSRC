@@ -271,7 +271,7 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'talk_to_manager',
-        description: 'Send a message to your team manager. Use this to report blockers, share findings, request a new task, or ask for clarification. Set wait_for_reply=true when you need the task paused until the manager answers. Only works inside team dispatches.',
+        description: 'Send a message to your team manager. The message is also posted as a visible team chat bubble so the room stays legible. Use this to report blockers, share findings, request a new task, or ask for clarification. Set wait_for_reply=true when you need the task paused until the manager answers. Only works inside team dispatches.',
         parameters: {
           type: 'object',
           required: ['message'],
@@ -323,7 +323,7 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Send a message to a teammate agent or the whole team. ' +
           'Use to coordinate, give feedback, report blockers, share findings, or discuss approach. ' +
-          'Messages are delivered to the recipient\'s next turn context.',
+          'Messages are delivered to the recipient\'s next turn context and posted as visible team chat bubbles.',
         parameters: {
           type: 'object', required: ['agent_id', 'message'],
           properties: {
@@ -456,17 +456,20 @@ export function getAgentTeamScheduleTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'timer',
-	        description: 'Create, list, or cancel one-off main-chat timers. A timer fires later as a regular user-like message in the SAME chat session. Use for requests like "check this in 5 minutes" or "remind/follow up in 30 minutes". Main chat only; do not use for recurring automation.',
+	        description: 'Create, list, update/reschedule, or cancel one-off main-chat timers. A timer fires later as a regular user-like message in its original chat session. Use for requests like "check this in 5 minutes", "remind/follow up in 30 minutes", "show my timers", "change that timer prompt", "move the timer to 8pm", or "cancel that timer". Main chat only; do not use for recurring automation.',
 	        parameters: {
 	          type: 'object',
 	          required: ['action'],
 	          properties: {
-	            action: { type: 'string', description: 'One of: create, list, cancel' },
-	            instruction: { type: 'string', description: 'Required for create. The exact task Prometheus should perform when the timer fires.' },
-	            delay_seconds: { type: 'number', description: 'For create: relative delay in seconds. Minimum 5 seconds.' },
-	            due_at: { type: 'string', description: 'For create: ISO timestamp when the timer should fire. Use instead of delay_seconds when the user gives a specific date/time.' },
-	            label: { type: 'string', description: 'Optional short label for the timer.' },
-	            timer_id: { type: 'string', description: 'Required for cancel.' },
+	            action: { type: 'string', description: 'One of: create, list, update, modify, reschedule, cancel' },
+	            instruction: { type: 'string', description: 'Required for create. For update/modify, replacement task Prometheus should perform when the timer fires.' },
+	            prompt: { type: 'string', description: 'Alias for instruction when creating or updating a timer.' },
+	            delay_seconds: { type: 'number', description: 'For create/update/reschedule: relative delay in seconds from now. Minimum 5 seconds.' },
+	            due_at: { type: 'string', description: 'For create/update/reschedule: ISO timestamp when the timer should fire. Use instead of delay_seconds when the user gives a specific date/time.' },
+	            label: { type: 'string', description: 'Optional short label for the timer. For update, replaces the existing label.' },
+	            timer_id: { type: 'string', description: 'Required for update/modify/reschedule/cancel.' },
+	            all_sessions: { type: 'boolean', description: 'For list/update/cancel: if true, view or manage timers across all main-chat sessions instead of only this chat.' },
+	            session_id: { type: 'string', description: 'For list/update/cancel: manage timers for a specific chat session. Defaults to the current session unless all_sessions=true.' },
 	            include_done: { type: 'boolean', description: 'For list: include completed/cancelled timers.' },
 	          },
 	        },
@@ -529,7 +532,7 @@ export function getAgentTeamScheduleTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'schedule_job',
-	        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). Use this for recurring or time-based automation, including any subagent cron by setting subagent_id.',
+	        description: 'Manage scheduled jobs (list/create/update/pause/resume/delete/run_now). Use team_id to schedule a managed team run where the manager wakes first and dispatches members from the team goal. Otherwise recurring/time-based jobs are schedule-owner-subagent backed by default; if subagent_id is omitted, the scheduler creates/assigns a dedicated owner subagent. Do not use session_target=main to represent ownership.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -551,11 +554,12 @@ export function getAgentTeamScheduleTools(): any[] {
               type: 'object',
               properties: {
                 channel: { type: 'string', description: 'web, telegram, discord, whatsapp' },
-                session_target: { type: 'string', description: 'main or isolated' },
+                session_target: { type: 'string', description: 'Legacy compatibility only. Scheduled jobs run through an isolated schedule-owner subagent even if main is requested.' },
               },
             },
             model_override: { type: 'string', description: 'Optional model override for this scheduled job' },
-	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use for this scheduled job. When set, the subagent system instructions and constraints are automatically injected at runtime.' },
+	            subagent_id: { type: 'string', description: 'Optional: ID of a configured subagent to use as the schedule owner. If omitted, a dedicated owner subagent is created and assigned automatically.' },
+            team_id: { type: 'string', description: 'Optional: managed team ID. When set, the scheduled run wakes that team manager first; the manager derives the run from team goal/memory and dispatches agents accordingly.' },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
           },
@@ -664,7 +668,7 @@ export function getAgentTeamScheduleTools(): any[] {
               description: 'Schedule patch: {kind:"recurring", cron:"0 9 * * *"} or {kind:"one_shot", run_at:"..."}',
             },
             timezone: { type: 'string', description: 'IANA timezone such as America/New_York.' },
-            delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web and session_target:main|isolated.' },
+            delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web. session_target is legacy and is coerced to isolated schedule-owner execution.' },
             model_override: { type: 'string', description: 'Optional model override; empty string clears.' },
             enabled: { type: 'boolean', description: 'Enable or pause the job.' },
             expected_outputs: {

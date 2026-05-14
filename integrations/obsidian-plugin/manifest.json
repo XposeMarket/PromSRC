@@ -1,0 +1,10 @@
+{
+  "id": "prometheus-bridge",
+  "name": "Prometheus Bridge",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Bridge an Obsidian vault with Prometheus memory.",
+  "author": "Prometheus",
+  "authorUrl": "https://prometheus.local",
+  "isDesktopOnly": true
+}

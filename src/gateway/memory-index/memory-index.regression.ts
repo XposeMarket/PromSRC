@@ -131,6 +131,9 @@ async function main(): Promise<void> {
 
     const searchHits = searchMemoryIndex(workspaceA, { query: 'command approvals', limit: 5 }).hits;
     assert.ok(searchHits.some((hit) => hit.recordId === base.id && hit.layer === 'operational'), 'memory_search should still surface operational hits from cached snapshots');
+    const operationalHit = searchHits.find((hit) => hit.recordId === base.id);
+    assert.equal(operationalHit?.citation?.sourcePath, 'memory/root/MEMORY.md');
+    assert.equal(operationalHit?.citation?.authority, 'durable_memory_file');
 
     const workspaceB = path.join(tmpRoot, 'workspace-b');
     const auditRoot = path.join(workspaceB, 'audit', 'memory', 'root');
@@ -145,6 +148,7 @@ async function main(): Promise<void> {
     assert.equal(fs.existsSync(storePath), false);
     const hotPathResult = searchMemoryIndex(workspaceB, { query: 'command approvals', limit: 5 });
     assert.ok(Array.isArray(hotPathResult.hits), 'search should return immediately even before refresh finishes');
+    assert.ok(typeof hotPathResult.stats.backend === 'string' || hotPathResult.stats.backend === undefined, 'search result may identify the active backend');
     assert.equal(fs.existsSync(storePath), false, 'hot-path search must not synchronously build the evidence store');
 
     await waitFor(() => fs.existsSync(storePath));

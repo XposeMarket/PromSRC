@@ -13,11 +13,12 @@ type GenerateImageArgs = {
 };
 
 export async function executeGenerateImage(args: GenerateImageArgs): Promise<ToolResult> {
+  const referenceImages = Array.isArray(args?.reference_images)
+    ? args.reference_images.map((item) => String(item))
+    : (args?.reference_images != null ? [String(args.reference_images)] : undefined);
   const result = await generateImage({
     prompt: String(args?.prompt || ''),
-    reference_images: Array.isArray(args?.reference_images)
-      ? args.reference_images.map((item) => String(item))
-      : (args?.reference_images != null ? [String(args.reference_images)] : undefined),
+    reference_images: referenceImages,
     aspect_ratio: args?.aspect_ratio != null ? String(args.aspect_ratio) : undefined,
     count: args?.count != null ? Number(args.count) : undefined,
     provider: args?.provider != null ? String(args.provider) : undefined,
@@ -44,6 +45,7 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
       provider: result.provider,
       model: result.model,
       prompt: result.prompt,
+      reference_images: referenceImages || [],
       revised_prompt: result.revised_prompt ?? null,
       aspect_ratio: result.aspect_ratio,
       image_count: imageCount,
@@ -74,15 +76,15 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
 
 export const generateImageTool = {
   name: 'generate_image',
-  description: 'Generate a new raster image from a text prompt using the configured AI image provider/GPT image model such as gpt-image-2. Use this for one-shot image generation, including brand kits, posters, thumbnails, concept art, and requests that reference uploaded files.',
+  description: 'Generate a new raster image from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. Use this for one-shot image generation, including brand kits, posters, thumbnails, concept art, and requests that reference uploaded files.',
   execute: executeGenerateImage,
   schema: {
     prompt: 'Text prompt describing the image to generate',
     reference_images: 'Optional local file paths, workspace-relative paths, HTTPS URLs, or data URLs to use as image references',
     aspect_ratio: 'Optional aspect ratio: landscape, square, or portrait',
     count: 'Optional number of images to generate at once (1-4)',
-    provider: 'Optional provider override: auto, openai, or openai_codex',
-    model: 'Optional image model tier override, e.g. gpt-image-2-medium',
+    provider: 'Optional provider override: auto, openai, openai_codex, or xai. Use xai for Grok Imagine.',
+    model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality',
     output_dir: 'Optional workspace-relative output directory (default: generated/images)',
     save_to_workspace: 'If false, keep the image only in Prometheus cache',
   },
@@ -110,10 +112,10 @@ export const generateImageTool = {
       },
       provider: {
         type: 'string',
-        enum: ['auto', 'openai', 'openai_codex'],
+        enum: ['auto', 'openai', 'openai_codex', 'xai'],
         description: 'Image generation provider override',
       },
-      model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium' },
+      model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
       output_dir: { type: 'string', description: 'Workspace-relative output directory' },
       save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
     },

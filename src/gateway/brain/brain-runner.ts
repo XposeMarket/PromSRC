@@ -43,6 +43,8 @@ import {
   type BrainLatestState,
 } from './brain-state';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
+import type { SkillsManager } from '../skills-runtime/skills-manager';
+import { runSkillCurator } from '../skills-runtime/skill-curator';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -81,6 +83,7 @@ export interface BrainRunnerDeps {
   handleChat: HandleChatFn;
   broadcast: (data: object) => void;
   workspacePath: string;
+  skillsManager?: SkillsManager;
 }
 
 // ─── BrainRunner ──────────────────────────────────────────────────────────────
@@ -764,6 +767,13 @@ export class BrainRunner {
           'webui_source_stats',
           'read_webui_source',
           'grep_webui_source',
+          'skill_list',
+          'skill_read',
+          'skill_inspect',
+          'skill_resource_list',
+          'skill_resource_read',
+          'skill_manifest_write',
+          'skill_resource_write',
           'write_proposal',
         ],
       );
@@ -823,6 +833,25 @@ export class BrainRunner {
       daily.dreamFile        = outFile;
       daily.dreamCompletedAt = new Date().toISOString();
       saveDailyStatus(daily);
+      if (this.deps.skillsManager) {
+        try {
+          const curator = runSkillCurator({
+            workspacePath: this.deps.workspacePath,
+            skillsManager: this.deps.skillsManager,
+            mode: 'pending',
+          });
+          this.deps.broadcast({
+            type: 'skill_curator_done',
+            date: dateStr,
+            runId: curator.runId,
+            suggestions: curator.suggestions.length,
+            quarantined: curator.quarantined.length,
+            reportPath: curator.reportPath,
+          });
+        } catch (err: any) {
+          console.warn('[BrainRunner] Skill curator pass failed:', err?.message || err);
+        }
+      }
     } else {
       state.lastDreamStatus = 'failed';
       state.lastDreamError = runFailed
@@ -1282,11 +1311,24 @@ Available proposal types:
   config_change      — cron schedule, settings.json, or config file change
   feature_addition   — new capability (include full design in executorPrompt)
   memory_update      — workspace file change (not USER.md/SOUL.md/MEMORY.md — those are Phase 3)
-  task_trigger       — schedule a one-shot investigation task
+  task_trigger       — start or schedule a bounded one-shot action, team run, verification, or investigation
   general            — anything that doesn't fit above
 
+Execution modes (required for executable proposals):
+  code_change        - Prometheus dev self-edit only; affected_files must be exact src/ and/or web-ui/ files; sandboxed; build/verification required
+  action             - approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
+  review             - read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
+
+Operational proposal rules:
+  - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
+  - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
+  - For task_trigger proposals, affected_files are resource references or expected artifact locations, not a per-file edit plan.
+  - Keep executorPrompt action-shaped: inspect necessary state, perform the approved action exactly once, verify the result, write a note, and complete.
+  - Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
+  - Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
+
 Source-code proposal rules:
-  - If a proposal would edit Prometheus source code, it MUST be type src_edit and affected_files MUST include the exact src/... paths.
+  - If a proposal would edit Prometheus source code, it MUST set execution_mode=code_change, type src_edit, and affected_files MUST include the exact src/... or web-ui/... paths.
   - Before calling write_proposal for src_edit, inspect current code with the source tools:
       * Use grep_source or list_source to locate relevant files when the path is uncertain.
       * Use source_stats before reading large or unfamiliar files.
@@ -1302,6 +1344,7 @@ Source-code proposal rules:
   - In "Exact source edits", name the files, functions/classes/handlers, and current behavior you verified from read_source.
   - In "Acceptance tests", include the build/test command that should verify the edit, usually npm run build for TypeScript source changes.
   - Set requires_build=true for TypeScript/backend src edits unless there is a specific reason no build is needed.
+  - Include execution_steps with the exact approved implementation/verification checklist. The executor will use these steps instead of inventing a fresh plan.
   - Make executorPrompt source-aware: instruct the approved executor to read affected files with read_source/read_webui_source first, then edit with the matching source write tools.
 
 Risk tier rules:
@@ -1314,7 +1357,9 @@ Risk tier rules:
   - If unsure, choose high. Do not hardcode a model name unless executor_provider_id/executor_model is explicitly justified.
 
 For each proposal passing the gate:
-  - Call write_proposal with: type, priority, title, summary, details, affected_files[], executorPrompt, risk_tier
+  - For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files[] as resource refs, execution_steps, executorPrompt, and requires_build=false.
+  - For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files[] as evidence/resource refs, execution_steps, executorPrompt, and requires_build=false.
+  - For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files[], execution_steps, executorPrompt, risk_tier
   - Save the returned proposal ID for the output files
 
 If 0 proposals pass the gate: note this in the dream file. This is normal.
@@ -1408,6 +1453,8 @@ After all writes: print a plain-text summary of what was done tonight (memory up
     const wsEnd = fmtUtc(windowEnd);
     const nowStr = fmtLocal(new Date());
     const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
+    const skillEpisodesDirRel = path.join('Brain', 'skill-episodes', dateStr);
+    const skillGardenerDirRel = path.join('Brain', 'skill-gardener', dateStr);
     const memNotesFileRel = path.join('memory', `${dateStr}-intraday-notes.md`);
     const auditDirRel = 'audit';
     const outFileRel = path.relative(this.deps.workspacePath, outFile);
@@ -1452,7 +1499,9 @@ Priority scan order:
 4. ${auditDirRel}/cron/runs/ - JSONL run history files filtered by timestamp
 5. ${auditDirRel}/teams/ - team activity logs, new subagents, and manager outputs if present
 6. ${auditDirRel}/proposals/ - proposal state changes if present
-7. ${memNotesFileRel} - today's intraday notes if the file exists
+7. ${skillEpisodesDirRel}/episodes.jsonl - structured skill-use episodes if present
+8. ${skillGardenerDirRel}/live-candidates.jsonl and workflow-episodes.jsonl - live skill gardener candidates captured during chat, if present
+9. ${memNotesFileRel} - today's intraday notes if the file exists
 
 Selective reading strategy:
 - List each directory first and identify the files that matter
@@ -1480,24 +1529,33 @@ B. Behavior Quality
 - User corrections, re-prompts, or frustration signals
 - Misunderstandings that required clarification
 
-C. Memory Candidates
+C. Skill And Workflow Signals
+- Skills read or used in the window, with the user request, tool sequence, final response, and any error/rework signal from ${skillEpisodesDirRel}/episodes.jsonl when available
+- Live skill gardener candidates from ${skillGardenerDirRel}, including candidate type, status, confidence, suggestedAction, and evidence
+- Existing skills that may need updated triggers, clearer steps, examples, resource templates, or guardrails
+- New repeatable workflows that seem skill-worthy because they appeared more than once, required many tools, or represent a reusable browser/desktop/file/code/business process
+- Procedural "do this next time" learnings belong here, not in memory candidates
+- Format as: Skill/Workflow | Signal | Possible Action | Confidence | Evidence
+
+D. Memory Candidates
 - Items that might be worthy of USER.md, SOUL.md, or MEMORY.md
 - Only flag if durable and not clearly already captured
+- Exclude procedural workflow instructions, skill usage improvements, tool-order recipes, and "when doing X, do Y" notes unless they are truly global operating rules
 - Format as a table row: Item | Target file | Confidence | Evidence
 
-D. Opportunity Seeds
+E. Opportunity Seeds
 - Capture unfinished or proactive opportunities the Dream should investigate
 - This is the most important section when the user talked about something but did not finish it
 - Include repeated manual workflows, partial feature ideas, new agents/subagents/teams created but not yet deployed, placeholder-heavy or underused workspace surfaces, business/marketing/product ideas, notification follow-ups, and concrete "Prometheus should probably help with this next" openings
 - Prefer seeds that can become proposals, skills, composite tools, browser/desktop taught workflows, scheduled monitors, or one-shot task triggers
 - Format as: Seed | Why it matters | Suggested scouting surface | Confidence | Evidence
 
-E. Improvement Candidates
+F. Improvement Candidates
 - Items that might be worthy of proposals
 - Format as: Issue | Proposal type | Confidence | Evidence
 - Proposal types: prompt_mutation / skill_evolution / src_edit / config_change / feature_addition / task_trigger / general
 
-F. Window Verdict
+G. Window Verdict
 - Active: yes / no
 - Signal quality: high / medium / low / none
 - Summary: short narrative brain note, 2-4 paragraphs. Put the real summary at the top of the final file, before section A.
@@ -1533,28 +1591,35 @@ _Generated: ${nowStr}_
 **User corrections:**
 - [observations, or "none observed"]
 
-## C. Memory Candidates
+## C. Skill And Workflow Signals
+| Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
+|----------------|--------|-----------------|-----------|---------|
+| ... | [request + tool/final response signal] | update existing skill / propose new skill / no action | high/medium/low | [skill episode or transcript ref] |
+
+_(Leave table with a single dash row if nothing found.)_
+
+## D. Memory Candidates
 | Item | Target | Confidence | Evidence |
 |------|--------|-----------|---------|
 | ...  | USER.md or SOUL.md or MEMORY.md | high/medium/low | [file ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
-## D. Opportunity Seeds
+## E. Opportunity Seeds
 | Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
 |------|----------------|----------------------------|-----------|---------|
 | ...  | [why Dream should care tomorrow] | [src/... or web-ui/... or teams/... or workspace path] | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
-## E. Improvement Candidates
+## F. Improvement Candidates
 | Issue | Proposal Type | Confidence | Evidence |
 |-------|--------------|-----------|---------|
 | ...   | prompt_mutation | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
-## F. Window Verdict
+## G. Window Verdict
 **Active:** yes/no
 **Signal quality:** high/medium/low/none
 **Summary:** [1-2 sentence factual recap; the richer narrative belongs in the top Summary section]
@@ -1656,6 +1721,8 @@ After writing the cleanup report, print a plain-text summary and stop.
     const { dateStr, thoughtCount, outFile } = opts;
     const nowStr = fmtLocal(new Date());
     const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
+    const skillEpisodesDirRel = path.join('Brain', 'skill-episodes', dateStr);
+    const skillGardenerDirRel = path.join('Brain', 'skill-gardener', dateStr);
     const dreamsDirRel = path.join('Brain', 'dreams', dateStr);
     const proposalsFileRel = path.join('Brain', 'proposals.md');
     const userMdFileRel = 'USER.md';
@@ -1682,7 +1749,7 @@ All paths in this prompt are relative to the workspace root.
 Pass them directly to file tools without modification.
 Do not prepend "workspace/" or any drive letter.
 
-You have 6 phases tonight. Execute them in order.
+You have 7 phases tonight. Execute them in order.
 
 OPERATING POSTURE:
 Act like the user's proactive second brain. The best dream is not just "what failed today"; it notices what the user is trying to become faster at, what they repeated manually, where they are building momentum, and what they would likely appreciate waking up to as approval-ready help. Look across all contexts: business, marketing, websites, apps, notifications, email/follow-up, code, content, research, operations, and personal workflow.
@@ -1700,6 +1767,10 @@ Also load for context:
 - ${memoryMdFileRel}
 - ${proposalsFileRel}
 
+List ${skillEpisodesDirRel}. If ${skillEpisodesDirRel}/episodes.jsonl exists, read it. This is the structured skill gardener evidence for the target date: skills read, request excerpts, tool sequences, final responses, errors, touched paths, and outcome hints.
+
+List ${skillGardenerDirRel}. If live-candidates.jsonl or workflow-episodes.jsonl exists, read them. These are always-on skill gardener signals captured during normal chat: reusable workflows, candidate skill updates, candidate resources/templates, missing trigger signals, user-facing offers, lifecycle status, confidence, risk, and evidence.
+
 List ${pendingPropsDirRel} to see what formal proposals are currently pending approval.
 You also have prom-root read tools tonight. Use them when the best evidence lives outside plain workspace surfaces:
 - list_prom / read_prom_file / grep_prom for scripts/, electron/, .prometheus/, root docs, and allowlisted project-root files
@@ -1708,12 +1779,14 @@ You also have prom-root read tools tonight. Use them when the best evidence live
 
 If no thought files exist in ${thoughtsDirRel}:
 - Note "no thoughts available" in the dream file
-- Skip phases 2-5
+- Still check ${skillEpisodesDirRel}/episodes.jsonl if present
+- Still check ${skillGardenerDirRel}/live-candidates.jsonl and workflow-episodes.jsonl if present
+- Skip any phase that has no evidence
 - Still write the dream file and proposals.md
 
 PHASE 2 - CROSS-EXAMINE HIGH-CONFIDENCE ITEMS
 
-For any item marked high confidence in sections C, D, or E of any thought:
+For any item marked high confidence in sections C, D, E, or F of any thought:
 - Read the cited evidence file or session from ${auditDirRel}
 - Verify the finding is real and accurately described
 - If evidence does not support the claim, downgrade or discard it
@@ -1725,7 +1798,67 @@ Medium and low confidence items:
 
 When a verified opportunity seed points to a partially-finished idea or a newly-created but idle agent, subagent, or workspace surface, treat that as a first-class signal, not a side note.
 
-PHASE 3 - INCUBATE OPPORTUNITY SEEDS
+PHASE 3 - SKILL GARDENER REVIEW
+
+Use the thought Skill And Workflow Signals, ${skillEpisodesDirRel}/episodes.jsonl, and ${skillGardenerDirRel}/live-candidates.jsonl + workflow-episodes.jsonl to decide whether today's work should improve existing skills or create new ones.
+
+For each skill episode:
+- Identify the skillId, requestExcerpt, toolSequence, finalResponseExcerpt, errors, touchedPaths, and outcomeHints
+- Call skill_read for the skillId before proposing an update so the proposal is based on the current skill, not only the episode excerpt
+- Use skill_inspect and skill_resource_list/read when metadata or bundled resources matter
+- Review lifecycle and ownership metadata from skill_inspect: lifecycle, ownership, status, manifestSource, provenance, validation, resources, and recent change history if present
+- Compare the current skill to what actually happened in the session
+- Look for missing triggers, unclear instructions, missing examples, missing templates/resources, tool-order mistakes, repeated errors, or user corrections
+- Aggregate repeated candidate signals across today's thoughts and episodes. Stronger signals include repeated use across days, explicit user correction, positive user feedback, skill was read but ignored, skill caused wrong tool order, skill trigger matched too broadly, or skill_list found a relevant skill but no skill_read followed.
+
+For each live candidate:
+- Identify type, status, confidence, risk, suggestedAction, userFacingOffer, toolSequence, outcomeHints, and evidence
+- Treat update_existing_skill, add_resource_or_template, and add_trigger as candidate existing-skill maintenance
+- Treat create_new_skill_candidate as a possible new skill proposal, but verify against existing skills first
+- Treat no_action_but_record_episode as raw evidence only unless repeated patterns make it stronger
+- Prefer high-confidence, low-risk candidates for automatic existing-skill updates; defer medium/low confidence items unless corroborated by thoughts, episodes, or transcripts
+
+Route learnings carefully:
+- If the learning is "when using this workflow, do X" and an existing skill fits, update that skill automatically
+- If it is a repeated tool choreography with no good skill, prefer a skill_evolution proposal that creates a new bundled skill
+- If it is a global Prometheus behavior rule independent of any skill, consider prompt_mutation or SOUL.md
+- If it is a durable user/project fact, consider memory
+- If it is only a one-off task, consider task_trigger or defer
+
+Automatic existing-skill evolution gate:
+1. EXISTING - the target skill already exists and was inspected with skill_read
+2. SPECIFIC - names the exact existing skill id and resource path to edit
+3. EVIDENCED - cites skill episode(s), thought rows, transcripts, or audit files
+4. BOUNDED - improves triggers, metadata, SKILL.md guidance, examples, templates, schemas, or other resources without changing unrelated behavior
+5. SAFE - preserves upstream/downloaded content where appropriate by using skill_manifest_write overlays or narrowly scoped skill_resource_write updates
+
+Skill lifecycle metadata:
+- lifecycle should be one of: draft, active, experimental, deprecated, archived
+- status should remain ready, needs_setup, or blocked
+- ownership should describe how to treat the skill: local, imported, upstream-managed, or prometheus-owned-overlay
+- Imported/upstream-managed skills should usually receive Prometheus-owned manifest overlays or additive resources instead of broad rewrites
+- Mark newly observed but uncertain existing skills experimental only when the skill already exists and the evidence shows it needs trial refinement
+- Mark stale, replaced, or unsafe skills deprecated/archived only with strong evidence; otherwise defer
+
+For existing skill updates:
+- Apply the update automatically tonight with skill_resource_write or skill_manifest_write
+- Do not write a proposal for existing-skill maintenance
+- Keep edits small, evidence-backed, and directly tied to observed workflow friction or repeated success patterns
+- After writing, call skill_read or skill_inspect to verify the updated skill is visible
+- When calling skill_resource_write or skill_manifest_write, include changeType, evidence, appliedBy="brain_dream", and reason so the skill change ledger is useful
+- The skill manager will snapshot the skill before writing and append the change ledger automatically; verify the update by inspecting the skill afterward
+- Record the automatic update in the Dream output under "Skill Gardener Review" and "Skill Updates Applied"
+- If the update would delete resources, split a skill, radically rewrite a skill, or otherwise feels high-risk, defer it instead of proposing a routine evolution
+
+For a new skill proposal:
+- type must be skill_evolution
+- affected_files should reference "skill:<new-skill-id>/SKILL.md" and any planned resources
+- details should include the proposed id, name, description, triggers, categories, permissions, required tools, and a draft SKILL.md outline
+- prefer skill_create_bundle when resources, examples, schemas, or templates would help; use skill_create only for a simple one-file playbook
+
+Do not create new skills directly. New skill creation must go through a skill_evolution proposal and wait for approval.
+
+PHASE 4 - INCUBATE OPPORTUNITY SEEDS
 
 For each verified high-confidence opportunity seed:
 - Scout the suggested surface directly before deciding what to propose
@@ -1754,9 +1887,9 @@ Incubation heuristics:
 6. PRODUCT/WEBSITE/APP IMPROVEMENT
    If the user was building a website or app, inspect the relevant files or browser-hosted surface when available and propose concrete UX, content, reliability, or launch-readiness improvements when evidence supports them.
 
-Do not hallucinate work. Every incubated proposal still needs concrete evidence from current files or audit history.
+Do not hallucinate work. Every incubated proposal still needs concrete evidence from current files, skill episodes, or audit history.
 
-PHASE 4 - MEMORY UPDATES
+PHASE 5 - MEMORY UPDATES
 
 Memory write gate - all 4 conditions must be true:
 1. DURABLE - the fact will still matter weeks from now
@@ -1766,13 +1899,18 @@ Memory write gate - all 4 conditions must be true:
 
 If nothing passes, write nothing to memory.
 
+Memory routing rule:
+- Do not write procedural workflow instructions, skill usage improvements, tool-order recipes, or "when doing X, do Y" notes to USER.md, SOUL.md, or MEMORY.md by default
+- Route those to automatic existing-skill updates when they fit an installed skill, or to new-skill proposals when no suitable skill exists
+- This is important: skill learning should improve skills, not pollute durable memory
+
 For items that do pass:
 - Edit USER.md for user identity, preferences, projects, communication style, and workflow rules
 - Edit SOUL.md for Prometheus behavior rules, tool policies, and operating constraints
 - Edit MEMORY.md for durable long-term context and decisions
 - Be surgical and record each write in the dream output under "Memory Updates Applied"
 
-PHASE 5 - PROPOSALS
+PHASE 6 - PROPOSALS
 
 Proposal quality gate - all 4 conditions must be true:
 1. CONCRETE - specific file, job, skill, agent, or behavior to change
@@ -1789,6 +1927,7 @@ This phase is not limited to "fix what went wrong."
 Strong proposals can also come from:
 - unfinished feature requests mentioned in chat
 - repeated manual workflows that should become skills or composite tools
+- skill episodes showing a skill should be improved, split, given examples/templates, or created
 - proactive follow-through for new agents, subagents, or teams
 - real product or workspace opportunities discovered during incubation
 - business, marketing, sales, communication, website, or app ideas that would help the user move faster
@@ -1802,11 +1941,31 @@ Available proposal types:
 - config_change
 - feature_addition
 - memory_update
-- task_trigger
+- task_trigger (bounded one-shot action, team run, verification, or investigation)
 - general
 
+Execution modes (required for executable proposals):
+- code_change: Prometheus dev self-edit only; affected_files must be exact src/ and/or web-ui/ files; sandboxed; build/verification required
+- action: approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
+- review: read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
+
+Operational proposal rules:
+  - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
+  - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
+- For task_trigger proposals, affected_files are resource references or expected artifact locations, not a per-file edit plan.
+- Keep executor_prompt action-shaped: inspect necessary state, perform the approved action exactly once, verify the result, write a note, and complete.
+- Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
+- Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
+
+Skill proposal rules:
+- Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
+- Use type skill_evolution only for creating a new reusable workflow skill, or for a high-risk skill change you intentionally deferred from automatic editing.
+- New skill proposals must include exact target skill id, planned resources, acceptance behavior after approval, a draft skill body or detailed outline, triggers, permissions, categories, and required tools.
+- High-risk existing-skill proposals must explain why automatic editing was unsafe and must cite skill_read/skill_inspect evidence.
+- Prefer automatic existing-skill updates or new-skill proposals over memory when the learning is procedural or workflow-specific.
+
 Source-code proposal rules:
-- If a proposal would edit Prometheus source code, it must be type src_edit and affected_files must include the exact src/... paths
+- If a proposal would edit Prometheus source code, it must set execution_mode=code_change, type src_edit, and affected_files must include the exact src/... or web-ui/... paths
 - Before calling write_proposal for src_edit, inspect current code with the source tools:
   - Use grep_source or list_source to locate relevant files when the path is uncertain
   - Use source_stats before reading large or unfamiliar files
@@ -1823,6 +1982,7 @@ Source-code proposal rules:
 - In "Exact source edits", include an ordered implementation plan with the exact files and symbols to edit, the current behavior observed from read_source, and the intended replacement behavior.
 - In "Acceptance tests", include the build/test command that should verify the edit, usually npm run build for TypeScript source changes.
 - Set requires_build=true for TypeScript/backend src edits unless there is a specific reason no build is needed.
+- Include execution_steps with the exact approved implementation/verification checklist. The executor will use these steps instead of inventing a fresh plan.
 - Set executor_prompt, not executorPrompt. The executor_prompt must restate the ordered plan and instruct the approved executor to read the affected files with read_source/read_webui_source/read_prom_file first, then apply only the approved edits.
 - If the needed src files or exact edit points are not known after inspection, do not create the proposal. Record it as deferred with "needs source scouting" instead.
 
@@ -1833,15 +1993,17 @@ Risk tier rules:
 - If unsure, choose high
 
 For each proposal passing the gate:
-- Call write_proposal with: type, priority, title, summary, details, affected_files, executor_prompt, risk_tier
+- For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files as resource refs, execution_steps, executor_prompt, and requires_build=false
+- For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false
+- For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files, execution_steps, executor_prompt, risk_tier
 - Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
 - Save the returned proposal ID for the output files
 
 If zero proposals pass the gate, note that in the dream file.
 
-PHASE 6 - WRITE OUTPUTS
+PHASE 7 - WRITE OUTPUTS
 
-6a. Create directory ${dreamsDirRel} if needed.
+7a. Create directory ${dreamsDirRel} if needed.
 Write ${outFileRel} with this structure. Use \`mkdir\` for the directory and \`write_file\` for the markdown artifact:
 
 ---
@@ -1866,6 +2028,18 @@ _(If none: "None - no items passed the memory gate tonight.")_
 
 _(If none: "None - no items passed the proposal gate tonight.")_
 
+## Skill Gardener Review
+| Skill/Workflow | Evidence | Current Skill Inspected | Outcome |
+|----------------|----------|-------------------------|---------|
+| [skill id or new workflow] | [skill episode/thought/audit ref] | yes/no/not applicable | auto-updated / proposed new skill / deferred / no change |
+
+## Skill Updates Applied
+| Skill | Resource/Manifest | Change Made | Evidence |
+|-------|-------------------|-------------|---------|
+| [skill id] | SKILL.md / skill.json overlay / resource path | [what was updated] | [skill episode/thought/audit ref] |
+
+_(If none: "None - no existing skills needed automatic evolution tonight.")_
+
 ## Opportunity Incubation
 | Seed | Surfaces Inspected | What The Dream Learned | Outcome |
 |------|--------------------|------------------------|---------|
@@ -1880,7 +2054,7 @@ _(If none: "None - no items passed the proposal gate tonight.")_
 - [specific things to monitor in the next day's thoughts]
 ---
 
-6b. Rewrite ${proposalsFileRel} completely. This file is not just a proposal ledger anymore; it is the user's morning-readable, full post-day Dream summary after memory updates, investigation/incubation, and proposal generation are complete. Use \`write_file\` so the existing file is replaced in full.
+7b. Rewrite ${proposalsFileRel} completely. This file is not just a proposal ledger anymore; it is the user's morning-readable, full post-day Dream summary after memory updates, skill gardener review, investigation/incubation, and proposal generation are complete. Use \`write_file\` so the existing file is replaced in full.
 
 ---
 # Brain Daily Summary - ${dateStr}
@@ -1897,6 +2071,16 @@ _Dream Source: ${outFileRel}_
 
 ## What The Dream Verified
 - [High-confidence item]: checked [surface/evidence], concluded [result]
+
+## Skill Gardener Review
+| Skill/Workflow | Evidence | What The Dream Learned | Outcome |
+|----------------|----------|------------------------|---------|
+| [skill id or workflow] | [skill episode/thought/audit ref] | [skill gap, no-op, or new skill opportunity] | auto-updated / proposed new skill / deferred / no change |
+
+## Skill Updates Applied
+| Skill | Resource/Manifest | Change Made | Evidence |
+|-------|-------------------|-------------|---------|
+| [skill id or None] | SKILL.md / skill.json overlay / resource path | [what changed or why nothing changed] | [skill episode/thought/audit ref] |
 
 ## Memory Updates Applied
 | Item | File | Change Made | Evidence |
@@ -1932,6 +2116,7 @@ _(Repeat for each proposal. If none: write "No proposals generated tonight - all
 
 ## Run Accounting
 - Thoughts synthesized: N
+- Skill episodes reviewed: N
 - Memory updates applied: N
 - Opportunity seeds incubated: N
 - Proposals generated: N (High: N, Medium: N, Low: N)

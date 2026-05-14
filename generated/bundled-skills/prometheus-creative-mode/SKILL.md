@@ -1,149 +1,134 @@
 ---
 name: prometheus-creative-mode
-description: Unified Prometheus Creative Mode bundle for video canvas work, HTML Motion, HyperFrames-style composition, Remotion guidance, Pretext text-fit and typography, ASCII video, GSAP/CSS/WAAPI animation, website-to-video, media analysis, templates, presets, lint/inspect, QA, and MP4 export. Use this as the main creative/video skill before any older standalone creative skill.
+description: HyperFrames-first Prometheus Creative Mode front door for editable video canvas work, HTML-in-motion editing, HyperFrames compositions, catalog blocks, media analysis, Pretext text flow, deterministic animation adapters, QA, and export.
 metadata:
-  short-description: Unified Creative Mode video, motion, ASCII, Pretext, Remotion, and HyperFrames workflow
+  short-description: HyperFrames-first Creative Mode with Prometheus editability, QA, assets, and export
 ---
 
 # Prometheus Creative Mode
 
-This is the front door for Creative Mode video work in Prometheus.
+This is the single active entry point for Creative Mode video work in Prometheus.
 
-Use this bundle first for:
+The goal is HyperFrames-first authoring with Prometheus-grade editability. HyperFrames is the main composition model: HTML is the source of truth, `data-*` attributes define timeline structure, media is declarative, GSAP/runtime adapters provide deterministic motion, and nested compositions make blocks reusable. Prometheus wraps that model with editable layers, asset placeholders, patch operations, timeline UI, snapshots, QA, and export.
 
-- HTML Motion clips
-- HyperFrames-style composition
-- Remotion-to-HTML conversion
-- Pretext text fitting and kinetic typography
-- ASCII video and terminal cinema
-- GSAP/CSS/WAAPI/Lottie/Three animation guidance
-- experimental WICG HTML-in-Canvas DOM-to-canvas adapters
-- website-to-video
-- video analysis and clipping
-- presets, reusable blocks, templates, lint, inspect, QA, and export
+HTML Motion is not a rival runtime. Treat it as Prometheus' editable compatibility layer around HyperFrames: the same HTML remains inspectable, patchable, selectable, asset-safe, and exportable inside Prometheus.
 
-Prometheus owns the editor, asset library, timeline UI, HTML Motion renderer, patch/revision system, export pipeline, QA flow, template library, style system, and ASCII pipeline. HyperFrames is reference material and an optional compatibility target, not the native runtime.
+## Default Route
 
-## Normal Path
+For video work, author real HyperFrames-compatible compositions and keep them editable in Prometheus.
 
-For polished video work:
+1. Switch into editable Video Creative Mode with `switch_creative_mode({ mode: "video", reason, initialIntent })`.
+2. Use HyperFrames structure as the default: root `data-composition-id`, `data-width`, `data-height`, timed clips, `data-track-index`, and deterministic runtime seeking.
+3. Import or analyze user media when supplied, then reference it through Prometheus asset placeholders or local project assets that Prometheus can serve.
+4. Prefer reusable HyperFrames catalog blocks/components when they fit, then adapt them into Prometheus-editable slots/layers.
+5. Preserve source HTML as the edit source of truth.
+6. Extract editable layers, variables, and slots for the Prometheus inspector.
+7. Patch through HyperFrames-aware operations whenever possible; raw string edits are fallback only.
+8. Lint with HyperFrames core plus Prometheus asset/text/QA checks.
+9. Sample early, middle, and near-end frames.
+10. Export through the best available Prometheus/HyperFrames-compatible path.
 
-1. Enter Creative Video mode.
-2. Import/analyze user media when provided.
-3. Choose an existing HTML Motion template/block when one fits.
-4. Author or patch a self-contained HTML Motion clip.
-5. Run text-fit/lint checks.
-6. Snapshot early, middle, and near-end frames.
-7. Patch until QA passes.
-8. Export through Prometheus.
+## HyperFrames Contract
 
-Do not use the external HyperFrames CLI or raw shell rendering for normal Prometheus creative clips.
+New clips should follow the real HyperFrames rules:
 
-## Core Spec
+- Every composition has a root/stage element, preferably `id="stage"`, with `data-composition-id`, `data-width`, and `data-height`.
+- Use seconds for native HyperFrames timing: `data-start="0"`, `data-duration="5"`, `data-media-start="2"`.
+- Use `data-track-index` for timeline order and z-order; same-track clips should not overlap.
+- Add `class="clip"` to timed visible non-media elements so the runtime can manage visibility.
+- Do not add `class="clip"` to `<video>` elements; HyperFrames manages video visibility/playback directly.
+- Do not manually call `video.play()`, `video.pause()`, set media `currentTime`, or mount/unmount clips from script.
+- Register GSAP timelines on `window.__timelines["composition-id"]`, matching the composition id.
+- Use `data-composition-src` and `<template>` files for reusable nested compositions.
+- Use `data-composition-variables` and `data-variable-values` for typed editable parameters.
 
-Prometheus HTML Motion clips must follow the bundled spec:
+Prometheus can accept older HTML Motion timing (`ms`, `prometheus-html-motion-seek`, stage metadata) as compatibility input, but new work should stay as close as possible to native HyperFrames and then expose Prometheus edit handles around it.
 
-- complete self-contained HTML document
-- inline CSS and optional inline JS only
-- no external network assets
-- media through `{{asset.id}}` placeholders
-- root metadata: `data-composition-id`, `data-width`, `data-height`, `data-duration`, `data-frame-rate`, `data-start`, `data-role`, `data-track-index`
-- explicit timing units in new clips: prefer `ms`; allow `s`; treat legacy bare numbers as milliseconds
-- deterministic seek-driven animation
-- Pretext/text-fit gate before export
-- early/mid/near-end visual QA
+## Editability Model
 
-## Spatial / PreText Flow Authoring
+Prometheus should not flatten sophisticated HyperFrames blocks into brittle DOM guesses. Use three editability tiers:
 
-When a visual object should influence text flow, do not fuse that object into the text node as a background, pseudo-element, canvas drawing, or single flattened group. Author it as its own selectable DOM element and mark it with flow metadata, for example:
+- Direct layers: simple text, image, video, audio, and composition elements parsed by `@hyperframes/core`.
+- Slots: advanced blocks expose `data-prom-slot-text`, `data-prom-slot-asset`, `data-prom-slot-color`, `data-prom-slot-number`, `data-prom-slot-timing`, or `data-prom-slot-variable`.
+- Opaque advanced blocks: GSAP-heavy, canvas, WebGL, Lottie, shader, and deeply nested blocks remain source-preserving, with edits routed only through declared variables/slots.
+
+If a reusable block needs future editing, add explicit variables or slots instead of relying on visual selection alone.
+
+## Core Runtime Stack
+
+Use local HyperFrames packages already installed in Prometheus:
+
+- `@hyperframes/core`: parse HTML, extract metadata, generate HTML, lint, validate, compile timing, inject runtime, work with variables.
+- `@hyperframes/player`: useful reference for iframe playback, controls, ready events, and mobile audio proxy behavior.
+- `@hyperframes/producer`: preferred export path for real HyperFrames renders, including frame capture, media probing, audio muxing, nested composition resolution, shader/canvas/Lottie handling, and final encoding.
+- `@hyperframes/engine`: underlying seekable page-to-video capture contract: pages must expose `window.__hf = { duration, seek }`, normally via the official runtime/player bridge.
+- `@hyperframes/studio`: reference/editor integration surface for variables, catalog blocks, and composition editing behavior.
+- Prometheus bridge files: `src/gateway/creative/hyperframes-bridge.ts`, `hyperframes-catalog.ts`, `hyperframes-producer.ts`, `hyperframes-export-adapter.ts`, and `hyperframes-qa.ts`.
+
+Prefer official HyperFrames core APIs over regex parsing for edits that map to the schema.
+
+## Routing Rules
+
+For HyperFrames-specific details, prefer the official installed skills in `.agents/skills`:
+
+- `hyperframes`: primary HTML composition authoring, timing, variables, nested comps, captions, audio-reactive visuals, transitions, and motion quality.
+- `hyperframes-cli`: `npx hyperframes` init/lint/inspect/preview/render/doctor/info flows.
+- `hyperframes-media`: TTS, transcription, background removal, and media preprocessing.
+- `hyperframes-registry`: `hyperframes add`, block/component files, nested composition wiring, registry discovery.
+- `website-to-hyperframes`: website capture and website-to-video pipeline.
+- `remotion-to-hyperframes`: Remotion migration only.
+- `gsap`, `animejs`, `css-animations`, `lottie`, `three`, `waapi`, `tailwind`: deterministic adapter-specific authoring.
+
+Use `references/legacy-skills/` only as Prometheus historical context or when an official installed skill is unavailable:
+
+- `prometheus-hyperframes-bridge`: Prometheus-specific editability and runtime boundaries.
+- `prometheus-html-motion-spec`: compatibility rules for older HTML Motion clips.
+- `html-motion-video`: Prometheus wrapper/edit/export workflow for HTML compositions.
+- `creative-director-video`: pacing, framing, edit decisions, and creative direction.
+- `video-analysis-and-transcription`: analyze longer videos before clipping or assembly.
+- `pretext-html-motion`: Pretext-style kinetic typography and text-as-geometry.
+- `pretext-html-motion-video`: finished video workflows using Pretext typography.
+- `nous-pretext-upstream`: upstream Pretext reference details only.
+- `nous-ascii-video`: Python/FFmpeg ASCII render lane composed back into HyperFrames/HTML.
+- `remotion-best-practices`: Remotion concepts and constraints as reference material.
+- `html-motion-preset-author`: save successful clips as reusable HyperFrames/Prometheus presets.
+- `holographic-globe-hyperframes-preset`: reusable globe preset.
+
+For HyperFrames catalog reuse, use the separate `hyperframes-catalog-assets` skill as a narrow catalog lookup/adaptation companion, then return here for Prometheus-native editing and QA.
+
+## Adapter Policy
+
+Animation adapter material is reference-only until a clip needs it:
+
+- GSAP: default for choreographed HyperFrames timelines; keep timelines paused and registered.
+- CSS/WAAPI: use for finite native animation that can be seeked deterministically.
+- Lottie/dotLottie: use local assets and seekable players.
+- Three/WebGL: render from HyperFrames/Prometheus seek time, not wall-clock animation loops.
+- Anime.js: require `autoplay: false` and a seekable instance.
+- Tailwind: acceptable for static style/layout only when bundled or compiled safely.
+
+## Pretext And Spatial Text
+
+When an object should influence text flow, author it as a real selectable DOM element and mark it with Prometheus flow metadata:
 
 ```html
 <div class="orb" data-role="orb" data-flow-exclusion data-flow-shape="circle"></div>
 <p class="article-copy" data-flow-text>Long copy that should wrap around the orb.</p>
 ```
 
-Use `data-flow-exclusion` on independently movable objects that text should wrap around. Use `data-flow-shape="circle"` for circular objects and `data-flow-shape="rect"` for panel-like objects. Use `data-flow-text` on the text container that should respond. The editor can then keep the object draggable while applying PreText-style exclusion flow and panel negotiation. If an object must be editable later, it must be a real element, not a CSS pseudo-element or painted background.
-
-For draggable flow objects, do not rely on CSS `float`/`shape-outside` as the primary layout mechanism. `shape-outside` follows the float's original layout box, not a transform/translate-driven dragged visual position. Put the flow object in its own absolutely positioned DOM element and let Prometheus flow metadata drive the live exclusion. Legacy inline floats may be accepted as compatibility input, but new clips should author the object separately from the prose.
-
-Prefer the `flow-orb-copy` HTML Motion block when the brief asks for PreText-like text/object interaction, an orb embedded in copy, text wrapping around an object, or editable flow typography. When revising older fused designs, use the editor's Separate Flow action or patch the HTML so the object is a sibling/child real element with `data-flow-exclusion`, while the copy has `data-flow-text`. In final notes, report separations and spatial QA changes explicitly, for example: "Orb separated into draggable flow object; copy marked as flow text; spatial QA passed."
-
-Read the full spec when authoring or reviewing structural rules:
-
-- `references/PROMETHEUS_HTML_MOTION_SPEC.md`
-- `references/legacy-skills/prometheus-html-motion-spec/SKILL.md`
-
-## Routing
-
-Use the smallest relevant reference from `references/legacy-skills/`:
-
-- `html-motion-video`: normal HTML Motion creation, templates, edits, media placement, QA, export.
-- `prometheus-hyperframes-bridge`: Prometheus-native HyperFrames-style routing and compatibility boundaries.
-- `prometheus-html-motion-spec`: canonical structure/timing/lint/export contract.
-- `creative-director-video`: creative direction, pacing, framing, clip selection.
-- `video-analysis-and-transcription`: analyze longer videos before editing or clipping.
-- `pretext-html-motion`: Pretext-style kinetic typography and text-as-geometry.
-- `pretext-html-motion-video`: finished video workflows using Pretext typography.
-- `nous-pretext-upstream`: upstream Pretext API/reference details.
-- `nous-ascii-video`: premium Python/FFmpeg ASCII render lane.
-- `gsap`: GSAP timeline technique inside deterministic HTML Motion.
-- `web-animations`: CSS/WAAPI animation patterns.
-- `remotion-best-practices`: Remotion concepts and constraints.
-- `remotion-to-hyperframes`: converting Remotion ideas to seek-safe HTML Motion.
-- `hyperframes`: upstream HyperFrames composition rules as reference.
-- `hyperframes-cli`: standalone HyperFrames CLI only when explicitly requested.
-- `hyperframes-registry`: reusable HyperFrames-style blocks and registry ideas.
-- `website-to-hyperframes`: website-to-video planning adapted to Prometheus.
-- `html-motion-preset-author`: saving successful clips as reusable presets.
-- `holographic-globe-hyperframes-preset`: reusable globe preset.
-
-Use `references/creative-skill-map.md` for the current consolidation map.
-
-## Decisions
-
-Default renderer:
-
-- Use Prometheus HTML Motion for polished short videos, social clips, ads, launch videos, animated cards, captions, overlays, and product/demo motion.
-
-ASCII:
-
-- Use the Python/FFmpeg ASCII lane for dense source-backed terminal cinema.
-- Use HTML/canvas ASCII smart layers for lightweight editable browser-native effects.
-- Use HTML Motion as the composition pass around either lane.
-
-Remotion:
-
-- Keep Remotion as a useful reference and preview/conversion lane.
-- Convert Remotion concepts to Prometheus HTML Motion unless the user explicitly asks for a standalone Remotion render.
-
-HyperFrames:
-
-- Use HyperFrames for patterns: track metadata, lint ideas, deterministic timelines, blocks, and optional compatibility export.
-- Do not assume HyperFrames packages, CLI, Studio, or runtime are installed.
-
-Audio:
-
-- HTML Motion export is strongest as a visual frame-sequence path.
-- If source speech/music matters, use the dedicated audio/video path or muxing flow. Never silently discard important audio.
-
-HTML-in-Canvas:
-
-- Treat WICG HTML-in-Canvas as experimental progressive enhancement.
-- Use it through adapter/block snippets only when feature detection passes.
-- Keep normal DOM fallback visible when unsupported.
-- Do not make browser flags or `drawElementImage` support mandatory for normal Prometheus exports.
+Use this as an editor enhancement over the HyperFrames DOM. Do not fuse editable objects into pseudo-elements, canvas drawings, backgrounds, or flattened groups.
 
 ## QA Gate
 
 Before export, verify:
 
-- no broken assets or raw local paths
-- no remote dependencies
-- no text overflow or bad wrapping
-- no clipped/off-canvas primary content
-- frame samples are visually different when the brief expects motion
-- scene timing is deterministic
-- important media segments are actually visible
-- audio preservation/muxing is handled when required
+- HyperFrames lint passes or every remaining finding is intentional.
+- No broken assets, raw local paths, or remote dependencies that Prometheus cannot serve deterministically.
+- No text overflow, bad wrapping, clipped titles, or off-canvas primary content.
+- Representative frames are visually different when motion is expected.
+- Media and GSAP timelines respond correctly to seek.
+- Nested compositions and variable overrides resolve.
+- Important media segments are visible and audio preservation/muxing is handled.
+- Advanced blocks expose slots/variables when they are supposed to be editable.
 
 If QA fails, patch and sample again before export.

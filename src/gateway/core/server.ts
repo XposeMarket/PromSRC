@@ -10,7 +10,9 @@
  */
 
 import http from 'http';
+import os from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
+import { getConfig } from '../../config/config';
 import { setWss } from '../comms/broadcaster';
 import { hookBus } from '../hooks';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
@@ -31,10 +33,93 @@ import {
 import { evaluateGatewayRequest } from '../gateway-auth';
 import { getSessionStatus } from '../routes/account.router';
 import { handleCreativeCommandResult } from '../creative/command-bus';
+import { isProviderStatusChecking, readProviderStatusCache } from '../provider-status';
+import { readCachedGpuInfo } from '../gpu-detector';
 
 export interface ServerBundle {
   server: http.Server;
   wss: WebSocketServer;
+}
+
+function sendRawJson(res: http.ServerResponse, body: any): void {
+  const json = JSON.stringify(body);
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Connection', 'close');
+  res.setHeader('Content-Length', Buffer.byteLength(json));
+  res.end(json);
+}
+
+function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  const pathname = String(req.url || '').split('?')[0];
+  if (pathname !== '/api/health' && pathname !== '/api/status' && pathname !== '/api/system-stats') return false;
+
+  if (method === 'HEAD') {
+    res.statusCode = 200;
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Connection', 'close');
+    res.end();
+    return true;
+  }
+
+  if (pathname === '/api/health') {
+    sendRawJson(res, {
+      ok: true,
+      pid: process.pid,
+      timestamp: Date.now(),
+      fastPath: true,
+    });
+    return true;
+  }
+
+  const rawCfg = getConfig().getConfig() as any;
+  const provider = String(rawCfg.llm?.provider || 'ollama');
+  const isCloudProvider = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';
+  const providerCfg = rawCfg.llm?.providers?.[provider] || {};
+  const currentModel = providerCfg.model || rawCfg.models?.primary || 'unknown';
+  const cachedProviderStatus = readProviderStatusCache();
+
+  if (pathname === '/api/status') {
+    const connected = isCloudProvider ? true : !!cachedProviderStatus?.connected;
+    sendRawJson(res, {
+      status: 'ok',
+      version: 'v2-tools',
+      ollama: connected,
+      providerOnline: connected,
+      providerChecking: !isCloudProvider && !cachedProviderStatus && isProviderStatusChecking(),
+      provider,
+      currentModel,
+      workspace: rawCfg.workspace?.path || '',
+      search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
+      fastPath: true,
+    });
+    return true;
+  }
+
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const gpuInfo = readCachedGpuInfo();
+  const gpuAvailable = !!(gpuInfo?.nvidiaAvailable || gpuInfo?.amdAvailable || gpuInfo?.appleSilicon);
+  sendRawJson(res, {
+    system: {
+      cpu_percent: 0,
+      memory_percent: totalMem > 0 ? (usedMem / totalMem) * 100 : 0,
+      memory_used_gb: usedMem / (1024 ** 3),
+      memory_total_gb: totalMem / (1024 ** 3),
+    },
+    gpu: { available: gpuAvailable, gpu_util_percent: 0, vram_used_percent: 0, vram_used_gb: 0, vram_total_gb: 0, name: gpuInfo?.name || '' },
+    ollama_process: { running: isCloudProvider ? true : !!cachedProviderStatus?.connected, process_count: 0, total_memory_mb: 0 },
+    gateway_process: { rss_mb: process.memoryUsage().rss / (1024 * 1024) },
+    active_provider: provider,
+    active_model: currentModel,
+    timestamp: new Date().toISOString(),
+    fastPath: true,
+  });
+  return true;
 }
 
 export function createServer(
@@ -42,7 +127,29 @@ export function createServer(
   port: number,
   host: string,
 ): ServerBundle {
-  const server = http.createServer(app);
+  const server = http.createServer((req, res) => {
+    res.setHeader('Connection', 'close');
+    res.on('finish', () => {
+      setImmediate(() => {
+        try { req.socket.destroy(); } catch {}
+      });
+    });
+    if (tryRawGatewayFastPath(req, res)) return;
+    app(req, res);
+  });
+  server.requestTimeout = 30_000;
+  server.headersTimeout = 15_000;
+  server.keepAliveTimeout = 1_000;
+  server.maxRequestsPerSocket = 100;
+  server.on('connection', (socket) => {
+    socket.setNoDelay(true);
+    socket.setKeepAlive(false);
+    socket.setTimeout(30_000, () => socket.destroy());
+    socket.on('end', () => setImmediate(() => {
+      try { socket.destroy(); } catch {}
+    }));
+    socket.on('error', () => {});
+  });
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   // Register wss with the broadcaster so broadcastWS() works everywhere
@@ -61,6 +168,13 @@ export function createServer(
   });
 
   wss.on('connection', (ws: WebSocket, req) => {
+    let heartbeatTimer: NodeJS.Timeout | null = null;
+    let missedPongs = 0;
+    const clearHeartbeat = () => {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    };
+
     const auth = evaluateGatewayRequest({
       headers: req.headers as Record<string, any>,
       socket: { remoteAddress: req.socket.remoteAddress },
@@ -76,6 +190,21 @@ export function createServer(
       return;
     }
     console.log('[Prom] WS connected');
+    ws.on('pong', () => { missedPongs = 0; });
+    heartbeatTimer = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        clearHeartbeat();
+        return;
+      }
+      if (missedPongs >= 2) {
+        try { ws.terminate(); } catch {}
+        clearHeartbeat();
+        return;
+      }
+      missedPongs++;
+      try { ws.ping(); } catch { try { ws.terminate(); } catch {} }
+    }, 30_000);
+    if (typeof (heartbeatTimer as any).unref === 'function') (heartbeatTimer as any).unref();
 
     const pending = listPendingStartupNotifications().filter((n) => !n.delivered?.web);
     const sendStartupNotification = (item: any) => {
@@ -416,7 +545,14 @@ export function createServer(
         }
       } catch {}
     });
-    ws.on('close', () => console.log('[Prom] WS disconnected'));
+    ws.on('close', () => {
+      clearHeartbeat();
+      console.log('[Prom] WS disconnected');
+    });
+    ws.on('error', () => {
+      clearHeartbeat();
+      try { ws.terminate(); } catch {}
+    });
   });
 
   server.on('error', (err: any) => {

@@ -63,6 +63,8 @@ import {
   stopAgentSchedules,
 } from '../scheduler';
 import { TelegramChannel } from './comms/telegram-channel';
+import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
+import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { setShutdownHooks } from './lifecycle';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import {
@@ -103,8 +105,8 @@ import {
   wss as _wssRef, setWss, broadcastWS, broadcastTeamEvent,
   addTeamSseClient, removeTeamSseClient, sendTeamNotificationToChannels,
   sendDiscordNotification, sendWhatsAppNotification, resolveChannelsConfig,
-  setTelegramChannelForBroadcaster, isModelBusy,
-  getLastMainSessionId, setLastMainSessionId,
+  setTelegramChannelForBroadcaster, setTeamEventMirror, isModelBusy,
+  getLastMainSessionId, setLastMainSessionId, startRuntimeHeartbeat,
   type TelegramChannelConfig, type DiscordChannelConfig, type WhatsAppChannelConfig,
   type ChannelsConfig, normalizeTelegramConfig, normalizeDiscordConfig, normalizeWhatsAppConfig,
 } from './comms/broadcaster';
@@ -123,10 +125,10 @@ import {
 } from './tasks/task-router';
 import { router as skillsRouter, setSkillsRouterManager } from './routes/skills.router';
 import { router as tasksRouter, initTasksRouter, makeBroadcastForTask } from './routes/tasks.router';
-import { router as channelsRouter, initChannelsRouter, sanitizeAgentId, normalizeAgentsForSave } from './routes/channels.router';
+import { router as channelsRouter, initChannelsRouter, runSubagentChatTurnFromChannel, sanitizeAgentId, normalizeAgentsForSave } from './routes/channels.router';
 import {
   router as teamsRouter, initTeamsRouter, pauseManagedTeamInternal, resumeManagedTeamInternal,
-  buildTeamDispatchContext, runTeamAgentViaChat,
+  buildTeamDispatchContext, postTeamChatFromChannel, runTeamAgentViaChat,
 } from './routes/teams.router';
 import { runTeamAgentViaChat as _runTeamAgentViaChat2, setDispatchDeps } from './teams/team-dispatch-runtime';
 import { router as settingsRouter, initSettingsRouter } from './routes/settings.router';
@@ -139,7 +141,14 @@ import { router as extensionsRouter } from './routes/extensions.router';
 import { router as canvasRouter, initCanvasRouter } from './routes/canvas.router';
 import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
+import { router as obsidianRouter } from './routes/obsidian.router';
 import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
+import { router as onboardingRouter } from './routes/onboarding.router';
+import { router as migrationRouter } from './routes/migration.router';
+import { router as processesRouter } from './routes/processes.router';
+import { router as codingRouter } from './routes/coding.router';
+import { router as realtimeRouter } from './routes/realtime.router';
+import { router as voiceRouter } from './routes/voice.router';
 import { addCanvasFile, getCanvasContextBlock } from './routes/canvas-state';
 import { getMCPManager } from './mcp-manager';
 import {
@@ -168,14 +177,12 @@ import {
   buildPersonalityContext as _buildPersonalityContext,
   TOOL_BLOCKS, TOOL_TO_MEMORY_CATS, type SkillWindow,
 } from './prompt-context';
-import { detectGpu, logGpuStatus } from './gpu-detector';
 import { internalAgentTaskRouter } from './agents-runtime/internal-agent-task';
 import {
   registerAgentBuilderTools, executeAgentBuilderTool, AGENT_BUILDER_TOOL_NAMES, getWorkflowContextBlock,
 } from './agents-runtime/agent-builder-integration';
 
 // ─── B6: Chat router (handleChat + /api/chat + /api/status) ─────────────────
-import { router as chatRouter, initChatRouter, handleChat, runInteractiveTurn, bindTeamNotificationTargetFromSession } from './routes/chat.router';
 
 // ─── CIS: Tool dependency injection (A2 + A5) ────────────────────────────────
 import { injectAnalysisTeamDeps } from '../tools/deploy-analysis-team';
@@ -190,9 +197,56 @@ const CONFIG_DIR_PATH = configManager.getConfigDir();
 const PORT = config.gateway.port || (process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789);
 const HOST = config.gateway.host || process.env.GATEWAY_HOST || (process.env.DOCKER_CONTAINER ? '0.0.0.0' : '127.0.0.1');
 
+const STARTUP_PROFILE = process.env.PROMETHEUS_STARTUP_PROFILE === '1';
+const startupT0 = Date.now();
+let startupLast = startupT0;
+function startupMark(label: string): void {
+  if (!STARTUP_PROFILE) return;
+  const now = Date.now();
+  console.error(`[startup] +${String(now - startupT0).padStart(5)}ms Δ${String(now - startupLast).padStart(5)}ms ${label}`);
+  startupLast = now;
+}
+
+type ChatRouterModule = typeof import('./routes/chat.router');
+let chatRouterModule: ChatRouterModule | null = null;
+let chatRouterDeps: Parameters<ChatRouterModule['initChatRouter']>[0] | null = null;
+let chatRouterInitialized = false;
+
+function getChatRouterModule(): ChatRouterModule {
+  if (!chatRouterModule) {
+    chatRouterModule = require('./routes/chat.router') as ChatRouterModule;
+    startupMark('chat router module loaded');
+  }
+  if (!chatRouterInitialized && chatRouterDeps) {
+    chatRouterModule.initChatRouter(chatRouterDeps);
+    chatRouterInitialized = true;
+    startupMark('chat router initialized lazily');
+  }
+  return chatRouterModule;
+}
+
+function initChatRouterLazy(deps: Parameters<ChatRouterModule['initChatRouter']>[0]): void {
+  chatRouterDeps = deps;
+  if (chatRouterModule && !chatRouterInitialized) {
+    chatRouterModule.initChatRouter(deps);
+    chatRouterInitialized = true;
+    startupMark('chat router initialized');
+  }
+}
+
+const chatRouter = (req: any, res: any, next: any) => getChatRouterModule().router(req, res, next);
+const handleChat: ChatRouterModule['handleChat'] = (...args: Parameters<ChatRouterModule['handleChat']>) =>
+  getChatRouterModule().handleChat(...args);
+const runInteractiveTurn: ChatRouterModule['runInteractiveTurn'] = (...args: Parameters<ChatRouterModule['runInteractiveTurn']>) =>
+  getChatRouterModule().runInteractiveTurn(...args);
+const bindTeamNotificationTargetFromSession: ChatRouterModule['bindTeamNotificationTargetFromSession'] = (
+  ...args: Parameters<ChatRouterModule['bindTeamNotificationTargetFromSession']>
+) => getChatRouterModule().bindTeamNotificationTargetFromSession(...args);
+
 // Electron starts the gateway directly, so we need to create the workspace/config
 // scaffold here rather than relying on the CLI onboarding flow.
 configManager.ensureDirectories();
+startupMark('config directories ensured');
 
 {
   const cleaned = cleanupSessions();
@@ -221,6 +275,7 @@ if (process.env.PROMETHEUS_BUNDLED_SKILLS_DIR) {
 
 const skillsManager = new SkillsManager(skillsDir);
 console.log(`[Skills] Directory: ${skillsDir}`);
+startupMark('skills manager constructed');
 
 // ─── CronScheduler Init ────────────────────────────────────────────────────────
 
@@ -375,6 +430,7 @@ const cronScheduler = new CronScheduler({
   },
 });
 setCronSchedulerInstance(cronScheduler);
+startupMark('cron scheduler constructed');
 
 // ─── Telegram Channel Init ─────────────────────────────────────────────────────
 
@@ -391,7 +447,29 @@ const telegramChannel = new TelegramChannel(
   }
 );
 setTelegramChannelForBroadcaster(telegramChannel);
+const telegramPersonaBots = new TelegramPersonaBotManager(
+  resolveChannelsConfig().telegram,
+  {
+    runSubagentTurn: (params) => runSubagentChatTurnFromChannel(params),
+  },
+);
+const telegramTeamRoomBridge = new TelegramTeamRoomBridge(
+  resolveChannelsConfig().telegram,
+  {
+    postTeamChat: (params) => postTeamChatFromChannel(params),
+    sendMain: (chatId, text, topicId) => telegramChannel.sendMessage(chatId, text, topicId),
+    sendPersona: (opts) => opts.agentId
+      ? telegramPersonaBots.sendMessageForAgent(opts.agentId, opts.chatId, opts.text, opts.topicId)
+      : opts.accountId
+        ? telegramPersonaBots.sendMessageForAccount(opts.accountId, opts.chatId, opts.text, opts.topicId)
+        : Promise.resolve(false),
+  },
+);
+telegramPersonaBots.setTeamRoomBridge(telegramTeamRoomBridge);
+setTeamEventMirror((data) => telegramTeamRoomBridge.handleTeamEvent(data));
+startupMark('telegram bridges constructed');
 initSkillWindows(skillsManager, skillsDir, fallbackSkillsDir);
+startupMark('skill windows initialized');
 setSkillRecoveryFn(() => {
   try {
     syncMissingSkills(fallbackSkillsDir, skillsDir);
@@ -429,14 +507,17 @@ const heartbeatRunner = new HeartbeatRunner({
 });
 
 setHeartbeatRunnerInstance(heartbeatRunner);
+startupMark('heartbeat runner constructed');
 
 const brainRunner = new BrainRunner({
   handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter) =>
     handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter),
   broadcast: broadcastWS,
   workspacePath: getConfig().getWorkspacePath(),
+  skillsManager,
 });
 setBrainRunnerInstance(brainRunner);
+startupMark('brain runner constructed');
 {
   const mainWorkspace = getConfig().getWorkspacePath();
   const mainHeartbeatPath = path.join(mainWorkspace, 'HEARTBEAT.md');
@@ -489,9 +570,11 @@ setBrainRunnerInstance(brainRunner);
     }
   } catch (err: any) { console.warn('[HeartbeatRunner] Subagent auto-registration failed:', err?.message); }
 })();
+startupMark('heartbeat agents registered');
 
 // ─── B6: Wire chat router ──────────────────────────────────────────────────────
-initChatRouter({ cronScheduler, telegramChannel, skillsManager });
+initChatRouterLazy({ cronScheduler, telegramChannel, skillsManager });
+startupMark('chat router init deferred');
 
 const mainChatTimerRunner = new MainChatTimerRunner({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
@@ -506,15 +589,18 @@ const internalWatchRunner = new InternalWatchRunner({
   cronScheduler,
 });
 internalWatchRunner.start();
+startupMark('timers started');
 
 // ─── A2 + A5: CIS tool dependency injection ────────────────────────────────
 injectAnalysisTeamDeps({ workspacePath: getConfig().getWorkspacePath(), broadcast: broadcastWS });
 injectSocialScraperDeps({ workspacePath: getConfig().getWorkspacePath(), broadcast: broadcastWS });
+startupMark('tool deps injected');
 
 // ─── Jarvis Fix #1: Wire live push so team events arrive without user prompting ─
 setNotifyBroadcastFn(broadcastWS);
 
 const app = createApp();
+startupMark('express app created');
 
 // ─── Router Registrations ────────────────────────────────────────────────────
 
@@ -525,6 +611,8 @@ initTasksRouter({ cronScheduler, telegramChannel, handleChat, heartbeatRunner, c
 initChannelsRouter({
   cronScheduler,
   telegramChannel,
+  telegramPersonaBots,
+  telegramTeamRoomBridge,
   dispatchToAgent: _dispatchToAgent,
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
@@ -537,11 +625,14 @@ initTeamsRouter({
 initCanvasRouter({ requireGatewayAuth, broadcastWS });
 initSettingsRouter({ requireGatewayAuth });
 initGoalsRouter({ requireGatewayAuth, cronScheduler, telegramChannel, handleChat });
+startupMark('routers initialized');
 
 // Mount routers. Account auth endpoints stay available after gateway auth so
 // users can log in, refresh status, or recover from an expired subscription.
 // Everything else requires an active account/subscription on the server side.
 app.use('/', requireGatewayAuth, accountRouter);
+app.use('/', requireGatewayAuth, realtimeRouter);
+app.use('/', requireGatewayAuth, voiceRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, skillsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, tasksRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, channelsRouter);
@@ -555,18 +646,27 @@ app.use('/', requireGatewayAuth, requireAccountAccess, extensionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, canvasRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, projectsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, memoryRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, obsidianRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, hubRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, migrationRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, processesRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, codingRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, chatRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, onboardingRouter);
+startupMark('routers mounted');
 
 // ─── Server ────────────────────────────────────────────────────────────────────
 const { server, wss } = createServer(app, PORT, HOST);
+startupMark('http server created');
+startRuntimeHeartbeat();
 setProposalsBroadcast(broadcastWS);
 setupErrorResponseEndpoint(app);
+startupMark('error endpoints setup');
 
 // ── Wire lifecycle shutdown hooks for gracefulRestart() ────────────────────
 // These enable lifecycle.ts to cleanly shut down all subsystems before respawning.
 setShutdownHooks({
-  stopTelegram: () => telegramChannel.stop(),
+  stopTelegram: () => { telegramChannel.stop(); telegramPersonaBots.stop().catch(() => {}); },
   stopCron: () => { cronScheduler.stop(); stopAgentSchedules(); },
   stopTimers: () => mainChatTimerRunner.stop(),
   stopInternalWatches: () => internalWatchRunner.stop(),
@@ -597,20 +697,30 @@ const retryStrategy = getRetryStrategy();
 const visualErrorDetector = getVisualErrorDetector();
 const errorAudit = getErrorAudit(process.env.ERROR_AUDIT_LOG_PATH || path.join(CONFIG_DIR_PATH, 'logs', 'audit.log'));
 const contextInjectionManager = getContextInjectionManager();
+startupMark('advanced systems initialized');
 
 console.log('[Server] ✅ Advanced error response systems initialized');
 try { seedDefaultShortcuts(); console.log('[SiteShortcuts] Default shortcuts seeded.'); } catch (e: any) { console.warn('[SiteShortcuts] Seed failed:', e.message); }
 
 server.listen(PORT, HOST, () => {
+  startupMark('server listen callback');
   // Silently refresh persisted Supabase session so users stay logged in
   refreshPersistedSession().catch(() => {});
   try {
-    scheduleMemoryIndexRefresh(getConfig().getWorkspacePath(), { minIntervalMs: 0, maxChangedFiles: 500 });
+    if (process.env.PROMETHEUS_STARTUP_MEMORY_REFRESH === '1') {
+      const memoryIndexTimer = setTimeout(() => {
+        scheduleMemoryIndexRefresh(getConfig().getWorkspacePath(), { minIntervalMs: 5 * 60_000, maxChangedFiles: 50 });
+      }, 30_000);
+      if (typeof (memoryIndexTimer as any).unref === 'function') (memoryIndexTimer as any).unref();
+    }
   } catch {}
-  runStartup({
-    HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
-    handleChat, buildTools, runTeamAgentViaChat,
-  }).catch((err: any) => console.error('[Gateway] Startup error:', err?.message || err));
+  setTimeout(() => {
+    runStartup({
+      HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
+      handleChat, buildTools, runTeamAgentViaChat,
+    }).catch((err: any) => console.error('[Gateway] Startup error:', err?.message || err));
+    telegramPersonaBots.start().catch((err: any) => console.error('[TelegramPersonaBots] Startup error:', err?.message || err));
+  }, 1000).unref?.();
 });
 
 let shuttingDown = false;
@@ -623,6 +733,7 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   console.log(`[Gateway] Received ${signal}; shutting down...`);
   try { skillsManager.persistState(); } catch {}
   try { telegramChannel.stop(); } catch {}
+  try { telegramPersonaBots.stop().catch(() => {}); } catch {}
   try { getMCPManager().disconnectAll(); } catch {}
   try { cronScheduler.stop(); } catch {}
   try { mainChatTimerRunner.stop(); } catch {}

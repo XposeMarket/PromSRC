@@ -42,6 +42,7 @@ export type ProposalType =
 
 export type ProposalStatus = 'pending' | 'approved' | 'denied' | 'executing' | 'repairing' | 'executed' | 'failed' | 'expired';
 export type ProposalPriority = 'critical' | 'high' | 'medium' | 'low';
+export type ProposalExecutionMode = 'code_change' | 'action' | 'review';
 
 export interface ProposalAffectedFile {
   path: string;
@@ -49,13 +50,32 @@ export interface ProposalAffectedFile {
   description: string;
 }
 
+export type ProposalExecutionStepKind =
+  | 'inspect'
+  | 'edit'
+  | 'write_artifact'
+  | 'trigger'
+  | 'verify'
+  | 'build'
+  | 'complete'
+  | 'other';
+
+export interface ProposalExecutionStep {
+  title: string;
+  kind?: ProposalExecutionStepKind;
+  description?: string;
+  successCriteria?: string;
+}
+
 export interface ProposalContentSnapshot {
+  executionMode?: ProposalExecutionMode;
   type: ProposalType;
   priority: ProposalPriority;
   title: string;
   summary: string;
   details: string;
   affectedFiles: ProposalAffectedFile[];
+  executionSteps?: ProposalExecutionStep[];
   diffPreview?: string;
   estimatedImpact?: string;
   requiresBuild: boolean;
@@ -97,6 +117,7 @@ export interface ProposalApprovalSnapshot {
 
 export interface Proposal {
   id: string;
+  executionMode?: ProposalExecutionMode;
   type: ProposalType;
   priority: ProposalPriority;
   title: string;
@@ -106,6 +127,7 @@ export interface Proposal {
   sourceTeamId?: string;
   sourcePipeline?: string;
   affectedFiles: ProposalAffectedFile[];
+  executionSteps?: ProposalExecutionStep[];
   diffPreview?: string;
   estimatedImpact?: string;
   requiresBuild: boolean;
@@ -132,12 +154,14 @@ export interface Proposal {
 }
 
 export interface ProposalUpdateInput {
+  executionMode?: ProposalExecutionMode;
   type?: ProposalType;
   priority?: ProposalPriority;
   title?: string;
   summary?: string;
   details?: string;
   affectedFiles?: ProposalAffectedFile[];
+  executionSteps?: ProposalExecutionStep[];
   diffPreview?: string;
   estimatedImpact?: string;
   requiresBuild?: boolean;
@@ -265,6 +289,51 @@ function cloneAffectedFiles(files: ProposalAffectedFile[] | undefined): Proposal
   }));
 }
 
+function normalizeExecutionStepKind(raw: any): ProposalExecutionStepKind | undefined {
+  const value = String(raw || '').trim().toLowerCase();
+  if ([
+    'inspect',
+    'edit',
+    'write_artifact',
+    'trigger',
+    'verify',
+    'build',
+    'complete',
+    'other',
+  ].includes(value)) {
+    return value as ProposalExecutionStepKind;
+  }
+  return undefined;
+}
+
+function normalizeProposalExecutionMode(raw: any): ProposalExecutionMode | undefined {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'code_change' || value === 'action' || value === 'review') {
+    return value as ProposalExecutionMode;
+  }
+  return undefined;
+}
+
+function cloneExecutionSteps(steps: ProposalExecutionStep[] | undefined): ProposalExecutionStep[] | undefined {
+  if (!Array.isArray(steps)) return undefined;
+  const normalized = steps
+    .map((step: any) => {
+      const title = String(step?.title || step?.description || '').trim().slice(0, 240);
+      if (!title) return null;
+      const kind = normalizeExecutionStepKind(step?.kind);
+      const description = String(step?.description || '').trim().slice(0, 1000);
+      const successCriteria = String(step?.successCriteria || step?.success_criteria || '').trim().slice(0, 1000);
+      return {
+        title,
+        kind,
+        description: description || undefined,
+        successCriteria: successCriteria || undefined,
+      } as ProposalExecutionStep;
+    })
+    .filter(Boolean) as ProposalExecutionStep[];
+  return normalized.length > 0 ? normalized.slice(0, 12) : undefined;
+}
+
 function normalizeProposalTeamExecution(raw: any): ProposalTeamExecution | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const teamId = String(raw.teamId || '').trim();
@@ -284,12 +353,14 @@ function normalizeProposalTeamExecution(raw: any): ProposalTeamExecution | undef
 
 function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalContentSnapshot>): ProposalContentSnapshot {
   return {
+    executionMode: normalizeProposalExecutionMode((proposal as any).executionMode),
     type: proposal.type,
     priority: proposal.priority,
     title: proposal.title,
     summary: proposal.summary,
     details: proposal.details,
     affectedFiles: cloneAffectedFiles(proposal.affectedFiles),
+    executionSteps: cloneExecutionSteps((proposal as any).executionSteps),
     diffPreview: proposal.diffPreview,
     estimatedImpact: proposal.estimatedImpact,
     requiresBuild: proposal.requiresBuild,
@@ -306,12 +377,14 @@ function buildProposalContentSnapshot(proposal: Pick<Proposal, keyof ProposalCon
 function normalizeRevision(raw: any): ProposalRevision {
   const snapshotRaw = (raw && typeof raw.snapshot === 'object') ? raw.snapshot : {};
   const snapshot: ProposalContentSnapshot = {
+    executionMode: normalizeProposalExecutionMode(snapshotRaw.executionMode || snapshotRaw.execution_mode),
     type: (snapshotRaw.type || 'general') as ProposalType,
     priority: (snapshotRaw.priority || 'medium') as ProposalPriority,
     title: String(snapshotRaw.title || ''),
     summary: String(snapshotRaw.summary || ''),
     details: String(snapshotRaw.details || ''),
     affectedFiles: cloneAffectedFiles(snapshotRaw.affectedFiles),
+    executionSteps: cloneExecutionSteps(snapshotRaw.executionSteps),
     diffPreview: snapshotRaw.diffPreview == null ? undefined : String(snapshotRaw.diffPreview),
     estimatedImpact: snapshotRaw.estimatedImpact == null ? undefined : String(snapshotRaw.estimatedImpact),
     requiresBuild: snapshotRaw.requiresBuild === true,
@@ -335,12 +408,14 @@ function normalizeRevision(raw: any): ProposalRevision {
 function normalizeProposal(raw: Proposal): Proposal {
   const normalized: Proposal = {
     ...raw,
+    executionMode: normalizeProposalExecutionMode((raw as any).executionMode || (raw as any).execution_mode),
     type: (raw.type || 'general') as ProposalType,
     priority: (raw.priority || 'medium') as ProposalPriority,
     title: String(raw.title || ''),
     summary: String(raw.summary || ''),
     details: String(raw.details || ''),
     affectedFiles: cloneAffectedFiles(raw.affectedFiles),
+    executionSteps: cloneExecutionSteps((raw as any).executionSteps),
     requiresBuild: raw.requiresBuild === true,
     teamExecution: normalizeProposalTeamExecution((raw as any).teamExecution),
     version: Number.isFinite(Number((raw as any).version)) && Number((raw as any).version) > 0
@@ -481,11 +556,15 @@ export function updatePendingProposal(
   const next: Proposal = { ...proposal };
 
   if (updates.type !== undefined) next.type = updates.type;
+  if (updates.executionMode !== undefined || (updates as any).execution_mode !== undefined) {
+    next.executionMode = normalizeProposalExecutionMode(updates.executionMode || (updates as any).execution_mode);
+  }
   if (updates.priority !== undefined) next.priority = updates.priority;
   if (updates.title !== undefined) next.title = updates.title;
   if (updates.summary !== undefined) next.summary = updates.summary;
   if (updates.details !== undefined) next.details = updates.details;
   if (updates.affectedFiles !== undefined) next.affectedFiles = cloneAffectedFiles(updates.affectedFiles);
+  if (updates.executionSteps !== undefined) next.executionSteps = cloneExecutionSteps(updates.executionSteps);
   if (updates.diffPreview !== undefined) next.diffPreview = updates.diffPreview || undefined;
   if (updates.estimatedImpact !== undefined) next.estimatedImpact = updates.estimatedImpact || undefined;
   if (updates.requiresBuild !== undefined) next.requiresBuild = updates.requiresBuild === true;
@@ -602,6 +681,7 @@ export function importProposalFromFile(filePath: string): Proposal | null {
     if (!raw.title || !raw.summary) return null;
     const proposal = createProposal({
       type: raw.type || 'general',
+      executionMode: normalizeProposalExecutionMode(raw.executionMode || raw.execution_mode),
       priority: raw.priority || 'medium',
       title: String(raw.title).slice(0, 120),
       summary: String(raw.summary).slice(0, 500),
@@ -609,6 +689,7 @@ export function importProposalFromFile(filePath: string): Proposal | null {
       sourceAgentId: String(raw.sourceAgentId || 'unknown'),
       sourcePipeline: raw.sourcePipeline,
       affectedFiles: Array.isArray(raw.affectedFiles) ? raw.affectedFiles : [],
+      executionSteps: Array.isArray(raw.executionSteps) ? raw.executionSteps : undefined,
       diffPreview: raw.diffPreview,
       estimatedImpact: raw.estimatedImpact,
       requiresBuild: raw.requiresBuild === true,

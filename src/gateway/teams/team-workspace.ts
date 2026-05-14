@@ -381,13 +381,25 @@ export function initTeamMemoryFiles(teamId: string): void {
 
 export function readTeamMemoryContext(teamId: string): string {
   const wsPath = getTeamWorkspacePath(teamId);
-  const parts: string[] = [];
+  const parts: string[] = [
+    `The following file snapshots were read by the system before this manager turn.`,
+    `Treat them as the current contents of the memory files; do not call file_stats or read_file on these files just to inspect them.`,
+    `If you need to update memory.json, last_run.json, or pending.json, use these snapshots as your base and write the updated file directly.`,
+  ];
   for (const filename of ['team_info.md', 'memory.json', 'last_run.json', 'pending.json'] as const) {
     const filePath = path.join(wsPath, filename);
     if (!fs.existsSync(filePath)) continue;
     try {
       const content = fs.readFileSync(filePath, 'utf-8').trim();
-      parts.push(`[${filename}]\n${content.slice(0, 2000)}`);
+      const lineCount = content ? content.split(/\r?\n/).length : 0;
+      const bytes = Buffer.byteLength(content, 'utf-8');
+      const truncated = content.length > 8000;
+      parts.push([
+        `[${filename}]`,
+        `path: ${filePath}`,
+        `lines: ${lineCount}, bytes: ${bytes}${truncated ? ', truncated to first 8000 chars' : ''}`,
+        content.slice(0, 8000),
+      ].join('\n'));
     } catch { /* skip unreadable */ }
   }
   return parts.join('\n\n');

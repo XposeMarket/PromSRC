@@ -29,8 +29,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { appendManagerNote, getTeamMemberAgentIds } from '../teams/managed-teams';
 import { type TaskStatus } from '../tasks/task-store';
+import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
 
 export const router = Router();
+
+const getAttachmentContext = () => require('../chat/attachment-context') as typeof import('../chat/attachment-context');
 
 let _cronScheduler: any;
 let _handleChat: (...args: any[]) => Promise<any>;
@@ -105,6 +108,37 @@ function buildTeamMentionParticipants(team: any): Array<{
   return participants;
 }
 
+function findTeamChatRouteMention(team: any, rawMessage: string): {
+  participant: ReturnType<typeof buildTeamMentionParticipants>[number];
+  start: number;
+  end: number;
+} | null {
+  const raw = String(rawMessage || '');
+  if (!raw.includes('@')) return null;
+  const participants = buildTeamMentionParticipants(team);
+  const aliasEntries = participants
+    .flatMap((participant) => participant.aliases.map((alias) => ({ participant, alias })))
+    .sort((a, b) => b.alias.length - a.alias.length);
+  const lowerRaw = raw.toLowerCase();
+
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw.charAt(index) !== '@') continue;
+    const prev = index > 0 ? raw.charAt(index - 1) : '';
+    if (prev && /[A-Za-z0-9_]/.test(prev)) continue;
+    const afterAt = raw.slice(index + 1);
+    const lowerAfter = lowerRaw.slice(index + 1);
+    for (const entry of aliasEntries) {
+      if (!entry.alias) continue;
+      if (!lowerAfter.startsWith(entry.alias)) continue;
+      const boundaryChar = afterAt.charAt(entry.alias.length);
+      if (boundaryChar && !/[\s.,!?;:)\]}]/.test(boundaryChar)) continue;
+      return { participant: entry.participant, start: index, end: index + 1 + entry.alias.length };
+    }
+  }
+
+  return null;
+}
+
 function resolveTeamChatRouteTarget(team: any, rawMessage: string, body: any): TeamChatRouteTarget {
   const original = String(rawMessage || '').trim();
   const explicitType = String(body?.targetType || '').trim().toLowerCase();
@@ -113,7 +147,7 @@ function resolveTeamChatRouteTarget(team: any, rawMessage: string, body: any): T
   const routedMessage = String(body?.routedMessage || '').trim() || original;
 
   if (explicitType === 'room') {
-    return { type: 'room', routedMessage };
+    return { type: 'team', targetLabel: explicitTargetLabel || 'team', routedMessage };
   }
   if ((explicitType === 'team' || explicitType === 'manager') && !explicitTargetId) {
     return { type: explicitType, targetLabel: explicitTargetLabel || explicitType, routedMessage };
@@ -127,33 +161,19 @@ function resolveTeamChatRouteTarget(team: any, rawMessage: string, body: any): T
     };
   }
 
-  const leading = String(rawMessage || '').trimStart();
-  if (!leading.startsWith('@')) {
+  const mention = findTeamChatRouteMention(team, rawMessage);
+  if (!mention) {
     return { type: 'team', targetLabel: 'team', routedMessage: original };
   }
-
-  const afterAt = leading.slice(1);
-  const participants = buildTeamMentionParticipants(team);
-  const aliasEntries = participants
-    .flatMap((participant) => participant.aliases.map((alias) => ({ participant, alias })))
-    .sort((a, b) => b.alias.length - a.alias.length);
-  const lowerAfter = afterAt.toLowerCase();
-
-  for (const entry of aliasEntries) {
-    if (!entry.alias) continue;
-    if (!lowerAfter.startsWith(entry.alias)) continue;
-    const boundaryChar = afterAt.charAt(entry.alias.length);
-    if (boundaryChar && !/[\s.,!?;:)\]}]/.test(boundaryChar)) continue;
-    const rest = afterAt.slice(entry.alias.length).trimStart();
-    return {
-      type: entry.participant.type,
-      targetId: entry.participant.type === 'member' ? entry.participant.id : undefined,
-      targetLabel: entry.participant.label,
-      routedMessage: rest || original,
-    };
-  }
-
-  return { type: 'team', targetLabel: 'team', routedMessage: original };
+  const before = String(rawMessage || '').slice(0, mention.start).trimEnd();
+  const after = String(rawMessage || '').slice(mention.end).trimStart();
+  const cleanedMessage = `${before}${before && after ? ' ' : ''}${after}`.trim();
+  return {
+    type: mention.participant.type,
+    targetId: mention.participant.type === 'member' ? mention.participant.id : undefined,
+    targetLabel: mention.participant.label,
+    routedMessage: cleanedMessage || original,
+  };
 }
 
 // ─── Teams API ───────────────────────────────────────────────────────────────────
@@ -219,6 +239,111 @@ export function resumeManagedTeamInternal(teamId: string) { return _resumeManage
 export function buildTeamDispatchContext(team: any, ctx?: string) { return _buildTeamDispatchContext(team, ctx); }
 export { runTeamAgentViaChat };
 
+export async function postTeamChatFromChannel(params: {
+  teamId: string;
+  message: string;
+  fromName?: string;
+  source?: string;
+  targetType?: 'room' | 'team' | 'manager' | 'member';
+  targetId?: string;
+  targetLabel?: string;
+  routedMessage?: string;
+}): Promise<{ success: boolean; message: any; target: TeamChatRouteTarget }> {
+  const teamId = String(params.teamId || '').trim();
+  const team = getManagedTeam(teamId);
+  if (!team) throw new Error('Team not found');
+  const content = String(params.message || '').trim();
+  if (!content) throw new Error('message is required');
+
+  const body = {
+    targetType: params.targetType,
+    targetId: params.targetId,
+    targetLabel: params.targetLabel,
+    routedMessage: params.routedMessage,
+  };
+  const routeTarget = resolveTeamChatRouteTarget(team, content, body);
+  if (routeTarget.type === 'member') {
+    if (!routeTarget.targetId || !team.subagentIds.includes(routeTarget.targetId)) {
+      throw new Error('Target subagent is not a member of this team');
+    }
+    if (team.agentPauseStates?.[routeTarget.targetId]?.paused === true) {
+      throw new Error(`${routeTarget.targetLabel || routeTarget.targetId} is paused.`);
+    }
+  }
+
+  const directThread = routeTarget.type === 'manager'
+    ? getOrCreateTeamDirectThread(teamId, 'manager', 'manager', routeTarget.targetLabel || 'manager')
+    : routeTarget.type === 'member' && routeTarget.targetId
+      ? getOrCreateTeamDirectThread(teamId, 'member', routeTarget.targetId, routeTarget.targetLabel || routeTarget.targetId)
+      : null;
+
+  const userMsg = appendTeamChat(teamId, {
+    from: 'user',
+    fromName: String(params.fromName || 'Telegram').trim() || 'Telegram',
+    content,
+    threadId: String(directThread?.id || '').trim() || undefined,
+    metadata: {
+      source: String(params.source || 'external_team_chat').trim() || 'external_team_chat',
+      targetType: routeTarget.type,
+      targetId: routeTarget.targetId,
+      targetLabel: routeTarget.targetLabel,
+    },
+  });
+  broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: userMsg, text: userMsg?.content || '' });
+
+  if (routeTarget.type === 'team') {
+    void (async () => {
+      const delivery = await deliverTeamBroadcastToMembers(teamId, team, routeTarget.routedMessage || content);
+      await handleManagerConversation(
+        teamId,
+        buildPostTeamBroadcastManagerPrompt(routeTarget.routedMessage || content, delivery.deliveredCount, delivery.completedCount),
+        broadcastTeamEvent,
+        false,
+      );
+    })().catch(err => console.error('[Teams] External team broadcast flow failed:', err.message));
+  } else if (routeTarget.type === 'manager') {
+    handleManagerConversation(
+      teamId,
+      routeTarget.routedMessage || content,
+      broadcastTeamEvent,
+      false,
+      {
+        sessionIdOverride: String(directThread?.sessionId || '').trim() || undefined,
+        threadId: String(directThread?.id || '').trim() || undefined,
+        replyTargetType: 'user',
+        replyTargetId: 'user',
+        replyTargetLabel: params.fromName || 'Telegram',
+      },
+    ).catch(err => console.error('[Teams] External manager conversation failed:', err.message));
+  } else if (routeTarget.type === 'member' && routeTarget.targetId) {
+    if (directThread) {
+      enqueueTeamDirectThreadUserMessage(
+        teamId,
+        'member',
+        routeTarget.targetId,
+        routeTarget.targetLabel || routeTarget.targetId,
+        routeTarget.routedMessage || content,
+        userMsg?.id,
+      );
+      scheduleTeamMemberDirectWake(teamId, routeTarget.targetId, String(directThread.id || '').trim(), {
+        reason: 'The team owner sent you a direct message from Telegram.',
+      });
+    } else {
+      queueAgentMessage(
+        teamId,
+        routeTarget.targetId,
+        `[From Team Owner${routeTarget.targetLabel ? ` via @${routeTarget.targetLabel}` : ''}] ${routeTarget.routedMessage || content}`,
+      );
+      scheduleTeamMemberAutoWake(teamId, routeTarget.targetId, {
+        reason: 'The team owner addressed you directly from Telegram.',
+        source: 'manager_message',
+      });
+    }
+  }
+
+  return { success: true, message: userMsg, target: routeTarget };
+}
+
 function _pauseManagedTeamInternal(teamId: string, reason?: string): { success: boolean; team?: any; error?: string } {
   const team = getManagedTeam(teamId);
   if (!team) return { success: false, error: 'Team not found' };
@@ -271,6 +396,49 @@ function _pauseManagedTeamInternal(teamId: string, reason?: string): { success: 
   });
 
   return { success: true, team };
+}
+
+function _abortManagedTeamLiveRuntimes(teamId: string, reason?: string): { success: boolean; team?: any; aborted: number; requested: number; error?: string } {
+  const team = getManagedTeam(teamId);
+  if (!team) return { success: false, aborted: 0, requested: 0, error: 'Team not found' };
+
+  const abortReason = reason ? String(reason).slice(0, 300) : 'Interrupted by user';
+  const requestedAt = Date.now();
+  team.manager = {
+    ...(team.manager as any),
+    runAbortRequestedAt: requestedAt,
+    runAbortReason: abortReason,
+  } as any;
+  saveManagedTeam(team);
+
+  const targets = listLiveRuntimes().filter((runtime) =>
+    runtime.teamId === teamId
+    && (runtime.kind === 'team_manager' || runtime.kind === 'team_member')
+    && runtime.abortable
+  );
+  let aborted = 0;
+  for (const runtime of targets) {
+    const out = abortLiveRuntime(runtime.id);
+    if (out.ok) aborted++;
+  }
+
+  appendTeamChat(team.id, {
+    from: 'manager',
+    fromName: 'System',
+    content: `Team run interrupted by user.${aborted > 0 ? ` Abort requested for ${aborted} live call${aborted !== 1 ? 's' : ''}.` : ''}`,
+  });
+
+  broadcastTeamEvent({
+    type: 'team_run_aborted',
+    teamId: team.id,
+    teamName: team.name,
+    reason: abortReason,
+    aborted,
+    requested: targets.length,
+    requestedAt,
+  });
+
+  return { success: true, team, aborted, requested: targets.length };
 }
 
 function _resumeManagedTeamInternal(teamId: string): { success: boolean; team?: any; error?: string } {
@@ -613,6 +781,11 @@ router.delete('/api/teams/:id', (req, res) => {
 router.post('/api/teams/:id/pause', (req, res) => {
   try {
     const reason = req.body?.reason ? String(req.body.reason) : undefined;
+    if (req.body?.abortOnly === true) {
+      const out = _abortManagedTeamLiveRuntimes(req.params.id, reason);
+      if (!out.success) return res.status(404).json(out);
+      return res.json(out);
+    }
     const out = _pauseManagedTeamInternal(req.params.id, reason);
     if (!out.success) return res.status(404).json(out);
     res.json(out);
@@ -735,6 +908,7 @@ router.post('/api/teams/:id/chat', async (req, res) => {
     if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
     const content = String(req.body?.message || '').trim();
     if (!content) return res.status(400).json({ success: false, error: 'message is required' });
+    const attachmentContext = await getAttachmentContext().buildAttachmentRuntimeContext(req.body?.attachmentPreviews);
     const routeTarget = resolveTeamChatRouteTarget(team, content, req.body || {});
     if (routeTarget.type === 'member') {
       if (!routeTarget.targetId || !team.subagentIds.includes(routeTarget.targetId)) {
@@ -760,6 +934,7 @@ router.post('/api/teams/:id/chat', async (req, res) => {
         targetType: routeTarget.type,
         targetId: routeTarget.targetId,
         targetLabel: routeTarget.targetLabel,
+        attachmentPreviews: Array.isArray(req.body?.attachmentPreviews) ? req.body.attachmentPreviews : undefined,
       },
     });
 
@@ -767,7 +942,7 @@ router.post('/api/teams/:id/chat', async (req, res) => {
     res.json({ success: true, message: userMsg, target: routeTarget });
 
     if (routeTarget.type === 'team') {
-      const broadcastText = routeTarget.routedMessage || content;
+      const broadcastText = getAttachmentContext().appendAttachmentContextToMessage(routeTarget.routedMessage || content, attachmentContext.block);
       void (async () => {
         const delivery = await deliverTeamBroadcastToMembers(req.params.id, team, broadcastText);
         const managerPrompt = buildPostTeamBroadcastManagerPrompt(
@@ -775,7 +950,9 @@ router.post('/api/teams/:id/chat', async (req, res) => {
           delivery.deliveredCount,
           delivery.completedCount,
         );
-        await handleManagerConversation(req.params.id, managerPrompt, broadcastTeamEvent);
+        await handleManagerConversation(req.params.id, managerPrompt, broadcastTeamEvent, false, {
+          attachments: attachmentContext.visionAttachments,
+        });
       })().catch(err =>
         console.error('[Teams] Team broadcast flow failed:', err.message)
       );
@@ -785,7 +962,7 @@ router.post('/api/teams/:id/chat', async (req, res) => {
     if (routeTarget.type === 'manager') {
       handleManagerConversation(
         req.params.id,
-        routeTarget.routedMessage || content,
+        getAttachmentContext().appendAttachmentContextToMessage(routeTarget.routedMessage || content, attachmentContext.block),
         broadcastTeamEvent,
         false,
         {
@@ -794,6 +971,7 @@ router.post('/api/teams/:id/chat', async (req, res) => {
           replyTargetType: 'user',
           replyTargetId: 'user',
           replyTargetLabel: 'You',
+          attachments: attachmentContext.visionAttachments,
         },
       ).catch(err =>
         console.error('[Teams] Manager direct conversation failed:', err.message)
@@ -808,7 +986,7 @@ router.post('/api/teams/:id/chat', async (req, res) => {
           'member',
           routeTarget.targetId,
           routeTarget.targetLabel || routeTarget.targetId,
-          routeTarget.routedMessage || content,
+          getAttachmentContext().appendAttachmentContextToMessage(routeTarget.routedMessage || content, attachmentContext.block),
           userMsg?.id,
         );
         scheduleTeamMemberDirectWake(req.params.id, routeTarget.targetId, String(directThread.id || '').trim(), {
@@ -818,7 +996,10 @@ router.post('/api/teams/:id/chat', async (req, res) => {
         queueAgentMessage(
           req.params.id,
           routeTarget.targetId,
-          `[From Team Owner${routeTarget.targetLabel ? ` via @${routeTarget.targetLabel}` : ''}] ${routeTarget.routedMessage || content}`,
+          getAttachmentContext().appendAttachmentContextToMessage(
+            `[From Team Owner${routeTarget.targetLabel ? ` via @${routeTarget.targetLabel}` : ''}] ${routeTarget.routedMessage || content}`,
+            attachmentContext.block,
+          ),
         );
         scheduleTeamMemberAutoWake(req.params.id, routeTarget.targetId, {
           reason: 'The team owner addressed you directly in the room.',
@@ -1019,6 +1200,15 @@ router.post('/api/teams/:id/start', async (req, res) => {
     if (team.manager?.paused === true) {
       _resumeManagedTeamInternal(teamId);
     }
+    const startTeam = getManagedTeam(teamId);
+    if (startTeam) {
+      startTeam.manager = {
+        ...(startTeam.manager as any),
+        runAbortRequestedAt: undefined,
+        runAbortReason: undefined,
+      } as any;
+      saveManagedTeam(startTeam);
+    }
 
     res.json({ success: true });
 
@@ -1056,6 +1246,15 @@ router.post('/api/teams/:id/run-all', async (req, res) => {
     // Auto-resume if paused (same behavior as /start)
     if (team.manager?.paused === true) {
       _resumeManagedTeamInternal(teamId);
+    }
+    const startTeam = getManagedTeam(teamId);
+    if (startTeam) {
+      startTeam.manager = {
+        ...(startTeam.manager as any),
+        runAbortRequestedAt: undefined,
+        runAbortReason: undefined,
+      } as any;
+      saveManagedTeam(startTeam);
     }
 
     res.json({ success: true, message: 'Manager-coordinated run started' });
@@ -1150,6 +1349,8 @@ router.post('/api/teams/:id/changes/:changeId/apply', async (req, res) => {
         runAt: parsed.toISOString(),
         sessionTarget: 'isolated',
         subagent_id: targetAgentId,
+        assignmentTarget: 'team',
+        deliverToMainChannel: false,
       } as any);
       appendTeamChat(req.params.id, {
         from: 'manager',
@@ -1370,13 +1571,14 @@ router.get('/api/schedules', (_req, res) => {
         last_duration: job.lastDuration,
         delivery_channel: job.delivery || 'web',
         subagent_id: job.subagent_id || '',
+        team_id: job.team_id || '',
       };
     }),
   });
 });
 
 router.post('/api/schedules', (req: any, res: any) => {
-  const { name, pattern, prompt, timezone, delivery_channel, confirm, subagent_id, reference_links } = req.body;
+  const { name, pattern, prompt, timezone, delivery_channel, confirm, subagent_id, team_id, reference_links } = req.body;
   
   // Require confirmation for create
   if (confirm !== true) {
@@ -1402,7 +1604,11 @@ router.post('/api/schedules', (req: any, res: any) => {
 
     const scheduleName = String(name).slice(0, 100);
     const promptText = promptWithRefs;
-    const selectedSubagentId = String(subagent_id || '').trim();
+    const selectedTeamId = String(team_id || '').trim();
+    if (selectedTeamId && !getManagedTeam(selectedTeamId)) {
+      return res.status(404).json({ success: false, error: `Team not found: ${selectedTeamId}` });
+    }
+    const selectedSubagentId = selectedTeamId ? '' : String(subagent_id || '').trim();
 
     const job = _cronScheduler.createJob({
       name: scheduleName,
@@ -1412,9 +1618,14 @@ router.post('/api/schedules', (req: any, res: any) => {
       tz: timezone || 'UTC',
       delivery: 'web',
       ...(selectedSubagentId ? { subagent_id: selectedSubagentId } : {}),
+      ...(selectedTeamId ? { team_id: selectedTeamId } : {}),
+      assignmentTarget: selectedTeamId ? 'team' : (selectedSubagentId ? 'subagent' : 'main'),
+      deliverToMainChannel: !selectedTeamId && !selectedSubagentId,
     } as any);
 
-    const ownerAgent = selectedSubagentId
+    const ownerAgent = selectedTeamId
+      ? { agentId: '', created: false }
+      : selectedSubagentId
       ? { agentId: selectedSubagentId, created: false }
       : ensureScheduleOwnerAgent({
           scheduleId: job.id,
@@ -1428,9 +1639,15 @@ router.post('/api/schedules', (req: any, res: any) => {
         prompt: promptText,
       });
     }
-    if (!selectedSubagentId) {
-      _cronScheduler.updateJob(job.id, { subagent_id: ownerAgent.agentId } as any);
+    if (!selectedTeamId && !selectedSubagentId) {
+      _cronScheduler.updateJob(job.id, {
+        subagent_id: ownerAgent.agentId,
+        assignmentTarget: 'main',
+        deliverToMainChannel: true,
+      } as any);
       job.subagent_id = ownerAgent.agentId;
+      (job as any).assignmentTarget = 'main';
+      (job as any).deliverToMainChannel = true;
     }
     
     res.json({
@@ -1441,6 +1658,7 @@ router.post('/api/schedules', (req: any, res: any) => {
         status: 'active',
         next_run: job.nextRun,
         subagent_id: job.subagent_id || '',
+        team_id: job.team_id || '',
         schedule_owner_created: ownerAgent.created,
       },
     });
@@ -1450,7 +1668,7 @@ router.post('/api/schedules', (req: any, res: any) => {
 });
 
 router.put('/api/schedules/:id', (req: any, res: any) => {
-  const { name, pattern, prompt, timezone, delivery_channel, confirm, subagent_id } = req.body;
+  const { name, pattern, prompt, timezone, delivery_channel, confirm, subagent_id, team_id } = req.body;
   
   if (confirm !== true) {
     return res.json({
@@ -1462,12 +1680,30 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
   
 	  try {
       const existing = _cronScheduler.getJobStatus(req.params.id)?.job;
-      const incomingSubagentId = Object.prototype.hasOwnProperty.call(req.body || {}, 'subagent_id')
-        ? String(subagent_id || '').trim()
+      const hasIncomingTeam = Object.prototype.hasOwnProperty.call(req.body || {}, 'team_id');
+      const incomingTeamId = hasIncomingTeam ? String(team_id || '').trim() : String(existing?.team_id || '').trim();
+      if (incomingTeamId && !getManagedTeam(incomingTeamId)) {
+        return res.status(404).json({ success: false, error: `Team not found: ${incomingTeamId}` });
+      }
+      const hasIncomingSubagent = Object.prototype.hasOwnProperty.call(req.body || {}, 'subagent_id');
+      const incomingSubagentId = hasIncomingSubagent
+        ? (incomingTeamId ? '' : String(subagent_id || '').trim())
         : String(existing?.subagent_id || '').trim();
+      const assignmentTarget = incomingTeamId
+        ? 'team'
+        : hasIncomingSubagent
+        ? (incomingSubagentId ? 'subagent' : 'main')
+        : String(existing?.assignmentTarget || '').trim() || (existing?.deliverToMainChannel === true ? 'main' : (incomingSubagentId ? 'subagent' : 'main'));
+      const deliverToMainChannel = incomingTeamId
+        ? false
+        : hasIncomingSubagent
+        ? !incomingSubagentId
+        : existing?.deliverToMainChannel === true;
       const effectivePrompt = prompt ? String(prompt).slice(0, 2000) : String(existing?.prompt || '');
       const effectiveName = name ? String(name).slice(0, 100) : String(existing?.name || 'Scheduled Job');
-      const ownerAgent = incomingSubagentId
+      const ownerAgent = incomingTeamId
+        ? { agentId: '', created: false }
+        : incomingSubagentId
         ? { agentId: incomingSubagentId, created: false }
         : ensureScheduleOwnerAgent({
             scheduleId: req.params.id,
@@ -1487,8 +1723,11 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
 	      prompt: prompt ? String(prompt).slice(0, 2000) : undefined,
 	      schedule: pattern && /^\d/.test(pattern) ? pattern : undefined,
 	      runAt: pattern && !/^\d/.test(pattern) ? pattern : undefined,
-	      tz: timezone || undefined,
-        subagent_id: ownerAgent.agentId,
+        tz: timezone || undefined,
+        subagent_id: incomingTeamId ? undefined : ownerAgent.agentId,
+        team_id: incomingTeamId || undefined,
+        assignmentTarget,
+        deliverToMainChannel,
 	    };
 	    const job = _cronScheduler.updateJob(req.params.id, updates);
     
@@ -1590,6 +1829,7 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
 
   const content = String(req.body?.message || '').trim();
   if (!content) return res.status(400).json({ success: false, error: 'message is required' });
+  const attachmentContext = await getAttachmentContext().buildAttachmentRuntimeContext(req.body?.attachmentPreviews);
   const routeTarget = resolveTeamChatRouteTarget(team, content, req.body || {});
   if (routeTarget.type === 'member') {
     if (!routeTarget.targetId || !team.subagentIds.includes(routeTarget.targetId)) {
@@ -1641,6 +1881,7 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
         targetType: routeTarget.type,
         targetId: routeTarget.targetId,
         targetLabel: routeTarget.targetLabel,
+        attachmentPreviews: Array.isArray(req.body?.attachmentPreviews) ? req.body.attachmentPreviews : undefined,
       },
     });
     broadcastTeamEvent({
@@ -1658,7 +1899,7 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
           'member',
           routeTarget.targetId,
           routeTarget.targetLabel || routeTarget.targetId,
-          routeTarget.routedMessage || content,
+          getAttachmentContext().appendAttachmentContextToMessage(routeTarget.routedMessage || content, attachmentContext.block),
           userMsg?.id,
         );
         scheduleTeamMemberDirectWake(req.params.id, routeTarget.targetId, String(directThread.id || '').trim(), {
@@ -1668,7 +1909,10 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
         queueAgentMessage(
           req.params.id,
           routeTarget.targetId,
-          `[From Team Owner${routeTarget.targetLabel ? ` via @${routeTarget.targetLabel}` : ''}] ${routeTarget.routedMessage || content}`,
+          getAttachmentContext().appendAttachmentContextToMessage(
+            `[From Team Owner${routeTarget.targetLabel ? ` via @${routeTarget.targetLabel}` : ''}] ${routeTarget.routedMessage || content}`,
+            attachmentContext.block,
+          ),
         );
         scheduleTeamMemberAutoWake(req.params.id, routeTarget.targetId, {
           reason: 'The team owner addressed you directly in the room.',
@@ -1685,19 +1929,20 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
     }
 
     let teamBroadcastDelivery: { deliveredCount: number; completedCount: number } | null = null;
+    const routedRuntimeMessage = getAttachmentContext().appendAttachmentContextToMessage(routeTarget.routedMessage || content, attachmentContext.block);
     if (routeTarget.type === 'team') {
-      const broadcastText = routeTarget.routedMessage || content;
+      const broadcastText = routedRuntimeMessage;
       sendSSE('info', { message: 'Broadcasting to team members before manager reply...' });
       teamBroadcastDelivery = await deliverTeamBroadcastToMembers(req.params.id, team, broadcastText);
     }
 
     const managerInput = routeTarget.type === 'team'
       ? buildPostTeamBroadcastManagerPrompt(
-          routeTarget.routedMessage || content,
+          routedRuntimeMessage,
           teamBroadcastDelivery?.deliveredCount || 0,
           teamBroadcastDelivery?.completedCount || 0,
         )
-      : routeTarget.routedMessage || content;
+      : routedRuntimeMessage;
 
     const result = await handleManagerConversationDetailed(
       req.params.id,
@@ -1712,6 +1957,7 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
         replyTargetType: routeTarget.type === 'manager' ? 'user' : undefined,
         replyTargetId: routeTarget.type === 'manager' ? 'user' : undefined,
         replyTargetLabel: routeTarget.type === 'manager' ? 'You' : undefined,
+        attachments: attachmentContext.visionAttachments,
       },
     );
 

@@ -122,6 +122,8 @@ SKILLS:
 - For greetings, small talk, quick Q&A, or confirmations, respond directly without skill_list.
 - Before browser/desktop automation, file edits, or other execution-heavy work, call skill_list first.
 - If a relevant skill exists, call skill_read(id) and follow it before acting.
+- Treat skills as living workflow playbooks: after real work, notice missing triggers, clearer steps, better tool order, reusable examples/templates/resources, and guardrails that would make the skill better next time.
+- If a completed workflow is reusable but no skill fit, briefly offer to turn it into a skill or add it to an existing skill; skip this for casual conversation.
 - For bundled templates/examples/schemas/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed.
 - Use skill_inspect(id) for normalized metadata/provenance.
 - When creating reusable workflows, prefer skill_create_bundle if resources or rich metadata would help; use skill_create only for simple one-file playbooks.

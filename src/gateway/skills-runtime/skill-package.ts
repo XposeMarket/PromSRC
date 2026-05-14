@@ -1,8 +1,18 @@
 import fs from 'fs';
 import path from 'path';
+import {
+  normalizeAssignment,
+  normalizeRequires,
+  normalizeToolBinding,
+  type SkillAssignment,
+  type SkillRequires,
+  type SkillToolBinding,
+} from './skill-eligibility';
 
 export type SkillKind = 'simple' | 'bundle';
 export type SkillResourceType = 'template' | 'schema' | 'example' | 'asset' | 'prompt-fragment' | 'doc' | 'data';
+export type SkillLifecycleState = 'draft' | 'active' | 'experimental' | 'deprecated' | 'archived';
+export type SkillOwnershipState = 'local' | 'imported' | 'upstream-managed' | 'prometheus-owned-overlay';
 
 export interface SkillPermissions {
   browser?: boolean;
@@ -32,10 +42,15 @@ export interface SkillManifest {
   triggers: string[];
   categories: string[];
   requiredTools: string[];
+  requires?: SkillRequires;
+  assignment?: SkillAssignment;
+  toolBinding?: SkillToolBinding;
   permissions: SkillPermissions;
   resources: SkillResource[];
   templates?: Array<{ action?: string; label?: string; command?: string }>;
   status: 'ready' | 'needs_setup' | 'blocked';
+  lifecycle: SkillLifecycleState;
+  ownership: SkillOwnershipState;
   executionEnabled: boolean;
   riskLevel?: string;
 }
@@ -50,8 +65,13 @@ export interface LoadedSkillPackage {
   triggers: string[];
   categories: string[];
   requiredTools: string[];
+  requires?: SkillRequires;
+  assignment?: SkillAssignment;
+  toolBinding?: SkillToolBinding;
   permissions: SkillPermissions;
   status: 'ready' | 'needs_setup' | 'blocked';
+  lifecycle: SkillLifecycleState;
+  ownership: SkillOwnershipState;
   executionEnabled: boolean;
   riskLevel?: string;
   rootDir: string;
@@ -149,6 +169,22 @@ function normalizeStatus(value: unknown): 'ready' | 'needs_setup' | 'blocked' {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'blocked' || raw === 'needs_setup') return raw;
   return 'ready';
+}
+
+function normalizeLifecycle(value: unknown): SkillLifecycleState {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'draft' || raw === 'experimental' || raw === 'deprecated' || raw === 'archived') return raw;
+  return 'active';
+}
+
+function normalizeOwnership(value: unknown, manifestSource: LoadedSkillPackage['manifestSource'], provenance?: Record<string, unknown>): SkillOwnershipState {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'imported' || raw === 'upstream-managed' || raw === 'prometheus-owned-overlay' || raw === 'local') {
+    return raw;
+  }
+  if (manifestSource === 'overlay') return 'prometheus-owned-overlay';
+  if (provenance?.sourceType || provenance?.source) return 'imported';
+  return 'local';
 }
 
 function safeRelativePath(raw: unknown, fallback = ''): string {
@@ -328,11 +364,14 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   const id = sanitizeSkillId(String(manifestRaw?.id || fm.id || fallbackId || path.basename(rootDir)));
   const name = String(manifestRaw?.name || fm.name || id).trim();
   const description = String(manifestRaw?.description || fm.description || '').trim();
-  const emoji = String(manifestRaw?.emoji || fm.emoji || '🧩').trim();
+  const emoji = '';
   const version = String(manifestRaw?.version || fm.version || (kind === 'bundle' ? '1.0.0' : '0.0.0')).trim();
   const triggers = asStringArray(manifestRaw?.triggers || fm.triggers).map((t) => t.toLowerCase());
   const categories = asStringArray(manifestRaw?.categories).map((t) => t.toLowerCase());
   const requiredTools = asStringArray(manifestRaw?.requiredTools || manifestRaw?.required_tools || manifestRaw?.required_tool_categories);
+  const requires = normalizeRequires(manifestRaw?.requires || manifestRaw?.requirements);
+  const assignment = normalizeAssignment(manifestRaw?.assignment || manifestRaw?.assignments);
+  const toolBinding = normalizeToolBinding(manifestRaw?.toolBinding || manifestRaw?.tool_binding, requiredTools);
   const permissions = isPlainObject(manifestRaw?.permissions) ? manifestRaw.permissions as SkillPermissions : {};
   const status = normalizeStatus(manifestRaw?.status);
   const executionEnabled = typeof manifestRaw?.execution_enabled === 'boolean'
@@ -363,6 +402,8 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   const promptPath = prompt ? resolveSkillRelativePath(rootDir, prompt) || undefined : undefined;
   if (prompt && (!promptPath || !fs.existsSync(promptPath))) warnings.push(`Prompt file not found: ${prompt}`);
   const provenance = readSkillProvenance(rootDir, id);
+  const lifecycle = normalizeLifecycle(manifestRaw?.lifecycle || manifestRaw?.lifecycleState || manifestRaw?.state);
+  const ownership = normalizeOwnership(manifestRaw?.ownership || manifestRaw?.ownershipState, manifestSource, provenance.data);
 
   const normalizedManifest: SkillManifest = {
     schemaVersion: String(manifestRaw?.schemaVersion || manifestRaw?.schema_version || 'prometheus-skill-bundle-v1'),
@@ -376,10 +417,15 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     triggers,
     categories,
     requiredTools,
+    requires,
+    assignment,
+    toolBinding,
     permissions,
     resources,
     templates: Array.isArray(manifestRaw?.templates) ? manifestRaw.templates as Array<{ action?: string; label?: string; command?: string }> : undefined,
     status,
+    lifecycle,
+    ownership,
     executionEnabled,
     riskLevel,
   };
@@ -394,8 +440,13 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     triggers,
     categories,
     requiredTools,
+    requires,
+    assignment,
+    toolBinding,
     permissions,
     status,
+    lifecycle,
+    ownership,
     executionEnabled,
     riskLevel,
     rootDir,
@@ -437,7 +488,7 @@ function mergeResources(discovered: SkillResource[], declared: SkillResource[]):
 export function readSkillResourceText(
   skill: Pick<LoadedSkillPackage, 'rootDir'>,
   relPath: string,
-  maxChars = 120_000,
+  maxChars?: number,
 ): { ok: true; path: string; content: string; truncated: boolean } | { ok: false; error: string } {
   const safeRel = safeRelativePath(relPath);
   if (!safeRel) return { ok: false, error: 'Invalid resource path.' };
@@ -446,6 +497,9 @@ export function readSkillResourceText(
   if (!abs) return { ok: false, error: 'Resource path escapes the skill folder.' };
   if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return { ok: false, error: `Resource not found: ${safeRel}` };
   const raw = fs.readFileSync(abs, 'utf-8');
-  if (raw.length <= maxChars) return { ok: true, path: safeRel, content: raw, truncated: false };
-  return { ok: true, path: safeRel, content: raw.slice(0, maxChars), truncated: true };
+  const limit = Number(maxChars);
+  if (!Number.isFinite(limit) || limit <= 0 || raw.length <= limit) {
+    return { ok: true, path: safeRel, content: raw, truncated: false };
+  }
+  return { ok: true, path: safeRel, content: raw.slice(0, limit), truncated: true };
 }

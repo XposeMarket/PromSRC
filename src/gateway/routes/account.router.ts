@@ -560,10 +560,21 @@ router.post('/api/account/refresh', async (_req, res) => {
 });
 
 // Helper for other routes to check if current session has an active subscription
+export function getCurrentUserId(): string | null {
+  if (!_session) return null;
+  if (_session.expiresAt < Math.floor(Date.now() / 1000)) return null;
+  return _session.userId || null;
+}
+
 export function getSessionStatus(): { authenticated: boolean; subscriptionActive: boolean; isAdmin: boolean } {
   if (!_session) return { authenticated: false, subscriptionActive: false, isAdmin: false };
   const expired = _session.expiresAt < Math.floor(Date.now() / 1000);
-  if (expired) return { authenticated: false, subscriptionActive: false, isAdmin: false };
+  // Do not hard-fail protected local routes during the short window where an
+  // access token is expired but a persisted refresh token is available. The
+  // account status route already refreshes in the background; returning false
+  // here made Creative tools intermittently report "Account login required"
+  // even for valid signed-in users.
+  if (expired && !_session.refreshToken) return { authenticated: false, subscriptionActive: false, isAdmin: false };
   return {
     authenticated: true,
     subscriptionActive: _session.subscriptionActive,

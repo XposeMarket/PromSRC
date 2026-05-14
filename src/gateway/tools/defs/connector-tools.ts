@@ -4,6 +4,7 @@
 // connector_list is a core tool (always available) for discovery.
 
 import { isConnectorConnected, listConnectors, getConnector } from '../../../integrations/connector-registry.js';
+import { loadObsidianBridgeState } from '../../obsidian/bridge.js';
 
 // Map from connector ID to available tool names (for discovery)
 export const CONNECTOR_TOOL_MAP: Record<string, string[]> = {
@@ -17,14 +18,15 @@ export const CONNECTOR_TOOL_MAP: Record<string, string[]> = {
   salesforce: ['connector_salesforce_query', 'connector_salesforce_search', 'connector_salesforce_create_record', 'connector_salesforce_get_record'],
   stripe: ['connector_stripe_get_balance', 'connector_stripe_list_customers', 'connector_stripe_list_charges', 'connector_stripe_list_products'],
   ga4: ['connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties'],
+  obsidian: ['connector_obsidian_status', 'connector_obsidian_connect_vault', 'connector_obsidian_sync', 'connector_obsidian_writeback'],
 };
 
 export function buildConnectorStatus(): string {
-  const all = listConnectors();
+  const all = Array.from(new Set([...listConnectors(), 'obsidian']));
   const connected: string[] = [];
   const disconnected: string[] = [];
   for (const id of all) {
-    if (isConnectorConnected(id)) {
+    if (id === 'obsidian' ? loadObsidianBridgeState().vaults.some((vault) => vault.enabled !== false) : isConnectorConnected(id)) {
       connected.push(id);
     } else {
       disconnected.push(id);
@@ -37,6 +39,13 @@ export function buildConnectorStatus(): string {
 
   const lines: string[] = [`Connected connectors (${connected.length} of ${all.length}):`];
   for (const id of connected) {
+    if (id === 'obsidian') {
+      const vaultCount = loadObsidianBridgeState().vaults.length;
+      const tools = CONNECTOR_TOOL_MAP[id] || [];
+      lines.push(`  ${id} - ${vaultCount} vault(s)`);
+      lines.push(`    Tools: ${tools.join(', ')}`);
+      continue;
+    }
     const c = getConnector(id);
     const tokens = (c as any).loadTokens?.() as any;
     const account = tokens?.account_email ? ` — ${tokens.account_email}` : '';
@@ -53,6 +62,69 @@ export function buildConnectorStatus(): string {
 
 export function getConnectorToolDefs(): any[] {
   return [
+    {
+      type: 'function',
+      function: {
+        name: 'connector_obsidian_status',
+        description: '[Obsidian] Show configured local vaults, bridge modes, and last sync stats.',
+        parameters: { type: 'object', required: [], properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'connector_obsidian_connect_vault',
+        description: '[Obsidian] Connect a local Obsidian vault folder to Prometheus. Defaults to read-only indexing.',
+        parameters: {
+          type: 'object',
+          required: ['path'],
+          properties: {
+            path: { type: 'string', description: 'Absolute path to the local Obsidian vault folder.' },
+            name: { type: 'string', description: 'Optional display name for the vault.' },
+            mode: { type: 'string', enum: ['read_only', 'assisted', 'full'], description: 'Bridge mode. read_only indexes only; assisted/full allow writeback.' },
+            include: { type: 'array', items: { type: 'string' }, description: 'Optional glob list. Default: **/*.md' },
+            exclude: { type: 'array', items: { type: 'string' }, description: 'Optional glob list. Default excludes .obsidian, trash, and node_modules.' },
+            writeback_folder: { type: 'string', description: 'Folder inside the vault where Prometheus writes notes in assisted/full mode.' },
+            sync_now: { type: 'boolean', description: 'If true, sync immediately after connecting. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'connector_obsidian_sync',
+        description: '[Obsidian] Sync configured Obsidian vault notes into Prometheus memory and refresh the memory index.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            vault_id: { type: 'string', description: 'Optional vault id to sync. Omit to sync every enabled vault.' },
+            force: { type: 'boolean', description: 'Force reindex unchanged notes. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'connector_obsidian_writeback',
+        description: '[Obsidian] Write a Prometheus-generated Markdown note into an Obsidian vault in assisted/full mode.',
+        parameters: {
+          type: 'object',
+          required: ['vault_id', 'title', 'content'],
+          properties: {
+            vault_id: { type: 'string', description: 'Vault id from connector_obsidian_status.' },
+            title: { type: 'string', description: 'Note title.' },
+            content: { type: 'string', description: 'Markdown note content to write.' },
+            folder: { type: 'string', description: 'Optional folder inside the vault. Defaults to the vault writeback folder.' },
+            tags: { type: 'array', items: { type: 'string' }, description: 'Optional extra tags.' },
+            source_record_id: { type: 'string', description: 'Optional Prometheus memory record id for traceability.' },
+          },
+        },
+      },
+    },
+
     // ── Gmail ─────────────────────────────────────────────────────────────────
     {
       type: 'function',

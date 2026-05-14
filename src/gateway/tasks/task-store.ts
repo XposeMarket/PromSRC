@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { listLiveRuntimes } from '../live-runtime-registry';
 import type { ProposalRepairContext } from '../proposals/repair-context.js';
 import type { ProposalTeamExecution } from '../proposals/proposal-store.js';
 
@@ -179,7 +180,16 @@ export interface TaskMutationScope {
   allowedDirs?: string[];
 }
 
-export type ProposalExecutionMode = 'standard' | 'dev_src_self_edit' | 'dev_src_self_edit_repair';
+export type ProposalExecutionMode =
+  | 'standard'
+  | 'code_change'
+  | 'action'
+  | 'review'
+  | 'task_trigger'
+  | 'verification'
+  | 'artifact_run'
+  | 'dev_src_self_edit'
+  | 'dev_src_self_edit_repair';
 
 export interface ProposalExecutionPromotionState {
   status: 'pending' | 'promoted' | 'failed';
@@ -200,6 +210,7 @@ export interface ProposalExecutionState {
   projectRoot?: string;
   liveProjectRoot?: string;
   buildRequired?: boolean;
+  canonicalBuildCommand?: string;
   buildVerifiedAt?: number;
   buildVerifiedCommand?: string;
   liveFileBaselines?: Record<string, ProposalFileBaseline>;
@@ -357,6 +368,7 @@ interface TaskIndex {
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Store Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 const TASKS_DIR_NAME = 'tasks';
+const STALE_RUNNING_TASK_MS = 10 * 60 * 1000;
 let taskIndexCache: TaskIndex | null = null;
 let taskIndexWriteCounter = 0;
 
@@ -643,6 +655,37 @@ function buildTaskSummaryFromFile(id: string): TaskSummary | null {
   return task ? buildTaskSummary(task) : null;
 }
 
+function hasLiveRuntimeForTask(summary: TaskSummary): boolean {
+  return listLiveRuntimes().some((runtime) => {
+    if (runtime.taskId && runtime.taskId === summary.id) return true;
+    if (runtime.scheduleId && summary.scheduleId && runtime.scheduleId === summary.scheduleId) return true;
+    return false;
+  });
+}
+
+function maybeRepairStaleRunningTaskSummary(summary: TaskSummary): TaskSummary {
+  if (summary.status !== 'running') return summary;
+  const lastProgressAt = Number.isFinite(Number(summary.lastProgressAt))
+    ? Number(summary.lastProgressAt)
+    : 0;
+  if (Date.now() - lastProgressAt < STALE_RUNNING_TASK_MS) return summary;
+  if (hasLiveRuntimeForTask(summary)) return summary;
+
+  const task = loadTask(summary.id);
+  if (!task || task.status !== 'running') return summary;
+  const now = Date.now();
+  task.status = 'stalled';
+  task.pauseReason = 'error';
+  task.lastProgressAt = now;
+  task.journal.push({
+    t: now,
+    type: 'status_push',
+    content: 'Marked stalled: task was still recorded as running, but no active runtime is registered.',
+  });
+  saveTask(task);
+  return buildTaskSummary(task);
+}
+
 function rebuildTaskIndex(): TaskIndex {
   const idx = defaultTaskIndex();
   const files = fs.readdirSync(getTasksDir())
@@ -676,6 +719,7 @@ export function listTaskSummaries(filter?: { status?: TaskStatus[] }): TaskSumma
     idx = rebuildTaskIndex();
   }
   return Object.values(idx.summaries)
+    .map(maybeRepairStaleRunningTaskSummary)
     .filter((task) => !filter?.status || filter.status.includes(task.status))
     .sort((a, b) => b.startedAt - a.startedAt);
 }

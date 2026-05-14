@@ -15,13 +15,13 @@ export function getCisSystemTools(): any[] {
     ['media_assets', 'media_assets - download and media analysis tools (download_url, download_media, analyze_image, analyze_video).'],
     ['media_quality', 'media_quality - image/video validation and render inspection tools (contrast, text overflow, frame renders, caption/audio timing).'],
     ['automations', 'automations - scheduling and automation management tools (schedule_job, history, outputs, patching, stuck control).'],
-    ['external_apps', 'external_apps - connected external app tools (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4). Use connector_list first.'],
+    ['external_apps', 'external_apps - connected external app tools (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian). Use connector_list first.'],
     ['integration_admin', 'integration_admin - MCP server, webhook, and integration setup/admin tools.'],
     ['social_intelligence', 'social_intelligence - social profile intelligence and reporting tools.'],
     ['proposal_admin', 'proposal_admin - proposal inspection/editing administration tools.'],
     ['mcp_server_tools', 'mcp_server_tools - dynamic tools exposed by connected MCP servers (shown as mcp__server__tool). Use only for trusted servers.'],
     ['composite_tools', 'composite_tools - saved multi-step composite tools plus create/get/edit/delete/list composite management tools.'],
-    ['creative_mode', 'creative_mode - enter or exit the dedicated creative runtime modes.'],
+    ['creative_mode', 'creative_mode - normal main-chat creative editor tools and workspace selectors.'],
   ];
   const categoryEnum = getPublicBuildAllowedCategories([
     'browser_automation',
@@ -215,7 +215,7 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'reply_to_team',
-        description: 'Reply to a team coordinator\'s message. Use this when a team has sent you (the main agent) a planning question, error report, or other message that needs a response. Your reply will appear in the team chat and auto-resume the coordinator if they are waiting. If the user wants the whole team to answer, prefix the message with [BROADCAST_TO_TEAM]. If the user wants one member to answer, prefix with [ASK_AGENT:<agent id or name>]. If no member is named, default to [BROADCAST_TO_TEAM]. Ask the coordinator to use background member turns plus internal_watch when waiting for member answers.',
+        description: 'Reply to a team coordinator\'s message. Use this when a team has sent you (the main agent) a planning question, error report, or other message that needs a response. Your reply will appear in the team chat. Prefix with [BROADCAST_TO_TEAM] for the whole team, [ASK_AGENT:<agent id or name>] for one member, or [TO_MANAGER] for manager-only. If no member is named, default to [BROADCAST_TO_TEAM]. For team/member routes, the system delivers the message to the addressed member room turn(s) first, then resumes the coordinator after those responses settle.',
         parameters: {
           type: 'object',
           required: ['team_id', 'message'],
@@ -245,6 +245,25 @@ export function getCisSystemTools(): any[] {
             agent_id: { type: 'string', description: 'For pause_agent/unpause_agent: which agent to pause/unpause' },
             relevant_agent_ids: { type: 'array', items: { type: 'string' }, description: 'For add_milestone: which agents are relevant to this milestone' },
             reason: { type: 'string', description: 'For pause_agent: why the agent is being paused' },
+          },
+        },
+      },
+    },
+    // ── manage_team_context_ref: persistent team context/reference cards ───────
+    {
+      type: 'function',
+      function: {
+        name: 'manage_team_context_ref',
+        description: 'Manage persistent team context/reference cards. These references are injected into the team manager and every subagent run. Use list before changing existing cards; preserve existing references unless the user explicitly asks to remove one.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['list', 'add', 'update', 'delete'], description: 'List, add, update, or delete persistent team context references.' },
+            team_id: { type: 'string', description: 'Team ID. Optional for list to summarize all teams; required for add/update/delete.' },
+            ref_id: { type: 'string', description: 'Reference ID. Required for update/delete.' },
+            title: { type: 'string', description: 'Reference title. Required for add; optional replacement for update.' },
+            content: { type: 'string', description: 'Reference content/body. Required for add; optional replacement for update. Include skill names, business context, links, or instructions agents should see on every run.' },
           },
         },
       },
@@ -365,6 +384,11 @@ export function getCisSystemTools(): any[] {
                   type: 'string',
                   enum: ['feature_addition', 'src_edit', 'config_change', 'task_trigger', 'memory_update', 'skill_evolution', 'prompt_mutation', 'general'],
                 },
+                execution_mode: {
+                  type: 'string',
+                  enum: ['code_change', 'action', 'review'],
+                  description: 'Execution lane used after approval.',
+                },
                 priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
                 title: { type: 'string' },
                 summary: { type: 'string' },
@@ -427,11 +451,154 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'get_agent_models',
+        description:
+          'Read the current model routing configuration: global primary model, agent_model_defaults, and per-agent model overrides. ' +
+          'Use this before changing proposal executor, background, coordinator, switch_model, or subagent defaults.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {},
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_agent_model',
+        description:
+          'Safely update live model routing in .prometheus/config.json without raw file writes. ' +
+          'Use agent_type to update an allowlisted agent_model_defaults key, or agent_id to update a specific configured agent override. ' +
+          'Critical outage use: when proposals/background work are blocked by a provider quota event, set proposal_executor_low_risk, background_agent, coordinator, or subagent_* defaults to a working provider/model such as openai_codex/gpt-5.5. ' +
+          'Changes are persisted through the Settings API and take effect for new proposal executions, background agents, subagents, and model switches.',
+        parameters: {
+          type: 'object',
+          required: ['model'],
+          properties: {
+            model: {
+              type: 'string',
+              description: 'Provider/model route in "provider/model" format, e.g. "openai_codex/gpt-5.5".',
+            },
+            agent_type: {
+              type: 'string',
+              enum: [
+                'main_chat',
+                'proposal_executor_high_risk',
+                'proposal_executor_low_risk',
+                'manager',
+                'team_manager',
+                'subagent',
+                'team_subagent',
+                'subagent_planner',
+                'subagent_orchestrator',
+                'subagent_researcher',
+                'subagent_analyst',
+                'subagent_builder',
+                'subagent_operator',
+                'subagent_verifier',
+                'switch_model_low',
+                'switch_model_medium',
+                'coordinator',
+                'background_task',
+                'background_agent',
+              ],
+              description: 'Allowlisted default route to update in agent_model_defaults.',
+            },
+            agent_id: {
+              type: 'string',
+              description: 'Specific configured agent ID to update instead of a type-level default.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_agent_model_templates',
+        description:
+          'List saved named agent model default templates, the active template id, and current agent_model_defaults. ' +
+          'Use this before applying, modifying, or removing a saved model routing template.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {},
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'save_agent_model_template',
+        description:
+          'Create or update a named template snapshot for agent_model_defaults. ' +
+          'If defaults is omitted, the current live defaults are saved. Use id or an existing name to modify a saved template.',
+        parameters: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Optional template id to update.',
+            },
+            name: {
+              type: 'string',
+              description: 'Custom template name, e.g. "Default 1" or "Research-heavy".',
+            },
+            defaults: {
+              type: 'object',
+              description: 'Optional full agent_model_defaults map to save. Values use "provider/model"; omit to snapshot current defaults.',
+              additionalProperties: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_agent_model_template',
+        description:
+          'Apply a saved agent model default template by id or exact name. This replaces current agent_model_defaults and persists through gateway restarts.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Template id or exact template name.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_agent_model_template',
+        description:
+          'Remove a saved agent model default template by id or exact name. This does not change the currently applied agent_model_defaults.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Template id or exact template name.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'write_proposal',
 	        description:
-	          'Submit a proposal for human approval. Use for any change that requires human review before execution: src/ code edits, new features, major config changes. The proposal will appear in the Prometheus proposals panel for you to approve or deny. ' +
+	          'Submit a proposal for human approval. Use for any change that requires human review before execution. Every executable proposal should choose exactly one execution_mode: code_change, action, or review. The proposal will appear in the Prometheus proposals panel for approval or denial. ' +
             'When used by a team manager, executor_agent_id is REQUIRED and must name a subagent on that same team; approved execution will use that subagent model/context and report back to team chat. ' +
-	          'REQUIRED for src/ edits: details MUST contain these exact section headings: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Proposals without them will be rejected.',
+            'For executable proposals, include execution_steps as the approved checklist the executor should follow after approval; dispatch requires at least two steps. ' +
+	          'Use execution_mode=code_change only for Prometheus dev self-edits touching src/ or web-ui/. REQUIRED for src/ edits: details MUST contain these exact section headings: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility".',
         parameters: {
           type: 'object',
           required: ['type', 'title', 'summary', 'details'],
@@ -441,13 +608,18 @@ export function getCisSystemTools(): any[] {
               enum: ['feature_addition', 'src_edit', 'config_change', 'task_trigger', 'memory_update', 'skill_evolution', 'prompt_mutation', 'general'],
               description: 'Category of change',
             },
+            execution_mode: {
+              type: 'string',
+              enum: ['code_change', 'action', 'review'],
+              description: 'Execution lane. code_change = Prometheus dev self-edit under src/ or web-ui/ only. action = approve and do/trigger/create something once. review = read-mostly verification/audit/report.',
+            },
             priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'How urgent (default: medium)' },
             title: { type: 'string', description: 'Short title shown in the proposals panel (max 120 chars)' },
             summary: { type: 'string', description: '1-3 sentence summary of what will change and why (shown in notification)' },
             details: {
               type: 'string',
               description:
-                'Full implementation details, markdown. When affected_files includes any src/ path, you MUST include these exact headings and content: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Otherwise the proposal will be rejected.',
+                'Full implementation details, markdown. Include execution_steps separately for the executor checklist. When affected_files includes any src/ path, you MUST include these exact headings and content: "Why this change", "Exact source edits", "Deterministic behavior after patch", "Acceptance tests", "Risks and compatibility". Otherwise the proposal will be rejected.',
             },
             affected_files: {
               type: 'array',
@@ -460,6 +632,23 @@ export function getCisSystemTools(): any[] {
                 },
               },
               description: 'Files that will be created/edited/deleted',
+            },
+            execution_steps: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: 'Short approved task step title' },
+                  kind: {
+                    type: 'string',
+                    enum: ['inspect', 'edit', 'write_artifact', 'trigger', 'verify', 'build', 'complete', 'other'],
+                    description: 'What kind of work this step represents',
+                  },
+                  description: { type: 'string', description: 'Optional details for how to execute this step' },
+                  success_criteria: { type: 'string', description: 'Optional concrete completion condition' },
+                },
+              },
+              description: 'Approved executor checklist. Required for executable proposals; use 3-7 concrete steps. Dispatcher uses these as the task plan after approval and the executor must not call declare_plan.',
             },
             diff_preview: { type: 'string', description: 'Optional: code diff or before/after snippet' },
             estimated_impact: { type: 'string', description: 'e.g. "adds browser caching, reduces API calls by ~40%"' },
@@ -598,7 +787,7 @@ export function getCisSystemTools(): any[] {
           properties: {
             id: { type: 'string', description: 'Skill ID from skill_list.' },
             path: { type: 'string', description: 'Resource path from skill_resource_list, e.g. "templates/lead-report.md".' },
-            max_chars: { type: 'number', description: 'Optional maximum characters to return.' },
+            max_chars: { type: 'number', description: 'Optional explicit cap; omit to return the full resource.' },
           },
         },
       },
@@ -653,6 +842,10 @@ export function getCisSystemTools(): any[] {
               type: 'object',
               description: 'Manifest overlay object. Prometheus normalizes id and defaults schemaVersion/entrypoint.',
             },
+            changeType: { type: 'string', description: 'Optional ledger change type, e.g. trigger_addition or lifecycle_update.' },
+            evidence: { type: 'array', items: { type: 'string' }, description: 'Optional evidence refs for the skill change ledger.' },
+            appliedBy: { type: 'string', description: 'Optional actor label. Brain auto-updates should use brain_dream.' },
+            reason: { type: 'string', description: 'Optional short rationale for the ledger.' },
           },
         },
       },
@@ -672,7 +865,6 @@ export function getCisSystemTools(): any[] {
             name: { type: 'string', description: 'Human-readable skill name.' },
             description: { type: 'string', description: 'One-sentence summary.' },
             instructions: { type: 'string', description: 'Full SKILL.md instructions.' },
-            emoji: { type: 'string', description: 'Single emoji representing this skill.' },
             version: { type: 'string', description: 'Version string. Default 1.0.0.' },
             triggers: { type: 'string', description: 'Comma-separated trigger phrases.' },
             categories: { type: 'string', description: 'Comma-separated categories.' },
@@ -712,6 +904,10 @@ export function getCisSystemTools(): any[] {
             type: { type: 'string', description: 'Resource type: template, schema, example, doc, prompt-fragment, data, asset.' },
             description: { type: 'string', description: 'Resource description for the manifest.' },
             addToManifest: { type: 'boolean', description: 'Add/update this resource in skill.json. Default true.' },
+            changeType: { type: 'string', description: 'Optional ledger change type, e.g. instructions_update, example_update, template_update.' },
+            evidence: { type: 'array', items: { type: 'string' }, description: 'Optional evidence refs for the skill change ledger.' },
+            appliedBy: { type: 'string', description: 'Optional actor label. Brain auto-updates should use brain_dream.' },
+            reason: { type: 'string', description: 'Optional short rationale for the ledger.' },
           },
         },
       },
@@ -778,44 +974,8 @@ export function getCisSystemTools(): any[] {
             name: { type: 'string', description: 'Human-readable name, e.g. "Python Debugger"' },
             description: { type: 'string', description: 'One-sentence summary of what this skill does' },
             instructions: { type: 'string', description: 'Full markdown instructions for using this skill - be thorough, as this is what you will read with skill_read when relevant' },
-            emoji: { type: 'string', description: 'Single emoji representing this skill' },
             triggers: { type: 'string', description: 'Comma-separated keywords used as discovery metadata, e.g. "python,debug,traceback"' },
           },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'enter_creative_mode',
-        description:
-          'Enter a persistent creative workspace mode for this session. ' +
-          'Valid modes: design, image, canvas, video. Canvas is a legacy alias for image. ' +
-          'Use this when the user is actively working in a specialized creative workflow and should stay there across turns.',
-        parameters: {
-          type: 'object',
-          required: ['mode'],
-          properties: {
-            mode: {
-              type: 'string',
-              enum: ['design', 'image', 'canvas', 'video'],
-              description: 'Creative mode to activate for this session.',
-            },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'exit_creative_mode',
-        description:
-          'Exit the active creative workspace mode for this session and return to normal main chat behavior. ' +
-          'Use only when the specialized creative workflow is clearly complete or the user explicitly asks to leave it.',
-        parameters: {
-          type: 'object',
-          required: [],
-          properties: {},
         },
       },
     },

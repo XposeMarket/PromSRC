@@ -9,6 +9,7 @@ import {
 } from '../integrations/connection-state.js';
 import { getConnectorStatuses } from '../integrations/connector-registry.js';
 import { getMCPManager } from '../gateway/mcp-manager.js';
+import { loadObsidianBridgeState } from '../gateway/obsidian/bridge.js';
 import { listExtensionDescriptors } from './registry.js';
 import type {
   ExtensionDescriptor,
@@ -51,14 +52,36 @@ function buildConnectorState(
     };
   }
 
+  if (descriptor.id === 'obsidian') {
+    const bridge = loadObsidianBridgeState();
+    const connectedVaults = bridge.vaults.filter((vault) => vault.enabled !== false);
+    return {
+      connected: connectedVaults.length > 0,
+      hasCredentials: connectedVaults.length > 0,
+      available: true,
+      authType,
+      connectedAt: connectedVaults[0]?.connectedAt
+        ? Date.parse(connectedVaults[0].connectedAt)
+        : typeof saved.connectedAt === 'number'
+          ? saved.connectedAt
+          : undefined,
+      vaultCount: bridge.vaults.length,
+      enabledVaultCount: connectedVaults.length,
+    };
+  }
+
   const status = statuses[descriptor.id];
+  const savedConnected = Boolean((saved as { connected?: boolean }).connected);
+  const connected =
+    authType === 'browser_session'
+      ? savedConnected
+      : Boolean(status?.connected);
   return {
-    connected:
-      Boolean(status?.connected) || Boolean((saved as { connected?: boolean }).connected),
+    connected,
     hasCredentials:
       Boolean(status?.hasCredentials) ||
       (authType === 'browser_session'
-        ? Boolean((saved as { connected?: boolean }).connected)
+        ? savedConnected
         : false),
     available: true,
     authType,

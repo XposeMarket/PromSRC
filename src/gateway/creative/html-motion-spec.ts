@@ -36,6 +36,8 @@ export type HtmlMotionCompositionSummary = {
   hasExternalNetworkDependency: boolean;
   usesPrometheusSeekEvent: boolean;
   usesPrometheusTimeGlobal: boolean;
+  usesWebGl: boolean;
+  usesThreeJs: boolean;
   timedNodes: HtmlMotionTimedNode[];
   roles: Array<{ role: string; count: number }>;
   tracks: Array<{ trackIndex: number; count: number; startMs: number; endMs: number | null }>;
@@ -125,7 +127,9 @@ function parseMs(value: unknown): number | null {
 }
 
 function parseNumber(value: unknown): number | null {
-  const numeric = Number(String(value ?? '').trim());
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const numeric = Number(raw);
   return Number.isFinite(numeric) ? numeric : null;
 }
 
@@ -162,9 +166,10 @@ function collectTags(html: string): RawTag[] {
 }
 
 function extractStage(tags: RawTag[]): RawTag | null {
-  return tags.find((tag) => hasAttr(tag.attrs, 'data-composition-id'))
-    || tags.find((tag) => getAttr(tag.attrs, 'id') === 'stage')
-    || tags.find((tag) => parseClasses(getAttr(tag.attrs, 'class')).includes('stage'))
+  const isDocumentShell = (tag: RawTag) => ['html', 'head', 'body'].includes(tag.tag);
+  return tags.find((tag) => getAttr(tag.attrs, 'id') === 'stage')
+    || tags.find((tag) => !isDocumentShell(tag) && hasAttr(tag.attrs, 'data-composition-id'))
+    || tags.find((tag) => !isDocumentShell(tag) && parseClasses(getAttr(tag.attrs, 'class')).includes('stage'))
     || null;
 }
 
@@ -441,6 +446,24 @@ export function lintHtmlMotionComposition(html: string, manifest: any = {}): Htm
       hint: 'Inline the required JS/CSS or vendor it through workspace assets before final export.',
     });
   }
+  const usesWebGl = /\bWebGLRenderer\b|getContext\(\s*['"]webgl2?['"]|data-prometheus-webgl=["']true["']|data-renderer=["']three["']/i.test(source);
+  const usesThreeJs = /from\s+['"](?:three|\/api\/canvas\/vendor\/three\/)|\/api\/canvas\/vendor\/three\/|data-renderer=["']three["']/i.test(source);
+  if (usesWebGl && !/preserveDrawingBuffer\s*:\s*true/i.test(source)) {
+    issues.push({
+      severity: 'warning',
+      code: 'webgl-preserve-buffer',
+      message: 'WebGL content may screenshot as blank if the renderer does not use preserveDrawingBuffer:true.',
+      hint: 'Create the WebGLRenderer with preserveDrawingBuffer:true for deterministic frame capture.',
+    });
+  }
+  if (usesThreeJs && !/\/api\/canvas\/vendor\/three\//.test(source)) {
+    issues.push({
+      severity: 'warning',
+      code: 'three-not-local-vendor',
+      message: 'Three.js is referenced without the Prometheus local vendor route.',
+      hint: 'Import Three.js from /api/canvas/vendor/three/build/three.module.js so preview/export stay offline and deterministic.',
+    });
+  }
   if (/\b(?:Date\.now|performance\.now|setInterval)\s*\(/.test(source)) {
     issues.push({
       severity: 'warning',
@@ -474,6 +497,8 @@ export function lintHtmlMotionComposition(html: string, manifest: any = {}): Htm
     hasExternalNetworkDependency: externalNetworkRefs.length > 0 || /<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=["']https?:\/\//i.test(source),
     usesPrometheusSeekEvent: /prometheus-html-motion-seek/.test(source),
     usesPrometheusTimeGlobal: /__PROMETHEUS_HTML_MOTION_TIME_(?:SECONDS|MS)__/.test(source),
+    usesWebGl,
+    usesThreeJs,
     timedNodes,
     roles: summarizeRoles(timedNodes),
     tracks: summarizeTracks(timedNodes),

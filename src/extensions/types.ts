@@ -1,4 +1,5 @@
 export type ExtensionKind = 'provider' | 'connector' | 'mcp_preset';
+export type ExtensionTrustLevel = 'core' | 'bundled' | 'local' | 'third_party' | 'marketplace';
 
 export type ExtensionSetupFieldInput =
   | 'text'
@@ -47,12 +48,29 @@ export type ExtensionDescriptor = {
   kind: ExtensionKind;
   name: string;
   description: string;
+  trustLevel?: ExtensionTrustLevel;
   category?: string;
   enabledByDefault?: boolean;
   docsUrl?: string;
   tags?: string[];
+  activation?: {
+    onStartup?: boolean;
+    whenToolsRequested?: string[];
+    whenCapabilityRequested?: string[];
+    whenConnected?: boolean;
+  };
+  contracts?: {
+    tools?: string[];
+    capabilities?: string[];
+    connectors?: string[];
+    providers?: string[];
+    mcpPresets?: string[];
+    memorySources?: string[];
+    contextProviders?: string[];
+  };
   runtime: {
     binding: string;
+    entrypoint?: string;
     options?: ExtensionRuntimeOptions;
   };
   ui?: {

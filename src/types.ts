@@ -203,7 +203,7 @@ export interface AgentDefinition {
   /** Team-specific assignment/mission for this agent within its managed team */
   teamAssignment?: string;
 
-  /** Emoji shown in UI and in agent output prefix */
+  /** Legacy metadata field; skill UI renders computer icons instead. */
   emoji?: string;
 
   /** Optional personality/name identity layer for this agent */
@@ -304,6 +304,34 @@ export interface AgentModelDefaults {
   background_task?: string;
   /** Ephemeral background_spawn agents */
   background_agent?: string;
+  /** Per-role planner subagents */
+  subagent_planner?: string;
+  /** Per-role orchestrator subagents */
+  subagent_orchestrator?: string;
+  /** Per-role researcher subagents */
+  subagent_researcher?: string;
+  /** Per-role analyst subagents */
+  subagent_analyst?: string;
+  /** Per-role builder subagents */
+  subagent_builder?: string;
+  /** Per-role operator subagents */
+  subagent_operator?: string;
+  /** Per-role verifier subagents */
+  subagent_verifier?: string;
+  /** Fast downshift tier used by switch_model */
+  switch_model_low?: string;
+  /** Careful downshift tier used by switch_model */
+  switch_model_medium?: string;
+  /** Meta-coordinator model */
+  coordinator?: string;
+}
+
+export interface AgentModelDefaultTemplate {
+  id: string;
+  name: string;
+  defaults: AgentModelDefaults;
+  created_at: string;
+  updated_at: string;
 }
 
 // Config Types
@@ -341,11 +369,26 @@ export interface PrometheusConfig {
     default_output_dir?: string;
     providers?: Record<string, Record<string, unknown> | undefined>;
   };
+  video_generation?: {
+    provider?: string;
+    model?: string;
+    save_to_workspace?: boolean;
+    default_output_dir?: string;
+    duration?: number;
+    resolution?: string;
+    providers?: Record<string, Record<string, unknown> | undefined>;
+  };
   /**
    * Per-agent-type model defaults. Consulted at spawn time when an agent has
    * no explicit model override. Falls back to models.primary if unset.
    */
   agent_model_defaults?: AgentModelDefaults;
+  /**
+   * Named snapshots of agent_model_defaults. The gateway and AI tools use
+   * these to swap full routing presets without manually changing each slot.
+   */
+  agent_model_default_templates?: AgentModelDefaultTemplate[];
+  active_agent_model_default_template?: string;
   tools: {
     enabled: string[];
     permissions: ToolPermissions;
@@ -397,12 +440,49 @@ export interface PrometheusConfig {
     rollingCompactionSummaryMaxWords?: number;
     /** Optional model override for compaction (active provider model namespace). */
     rollingCompactionModel?: string;
+    mainChatGoals?: {
+      enabled?: boolean;
+      autoResumeOnRestart?: boolean;
+      summaryEveryTurns?: number;
+      summaryMaxWords?: number;
+      judgeModel?: string;
+      compactionModel?: string;
+      maxConsecutiveJudgeFailures?: number;
+      maxConsecutiveRuntimeFailures?: number;
+      permissions?: {
+        approvalMode?: 'normal' | 'never';
+        hardDenyEnabled?: boolean;
+        recordDeniedActions?: boolean;
+        denyDestructiveGit?: boolean;
+        denyRemoteScriptExecution?: boolean;
+        denyDesktopCredentialEntry?: boolean;
+      };
+    };
   };
   telegram?: {
     enabled: boolean;
     botToken: string;
     allowedUserIds: number[];
     streamMode: 'full' | 'partial';
+    personas?: Record<string, {
+      enabled?: boolean;
+      agentId: string;
+      botToken?: string;
+      managedBotUserId?: number;
+      botUsername?: string;
+      allowedUserIds?: number[];
+      groupChatIds?: number[];
+      requireMentionInGroups?: boolean;
+      streamMode?: 'full' | 'partial';
+    }>;
+    teamRooms?: Record<string, {
+      enabled?: boolean;
+      teamId: string;
+      chatId: number;
+      topicId?: number;
+      title?: string;
+      usePersonaIdentities?: boolean;
+    }>;
   };
   channels?: {
     telegram?: {
@@ -410,6 +490,25 @@ export interface PrometheusConfig {
       botToken: string;
       allowedUserIds: number[];
       streamMode: 'full' | 'partial';
+      personas?: Record<string, {
+        enabled?: boolean;
+        agentId: string;
+        botToken?: string;
+        managedBotUserId?: number;
+        botUsername?: string;
+        allowedUserIds?: number[];
+        groupChatIds?: number[];
+        requireMentionInGroups?: boolean;
+        streamMode?: 'full' | 'partial';
+      }>;
+      teamRooms?: Record<string, {
+        enabled?: boolean;
+        teamId: string;
+        chatId: number;
+        topicId?: number;
+        title?: string;
+        usePersonaIdentities?: boolean;
+      }>;
     };
     discord?: {
       enabled: boolean;
@@ -431,6 +530,7 @@ export interface PrometheusConfig {
   };
   search?: {
     preferred_provider?: string;
+    tinyfish_api_key?: string;
     tavily_api_key?: string;
     google_api_key?: string;
     google_cx?: string;
@@ -497,10 +597,6 @@ export interface PrometheusConfig {
     path: string;
   };
   agent_policy?: {
-    force_web_for_fresh?: boolean;
-    memory_fallback_on_search_failure?: boolean;
-    auto_store_web_facts?: boolean;
-    natural_language_tool_router?: boolean;
     retrieval_mode?: string;
   };
 
@@ -519,8 +615,6 @@ export interface PrometheusConfig {
   };
 }
 
-// Backward-compatible aliases while internals migrate.
-export type SmallClawConfig = PrometheusConfig;
 export type LocalClawConfig = PrometheusConfig;
 
 // ─── Multi-Provider LLM Config ──────────────────────────────────────────────
@@ -610,7 +704,7 @@ export interface AuditLogEntry {
   toolName?: string;
   toolArgs?: Record<string, any>;
   policyTier?: 'read' | 'propose' | 'commit';
-  approvalStatus?: 'auto' | 'approved' | 'rejected' | 'pending';
+  approvalStatus?: 'auto' | 'auto_allowed' | 'approved' | 'rejected' | 'pending';
   resultSummary?: string;
   error?: string;
 }

@@ -15,6 +15,8 @@ import { normalizeCreativeSceneDoc, summarizeCreativeSceneDoc, type CreativeScen
 import {
   isSegmentationStackAvailable,
   produceCleanPlate,
+  runApproximateCutouts,
+  runForegroundSubjectCutout,
   runSamCutouts,
   sampleLayerColors,
   tryTraceShapeLayers,
@@ -38,6 +40,35 @@ export type CreativeLayerExtractionOptions = {
   useSam?: boolean;
   inpaintBackground?: boolean;
   vectorTraceShapes?: boolean;
+  requestId?: string;
+  onProgress?: (event: CreativeLayerExtractionProgressEvent) => void | Promise<void>;
+};
+
+export type CreativeLayerExtractionProgressBox = {
+  id?: string;
+  type: 'text' | 'shape' | 'image' | 'group';
+  role?: string;
+  label?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence?: number;
+  cutoutPath?: string;
+  cutoutBbox?: { x: number; y: number; width: number; height: number } | null;
+};
+
+export type CreativeLayerExtractionProgressEvent = {
+  requestId?: string;
+  stage: string;
+  label: string;
+  detail?: string;
+  timestamp: number;
+  width?: number;
+  height?: number;
+  boxes?: CreativeLayerExtractionProgressBox[];
+  cleanPlatePath?: string | null;
+  diagnostics?: Record<string, any>;
 };
 
 export type CreativeLayerExtractionResult = {
@@ -53,6 +84,7 @@ export type CreativeLayerExtractionResult = {
     mode: CreativeLayerExtractionMode;
     vision: { attempted: boolean; used: boolean; error: string | null; model: string | null };
     ocr: { attempted: boolean; used: boolean; error: string | null; textLayerCount: number };
+    foreground: { attempted: boolean; used: boolean; available: boolean; model: string | null; error: string | null };
     sam: { attempted: boolean; used: boolean; cutoutCount: number; available: boolean };
     inpaint: { attempted: boolean; used: boolean; available: boolean; cleanPlatePath: string | null };
     vectorTrace: { attempted: boolean; tracedCount: number };
@@ -205,7 +237,31 @@ function buildVisionLayerPrompt(input: {
     'You convert a flat raster graphic into an editable design layer plan for Prometheus Creative Image mode.',
     'Return only valid JSON. Use pixel coordinates in the original image coordinate space.',
     'Prefer editable text and simple shapes over vague descriptions. Do not invent text.',
+    'For text layers, you MUST visually identify and report the closest matching web font, real weight, italic flag, case, and tracking. Do not default everything to Inter.',
   ].join(' ');
+  const fontCatalog = [
+    'Inter (modern geometric sans, neutral UI)',
+    'Manrope (rounded humanist sans)',
+    'Poppins (geometric sans, slightly playful)',
+    'Roboto (neutral grotesque)',
+    'Montserrat (geometric, wide caps)',
+    'Bebas Neue (tall condensed all-caps display)',
+    'Oswald (condensed grotesque)',
+    'Anton (heavy condensed display)',
+    'Archivo Black (heavy geometric display)',
+    'Playfair Display (high-contrast serif, fashion/editorial)',
+    'Merriweather (sturdy serif, body text)',
+    'Roboto Slab (slab serif)',
+    'DM Serif Display (high-contrast display serif)',
+    'Lora (calligraphic serif)',
+    'Pacifico (brush script)',
+    'Caveat (handwritten script)',
+    'Permanent Marker (marker handwriting)',
+    'Press Start 2P (pixel/8-bit)',
+    'Comic Neue (comic / casual)',
+    'Space Grotesk (techy geometric sans)',
+    'JetBrains Mono (monospace)',
+  ].join('; ');
   const userText = [
     `Canvas size: ${input.width}x${input.height}.`,
     input.prompt ? `Original generation/user prompt: ${input.prompt}` : '',
@@ -213,7 +269,11 @@ function buildVisionLayerPrompt(input: {
     input.extractObjects
       ? 'Identify major visual objects as image layer candidates, but only include objects with clear bounding boxes.'
       : 'Skip decorative object layers unless they are obvious product/photo regions.',
-    'JSON schema: {"background":"#ffffff","layers":[{"type":"text|shape|image","role":"headline|subtitle|body|cta|panel|product|photo|decoration|logo|other","content":"visible text for text layers","description":"short label for non-text layers","x":0,"y":0,"width":100,"height":40,"rotation":0,"opacity":1,"confidence":0.0,"meta":{"fontSize":48,"fontWeight":700,"fontFamily":"Inter","color":"#111111","textAlign":"left","shape":"rect","fill":"#ffffff","stroke":"transparent","strokeWidth":0,"radius":0}}]}',
+    'For photographic scenes, prefer one coherent foreground subject image layer (animal, person, product, vehicle, etc.) and treat scenery such as water, sky, rocks, grass, tables, walls, and shadows as background unless the user explicitly asks to move them separately.',
+    'Avoid duplicate object boxes for the same foreground subject. If a subject has connected parts, return one bounding box around the full subject instead of separate head/body/limb layers.',
+    `Font matching: pick the closest visual match from this catalog (return the exact family name): ${fontCatalog}. If the lettering is clearly hand-drawn or a custom logotype, use "custom" and the layer will be rasterized instead. Always estimate fontWeight from stroke thickness (100 hairline, 400 regular, 700 bold, 900 black) and report italic:true when slanted.`,
+    'For each text layer also report: textTransform ("none"|"uppercase"|"lowercase"|"capitalize") based on the visible casing, letterSpacing in px (negative for tight display type, positive for wide tracking), and lineHeight as a multiplier.',
+    'JSON schema: {"background":"#ffffff","layers":[{"type":"text|shape|image","role":"headline|subtitle|body|cta|panel|product|photo|decoration|logo|other","content":"visible text for text layers","description":"short label for non-text layers","x":0,"y":0,"width":100,"height":40,"rotation":0,"opacity":1,"confidence":0.0,"meta":{"fontSize":48,"fontWeight":700,"fontFamily":"Inter","italic":false,"textTransform":"none","letterSpacing":0,"lineHeight":1.1,"color":"#111111","textAlign":"left","shape":"rect","fill":"#ffffff","stroke":"transparent","strokeWidth":0,"radius":0}}]}',
     'Keep layers high-signal: max 18 text layers, max 16 shape/object layers.',
   ].filter(Boolean).join('\n');
   return { system, userText };
@@ -406,6 +466,60 @@ function overlapRatio(a: ProposedLayer, b: ProposedLayer): number {
   return area / minArea;
 }
 
+function shouldUseForegroundSubjectCutout(layers: ExtractionPipelineLayer[], canvasWidth: number, canvasHeight: number): boolean {
+  const canvasArea = Math.max(1, canvasWidth * canvasHeight);
+  const imageLayers = layers.filter((layer) => layer.type === 'image');
+  if (imageLayers.length === 0) return true;
+  if (imageLayers.length > 2) return false;
+  const largest = imageLayers.reduce((best, layer) => {
+    const area = layer.width * layer.height;
+    return area > best.width * best.height ? layer : best;
+  }, imageLayers[0]);
+  const largestArea = largest.width * largest.height;
+  return largestArea > canvasArea * 0.12;
+}
+
+function isDuplicateOfSubject(layer: ExtractionPipelineLayer, subject: ExtractionPipelineLayer): boolean {
+  if (layer === subject || layer.type !== 'image') return false;
+  const overlap = overlapRatio(layer as ProposedLayer, subject as ProposedLayer);
+  if (overlap > 0.35) return true;
+  const centerX = layer.x + layer.width / 2;
+  const centerY = layer.y + layer.height / 2;
+  const insideSubject = centerX >= subject.x && centerX <= subject.x + subject.width
+    && centerY >= subject.y && centerY <= subject.y + subject.height;
+  if (!insideSubject) return false;
+  const layerArea = Math.max(1, layer.width * layer.height);
+  const subjectArea = Math.max(1, subject.width * subject.height);
+  return Math.min(layerArea, subjectArea) / Math.max(layerArea, subjectArea) > 0.18;
+}
+
+function progressBoxForLayer(layer: Partial<ExtractionPipelineLayer | ProposedLayer>, storage?: CreativeAssetStorage): CreativeLayerExtractionProgressBox | null {
+  if (!layer || !Number.isFinite(Number(layer.x)) || !Number.isFinite(Number(layer.y))) return null;
+  const width = Math.max(1, Math.round(Number(layer.width) || 0));
+  const height = Math.max(1, Math.round(Number(layer.height) || 0));
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  const rawCutout = String((layer as ExtractionPipelineLayer).cutoutPath || '');
+  const absCutout = String((layer as ExtractionPipelineLayer).cutoutAbsPath || '');
+  const cutoutPath = rawCutout || (storage && absCutout ? buildWorkspaceRelativePath(storage, absCutout) : '');
+  return {
+    id: layer.id ? String(layer.id) : undefined,
+    type: (layer.type || 'shape') as CreativeLayerExtractionProgressBox['type'],
+    role: layer.role ? String(layer.role) : undefined,
+    label: String(layer.content || layer.description || layer.role || layer.type || 'Layer').slice(0, 80),
+    x: Math.round(Number(layer.x) || 0),
+    y: Math.round(Number(layer.y) || 0),
+    width,
+    height,
+    confidence: Number.isFinite(Number(layer.confidence)) ? Number(layer.confidence) : undefined,
+    cutoutPath: cutoutPath || undefined,
+    cutoutBbox: (layer as ExtractionPipelineLayer).cutoutBbox || null,
+  };
+}
+
+function progressBoxesForLayers(layers: Array<Partial<ExtractionPipelineLayer | ProposedLayer>>, storage?: CreativeAssetStorage): CreativeLayerExtractionProgressBox[] {
+  return layers.map((layer) => progressBoxForLayer(layer, storage)).filter(Boolean) as CreativeLayerExtractionProgressBox[];
+}
+
 function mergeLayerProposals(visionLayers: ProposedLayer[], ocrLayers: ProposedLayer[], options: {
   maxTextLayers: number;
   maxShapeLayers: number;
@@ -430,7 +544,7 @@ function mergeLayerProposals(visionLayers: ProposedLayer[], ocrLayers: ProposedL
     if (!duplicate) layers.push(layer);
   }
   const canvasArea = options.canvasWidth * options.canvasHeight;
-  const nonText = visionLayers
+  const nonTextCandidates = visionLayers
     .filter((layer) => layer.type !== 'text')
     .filter((layer) => options.extractObjects || layer.type === 'shape')
     .filter((layer) => {
@@ -443,7 +557,23 @@ function mergeLayerProposals(visionLayers: ProposedLayer[], ocrLayers: ProposedL
       if (ar > 12 || ar < 1 / 12) return false;
       return true;
     })
-    .slice(0, options.maxShapeLayers);
+    .sort((a, b) => (Number(b.confidence ?? 0.55) - Number(a.confidence ?? 0.55)) || ((b.width * b.height) - (a.width * a.height)));
+  const nonText: ProposedLayer[] = [];
+  for (const layer of nonTextCandidates) {
+    if (nonText.length >= options.maxShapeLayers) break;
+    const duplicate = nonText.some((candidate) => {
+      if (candidate.type !== layer.type) return false;
+      if (overlapRatio(candidate, layer) > 0.48) return true;
+      const centerX = layer.x + layer.width / 2;
+      const centerY = layer.y + layer.height / 2;
+      const candidateContainsCenter = centerX >= candidate.x && centerX <= candidate.x + candidate.width
+        && centerY >= candidate.y && centerY <= candidate.y + candidate.height;
+      const candidateArea = candidate.width * candidate.height;
+      const layerArea = layer.width * layer.height;
+      return candidateContainsCenter && Math.min(candidateArea, layerArea) / Math.max(candidateArea, layerArea) > 0.38;
+    });
+    if (!duplicate) nonText.push(layer);
+  }
   return [...nonText, ...layers];
 }
 
@@ -474,6 +604,10 @@ function layerToElement(layer: ExtractionPipelineLayer, index: number): any | nu
         fontFamily: String(layer.meta?.fontFamily || 'Inter'),
         fontSize: Math.max(8, Math.round(Number(layer.meta?.fontSize) || layer.height * 0.78 || 24)),
         fontWeight: Math.max(100, Math.min(900, Math.round(Number(layer.meta?.fontWeight) || 700))),
+        fontStyle: layer.meta?.italic === true || String(layer.meta?.fontStyle || '').toLowerCase() === 'italic' ? 'italic' : 'normal',
+        textTransform: ['none', 'uppercase', 'lowercase', 'capitalize'].includes(String(layer.meta?.textTransform || '').toLowerCase())
+          ? String(layer.meta?.textTransform).toLowerCase()
+          : 'none',
         color: fillColor,
         lineHeight: Number.isFinite(Number(layer.meta?.lineHeight)) ? Number(layer.meta?.lineHeight) : 1.08,
         letterSpacing: Number.isFinite(Number(layer.meta?.letterSpacing)) ? Number(layer.meta?.letterSpacing) : 0,
@@ -543,7 +677,7 @@ function layerToElement(layer: ExtractionPipelineLayer, index: number): any | nu
           confidence: layer.confidence ?? null,
           source: 'image-to-layers',
           cropCandidate: true,
-          note: 'SAM segmentation unavailable; client falls back to rectangular bbox crop.',
+          note: 'SAM segmentation unavailable; backend attempts an approximate alpha cutout before this client crop fallback is used.',
         },
       },
     };
@@ -565,6 +699,7 @@ function buildScene(input: {
   const elements: any[] = [];
   const baseLayerSource = input.cleanPlatePath || (input.preserveOriginal ? sourcePath : null);
   if (baseLayerSource) {
+    const isCleanPlateBase = !!input.cleanPlatePath;
     elements.push({
       id: 'extracted_background_plate',
       type: 'image',
@@ -581,14 +716,41 @@ function buildScene(input: {
         source: baseLayerSource,
         fit: 'cover',
         radius: 0,
-        role: input.cleanPlatePath ? 'inpainted_clean_plate' : 'locked_source_reference',
+        role: isCleanPlateBase ? 'inpainted_clean_plate' : 'locked_source_reference',
         extraction: {
           source: 'image-to-layers',
-          inpainted: !!input.cleanPlatePath,
+          inpainted: isCleanPlateBase,
           originalSource: sourcePath,
-          note: input.cleanPlatePath
-            ? 'Background regenerated by LaMa inpainting after foreground removal. Drag extracted layers freely.'
-            : 'Original raster preserved as locked reference. SAM/LaMa unavailable; install models for full extraction.',
+          note: isCleanPlateBase
+            ? 'Visible background plate rebuilt after layer separation. The image should look unchanged until extracted layers are moved or edited.'
+            : 'Original raster preserved as locked fallback because no clean plate was generated.',
+        },
+      },
+    });
+  }
+  if (input.preserveOriginal && input.cleanPlatePath) {
+    elements.push({
+      id: 'extracted_original_reference',
+      type: 'image',
+      x: 0,
+      y: 0,
+      width: input.width,
+      height: input.height,
+      rotation: 0,
+      opacity: 1,
+      locked: true,
+      visible: false,
+      zIndex: 1,
+      meta: {
+        source: sourcePath,
+        fit: 'cover',
+        radius: 0,
+        role: 'locked_source_reference',
+        extraction: {
+          source: 'image-to-layers',
+          inpainted: false,
+          originalSource: sourcePath,
+          note: 'Hidden original raster backup kept for non-destructive layer extraction.',
         },
       },
     });
@@ -645,6 +807,26 @@ export async function extractCreativeLayers(
   const width = Math.max(64, Math.round(Number(analyzed.width) || 1080));
   const height = Math.max(64, Math.round(Number(analyzed.height) || 1080));
   const mimeType = analyzed.mimeType || 'image/png';
+  const emitProgress = async (event: Omit<CreativeLayerExtractionProgressEvent, 'requestId' | 'timestamp' | 'width' | 'height'>) => {
+    if (typeof options.onProgress !== 'function') return;
+    try {
+      await options.onProgress({
+        requestId: options.requestId,
+        timestamp: Date.now(),
+        width,
+        height,
+        ...event,
+      });
+    } catch {
+      // Progress is best-effort; extraction should not fail because the UI disconnected.
+    }
+  };
+  await emitProgress({
+    stage: 'source_loaded',
+    label: 'Reading source image',
+    detail: `${width}x${height}`,
+    boxes: [],
+  });
   const isSpriteSizedRaster = sourceAsset.kind === 'image'
     && Math.max(1, Number(analyzed.width) || width) <= 96
     && Math.max(1, Number(analyzed.height) || height) <= 96;
@@ -671,9 +853,23 @@ export async function extractCreativeLayers(
       visionBackground = result.background;
       vision.used = visionLayers.length > 0;
       vision.model = result.model;
+      await emitProgress({
+        stage: 'vision_candidates',
+        label: vision.used ? 'Detected editable regions' : 'Scanning for editable regions',
+        detail: vision.used ? `${visionLayers.length} candidate layer${visionLayers.length === 1 ? '' : 's'}` : 'No strong visual candidates yet',
+        boxes: progressBoxesForLayers(visionLayers),
+        diagnostics: { model: result.model, background: result.background },
+      });
     } catch (err: any) {
       vision.error = String(err?.message || err || 'OpenAI vision analysis failed').slice(0, 500);
       warnings.push(`Vision layer proposal skipped: ${vision.error}`);
+      await emitProgress({
+        stage: 'vision_candidates',
+        label: 'Vision proposal skipped',
+        detail: vision.error,
+        boxes: [],
+        diagnostics: { error: vision.error },
+      });
     }
   }
 
@@ -690,6 +886,14 @@ export async function extractCreativeLayers(
       });
       ocr.used = ocrLayers.length > 0;
       ocr.textLayerCount = ocrLayers.length;
+      if (ocr.used) {
+        await emitProgress({
+          stage: 'text_candidates',
+          label: 'Found editable text',
+          detail: `${ocr.textLayerCount} text region${ocr.textLayerCount === 1 ? '' : 's'}`,
+          boxes: progressBoxesForLayers(ocrLayers),
+        });
+      }
     } catch (err: any) {
       ocr.error = String(err?.message || err || 'OCR failed').slice(0, 500);
       warnings.push(`OCR text extraction skipped: ${ocr.error}`);
@@ -704,19 +908,81 @@ export async function extractCreativeLayers(
     canvasHeight: height,
   });
   let pipelineLayers: ExtractionPipelineLayer[] = mergedProposals as ExtractionPipelineLayer[];
+  await emitProgress({
+    stage: 'proposal_merge',
+    label: 'Planning layer separation',
+    detail: `${pipelineLayers.length} high-confidence layer${pipelineLayers.length === 1 ? '' : 's'}`,
+    boxes: progressBoxesForLayers(pipelineLayers),
+  });
 
   const stack = isSegmentationStackAvailable();
   const useSam = options.useSam !== false && stack.sam && !isSpriteSizedRaster;
-  const useLama = options.inpaintBackground !== false && stack.lama;
+  const useForegroundSubject = extractObjects
+    && mode !== 'fast'
+    && sourceAsset.kind === 'image'
+    && !isSpriteSizedRaster
+    && shouldUseForegroundSubjectCutout(pipelineLayers, width, height);
+  const useLama = options.inpaintBackground !== false;
   const useVectorTrace = options.vectorTraceShapes !== false;
   const id = nowId('image_layers');
   const extractionDir = path.join(storage.creativeDir, 'extractions', sanitizeSegment(id));
+
+  const foreground = { attempted: false, used: false, available: stack.foreground, model: null as string | null, error: null as string | null };
+  if (useForegroundSubject) {
+    foreground.attempted = true;
+    if (stack.foreground) {
+      try {
+        await emitProgress({
+          stage: 'foreground_start',
+          label: 'Masking foreground subject',
+          detail: 'Running subject segmentation',
+          boxes: progressBoxesForLayers(pipelineLayers.filter((layer) => layer.type === 'image')),
+        });
+        const result = await runForegroundSubjectCutout({
+          sourceAbsPath: sourceAsset.absPath,
+          outputDir: path.join(extractionDir, 'cutouts'),
+        });
+        foreground.model = result.model;
+        if (result.layer) {
+          const subjectLayer: ExtractionPipelineLayer = {
+            ...result.layer,
+            cutoutPath: result.layer.cutoutAbsPath
+              ? buildWorkspaceRelativePath(storage, result.layer.cutoutAbsPath)
+              : result.layer.cutoutPath,
+          };
+          pipelineLayers = [
+            subjectLayer,
+            ...pipelineLayers.filter((layer) => !isDuplicateOfSubject(layer, subjectLayer)),
+          ];
+          foreground.used = true;
+          await emitProgress({
+            stage: 'foreground_mask',
+            label: 'Foreground mask extracted',
+            detail: 'Primary subject is now a movable layer',
+            boxes: progressBoxesForLayers([subjectLayer], storage),
+            diagnostics: { model: result.model },
+          });
+        }
+      } catch (err: any) {
+        foreground.error = String(err?.message || err || 'Foreground subject cutout failed').slice(0, 500);
+        warnings.push(`Foreground subject cutout skipped: ${foreground.error}`);
+      }
+    } else {
+      warnings.push('Foreground subject model not installed; photo subject extraction falls back to SAM/object boxes. Run: node scripts/download-creative-models.mjs to add rmbg.onnx.');
+    }
+  }
 
   const sam = { attempted: false, used: false, cutoutCount: 0, available: stack.sam };
   if (useSam) {
     sam.attempted = true;
     try {
       const cutoutDir = path.join(extractionDir, 'cutouts');
+      await emitProgress({
+        stage: 'sam_start',
+        label: 'Tracing object masks',
+        detail: 'Refining detected boxes into alpha cutouts',
+        boxes: progressBoxesForLayers(pipelineLayers.filter((layer) => layer.type === 'image')),
+      });
       const result = await runSamCutouts({
         sourceAbsPath: sourceAsset.absPath,
         layers: pipelineLayers,
@@ -728,11 +994,45 @@ export async function extractCreativeLayers(
       });
       sam.cutoutCount = pipelineLayers.filter((l) => !!l.cutoutAbsPath).length;
       sam.used = sam.cutoutCount > 0;
+      await emitProgress({
+        stage: 'sam_masks',
+        label: sam.used ? 'Object masks ready' : 'Object masks checked',
+        detail: sam.used ? `${sam.cutoutCount} cutout layer${sam.cutoutCount === 1 ? '' : 's'}` : 'No SAM cutouts were accepted',
+        boxes: progressBoxesForLayers(pipelineLayers.filter((layer) => layer.type === 'image'), storage),
+      });
     } catch (err: any) {
       warnings.push(`SAM cutout step skipped: ${String(err?.message || err).slice(0, 200)}`);
     }
   } else if (!stack.sam) {
-    warnings.push('MobileSAM weights not installed — image layers fall back to rectangular bbox crops. Run: node scripts/download-creative-models.mjs');
+    warnings.push('MobileSAM weights not installed — image layers use approximate alpha cutouts. Run: node scripts/download-creative-models.mjs for stronger segmentation.');
+  }
+
+  const missingImageCutouts = pipelineLayers.some((l) => l.type === 'image' && !l.cutoutAbsPath);
+  if (missingImageCutouts) {
+    try {
+      const cutoutDir = path.join(extractionDir, 'cutouts');
+      const result = await runApproximateCutouts({
+        sourceAbsPath: sourceAsset.absPath,
+        layers: pipelineLayers,
+        outputDir: cutoutDir,
+      });
+      pipelineLayers = result.layers.map((layer) => {
+        if (!layer.cutoutAbsPath) return layer;
+        return { ...layer, cutoutPath: buildWorkspaceRelativePath(storage, layer.cutoutAbsPath) };
+      });
+      if (result.cutoutCount > 0) {
+        sam.cutoutCount = pipelineLayers.filter((l) => !!l.cutoutAbsPath).length;
+        sam.used = sam.cutoutCount > 0;
+        await emitProgress({
+          stage: 'alpha_cutouts',
+          label: 'Approximate alpha cutouts ready',
+          detail: `${result.cutoutCount} fallback cutout${result.cutoutCount === 1 ? '' : 's'}`,
+          boxes: progressBoxesForLayers(pipelineLayers.filter((layer) => layer.type === 'image'), storage),
+        });
+      }
+    } catch (err: any) {
+      warnings.push(`Approximate alpha cutout step skipped: ${String(err?.message || err).slice(0, 200)}`);
+    }
   }
 
   try {
@@ -747,6 +1047,14 @@ export async function extractCreativeLayers(
     try {
       pipelineLayers = await tryTraceShapeLayers({ sourceAbsPath: sourceAsset.absPath, layers: pipelineLayers });
       vectorTrace.tracedCount = pipelineLayers.filter((l) => !!l.vectorPath).length;
+      if (vectorTrace.tracedCount > 0) {
+        await emitProgress({
+          stage: 'vector_trace',
+          label: 'Vector shapes traced',
+          detail: `${vectorTrace.tracedCount} editable shape${vectorTrace.tracedCount === 1 ? '' : 's'}`,
+          boxes: progressBoxesForLayers(pipelineLayers.filter((layer) => layer.vectorPath)),
+        });
+      }
     } catch (err: any) {
       warnings.push(`Vector trace skipped: ${String(err?.message || err).slice(0, 200)}`);
     }
@@ -765,6 +1073,12 @@ export async function extractCreativeLayers(
       const shapeBoxes = pipelineLayers
         .filter((l) => l.type === 'shape')
         .map((l) => ({ x: l.x, y: l.y, width: l.width, height: l.height }));
+      await emitProgress({
+        stage: 'inpaint_start',
+        label: 'Rebuilding background plate',
+        detail: 'Removing extracted layers from the locked base',
+        boxes: progressBoxesForLayers(cutoutLayers, storage),
+      });
       const result = await produceCleanPlate({
         sourceAbsPath: sourceAsset.absPath,
         outputAbsPath: cleanPlateOut,
@@ -777,12 +1091,21 @@ export async function extractCreativeLayers(
         cleanPlateAbsPath = result.absPath;
         inpaint.used = true;
         inpaint.cleanPlatePath = buildWorkspaceRelativePath(storage, result.absPath);
+        await emitProgress({
+          stage: 'clean_plate',
+          label: 'Background plate rebuilt',
+          detail: stack.lama ? 'Clean plate generated with inpainting' : 'Clean plate generated with fallback fill',
+          boxes: progressBoxesForLayers(cutoutLayers, storage),
+          cleanPlatePath: inpaint.cleanPlatePath,
+          diagnostics: { lama: stack.lama },
+        });
       }
     } catch (err: any) {
       warnings.push(`Background inpainting skipped: ${String(err?.message || err).slice(0, 200)}`);
     }
-  } else if (!stack.lama) {
-    warnings.push('LaMa weights not installed — clean-plate background not generated. Run: node scripts/download-creative-models.mjs');
+    if (!stack.lama) {
+      warnings.push('LaMa weights not installed — using flat-color fallback plate. For photo-realistic background reconstruction run: node scripts/download-creative-models.mjs');
+    }
   }
 
   if (!pipelineLayers.length) {
@@ -797,6 +1120,13 @@ export async function extractCreativeLayers(
     background: coerceHexColor(visionBackground, '#ffffff'),
     layers: pipelineLayers,
     preserveOriginal,
+    cleanPlatePath: inpaint.cleanPlatePath,
+  });
+  await emitProgress({
+    stage: 'scene_assembled',
+    label: 'Assembling editable scene',
+    detail: `${scene.elements.length} canvas element${scene.elements.length === 1 ? '' : 's'}`,
+    boxes: progressBoxesForLayers(pipelineLayers, storage),
     cleanPlatePath: inpaint.cleanPlatePath,
   });
   const scenesDir = path.join(storage.creativeDir, 'scenes');
@@ -823,6 +1153,7 @@ export async function extractCreativeLayers(
       mode,
       vision,
       ocr,
+      foreground,
       sam,
       inpaint,
       vectorTrace,

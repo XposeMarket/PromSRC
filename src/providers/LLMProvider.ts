@@ -47,6 +47,8 @@ export interface ChatOptions {
   onThinking?: (chunk: string) => void;
   /** Called with provider-visible reasoning summary deltas as they stream. */
   onReasoningSummary?: (chunk: string) => void;
+  /** Cancels the provider request when the owning chat turn is stopped. */
+  abortSignal?: AbortSignal;
   /** When true, strip [TODAY_NOTES] intraday context from system prompt (used after switch_model to reduce context). */
   omitIntradayNotes?: boolean;
 }
@@ -60,14 +62,26 @@ export interface GenerateOptions {
   think?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
+export interface ModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  totalTokens?: number;
+  source?: 'provider' | 'estimated';
+}
+
 export interface ChatResult {
   message: ChatMessage;
   thinking?: string;
+  usage?: ModelUsage;
 }
 
 export interface GenerateResult {
   response: string;
   thinking?: string;
+  usage?: ModelUsage;
 }
 
 export interface ModelInfo {

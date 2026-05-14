@@ -1,5 +1,11 @@
 import { renderAsciiSourceCanvasParts } from './ascii-html-motion';
 import {
+  renderThreeDeviceStackParts,
+  renderThreeGltfTurntableParts,
+  renderThreeLogoRevealParts,
+  renderThreeParticleFieldParts,
+} from './three-html-motion';
+import {
   type CreativeStorageLike,
   getCustomHtmlMotionBlock,
   listCustomHtmlMotionBlocks,
@@ -16,6 +22,7 @@ export type HtmlMotionBlockCategory =
   | 'transitions'
   | 'cta'
   | 'utility'
+  | '3d'
   | 'experimental';
 
 export type HtmlMotionBlockSlot = {
@@ -733,6 +740,92 @@ const BLOCKS: HtmlMotionBlockDefinition[] = [
     requiredStageFeatures: STAGE_REQS,
     outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: true, assetPlaceholders: [] },
   },
+  {
+    id: 'three-particle-field',
+    packId: 'prometheus-three',
+    name: 'Three Particle Field',
+    description: 'A deterministic Three.js point-cloud field for premium depth, network, and launch-energy backgrounds.',
+    category: '3d',
+    tags: ['three', '3d', 'webgl', 'particles', 'network', 'background', 'depth', 'seek'],
+    bestFor: 'High-end SaaS promos, AI/network visuals, data-world intros, and spatial background plates.',
+    slots: [
+      { id: 'id', label: 'Canvas id', kind: 'text', default: 'prom-three-particles' },
+      { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
+      { id: 'duration', label: 'Duration seconds', kind: 'number', default: 6 },
+      { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
+      { id: 'count', label: 'Particle count', kind: 'number', default: 900 },
+      { id: 'radius', label: 'Field radius', kind: 'number', default: 7 },
+      { id: 'speed', label: 'Motion speed', kind: 'number', default: 1 },
+    ],
+    requiredStageFeatures: STAGE_REQS,
+    outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: true, assetPlaceholders: [] },
+  },
+  {
+    id: 'three-logo-reveal',
+    packId: 'prometheus-three',
+    name: 'Three Logo Reveal',
+    description: 'A procedural 3D logo/title reveal with camera drift, metallic blocks, rim light, and deterministic frame seeking.',
+    category: '3d',
+    tags: ['three', '3d', 'webgl', 'logo', 'title', 'reveal', 'promo', 'seek'],
+    bestFor: 'Brand stingers, product launch title cards, and premium intro/outro moments.',
+    slots: [
+      { id: 'id', label: 'Canvas id', kind: 'text', default: 'prom-three-logo' },
+      { id: 'text', label: 'Logo/title text', kind: 'text', default: 'PROMETHEUS' },
+      { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
+      { id: 'duration', label: 'Duration seconds', kind: 'number', default: 5 },
+      { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
+      { id: 'intensity', label: 'Light intensity', kind: 'number', default: 0.9 },
+      { id: 'speed', label: 'Motion speed', kind: 'number', default: 1 },
+    ],
+    requiredStageFeatures: STAGE_REQS,
+    outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: true, assetPlaceholders: [] },
+  },
+  {
+    id: 'three-device-stack',
+    packId: 'prometheus-three',
+    name: 'Three Device Stack',
+    description: 'A procedural 3D phone/tablet/browser stack that adds real depth when no GLB model is available.',
+    category: '3d',
+    tags: ['three', '3d', 'webgl', 'device', 'product', 'mockup', 'saas', 'seek'],
+    bestFor: 'Product walkthroughs and SaaS promo clips needing spatial device/dashboard motion without imported models.',
+    slots: [
+      { id: 'id', label: 'Canvas id', kind: 'text', default: 'prom-three-devices' },
+      { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
+      { id: 'duration', label: 'Duration seconds', kind: 'number', default: 6 },
+      { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
+      { id: 'speed', label: 'Motion speed', kind: 'number', default: 1 },
+    ],
+    requiredStageFeatures: STAGE_REQS,
+    outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: true, assetPlaceholders: [] },
+  },
+  {
+    id: 'three-gltf-turntable',
+    packId: 'prometheus-three',
+    name: 'Three GLTF Turntable',
+    description: 'A GLB/GLTF model turntable with local Three.js + GLTFLoader imports and a procedural fallback object.',
+    category: '3d',
+    tags: ['three', '3d', 'webgl', 'gltf', 'glb', 'model', 'turntable', 'product', 'seek'],
+    bestFor: 'Imported 3D product assets, logo models, device models, and hero object spins.',
+    slots: [
+      { id: 'id', label: 'Canvas id', kind: 'text', default: 'prom-three-model' },
+      { id: 'modelAssetId', label: 'Model asset id', kind: 'asset', required: true, default: 'model' },
+      { id: 'start', label: 'Start seconds', kind: 'number', default: 0 },
+      { id: 'duration', label: 'Duration seconds', kind: 'number', default: 6 },
+      { id: 'accent', label: 'Accent color', kind: 'color', default: '#38bdf8' },
+      { id: 'secondary', label: 'Secondary color', kind: 'color', default: '#f97316' },
+      { id: 'background', label: 'Background color', kind: 'color', default: '#05070d' },
+      { id: 'intensity', label: 'Light intensity', kind: 'number', default: 0.9 },
+      { id: 'speed', label: 'Motion speed', kind: 'number', default: 1 },
+    ],
+    requiredStageFeatures: STAGE_REQS,
+    outputContract: { htmlRegion: true, usesTimingAttributes: true, usesPrometheusSeekEvent: true, assetPlaceholders: ['model'] },
+  },
 ];
 
 function escapeHtml(value: unknown): string {
@@ -1220,6 +1313,48 @@ const RENDERERS: Record<string, Renderer> = {
       js: `<script>(function(){var canvas=document.getElementById('${id}');if(!canvas)return;var ctx=canvas.getContext('2d');var source=canvas.querySelector('[data-html-canvas-source]');var supported=!!(ctx&&source&&typeof ctx.drawElementImage==='function');canvas.setAttribute('data-prometheus-html-in-canvas-supported',supported?'true':'false');function resize(){var r=canvas.getBoundingClientRect();canvas.width=Math.max(1,Math.round(r.width));canvas.height=Math.max(1,Math.round(r.height))}async function draw(ms){resize();if(!supported)return;var t=(Number(ms)||0)/1000;ctx.clearRect(0,0,canvas.width,canvas.height);ctx.save();ctx.globalAlpha=.96;ctx.filter='drop-shadow(0 28px 70px rgba(2,6,23,.32)) blur('+Math.max(0,Math.sin(t*2)*2+2).toFixed(2)+'px)';try{await ctx.drawElementImage(source,canvas.width*.08+Math.sin(t)*18,canvas.height*.16)}catch(e){supported=false;canvas.setAttribute('data-prometheus-html-in-canvas-supported','false')}ctx.restore()}window.addEventListener('prometheus-html-motion-seek',function(e){draw(Number(e.detail&&e.detail.timeMs)||window.__PROMETHEUS_HTML_MOTION_TIME_MS__||0)});draw(window.__PROMETHEUS_HTML_MOTION_TIME_MS__||0);})();</script>`,
     };
   },
+  'three-particle-field': (_block, input) => renderThreeParticleFieldParts({
+    id: slotValue(input, 'id', 'prom-three-particles'),
+    start: slotNumber(input, 'start', 0),
+    duration: slotNumber(input, 'duration', 6),
+    accent: slotValue(input, 'accent', '#38bdf8'),
+    secondary: slotValue(input, 'secondary', '#f97316'),
+    background: slotValue(input, 'background', '#05070d'),
+    speed: slotNumber(input, 'speed', 1),
+    count: slotNumber(input, 'count', 900),
+    radius: slotNumber(input, 'radius', 7),
+  } as any),
+  'three-logo-reveal': (_block, input) => renderThreeLogoRevealParts({
+    id: slotValue(input, 'id', 'prom-three-logo'),
+    text: slotValue(input, 'text', 'PROMETHEUS'),
+    start: slotNumber(input, 'start', 0),
+    duration: slotNumber(input, 'duration', 5),
+    accent: slotValue(input, 'accent', '#38bdf8'),
+    secondary: slotValue(input, 'secondary', '#f97316'),
+    background: slotValue(input, 'background', '#05070d'),
+    intensity: slotNumber(input, 'intensity', 0.9),
+    speed: slotNumber(input, 'speed', 1),
+  }),
+  'three-device-stack': (_block, input) => renderThreeDeviceStackParts({
+    id: slotValue(input, 'id', 'prom-three-devices'),
+    start: slotNumber(input, 'start', 0),
+    duration: slotNumber(input, 'duration', 6),
+    accent: slotValue(input, 'accent', '#38bdf8'),
+    secondary: slotValue(input, 'secondary', '#f97316'),
+    background: slotValue(input, 'background', '#05070d'),
+    speed: slotNumber(input, 'speed', 1),
+  }),
+  'three-gltf-turntable': (_block, input) => renderThreeGltfTurntableParts({
+    id: slotValue(input, 'id', 'prom-three-model'),
+    modelAssetId: slotValue(input, 'modelAssetId', 'model'),
+    start: slotNumber(input, 'start', 0),
+    duration: slotNumber(input, 'duration', 6),
+    accent: slotValue(input, 'accent', '#38bdf8'),
+    secondary: slotValue(input, 'secondary', '#f97316'),
+    background: slotValue(input, 'background', '#05070d'),
+    intensity: slotNumber(input, 'intensity', 0.9),
+    speed: slotNumber(input, 'speed', 1),
+  }),
 };
 
 export function renderHtmlMotionBlock(blockId: string, input: Record<string, any> = {}, storage?: CreativeStorageLike | null): HtmlMotionBlockRenderResult {

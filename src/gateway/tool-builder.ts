@@ -13,7 +13,8 @@ import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
 import { getCisSystemTools } from './tools/defs/cis-system';
 import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
-import { getConnectorToolDefs, buildConnectorStatus } from './tools/defs/connector-tools';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
+import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
 import { getPublicBuildAllowedCategories } from '../runtime/distribution.js';
 
 export interface BuildToolsDeps {
@@ -44,9 +45,12 @@ export const ALL_TOOL_CATEGORIES = [
   'creative_mode',
 ] as const;
 export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
-type InternalToolCategory = ToolCategory | 'creative_runtime';
+type InternalToolCategory = ToolCategory;
 
-export { buildConnectorStatus };
+export function buildConnectorStatus(): string {
+  ensurePrometheusExtensionRuntimeLoaded();
+  return getExtensionRuntimeRegistry().buildConnectorStatus();
+}
 
 export function getRuntimeToolCategories(): ToolCategory[] {
   return getPublicBuildAllowedCategories(ALL_TOOL_CATEGORIES) as ToolCategory[];
@@ -106,7 +110,7 @@ const TEAM_OPS_TOOL_NAMES = new Set([
   'update_my_status', 'update_team_goal', 'share_artifact', 'team_manage',
   'dispatch_to_agent', 'dispatch_team_agent', 'request_team_member_turn', 'get_agent_result',
   'post_to_team_chat', 'message_main_agent', 'reply_to_team',
-  'manage_team_goal',
+  'manage_team_goal', 'manage_team_context_ref',
   // ask_team_coordinator intentionally excluded — it's a core tool (always available)
   // deploy_analysis_team intentionally excluded — user-facing tool, must always be available
 ]);
@@ -139,6 +143,40 @@ const FILE_OPS_TOOL_NAMES = new Set([
   'delete_file',
   'write_file',
   'rename_file',
+  'copy_file',
+  'move_file',
+  'copy_directory',
+  'move_directory',
+  'path_exists',
+  'show_diff',
+  'preview_patch',
+  'apply_patch',
+  'format_changed_files',
+  'revert_last_tool_change',
+  'revert_own_patch',
+  'git_status',
+  'git_diff',
+  'git_log',
+  'git_branch',
+  'git_commit',
+  'git_push',
+  'open_pr',
+  'run_tests',
+  'run_linter',
+  'run_formatter',
+  'run_typecheck',
+  'start_dev_server',
+  'stop_process',
+  'read_process_output',
+  'snapshot_workspace',
+  'restore_snapshot',
+  'scan_secrets',
+  'scan_large_files',
+  'operation_plan',
+  'code_outline',
+  'get_symbols',
+  'go_to_definition',
+  'find_references',
 ]);
 
 const MEMORY_TOOL_NAMES = new Set([
@@ -148,6 +186,15 @@ const MEMORY_TOOL_NAMES = new Set([
   'memory_get_related',
   'memory_graph_snapshot',
   'memory_index_refresh',
+  'memory_provider_status',
+  'memory_embedding_status',
+  'memory_embedding_backfill',
+  'memory_debug_search',
+  'memory_consolidate',
+  'memory_review_claims',
+  'memory_accept_claim',
+  'memory_reject_claim',
+  'memory_supersede_record',
 ]);
 
 const MEDIA_TOOL_NAMES = new Set([
@@ -178,11 +225,6 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_outputs',
   'schedule_job_patch',
   'schedule_job_stuck_control',
-]);
-
-const CREATIVE_MODE_TOOL_NAMES = new Set([
-  'enter_creative_mode',
-  'exit_creative_mode',
 ]);
 
 const CORE_CREATIVE_CONTROL_TOOL_NAMES = new Set([
@@ -220,7 +262,7 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (name === 'connector_list') return null; // core tool — always available
   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return null;
   if (name === 'save_site_shortcut') return 'browser_automation';
-  if (CREATIVE_MODE_TOOL_NAMES.has(name)) return 'creative_mode';
+  if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test') return 'browser_automation';
   if (name.startsWith('browser_')) return 'browser_automation';
   if (name.startsWith('desktop_')) return 'desktop_automation';
   if (name.startsWith('connector_')) return 'external_apps';
@@ -234,7 +276,7 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (MEDIA_TOOL_NAMES.has(name)) return 'media_assets';
   if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return 'media_quality';
   if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
-  if (name.startsWith('creative_')) return 'creative_runtime';
+  if (name.startsWith('creative_')) return 'creative_mode';
   if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
   if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';
   if (PROPOSAL_ADMIN_TOOL_NAMES.has(name)) return 'proposal_admin';
@@ -283,6 +325,96 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'start_process',
+        description: 'Start a long-running command as a supervised Prometheus process. Use this for dev servers, watchers, interactive CLIs, long builds, renders, or commands the user may want to inspect/kill later. Returns a runId; use process_status/process_log/process_wait/process_kill/process_submit to manage it.',
+        parameters: {
+          type: 'object',
+          required: ['command'],
+          properties: {
+            command: { type: 'string', description: 'Command to start, e.g. "npm run dev" or "python server.py".' },
+            cwd: { type: 'string', description: 'Optional working directory relative to active workspace, or absolute path inside allowed paths.' },
+            title: { type: 'string', description: 'Optional human-readable title for UI command cards.' },
+            stdin: { type: 'boolean', description: 'If true, keep stdin open so process_submit can answer prompts.' },
+            noOutputTimeoutMs: { type: 'number', description: 'Optional no-output timeout in milliseconds.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'process_status',
+        description: 'Inspect supervised command runs. Pass runId for one process, or omit it to list recent process cards.',
+        parameters: {
+          type: 'object',
+          properties: {
+            runId: { type: 'string', description: 'Optional run id.' },
+            limit: { type: 'number', description: 'Optional max runs to list.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'process_log',
+        description: 'Read stdout/stderr logs for a supervised process run.',
+        parameters: {
+          type: 'object',
+          required: ['runId'],
+          properties: {
+            runId: { type: 'string', description: 'Process run id.' },
+            maxChars: { type: 'number', description: 'Optional max characters to return.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'process_wait',
+        description: 'Wait for a running supervised process to exit and return its captured output.',
+        parameters: {
+          type: 'object',
+          required: ['runId'],
+          properties: {
+            runId: { type: 'string', description: 'Process run id.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'process_kill',
+        description: 'Kill a running supervised process by runId.',
+        parameters: {
+          type: 'object',
+          required: ['runId'],
+          properties: {
+            runId: { type: 'string', description: 'Process run id.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'process_submit',
+        description: 'Send one line of stdin to a running supervised process. Use for prompts in interactive CLIs started with start_process({stdin:true}).',
+        parameters: {
+          type: 'object',
+          required: ['runId'],
+          properties: {
+            runId: { type: 'string', description: 'Process run id.' },
+            data: { type: 'string', description: 'Text to send before Enter.' },
+          },
+        },
+      },
+    },
     // Browser automation tools
     ...getBrowserToolDefinitions(),
     ...getDesktopToolDefinitions(),
@@ -322,7 +454,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     ...getAgentTeamScheduleTools(),
     // ── CIS, System, and Self-improvement tools ───────────────────────────────
     ...getCisSystemTools(),
-    // ── Creative runtime tools ────────────────────────────────────────────────
+    // ── Creative editor tools ─────────────────────────────────────────────────
     ...getCreativeToolDefs(),
     // ── Agent Builder Integration Tools (only when enabled in config) ─────────
   ] as any[];
@@ -347,7 +479,8 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
 
   // ── Connector tools (activated via connectors category) ───────────────────
   try {
-    toolDefs.push(...getConnectorToolDefs());
+    ensurePrometheusExtensionRuntimeLoaded();
+    toolDefs.push(...getExtensionRuntimeRegistry().listToolDefinitions());
   } catch { /* connector defs may not load in all build targets */ }
 
   // ── Inject MCP tools from connected servers ────────────────────────────────
@@ -451,6 +584,11 @@ export function summarizeCronJob(job: any): Record<string, any> {
     lastRun: job?.lastRun || null,
     lastResult: job?.lastResult || null,
     sessionTarget: job?.sessionTarget || 'isolated',
+    subagent_id: job?.subagent_id || null,
+    team_id: job?.team_id || null,
+    scheduleOwnerSubagent: job?.subagent_id || null,
+    assignmentTarget: job?.assignmentTarget || null,
+    deliverToMainChannel: job?.deliverToMainChannel === true,
     model: job?.model || null,
   };
 }

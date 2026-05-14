@@ -425,6 +425,7 @@ export class TelegramChannel {
   private creativeProgressCounters = new Map<string, number>();
   private creativeProgressStarted = new Set<string>();
   private creativeProgressLastSentAt = new Map<string, number>();
+  private screenshotBrowserSelections = new Map<string, { sessionId: string; createdAt: number }>();
 
   private getTelegramSessionId(userId: number, chatId?: number): string {
     const linked = getLinkedSession(userId);
@@ -455,10 +456,78 @@ export class TelegramChannel {
   private buildScreenshotReplyMarkup(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
     return {
       inline_keyboard: [
-        [{ text: '🌐 Browser', callback_data: 'ss:browser' }],
+        [{ text: '🌐 Browser instances', callback_data: 'ss:browser' }],
         [{ text: '🖥 Desktop', callback_data: 'ss:desktop' }],
       ],
     };
+  }
+
+  private htmlEscape(value: unknown): string {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  private compactTelegramButtonText(value: string, max = 54): string {
+    const clean = String(value || '').replace(/\s+/g, ' ').trim();
+    return clean.length > max ? `${clean.slice(0, Math.max(0, max - 1))}…` : clean;
+  }
+
+  private makeScreenshotBrowserSelection(chatId: number, userId: number, sessionId: string): string {
+    const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const key = `${chatId}:${userId}:${token}`;
+    this.screenshotBrowserSelections.set(key, { sessionId, createdAt: Date.now() });
+    const cutoff = Date.now() - 10 * 60_000;
+    for (const [existingKey, value] of this.screenshotBrowserSelections.entries()) {
+      if (value.createdAt < cutoff) this.screenshotBrowserSelections.delete(existingKey);
+    }
+    return token;
+  }
+
+  private getScreenshotBrowserSelection(chatId: number, userId: number, token: string): string | null {
+    const key = `${chatId}:${userId}:${String(token || '').trim()}`;
+    const value = this.screenshotBrowserSelections.get(key);
+    if (!value) return null;
+    if (Date.now() - value.createdAt > 10 * 60_000) {
+      this.screenshotBrowserSelections.delete(key);
+      return null;
+    }
+    return value.sessionId;
+  }
+
+  private async buildBrowserScreenshotPayload(
+    chatId: number,
+    userId: number,
+  ): Promise<{ text: string; reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } }> {
+    const { listBrowserSessions } = await import('../browser-tools.js');
+    const sessions = listBrowserSessions();
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    if (!sessions.length) {
+      rows.push([{ text: '🌐 Current chat browser', callback_data: `ss:browser:current` }]);
+    } else {
+      for (const session of sessions.slice(0, 20)) {
+        const token = this.makeScreenshotBrowserSelection(chatId, userId, session.sessionId);
+        const title = session.title || session.url || session.sessionId;
+        const label = `${session.originLabel || session.label || session.sessionId}${title ? ` · ${title}` : ''}`;
+        rows.push([{ text: this.compactTelegramButtonText(`🌐 ${label}`), callback_data: `ss:b:${token}` }]);
+      }
+    }
+    rows.push([{ text: '⬅️ Back', callback_data: 'ss:menu' }]);
+    const lines = [
+      `📸 <b>Browser Screenshots</b>`,
+      sessions.length
+        ? `Choose an active browser instance.`
+        : `No active browser instances were detected. You can still try the current Telegram chat browser.`,
+      ``,
+      ...sessions.slice(0, 12).map((session, idx) => {
+        const title = session.title || session.url || '(blank)';
+        const port = session.debugPort ? ` · port ${session.debugPort}` : '';
+        return `${idx + 1}. <b>${this.htmlEscape(session.originLabel || session.label || session.sessionId)}</b>${port}\n   <code>${this.htmlEscape(title).slice(0, 180)}</code>`;
+      }),
+    ];
+    return { text: lines.filter((line) => line !== null).join('\n'), reply_markup: { inline_keyboard: rows } };
   }
 
   private buildDesktopMonitorReplyMarkup(
@@ -707,7 +776,7 @@ export class TelegramChannel {
     }
   }
 
-  async sendFileToChat(chatId: number, filePath: string, caption: string = ''): Promise<void> {
+  async sendFileToChat(chatId: number, filePath: string, caption: string = '', options: { forceDocument?: boolean } = {}): Promise<void> {
     if (!this.config.enabled || !this.config.botToken) return;
     const resolved = path.resolve(String(filePath || ''));
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
@@ -739,7 +808,7 @@ export class TelegramChannel {
       form.append('caption', caption.slice(0, 1024));
       form.append('parse_mode', 'HTML');
     }
-    if (videoMime[ext]) {
+    if (videoMime[ext] && options.forceDocument !== true) {
       form.append('video', new Blob([fileBuffer], { type: videoMime[ext] }), fileName);
       const resp = await fetch(`${this.apiBase}/sendVideo`, { method: 'POST', body: form });
       const data: any = await resp.json();
@@ -757,7 +826,7 @@ export class TelegramChannel {
       if (!docData.ok) throw new Error(docData.description || data.description || 'Telegram video upload failed');
       return;
     }
-    form.append('document', new Blob([fileBuffer]), fileName);
+    form.append('document', new Blob([fileBuffer], { type: videoMime[ext] || 'application/octet-stream' }), fileName);
     const resp = await fetch(`${this.apiBase}/sendDocument`, { method: 'POST', body: form });
     const data: any = await resp.json();
     if (!data.ok) throw new Error(data.description || 'Telegram sendDocument failed');
@@ -843,16 +912,49 @@ export class TelegramChannel {
     }
   }
 
-  private async runTelegramBrowserScreenshot(chatId: number, userId: number, triggerLabel: string): Promise<string> {
-    const sessionId = this.getTelegramSessionId(userId, chatId);
-    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const caption = `Browser screenshot (${triggerLabel}) @ ${ts}`;
+  private async sendGeneratedVideosToChat(chatId: number, generatedVideos: any[]): Promise<void> {
+    if (!this.config.enabled || !this.config.botToken) return;
+    const fsLocal = require('fs') as typeof import('fs');
+    const pathLocal = require('path') as typeof import('path');
 
-    const { browserVisionScreenshot } = await import('../browser-tools.js');
+    for (let index = 0; index < generatedVideos.length; index += 1) {
+      const video = generatedVideos[index];
+      const rawPath = String(video?.path || video?.rel_path || '').trim();
+      if (!rawPath) continue;
+      const absPath = pathLocal.isAbsolute(rawPath)
+        ? rawPath
+        : pathLocal.join(this.workspaceRoot, rawPath);
+      if (!fsLocal.existsSync(absPath)) continue;
+
+      const caption = index === 0
+        ? '🎬 <b>Generated video</b>'
+        : '';
+      await this.sendFileToChat(chatId, absPath, caption, { forceDocument: false });
+    }
+  }
+
+  private async runTelegramBrowserScreenshot(
+    chatId: number,
+    userId: number,
+    triggerLabel: string,
+    opts?: { sessionId?: string },
+  ): Promise<string> {
+    const sessionId = String(opts?.sessionId || '').trim() || this.getTelegramSessionId(userId, chatId);
+    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const { browserVisionScreenshot, getBrowserSessionInfo } = await import('../browser-tools.js');
+    const info = getBrowserSessionInfo(sessionId);
+    const origin = info.originLabel || 'Browser';
+    const title = info.title || info.url || '';
+    const caption = [
+      `Browser screenshot (${triggerLabel}) @ ${ts}`,
+      origin,
+      title ? title.slice(0, 140) : '',
+    ].filter(Boolean).join('\n');
     const shot = await browserVisionScreenshot(sessionId);
     if (!shot?.base64) return 'ERROR: No browser session. Use browser_open first.';
     await this.sendPhotoToChat(chatId, Buffer.from(shot.base64, 'base64'), caption);
-    return `Browser screenshot sent (${shot.width}x${shot.height}).`;
+    return `Browser screenshot sent (${shot.width}x${shot.height}) from ${origin}.`;
   }
 
   private async runTelegramDesktopScreenshot(
@@ -1257,6 +1359,30 @@ export class TelegramChannel {
     } catch (err: any) {
       console.warn('[Telegram] Could not enumerate running background tasks:', err?.message || err);
     }
+    try {
+      const { listBackgroundStatuses } = require('../tasks/task-runner.js');
+      const knownIds = new Set(targets.map((target) => target.taskId || target.id));
+      for (const bg of listBackgroundStatuses()) {
+        const state = String(bg?.state || '');
+        if (!['queued', 'in_progress'].includes(state)) continue;
+        if (knownIds.has(String(bg.id))) continue;
+        const meta = this.getStopKindMeta('background_agent');
+        targets.push({
+          sourceType: 'task',
+          id: String(bg.id),
+          kind: 'background_agent',
+          label: `${meta.label} - ${String(bg.id).slice(0, 18)}`,
+          icon: meta.icon,
+          startedAt: Number(bg.startedAt || Date.now()),
+          status: state,
+          sessionId: `background_${bg.id}`,
+          taskId: String(bg.id),
+          detail: Array.isArray(bg.tags) && bg.tags.length ? `Tags: ${bg.tags.join(', ')}` : undefined,
+        });
+      }
+    } catch (err: any) {
+      console.warn('[Telegram] Could not enumerate ephemeral background agents:', err?.message || err);
+    }
     return targets.sort((a, b) => b.startedAt - a.startedAt);
   }
 
@@ -1268,7 +1394,28 @@ export class TelegramChannel {
     try {
       const { loadTask } = require('../tasks/task-store.js');
       const task = loadTask(id);
-      if (!task) return null;
+      if (!task) {
+        try {
+          const { backgroundStatus } = require('../tasks/task-runner.js');
+          const bg = backgroundStatus(id);
+          if (!bg) return null;
+          const meta = this.getStopKindMeta('background_agent');
+          return {
+            sourceType: 'task',
+            id: String(bg.id),
+            kind: 'background_agent',
+            label: `${meta.label} - ${String(bg.id).slice(0, 18)}`,
+            icon: meta.icon,
+            startedAt: Number(bg.startedAt || Date.now()),
+            status: String(bg.state || 'running'),
+            sessionId: `background_${bg.id}`,
+            taskId: String(bg.id),
+            detail: Array.isArray(bg.tags) && bg.tags.length ? `Tags: ${bg.tags.join(', ')}` : undefined,
+          };
+        } catch {
+          return null;
+        }
+      }
       return this.buildStopTargetFromTask(task);
     } catch {
       return null;
@@ -1360,9 +1507,27 @@ export class TelegramChannel {
       }
 
       try {
+        const target = this.getStopTarget('task', resolvedId);
+        if (target?.kind === 'background_agent' || String(resolvedId).startsWith('bg_')) {
+          const { backgroundAbort } = require('../tasks/task-runner.js');
+          const result = backgroundAbort(resolvedId);
+          await edit(
+            result.ok ? '🛑 Background agent abort requested.' : `❌ ${result.error || 'Abort failed.'}`,
+            [[{ text: '⬅️ Back', callback_data: 'stop:list' }]],
+          );
+          return;
+        }
         const { BackgroundTaskRunner } = require('../tasks/background-task-runner.js');
-        const ok = BackgroundTaskRunner.cancelTask(resolvedId, 'Aborted via Telegram /stop.');
-        await edit(ok ? '🛑 Task abort requested.' : '❌ Task not found.', [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
+        const { loadTask, updateTaskStatus, appendJournal } = require('../tasks/task-store.js');
+        const task = loadTask(resolvedId);
+        if (!task) {
+          await edit('❌ Task not found.', [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
+          return;
+        }
+        BackgroundTaskRunner.requestPause(resolvedId);
+        updateTaskStatus(resolvedId, 'paused', { pauseReason: 'user_pause' });
+        appendJournal(resolvedId, { type: 'pause', content: 'Paused via Telegram /stop. Context was preserved for resume.' });
+        await edit('🛑 Task pause requested. Context is preserved for resume.', [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
       } catch (err: any) {
         await edit(`❌ ${String(err?.message || err)}`, [[{ text: '⬅️ Back', callback_data: 'stop:list' }]]);
       }
@@ -2032,7 +2197,7 @@ export class TelegramChannel {
   }
 
   /** Send a single message */
-  async sendMessage(chatId: number, text: string): Promise<void> {
+  async sendMessage(chatId: number, text: string, messageThreadId?: number): Promise<void> {
     const outbound = stripInternalToolNotes(text) || String(text || '').trim();
     if (!outbound) return;
     // Telegram messages max 4096 chars — split if needed
@@ -2041,6 +2206,7 @@ export class TelegramChannel {
       await this.apiCall('sendMessage', {
         chat_id: chatId,
         text: chunk,
+        message_thread_id: messageThreadId || undefined,
         parse_mode: 'HTML',
       }).catch(async () => {
         // HTML parse failed — strip tags and retry as plain text
@@ -2053,7 +2219,7 @@ export class TelegramChannel {
           .replace(/&gt;/g, '>')
           .replace(/&quot;/g, '"')
           .replace(/&#39;/g, "'");
-        return this.apiCall('sendMessage', { chat_id: chatId, text: plain }).catch((err: any) => {
+        return this.apiCall('sendMessage', { chat_id: chatId, text: plain, message_thread_id: messageThreadId || undefined }).catch((err: any) => {
           console.error(`[Telegram] sendMessage failed even as plain text: ${err?.message}`);
         });
       });
@@ -2066,6 +2232,92 @@ export class TelegramChannel {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  private getProposalStatusEmoji(status: string): string {
+    const statusEmoji: Record<string, string> = {
+      pending: '⏳',
+      approved: '✅',
+      executing: '🔄',
+      repairing: '🛠️',
+      executed: '🎉',
+      failed: '❌',
+      denied: '🚫',
+      expired: '⏰',
+    };
+    return statusEmoji[status] || '❓';
+  }
+
+  private formatProposalSummaryCard(proposal: any): string {
+    const emoji = this.getProposalStatusEmoji(String(proposal?.status || ''));
+    const affectedFiles = Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [];
+    const files = affectedFiles.length
+      ? `\n\n<b>Affected Files (${affectedFiles.length}):</b>\n${affectedFiles.slice(0, 8).map((f: any) => `  • ${this.tgEscape(f?.path || '?')} (${this.tgEscape(f?.action || 'touch')})`).join('\n')}${affectedFiles.length > 8 ? '\n  • ...' : ''}`
+      : '';
+    return [
+      `${emoji} <b>${this.tgEscape(proposal?.title || 'Untitled proposal')}</b>`,
+      ``,
+      `<b>ID:</b> <code>${this.tgEscape(proposal?.id || '')}</code>`,
+      `<b>Status:</b> ${this.tgEscape(proposal?.status || 'unknown')}`,
+      `<b>Priority:</b> ${this.tgEscape(proposal?.priority || 'medium')}`,
+      `<b>Type:</b> ${this.tgEscape(proposal?.type || 'general')}`,
+      proposal?.sourceAgentId ? `<b>Source:</b> ${this.tgEscape(proposal.sourceAgentId)}` : '',
+      ``,
+      `<b>Summary:</b>`,
+      this.tgEscape(proposal?.summary || '(no summary)'),
+      files,
+    ].filter(Boolean).join('\n');
+  }
+
+  private formatProposalFullDetails(proposal: any): string {
+    const affectedFiles = Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [];
+    const steps = Array.isArray(proposal?.executionSteps) ? proposal.executionSteps : [];
+    const stepBlock = steps.length
+      ? `\n\n<b>Execution Plan:</b>\n${steps.map((step: any, index: number) => {
+          const title = this.tgEscape(step?.title || step?.description || `Step ${index + 1}`);
+          const kind = step?.kind ? ` [${this.tgEscape(step.kind)}]` : '';
+          const desc = step?.description ? `\n   ${this.tgEscape(step.description)}` : '';
+          const success = step?.successCriteria ? `\n   Success: ${this.tgEscape(step.successCriteria)}` : '';
+          return `${index + 1}. ${title}${kind}${desc}${success}`;
+        }).join('\n')}`
+      : '';
+    const fileBlock = affectedFiles.length
+      ? `\n\n<b>Affected Files:</b>\n${affectedFiles.map((f: any) => `  • ${this.tgEscape(f?.path || '?')} (${this.tgEscape(f?.action || 'touch')})${f?.description ? ` - ${this.tgEscape(f.description)}` : ''}`).join('\n')}`
+      : '';
+    const diffBlock = proposal?.diffPreview
+      ? `\n\n<b>Diff Preview:</b>\n${this.tgEscape(proposal.diffPreview)}`
+      : '';
+    const executorBlock = proposal?.executorPrompt
+      ? `\n\n<b>Executor Prompt:</b>\n${this.tgEscape(proposal.executorPrompt)}`
+      : '';
+    const impactBlock = proposal?.estimatedImpact
+      ? `\n\n<b>Estimated Impact:</b>\n${this.tgEscape(proposal.estimatedImpact)}`
+      : '';
+
+    return [
+      `📖 <b>Proposal Details</b>`,
+      `<code>${this.tgEscape(proposal?.id || '')}</code> - ${this.tgEscape(proposal?.title || 'Untitled proposal')}`,
+      ``,
+      `<b>Details:</b>`,
+      this.tgEscape(proposal?.details || '(no details)'),
+      stepBlock,
+      fileBlock,
+      impactBlock,
+      diffBlock,
+      executorBlock,
+    ].filter(Boolean).join('\n');
+  }
+
+  private buildProposalKeyboard(proposal: any, backTarget: 'pending' | 'done' = 'pending', includeDetails = true): any[][] {
+    const kb: any[][] = [];
+    if (includeDetails) {
+      kb.push([{ text: '📖 View Details', callback_data: `pr:full:${proposal.id}` }]);
+    }
+    if (proposal.status === 'pending') {
+      kb.push([{ text: '✅ Approve', callback_data: `pr:ap:${proposal.id}` }, { text: '❌ Reject', callback_data: `pr:rj:${proposal.id}` }]);
+    }
+    kb.push([{ text: '📋 Back to list', callback_data: `pr:list:${backTarget}` }]);
+    return kb;
   }
 
   private getCommandApprovalOrigin(record: {
@@ -2146,8 +2398,11 @@ export class TelegramChannel {
 	    ].join('\n');
     const replyMarkup = {
       inline_keyboard: [[
-        { text: '✅ Approve', callback_data: `ca:ap:${record.id}` },
+        { text: '✅ Approve Once', callback_data: `ca:ap:${record.id}` },
         { text: '❌ Reject', callback_data: `ca:rj:${record.id}` },
+      ], [
+        { text: 'This Session', callback_data: `ca:session:${record.id}` },
+        { text: 'Always Allow', callback_data: `ca:always:${record.id}` },
       ], [
         { text: '📋 Pending', callback_data: 'ca:list:pending' },
       ]],
@@ -2515,12 +2770,11 @@ export class TelegramChannel {
           }).catch(() => {});
           return;
         }
-        const statusEmoji: { [key: string]: string } = { pending: '⏳', approved: '✅', executing: '🔄', executed: '🎉', failed: '❌', denied: '🚫', expired: '⏰' };
         const lines = proposals.map(p => {
-          const emoji = statusEmoji[p.status] || '❓';
-          return `${emoji} <code>#${p.id}</code> <b>${p.title.slice(0, 40)}</b>\n   Priority: ${p.priority}`;
+          const emoji = this.getProposalStatusEmoji(p.status);
+          return `${emoji} <code>#${this.tgEscape(p.id)}</code> <b>${this.tgEscape(String(p.title || 'Untitled').slice(0, 40))}</b>\n   Priority: ${this.tgEscape(p.priority)}`;
         });
-        const kb = proposals.map(p => [{ text: `${p.title.slice(0, 30)}...`, callback_data: `pr:detail:${p.id}` }]);
+        const kb = proposals.map(p => [{ text: this.compactTelegramButtonText(p.title || p.id, 34), callback_data: `pr:detail:${p.id}` }]);
         kb.push([{ text: status === 'done' ? '⏳ View pending' : '✅ View done', callback_data: `pr:list:${status === 'done' ? 'pending' : 'done'}` }]);
         
         try {
@@ -2539,7 +2793,7 @@ export class TelegramChannel {
       }
       
       if (action === 'detail') {
-        // Show full proposal details
+        // Show compact proposal card; the long plan stays behind View Details.
         const { loadProposal } = await import('../proposals/proposal-store');
         const p = loadProposal(proposalId);
         if (!p) {
@@ -2550,21 +2804,12 @@ export class TelegramChannel {
           }).catch(() => {});
           return;
         }
-        const statusEmoji: { [key: string]: string } = { pending: '⏳', approved: '✅', executing: '🔄', executed: '🎉', failed: '❌', denied: '🚫', expired: '⏰' };
-        const emoji = statusEmoji[p.status] || '❓';
-        const details = `${emoji} <b>${p.title}</b>\n\n<b>Status:</b> ${p.status}\n<b>Priority:</b> ${p.priority}\n<b>Type:</b> ${p.type}\n<b>Source:</b> ${p.sourceAgentId}\n\n<b>Summary:</b>\n${(p.summary || '(no summary)').slice(0, 500)}\n\n<b>Details:</b>\n${(p.details || '(no details)').slice(0, 500)}`;
-        const files = p.affectedFiles?.length ? `\n\n<b>Affected Files (${p.affectedFiles.length}):</b>\n${p.affectedFiles.map((f: any) => `  • ${f.path} (${f.action})`).join('\n').slice(0, 300)}` : '';
-        
-        let kb: any[][] = [];
-        if (p.status === 'pending') {
-          kb = [[{ text: '✅ Approve', callback_data: `pr:ap:${p.id}` }, { text: '❌ Reject', callback_data: `pr:rj:${p.id}` }]];
-        }
-        kb.push([{ text: '📋 Back to list', callback_data: 'pr:list:pending' }]);
+        const kb = this.buildProposalKeyboard(p, p.status === 'pending' ? 'pending' : 'done');
         
         try {
           await this.apiCall('editMessageText', {
             chat_id: chatId, message_id: messageId,
-            text: (details + files).slice(0, 4000),
+            text: this.formatProposalSummaryCard(p).slice(0, 4000),
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard: kb },
           });
@@ -2572,6 +2817,33 @@ export class TelegramChannel {
           if (!e.message?.includes('message is not modified')) {
             console.error('[Telegram] pr:detail edit error:', e.message);
           }
+        }
+        return;
+      }
+
+      if (action === 'full') {
+        const { loadProposal } = await import('../proposals/proposal-store');
+        const p = loadProposal(proposalId);
+        if (!p) {
+          await this.apiCall('editMessageText', {
+            chat_id: chatId, message_id: messageId,
+            text: `❌ Proposal <code>#${this.tgEscape(proposalId)}</code> not found.`,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[{ text: '📋 Back', callback_data: 'pr:list:pending' }]] },
+          }).catch(() => {});
+          return;
+        }
+        const chunks = this.splitMessage(this.formatProposalFullDetails(p), 3800);
+        for (let i = 0; i < chunks.length; i++) {
+          const suffix = chunks.length > 1 ? `\n\n<i>Part ${i + 1}/${chunks.length}</i>` : '';
+          await this.apiCall('sendMessage', {
+            chat_id: chatId,
+            text: `${chunks[i]}${suffix}`,
+            parse_mode: 'HTML',
+            reply_markup: i === chunks.length - 1 ? { inline_keyboard: this.buildProposalKeyboard(p, p.status === 'pending' ? 'pending' : 'done', false) } : undefined,
+          }).catch(async (err: any) => {
+            await this.sendMessage(chatId, `❌ Could not send proposal details: ${String(err?.message || err)}`);
+          });
         }
         return;
       }
@@ -2722,7 +2994,8 @@ export class TelegramChannel {
 		        ].filter(Boolean).join('\n');
 	        const kb: any[][] = [];
 	        if (approval.status === 'pending') {
-	          kb.push([{ text: '✅ Approve', callback_data: `ca:ap:${approval.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${approval.id}` }]);
+	          kb.push([{ text: '✅ Approve Once', callback_data: `ca:ap:${approval.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${approval.id}` }]);
+	          kb.push([{ text: 'This Session', callback_data: `ca:session:${approval.id}` }, { text: 'Always Allow', callback_data: `ca:always:${approval.id}` }]);
 	        }
 	        kb.push([{ text: '📋 Back to list', callback_data: 'ca:list:pending' }]);
 	        await this.apiCall('editMessageText', {
@@ -2744,7 +3017,7 @@ export class TelegramChannel {
 	        return;
 	      }
 
-		      if (action === 'ap') {
+		      if (action === 'ap' || action === 'session' || action === 'always') {
 		        const { getApprovalQueue } = await import('../verification-flow');
 		        const queue = getApprovalQueue();
 		        const existing = queue.get(approvalId);
@@ -2760,12 +3033,31 @@ export class TelegramChannel {
 		        try {
 		          const approved = queue.resolve(approvalId, true, 'telegram');
 		          if (!approved) throw new Error('Approval is no longer pending.');
+              let grantLabel = '';
+              if ((action === 'session' || action === 'always') && approved.commandPermissionCandidate) {
+                const { addCommandPermissionGrant } = await import('../command-permissions');
+                const grant = addCommandPermissionGrant(approved.commandPermissionCandidate, action, 'telegram');
+                const { appendAuditEntry } = await import('../audit-log');
+                appendAuditEntry({
+                  sessionId: approved.sessionId,
+                  agentId: approved.agentId,
+                  actionType: 'approval_resolved',
+                  toolName: approved.toolName,
+                  toolArgs: { command: approved.commandPermissionCandidate.command },
+                  policyTier: approved.policyTier,
+                  approvalStatus: 'auto_allowed' as any,
+                  resultSummary: `Created ${action} command permission ${grant.id}`,
+                });
+                grantLabel = action === 'always'
+                  ? ` Always allow saved (<code>${this.tgEscape(grant.id)}</code>).`
+                  : ` Session allow saved (<code>${this.tgEscape(grant.id)}</code>).`;
+              }
 		          await this.apiCall('editMessageReplyMarkup', {
 		            chat_id: chatId,
 		            message_id: messageId,
-		            reply_markup: { inline_keyboard: [[{ text: '✅ Approved', callback_data: 'noop' }, { text: '📋 List', callback_data: 'ca:list:pending' }]] },
+		            reply_markup: { inline_keyboard: [[{ text: action === 'always' ? '✅ Always allowed' : action === 'session' ? '✅ Allowed this session' : '✅ Approved', callback_data: 'noop' }, { text: '📋 List', callback_data: 'ca:list:pending' }]] },
 		          }).catch(() => {});
-		          await this.sendMessage(chatId, `✅ Command approval <code>#${approvalId}</code> approved. The paused run will continue now.`);
+		          await this.sendMessage(chatId, `✅ Command approval <code>#${approvalId}</code> approved.${grantLabel} The paused run will continue now.`);
 		        } catch (err: any) {
 		          await this.sendMessage(chatId, `❌ Approval error: ${err.message}`);
 		        }
@@ -3030,6 +3322,74 @@ export class TelegramChannel {
         }
         return;
       }
+      if (action === 'browser') {
+        try {
+          const payload = await this.buildBrowserScreenshotPayload(chatId, userId);
+          await this.apiCall('editMessageText', {
+            chat_id: chatId,
+            message_id: messageId,
+            text: payload.text,
+            parse_mode: 'HTML',
+            reply_markup: payload.reply_markup,
+          }).catch(async () => {
+            await this.apiCall('sendMessage', {
+              chat_id: chatId,
+              text: payload.text,
+              parse_mode: 'HTML',
+              reply_markup: payload.reply_markup,
+            }).catch(() => {});
+          });
+        } catch (err: any) {
+          await this.apiCall('sendMessage', {
+            chat_id: chatId,
+            text: `❌ Could not list browser instances: ${String(err?.message || err)}`,
+            reply_markup: this.buildScreenshotReplyMarkup(),
+          }).catch(() => {});
+        }
+        return;
+      }
+      if (action === 'browser:current' || action.startsWith('b:')) {
+        const selectedSessionId = action === 'browser:current'
+          ? this.getTelegramSessionId(userId, chatId)
+          : this.getScreenshotBrowserSelection(chatId, userId, action.slice('b:'.length));
+        if (!selectedSessionId) {
+          await this.apiCall('sendMessage', {
+            chat_id: chatId,
+            text: '❌ Browser selection expired. Use /screenshot to refresh the browser list.',
+            reply_markup: this.buildScreenshotReplyMarkup(),
+          }).catch(() => {});
+          return;
+        }
+        try {
+          await this.apiCall('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [] },
+          }).catch(() => {});
+          await this.sendMessage(chatId, `📸 Capturing browser screenshot...`);
+          const browserResult = await this.runTelegramBrowserScreenshot(chatId, userId, 'browser instance button', {
+            sessionId: selectedSessionId,
+          });
+          const ok = !/^ERROR:/i.test(String(browserResult || ''));
+          await this.apiCall('sendMessage', {
+            chat_id: chatId,
+            text: [
+              `📸 <b>Browser Screenshot</b>`,
+              `Result: ${ok ? '✅' : '⚠️'} ${this.htmlEscape(String(browserResult || '').slice(0, 700) || 'No response')}`,
+            ].join('\n'),
+            parse_mode: 'HTML',
+            reply_markup: this.buildScreenshotReplyMarkup(),
+          }).catch(() => {});
+        } catch (err: any) {
+          await this.apiCall('sendMessage', {
+            chat_id: chatId,
+            text: `❌ Screenshot capture failed: ${this.htmlEscape(String(err?.message || err))}`,
+            parse_mode: 'HTML',
+            reply_markup: this.buildScreenshotReplyMarkup(),
+          }).catch(() => {});
+        }
+        return;
+      }
       if (action !== 'browser') {
         await this.apiCall('sendMessage', {
           chat_id: chatId,
@@ -3038,32 +3398,6 @@ export class TelegramChannel {
         }).catch(() => {});
         return;
       }
-      try {
-        await this.apiCall('editMessageReplyMarkup', {
-          chat_id: chatId,
-          message_id: messageId,
-          reply_markup: { inline_keyboard: [] },
-        }).catch(() => {});
-        await this.sendMessage(chatId, `📸 Capturing browser screenshot...`);
-        const browserResult = await this.runTelegramBrowserScreenshot(chatId, userId, 'browser button');
-        const ok = !/^ERROR:/i.test(String(browserResult || ''));
-        await this.apiCall('sendMessage', {
-          chat_id: chatId,
-          text: [
-            `📸 <b>Browser Screenshot</b>`,
-            `Result: ${ok ? '✅' : '⚠️'} ${String(browserResult || '').slice(0, 700) || 'No response'}`,
-          ].join('\n'),
-          parse_mode: 'HTML',
-          reply_markup: this.buildScreenshotReplyMarkup(),
-        }).catch(() => {});
-      } catch (err: any) {
-        await this.apiCall('sendMessage', {
-          chat_id: chatId,
-          text: `❌ Screenshot capture failed: ${String(err?.message || err)}`,
-          reply_markup: this.buildScreenshotReplyMarkup(),
-        }).catch(() => {});
-      }
-      return;
     }
 
     if (data.startsWith('rs:')) {
@@ -5484,39 +5818,29 @@ export class TelegramChannel {
       const isSingleProposal = proposals.length === 1 && showStatus === 'id';
       if (isSingleProposal) {
         const p = proposals[0];
-        const statusEmojiMap: { [key: string]: string } = { pending: '⏳', approved: '✅', executing: '🔄', executed: '🎉', failed: '❌', denied: '🚫', expired: '⏰' };
-        const emoji = statusEmojiMap[p.status] || '❓';
-        const details = `${emoji} <b>${p.title}</b>\n\n<b>Status:</b> ${p.status}\n<b>Priority:</b> ${p.priority}\n<b>Type:</b> ${p.type}\n\n<b>Summary:</b>\n${(p.summary || '(no summary)').slice(0, 500)}\n\n<b>Details:</b>\n${(p.details || '(no details)').slice(0, 500)}`;
-        const files = p.affectedFiles?.length ? `\n\n<b>Affected Files (${p.affectedFiles.length}):</b>\n${p.affectedFiles.map((f: any) => `  • ${f.path} (${f.action})`).join('\n').slice(0, 300)}` : '';
-        
-        let kb: any[][] = [];
-        if (p.status === 'pending') {
-          kb = [[{ text: '✅ Approve', callback_data: `pr:ap:${p.id}` }, { text: '❌ Reject', callback_data: `pr:rj:${p.id}` }]];
-        }
-        kb.push([{ text: '📋 Back to list', callback_data: `pr:list:${showStatus === 'id' ? 'pending' : 'done'}` }]);
+        const kb = this.buildProposalKeyboard(p, p.status === 'pending' ? 'pending' : 'done');
         
         try {
           await this.apiCall('sendMessage', {
             chat_id: chatId,
-            text: (details + files).slice(0, 4000),
+            text: this.formatProposalSummaryCard(p).slice(0, 4000),
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard: kb },
           });
         } catch (e: any) {
-          await this.sendMessage(chatId, details + files);
+          await this.sendMessage(chatId, this.formatProposalSummaryCard(p));
         }
         return;
       }
       
       const statusLabel = showStatus === 'done' ? 'COMPLETED' : showStatus === 'pending' ? 'PENDING' : 'FOUND';
       const lines = proposals.map(p => {
-        const statusEmojiMap: { [key: string]: string } = { pending: '⏳', approved: '✅', executing: '🔄', executed: '🎉', failed: '❌', denied: '🚫', expired: '⏰' };
-        const emoji = statusEmojiMap[p.status] || '❓';
-        return `${emoji} <code>#${p.id}</code> <b>${p.title.slice(0, 40)}</b>\n   Priority: ${p.priority} | Type: ${p.type}`;
+        const emoji = this.getProposalStatusEmoji(p.status);
+        return `${emoji} <code>#${this.tgEscape(p.id)}</code> <b>${this.tgEscape(String(p.title || 'Untitled').slice(0, 40))}</b>\n   Priority: ${this.tgEscape(p.priority)} | Type: ${this.tgEscape(p.type)}`;
       });
       
       try {
-        const kb = proposals.map(p => [{ text: `${p.title.slice(0, 30)}...`, callback_data: `pr:detail:${p.id}` }]);
+        const kb = proposals.map(p => [{ text: this.compactTelegramButtonText(p.title || p.id, 34), callback_data: `pr:detail:${p.id}` }]);
         kb.push([{ text: showStatus === 'done' ? '⏳ View pending' : '✅ View completed', callback_data: `pr:list:${showStatus === 'done' ? 'pending' : 'done'}` }]);
         await this.apiCall('sendMessage', {
           chat_id: chatId,
@@ -5837,8 +6161,10 @@ export class TelegramChannel {
 	    const events: Array<{ type: string; data: any }> = [];
 	    // Collect files to present: canvas_present events + edit/apply_patch results
 	    const presentedFiles: Array<{ path: string; trigger: string }> = [];
-	    const generatedImages: any[] = [];
-	    const generatedImageKeys = new Set<string>();
+      const generatedImages: any[] = [];
+      const generatedImageKeys = new Set<string>();
+      const generatedVideos: any[] = [];
+      const generatedVideoKeys = new Set<string>();
 	    let lastProgressSignature = '';
 	    const sendSSE = (type: string, data: any) => {
       events.push({ type, data });
@@ -5944,6 +6270,17 @@ export class TelegramChannel {
 	            generatedImages.push(image);
 	          }
 	        }
+	        if (action === 'generate_video') {
+	          const videoRows = Array.isArray(data?.extra?.generated_videos)
+	            ? data.extra.generated_videos
+	            : (data?.extra?.generated_video ? [data.extra.generated_video] : []);
+	          for (const video of videoRows) {
+	            const key = String(video?.path || video?.rel_path || '').trim().toLowerCase();
+	            if (!key || generatedVideoKeys.has(key)) continue;
+	            generatedVideoKeys.add(key);
+	            generatedVideos.push(video);
+	          }
+	        }
 	        if (action === 'edit' || action === 'find_replace' || action === 'replace_lines') {
 	          // Tool result typically contains "path: /abs/path" — extract it
 	          const resultStr = String(data?.result || '');
@@ -6043,11 +6380,7 @@ export class TelegramChannel {
         : imageAttachment
           ? '(Image attached — please analyze it)'
           : '');
-    const messageForModel = videoAttachment
-      ? `${effectiveText}${effectiveText ? '\n\n' : ''}Telegram video attachment saved at: ${videoAttachment.relPath}\nUse analyze_video on that local file when the user is asking what is in the clip.`
-      : savedImageAttachment
-        ? `${effectiveText}${effectiveText ? '\n\n' : ''}Telegram image attachment saved at: ${savedImageAttachment.relPath}\nAbsolute path: ${savedImageAttachment.absPath}\nThe image is also attached directly for vision. Use the saved path when you need to reference, edit, place, or process the file.`
-      : effectiveText;
+    const messageForModel = effectiveText;
 
 	    try {
 	      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_close, desktop_screenshot, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
@@ -6093,6 +6426,13 @@ export class TelegramChannel {
 	          console.warn(`[Telegram] Generated image delivery failed: ${err?.message}`);
 	        }
 	      }
+	      if (generatedVideos.length) {
+	        try {
+	          await this.sendGeneratedVideosToChat(chatId, generatedVideos);
+	        } catch (err: any) {
+	          console.warn(`[Telegram] Generated video delivery failed: ${err?.message}`);
+	        }
+	      }
 
 	      // ── Present any files the AI created or edited ──────────────────────────
       // Reset per-turn dedup set, then send each unique file
@@ -6116,7 +6456,8 @@ export class TelegramChannel {
 	          role: 'assistant',
 	          content: responseText,
 	          timestamp: now,
-	          generatedImages: generatedImages.length ? generatedImages : undefined,
+	        generatedImages: generatedImages.length ? generatedImages : undefined,
+	        generatedVideos: generatedVideos.length ? generatedVideos : undefined,
 	        },
       });
 
@@ -6267,13 +6608,8 @@ export class TelegramChannel {
   async sendProposalToAllowed(proposal: any): Promise<void> {
     if (!this.config.enabled || !this.botInfo) return;
     
-    const statusEmoji: { [key: string]: string } = { pending: '⏳', approved: '✅', executing: '🔄', executed: '🎉', failed: '❌', denied: '🚫', expired: '⏰' };
-    const emoji = statusEmoji[proposal.status] || '❓';
-    const message = `${emoji} <b>New Proposal: ${proposal.title}</b>\n\n<b>Type:</b> ${proposal.type}\n<b>Priority:</b> ${proposal.priority}\n<b>Source:</b> ${proposal.sourceAgentId || 'unknown'}\n\n<b>Summary:</b>\n${(proposal.summary || '(no summary)').slice(0, 500)}\n\n<b>Details:</b>\n${(proposal.details || '(no details)').slice(0, 300)}`;
-    
-    const files = proposal.affectedFiles?.length ? `\n\n<b>Affected Files:</b>\n${proposal.affectedFiles.slice(0, 10).map((f: any) => `  • ${f.path} (${f.action})`).join('\n')}` : '';
-    const fullMessage = (message + files).slice(0, 4000);
-    const keyboard = [[{ text: '✅ Approve', callback_data: `pr:ap:${proposal.id}` }, { text: '❌ Reject', callback_data: `pr:rj:${proposal.id}` }]];
+    const fullMessage = this.formatProposalSummaryCard(proposal).slice(0, 4000);
+    const keyboard = this.buildProposalKeyboard(proposal, 'pending');
     
     for (const userId of this.config.allowedUserIds) {
       try {

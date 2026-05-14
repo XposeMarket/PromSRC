@@ -19,6 +19,8 @@
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, bgtToast, renderMd } from '../utils.js';
 import { wsEventBus } from '../ws.js';
+import { installProcessRunCardHandlers, loadRecentProcessRuns, renderProcessRunsHTML } from '../components/ProcessRunCard.js';
+import { installCodingWorkspaceHandlers, loadCodingWorkspace, renderCodingWorkspacePanel } from '../components/CodingWorkspacePanel.js';
 
 
 // ─── Shared helpers (moved from ChatPage.js — used by bgtCardHTML) ──────────
@@ -78,6 +80,10 @@ let bgtTasks = [];           // all task records from server
 let bgtOpenTaskId = null;    // currently open panel task id
 window.bgtOpenTaskId = null;
 let bgtEditMode = false;
+let bgtDraggedTaskId = null;
+let bgtDragClickSuppressUntil = 0;
+let bgtRecentProcessRuns = [];
+let bgtCodingWorkspace = null;
 
 const BGT_HIDDEN_KEY = 'prom_hidden_tasks';
 
@@ -140,6 +146,134 @@ function bgtNormalizeStatus(rawStatus) {
   if (status === 'waiting_subagent' || status === 'in_progress') return 'running';
   if (status === 'completed' || status === 'done') return 'complete';
   return status;
+}
+
+function bgtGetTask(taskId) {
+  return bgtTasks.find(t => String(t.id) === String(taskId));
+}
+
+function bgtActionForDrop(task, targetStatus) {
+  if (!task || !targetStatus) return null;
+  const rawStatus = String(task.status || '').trim().toLowerCase();
+  const displayStatus = bgtNormalizeStatus(rawStatus);
+  if (displayStatus === targetStatus) return { type: 'noop' };
+
+  if (targetStatus === 'paused') {
+    if (rawStatus === 'complete' || rawStatus === 'completed' || rawStatus === 'done' || rawStatus === 'failed') return null;
+    return { type: 'pause', endpoint: `/api/bg-tasks/${encodeURIComponent(task.id)}/pause`, label: 'Task paused' };
+  }
+
+  if (targetStatus === 'running' || targetStatus === 'queued') {
+    if (rawStatus === 'failed') {
+      return { type: 'restart', endpoint: `/api/bg-tasks/${encodeURIComponent(task.id)}/restart`, label: 'Task restarted' };
+    }
+    if (['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input', 'running'].includes(rawStatus)) {
+      if (rawStatus === 'running') return { type: 'noop' };
+      return { type: 'resume', endpoint: `/api/bg-tasks/${encodeURIComponent(task.id)}/resume`, label: 'Task resumed' };
+    }
+    return null;
+  }
+
+  return null;
+}
+
+function bgtSetDropActive(targetStatus, active) {
+  document.querySelectorAll(`[data-bgt-drop-status="${targetStatus}"]`).forEach((el) => {
+    el.style.outline = active ? '2px solid var(--brand)' : '';
+    el.style.outlineOffset = active ? '3px' : '';
+    el.style.background = active ? 'rgba(90,145,255,0.06)' : '';
+  });
+}
+
+function bgtHandleCardDragStart(e, taskId) {
+  bgtDraggedTaskId = taskId;
+  bgtDragClickSuppressUntil = Date.now() + 600;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', taskId);
+  }
+  const card = e.currentTarget;
+  if (card) {
+    card.style.opacity = '0.65';
+    card.style.transform = 'scale(0.98)';
+  }
+}
+
+function bgtHandleCardDragEnd(e) {
+  bgtDraggedTaskId = null;
+  document.querySelectorAll('[data-bgt-drop-status]').forEach((el) => bgtSetDropActive(el.dataset.bgtDropStatus, false));
+  const card = e.currentTarget;
+  if (card) {
+    card.style.opacity = '';
+    card.style.transform = '';
+  }
+}
+
+function bgtOpenCardFromClick(e, taskId) {
+  if (Date.now() < bgtDragClickSuppressUntil) {
+    if (e) e.stopPropagation();
+    return;
+  }
+  openBgtPanel(taskId);
+}
+
+function bgtHandleColumnDragOver(e, targetStatus) {
+  if (!bgtDraggedTaskId) return;
+  const task = bgtGetTask(bgtDraggedTaskId);
+  if (!bgtActionForDrop(task, targetStatus)) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+}
+
+function bgtHandleColumnDragEnter(e, targetStatus) {
+  if (!bgtDraggedTaskId) return;
+  const task = bgtGetTask(bgtDraggedTaskId);
+  if (!bgtActionForDrop(task, targetStatus)) return;
+  e.preventDefault();
+  bgtSetDropActive(targetStatus, true);
+}
+
+function bgtHandleColumnDragLeave(e, targetStatus) {
+  const current = e.currentTarget;
+  if (current && e.relatedTarget && current.contains(e.relatedTarget)) return;
+  bgtSetDropActive(targetStatus, false);
+}
+
+async function bgtMoveTaskToStatus(taskId, targetStatus) {
+  const task = bgtGetTask(taskId);
+  const action = bgtActionForDrop(task, targetStatus);
+  bgtSetDropActive(targetStatus, false);
+  bgtDraggedTaskId = null;
+
+  if (!task || !action) {
+    bgtToast('Task not moved', 'That column does not have a matching task action');
+    await refreshBgTasks();
+    return;
+  }
+  if (action.type === 'noop') {
+    bgtToast('No change', 'Task is already there');
+    return;
+  }
+
+  try {
+    const result = await api(action.endpoint, { method: 'POST' });
+    if (!result?.success) {
+      bgtToast('Task not moved', result?.error || 'Could not update task');
+    } else {
+      bgtToast(action.label, 'Updated from the board');
+    }
+  } catch (err) {
+    bgtToast('Task not moved', err?.message || 'Could not update task');
+  }
+  await refreshBgTasks();
+  if (bgtOpenTaskId === taskId) await bgtRefreshOpenPanel();
+}
+
+async function bgtHandleColumnDrop(e, targetStatus) {
+  e.preventDefault();
+  const taskId = (e.dataTransfer && e.dataTransfer.getData('text/plain')) || bgtDraggedTaskId;
+  if (!taskId) return;
+  await bgtMoveTaskToStatus(taskId, targetStatus);
 }
 
 // --- Fetch & Render ----------------------------------------------------------
@@ -207,7 +341,7 @@ function renderBgTasks() {
         <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${col.color}">${col.label}</span>
         <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${tasks.length}</span>
       </div>
-      <div class="bgt-col-cards" style="display:flex;flex-direction:column;gap:8px;min-height:60px">
+      <div class="bgt-col-cards" data-bgt-drop-status="${col.key}" ondragover="bgtHandleColumnDragOver(event,'${col.key}')" ondragenter="bgtHandleColumnDragEnter(event,'${col.key}')" ondragleave="bgtHandleColumnDragLeave(event,'${col.key}')" ondrop="bgtHandleColumnDrop(event,'${col.key}')" style="display:flex;flex-direction:column;gap:8px;min-height:60px;border-radius:12px;transition:outline 0.15s,background 0.15s">
         ${tasks.slice(0,5).map(t => bgtCardHTML(t, col)).join('')}
         ${tasks.length > 5 ? `
         <div id="bgt-more-${col.key}" style="display:none;">${tasks.slice(5).map(t => bgtCardHTML(t, col)).join('')}</div>
@@ -246,7 +380,7 @@ function bgtCardHTML(t, col) {
   const channel = t.channel === 'telegram' ? 'Telegram' : 'Web UI';
 
   return `
-  <div onclick="openBgtPanel('${escHtml(t.id)}')" data-bgt-id="${escHtml(t.id)}" style="
+  <div onclick="bgtOpenCardFromClick(event,'${escHtml(t.id)}')" draggable="true" ondragstart="bgtHandleCardDragStart(event,'${escHtml(t.id)}')" ondragend="bgtHandleCardDragEnd(event)" data-bgt-id="${escHtml(t.id)}" style="
     background:var(--panel);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px;
     cursor:pointer;transition:border-color 0.15s,box-shadow 0.15s;
     ${bgtOpenTaskId === t.id ? 'border-color:var(--brand);box-shadow:0 0 0 2px rgba(90,145,255,0.15);' : ''}
@@ -307,6 +441,18 @@ async function bgtRefreshOpenPanel() {
   if (!task) { task = bgtTasks.find(t => t.id === bgtOpenTaskId); }
   if (!task) return;
   const pendingApprovals = await loadTaskApprovals(task.id);
+  try {
+    const runs = await loadRecentProcessRuns(12);
+    const linked = runs.filter((run) => String(run.taskId || '') === String(task.id));
+    bgtRecentProcessRuns = linked.length > 0 ? linked : runs.slice(0, 5);
+  } catch {
+    bgtRecentProcessRuns = [];
+  }
+  try {
+    bgtCodingWorkspace = await loadCodingWorkspace();
+  } catch {
+    bgtCodingWorkspace = null;
+  }
 
   const titleEl = document.getElementById('bgt-panel-title');
   if (titleEl) titleEl.textContent = task.title || 'Task Details';
@@ -316,8 +462,11 @@ async function bgtRefreshOpenPanel() {
     if (task.status === 'running') {
       pauseBtn.textContent = 'Pause';
       pauseBtn.style.display = '';
-    } else if (task.status === 'paused' || task.status === 'queued') {
+    } else if (['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(task.status)) {
       pauseBtn.textContent = 'Resume';
+      pauseBtn.style.display = '';
+    } else if (task.status === 'failed') {
+      pauseBtn.textContent = 'Restart';
       pauseBtn.style.display = '';
     } else {
       pauseBtn.style.display = 'none';
@@ -482,12 +631,27 @@ async function bgtRefreshOpenPanel() {
       </div>
     </div>
 
+    <!-- Coding workspace -->
+    <div id="coding-workspace-section">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Coding Workspace</div>
+      ${renderCodingWorkspacePanel(bgtCodingWorkspace)}
+    </div>
+
     <!-- Manager/Worker status indicator (only shown when manager is active) -->
     ${task.managerEnabled ? `<div id="manager-status-bar" style="background:#f0f5ff;border:1px solid #c7d8f5;border-radius:10px;padding:8px 12px;font-size:11px;font-weight:700;color:#0d4faf;display:flex;align-items:center;gap:8px">
       <span id="manager-status-icon">⚙️</span>
       <span id="manager-status-text">Manager/Worker mode active</span>
       ${task.executorProvider ? `<span style="font-weight:400;color:#555;margin-left:auto">Worker: ${escHtml(task.executorProvider)}</span>` : ''}
     </div>` : ''}
+
+    <!-- Supervised command runs -->
+    <div id="process-runs-section">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:8px">
+        <span>Command Runs</span>
+        <span style="font-weight:400;opacity:0.6">${bgtRecentProcessRuns.length ? `${bgtRecentProcessRuns.length} recent` : ''}</span>
+      </div>
+      <div id="process-runs-body" class="process-runs-list">${renderProcessRunsHTML(bgtRecentProcessRuns)}</div>
+    </div>
 
     <!-- Evidence Bus panel (collapsible) -->
     <div id="evidence-bus-section">
@@ -507,9 +671,12 @@ async function bgtRefreshOpenPanel() {
       </div>
     </div>
 
-    <!-- Delete button -->
+    <!-- Finished-task actions -->
     ${(displayStatus === 'complete' || displayStatus === 'failed') ? `
-    <button onclick="bgtDeleteTask('${escHtml(task.id)}')" style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;align-self:flex-start">Remove</button>` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="bgtCreateSkillProposal('${escHtml(task.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">Draft Skill</button>
+      <button onclick="bgtDeleteTask('${escHtml(task.id)}')" style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">Remove</button>
+    </div>` : ''}
   `;
 
   // Auto-expand evidence bus for cron tasks (they always write notes) or if entries already exist
@@ -548,12 +715,30 @@ async function bgtPauseResume() {
   if (task.status === 'running') {
     // Pause
     try { await api(`/api/bg-tasks/${bgtOpenTaskId}/pause`, { method: 'POST' }); } catch {}
-  } else if (task.status === 'paused' || task.status === 'queued') {
+  } else if (['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(task.status)) {
     // Resume
     try { await api(`/api/bg-tasks/${bgtOpenTaskId}/resume`, { method: 'POST' }); } catch {}
+  } else if (task.status === 'failed') {
+    // Restart failed task with previous-run context
+    try { await api(`/api/bg-tasks/${bgtOpenTaskId}/restart`, { method: 'POST' }); } catch {}
   }
   await refreshBgTasks();
   await bgtRefreshOpenPanel();
+}
+
+async function bgtCreateSkillProposal(taskId) {
+  if (!taskId) return;
+  try {
+    const result = await api(ENDPOINTS.bgTaskSkillProposal(taskId), { method: 'POST' });
+    if (!result?.success) {
+      bgtToast('Skill draft failed', result?.error || 'Could not create draft skill');
+      return;
+    }
+    bgtToast('Skill draft created', result.path || 'Draft saved');
+    await bgtRefreshOpenPanel();
+  } catch (err) {
+    bgtToast('Skill draft failed', err?.message || 'Could not create draft skill');
+  }
 }
 
 async function bgtResolveApproval(approvalId, action) {
@@ -1026,10 +1211,18 @@ function handleErrorResponseWsEvent(e) {
 window.refreshBgTasks = refreshBgTasks;
 window.toggleBgtEditMode = toggleBgtEditMode;
 window.bgtHideTask = bgtHideTask;
+window.bgtOpenCardFromClick = bgtOpenCardFromClick;
+window.bgtHandleCardDragStart = bgtHandleCardDragStart;
+window.bgtHandleCardDragEnd = bgtHandleCardDragEnd;
+window.bgtHandleColumnDragOver = bgtHandleColumnDragOver;
+window.bgtHandleColumnDragEnter = bgtHandleColumnDragEnter;
+window.bgtHandleColumnDragLeave = bgtHandleColumnDragLeave;
+window.bgtHandleColumnDrop = bgtHandleColumnDrop;
 window.openBgtPanel = openBgtPanel;
 window.closeBgtPanel = closeBgtPanel;
 window.bgtRefreshOpenPanel = bgtRefreshOpenPanel;
 window.bgtPauseResume = bgtPauseResume;
+window.bgtCreateSkillProposal = bgtCreateSkillProposal;
 window.bgtResolveApproval = bgtResolveApproval;
 window.bgtSendReply = bgtSendReply;
 window.bgtChatSend = bgtChatSend;
@@ -1096,4 +1289,27 @@ wsEventBus.on('task_evidence_update', (msg) => {
 wsEventBus.on('cron_task_spawned', (msg) => {
   bgtToast('\uD83D\uDD50 Scheduled job running', `"${msg.jobName}" started as background task`);
   if (window.currentMode === 'bgtasks') refreshBgTasks();
+});
+
+window.refreshProcessRunsPanel = async function refreshProcessRunsPanel() {
+  if (window.bgtOpenTaskId) {
+    await bgtRefreshOpenPanel();
+    return;
+  }
+  const body = document.getElementById('process-runs-body');
+  if (!body) return;
+  try {
+    const runs = await loadRecentProcessRuns(8);
+    body.innerHTML = renderProcessRunsHTML(runs);
+  } catch {}
+};
+
+installProcessRunCardHandlers(document);
+installCodingWorkspaceHandlers(document);
+wsEventBus.on('process_run_started', () => window.refreshProcessRunsPanel?.());
+wsEventBus.on('process_run_output', () => window.refreshProcessRunsPanel?.());
+wsEventBus.on('process_run_exited', () => window.refreshProcessRunsPanel?.());
+wsEventBus.on('skill_proposal_created', (msg) => {
+  bgtToast('Skill draft created', msg?.title || 'Draft saved');
+  if (window.bgtOpenTaskId === msg?.taskId) bgtRefreshOpenPanel();
 });

@@ -11,6 +11,7 @@ import path from 'path';
 import { getConfig } from '../../config/config.js';
 import { getVault } from '../../security/vault.js';
 import {
+  disconnectConnector,
   getConnectorStatuses,
   pollOAuthResult,
   saveConnectorCredentials,
@@ -21,6 +22,10 @@ import {
   loadSavedConnections,
   saveSavedConnections,
 } from '../../integrations/connection-state.js';
+import {
+  loadObsidianBridgeState,
+  removeObsidianVault,
+} from '../obsidian/bridge.js';
 import { browserOpen, getBrowserSessionInfo } from '../browser-tools.js';
 
 export const router = Router();
@@ -69,6 +74,12 @@ router.get('/api/connections', (_req: any, res: any) => {
       hasCredentials: !!vercelCreds?.apiKey,
       authType: 'api_key',
     };
+    const obsidianVaults = loadObsidianBridgeState().vaults;
+    statuses.obsidian = {
+      connected: obsidianVaults.some((vault) => vault.enabled !== false),
+      hasCredentials: obsidianVaults.length > 0,
+      authType: 'none',
+    };
     res.json({ connections: loadSavedConnections(), statuses });
   } catch {
     const vercelCreds = getVercelCredentials();
@@ -79,6 +90,11 @@ router.get('/api/connections', (_req: any, res: any) => {
           connected: !!vercelCreds?.apiKey,
           hasCredentials: !!vercelCreds?.apiKey,
           authType: 'api_key',
+        },
+        obsidian: {
+          connected: loadObsidianBridgeState().vaults.some((vault) => vault.enabled !== false),
+          hasCredentials: loadObsidianBridgeState().vaults.length > 0,
+          authType: 'none',
         },
       },
     });
@@ -155,6 +171,20 @@ router.post('/api/connections/disconnect', (req: any, res: any) => {
         'integration.vercel.credentials',
         'connections:vercel:disconnect',
       );
+    } catch {
+      // best effort
+    }
+  } else if (id === 'obsidian') {
+    try {
+      for (const vault of loadObsidianBridgeState().vaults) {
+        removeObsidianVault(vault.id, { removeIndexedNotes: true });
+      }
+    } catch {
+      // best effort
+    }
+  } else {
+    try {
+      disconnectConnector(id);
     } catch {
       // best effort
     }

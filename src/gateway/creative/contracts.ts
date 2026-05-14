@@ -640,6 +640,253 @@ export function summarizeCreativeSceneDoc(doc: any): CreativeSceneSummary {
   };
 }
 
+// ── Composition (multi-clip timeline) ────────────────────────────────────────
+
+export type CreativeClipLane = 'html-motion' | 'remotion';
+
+export type CreativeTransitionKind =
+  | 'cut'
+  | 'fade'
+  | 'crossfade'
+  | 'wipe-left'
+  | 'wipe-right'
+  | 'dip-to-color';
+
+export type CreativeTransitionSpec = {
+  kind: CreativeTransitionKind;
+  durationMs: number;
+  color?: string;
+};
+
+export type CreativeTrackKind = 'video' | 'audio' | 'caption';
+
+export type CreativeTrack = {
+  id: string;
+  kind: CreativeTrackKind;
+  label: string;
+  index: number;
+  height: number;
+  muted: boolean;
+  locked: boolean;
+  hidden: boolean;
+};
+
+export type CreativeClipSource =
+  | { kind: 'html-motion'; clipPath: string; compositionId?: string | null }
+  | { kind: 'remotion'; templateId: string; presetId?: string | null; input: any };
+
+export type CreativeClip = {
+  id: string;
+  trackId: string;
+  label: string;
+  inMs: number;            // master-timeline start
+  outMs: number;           // master-timeline end (exclusive)
+  trimStartMs: number;     // skipped from clip head
+  trimEndMs: number;       // skipped from clip tail
+  lane: CreativeClipLane;
+  source: CreativeClipSource;
+  transitionIn: CreativeTransitionSpec | null;
+  transitionOut: CreativeTransitionSpec | null;
+  locked: boolean;
+  meta: Record<string, any>;
+};
+
+export type CreativeComposition = {
+  id: string;
+  version: number;
+  width: number;
+  height: number;
+  frameRate: number;
+  durationMs: number;        // master timeline duration
+  background: string;
+  tracks: CreativeTrack[];
+  clips: CreativeClip[];
+  audioTracks: CreativeAudioTrack[];
+  captions: CreativeCaptionTrack[];
+  brandKit: CreativeBrandKit | null;
+  selectedClipId: string | null;
+  meta: Record<string, any>;
+};
+
+export type CreativeCompositionSummary = {
+  width: number;
+  height: number;
+  durationMs: number;
+  frameRate: number;
+  trackCount: number;
+  clipCount: number;
+  videoClipCount: number;
+  audioTrackCount: number;
+  captionTrackCount: number;
+  hasGaps: boolean;
+  hasOverlaps: boolean;
+};
+
+function compositionId(prefix = 'comp'): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeTransitionSpec(input: any): CreativeTransitionSpec | null {
+  if (!isPlainObject(input)) return null;
+  const kindRaw = String(input.kind || 'cut').trim().toLowerCase();
+  const kindAllowed: CreativeTransitionKind[] = ['cut', 'fade', 'crossfade', 'wipe-left', 'wipe-right', 'dip-to-color'];
+  const kind = (kindAllowed.includes(kindRaw as CreativeTransitionKind) ? kindRaw : 'cut') as CreativeTransitionKind;
+  const durationMs = Math.max(0, Number(input.durationMs) || 0);
+  if (kind === 'cut' || durationMs <= 0) return { kind: 'cut', durationMs: 0 };
+  const out: CreativeTransitionSpec = { kind, durationMs };
+  if (typeof input.color === 'string' && input.color.trim()) out.color = input.color.trim();
+  return out;
+}
+
+function normalizeCreativeTrack(input: any, fallbackIndex = 0): CreativeTrack {
+  const safe = isPlainObject(input) ? input : {};
+  const kindRaw = String(safe.kind || 'video').trim().toLowerCase();
+  const kind = (['video', 'audio', 'caption'].includes(kindRaw) ? kindRaw : 'video') as CreativeTrackKind;
+  return {
+    id: normalizeString(safe.id, '') || compositionId('track'),
+    kind,
+    label: normalizeString(safe.label, kind === 'video' ? `V${fallbackIndex + 1}` : kind === 'audio' ? `A${fallbackIndex + 1}` : `C${fallbackIndex + 1}`),
+    index: Number.isFinite(Number(safe.index)) ? Number(safe.index) : fallbackIndex,
+    height: Math.max(24, Number(safe.height) || (kind === 'video' ? 56 : kind === 'audio' ? 44 : 36)),
+    muted: safe.muted === true,
+    locked: safe.locked === true,
+    hidden: safe.hidden === true,
+  };
+}
+
+function normalizeClipSource(input: any): CreativeClipSource {
+  const safe = isPlainObject(input) ? input : {};
+  const kindRaw = String(safe.kind || 'html-motion').trim().toLowerCase();
+  if (kindRaw === 'html-motion') {
+    return {
+      kind: 'html-motion',
+      clipPath: normalizeString(safe.clipPath, ''),
+      compositionId: typeof safe.compositionId === 'string' ? safe.compositionId : null,
+    };
+  }
+  if (kindRaw === 'remotion') {
+    return {
+      kind: 'remotion',
+      templateId: normalizeString(safe.templateId, ''),
+      presetId: typeof safe.presetId === 'string' ? safe.presetId : null,
+      input: cloneData(safe.input ?? {}),
+    };
+  }
+  return {
+    kind: 'html-motion',
+    clipPath: '',
+    compositionId: null,
+  };
+}
+
+export function normalizeCreativeClip(input: any, fallback: { fps?: number } = {}): CreativeClip {
+  const safe = isPlainObject(input) ? input : {};
+  const inMs = Math.max(0, Number(safe.inMs) || 0);
+  let outMs = Math.max(inMs, Number(safe.outMs) || 0);
+  if (outMs <= inMs) outMs = inMs + Math.max(1, Number(safe.durationMs) || 4000);
+  const laneRaw = String(safe.lane || safe.source?.kind || '').trim().toLowerCase();
+  const lane = (['html-motion', 'remotion'].includes(laneRaw) ? laneRaw : 'html-motion') as CreativeClipLane;
+  return {
+    id: normalizeString(safe.id, '') || compositionId('clip'),
+    trackId: normalizeString(safe.trackId, ''),
+    label: normalizeString(safe.label, 'Clip'),
+    inMs,
+    outMs,
+    trimStartMs: Math.max(0, Number(safe.trimStartMs) || 0),
+    trimEndMs: Math.max(0, Number(safe.trimEndMs) || 0),
+    lane,
+    source: normalizeClipSource(safe.source),
+    transitionIn: normalizeTransitionSpec(safe.transitionIn),
+    transitionOut: normalizeTransitionSpec(safe.transitionOut),
+    locked: safe.locked === true,
+    meta: isPlainObject(safe.meta) ? cloneData(safe.meta) : {},
+  };
+}
+
+function defaultCompositionTracks(): CreativeTrack[] {
+  return [
+    normalizeCreativeTrack({ kind: 'video', label: 'V1' }, 0),
+    normalizeCreativeTrack({ kind: 'audio', label: 'A1' }, 0),
+    normalizeCreativeTrack({ kind: 'caption', label: 'C1' }, 0),
+  ];
+}
+
+export function normalizeCreativeComposition(input: any = {}): CreativeComposition {
+  const safe = isPlainObject(input) ? input : {};
+  const tracksIn = Array.isArray(safe.tracks) ? safe.tracks : [];
+  const tracks = tracksIn.length > 0
+    ? tracksIn.map((track: any, idx: number) => normalizeCreativeTrack(track, idx))
+    : defaultCompositionTracks();
+  const clipsIn = Array.isArray(safe.clips) ? safe.clips : [];
+  const clips = clipsIn.map((clip: any) => normalizeCreativeClip(clip));
+  // assign a default trackId to clips that don't have one yet
+  const firstVideoTrack = tracks.find((t) => t.kind === 'video');
+  if (firstVideoTrack) {
+    for (const clip of clips) {
+      if (!clip.trackId) clip.trackId = firstVideoTrack.id;
+    }
+  }
+  const audioTracks = Array.isArray(safe.audioTracks)
+    ? safe.audioTracks.map(normalizeCreativeAudioTrack)
+    : [];
+  const captions = Array.isArray(safe.captions)
+    ? safe.captions.map(normalizeCreativeCaptionTrack).filter(Boolean) as CreativeCaptionTrack[]
+    : [];
+  const computedDurationMs = clips.length > 0
+    ? clips.reduce((max, c) => Math.max(max, c.outMs), 0)
+    : 0;
+  const durationMs = Math.max(1000, Number(safe.durationMs) || computedDurationMs || 12000);
+  return {
+    id: normalizeString(safe.id, '') || compositionId(),
+    version: Number.isFinite(Number(safe.version)) ? Number(safe.version) : 1,
+    width: Number.isFinite(Number(safe.width)) ? Number(safe.width) : 1920,
+    height: Number.isFinite(Number(safe.height)) ? Number(safe.height) : 1080,
+    frameRate: Math.max(1, Number(safe.frameRate) || 30),
+    durationMs,
+    background: normalizeString(safe.background, '#000000') || '#000000',
+    tracks,
+    clips,
+    audioTracks,
+    captions,
+    brandKit: normalizeCreativeBrandKit(safe.brandKit),
+    selectedClipId: safe.selectedClipId ? normalizeString(safe.selectedClipId) : null,
+    meta: isPlainObject(safe.meta) ? cloneData(safe.meta) : {},
+  };
+}
+
+export function summarizeCreativeComposition(comp: any): CreativeCompositionSummary {
+  const c = normalizeCreativeComposition(comp);
+  const sortedByTrackThenIn = c.clips.slice().sort((a, b) => (a.trackId === b.trackId ? a.inMs - b.inMs : a.trackId.localeCompare(b.trackId)));
+  let hasOverlaps = false;
+  let hasGaps = false;
+  let prevEnd = 0;
+  let prevTrack = '';
+  for (const clip of sortedByTrackThenIn) {
+    if (clip.trackId !== prevTrack) {
+      prevEnd = 0;
+      prevTrack = clip.trackId;
+      if (clip.inMs > 0) hasGaps = true;
+    }
+    if (clip.inMs < prevEnd) hasOverlaps = true;
+    if (clip.inMs > prevEnd) hasGaps = true;
+    prevEnd = Math.max(prevEnd, clip.outMs);
+  }
+  const videoTrackIds = new Set(c.tracks.filter((t) => t.kind === 'video').map((t) => t.id));
+  return {
+    width: c.width,
+    height: c.height,
+    durationMs: c.durationMs,
+    frameRate: c.frameRate,
+    trackCount: c.tracks.length,
+    clipCount: c.clips.length,
+    videoClipCount: c.clips.filter((clip) => videoTrackIds.has(clip.trackId)).length,
+    audioTrackCount: c.audioTracks.length,
+    captionTrackCount: c.captions.length,
+    hasGaps,
+    hasOverlaps,
+  };
+}
+
 export function getCreativeAudioTrackWindow(trackInput: any = {}, durationMs = 12000): {
   startMs: number;
   trimStartMs: number;

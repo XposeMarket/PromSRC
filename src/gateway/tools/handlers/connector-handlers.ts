@@ -13,6 +13,12 @@ import type { HubSpotConnector } from '../../../integrations/connectors/hubspot.
 import type { SalesforceConnector } from '../../../integrations/connectors/salesforce.js';
 import type { StripeConnector } from '../../../integrations/connectors/stripe.js';
 import type { GoogleAnalyticsConnector } from '../../../integrations/connectors/google-analytics.js';
+import {
+  loadObsidianBridgeState,
+  syncObsidianVaults,
+  upsertObsidianVault,
+  writePrometheusNoteToObsidian,
+} from '../../obsidian/bridge.js';
 
 export interface ConnectorToolResult {
   result: string;
@@ -35,6 +41,54 @@ function summarizeEmails(messages: any[]): string {
 
 export async function handleConnectorTool(toolName: string, args: any): Promise<ConnectorToolResult> {
   try {
+    if (toolName.startsWith('connector_obsidian_')) {
+      if (toolName === 'connector_obsidian_status') {
+        return ok(loadObsidianBridgeState());
+      }
+
+      if (toolName === 'connector_obsidian_connect_vault') {
+        const vaultPath = String(args.path || '').trim();
+        if (!vaultPath) return { result: 'connector_obsidian_connect_vault: path is required', error: true };
+        const vault = upsertObsidianVault({
+          path: vaultPath,
+          name: args.name ? String(args.name).trim() : undefined,
+          mode: args.mode === 'full' || args.mode === 'assisted' ? args.mode : 'read_only',
+          include: Array.isArray(args.include) ? args.include.map((v: any) => String(v || '').trim()).filter(Boolean) : undefined,
+          exclude: Array.isArray(args.exclude) ? args.exclude.map((v: any) => String(v || '').trim()).filter(Boolean) : undefined,
+          writebackFolder: args.writeback_folder ? String(args.writeback_folder).trim() : undefined,
+          enabled: true,
+        });
+        const sync = args.sync_now === false ? null : syncObsidianVaults({ vaultId: vault.id, force: true });
+        return ok({ vault, sync });
+      }
+
+      if (toolName === 'connector_obsidian_sync') {
+        const state = loadObsidianBridgeState();
+        if (!state.vaults.length) return notConnected('Obsidian');
+        return ok(syncObsidianVaults({
+          vaultId: args.vault_id ? String(args.vault_id).trim() : undefined,
+          force: args.force !== false,
+        }));
+      }
+
+      if (toolName === 'connector_obsidian_writeback') {
+        const vaultId = String(args.vault_id || '').trim();
+        const title = String(args.title || '').trim();
+        const content = String(args.content || '').trim();
+        if (!vaultId) return { result: 'connector_obsidian_writeback: vault_id is required', error: true };
+        if (!title) return { result: 'connector_obsidian_writeback: title is required', error: true };
+        if (!content) return { result: 'connector_obsidian_writeback: content is required', error: true };
+        return ok(writePrometheusNoteToObsidian({
+          vaultId,
+          title,
+          content,
+          folder: args.folder ? String(args.folder).trim() : undefined,
+          tags: Array.isArray(args.tags) ? args.tags.map((v: any) => String(v || '').trim()).filter(Boolean) : undefined,
+          sourceRecordId: args.source_record_id ? String(args.source_record_id).trim() : undefined,
+        }));
+      }
+    }
+
     // ── Gmail ───────────────────────────────────────────────────────────────
     if (toolName.startsWith('connector_gmail_')) {
       if (!isConnectorConnected('gmail')) return notConnected('Gmail');

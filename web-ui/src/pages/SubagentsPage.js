@@ -25,6 +25,289 @@ const MAX_SUBAGENT_CHAT_QUEUE = 8;
 let subagentChatAbortControllers = {}; // agentId -> AbortController
 let subagentChatQueueByAgent = {}; // agentId -> [{ content }]
 let subagentChatQueueDrainTimers = {}; // agentId -> timer id
+let subagentChatPendingFilesByAgent = {}; // agentId -> staged files before send
+let subagentChatFileStagingPromisesByAgent = {}; // agentId -> Promise[]
+
+const SUBAGENT_CHAT_TEXT_EXTENSIONS = new Set([
+  'txt','md','csv','json','js','ts','jsx','tsx','html','htm','css','scss','less',
+  'py','rb','php','java','c','cpp','h','go','rs','sh','bash','yaml','yml',
+  'toml','ini','cfg','conf','xml','svg','sql','graphql','vue','svelte','log'
+]);
+const SUBAGENT_CHAT_IMAGE_EXTENSIONS = new Set(['png','jpg','jpeg','webp','gif','bmp','ico','svg']);
+const SUBAGENT_CHAT_VIDEO_EXTENSIONS = new Set(['mp4','mov','m4v','webm','avi','mkv','mpeg','mpg','3gp']);
+
+function subagentChatJsArg(value) {
+  return JSON.stringify(String(value ?? ''))
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function getSubagentPendingFiles(agentId) {
+  if (!subagentChatPendingFilesByAgent[agentId]) subagentChatPendingFilesByAgent[agentId] = [];
+  return subagentChatPendingFilesByAgent[agentId];
+}
+
+function getSubagentStagingPromises(agentId) {
+  if (!subagentChatFileStagingPromisesByAgent[agentId]) subagentChatFileStagingPromisesByAgent[agentId] = [];
+  return subagentChatFileStagingPromisesByAgent[agentId];
+}
+
+function getSubagentFileIcon(ext) {
+  const e = String(ext || '').toLowerCase();
+  if (SUBAGENT_CHAT_IMAGE_EXTENSIONS.has(e)) return '🖼️';
+  if (SUBAGENT_CHAT_VIDEO_EXTENSIONS.has(e)) return '🎥';
+  if (['mp3','wav','ogg','flac','m4a'].includes(e)) return '🎵';
+  if (e === 'pdf') return '📄';
+  if (['zip','rar','7z','tar','gz'].includes(e)) return '📦';
+  if (['doc','docx'].includes(e)) return '📃';
+  if (['xls','xlsx','csv'].includes(e)) return '📈';
+  if (['ppt','pptx'].includes(e)) return '📊';
+  if (['js','ts','jsx','tsx','py','rb','java','c','cpp','go','rs'].includes(e)) return '💻';
+  if (['json','yaml','yml','toml','xml'].includes(e)) return '⚙️';
+  if (['md','txt'].includes(e)) return '📝';
+  return '📎';
+}
+
+function getSubagentMimeType(ext) {
+  const map = {
+    pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    doc: 'application/msword', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    xls: 'application/vnd.ms-excel', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ppt: 'application/vnd.ms-powerpoint', zip: 'application/zip',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml',
+    mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime', webm: 'video/webm',
+    avi: 'video/x-msvideo', mkv: 'video/x-matroska', mpeg: 'video/mpeg', mpg: 'video/mpeg', '3gp': 'video/3gpp',
+  };
+  return map[String(ext || '').toLowerCase()] || 'application/octet-stream';
+}
+
+function stageSubagentChatFiles(agentId, fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  if (!agentId || !files.length) return Promise.resolve([]);
+  const promises = files.map(file => new Promise(resolve => {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (SUBAGENT_CHAT_TEXT_EXTENSIONS.has(ext)) {
+      const reader = new FileReader();
+      reader.onload = e => resolve({ file, name: file.name, ext, text: e.target.result, dataUrl: null, binary: false });
+      reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true });
+      reader.readAsText(file);
+      return;
+    }
+    if (SUBAGENT_CHAT_IMAGE_EXTENSIONS.has(ext)) {
+      const reader = new FileReader();
+      reader.onload = e => resolve({ file, name: file.name, ext, text: null, dataUrl: e.target.result, binary: false, isImage: true });
+      reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, isImage: true });
+      reader.readAsDataURL(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+      const bytes = new Uint8Array(e.target.result);
+      let raw = '';
+      for (let i = 0; i < bytes.byteLength; i++) raw += String.fromCharCode(bytes[i]);
+      resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, base64: btoa(raw), isVideo: SUBAGENT_CHAT_VIDEO_EXTENSIONS.has(ext) });
+    };
+    reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true });
+    reader.readAsArrayBuffer(file);
+  }));
+  const stagingPromise = Promise.all(promises).then((staged) => {
+    getSubagentPendingFiles(agentId).push(...staged);
+    renderSubagentChatAttachmentStaging(agentId);
+    return staged;
+  }).finally(() => {
+    subagentChatFileStagingPromisesByAgent[agentId] = getSubagentStagingPromises(agentId).filter((p) => p !== stagingPromise);
+  });
+  getSubagentStagingPromises(agentId).push(stagingPromise);
+  return stagingPromise;
+}
+
+async function waitForSubagentChatFileStaging(agentId) {
+  while (getSubagentStagingPromises(agentId).length) {
+    await Promise.allSettled(getSubagentStagingPromises(agentId).slice());
+  }
+}
+
+function subagentStagedFilesToAttachmentPreviews(stagedFiles) {
+  return (Array.isArray(stagedFiles) ? stagedFiles : []).map((sf) => sf.isImage && sf.dataUrl
+    ? { kind: 'image', name: sf.name, ext: sf.ext || '', workspacePath: '', dataUrl: sf.dataUrl }
+    : { kind: sf.isVideo ? 'video' : 'file', name: sf.name, ext: sf.ext || '', workspacePath: '', mimeType: sf.binary || sf.isVideo ? getSubagentMimeType(sf.ext) : '', binary: !!sf.binary });
+}
+
+function subagentUploadResultsToAttachmentPreviews(uploadResults) {
+  return (Array.isArray(uploadResults) ? uploadResults : []).map((r) => r.isImage && r.base64 && r.mimeType
+    ? { kind: 'image', name: r.name, ext: r.ext || '', workspacePath: r.workspacePath || '', dataUrl: `data:${r.mimeType};base64,${r.base64}` }
+    : { kind: r.isVideo ? 'video' : 'file', name: r.name, ext: r.ext || '', workspacePath: r.workspacePath || '', mimeType: r.mimeType || '', binary: !!r.binary });
+}
+
+async function uploadSubagentChatStagedFiles(stagedFiles) {
+  if (!Array.isArray(stagedFiles) || !stagedFiles.length) return [];
+  if (typeof window.uploadStagedFilesToCanvas === 'function') return window.uploadStagedFilesToCanvas(stagedFiles);
+  const results = [];
+  for (const sf of stagedFiles) {
+    if (sf.text !== null) {
+      try {
+        const r = await fetch('/api/canvas/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: sf.name, content: sf.text }) });
+        const d = await r.json();
+        results.push(d.success ? { name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath } : { name: sf.name, ext: sf.ext, error: d.error });
+      } catch (e) { results.push({ name: sf.name, ext: sf.ext, error: e.message }); }
+    } else {
+      const base64 = sf.isImage && sf.dataUrl ? sf.dataUrl.replace(/^data:[^;]+;base64,/, '') : sf.base64;
+      const mimeType = sf.isImage && sf.dataUrl ? (sf.dataUrl.split(';')[0].replace('data:', '') || getSubagentMimeType(sf.ext)) : getSubagentMimeType(sf.ext);
+      if (!base64) { results.push({ name: sf.name, ext: sf.ext, binary: true, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: 'Could not read file bytes' }); continue; }
+      try {
+        const r = await fetch('/api/canvas/upload-binary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: sf.name, base64, mimeType }) });
+        const d = await r.json();
+        results.push(d.success
+          ? { name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, base64: sf.isImage ? base64 : undefined, mimeType }
+          : { name: sf.name, ext: sf.ext, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: d.error });
+      } catch (e) { results.push({ name: sf.name, ext: sf.ext, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: e.message }); }
+    }
+  }
+  return results;
+}
+
+function buildSubagentFileContextNote(uploadResults) {
+  if (typeof window.buildFileContextNote === 'function') return window.buildFileContextNote(uploadResults);
+  const lines = uploadResults.map((r) => r.workspacePath ? `  - "${r.name}" -> saved to: ${r.workspacePath}` : `  - "${r.name}" - upload failed: ${r.error || 'unknown error'}`);
+  return `\n\n[UPLOADED FILES]\n${lines.join('\n')}\nUse the exact workspace paths above to read, edit, place, or process files.`;
+}
+
+function stripSubagentUploadNote(text, attachments = []) {
+  const raw = String(text || '');
+  return (attachments && attachments.length ? raw.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '') : raw).trim();
+}
+
+function renderSubagentAttachmentPreviews(attachments, agentId, messageId) {
+  const list = Array.isArray(attachments) ? attachments : [];
+  if (!list.length) return '';
+  return `<div class="team-chat-attachment-list">${list.map((item, idx) => {
+    const name = String(item?.name || 'file');
+    if (item?.kind === 'image' && item.dataUrl) {
+      return `<button type="button" class="team-chat-attachment-thumb" title="${escHtml(name)}" onclick="openSubagentChatAttachmentPreview(${subagentChatJsArg(agentId)}, ${subagentChatJsArg(messageId)}, ${idx})"><img src="${item.dataUrl}" alt=""></button>`;
+    }
+    return `<button type="button" class="team-chat-attachment-file" title="${escHtml(name)}" onclick="openSubagentChatAttachmentPreview(${subagentChatJsArg(agentId)}, ${subagentChatJsArg(messageId)}, ${idx})"><span>${getSubagentFileIcon(item?.ext)}</span><strong>${escHtml(name)}</strong><em>${escHtml(String(item?.ext || 'file'))}</em></button>`;
+  }).join('')}</div>`;
+}
+
+function renderSubagentChatAttachmentStaging(agentId) {
+  const staging = document.getElementById('subagent-chat-file-staging');
+  if (!staging) return;
+  const files = getSubagentPendingFiles(agentId);
+  if (!files.length) { staging.style.display = 'none'; staging.innerHTML = ''; return; }
+  staging.style.display = 'flex';
+  staging.innerHTML = files.map((f, idx) => {
+    const preview = f.isImage && f.dataUrl ? `<img src="${f.dataUrl}" style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0" alt="">` : `<span class="pill-icon">${getSubagentFileIcon(f.ext)}</span>`;
+    return `<div class="chat-file-pill">${preview}<span class="pill-name" title="${escHtml(f.name)}">${escHtml(f.name)}</span><span class="pill-ext">${escHtml(f.ext || 'file')}</span><button class="pill-remove" onclick="removeSubagentChatFile(${subagentChatJsArg(agentId)}, ${idx})" title="Remove">&times;</button></div>`;
+  }).join('');
+}
+
+function removeSubagentChatFile(agentId, idx) {
+  getSubagentPendingFiles(agentId).splice(Number(idx), 1);
+  renderSubagentChatAttachmentStaging(agentId);
+}
+
+function openSubagentChatFilePicker() {
+  document.getElementById('subagent-chat-file-input')?.click();
+}
+
+function onSubagentChatFilesChosen(agentId, input) {
+  if (!input?.files?.length) return;
+  stageSubagentChatFiles(agentId, input.files);
+  input.value = '';
+}
+
+function getSubagentClipboardFiles(clipboardData) {
+  const files = [];
+  const seen = new Set();
+  const addFile = (file) => {
+    if (!file) return;
+    const key = `${file.name}:${file.size}:${file.type}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(file);
+  };
+  Array.from(clipboardData?.files || []).forEach(addFile);
+  Array.from(clipboardData?.items || []).forEach((item) => {
+    if (!item || item.kind !== 'file') return;
+    try { addFile(item.getAsFile()); } catch {}
+  });
+  return files;
+}
+
+function handleSubagentChatPaste(event, agentId) {
+  const files = getSubagentClipboardFiles(event.clipboardData);
+  if (!files.length) return;
+  const pastedText = event.clipboardData?.getData?.('text/plain') || '';
+  if (!pastedText.trim()) event.preventDefault();
+  stageSubagentChatFiles(agentId, files);
+  showToast(files.length === 1 ? 'Attachment staged' : `${files.length} attachments staged`, 'Press Send when you are ready.', 'success');
+}
+
+function bindSubagentChatAttachmentListeners(agentId) {
+  const shell = document.getElementById('subagent-chat-tab-shell');
+  if (!shell || shell.dataset.attachBound === agentId) return;
+  shell.dataset.attachBound = agentId;
+  shell.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    shell.classList.add('team-chat-drag-over');
+  });
+  shell.addEventListener('dragleave', (event) => {
+    if (!shell.contains(event.relatedTarget)) shell.classList.remove('team-chat-drag-over');
+  });
+  shell.addEventListener('drop', (event) => {
+    event.preventDefault();
+    shell.classList.remove('team-chat-drag-over');
+    const files = event.dataTransfer?.files;
+    if (files?.length) stageSubagentChatFiles(agentId, files);
+  });
+}
+
+async function openSubagentChatAttachmentPreview(agentId, messageId, attachmentIndex) {
+  const message = subagentChatHistory.find((entry) => String(entry.id) === String(messageId));
+  const attachment = message?.metadata?.attachmentPreviews?.[Number(attachmentIndex)];
+  if (!attachment) return;
+  await openSubagentPanelAttachmentPreview('subagent-chat-tab-shell', attachment);
+}
+
+async function openSubagentPanelAttachmentPreview(containerId, attachment) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  closeSubagentPanelAttachmentPreview(containerId);
+  const overlay = document.createElement('div');
+  overlay.className = 'panel-attachment-preview-overlay';
+  overlay.innerHTML = `<button type="button" class="panel-attachment-preview-close" title="Close" onclick="closeSubagentPanelAttachmentPreview(${subagentChatJsArg(containerId)})">&times;</button><div class="panel-attachment-preview-body">Loading...</div>`;
+  host.appendChild(overlay);
+  const body = overlay.querySelector('.panel-attachment-preview-body');
+  const name = String(attachment.name || 'file');
+  try {
+    if (attachment.kind === 'image' && attachment.dataUrl) {
+      body.innerHTML = `<img src="${attachment.dataUrl}" alt="${escHtml(name)}"><div class="panel-attachment-preview-name">${escHtml(name)}</div>`;
+      return;
+    }
+    if (attachment.workspacePath) {
+      const res = await fetch(`/api/canvas/file?path=${encodeURIComponent(attachment.workspacePath)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.isImage && data.base64 && data.mimeType) {
+        body.innerHTML = `<img src="data:${data.mimeType};base64,${data.base64}" alt="${escHtml(name)}"><div class="panel-attachment-preview-name">${escHtml(name)}</div>`;
+      } else if (data.content !== undefined) {
+        body.innerHTML = `<div class="panel-attachment-preview-name">${escHtml(name)}</div><pre>${escHtml(String(data.content || ''))}</pre>`;
+      } else {
+        body.innerHTML = `<div class="panel-attachment-preview-file"><div>${getSubagentFileIcon(attachment.ext)}</div><strong>${escHtml(name)}</strong><span>${escHtml(attachment.workspacePath)}</span><button type="button" onclick="canvasPresentFile(${subagentChatJsArg(attachment.workspacePath)}, ${subagentChatJsArg(name)})">Open in Canvas</button></div>`;
+      }
+    } else {
+      body.innerHTML = `<div class="panel-attachment-preview-file"><div>${getSubagentFileIcon(attachment.ext)}</div><strong>${escHtml(name)}</strong><span>Upload completes when the message sends.</span></div>`;
+    }
+  } catch (err) {
+    body.innerHTML = `<div class="panel-attachment-preview-file"><strong>Preview unavailable</strong><span>${escHtml(String(err?.message || err))}</span></div>`;
+  }
+}
+
+function closeSubagentPanelAttachmentPreview(containerId = 'subagent-chat-tab-shell') {
+  document.querySelectorAll(`#${CSS.escape(containerId)} .panel-attachment-preview-overlay`).forEach((el) => el.remove());
+}
 
 function getSubagentStreamingState(agentId) {
   if (!agentId) return null;
@@ -41,15 +324,16 @@ function getSubagentChatQueue(agentId, create = false) {
   return subagentChatQueueByAgent[agentId] || [];
 }
 
-function queueSubagentChatMessage(agentId, content) {
+function queueSubagentChatMessage(agentId, content, files = []) {
   const text = String(content || '').trim();
-  if (!text) return false;
+  const stagedFiles = Array.isArray(files) ? files.slice() : [];
+  if (!text && !stagedFiles.length) return false;
   const queue = getSubagentChatQueue(agentId, true);
   if (queue.length >= MAX_SUBAGENT_CHAT_QUEUE) {
     showToast('Queue full', `Wait for ${getActiveSubagentName(agentId)} to catch up before adding more.`, 'warning');
     return false;
   }
-  queue.push({ content: text });
+  queue.push({ content: text, files: stagedFiles });
   showToast('Queued', `${getActiveSubagentName(agentId)} will receive this next.`, 'info');
   return true;
 }
@@ -62,8 +346,8 @@ function scheduleNextSubagentQueuedMessage(agentId) {
     delete subagentChatQueueDrainTimers[agentId];
     if (isSubagentChatBusy(agentId)) return;
     const next = getSubagentChatQueue(agentId).shift();
-    if (!next?.content) return;
-    sendSubagentChat(agentId, next.content);
+    if (!next?.content && !next?.files?.length) return;
+    sendSubagentChat(agentId, next);
   }, 120);
   if (activeSubagentId === agentId && subagentDetailTab === 'chat') renderSubagentBoard(agentId);
 }
@@ -673,6 +957,8 @@ async function switchSubagentTab(tab, agentId) {
         inp.focus();
         inp.addEventListener('input', () => { subagentChatDraft = inp.value; });
       }
+      renderSubagentChatAttachmentStaging(agentId);
+      bindSubagentChatAttachmentListeners(agentId);
     });
   }
 }
@@ -923,8 +1209,10 @@ function renderSubagentChatTab(agent) {
     const stepCount = m.steps || m.metadata?.stepCount;
     const durationSec = m.duration || (m.metadata?.durationMs ? Math.round(m.metadata.durationMs / 1000) : 0);
     const processHtml = !isUser ? renderSubagentProcessPill(m.metadata?.processEntries || [], 'sa_msg_proc') : '';
+    const attachments = Array.isArray(m.metadata?.attachmentPreviews) ? m.metadata.attachmentPreviews : [];
+    const visibleContent = stripSubagentUploadNote(m.content, attachments);
     const contentHtml = isUser
-      ? `<div class="msg-content">${!isDirectUserMessage ? `<div style="font-size:11px;font-weight:800;margin-bottom:6px;opacity:0.78">${label}${source ? ` · ${source}` : ''}</div>` : ''}${escHtml(m.content)}</div>`
+      ? `<div class="msg-content">${!isDirectUserMessage ? `<div style="font-size:11px;font-weight:800;margin-bottom:6px;opacity:0.78">${label}${source ? ` · ${source}` : ''}</div>` : ''}${renderSubagentAttachmentPreviews(attachments, agent.id, m.id)}${visibleContent ? escHtml(visibleContent) : ''}</div>`
       : `<div class="msg-content markdown-body">${typeof marked !== 'undefined' ? marked.parse(m.content) : escHtml(m.content)}</div>`;
     const metaHtml = stepCount ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${stepCount} steps${durationSec ? ` · ${durationSec}s` : ''}</div>` : '';
     return `
@@ -939,7 +1227,7 @@ function renderSubagentChatTab(agent) {
       </div>`;
   }).join('');
   return `
-    <div style="display:flex;flex-direction:column;height:100%;gap:0">
+    <div id="subagent-chat-tab-shell" class="panel-chat-shell" style="position:relative;display:flex;flex-direction:column;height:100%;gap:0">
       <div id="subagent-chat-messages" style="flex:1;display:flex;flex-direction:column;align-items:center;width:100%;gap:18px;overflow-y:auto;padding:16px 0 8px">
         ${subagentChatHistory.length === 0 ? `
           <div style="text-align:center;color:var(--muted);padding:32px 16px;font-size:13px">
@@ -951,9 +1239,14 @@ function renderSubagentChatTab(agent) {
         ${liveStream ? renderSubagentStreamingBubble(agent) : ''}
       </div>
       <div style="flex-shrink:0;border-top:1px solid var(--line);padding:10px 0 0;display:flex;gap:8px;align-items:flex-end">
+        <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openSubagentChatFilePicker()">
+          <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
+        </button>
+        <input id="subagent-chat-file-input" type="file" multiple style="display:none" onchange="onSubagentChatFilesChosen(${subagentChatJsArg(agent.id)}, this)" />
         <div style="flex:1;display:flex;flex-direction:column;gap:6px">
           ${queuedCount ? `<div style="align-self:flex-start;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700">${queuedCount} queued</div>` : ''}
-          <textarea id="subagent-chat-input" rows="2" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`} (Enter to send, Shift+Enter for newline)" style="width:100%;resize:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat('${escHtml(agent.id)}');}"></textarea>
+          <div id="subagent-chat-file-staging" class="chat-file-staging panel-chat-file-staging" style="display:none"></div>
+          <textarea id="subagent-chat-input" rows="2" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`} (Enter to send, Shift+Enter for newline)" style="width:100%;resize:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}"></textarea>
         </div>
         <button onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;height:36px;min-width:58px">${isSending ? 'Stop' : 'Send'}</button>
       </div>
@@ -965,14 +1258,22 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
   const inp = document.getElementById('subagent-chat-input');
   const fromQueue = queuedMessage !== null && queuedMessage !== undefined;
   if (!inp && !fromQueue) return;
-  const msg = fromQueue ? String(queuedMessage || '').trim() : String(inp?.value || '').trim();
-  if (!msg) return;
+  await waitForSubagentChatFileStaging(agentId);
+  const queuedTurn = fromQueue && typeof queuedMessage === 'object' && !Array.isArray(queuedMessage)
+    ? queuedMessage
+    : { content: queuedMessage, files: [] };
+  const filesToUpload = fromQueue ? (Array.isArray(queuedTurn.files) ? queuedTurn.files.slice() : []) : getSubagentPendingFiles(agentId).slice();
+  const rawMsg = fromQueue ? String(queuedTurn.content || '').trim() : String(inp?.value || '').trim();
+  const msg = rawMsg || (filesToUpload.length ? 'Please review the attached file(s).' : '');
+  if (!msg && !filesToUpload.length) return;
 
   if (isSubagentChatBusy(agentId)) {
-    const queued = queueSubagentChatMessage(agentId, msg);
+    const queued = queueSubagentChatMessage(agentId, msg, filesToUpload);
     if (queued && !fromQueue && inp) {
       inp.value = '';
       subagentChatDraft = '';
+      subagentChatPendingFilesByAgent[agentId] = [];
+      renderSubagentChatAttachmentStaging(agentId);
     }
     if (activeSubagentId === agentId && subagentDetailTab === 'chat') renderSubagentBoard(agentId);
     requestAnimationFrame(() => {
@@ -982,11 +1283,24 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
     return;
   }
 
+  let messageForRuntime = msg;
+  let attachmentPreviews = subagentStagedFilesToAttachmentPreviews(filesToUpload);
+  if (!fromQueue) {
+    subagentChatPendingFilesByAgent[agentId] = [];
+    renderSubagentChatAttachmentStaging(agentId);
+  }
+  if (filesToUpload.length) {
+    const uploadResults = await uploadSubagentChatStagedFiles(filesToUpload);
+    const fileContextNote = buildSubagentFileContextNote(uploadResults);
+    attachmentPreviews = subagentUploadResultsToAttachmentPreviews(uploadResults);
+    messageForRuntime = fileContextNote ? `${msg}${fileContextNote}` : msg;
+  }
+
   if (inp && !fromQueue) inp.value = '';
   if (!fromQueue) subagentChatDraft = '';
   _subagentChatSending = true;
 
-  subagentChatHistory.push({ id: `pending_${Date.now()}`, role: 'user', content: msg, ts: Date.now(), metadata: { pending: true } });
+  subagentChatHistory.push({ id: `pending_${Date.now()}`, role: 'user', content: messageForRuntime, ts: Date.now(), metadata: { pending: true, attachmentPreviews } });
 
   const startTs = Date.now();
   const streamState = {
@@ -1020,7 +1334,8 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        message: msg,
+        message: messageForRuntime,
+        attachmentPreviews,
         timeoutMs: 300000,
       }),
     });
@@ -1783,6 +2098,12 @@ window.closeSubagentDetail = closeSubagentDetail;
 window.switchSubagentTab = switchSubagentTab;
 window.sendSubagentChat = sendSubagentChat;
 window.abortSubagentChat = abortSubagentChat;
+window.openSubagentChatFilePicker = openSubagentChatFilePicker;
+window.onSubagentChatFilesChosen = onSubagentChatFilesChosen;
+window.removeSubagentChatFile = removeSubagentChatFile;
+window.handleSubagentChatPaste = handleSubagentChatPaste;
+window.openSubagentChatAttachmentPreview = openSubagentChatAttachmentPreview;
+window.closeSubagentPanelAttachmentPreview = closeSubagentPanelAttachmentPreview;
 window.saveSubagentSystemPrompt = saveSubagentSystemPrompt;
 window.spawnSubagentTask = spawnSubagentTask;
 window.refreshSubagentDetail = refreshSubagentDetail;

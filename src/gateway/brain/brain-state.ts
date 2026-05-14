@@ -100,7 +100,7 @@ export function getBrainDir(): string {
 
 export function ensureBrainDirs(): void {
   const base = getBrainDir();
-  for (const sub of ['thoughts', 'dreams', 'state', path.join('state', 'daily')]) {
+  for (const sub of ['thoughts', 'dreams', 'skill-episodes', 'skill-gardener', 'state', path.join('state', 'daily')]) {
     fs.mkdirSync(path.join(base, sub), { recursive: true });
   }
 }

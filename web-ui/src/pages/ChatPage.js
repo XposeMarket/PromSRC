@@ -20,6 +20,8 @@ import { normalizeCreativeAudioTrackConfig as normalizeCreativeAudioTrackConfigE
 import { normalizeCreativeRenderJobStatus as normalizeCreativeRenderJobStatusEngine, isCreativeRenderJobTerminalStatus as isCreativeRenderJobTerminalStatusEngine, sortCreativeRenderJobEntries as sortCreativeRenderJobEntriesEngine, createCreativeRenderJobClient, createCreativeRenderWorkerController } from '../components/creative/renderJobs.js';
 import { createCreativeExportEngine } from '../components/creative/exportEngine.js';
 import { createCreativeMotionTemplateClient } from '../components/creative/motionTemplates.js';
+import { createHyperframesController } from '../components/creative/hyperframesController.js';
+import { createHyperframesCatalogBrowser } from '../components/creative/hyperframesCatalogBrowser.js';
 // (state.js imports handled via window.* proxy above)
 
 // ─── Global state: all shared mutable state accessed via window.* ───────────
@@ -138,8 +140,13 @@ if (window._sessionThinking === undefined) window._sessionThinking = {};
 if (window._sessionAbortControllers === undefined) window._sessionAbortControllers = {};
 if (window._sessionStreamState === undefined) window._sessionStreamState = {};
 if (window._sessionQueuedPrompts === undefined) window._sessionQueuedPrompts = {};
+if (window._editRerunAbortResetSessions === undefined) window._editRerunAbortResetSessions = new Set();
+if (window._voicePendingTurns === undefined) window._voicePendingTurns = [];
 if (window.currentProgressThinkingActive === undefined) window.currentProgressThinkingActive = false;
 if (window.currentProgressThinkingText === undefined) window.currentProgressThinkingText = '';
+window.editingUserMessageIndex = Number.isInteger(window.editingUserMessageIndex) ? window.editingUserMessageIndex : -1;
+let voicePendingTurnSeq = 0;
+let voicePendingProcessing = false;
 
 
 function generateSessionId() {
@@ -155,6 +162,20 @@ function setAgentSessionId(id) {
 
 function getChatSessionById(id) {
   return window.chatSessions.find(s => s.id === id) || null;
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function makeEmptyStreamState() {
@@ -1273,7 +1294,7 @@ function closeBrowserModeForCreativeSwitch(options = {}) {
   if (captureActive) {
     syncBrowserControlCapture(false, {
       owner: 'agent',
-      reason: String(options.reason || 'Creative mode opened.').trim(),
+      reason: String(options.reason || 'Creative workspace opened.').trim(),
       statusLabel: String(options.statusLabel || 'Browser control returned to agent.').trim(),
       render: false,
       syncRemote: options.syncRemote !== false,
@@ -3401,7 +3422,7 @@ function applySessionCreativeMode(sessionId, mode, options = {}) {
     if (normalizedMode) {
       closeBrowserModeForCreativeSwitch({
         persist: false,
-        reason: `${getCreativeModeMeta(normalizedMode)?.title || 'Creative mode'} opened.`,
+        reason: `${getCreativeModeMeta(normalizedMode)?.title || 'Creative workspace'} opened.`,
         statusLabel: 'Browser mode closed.',
       });
     }
@@ -3453,10 +3474,10 @@ async function setCreativeModeFromUI(mode) {
     const savedMode = await persistCreativeMode(sid, nextMode);
     applySessionCreativeMode(sid, savedMode);
     const meta = getCreativeModeMeta(savedMode);
-    addProcessEntry('info', `${meta?.title || 'Creative mode'} enabled for this chat.`);
-    showToast(`${meta?.title || 'Creative mode'} enabled`);
+    addProcessEntry('info', `${meta?.title || 'Creative workspace'} opened for this chat.`);
+    showToast(`${meta?.title || 'Creative workspace'} opened`);
   } catch (err) {
-    showToast(`Could not enable creative mode: ${err.message}`, 'error');
+    showToast(`Could not open Creative workspace: ${err.message}`, 'error');
   }
 }
 
@@ -3466,10 +3487,10 @@ async function exitCreativeModeFromUI() {
   try {
     await persistCreativeMode(sid, null);
     applySessionCreativeMode(sid, null);
-    addProcessEntry('info', 'Creative mode exited for this chat.');
-    showToast('Creative mode exited');
+    addProcessEntry('info', 'Creative workspace closed for this chat.');
+    showToast('Creative workspace closed');
   } catch (err) {
-    showToast(`Could not exit creative mode: ${err.message}`, 'error');
+    showToast(`Could not close Creative workspace: ${err.message}`, 'error');
   }
 }
 
@@ -3541,6 +3562,134 @@ function updateQueuedPromptUI() {
   renderQueuedPromptsPanel();
 }
 
+function getVoicePendingTurns() {
+  if (!Array.isArray(window._voicePendingTurns)) window._voicePendingTurns = [];
+  return window._voicePendingTurns;
+}
+
+function getActiveVoicePendingTurns() {
+  const sid = String(window.activeChatSessionId || '').trim();
+  if (!sid) return [];
+  return getVoicePendingTurns().filter((turn) => String(turn?.sessionId || '') === sid);
+}
+
+function removeVoicePendingTurnInternal(id) {
+  const key = String(id || '');
+  if (!key) return null;
+  const turns = getVoicePendingTurns();
+  const index = turns.findIndex((turn) => String(turn?.id || '') === key);
+  if (index < 0) return null;
+  return turns.splice(index, 1)[0] || null;
+}
+
+function markVoicePendingTurn(id, patch = {}) {
+  const key = String(id || '');
+  if (!key) return null;
+  const turn = getVoicePendingTurns().find((entry) => String(entry?.id || '') === key);
+  if (!turn) return null;
+  Object.assign(turn, patch);
+  return turn;
+}
+
+function renderVoicePendingTurns() {
+  const turns = getActiveVoicePendingTurns();
+  if (!turns.length) return '';
+  return turns.map((turn) => {
+    const idArg = encodeInlineJsString(turn.id);
+    const files = Array.isArray(turn.files) ? turn.files : [];
+    const state = String(turn.state || 'queued');
+    const isLocked = state !== 'queued';
+    const label = state === 'sending' ? 'Sending voice message' : 'Queued voice message';
+    return `
+      <div class="msg-shell user voice-pending-shell">
+        <div class="msg user voice-pending-msg">
+          <div class="msg-body voice-pending-body">
+            <div class="msg-content">${escHtml(turn.text || '')}</div>
+            <div class="voice-pending-meta">
+              <span>${escHtml(label)}${files.length ? ` +${files.length} file(s)` : ''}</span>
+              <span class="voice-pending-actions">
+                <button class="voice-pending-btn" onclick="editVoicePendingTurn(${idArg})" ${isLocked ? 'disabled' : ''}>Edit</button>
+                <button class="voice-pending-btn" onclick="removeVoicePendingTurn(${idArg})" ${isLocked ? 'disabled' : ''}>Remove</button>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function enqueueVoicePendingTurn(text, files = [], source = 'voice') {
+  const message = String(text || '').trim();
+  if (!message) return '';
+  ensureActiveChatSessionExists();
+  const turn = {
+    id: `voice_${Date.now()}_${++voicePendingTurnSeq}`,
+    sessionId: String(window.activeChatSessionId || ''),
+    text: message,
+    files: Array.isArray(files) ? files.slice() : [],
+    source: String(source || 'voice'),
+    state: 'queued',
+    createdAt: Date.now(),
+  };
+  getVoicePendingTurns().push(turn);
+  renderChatMessages();
+  setTimeout(processVoicePendingTurns, 0);
+  return turn.id;
+}
+
+function removeVoicePendingTurn(id) {
+  const turn = getVoicePendingTurns().find((entry) => String(entry?.id || '') === String(id || ''));
+  if (!turn) return;
+  if (String(turn.state || 'queued') !== 'queued') {
+    showToast('Voice message is already sending', 'Wait for it to appear as a chat bubble.', 'info');
+    return;
+  }
+  removeVoicePendingTurnInternal(id);
+  renderChatMessages();
+}
+
+function editVoicePendingTurn(id) {
+  const turn = getVoicePendingTurns().find((entry) => String(entry?.id || '') === String(id || ''));
+  if (!turn) return;
+  if (String(turn.state || 'queued') !== 'queued') {
+    showToast('Voice message is already sending', 'Wait for it to appear as a chat bubble before editing.', 'info');
+    return;
+  }
+  removeVoicePendingTurnInternal(id);
+  const input = document.getElementById('chat-input');
+  if (input) {
+    input.value = String(turn.text || '');
+    resizeChatInput(input);
+    input.focus();
+  }
+  const files = Array.isArray(turn.files) ? turn.files : [];
+  if (files.length) {
+    pendingChatFiles = pendingChatFiles.concat(files);
+    renderChatFilePills();
+  }
+  renderChatMessages();
+}
+
+async function processVoicePendingTurns() {
+  if (voicePendingProcessing) return;
+  const sid = String(window.activeChatSessionId || '').trim();
+  if (!sid || isSessionThinking(sid)) return;
+  const turn = getVoicePendingTurns().find((entry) => String(entry?.sessionId || '') === sid && String(entry?.state || 'queued') === 'queued');
+  if (!turn) return;
+  voicePendingProcessing = true;
+  markVoicePendingTurn(turn.id, { state: 'sending' });
+  renderChatMessages();
+  try {
+    await sendChat(makeQueuedChatTurn(turn.text, turn.files), { voicePendingTurnId: turn.id });
+  } catch (err) {
+    markVoicePendingTurn(turn.id, { state: 'queued' });
+    showToast('Voice message send failed', String(err?.message || err), 'error');
+  } finally {
+    voicePendingProcessing = false;
+    setTimeout(processVoicePendingTurns, 0);
+  }
+}
+
 function sanitizeBrowserCanvasStateForStorage(browserCanvasState) {
   if (!browserCanvasState || typeof browserCanvasState !== 'object') return browserCanvasState;
   const clean = { ...browserCanvasState };
@@ -3565,7 +3714,9 @@ function sanitizeChatSessionForStorage(session) {
 }
 
 function sanitizeChatSessionsForStorage(sessions) {
-  return Array.isArray(sessions) ? sessions.map((session) => sanitizeChatSessionForStorage(session)) : [];
+  return Array.isArray(sessions)
+    ? sessions.filter(hasPersistableChatSessionContent).map((session) => sanitizeChatSessionForStorage(session))
+    : [];
 }
 
 function saveChatSessions() {
@@ -3633,6 +3784,231 @@ function makeSessionTitle(history) {
   return firstUser ? String(firstUser.content || '').trim().slice(0, 42) || 'New chat' : 'New chat';
 }
 
+function createEmptyChatSession(id = generateSessionId()) {
+  const now = Date.now();
+  return {
+    id,
+    title: 'New chat',
+    history: [],
+    processLog: [],
+    creativeMode: null,
+    canvasProjectRoot: null,
+    canvasProjectLabel: null,
+    canvasProjectLink: null,
+    creativeSceneDoc: null,
+    creativeSelectedId: null,
+    creativeTimelineMs: 0,
+    creativeHistoryPast: [],
+    creativeHistoryFuture: [],
+    creativeHtmlMotionClip: null,
+    creativeComposition: null,
+    mainChatGoal: null,
+    mainChatGoalHistory: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function hasPersistableChatSessionContent(session) {
+  if (!session || typeof session !== 'object') return false;
+  if (session._needsServerLoad || session.automated) return true;
+  if (session.source && session.source !== 'web') return true;
+  if (Array.isArray(session.history) && session.history.length > 0) return true;
+  if (Array.isArray(session.processLog) && session.processLog.length > 0) return true;
+  return false;
+}
+
+function ensureActiveChatSessionExists() {
+  let id = String(window.activeChatSessionId || '').trim();
+  if (!id) {
+    id = generateSessionId();
+    window.activeChatSessionId = id;
+    setAgentSessionId(id);
+  }
+  let sess = getChatSessionById(id);
+  if (!sess) {
+    sess = createEmptyChatSession(id);
+    window.chatSessions.unshift(sess);
+  }
+  return sess;
+}
+
+function isAssistantLikeMessage(msg) {
+  return msg?.role === 'ai' || msg?.role === 'assistant';
+}
+
+function cloneChatMessageForBranch(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  const clone = JSON.parse(JSON.stringify(msg));
+  delete clone._promptVariants;
+  delete clone._promptVariantActive;
+  delete clone._editingDraft;
+  return clone;
+}
+
+function getMessageCopyText(msg) {
+  return String(msg?.content || '').trim();
+}
+
+function findAssistantResponseIndex(history, userIndex) {
+  const list = Array.isArray(history) ? history : [];
+  for (let i = userIndex + 1; i < list.length; i++) {
+    const msg = list[i];
+    if (!msg) continue;
+    if (msg.role === 'user') return -1;
+    if (isAssistantLikeMessage(msg)) return i;
+  }
+  return -1;
+}
+
+function getBranchTailStartIndex(history, userIndex) {
+  const assistantIndex = findAssistantResponseIndex(history, userIndex);
+  return assistantIndex >= 0 ? assistantIndex + 1 : userIndex + 1;
+}
+
+function getPromptVariants(userIndex) {
+  const msg = (window.chatHistory || [])[userIndex];
+  return Array.isArray(msg?._promptVariants) ? msg._promptVariants : [];
+}
+
+function getPromptVariantActiveIndex(userIndex) {
+  const variants = getPromptVariants(userIndex);
+  const raw = Number((window.chatHistory || [])[userIndex]?._promptVariantActive);
+  if (!variants.length) return -1;
+  return Number.isFinite(raw) ? clamp(Math.floor(raw), 0, variants.length - 1) : 0;
+}
+
+function makePromptVariantFromTimeline(userIndex) {
+  const history = window.chatHistory || [];
+  const user = cloneChatMessageForBranch(history[userIndex]);
+  if (!user) return null;
+  const assistantIndex = findAssistantResponseIndex(history, userIndex);
+  const assistant = assistantIndex >= 0 ? cloneChatMessageForBranch(history[assistantIndex]) : null;
+  const tailStart = assistantIndex >= 0 ? assistantIndex + 1 : userIndex + 1;
+  const tail = history.slice(tailStart).map(cloneChatMessageForBranch).filter(Boolean);
+  return { user, assistant, tail };
+}
+
+function attachPromptVariantsToUserMessage(user, variants, activeIndex) {
+  const next = cloneChatMessageForBranch(user) || { role: 'user', content: '', timestamp: Date.now() };
+  next._promptVariants = variants;
+  next._promptVariantActive = activeIndex;
+  return next;
+}
+
+function saveActivePromptVariant(userIndex) {
+  const history = window.chatHistory || [];
+  const msg = history[userIndex];
+  const variants = Array.isArray(msg?._promptVariants) ? msg._promptVariants : null;
+  if (!variants || !variants.length) return variants || [];
+  const activeIndex = getPromptVariantActiveIndex(userIndex);
+  const current = makePromptVariantFromTimeline(userIndex);
+  if (current) variants[activeIndex] = current;
+  msg._promptVariants = variants;
+  msg._promptVariantActive = activeIndex;
+  return variants;
+}
+
+function ensurePromptVariantsForEdit(userIndex) {
+  const history = window.chatHistory || [];
+  const msg = history[userIndex];
+  if (!msg || msg.role !== 'user') return null;
+  if (Array.isArray(msg._promptVariants) && msg._promptVariants.length) {
+    saveActivePromptVariant(userIndex);
+    return msg._promptVariants;
+  }
+  const original = makePromptVariantFromTimeline(userIndex);
+  msg._promptVariants = original ? [original] : [];
+  msg._promptVariantActive = 0;
+  return msg._promptVariants;
+}
+
+function historyForServer(history = window.chatHistory || []) {
+  return (Array.isArray(history) ? history : [])
+    .filter((msg) => msg && (msg.role === 'user' || isAssistantLikeMessage(msg)))
+    .map((msg) => ({
+      ...cloneChatMessageForBranch(msg),
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: String(msg.content || ''),
+      timestamp: Number(msg.timestamp) || Date.now(),
+    }))
+    .filter((msg) => msg.content.trim());
+}
+
+async function syncActiveSessionHistoryToServer(history = window.chatHistory || []) {
+  const sid = String(window.activeChatSessionId || '').trim();
+  if (!sid) return;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ history: historyForServer(history) }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (err) {
+    console.warn('[ChatPage] failed to sync edited session history:', err);
+  }
+}
+
+async function markEditRerunResetOnServer(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  try {
+    await fetch(`/api/sessions/${encodeURIComponent(sid)}/edit-rerun-reset`, { method: 'POST' });
+  } catch {}
+}
+
+function waitForSessionIdle(sessionId, timeoutMs = 1800) {
+  const sid = String(sessionId || '').trim();
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (!isSessionThinking(sid) || Date.now() - start >= timeoutMs) {
+        resolve();
+        return;
+      }
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
+function renderMessageActions(msg, originalIndex) {
+  if (contextPinMode) return '';
+  const isUser = msg?.role === 'user';
+  const copyTitle = isUser ? 'Copy prompt' : 'Copy response';
+  const editOrFork = isUser
+    ? `<button class="msg-action-btn" type="button" title="Edit prompt" onclick="startEditUserMessage(${originalIndex}, event)"><iconify-icon icon="solar:pen-2-linear" width="14" height="14"></iconify-icon></button>`
+    : `<button class="msg-action-btn" type="button" title="Fork conversation" onclick="forkConversationFromAssistantMessage(${originalIndex}, event)"><iconify-icon icon="solar:branching-paths-up-linear" width="14" height="14"></iconify-icon></button>`;
+  return `<div class="msg-actions">
+    <button class="msg-action-btn" type="button" title="${copyTitle}" onclick="copyChatMessage(${originalIndex}, event)"><iconify-icon icon="solar:copy-linear" width="14" height="14"></iconify-icon></button>
+    ${editOrFork}
+    ${isUser ? renderPromptVariantNav(originalIndex) : ''}
+  </div>`;
+}
+
+function renderPromptVariantNav(originalIndex) {
+  const variants = getPromptVariants(originalIndex);
+  if (variants.length < 2) return '';
+  const active = getPromptVariantActiveIndex(originalIndex);
+  return `<div class="msg-variant-nav" title="Prompt variants">
+    <button class="msg-action-btn" type="button" title="Previous variant" ${active <= 0 ? 'disabled' : ''} onclick="switchPromptVariant(${originalIndex}, ${active - 1}, event)"><iconify-icon icon="solar:alt-arrow-left-linear" width="14" height="14"></iconify-icon></button>
+    <span>${active + 1}/${variants.length}</span>
+    <button class="msg-action-btn" type="button" title="Next variant" ${active >= variants.length - 1 ? 'disabled' : ''} onclick="switchPromptVariant(${originalIndex}, ${active + 1}, event)"><iconify-icon icon="solar:alt-arrow-right-linear" width="14" height="14"></iconify-icon></button>
+  </div>`;
+}
+
+function renderUserEditComposer(msg, originalIndex) {
+  const value = escHtml(String(msg?.content || ''));
+  return `<div class="msg-edit-composer" onclick="event.stopPropagation()">
+    <textarea id="msg-edit-input-${originalIndex}" class="msg-edit-input" rows="4">${value}</textarea>
+    <div class="msg-edit-actions">
+      <button type="button" class="msg-edit-btn" onclick="cancelEditUserMessage(event)">Cancel</button>
+      <button type="button" class="msg-edit-btn msg-edit-btn-primary" onclick="submitEditedUserMessage(${originalIndex}, event)">Send</button>
+    </div>
+  </div>`;
+}
+
 function isInternalChatSession(session) {
   return /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_)/i.test(String(session?.id || ''));
 }
@@ -3643,7 +4019,9 @@ function isInternalChatMessage(msg) {
 }
 
 function setChatSessions(next) {
-  const sessions = (Array.isArray(next) ? next : []).filter((session) => !isInternalChatSession(session));
+  const sessions = (Array.isArray(next) ? next : [])
+    .filter((session) => !isInternalChatSession(session))
+    .filter(hasPersistableChatSessionContent);
   if (typeof window.setChatSessionsRef === 'function') {
     return window.setChatSessionsRef(sessions);
   }
@@ -3670,6 +4048,8 @@ function normalizeStoredSession(session) {
     creativeHistoryPast: Array.isArray(session?.creativeHistoryPast) ? session.creativeHistoryPast : [],
     creativeHistoryFuture: Array.isArray(session?.creativeHistoryFuture) ? session.creativeHistoryFuture : [],
     creativeHtmlMotionClip: session?.creativeHtmlMotionClip || null,
+    mainChatGoal: session?.mainChatGoal || null,
+    mainChatGoalHistory: Array.isArray(session?.mainChatGoalHistory) ? session.mainChatGoalHistory : [],
   };
 }
 
@@ -3690,6 +4070,7 @@ function sessionStubFromServer(s) {
     creativeHistoryPast: Array.isArray(s.creativeHistoryPast) ? s.creativeHistoryPast : [],
     creativeHistoryFuture: Array.isArray(s.creativeHistoryFuture) ? s.creativeHistoryFuture : [],
     creativeHtmlMotionClip: s.creativeHtmlMotionClip || null,
+    mainChatGoal: s.mainChatGoal || null,
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
     source: channel !== 'web' ? channel : undefined,
@@ -3704,14 +4085,13 @@ async function _loadSessionFromServer(id) {
   const sess = window.chatSessions.find(s => s.id === id);
   if (!sess || !sess._needsServerLoad) return;
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`);
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}`, 2000);
     const s = data.session;
     if (!s) return;
     sess.history = (s.history || [])
       .filter((m) => !isInternalChatMessage(m))
       .map(m => ({
+        ...m,
         role: m.role,
         content: m.content || '',
         timestamp: m.timestamp,
@@ -3725,6 +4105,8 @@ async function _loadSessionFromServer(id) {
     sess.creativeSelectedId = s.creativeSelectedId || null;
     sess.creativeTimelineMs = Number.isFinite(Number(s.creativeTimelineMs)) ? Number(s.creativeTimelineMs) : 0;
     sess.creativeHtmlMotionClip = s.creativeHtmlMotionClip || null;
+    sess.mainChatGoal = s.mainChatGoal || null;
+    sess.mainChatGoalHistory = Array.isArray(s.mainChatGoalHistory) ? s.mainChatGoalHistory : [];
     if (sess.history.length > 0) sess.title = makeSessionTitle(sess.history) || sess.title;
     sess.createdAt = s.createdAt || sess.createdAt;
     sess.updatedAt = s.lastActiveAt || sess.updatedAt;
@@ -3744,9 +4126,8 @@ async function loadChatSessions() {
   setChatSessions(storedSessions.map(normalizeStoredSession));
   let serverSessions = [];
   try {
-    const res = await fetch('/api/sessions');
-    if (res.ok) {
-      const data = await res.json();
+    const data = await fetchJsonWithTimeout('/api/sessions', 2000);
+    if (data) {
       serverSessions = Array.isArray(data.sessions) ? data.sessions : [];
     }
   } catch {}
@@ -3773,6 +4154,7 @@ async function loadChatSessions() {
           creativeSelectedId: existing.creativeSelectedId || serverStub.creativeSelectedId,
           creativeTimelineMs: existing.creativeTimelineMs || serverStub.creativeTimelineMs,
           creativeHtmlMotionClip: existing.creativeHtmlMotionClip || serverStub.creativeHtmlMotionClip,
+          mainChatGoal: serverStub.mainChatGoal || existing.mainChatGoal || null,
         });
         if (!Array.isArray(existing.history) || existing.history.length === 0) existing._needsServerLoad = true;
       } else {
@@ -3787,9 +4169,8 @@ async function loadChatSessions() {
     // localStorage is empty — try to recover sessions from disk via server
     let recovered = false;
     try {
-      const res = await fetch('/api/sessions');
-      if (res.ok) {
-        const data = await res.json();
+      const data = await fetchJsonWithTimeout('/api/sessions', 2000);
+      if (data) {
         const serverSessions = Array.isArray(data.sessions) ? data.sessions : [];
         if (serverSessions.length > 0) {
           setChatSessions(serverSessions.filter((s) => !isInternalChatSession(s)).map(s => ({
@@ -3807,6 +4188,7 @@ async function loadChatSessions() {
             creativeHistoryPast: Array.isArray(s.creativeHistoryPast) ? s.creativeHistoryPast : [],
             creativeHistoryFuture: Array.isArray(s.creativeHistoryFuture) ? s.creativeHistoryFuture : [],
             creativeHtmlMotionClip: s.creativeHtmlMotionClip || null,
+            mainChatGoal: s.mainChatGoal || null,
             createdAt: s.createdAt || Date.now(),
             updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
             // Preserve channel so _isChannelSession works on stubs
@@ -3825,8 +4207,7 @@ async function loadChatSessions() {
     } catch {}
 
     if (!recovered) {
-      const id = crypto?.randomUUID?.() || ('chat_' + Math.random().toString(36).slice(2));
-      window.chatSessions.push({ id, title: 'New chat', history: [], processLog: [], creativeMode: null, canvasProjectRoot: null, canvasProjectLabel: null, canvasProjectLink: null, creativeSceneDoc: null, creativeSelectedId: null, creativeTimelineMs: 0, creativeHistoryPast: [], creativeHistoryFuture: [], creativeHtmlMotionClip: null, createdAt: Date.now(), updatedAt: Date.now() });
+      const id = generateSessionId();
       window.activeChatSessionId = id;
       setAgentSessionId(id);
       saveChatSessions();
@@ -3850,6 +4231,66 @@ async function loadChatSessions() {
   }, 30000);
 }
 
+function getActiveMainChatGoal() {
+  const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
+  return sess?.mainChatGoal || null;
+}
+
+function renderMainGoalStrip() {
+  const strip = document.getElementById('main-goal-strip');
+  if (!strip) return;
+  const goal = getActiveMainChatGoal();
+  if (!goal || goal.status === 'cleared') {
+    strip.style.display = 'none';
+    strip.innerHTML = '';
+    return;
+  }
+  const status = String(goal.status || 'active');
+  const isActive = status === 'active';
+  const canResume = ['paused', 'blocked', 'failed'].includes(status);
+  const reason = goal.blockedReason || goal.pausedReason || goal.failureReason || goal.lastReason || '';
+  const deniedActions = Array.isArray(goal.deniedActions) ? goal.deniedActions : [];
+  const latestDenial = deniedActions[deniedActions.length - 1] || null;
+  const policyMeta = [
+    `${Number(goal.turnsUsed || 0)} turns`,
+    'Autonomous',
+    'Hard policy active',
+    deniedActions.length ? `${deniedActions.length} denied` : '',
+    reason,
+  ].filter(Boolean).join(' · ');
+  strip.style.display = 'flex';
+  strip.setAttribute('data-status', status);
+  strip.innerHTML = `
+    <div class="main-goal-main">
+      <div class="main-goal-kicker">Main chat goal · ${escHtml(status)}</div>
+      <div class="main-goal-title" title="${escHtml(goal.goal || '')}">${escHtml(goal.goal || 'Untitled goal')}</div>
+      <div class="main-goal-meta">${escHtml(policyMeta)}</div>
+      ${latestDenial ? `<div class="main-goal-denial">${escHtml(`Latest denied: ${latestDenial.category || 'policy'} - ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
+    </div>
+    <div class="main-goal-actions">
+      ${isActive ? `<button class="main-goal-action" type="button" onclick="mainGoalAction('pause')" title="Pause goal">Pause</button>` : ''}
+      ${canResume ? `<button class="main-goal-action" type="button" onclick="mainGoalAction('resume')" title="Resume goal">Resume</button>` : ''}
+      <button class="main-goal-action" type="button" onclick="mainGoalAction('status')" title="Refresh goal">Status</button>
+      <button class="main-goal-action" type="button" onclick="mainGoalAction('clear')" title="Clear goal">Clear</button>
+    </div>
+  `;
+}
+
+async function mainGoalAction(action) {
+  const sid = String(window.activeChatSessionId || '').trim();
+  if (!sid) return;
+  try {
+    const result = await api(`/api/sessions/${encodeURIComponent(sid)}/main-goal/${encodeURIComponent(action)}`, { method: 'POST', body: {} });
+    const sess = window.chatSessions.find(s => s.id === sid);
+    if (sess) sess.mainChatGoal = result?.goal || null;
+    renderMainGoalStrip();
+    if (action === 'status' && result?.message) showToast('Goal status', result.message.slice(0, 240), 'info');
+    if (action !== 'status') showToast('Goal updated', result?.message || action, 'success');
+  } catch (err) {
+    showToast('Goal action failed', err?.message || String(err), 'error');
+  }
+}
+
 function syncActiveChat() {
   const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
   window.chatHistory = sess ? (sess.history || []) : [];
@@ -3864,6 +4305,7 @@ function syncActiveChat() {
   creativeHistoryPast = Array.isArray(sess?.creativeHistoryPast) ? sess.creativeHistoryPast.slice() : [];
   creativeHistoryFuture = Array.isArray(sess?.creativeHistoryFuture) ? sess.creativeHistoryFuture.slice() : [];
   creativeHtmlMotionClip = sess?.creativeHtmlMotionClip || null;
+  creativeComposition = sess?.creativeComposition || null;
   restoreBrowserCanvasSessionState(sess?.browserCanvasState);
   if (window.currentCreativeMode) {
     closeBrowserModeForCreativeSwitch({ persist: false, syncRemote: false });
@@ -3892,6 +4334,7 @@ function syncActiveChat() {
   }
   // Mark session as read when opening it
   if (sess) sess.unread = false;
+  renderMainGoalStrip();
   renderChatMessages();
   renderProcessLog();
   renderProgressPanel();
@@ -4037,8 +4480,7 @@ async function openTerminalSession(id) {
 }
 
 function newChatSession() {
-  const id = crypto?.randomUUID?.() || ('chat_' + Math.random().toString(36).slice(2));
-  window.chatSessions.unshift({ id, title: 'New chat', history: [], processLog: [], creativeMode: null, canvasProjectRoot: null, canvasProjectLabel: null, canvasProjectLink: null, creativeSceneDoc: null, creativeSelectedId: null, creativeTimelineMs: 0, creativeHistoryPast: [], creativeHistoryFuture: [], creativeHtmlMotionClip: null, createdAt: Date.now(), updatedAt: Date.now() });
+  const id = generateSessionId();
   if (window.currentMode !== 'chat') {
     if (typeof window.setMode === 'function') window.setMode('chat');
     else setMode('chat');
@@ -4075,8 +4517,7 @@ async function deleteChatSession(id, ev) {
     window.terminalSessions = window.terminalSessions.filter(s => s.id !== id);
   }
   if (window.chatSessions.length === 0) {
-    const newId = crypto?.randomUUID?.() || ('chat_' + Math.random().toString(36).slice(2));
-    window.chatSessions.push({ id: newId, title: 'New chat', history: [], processLog: [], creativeMode: null, canvasProjectRoot: null, canvasProjectLabel: null, canvasProjectLink: null, creativeSceneDoc: null, creativeSelectedId: null, creativeTimelineMs: 0, creativeHistoryPast: [], creativeHistoryFuture: [], creativeHtmlMotionClip: null, createdAt: Date.now(), updatedAt: Date.now() });
+    const newId = generateSessionId();
     window.activeChatSessionId = newId;
     setAgentSessionId(newId);
   } else if (window.activeChatSessionId === id) {
@@ -4271,9 +4712,7 @@ function updateAgentMode() {
   window.useAgentMode = document.getElementById('agent-mode-toggle').checked;
   document.getElementById('agent-mode-label').textContent = window.useAgentMode ? 'Agent' : 'Chat';
   document.getElementById('agent-mode-badge').classList.toggle('visible', window.useAgentMode);
-  document.getElementById('chat-input').placeholder = window.useAgentMode
-    ? 'Ask agent to do something... (has access to tools)'
-    : 'Type a message... (Enter to send, Shift+Enter for newline)';
+  refreshActiveSlashCommandChrome();
 }
 
 // ---- Chat ----
@@ -5261,42 +5700,234 @@ async function materializeCreativeCropCandidateLayers(scene, source) {
     const cropCanvas = document.createElement('canvas');
     cropCanvas.width = sw;
     cropCanvas.height = sh;
-    const cropCtx = cropCanvas.getContext('2d');
-    if (!cropCtx) return;
-    cropCtx.imageSmoothingEnabled = false;
-    cropCtx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
-    const existingMeta = element.meta || {};
-    nextScene.elements[index] = {
-      ...element,
-      id: element.id || `materialized_crop_${Date.now().toString(36)}_${candidateIndex.toString(36)}`,
-      type: 'image',
-      locked: false,
-      visible: element.visible !== false,
-      meta: {
-        ...existingMeta,
-        source: cropCanvas.toDataURL('image/png'),
-        fit: 'cover',
-        radius: 0,
-        role: existingMeta.role || 'object_crop',
-        sourceImage: targetSource,
-        extraction: {
-          ...(existingMeta.extraction || {}),
-          source: 'image-to-layers',
-          cropCandidate: false,
-          materializedCrop: true,
-        },
-        crop: {
-          x: sx,
-          y: sy,
-          width: sw,
-          height: sh,
-          naturalWidth: naturalW,
-          naturalHeight: naturalH,
-        },
+      const cropCtx = cropCanvas.getContext('2d');
+      if (!cropCtx) return;
+      cropCtx.imageSmoothingEnabled = false;
+      cropCtx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+      const alphaBounds = applyApproximateObjectAlphaToCanvas(cropCanvas);
+      let layerCanvas = cropCanvas;
+      let nextX = element.x;
+      let nextY = element.y;
+      let nextW = element.width;
+      let nextH = element.height;
+      if (alphaBounds && alphaBounds.width > 0 && alphaBounds.height > 0) {
+        const pad = Math.min(8, Math.max(2, Math.round(Math.min(alphaBounds.width, alphaBounds.height) * 0.03)));
+        const trimX = Math.max(0, alphaBounds.x - pad);
+        const trimY = Math.max(0, alphaBounds.y - pad);
+        const trimW = Math.min(sw - trimX, alphaBounds.width + pad * 2);
+        const trimH = Math.min(sh - trimY, alphaBounds.height + pad * 2);
+        const trimmed = document.createElement('canvas');
+        trimmed.width = Math.max(1, trimW);
+        trimmed.height = Math.max(1, trimH);
+        const trimmedCtx = trimmed.getContext('2d');
+        if (trimmedCtx) {
+          trimmedCtx.drawImage(cropCanvas, trimX, trimY, trimW, trimH, 0, 0, trimW, trimH);
+          layerCanvas = trimmed;
+          nextX = (sx + trimX) / scaleX;
+          nextY = (sy + trimY) / scaleY;
+          nextW = trimW / scaleX;
+          nextH = trimH / scaleY;
+        }
+      }
+      const existingMeta = element.meta || {};
+      nextScene.elements[index] = {
+        ...element,
+        id: element.id || `materialized_crop_${Date.now().toString(36)}_${candidateIndex.toString(36)}`,
+        type: 'image',
+        x: Math.round(nextX),
+        y: Math.round(nextY),
+        width: Math.max(1, Math.round(nextW)),
+        height: Math.max(1, Math.round(nextH)),
+        locked: false,
+        visible: element.visible !== false,
+        meta: {
+          ...existingMeta,
+          source: layerCanvas.toDataURL('image/png'),
+          fit: 'contain',
+          radius: 0,
+          role: existingMeta.role || 'object_crop',
+          sourceImage: targetSource,
+          extraction: {
+            ...(existingMeta.extraction || {}),
+            source: 'image-to-layers',
+            cropCandidate: false,
+            materializedCrop: true,
+            alphaCutoutFallback: !!alphaBounds,
+          },
+          crop: {
+            x: sx,
+            y: sy,
+            width: sw,
+            height: sh,
+            trim: alphaBounds || null,
+            naturalWidth: naturalW,
+            naturalHeight: naturalH,
+          },
       },
     };
   });
   return createSceneDocument(nextScene);
+}
+
+function applyApproximateObjectAlphaToCanvas(canvas) {
+  const w = Math.max(1, Number(canvas?.width) || 0);
+  const h = Math.max(1, Number(canvas?.height) || 0);
+  if (!w || !h) return false;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  const image = ctx.getImageData(0, 0, w, h);
+  const data = image.data;
+  const samples = [];
+  const pushSample = (x, y) => {
+    const idx = (y * w + x) * 4;
+    if (data[idx + 3] < 8) return;
+    samples.push([data[idx], data[idx + 1], data[idx + 2]]);
+  };
+  const cornerSamples = [];
+  const pushCornerSample = (x, y) => {
+    const idx = (y * w + x) * 4;
+    if (data[idx + 3] < 8) return;
+    cornerSamples.push([data[idx], data[idx + 1], data[idx + 2]]);
+  };
+  const cornerW = Math.max(3, Math.round(w * 0.12));
+  const cornerH = Math.max(3, Math.round(h * 0.12));
+  for (let y = 0; y < cornerH; y++) {
+    for (let x = 0; x < cornerW; x++) {
+      pushCornerSample(x, y);
+      pushCornerSample(w - 1 - x, y);
+      pushCornerSample(x, h - 1 - y);
+      pushCornerSample(w - 1 - x, h - 1 - y);
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    pushSample(x, 0);
+    pushSample(x, h - 1);
+  }
+  for (let y = 1; y < h - 1; y++) {
+    pushSample(0, y);
+    pushSample(w - 1, y);
+  }
+  if (!samples.length) return false;
+  const median = (channel) => {
+    const sourceSamples = cornerSamples.length >= 16 ? cornerSamples : samples;
+    const values = sourceSamples.map((sample) => sample[channel]).sort((a, b) => a - b);
+    return values[Math.floor(values.length / 2)] || 0;
+  };
+  const bg = { r: median(0), g: median(1), b: median(2) };
+  const bgSat = Math.max(bg.r, bg.g, bg.b) - Math.min(bg.r, bg.g, bg.b);
+  const colorDistance = (idx) => {
+    const dr = data[idx] - bg.r;
+    const dg = data[idx + 1] - bg.g;
+    const db = data[idx + 2] - bg.b;
+    return Math.sqrt(dr * dr + dg * dg + db * db);
+  };
+  const saturation = (idx) => {
+    const max = Math.max(data[idx], data[idx + 1], data[idx + 2]);
+    const min = Math.min(data[idx], data[idx + 1], data[idx + 2]);
+    return max - min;
+  };
+  const luminance = (idx) => 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2];
+  const bgLum = 0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b;
+  const similarToBackground = (pixel) => {
+    const idx = pixel * 4;
+    if (data[idx + 3] < 8) return true;
+    const dist = colorDistance(idx);
+    const sat = saturation(idx);
+    const lum = luminance(idx);
+    const brightAccent = sat > 70 && lum > bgLum + 18;
+    const coloredSubject = lum > bgLum + 28 || sat > Math.max(52, bgSat + 38);
+    const darkMatteLike = lum <= bgLum + 18 && sat <= bgSat + 32;
+    return !brightAccent && !coloredSubject && (dist < 74 || (darkMatteLike && Math.abs(lum - bgLum) < 58));
+  };
+  const total = w * h;
+  const bgMask = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let head = 0;
+  let tail = 0;
+  const enqueue = (pixel) => {
+    if (pixel < 0 || pixel >= total || bgMask[pixel]) return;
+    if (!similarToBackground(pixel)) return;
+    bgMask[pixel] = 1;
+    queue[tail++] = pixel;
+  };
+  for (let x = 0; x < w; x++) {
+    enqueue(x);
+    enqueue((h - 1) * w + x);
+  }
+  for (let y = 1; y < h - 1; y++) {
+    enqueue(y * w);
+    enqueue(y * w + w - 1);
+  }
+  while (head < tail) {
+    const pixel = queue[head++];
+    const x = pixel % w;
+    const y = Math.floor(pixel / w);
+    if (x > 0) enqueue(pixel - 1);
+    if (x < w - 1) enqueue(pixel + 1);
+    if (y > 0) enqueue(pixel - w);
+    if (y < h - 1) enqueue(pixel + w);
+  }
+  closeMaskGaps(bgMask, w, h, 1);
+  let foreground = 0;
+  let minX = w;
+  let minY = h;
+  let maxX = 0;
+  let maxY = 0;
+  for (let pixel = 0; pixel < total; pixel++) {
+    const idx = pixel * 4;
+    const isBackground = !!bgMask[pixel];
+    if (isBackground) {
+      data[idx + 3] = 0;
+      continue;
+    }
+    if (data[idx + 3] > 8) {
+      foreground++;
+      const x = pixel % w;
+      const y = Math.floor(pixel / w);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (foreground < Math.max(32, total * 0.015) || foreground > total * 0.96) return null;
+  featherAlphaEdges(data, bgMask, w, h);
+  ctx.putImageData(image, 0, 0);
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX + 1),
+    height: Math.max(1, maxY - minY + 1),
+  };
+}
+
+function closeMaskGaps(mask, w, h, iterations = 1) {
+  for (let it = 0; it < iterations; it++) {
+    const next = new Uint8Array(mask);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const pixel = y * w + x;
+        if (mask[pixel]) continue;
+        const horizontal = mask[pixel - 1] && mask[pixel + 1];
+        const vertical = mask[pixel - w] && mask[pixel + w];
+        if (horizontal || vertical) next[pixel] = 1;
+      }
+    }
+    mask.set(next);
+  }
+}
+
+function featherAlphaEdges(data, bgMask, w, h) {
+  const alpha = new Uint8ClampedArray(w * h);
+  for (let pixel = 0; pixel < alpha.length; pixel++) alpha[pixel] = data[pixel * 4 + 3];
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const pixel = y * w + x;
+      if (bgMask[pixel] || alpha[pixel] < 8) continue;
+      const touchesBg = bgMask[pixel - 1] || bgMask[pixel + 1] || bgMask[pixel - w] || bgMask[pixel + w];
+      if (touchesBg) data[pixel * 4 + 3] = Math.min(alpha[pixel], 180);
+    }
+  }
 }
 
 async function saveGeneratedImageFile(diskPath, filename = 'generated-image.png') {
@@ -5374,10 +6005,13 @@ async function canvasExtractLayersFromSource(source, promptText = '', overrides 
     return;
   }
   const sid = getCurrentChatModeSessionId() || window.activeChatSessionId || window.agentSessionId || 'default';
+  const requestId = canvasCreateExtractRequestId();
+  creativeLayerExtractionRequestId = requestId;
+  creativeLayerExtractionProgress = null;
   creativeLayerExtractionBusy = true;
   renderChatMessages();
   renderCreativeWorkspace();
-  canvasShowExtractScanOverlay();
+  canvasShowExtractScanOverlay({ requestId, label: 'Preparing extraction', detail: 'Reading source image' });
   addProcessEntry('info', `Extracting editable layers from ${targetSource.split('/').pop() || targetSource}...`);
   try {
     if (normalizeCreativeMode(window.currentCreativeMode) !== 'image') {
@@ -5407,6 +6041,7 @@ async function canvasExtractLayersFromSource(source, promptText = '', overrides 
       body: JSON.stringify({
         sessionId: sid,
         root: canvasProjectRoot || '',
+        requestId,
         source: targetSource,
         prompt: String(promptText || ''),
         copySource: true,
@@ -5430,6 +6065,28 @@ async function canvasExtractLayersFromSource(source, promptText = '', overrides 
     const textCount = Number(summary.textCount || 0);
     const elementCount = Number(summary.elementCount || nextScene.elements.length || 0);
     const warnings = Array.isArray(data.diagnostics?.warnings) ? data.diagnostics.warnings : [];
+    canvasApplyExtractProgressEvent({
+      requestId,
+      stage: 'done',
+      label: 'Editable layers ready',
+      detail: `${elementCount} layer${elementCount === 1 ? '' : 's'} assembled`,
+      width: nextScene.width,
+      height: nextScene.height,
+      boxes: (nextScene.elements || [])
+        .filter((element) => element?.id !== 'extracted_background_plate' && element?.id !== 'extracted_original_reference')
+        .slice(0, 18)
+        .map((element) => ({
+          id: element.id,
+          type: element.type,
+          role: element.meta?.role,
+          label: element.meta?.content || element.meta?.label || element.meta?.role || element.type,
+          x: element.x,
+          y: element.y,
+          width: element.width,
+          height: element.height,
+          cutoutPath: element.type === 'image' ? element.meta?.source : '',
+        })),
+    });
     addProcessEntry('info', `Extracted ${elementCount} layer${elementCount === 1 ? '' : 's'}${textCount ? ` with ${textCount} editable text layer${textCount === 1 ? '' : 's'}` : ''}.`);
     showToast('Layers extracted', warnings.length ? warnings[0] : `${elementCount} editable layers created.`, warnings.length ? 'info' : 'success');
   } catch (err) {
@@ -5439,6 +6096,7 @@ async function canvasExtractLayersFromSource(source, promptText = '', overrides 
   } finally {
     creativeLayerExtractionBusy = false;
     canvasHideExtractScanOverlay();
+    creativeLayerExtractionRequestId = '';
     renderChatMessages();
     renderCreativeWorkspace();
   }
@@ -5487,6 +6145,81 @@ function canvasEnsureExtractScanStyles() {
       mix-blend-mode: screen;
       animation: creative-extract-scan-grid-pulse 2.4s ease-in-out infinite alternate;
     }
+    .creative-extract-scan-work {
+      position: absolute; inset: 0; pointer-events: none;
+    }
+    .creative-extract-scan-box {
+      position: absolute;
+      border: 1.5px solid rgba(255, 181, 75, 0.95);
+      background: rgba(255, 138, 0, 0.055);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 24px rgba(255, 138, 0, 0.22);
+      animation: creative-extract-box-arrive 420ms cubic-bezier(.2,.8,.2,1) both, creative-extract-box-breathe 1.7s ease-in-out infinite alternate;
+    }
+    .creative-extract-scan-box[data-kind="text"] {
+      border-color: rgba(96, 165, 250, 0.92);
+      background: rgba(59, 130, 246, 0.065);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 22px rgba(96, 165, 250, 0.22);
+    }
+    .creative-extract-scan-box[data-kind="shape"] {
+      border-color: rgba(74, 222, 128, 0.9);
+      background: rgba(34, 197, 94, 0.055);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.45), 0 0 22px rgba(74, 222, 128, 0.2);
+    }
+    .creative-extract-scan-box[data-kind="image"][data-cutout="1"] {
+      border-style: dashed;
+      border-color: rgba(251, 146, 60, 0.95);
+      background: rgba(251, 146, 60, 0.08);
+    }
+    .creative-extract-scan-box::before,
+    .creative-extract-scan-box::after {
+      content: ''; position: absolute; width: 8px; height: 8px;
+      border-color: inherit; border-style: solid; opacity: 0.95;
+    }
+    .creative-extract-scan-box::before {
+      left: -4px; top: -4px; border-width: 2px 0 0 2px;
+    }
+    .creative-extract-scan-box::after {
+      right: -4px; bottom: -4px; border-width: 0 2px 2px 0;
+    }
+    .creative-extract-scan-cutout {
+      position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+      opacity: 0.56; filter: drop-shadow(0 0 10px rgba(255, 168, 60, 0.58));
+      mix-blend-mode: screen;
+    }
+    .creative-extract-scan-box-label {
+      position: absolute; left: 0; top: -22px; max-width: 180px;
+      padding: 3px 7px; border-radius: 6px;
+      background: rgba(8, 10, 18, 0.72);
+      color: rgba(255,255,255,0.9);
+      font: 700 10px/1.2 'Inter', system-ui, sans-serif;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .creative-extract-stage-stack {
+      position: absolute; left: 14px; top: 14px; display: flex; flex-direction: column; gap: 7px;
+      width: min(260px, calc(100% - 28px));
+    }
+    .creative-extract-stage-pill {
+      display: flex; align-items: center; gap: 8px;
+      min-height: 28px; padding: 6px 9px; border-radius: 8px;
+      background: rgba(8, 10, 18, 0.68);
+      border: 1px solid rgba(255, 168, 60, 0.2);
+      color: rgba(255,255,255,0.88);
+      box-shadow: 0 10px 34px rgba(0,0,0,0.28);
+      font: 650 11px/1.25 'Inter', system-ui, sans-serif;
+      transform-origin: left center;
+      animation: creative-extract-pill-in 260ms ease-out both;
+    }
+    .creative-extract-stage-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: rgba(255, 196, 110, 1);
+      box-shadow: 0 0 12px rgba(255, 196, 110, 0.9);
+      flex: 0 0 auto;
+    }
+    .creative-extract-stage-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .creative-extract-stage-detail {
+      display: block; margin-top: 1px; color: rgba(226,232,240,0.6); font-weight: 600;
+    }
     .creative-extract-scan-label {
       position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
       font: 600 11px/1.4 'Inter', system-ui, sans-serif; letter-spacing: 0.18em;
@@ -5519,16 +6252,131 @@ function canvasEnsureExtractScanStyles() {
       0%, 100% { transform: scale(1); opacity: 1; }
       50% { transform: scale(1.5); opacity: 0.6; }
     }
+    @keyframes creative-extract-box-arrive {
+      from { opacity: 0; transform: scale(0.96); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    @keyframes creative-extract-box-breathe {
+      from { filter: brightness(0.95); }
+      to { filter: brightness(1.18); }
+    }
+    @keyframes creative-extract-pill-in {
+      from { opacity: 0; transform: translateX(-8px) scale(.98); }
+      to { opacity: 1; transform: none; }
+    }
   `;
   document.head.appendChild(style);
 }
 
-function canvasShowExtractScanOverlay() {
+function canvasCreateExtractRequestId() {
+  return `extract_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function canvasEnsureExtractOverlayProgressState(requestId = '') {
+  if (!creativeLayerExtractionProgress || (requestId && creativeLayerExtractionProgress.requestId !== requestId)) {
+    creativeLayerExtractionProgress = {
+      requestId,
+      width: Math.max(1, Number(creativeSceneDoc?.width) || 1),
+      height: Math.max(1, Number(creativeSceneDoc?.height) || 1),
+      stages: [],
+      boxes: [],
+      label: 'Extracting layers',
+      detail: 'Preparing layer analysis',
+    };
+  }
+  return creativeLayerExtractionProgress;
+}
+
+function canvasBuildExtractStagePills(progress) {
+  const stages = Array.isArray(progress?.stages) ? progress.stages.slice(-4) : [];
+  return stages.map((stage) => `
+    <div class="creative-extract-stage-pill">
+      <span class="creative-extract-stage-dot"></span>
+      <span class="creative-extract-stage-text">
+        ${escHtml(stage.label || 'Working')}
+        ${stage.detail ? `<span class="creative-extract-stage-detail">${escHtml(String(stage.detail).slice(0, 96))}</span>` : ''}
+      </span>
+    </div>
+  `).join('');
+}
+
+function canvasBuildExtractWorkOverlay(progress) {
+  const sceneW = Math.max(1, Number(progress?.width) || Number(creativeSceneDoc?.width) || 1);
+  const sceneH = Math.max(1, Number(progress?.height) || Number(creativeSceneDoc?.height) || 1);
+  const boxes = Array.isArray(progress?.boxes) ? progress.boxes.slice(0, 18) : [];
+  return boxes.map((box) => {
+    const x = clamp(Number(box?.x) || 0, -sceneW, sceneW * 2);
+    const y = clamp(Number(box?.y) || 0, -sceneH, sceneH * 2);
+    const w = clamp(Number(box?.width) || 0, 1, sceneW * 2);
+    const h = clamp(Number(box?.height) || 0, 1, sceneH * 2);
+    const kind = ['text', 'shape', 'image', 'group'].includes(String(box?.type || '')) ? String(box.type) : 'shape';
+    const cutoutPath = normalizeCanvasPath(box?.cutoutPath || '');
+    const left = (x / sceneW) * 100;
+    const top = (y / sceneH) * 100;
+    const width = (w / sceneW) * 100;
+    const height = (h / sceneH) * 100;
+    const label = String(box?.label || box?.role || kind || 'Layer').trim();
+    return `
+      <div class="creative-extract-scan-box" data-kind="${escHtml(kind)}" data-cutout="${cutoutPath ? '1' : '0'}" style="left:${left.toFixed(4)}%;top:${top.toFixed(4)}%;width:${width.toFixed(4)}%;height:${height.toFixed(4)}%;">
+        ${cutoutPath ? `<img class="creative-extract-scan-cutout" src="${escHtml(creativeMediaSourceUrl(cutoutPath))}" alt="">` : ''}
+        ${label ? `<span class="creative-extract-scan-box-label">${escHtml(label)}</span>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+function canvasRenderExtractScanOverlay() {
+  const overlay = document.querySelector('[data-creative-extract-scan="1"]');
+  if (!overlay || !creativeLayerExtractionProgress) return;
+  const progress = creativeLayerExtractionProgress;
+  const labelEl = overlay.querySelector('.creative-extract-scan-label');
+  if (labelEl) labelEl.textContent = progress.label || 'Extracting layers';
+  const workEl = overlay.querySelector('.creative-extract-scan-work');
+  if (workEl) workEl.innerHTML = canvasBuildExtractWorkOverlay(progress);
+  const stackEl = overlay.querySelector('.creative-extract-stage-stack');
+  if (stackEl) stackEl.innerHTML = canvasBuildExtractStagePills(progress);
+}
+
+function canvasApplyExtractProgressEvent(msg = {}) {
+  const requestId = String(msg?.requestId || '').trim();
+  if (creativeLayerExtractionRequestId && requestId && requestId !== creativeLayerExtractionRequestId) return;
+  if (!creativeLayerExtractionBusy && requestId && requestId !== creativeLayerExtractionRequestId) return;
+  const progress = canvasEnsureExtractOverlayProgressState(requestId || creativeLayerExtractionRequestId);
+  progress.width = Math.max(1, Number(msg.width) || progress.width || Number(creativeSceneDoc?.width) || 1);
+  progress.height = Math.max(1, Number(msg.height) || progress.height || Number(creativeSceneDoc?.height) || 1);
+  progress.label = String(msg.label || progress.label || 'Extracting layers');
+  progress.detail = String(msg.detail || progress.detail || '');
+  const boxes = Array.isArray(msg.boxes) ? msg.boxes : null;
+  if (boxes) progress.boxes = boxes;
+  progress.cleanPlatePath = normalizeCanvasPath(msg.cleanPlatePath || progress.cleanPlatePath || '');
+  progress.stages = Array.isArray(progress.stages) ? progress.stages : [];
+  progress.stages.push({
+    stage: String(msg.stage || 'progress'),
+    label: progress.label,
+    detail: progress.detail,
+    at: Number(msg.timestamp || Date.now()) || Date.now(),
+  });
+  progress.stages = progress.stages.slice(-8);
+  if (!document.querySelector('[data-creative-extract-scan="1"]')) {
+    canvasShowExtractScanOverlay({ requestId: progress.requestId, label: progress.label, detail: progress.detail });
+  } else {
+    canvasRenderExtractScanOverlay();
+  }
+}
+
+function canvasShowExtractScanOverlay(options = {}) {
   canvasEnsureExtractScanStyles();
   const stage = document.getElementById('canvas-creative-stage')
     || document.getElementById('canvas-creative-stage-scroll');
   if (!stage) return;
-  if (stage.querySelector('.creative-extract-scan-overlay')) return;
+  const requestId = String(options.requestId || creativeLayerExtractionRequestId || '').trim();
+  const progress = canvasEnsureExtractOverlayProgressState(requestId);
+  progress.label = String(options.label || progress.label || 'Extracting layers');
+  progress.detail = String(options.detail || progress.detail || 'Preparing layer analysis');
+  if (stage.querySelector('.creative-extract-scan-overlay')) {
+    canvasRenderExtractScanOverlay();
+    return;
+  }
   const cs = getComputedStyle(stage);
   if (cs.position === 'static') stage.style.position = 'relative';
   const overlay = document.createElement('div');
@@ -5536,15 +6384,19 @@ function canvasShowExtractScanOverlay() {
   overlay.setAttribute('data-creative-extract-scan', '1');
   overlay.innerHTML = `
     <div class="creative-extract-scan-grid"></div>
-    <div class="creative-extract-scan-label">Extracting layers</div>
+    <div class="creative-extract-scan-work"></div>
+    <div class="creative-extract-stage-stack"></div>
+    <div class="creative-extract-scan-label">${escHtml(progress.label || 'Extracting layers')}</div>
   `;
   stage.appendChild(overlay);
+  canvasRenderExtractScanOverlay();
 }
 
 function canvasHideExtractScanOverlay() {
   document.querySelectorAll('[data-creative-extract-scan="1"]').forEach((el) => {
     if (el.parentNode) el.parentNode.removeChild(el);
   });
+  creativeLayerExtractionProgress = null;
 }
 
 function canvasCloseExtractLayersDialog() {
@@ -5591,13 +6443,13 @@ function canvasOpenExtractLayersDialog(source = '', promptText = '') {
           <input type="checkbox" id="cx-text" checked /> Editable text (OCR + sampled colors)
         </label>
         <label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 0;">
-          <input type="checkbox" id="cx-inpaint" checked /> Inpaint background (LaMa clean plate)
+          <input type="checkbox" id="cx-inpaint" checked /> Rebuild background for editing
         </label>
         <label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 0;">
           <input type="checkbox" id="cx-vector" checked /> Vector-trace shape regions
         </label>
         <label style="display:flex;align-items:center;gap:10px;font-size:13px;padding:6px 0;">
-          <input type="checkbox" id="cx-keep" /> Also keep original raster (hidden backup)
+          <input type="checkbox" id="cx-keep" checked /> Keep original backup
         </label>
         <div id="cx-warn" style="font-size:11px;color:#e2a948;display:none;background:rgba(226,169,72,0.08);border:1px solid rgba(226,169,72,0.3);border-radius:8px;padding:8px 10px;margin-top:4px;"></div>
       </div>
@@ -5627,7 +6479,7 @@ function canvasOpenExtractLayersDialog(source = '', promptText = '') {
       const warn = overlay.querySelector('#cx-warn');
       if (!warn) return;
       warn.style.display = 'block';
-      warn.innerHTML = `Missing local model${missing.length>1?'s':''}: <strong>${missing.map((m) => m.fileName).join(', ')}</strong><br/>Cutouts/inpaint will fall back to bbox crops. Run <code style="background:rgba(255,255,255,0.06);padding:2px 5px;border-radius:4px;">node scripts/download-creative-models.mjs</code> once.`;
+      warn.innerHTML = `Missing local model${missing.length>1?'s':''}: <strong>${missing.map((m) => m.fileName).join(', ')}</strong><br/>Object cutouts and clean-plate generation will use simpler fallbacks. Run <code style="background:rgba(255,255,255,0.06);padding:2px 5px;border-radius:4px;">node scripts/download-creative-models.mjs</code> once.`;
     })
     .catch(() => {});
 
@@ -6121,8 +6973,9 @@ function renderChatMessages() {
   const visibleHistory = (window.chatHistory || [])
     .map((msg, originalIndex) => ({ msg, originalIndex }))
     .filter((entry) => !isInternalChatMessage(entry.msg));
+  const voicePendingHtml = renderVoicePendingTurns();
 
-  if (visibleHistory.length === 0) {
+  if (visibleHistory.length === 0 && !voicePendingHtml) {
     container.innerHTML = `
       <div class="chat-welcome" id="chat-welcome">
         <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
@@ -6146,25 +6999,35 @@ function renderChatMessages() {
     const clickHandler = contextPinMode ? ` onclick="togglePinMessage(${originalIndex})"` : '';
     const isTelegramMsg = String(msg?.channel || '').toLowerCase() === 'telegram';
     const isTimerMsg = String(msg?.channelLabel || '').toLowerCase() === 'timer' || /^\s*\[Timer fired\]/i.test(String(msg?.content || ''));
+    const isGoalMsg = String(msg?.channelLabel || '').toLowerCase() === 'goal';
     const channelTag = isTelegramMsg
       ? '<span class="msg-channel-tag">(telegram)</span>'
-      : (isTimerMsg ? '<span class="msg-channel-tag">(timer)</span>' : '');
+      : (isTimerMsg ? '<span class="msg-channel-tag">(timer)</span>' : (isGoalMsg ? '<span class="msg-channel-tag">(goal)</span>' : ''));
     const displayRole = isTimerMsg ? 'assistant' : msg.role;
     const isUser = displayRole === 'user';
+    const isEditingThisUserMessage = isUser && window.editingUserMessageIndex === originalIndex;
+    const userContentHtml = isEditingThisUserMessage
+      ? renderUserEditComposer(msg, originalIndex)
+      : (isGoalMsg
+        ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
+        : renderUserMessageContent(msg));
     return `
-    <div class="msg ${displayRole}${pinClass}${selectedClass}${confirmedClass}"${clickHandler}>
-      ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
-      <div class="msg-body">
-		        ${!isUser ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
-		        ${(!isUser || msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantContent(msg.content) : renderUserMessageContent(msg)}
-		        ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
-		        ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
-		        ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
-		        ${(msg.role === 'ai' || msg.role === 'assistant') && msg.processEntries && msg.processEntries.length ? renderProcessPill(msg.processEntries) : ''}
-		        ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
-		      </div>
+    <div class="msg-shell ${displayRole}${pinClass}${selectedClass}${confirmedClass}">
+      <div class="msg ${displayRole}${pinClass}${selectedClass}${confirmedClass}"${clickHandler}>
+        ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
+        <div class="msg-body">
+		          ${!isUser ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
+		          ${isUser ? userContentHtml : renderAssistantContent(msg.content)}
+		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
+		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
+		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
+		          ${(msg.role === 'ai' || msg.role === 'assistant') && msg.processEntries && msg.processEntries.length ? renderProcessPill(msg.processEntries) : ''}
+		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
+              ${renderMessageActions(msg, originalIndex)}
+		        </div>
+	      </div>
 	    </div>`;
-  }).join('');
+  }).join('') + voicePendingHtml;
 
   if (isSessionThinking(window.activeChatSessionId)) {
     const progressHtml = window.currentProgressLines.length
@@ -6174,25 +7037,181 @@ function renderChatMessages() {
 	      : '';
 	    const thinkingOnly = !window.streamingAIText && !progressHtml && !window.currentPreflightStatus;
 	    container.innerHTML += `
-      <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
-        <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
-        <div class="msg-body">
-          ${!thinkingOnly ? `<div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>` : ''}
-          ${window.currentPreflightStatus ? `<div class="msg-content" style="margin-bottom:6px;color:#26487e">${escHtml(window.currentPreflightStatus)}</div>` : ''}
-	          ${progressHtml}
-          ${window.streamingAIText
-            ? `<div id="streaming-text-content" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word">${escHtml(window.streamingAIText)}</div>`
-            : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`
-          }
-          ${!thinkingOnly ? `<div style="margin-top:8px">
-            <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
-            <div id="current-turn-process" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6"></div>
-          </div>` : ''}
+      <div class="msg-shell ai">
+        <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
+          <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
+          <div class="msg-body">
+            ${!thinkingOnly ? `<div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>` : ''}
+            ${window.currentPreflightStatus ? `<div class="msg-content" style="margin-bottom:6px;color:#26487e">${escHtml(window.currentPreflightStatus)}</div>` : ''}
+	            ${progressHtml}
+            ${window.streamingAIText
+              ? `<div id="streaming-text-content" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word">${escHtml(window.streamingAIText)}</div>`
+              : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`
+            }
+            ${!thinkingOnly ? `<div style="margin-top:8px">
+              <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
+              <div id="current-turn-process" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6"></div>
+            </div>` : ''}
+          </div>
         </div>
       </div>`;
   }
 
   container.scrollTop = container.scrollHeight;
+}
+
+async function copyChatMessage(originalIndex, ev) {
+  if (ev) ev.stopPropagation();
+  const msg = (window.chatHistory || [])[originalIndex];
+  const text = getMessageCopyText(msg);
+  if (!text) return;
+  await copyTextToClipboard(text, 'Message copied', '', 'success');
+}
+
+function forkConversationFromAssistantMessage(originalIndex, ev) {
+  if (ev) ev.stopPropagation();
+  const history = window.chatHistory || [];
+  const msg = history[originalIndex];
+  if (!isAssistantLikeMessage(msg)) return;
+  const id = generateSessionId();
+  const forkedHistory = history.slice(0, originalIndex + 1).map(cloneChatMessageForBranch).filter(Boolean);
+  const source = getChatSessionById(window.activeChatSessionId) || {};
+  const forked = {
+    ...createEmptyChatSession(id),
+    title: makeSessionTitle(forkedHistory),
+    history: forkedHistory,
+    processLog: [],
+    creativeMode: normalizeCreativeMode(source.creativeMode),
+    canvasProjectRoot: normalizeCanvasPath(source.canvasProjectRoot) || null,
+    canvasProjectLabel: source.canvasProjectLabel || null,
+    canvasProjectLink: normalizeCanvasProjectLink(source.canvasProjectLink),
+    creativeSceneDoc: source.creativeSceneDoc || null,
+    creativeSelectedId: source.creativeSelectedId || null,
+    creativeTimelineMs: Number.isFinite(Number(source.creativeTimelineMs)) ? Number(source.creativeTimelineMs) : 0,
+    creativeHistoryPast: [],
+    creativeHistoryFuture: [],
+    creativeHtmlMotionClip: source.creativeHtmlMotionClip || null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  window.chatSessions.unshift(forked);
+  window.activeChatSessionId = id;
+  setAgentSessionId(id);
+  window.editingUserMessageIndex = -1;
+  saveChatSessions();
+  syncActiveChat();
+  showToast('Conversation forked', 'Continue from the new branch when ready.', 'success');
+}
+
+function startEditUserMessage(originalIndex, ev) {
+  if (ev) ev.stopPropagation();
+  const msg = (window.chatHistory || [])[originalIndex];
+  if (!msg || msg.role !== 'user') return;
+  window.editingUserMessageIndex = originalIndex;
+  renderChatMessages();
+  setTimeout(() => {
+    const input = document.getElementById(`msg-edit-input-${originalIndex}`);
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }, 0);
+}
+
+function cancelEditUserMessage(ev) {
+  if (ev) ev.stopPropagation();
+  window.editingUserMessageIndex = -1;
+  renderChatMessages();
+}
+
+async function submitEditedUserMessage(originalIndex, ev) {
+  if (ev) ev.stopPropagation();
+  const input = document.getElementById(`msg-edit-input-${originalIndex}`);
+  const nextText = String(input?.value || '').trim();
+  if (!nextText) return;
+  await rerunEditedUserMessage(originalIndex, nextText);
+}
+
+async function rerunEditedUserMessage(originalIndex, nextText) {
+  const sess = getChatSessionById(window.activeChatSessionId);
+  const history = window.chatHistory || [];
+  const userMsg = history[originalIndex];
+  if (!sess || !userMsg || userMsg.role !== 'user') return;
+  const previousText = String(userMsg.content || '').trim();
+  if (previousText === nextText && !isSessionThinking(window.activeChatSessionId)) {
+    window.editingUserMessageIndex = -1;
+    renderChatMessages();
+    return;
+  }
+
+  const sid = String(window.activeChatSessionId || '').trim();
+  if (isSessionThinking(sid)) {
+    window._editRerunAbortResetSessions.add(sid);
+    await markEditRerunResetOnServer(sid);
+    const ctrl = window._sessionAbortControllers?.[sid] || currentAbortController;
+    if (ctrl && !ctrl.signal?.aborted) ctrl.abort();
+    await waitForSessionIdle(sid);
+  }
+
+  const variants = ensurePromptVariantsForEdit(originalIndex) || [];
+  const editedUser = {
+    ...cloneChatMessageForBranch(userMsg),
+    role: 'user',
+    content: nextText,
+    timestamp: Date.now(),
+  };
+  const nextVariant = { user: cloneChatMessageForBranch(editedUser), assistant: null, tail: [] };
+  variants.push(nextVariant);
+  const activeIndex = variants.length - 1;
+  const activeUser = attachPromptVariantsToUserMessage(editedUser, variants, activeIndex);
+  history.splice(originalIndex, history.length - originalIndex, activeUser);
+  window.chatHistory = history;
+  sess.history = history;
+  sess.title = makeSessionTitle(history);
+  sess.updatedAt = Date.now();
+  window.editingUserMessageIndex = -1;
+  saveChatSessions();
+  renderChatMessages();
+  await syncActiveSessionHistoryToServer(history.slice(0, originalIndex));
+  await sendChat(makeQueuedChatTurn(nextText), { reuseExistingUserIndex: originalIndex });
+}
+
+async function switchPromptVariant(originalIndex, targetIndex, ev) {
+  if (ev) ev.stopPropagation();
+  if (isSessionThinking(window.activeChatSessionId)) {
+    showToast('Wait for the current response to finish before switching variants.', '', 'info');
+    return;
+  }
+  const history = window.chatHistory || [];
+  const msg = history[originalIndex];
+  if (!msg || msg.role !== 'user') return;
+  const variants = saveActivePromptVariant(originalIndex);
+  if (!Array.isArray(variants) || !variants[targetIndex]) return;
+  const selected = variants[targetIndex];
+  const nextUser = attachPromptVariantsToUserMessage(selected.user, variants, targetIndex);
+  const replacement = [nextUser];
+  if (selected.assistant) replacement.push(cloneChatMessageForBranch(selected.assistant));
+  if (Array.isArray(selected.tail)) replacement.push(...selected.tail.map(cloneChatMessageForBranch).filter(Boolean));
+  history.splice(originalIndex, history.length - originalIndex, ...replacement);
+  const sess = getChatSessionById(window.activeChatSessionId);
+  if (sess) {
+    sess.history = history;
+    sess.title = makeSessionTitle(history);
+    sess.updatedAt = Date.now();
+  }
+  window.chatHistory = history;
+  window.editingUserMessageIndex = -1;
+  saveChatSessions();
+  renderChatMessages();
+  await syncActiveSessionHistoryToServer(history);
+}
+
+function updatePromptVariantAfterRerun(userIndex) {
+  const history = window.chatHistory || [];
+  const msg = history[userIndex];
+  if (!msg || !Array.isArray(msg._promptVariants) || !msg._promptVariants.length) return;
+  saveActivePromptVariant(userIndex);
+  saveChatSessions();
 }
 
 function pushProgressLine(line) {
@@ -6833,6 +7852,164 @@ function isFailedTurnReply(text) {
   return false;
 }
 
+const CHAT_SLASH_COMMANDS = [
+  { command: '/goal', label: 'Start goal mode in this chat', placeholder: 'Describe the goal Prometheus should keep working toward...' },
+  { command: '/goal status', label: 'Show the active goal state', placeholder: 'Optional note for the status check...' },
+  { command: '/goal pause', label: 'Pause the active goal runner', placeholder: 'Optional reason...' },
+  { command: '/goal resume', label: 'Resume a paused goal', placeholder: 'Optional note before resuming...' },
+  { command: '/goal done', label: 'Mark the goal completed', placeholder: 'Optional completion note...' },
+  { command: '/goal clear', label: 'Stop and archive the goal', placeholder: 'Optional archive note...' },
+  { command: '/goal revise', label: 'Rewrite the active goal', placeholder: 'Write the revised goal...' },
+];
+let activeSlashCommand = null;
+let slashCommandSelectionIndex = 0;
+
+function getChatInputDefaultPlaceholder() {
+  return window.useAgentMode
+    ? 'Ask agent to do something... (has access to tools)'
+    : 'Type a message... (Enter to send, Shift+Enter for newline)';
+}
+
+function sortedSlashCommands() {
+  return CHAT_SLASH_COMMANDS.slice().sort((a, b) => b.command.length - a.command.length);
+}
+
+function matchSlashCommandValue(value) {
+  const text = String(value || '');
+  const lower = text.toLowerCase();
+  for (const item of sortedSlashCommands()) {
+    const command = item.command.toLowerCase();
+    if (lower === command || lower.startsWith(`${command} `)) {
+      return {
+        item,
+        remainder: text.slice(item.command.length).replace(/^\s+/, ''),
+      };
+    }
+  }
+  return null;
+}
+
+function getSlashCommandSuggestions(value) {
+  const text = String(value || '');
+  if (!text.startsWith('/') || /\s/.test(text.trim())) return [];
+  const query = text.toLowerCase();
+  return CHAT_SLASH_COMMANDS.filter((item) => item.command.toLowerCase().startsWith(query)).slice(0, 7);
+}
+
+function hideSlashCommandPopover() {
+  const popover = document.getElementById('chat-slash-command-popover');
+  if (popover) popover.style.display = 'none';
+}
+
+function renderSlashCommandPopover(inputValue = '') {
+  const popover = document.getElementById('chat-slash-command-popover');
+  if (!popover || activeSlashCommand) {
+    hideSlashCommandPopover();
+    return;
+  }
+  const suggestions = getSlashCommandSuggestions(inputValue);
+  if (!suggestions.length) {
+    hideSlashCommandPopover();
+    return;
+  }
+  slashCommandSelectionIndex = Math.max(0, Math.min(slashCommandSelectionIndex, suggestions.length - 1));
+  popover.innerHTML = suggestions.map((item, idx) => `
+    <button class="chat-slash-command-item ${idx === slashCommandSelectionIndex ? 'active' : ''}" type="button" data-command="${escHtml(item.command)}">
+      <span class="chat-slash-token">[${escHtml(item.command)}]</span>
+      <span class="chat-slash-label">${escHtml(item.label)}</span>
+      <span class="chat-slash-hint">${idx === 0 ? 'Enter' : 'Click'}</span>
+    </button>
+  `).join('');
+  popover.querySelectorAll('.chat-slash-command-item').forEach((btn) => {
+    btn.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      selectSlashCommand(btn.getAttribute('data-command') || '');
+    });
+  });
+  popover.style.display = 'block';
+}
+
+function refreshActiveSlashCommandChrome() {
+  const input = document.getElementById('chat-input');
+  const chip = document.getElementById('chat-command-chip');
+  if (!chip || !input) return;
+  if (!activeSlashCommand) {
+    chip.style.display = 'none';
+    chip.textContent = '';
+    input.placeholder = getChatInputDefaultPlaceholder();
+    return;
+  }
+  chip.textContent = `[${activeSlashCommand.command}]`;
+  chip.style.display = 'inline-flex';
+  input.placeholder = activeSlashCommand.placeholder || 'Type the command details...';
+}
+
+function setActiveSlashCommand(item, remainder = '') {
+  const input = document.getElementById('chat-input');
+  if (!input || !item) return;
+  activeSlashCommand = item;
+  input.value = String(remainder || '');
+  resizeChatInput(input);
+  refreshActiveSlashCommandChrome();
+  hideSlashCommandPopover();
+  input.focus();
+}
+
+function selectSlashCommand(command) {
+  const item = CHAT_SLASH_COMMANDS.find((candidate) => candidate.command === command);
+  if (!item) return;
+  const input = document.getElementById('chat-input');
+  const current = String(input?.value || '');
+  const typedMatch = matchSlashCommandValue(current);
+  const remainder = typedMatch?.item.command === item.command ? typedMatch.remainder : '';
+  setActiveSlashCommand(item, remainder);
+}
+
+function clearActiveSlashCommand(options = {}) {
+  activeSlashCommand = null;
+  refreshActiveSlashCommandChrome();
+  hideSlashCommandPopover();
+  if (options.focus !== false) document.getElementById('chat-input')?.focus();
+}
+
+function getChatComposerValue() {
+  const input = document.getElementById('chat-input');
+  const value = String(input?.value || '').trim();
+  if (!activeSlashCommand) return value;
+  return `${activeSlashCommand.command}${value ? ` ${value}` : ''}`.trim();
+}
+
+function handleSlashCommandInput(input) {
+  if (!input) return;
+  const value = String(input.value || '');
+  if (activeSlashCommand) {
+    if (value.startsWith('/')) {
+      activeSlashCommand = null;
+      refreshActiveSlashCommandChrome();
+      slashCommandSelectionIndex = 0;
+      renderSlashCommandPopover(value);
+    }
+    return;
+  }
+  const match = matchSlashCommandValue(value);
+  if (match) {
+    setActiveSlashCommand(match.item, match.remainder);
+    return;
+  }
+  slashCommandSelectionIndex = 0;
+  renderSlashCommandPopover(value);
+}
+
+function clearChatComposerAfterSend(input) {
+  if (input) {
+    input.value = '';
+    input.style.height = 'auto';
+  }
+  clearActiveSlashCommand({ focus: false });
+}
+
+window.clearActiveSlashCommand = clearActiveSlashCommand;
+
 // Persist a specific session by ID (used by SSE handler to target the right session even after a switch)
 function persistSession(id) {
   const idx = window.chatSessions.findIndex(s => s.id === id);
@@ -6853,14 +8030,15 @@ function persistSession(id) {
 }
 
 // ---- Send chat (SSE version) ----
-async function sendChat(queuedMessage = null) {
+async function sendChat(queuedMessage = null, options = {}) {
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('send-btn');
   if (typeof waitForChatFileStaging === 'function') await waitForChatFileStaging();
   const queuedTurn = queuedMessage == null ? null : normalizeQueuedChatTurn(queuedMessage);
-  const raw = queuedTurn ? queuedTurn.message : input.value;
+  const raw = queuedTurn ? queuedTurn.message : getChatComposerValue();
   const message = String(raw || '').trim();
   if (!message) return;
+  ensureActiveChatSessionExists();
   const thisSessionId = window.activeChatSessionId; // capture at send time — stable through async closure
   const thisSession = getChatSessionById(thisSessionId);
   let streamState = getSessionStreamState(thisSessionId) || resetSessionStreamState(thisSessionId);
@@ -6908,7 +8086,13 @@ async function sendChat(queuedMessage = null) {
   }
   const sessionQueue = getSessionQueuedPrompts(thisSessionId);
   if (isSessionThinking(thisSessionId)) {
-    if (queuedTurn) return;
+    if (queuedTurn) {
+      if (options.voicePendingTurnId) {
+        markVoicePendingTurn(options.voicePendingTurnId, { state: 'queued' });
+        renderIfViewingThisSession();
+      }
+      return;
+    }
     if (sessionQueue.length >= MAX_QUEUED_PROMPTS) {
       addProcessEntry('warn', `Queue full (${MAX_QUEUED_PROMPTS}). Wait for current run to finish.`);
       return;
@@ -6921,8 +8105,7 @@ async function sendChat(queuedMessage = null) {
     }
     if (window.activeChatSessionId === thisSessionId) window.queuedPrompts = sessionQueue;
     addProcessEntry('info', `Queued prompt #${sessionQueue.length}${queuedFiles.length ? ` with ${queuedFiles.length} file(s)` : ''}. It will run automatically next.`);
-    input.value = '';
-    input.style.height = 'auto';
+    clearChatComposerAfterSend(input);
     updateQueuedPromptUI();
     return;
   }
@@ -6946,16 +8129,24 @@ async function sendChat(queuedMessage = null) {
   }
   let messageWithFiles = message;
 
-  const userTurnMessage = {
-    role: 'user',
-    content: messageWithFiles,
-    attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined,
-  };
-  sessionHistoryRef.push(userTurnMessage);
+  const reuseExistingUserIndex = Number.isInteger(options.reuseExistingUserIndex)
+    ? options.reuseExistingUserIndex
+    : -1;
+  const userTurnMessage = reuseExistingUserIndex >= 0 && sessionHistoryRef[reuseExistingUserIndex]?.role === 'user'
+    ? sessionHistoryRef[reuseExistingUserIndex]
+    : {
+        role: 'user',
+        content: messageWithFiles,
+        attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined,
+      };
+  userTurnMessage.content = messageWithFiles;
+  userTurnMessage.attachmentPreviews = uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined;
+  userTurnMessage.timestamp = userTurnMessage.timestamp || Date.now();
+  if (reuseExistingUserIndex < 0) sessionHistoryRef.push(userTurnMessage);
+  if (options.voicePendingTurnId) removeVoicePendingTurnInternal(options.voicePendingTurnId);
   persistSession(thisSessionId);
   if (!queuedTurn) {
-    input.value = '';
-    input.style.height = 'auto';
+    clearChatComposerAfterSend(input);
   }
   window._sessionThinking[thisSessionId] = true;
   if (window.activeChatSessionId === thisSessionId) syncActiveSessionRunState();
@@ -7170,7 +8361,7 @@ async function sendChat(queuedMessage = null) {
             const sid = String(event.sessionId || thisSessionId || '').trim();
             applySessionCreativeMode(sid, event.creativeMode, { resetScene: event.resetScene === true });
             const meta = getCreativeModeMeta(event.creativeMode);
-            addProcessEntry('info', meta ? `${meta.title} activated.` : 'Creative mode exited.');
+            addProcessEntry('info', meta ? `${meta.title} workspace selected.` : 'Creative workspace closed.');
             break;
           }
 
@@ -7624,6 +8815,19 @@ async function sendChat(queuedMessage = null) {
             const badgeText = `${modelLabel}${switchedReason ? ` — ${switchedReason}` : ''}`;
             pushProgressLine(badgeText);
             streamState.activeModelBadge = { label: modelLabel, reason: switchedReason, provider: switchedProvider };
+            showToast('Model switched', `${switchedProvider ? `${switchedProvider}/` : ''}${switchedModel}${switchedReason ? ` - ${switchedReason}` : ''}`, 'info', 4500);
+            renderIfViewingThisSession();
+            break;
+          }
+
+          case 'main_model_changed': {
+            const modelRef = String(event.modelRef || '').trim();
+            const model = String(event.model || modelRef).trim();
+            const provider = String(event.providerId || '').trim();
+            const label = model.split('/').pop() || model || 'main model';
+            pushProgressLine(`Main chat model set to ${provider ? `${provider}/` : ''}${model}`);
+            streamState.activeModelBadge = { label, reason: 'main chat default', provider };
+            showToast('Main model changed', modelRef || `${provider ? `${provider}/` : ''}${model}`, 'success', 5000);
             renderIfViewingThisSession();
             break;
           }
@@ -7671,6 +8875,11 @@ async function sendChat(queuedMessage = null) {
 	      });
 	    }
     persistSession(thisSessionId);
+    if (finalReply && window.activeChatSessionId === thisSessionId) {
+      speakAssistantReply(finalReply).catch((err) => {
+        addProcessEntry('warn', `Voice reply failed: ${String(err?.message || err)}`);
+      });
+    }
 
   } catch (err) {
     persistTurnThinkingToProcess();
@@ -7678,27 +8887,30 @@ async function sendChat(queuedMessage = null) {
       || turnAbortController?.signal?.aborted
       || /abort/i.test(String(err?.message || err || ''));
     if (wasAborted) {
-      addProcessEntry('warn', 'Generation stopped by user.');
-      const turnEntries = getTurnEntries();
-      const streamedText = String(streamState.streamingAIText || partialContent || '').trim();
-      const streamedThinking = String(streamState.streamingThinkingText || '').trim();
-      const content = partialContent ||
-        (streamedText
-          ? `[Stopped by user]\n\n${streamedText}`
-          : allSteps.length
-            ? `[Stopped - ${allSteps.length} step${allSteps.length !== 1 ? 's' : ''} completed]`
-            : streamedThinking
-              ? '[Stopped by user while thinking. Process log preserved.]'
-              : '[Generation stopped]');
-      sessionHistoryRef.push({
-        role: 'ai',
-        content,
-        steps: allSteps,
-        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
-        mode: window.useAgentMode ? 'agentic' : 'chat',
-        thinking: streamedThinking || undefined,
-        processEntries: turnEntries,
-      });
+      const isEditRerunReset = window._editRerunAbortResetSessions?.has?.(thisSessionId);
+      if (!isEditRerunReset) {
+        addProcessEntry('warn', 'Generation stopped by user.');
+        const turnEntries = getTurnEntries();
+        const streamedText = String(streamState.streamingAIText || partialContent || '').trim();
+        const streamedThinking = String(streamState.streamingThinkingText || '').trim();
+        const content = partialContent ||
+          (streamedText
+            ? `[Stopped by user]\n\n${streamedText}`
+            : allSteps.length
+              ? `[Stopped - ${allSteps.length} step${allSteps.length !== 1 ? 's' : ''} completed]`
+              : streamedThinking
+                ? '[Stopped by user while thinking. Process log preserved.]'
+                : '[Generation stopped]');
+        sessionHistoryRef.push({
+          role: 'ai',
+          content,
+          steps: allSteps,
+          generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+          mode: window.useAgentMode ? 'agentic' : 'chat',
+          thinking: streamedThinking || undefined,
+          processEntries: turnEntries,
+        });
+      }
     } else {
       const turnEntries = getTurnEntries();
       streamState.lastHeartbeat = { ...streamState.lastHeartbeat, state: 'stalled', level: 'hard', message: String(err.message || 'connection_error'), current_step: 'error' };
@@ -7735,10 +8947,15 @@ async function sendChat(queuedMessage = null) {
   }
   sendBtn.disabled = false;
   updateQueuedPromptUI();
+  if (Number.isInteger(options.reuseExistingUserIndex) && options.reuseExistingUserIndex >= 0) {
+    updatePromptVariantAfterRerun(options.reuseExistingUserIndex);
+    window._editRerunAbortResetSessions?.delete?.(thisSessionId);
+  }
 
   if (isViewingThisSession) {
     const shouldPauseQueue = isFailedTurnReply(finalReply || (sessionHistoryRef[sessionHistoryRef.length - 1]?.content || ''));
     const queue = getSessionQueuedPrompts(thisSessionId);
+    let queuedPromptStarted = false;
     if (queue.length > 0 && shouldPauseQueue) {
       addProcessEntry('warn', 'Queue paused because the previous turn failed/blocked. Press Send to resume queued prompts.');
     } else if (queue.length > 0) {
@@ -7746,8 +8963,10 @@ async function sendChat(queuedMessage = null) {
       window.queuedPrompts = queue;
       updateQueuedPromptUI();
       addProcessEntry('info', `Auto-running queued prompt${queue.length ? ` (${queue.length} remaining)` : ''}.`);
+      queuedPromptStarted = true;
       setTimeout(() => { sendChat(next); }, 0);
     }
+    if (!queuedPromptStarted) setTimeout(processVoicePendingTurns, 0);
   }
 }
 
@@ -7849,6 +9068,31 @@ function clearChat() {
 
 // Enter to send, Shift+Enter for newline
 document.getElementById('chat-input').addEventListener('keydown', e => {
+  const input = e.currentTarget;
+  const suggestions = getSlashCommandSuggestions(String(input.value || ''));
+  const popoverVisible = !activeSlashCommand && suggestions.length > 0;
+  if (popoverVisible && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    e.preventDefault();
+    slashCommandSelectionIndex = e.key === 'ArrowDown'
+      ? (slashCommandSelectionIndex + 1) % suggestions.length
+      : (slashCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+    renderSlashCommandPopover(input.value);
+    return;
+  }
+  if (popoverVisible && (e.key === 'Enter' || e.key === 'Tab')) {
+    e.preventDefault();
+    selectSlashCommand(suggestions[slashCommandSelectionIndex]?.command || suggestions[0]?.command || '');
+    return;
+  }
+  if (e.key === 'Escape' && popoverVisible) {
+    e.preventDefault();
+    hideSlashCommandPopover();
+    return;
+  }
+  if (e.key === 'Backspace' && activeSlashCommand && !String(input.value || '') && input.selectionStart === 0) {
+    clearActiveSlashCommand({ focus: false });
+    return;
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendChat();
@@ -7857,9 +9101,14 @@ document.getElementById('chat-input').addEventListener('keydown', e => {
 
 // Auto-resize textarea
 document.getElementById('chat-input').addEventListener('input', function() {
-  this.style.height = 'auto';
-  this.style.height = Math.min(this.scrollHeight, 140) + 'px';
+  resizeChatInput(this);
+  handleSlashCommandInput(this);
 });
+document.getElementById('chat-input').addEventListener('blur', () => {
+  setTimeout(hideSlashCommandPopover, 120);
+});
+
+queueMicrotask(() => refreshVoiceProviderStatus().catch(() => {}));
 
 // ---- WebSocket ----
 
@@ -7889,6 +9138,8 @@ let creativeTimelineMs = 0;
 let creativeHistoryPast = [];
 let creativeHistoryFuture = [];
 let creativeHtmlMotionClip = null;
+// Composition (multi-clip timeline). Video clips are HTML Motion or Remotion only.
+let creativeComposition = null;
 let creativeHtmlMotionBlocksState = {
   loading: false,
   loaded: false,
@@ -7928,6 +9179,8 @@ let creativeSceneSavePending = false;
 let creativeAssetsRequestToken = 0;
 let creativeAudioAnalysisRequestToken = 0;
 let creativeLayerExtractionBusy = false;
+let creativeLayerExtractionRequestId = '';
+let creativeLayerExtractionProgress = null;
 let creativeAssetsState = {
   key: '',
   sessionId: '',
@@ -7977,48 +9230,6 @@ let creativePresetBrowserState = {
   query: '',
   libraryId: '__all__',
 };
-const CREATIVE_PREMIUM_VIDEO_TEMPLATES = [
-  {
-    id: 'saas-hero-reveal',
-    name: 'SaaS Hero Reveal',
-    icon: 'solar:rocket-2-bold-duotone',
-    category: 'SaaS',
-    description: 'Launch opener with product frame, proof chips, CTA, and staggered type.',
-    defaults: {
-      title: 'Launch the workflow that sells while you sleep',
-      subtitle: 'Prometheus turns strategy, assets, and follow-up into one operating layer.',
-      cta: 'See the system',
-      durationMs: 9000,
-    },
-  },
-  {
-    id: 'ai-dashboard-flythrough',
-    name: 'AI Dashboard Flythrough',
-    icon: 'solar:chart-2-bold-duotone',
-    category: 'AI',
-    description: 'Layered dashboard panels, metrics, neural overlay, and parallax motion.',
-    defaults: {
-      title: 'Your AI command center, finally visible',
-      subtitle: 'Dashboards, agents, decisions, and proof in one living system.',
-      cta: 'Watch it move',
-      durationMs: 11000,
-    },
-  },
-  {
-    id: 'podcast-audiogram-premium',
-    name: 'Podcast Audiogram Premium',
-    icon: 'solar:volume-loud-bold-duotone',
-    category: 'Audio',
-    description: 'Cover plate, waveform bars, caption window, speaker badge, and progress.',
-    defaults: {
-      title: 'The founder systems episode',
-      subtitle: 'The bottleneck was never effort. It was rhythm.',
-      cta: 'Listen now',
-      speaker: 'Prometheus Radio',
-      durationMs: 30000,
-    },
-  },
-];
 let creativeLibraryNavTab = null;
 let creativeLibraryActiveCategory = null;
 let creativeIconifySearch = { query: '', results: [], loading: false, error: '' };
@@ -8038,6 +9249,53 @@ let creativeHtmlMotionDragState = null;
 let creativeHtmlMotionSpatialDebugEnabled = false;
 let currentAbortController = null;
 let creativeRenderWorkerBootPromise = null;
+let voiceRecognition = null;
+let voiceDictationActive = false;
+let voiceDictationEnabled = false;
+let voiceDictationBaseText = '';
+let voiceDictationFinalText = '';
+let voiceProvidersStatus = { sttProviders: [], ttsProviders: [] };
+let voiceSttProvider = 'browser';
+let voiceTtsProvider = 'browser';
+let voiceOutputVoice = '';
+let realtimeVoiceSelection = 'marin';
+let voiceCatalogCache = {};
+let voiceRepliesEnabled = false;
+let regularVoiceControlsVisible = false;
+let realtimeVoiceRepliesEnabled = false;
+let backendVoiceRecorder = null;
+let backendVoiceChunks = [];
+let backendVoiceMimeType = 'audio/webm';
+let realtimeVoiceConfigured = false;
+let realtimeVoiceConnection = null;
+let realtimeVoiceConnecting = null;
+let realtimeVoicePlaybackActive = false;
+let realtimeVoiceActiveResponseId = '';
+let realtimeVoiceResponseWaiters = [];
+let realtimeVoiceSpeakChain = Promise.resolve();
+let realtimeContextPackCache = null;
+let realtimeContextPackFetchedAt = 0;
+let realtimeDictationConnection = null;
+let realtimeDictationConnecting = null;
+let realtimeDictationBaseText = '';
+let realtimeDictationFinalText = '';
+let realtimeDictationDeltas = new Map();
+let realtimeDictationSubmitChain = Promise.resolve();
+let realtimeDictationLastSubmittedText = '';
+let realtimeDictationSubmitTimer = null;
+let realtimeDictationCompletedItemIds = new Set();
+let realtimeDictationRecentSubmitKeys = new Map();
+let realtimeWakeGate = null;
+let realtimeDictationFallbackTimer = null;
+let realtimeDictationUtteranceSeq = 0;
+let realtimeDictationSubmittedUtteranceSeq = -1;
+let realtimeDictationSubmittedUtteranceUntil = 0;
+let realtimeDraftRecognition = null;
+let realtimeDraftFinalText = '';
+let realtimeDraftInterimText = '';
+let realtimeDraftStartedAt = 0;
+
+const OPENAI_REALTIME_VOICE_IDS = new Set(['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar']);
 
 const CANVAS_LANG_MAP = {
   js:'javascript', ts:'javascript', jsx:'javascript', tsx:'javascript', mjs:'javascript',
@@ -8055,6 +9313,1512 @@ function creativeMediaSourceUrl(source = '') {
   if (!value) return '';
   if (/^(?:data:|blob:|https?:|\/api\/)/i.test(value)) return value;
   return `/api/canvas/inline?path=${encodeURIComponent(normalizeCanvasPath(value))}`;
+}
+
+function getSpeechRecognitionCtor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function getStoredVoiceProvider(kind, fallback) {
+  try {
+    const value = localStorage.getItem(`prometheus_voice_${kind}_provider`);
+    return value ? String(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function storeVoiceProvider(kind, provider) {
+  try { localStorage.setItem(`prometheus_voice_${kind}_provider`, provider); } catch {}
+}
+
+function getStoredVoiceSetting(key, fallback = '') {
+  try {
+    const value = localStorage.getItem(`prometheus_${key}`);
+    return value ? String(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function storeVoiceSetting(key, value) {
+  try { localStorage.setItem(`prometheus_${key}`, String(value || '')); } catch {}
+}
+
+function setRegularVoiceControlsVisible(visible) {
+  regularVoiceControlsVisible = !!visible;
+  const controls = document.getElementById('voice-provider-controls');
+  if (!controls) return;
+  controls.hidden = !regularVoiceControlsVisible;
+  controls.classList.toggle('visible', regularVoiceControlsVisible);
+}
+
+function setRealtimeVoiceControlsVisible(visible) {
+  const controls = document.getElementById('realtime-voice-provider-controls');
+  if (!controls) return;
+  controls.hidden = !visible;
+  controls.classList.toggle('visible', !!visible);
+  renderRealtimeWakeGateState();
+}
+
+function disableRealtimeVoiceMode() {
+  if (!realtimeVoiceRepliesEnabled && !realtimeDictationConnection && !realtimeVoiceConnection) return;
+  realtimeVoiceRepliesEnabled = false;
+  clearRealtimeWakeGate({ silent: true });
+  closeRealtimeDictationConnection();
+  closeRealtimeVoiceConnection();
+  setRealtimeVoiceControlsVisible(false);
+  setRealtimeVoiceButtonState();
+}
+
+function resizeChatInput(input = document.getElementById('chat-input')) {
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+}
+
+function setVoiceDictationState(active) {
+  voiceDictationActive = !!active && voiceDictationEnabled;
+  const btn = document.getElementById('chat-voice-btn');
+  if (!btn) return;
+  btn.classList.toggle('recording', voiceDictationActive);
+  btn.classList.toggle('active', voiceDictationEnabled);
+  btn.title = voiceDictationEnabled ? 'Stop dictation' : 'Dictate message';
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function writeDictationTranscript(interimText = '') {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  const pieces = [voiceDictationBaseText, voiceDictationFinalText, interimText]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+  input.value = pieces.join(pieces.length > 1 ? ' ' : '');
+  resizeChatInput(input);
+}
+
+function appendDictationText(text) {
+  if (!voiceDictationEnabled) return;
+  const input = document.getElementById('chat-input');
+  const transcript = String(text || '').trim();
+  if (!input || !transcript) return;
+  const current = String(input.value || '').trim();
+  input.value = current ? `${current} ${transcript}` : transcript;
+  resizeChatInput(input);
+  input.focus();
+  submitVoiceCommandIfPresent();
+}
+
+function extractVoiceSubmitCommand(value) {
+  const source = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!source) return { text: '', shouldSubmit: false };
+  const commandPattern = /(?:[,.!?;:]\s*|\s+)(?:please\s+)?(?:send(?:\s+(?:it|this|that|message))?|submit(?:\s+(?:it|this|that|message))?|go ahead and send(?:\s+(?:it|this|that|message))?)$/i;
+  const match = source.match(commandPattern);
+  if (!match) return { text: source, shouldSubmit: false };
+  return {
+    text: source.slice(0, match.index).replace(/[,\s]+$/g, '').trim(),
+    shouldSubmit: true,
+  };
+}
+
+function submitVoiceCommandIfPresent() {
+  if (!voiceDictationEnabled) return false;
+  const input = document.getElementById('chat-input');
+  if (!input) return false;
+  const parsed = extractVoiceSubmitCommand(input.value);
+  if (!parsed.shouldSubmit || !parsed.text) return false;
+  input.value = parsed.text;
+  resizeChatInput(input);
+  if (voiceRecognition) {
+    try { voiceRecognition.stop(); } catch {}
+  }
+  setTimeout(() => {
+    const result = sendChat();
+    if (result?.catch) result.catch((err) => showToast('Voice send failed', String(err?.message || err), 'error'));
+  }, 0);
+  voiceDictationEnabled = false;
+  setRegularVoiceControlsVisible(false);
+  return true;
+}
+
+function getRecorderMimeType() {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+  return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+}
+
+function toggleBrowserDictation() {
+  const Recognition = getSpeechRecognitionCtor();
+  if (!Recognition) {
+    showToast('Voice dictation unavailable', 'This browser does not expose SpeechRecognition.', 'error');
+    return;
+  }
+
+  const input = document.getElementById('chat-input');
+  voiceDictationBaseText = String(input?.value || '').trim();
+  voiceDictationFinalText = '';
+  voiceRecognition = new Recognition();
+  voiceRecognition.continuous = true;
+  voiceRecognition.interimResults = true;
+  voiceRecognition.lang = navigator.language || 'en-US';
+  voiceRecognition.onstart = () => {
+    if (!voiceDictationEnabled) {
+      try { voiceRecognition?.stop?.(); } catch {}
+      return;
+    }
+    setVoiceDictationState(true);
+    showToast('Listening', 'Dictation is writing into the chat box.', 'info', 1800);
+  };
+  voiceRecognition.onerror = (event) => {
+    const message = event?.error ? `Speech recognition error: ${event.error}` : 'Speech recognition stopped.';
+    showToast('Dictation stopped', message, 'error');
+  };
+  voiceRecognition.onend = () => {
+    setVoiceDictationState(false);
+    voiceRecognition = null;
+    if (voiceDictationEnabled) writeDictationTranscript('');
+  };
+  voiceRecognition.onresult = (event) => {
+    if (!voiceDictationEnabled) return;
+    let interim = '';
+    let sawFinal = false;
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const transcript = String(event.results[i]?.[0]?.transcript || '').trim();
+      if (!transcript) continue;
+      if (event.results[i].isFinal) {
+        voiceDictationFinalText = `${voiceDictationFinalText} ${transcript}`.trim();
+        sawFinal = true;
+      } else {
+        interim = `${interim} ${transcript}`.trim();
+      }
+    }
+    writeDictationTranscript(interim);
+    if (sawFinal) submitVoiceCommandIfPresent();
+  };
+  try {
+    voiceRecognition.start();
+  } catch (err) {
+    setVoiceDictationState(false);
+    showToast('Dictation could not start', String(err?.message || err), 'error');
+  }
+}
+
+async function stopBackendDictation() {
+  if (!backendVoiceRecorder) return;
+  try { backendVoiceRecorder.stop(); } catch {}
+  try { backendVoiceRecorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+}
+
+async function transcribeBackendRecording(blob) {
+  if (!voiceDictationEnabled) return;
+  const provider = voiceSttProvider;
+  const audioBase64 = await blobToBase64(blob);
+  const response = await fetch('/api/voice/stt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider,
+      audioBase64,
+      mimeType: blob.type || backendVoiceMimeType || 'audio/webm',
+      filename: `prometheus-voice-${Date.now()}.webm`,
+      language: navigator.language?.split('-')?.[0] || undefined,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success === false) throw new Error(data?.error || `Transcription failed (${response.status})`);
+  appendDictationText(data.text || '');
+  if (data.text) showToast('Transcribed', `${provider.toUpperCase()} wrote into the chat box.`, 'success', 1800);
+  else showToast('No speech detected', '', 'info', 1800);
+}
+
+async function toggleBackendDictation() {
+  if (backendVoiceRecorder && voiceDictationActive) {
+    await stopBackendDictation();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    showToast('Voice recording unavailable', 'This browser cannot record microphone audio for backend STT.', 'error');
+    return;
+  }
+  const selected = getProviderInfo('stt', voiceSttProvider);
+  if (!selected?.configured) {
+    showToast('Voice provider not configured', `${selected?.label || voiceSttProvider} needs its API key on the gateway.`, 'error');
+    return;
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  backendVoiceChunks = [];
+  backendVoiceMimeType = getRecorderMimeType();
+  backendVoiceRecorder = new MediaRecorder(stream, backendVoiceMimeType ? { mimeType: backendVoiceMimeType } : undefined);
+  backendVoiceRecorder.ondataavailable = (event) => {
+    if (voiceDictationEnabled && event.data && event.data.size > 0) backendVoiceChunks.push(event.data);
+  };
+  backendVoiceRecorder.onerror = (event) => {
+    showToast('Recording failed', String(event?.error?.message || event?.error || 'Unknown recording error'), 'error');
+  };
+  backendVoiceRecorder.onstop = async () => {
+    const chunks = backendVoiceChunks.slice();
+    backendVoiceChunks = [];
+    const recorder = backendVoiceRecorder;
+    backendVoiceRecorder = null;
+    setVoiceDictationState(false);
+    try { recorder?.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+    if (!voiceDictationEnabled) {
+      backendVoiceChunks = [];
+      return;
+    }
+    if (!chunks.length) return;
+    const blob = new Blob(chunks, { type: backendVoiceMimeType || 'audio/webm' });
+    try {
+      showToast('Transcribing', `Sending audio to ${selected?.label || voiceSttProvider}.`, 'info', 1600);
+      await transcribeBackendRecording(blob);
+    } catch (err) {
+      showToast('Transcription failed', String(err?.message || err), 'error');
+    }
+  };
+  backendVoiceRecorder.start();
+  setVoiceDictationState(true);
+  showToast('Recording', `Tap the mic again to transcribe with ${selected?.label || voiceSttProvider}.`, 'info', 2200);
+}
+
+function toggleVoiceDictation() {
+  if (voiceDictationEnabled || voiceDictationActive || voiceRecognition || backendVoiceRecorder) {
+    voiceDictationEnabled = false;
+    voiceRepliesEnabled = false;
+    setRegularVoiceControlsVisible(false);
+    setVoiceDictationState(false);
+    if (voiceRecognition) {
+      const recognition = voiceRecognition;
+      voiceRecognition = null;
+      try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch {}
+      try { recognition.abort?.(); } catch {}
+    }
+    if (backendVoiceRecorder) {
+      const recorder = backendVoiceRecorder;
+      backendVoiceRecorder = null;
+      backendVoiceChunks = [];
+      try { recorder.ondataavailable = null; recorder.onerror = null; recorder.onstop = null; recorder.stop(); } catch {}
+      try { recorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+    }
+    showToast('Dictation off', '', 'info', 1400);
+    return;
+  }
+  disableRealtimeVoiceMode();
+  voiceDictationEnabled = true;
+  voiceRepliesEnabled = true;
+  setRegularVoiceControlsVisible(true);
+  if (voiceSttProvider === 'browser') {
+    toggleBrowserDictation();
+    return;
+  }
+  toggleBackendDictation().catch((err) => {
+    setVoiceDictationState(false);
+    showToast('Dictation could not start', String(err?.message || err), 'error');
+  });
+}
+
+function extractRealtimeClientSecret(data) {
+  return String(data?.client_secret?.value || data?.value || data?.client_secret || '').trim();
+}
+
+function setRealtimeVoiceButtonState() {
+  const btn = document.getElementById('chat-realtime-voice-btn');
+  if (!btn) return;
+  const gate = getRealtimeWakeGate();
+  btn.classList.toggle('active', realtimeVoiceRepliesEnabled);
+  btn.classList.toggle('silent', !!gate);
+  btn.classList.toggle('unconfigured', !realtimeVoiceConfigured);
+  btn.disabled = false;
+  btn.title = gate
+    ? `Silent until "${gate.phrase}"`
+    : realtimeVoiceRepliesEnabled
+    ? 'Stop OpenAI Realtime replies'
+    : (realtimeVoiceConfigured ? 'OpenAI Realtime replies' : 'Connect OpenAI Codex OAuth or set an OpenAI Realtime API key');
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function closeRealtimeVoiceConnection() {
+  const connection = realtimeVoiceConnection;
+  realtimeVoiceConnection = null;
+  realtimeVoicePlaybackActive = false;
+  realtimeVoiceActiveResponseId = '';
+  realtimeVoiceResponseWaiters.splice(0).forEach((resolve) => {
+    try { resolve(); } catch {}
+  });
+  try { connection?.dc?.close?.(); } catch {}
+  try { connection?.pc?.close?.(); } catch {}
+  try { if (connection?.audio) connection.audio.srcObject = null; } catch {}
+}
+
+function setRealtimeDictationRecordingState(active) {
+  const btn = document.getElementById('chat-realtime-voice-btn');
+  if (!btn) return;
+  btn.classList.toggle('recording', !!active && realtimeVoiceRepliesEnabled);
+}
+
+function normalizeRealtimeWakePhrase(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripRealtimeWakeCommandPunctuation(value) {
+  return String(value || '').replace(/^[\s,.:;"'!?-]+|[\s,.:;"'!?-]+$/g, '').trim();
+}
+
+function parseRealtimeWakeGateCommand(value) {
+  const source = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!source) return null;
+  const patterns = [
+    /\b(?:do\s+not|don't|dont)\s+(?:respond|answer|reply|talk|speak)(?:\s+(?:to|about|at|for)\s+.*?|\s+again|\s+to\s+anything|\s+until|\s+unless)*?\s+(?:until|unless)\s+i\s+say\s+(.+)$/i,
+    /\b(?:stay|be|remain)\s+(?:quiet|silent|muted)\s+(?:until|unless)\s+i\s+say\s+(.+)$/i,
+    /\b(?:stop|pause|mute)\s+(?:talking|speaking|responding|replying|yourself)\s+(?:until|unless)\s+i\s+say\s+(.+)$/i,
+    /\b(?:listen|keep\s+listening)\s+(?:silently\s+)?(?:until|unless)\s+i\s+say\s+(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    const phrase = stripRealtimeWakeCommandPunctuation(match?.[1] || '');
+    if (!phrase) continue;
+    return {
+      active: true,
+      phrase,
+      normalizedPhrase: normalizeRealtimeWakePhrase(phrase),
+      suppressTranscript: true,
+      suppressSend: true,
+      suppressVoice: true,
+      workerPolicy: /\b(?:cancel|abort|stop\s+the\s+task|stop\s+prometheus)\b/i.test(source)
+        ? 'interrupt'
+        : /\b(?:pause\s+prometheus|pause\s+the\s+worker|pause\s+the\s+task)\b/i.test(source)
+          ? 'pause'
+          : 'continue',
+      createdAt: Date.now(),
+    };
+  }
+  return null;
+}
+
+function parseRealtimeControlCommand(value) {
+  const normalized = normalizeRealtimeWakePhrase(value);
+  if (!normalized) return null;
+  if (/^(?:hey\s+)?(?:prometheus\s+)?(?:what\s+are\s+you\s+doing|what\s+is\s+going\s+on|what\s+s\s+going\s+on|what\s+are\s+you\s+working\s+on|status|status\s+update|any\s+progress|how\s+is\s+it\s+going|how\s+s\s+it\s+going)\??$/.test(normalized)) {
+    return { kind: 'status' };
+  }
+  if (/^(?:hey\s+)?(?:prometheus\s+)?(?:stop|cancel|abort|stop\s+that|cancel\s+that|abort\s+that|stop\s+the\s+task|cancel\s+the\s+task)$/.test(normalized)) {
+    return { kind: 'interrupt' };
+  }
+  if (/^(?:hey\s+)?(?:prometheus\s+)?(?:stop\s+talking|stop\s+speaking|be\s+quiet|mute\s+yourself)$/.test(normalized)) {
+    return { kind: 'mute_voice' };
+  }
+  return null;
+}
+
+function getRealtimePrometheusStatusText() {
+  const sid = String(window.activeChatSessionId || '').trim();
+  const thinking = !!window._sessionThinking?.[sid] || !!window.isThinking;
+  const entries = Array.isArray(window.processLogEntries) ? window.processLogEntries : [];
+  const meaningful = entries
+    .filter((entry) => entry && !['user', 'final'].includes(String(entry.type || '').toLowerCase()))
+    .slice(-5)
+    .map((entry) => String(entry.content || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (thinking && meaningful.length) {
+    return `Prometheus is still working. Latest progress: ${meaningful.slice(-3).join(' Then ')}`;
+  }
+  if (thinking) return 'Prometheus is still working, but there is no detailed progress note yet.';
+  if (meaningful.length) return `No active Prometheus worker right now. The latest note was: ${meaningful[meaningful.length - 1]}`;
+  return 'No active Prometheus worker right now.';
+}
+
+function interruptActivePrometheusWorkerFromVoice() {
+  const sid = String(window.activeChatSessionId || '').trim();
+  const thinking = !!window._sessionThinking?.[sid] || !!window.isThinking;
+  if (!thinking) return false;
+  try { window.stopGeneration?.(); } catch {}
+  const ctrl = window._sessionAbortControllers?.[sid] || currentAbortController;
+  try { if (ctrl && !ctrl.signal?.aborted) ctrl.abort(); } catch {}
+  addProcessEntry?.('warn', 'Realtime voice: worker interrupted by voice command.');
+  return true;
+}
+
+function handleRealtimeControlCommand(command) {
+  if (!command?.kind) return false;
+  if (command.kind === 'status') {
+    const text = getRealtimePrometheusStatusText();
+    addProcessEntry?.('info', `Realtime voice status: ${text}`);
+    speakAssistantReply(text).catch((err) => showToast('Realtime status voice failed', String(err?.message || err), 'error'));
+    return true;
+  }
+  if (command.kind === 'interrupt') {
+    stopRealtimeVoicePlayback();
+    const stopped = interruptActivePrometheusWorkerFromVoice();
+    const text = stopped ? 'Stopped the active Prometheus worker.' : 'There is no active Prometheus worker to stop.';
+    showToast('Realtime interrupt', text, stopped ? 'success' : 'info', 1800);
+    speakAssistantReply(text).catch(() => {});
+    return true;
+  }
+  if (command.kind === 'mute_voice') {
+    stopRealtimeVoicePlayback();
+    showToast('Realtime voice muted', '', 'info', 1400);
+    return true;
+  }
+  return false;
+}
+
+function getRealtimeWakeGate() {
+  return realtimeWakeGate?.active ? realtimeWakeGate : null;
+}
+
+function renderRealtimeWakeGateState() {
+  const status = document.getElementById('realtime-wake-gate-status');
+  const btn = document.getElementById('chat-realtime-voice-btn');
+  const gate = getRealtimeWakeGate();
+  if (btn) {
+    btn.classList.toggle('silent', !!gate);
+    if (gate) {
+      btn.title = `Silent until "${gate.phrase}"`;
+      btn.setAttribute('aria-label', btn.title);
+    } else {
+      setRealtimeVoiceButtonState();
+    }
+  }
+  if (!status) return;
+  if (!gate || !realtimeVoiceRepliesEnabled) {
+    status.hidden = true;
+    status.classList.remove('visible');
+    status.innerHTML = '';
+    return;
+  }
+  status.hidden = false;
+  status.classList.add('visible');
+  status.innerHTML = `<span class="realtime-wake-gate-pill" title="Prometheus is listening silently for this wake phrase">Silent until &quot;${escHtml(gate.phrase)}&quot;</span><button type="button" class="realtime-wake-gate-btn" onclick="clearRealtimeWakeGate()">Wake</button>`;
+}
+
+function stopRealtimeVoicePlayback() {
+  try { window.speechSynthesis?.cancel?.(); } catch {}
+  const audio = document.getElementById('realtime-voice-audio');
+  try {
+    audio?.pause?.();
+    if (audio) audio.currentTime = 0;
+  } catch {}
+  const dc = realtimeVoiceConnection?.dc;
+  if (realtimeVoicePlaybackActive && dc?.readyState === 'open') {
+    try { dc.send(JSON.stringify({ type: 'response.cancel' })); } catch {}
+    try { dc.send(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
+  }
+  realtimeVoicePlaybackActive = false;
+  realtimeVoiceActiveResponseId = '';
+}
+
+function activateRealtimeWakeGate(gate, options = {}) {
+  if (!gate?.normalizedPhrase) return false;
+  realtimeWakeGate = gate;
+  stopRealtimeVoicePlayback();
+  if (gate.workerPolicy === 'interrupt' && window._sessionThinking?.[window.activeChatSessionId]) {
+    try { window.stopGeneration?.(); } catch {}
+    addProcessEntry?.('warn', 'Realtime voice: worker interrupted before entering silent wake gate.');
+  } else if (gate.workerPolicy === 'pause') {
+    addProcessEntry?.('info', 'Realtime voice: pause requested; voice is silent, worker pause bridge is not active yet.');
+  }
+  const input = document.getElementById('chat-input');
+  if (input) {
+    input.value = '';
+    resizeChatInput(input);
+  }
+  resetRealtimeDictationTranscript();
+  renderRealtimeWakeGateState();
+  if (options.toast !== false) {
+    showToast('Realtime silent', `Listening for "${gate.phrase}".`, 'info', 2600);
+  }
+  addProcessEntry?.('info', `Realtime voice: silent until "${gate.phrase}".`);
+  return true;
+}
+
+function clearRealtimeWakeGate(options = {}) {
+  const gate = getRealtimeWakeGate();
+  realtimeWakeGate = null;
+  const input = document.getElementById('chat-input');
+  if (input && options.clearInput !== false) {
+    input.value = '';
+    resizeChatInput(input);
+  }
+  resetRealtimeDictationTranscript();
+  renderRealtimeWakeGateState();
+  if (gate && options.silent !== true) {
+    showToast('Realtime awake', 'Prometheus is listening normally again.', 'success', 1800);
+    addProcessEntry?.('info', `Realtime voice: woke from "${gate.phrase}".`);
+  }
+  return gate;
+}
+
+function splitRealtimeWakePhraseRemainder(transcript, gate) {
+  const source = String(transcript || '').trim();
+  const normalizedSource = normalizeRealtimeWakePhrase(source);
+  const normalizedPhrase = normalizeRealtimeWakePhrase(gate?.phrase);
+  if (!source || !normalizedPhrase || !normalizedSource.includes(normalizedPhrase)) {
+    return { woke: false, remainder: '' };
+  }
+  const phraseWords = normalizedPhrase.split(/\s+/).filter(Boolean);
+  const sourceWords = source.split(/\s+/).filter(Boolean);
+  if (!phraseWords.length) return { woke: false, remainder: '' };
+  for (let i = 0; i <= sourceWords.length - phraseWords.length; i += 1) {
+    const candidate = normalizeRealtimeWakePhrase(sourceWords.slice(i, i + phraseWords.length).join(' '));
+    if (candidate === normalizedPhrase) {
+      return {
+        woke: true,
+        remainder: stripRealtimeWakeCommandPunctuation(sourceWords.slice(i + phraseWords.length).join(' ')),
+      };
+    }
+  }
+  return { woke: true, remainder: '' };
+}
+
+function resetRealtimeDictationTranscript(options = {}) {
+  const input = document.getElementById('chat-input');
+  realtimeDictationBaseText = options.baseFromInput === true ? String(input?.value || '').trim() : '';
+  realtimeDictationFinalText = '';
+  realtimeDictationDeltas = new Map();
+  realtimeDraftFinalText = '';
+  realtimeDraftInterimText = '';
+  realtimeDictationLastSubmittedText = '';
+  if (realtimeDictationSubmitTimer) clearTimeout(realtimeDictationSubmitTimer);
+  realtimeDictationSubmitTimer = null;
+  if (realtimeDictationFallbackTimer) clearTimeout(realtimeDictationFallbackTimer);
+  realtimeDictationFallbackTimer = null;
+}
+
+function resetRealtimeDictationEventDedupe() {
+  realtimeDictationCompletedItemIds = new Set();
+  realtimeDictationRecentSubmitKeys = new Map();
+  realtimeDictationUtteranceSeq = 0;
+  realtimeDictationSubmittedUtteranceSeq = -1;
+  realtimeDictationSubmittedUtteranceUntil = 0;
+}
+
+function normalizeRealtimeTranscriptKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s.,!?;:'"()[\]{}-]+/g, ' ')
+    .trim();
+}
+
+function hasRecentRealtimeTranscriptSubmit(key, now = Date.now()) {
+  const normalized = normalizeRealtimeTranscriptKey(key);
+  if (!normalized) return false;
+  const maxAgeMs = 12000;
+  for (const [existingKey, submittedAt] of realtimeDictationRecentSubmitKeys.entries()) {
+    if (now - submittedAt > maxAgeMs) realtimeDictationRecentSubmitKeys.delete(existingKey);
+  }
+  const previous = realtimeDictationRecentSubmitKeys.get(normalized) || 0;
+  if (previous && now - previous <= maxAgeMs) return true;
+  realtimeDictationRecentSubmitKeys.set(normalized, now);
+  return false;
+}
+
+function isRecentRealtimeTranscriptSubmit(key, now = Date.now()) {
+  const normalized = normalizeRealtimeTranscriptKey(key);
+  if (!normalized) return false;
+  const submittedAt = realtimeDictationRecentSubmitKeys.get(normalized) || 0;
+  return !!submittedAt && now - submittedAt <= 12000;
+}
+
+function writeRealtimeDictationTranscript() {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  const interimText = Array.from(realtimeDictationDeltas.values()).join(' ').replace(/\s+/g, ' ').trim();
+  const draftText = [realtimeDraftFinalText, realtimeDraftInterimText].filter(Boolean).join(' ').trim();
+  const pieces = [realtimeDictationBaseText, realtimeDictationFinalText, interimText || draftText]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+  input.value = pieces.join(pieces.length > 1 ? ' ' : '');
+  resizeChatInput(input);
+}
+
+function getRealtimeDictationComposerText() {
+  const interimText = Array.from(realtimeDictationDeltas.values()).join(' ').replace(/\s+/g, ' ').trim();
+  const draftText = [realtimeDraftFinalText, realtimeDraftInterimText].filter(Boolean).join(' ').trim();
+  return [realtimeDictationBaseText, realtimeDictationFinalText, interimText || draftText]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+function appendRealtimeCompletedTranscript(itemId, transcript) {
+  const text = String(transcript || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (itemId && realtimeDictationCompletedItemIds.has(itemId)) return '';
+  if (itemId) realtimeDictationCompletedItemIds.add(itemId);
+  if (itemId) realtimeDictationDeltas.delete(itemId);
+  realtimeDictationFinalText = [realtimeDictationFinalText, text].filter(Boolean).join(' ').trim();
+  writeRealtimeDictationTranscript();
+  return text;
+}
+
+function submitRealtimeDictationTranscript(sourceKey = '', messageOverride = '') {
+  if (realtimeDictationSubmitTimer) clearTimeout(realtimeDictationSubmitTimer);
+  realtimeDictationSubmitTimer = null;
+  if (realtimeDictationFallbackTimer) clearTimeout(realtimeDictationFallbackTimer);
+  realtimeDictationFallbackTimer = null;
+  const input = document.getElementById('chat-input');
+  const message = String(messageOverride || input?.value || '').trim();
+  if (!message) return;
+  if (message === realtimeDictationLastSubmittedText) return;
+  if (hasRecentRealtimeTranscriptSubmit(sourceKey || message)) return;
+  hasRecentRealtimeTranscriptSubmit(message);
+  realtimeDictationLastSubmittedText = message;
+  realtimeDictationSubmittedUtteranceSeq = realtimeDictationUtteranceSeq;
+  realtimeDictationSubmittedUtteranceUntil = Date.now() + 900;
+  realtimeDictationBaseText = '';
+  realtimeDictationFinalText = '';
+  realtimeDictationDeltas = new Map();
+  realtimeDraftFinalText = '';
+  realtimeDraftInterimText = '';
+  if (input) {
+    input.value = '';
+    resizeChatInput(input);
+  }
+  const filesForTurn = Array.isArray(pendingChatFiles) && pendingChatFiles.length ? pendingChatFiles.slice() : [];
+  if (filesForTurn.length) {
+    pendingChatFiles = [];
+    renderChatFilePills();
+  }
+  try {
+    enqueueVoicePendingTurn(message, filesForTurn, 'realtime_voice');
+    resetRealtimeDictationTranscript();
+  } catch (err) {
+    showToast('Realtime send failed', String(err?.message || err), 'error');
+  }
+}
+
+function scheduleRealtimeDictationFallbackSubmit(delayMs = 1300) {
+  if (realtimeDictationFallbackTimer) clearTimeout(realtimeDictationFallbackTimer);
+  realtimeDictationFallbackTimer = setTimeout(() => {
+    realtimeDictationFallbackTimer = null;
+    if (getRealtimeWakeGate()) return;
+    const text = getRealtimeDictationComposerText();
+    if (!text) return;
+    const parsed = extractVoiceSubmitCommand(text);
+    if (parsed.shouldSubmit && parsed.text) {
+      submitRealtimeDictationTranscript(parsed.text, parsed.text);
+      return;
+    }
+    submitRealtimeDictationTranscript(text, text);
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function realtimeCurrentUtteranceRecentlySubmitted() {
+  return realtimeDictationSubmittedUtteranceSeq === realtimeDictationUtteranceSeq
+    && Date.now() < realtimeDictationSubmittedUtteranceUntil;
+}
+
+function beginImplicitRealtimeUtteranceIfSubmitted() {
+  if (realtimeDictationSubmittedUtteranceSeq !== realtimeDictationUtteranceSeq) return;
+  if (Date.now() < realtimeDictationSubmittedUtteranceUntil) return;
+  realtimeDictationUtteranceSeq += 1;
+  realtimeDictationSubmittedUtteranceSeq = -1;
+  realtimeDictationSubmittedUtteranceUntil = 0;
+  realtimeDictationBaseText = String(document.getElementById('chat-input')?.value || '').trim();
+  realtimeDictationFinalText = '';
+  realtimeDictationDeltas = new Map();
+  realtimeDraftFinalText = '';
+  realtimeDraftInterimText = '';
+}
+
+function startRealtimeDraftRecognition() {
+  if (realtimeDraftRecognition || !realtimeVoiceRepliesEnabled) return;
+  const Recognition = getSpeechRecognitionCtor();
+  if (!Recognition) return;
+  const input = document.getElementById('chat-input');
+  realtimeDraftFinalText = '';
+  realtimeDraftInterimText = '';
+  realtimeDraftStartedAt = Date.now();
+  const recognition = new Recognition();
+  realtimeDraftRecognition = recognition;
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = navigator.language || 'en-US';
+  recognition.onresult = (event) => {
+    if (!realtimeVoiceRepliesEnabled || realtimeDraftRecognition !== recognition || getRealtimeWakeGate()) return;
+    let interim = '';
+    let sawFinal = false;
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const transcript = String(event.results[i]?.[0]?.transcript || '').trim();
+      if (!transcript) continue;
+      if (event.results[i].isFinal) {
+        realtimeDraftFinalText = `${realtimeDraftFinalText} ${transcript}`.trim();
+        realtimeDraftInterimText = '';
+        sawFinal = true;
+      } else {
+        interim = `${interim} ${transcript}`.trim();
+      }
+    }
+    realtimeDraftInterimText = interim;
+    if (!realtimeDictationFinalText && !realtimeDictationDeltas.size) writeRealtimeDictationTranscript();
+    const parsed = extractVoiceSubmitCommand(getRealtimeDictationComposerText());
+    if (parsed.shouldSubmit && parsed.text) {
+      submitRealtimeDictationTranscript(parsed.text, parsed.text);
+      return;
+    }
+    if (sawFinal) scheduleRealtimeDictationFallbackSubmit(650);
+    else scheduleRealtimeDictationFallbackSubmit(1600);
+  };
+  recognition.onerror = (event) => {
+    const err = String(event?.error || '').toLowerCase();
+    if (err && !['no-speech', 'aborted'].includes(err)) console.warn('[Realtime draft dictation] recognition error', event);
+  };
+  recognition.onend = () => {
+    if (realtimeDraftRecognition !== recognition) return;
+    realtimeDraftRecognition = null;
+    if (realtimeVoiceRepliesEnabled) setTimeout(startRealtimeDraftRecognition, 180);
+  };
+  try { recognition.start(); } catch { realtimeDraftRecognition = null; }
+}
+
+function stopRealtimeDraftRecognition() {
+  const recognition = realtimeDraftRecognition;
+  realtimeDraftRecognition = null;
+  realtimeDraftFinalText = '';
+  realtimeDraftInterimText = '';
+  realtimeDraftStartedAt = 0;
+  if (!recognition) return;
+  try { recognition.onresult = null; recognition.onerror = null; recognition.onend = null; recognition.stop(); } catch {}
+  try { recognition.abort?.(); } catch {}
+}
+
+function handleRealtimeTranscriptionEvent(event) {
+  const type = String(event?.type || '');
+  if (type === 'input_audio_buffer.speech_started') {
+    realtimeDictationUtteranceSeq += 1;
+    realtimeDraftFinalText = '';
+    realtimeDraftInterimText = '';
+    if (!realtimeDictationFinalText && !realtimeDictationDeltas.size) {
+      realtimeDictationBaseText = String(document.getElementById('chat-input')?.value || '').trim();
+    }
+    setRealtimeDictationRecordingState(true);
+    stopRealtimeVoicePlayback();
+    return;
+  }
+  if (type === 'input_audio_buffer.speech_stopped' || type === 'input_audio_buffer.committed') {
+    setRealtimeDictationRecordingState(false);
+    if (realtimeCurrentUtteranceRecentlySubmitted()) return;
+    beginImplicitRealtimeUtteranceIfSubmitted();
+    scheduleRealtimeDictationFallbackSubmit(type === 'input_audio_buffer.committed' ? 900 : 1400);
+    return;
+  }
+  if (type === 'conversation.item.input_audio_transcription.delta') {
+    if (getRealtimeWakeGate()) return;
+    if (realtimeCurrentUtteranceRecentlySubmitted()) return;
+    beginImplicitRealtimeUtteranceIfSubmitted();
+    const itemId = String(event?.item_id || 'current');
+    const previous = realtimeDictationDeltas.get(itemId) || '';
+    realtimeDictationDeltas.set(itemId, `${previous}${String(event?.delta || '')}`.trim());
+    writeRealtimeDictationTranscript();
+    const parsed = extractVoiceSubmitCommand(getRealtimeDictationComposerText());
+    if (parsed.shouldSubmit && parsed.text) {
+      submitRealtimeDictationTranscript(parsed.text, parsed.text);
+    } else {
+      scheduleRealtimeDictationFallbackSubmit(1800);
+    }
+    return;
+  }
+  if (type === 'conversation.item.input_audio_transcription.completed') {
+    const itemId = String(event?.item_id || '');
+    const rawTranscript = String(event?.transcript || '').replace(/\s+/g, ' ').trim();
+    if (!rawTranscript) return;
+    if (realtimeCurrentUtteranceRecentlySubmitted() || isRecentRealtimeTranscriptSubmit(rawTranscript)) {
+      if (itemId) realtimeDictationDeltas.delete(itemId);
+      return;
+    }
+    beginImplicitRealtimeUtteranceIfSubmitted();
+
+    const gate = getRealtimeWakeGate();
+    if (gate) {
+      if (itemId) realtimeDictationDeltas.delete(itemId);
+      const wake = splitRealtimeWakePhraseRemainder(rawTranscript, gate);
+      if (!wake.woke) return;
+      clearRealtimeWakeGate();
+      if (wake.remainder) {
+        const control = parseRealtimeControlCommand(wake.remainder);
+        if (control && handleRealtimeControlCommand(control)) return;
+        const nextWakeCommand = parseRealtimeWakeGateCommand(wake.remainder);
+        if (nextWakeCommand) {
+          activateRealtimeWakeGate(nextWakeCommand);
+          return;
+        }
+        const transcript = appendRealtimeCompletedTranscript(itemId, wake.remainder);
+        if (transcript) {
+          realtimeDraftFinalText = '';
+          realtimeDraftInterimText = '';
+          const message = String(document.getElementById('chat-input')?.value || '').trim();
+          const parsed = extractVoiceSubmitCommand(message);
+          submitRealtimeDictationTranscript(itemId || transcript, parsed.shouldSubmit && parsed.text ? parsed.text : message);
+        }
+      }
+      return;
+    }
+
+    const controlCommand = parseRealtimeControlCommand(rawTranscript);
+    if (controlCommand && handleRealtimeControlCommand(controlCommand)) {
+      if (itemId) realtimeDictationDeltas.delete(itemId);
+      return;
+    }
+
+    const wakeCommand = parseRealtimeWakeGateCommand(rawTranscript);
+    if (wakeCommand) {
+      if (itemId) realtimeDictationDeltas.delete(itemId);
+      activateRealtimeWakeGate(wakeCommand);
+      return;
+    }
+
+    const transcript = appendRealtimeCompletedTranscript(itemId, rawTranscript);
+    if (transcript) {
+      realtimeDraftFinalText = '';
+      realtimeDraftInterimText = '';
+      const message = String(document.getElementById('chat-input')?.value || '').trim();
+      const parsed = extractVoiceSubmitCommand(message);
+      submitRealtimeDictationTranscript(itemId || transcript, parsed.shouldSubmit && parsed.text ? parsed.text : message);
+    }
+    return;
+  }
+  if (type === 'conversation.item.input_audio_transcription.failed' || type === 'error') {
+    const message = event?.error?.message || event?.error || 'Realtime transcription failed.';
+    showToast('Realtime transcription failed', String(message), 'error');
+  }
+}
+
+function closeRealtimeDictationConnection() {
+  const connection = realtimeDictationConnection;
+  realtimeDictationConnection = null;
+  realtimeDictationConnecting = null;
+  setRealtimeDictationRecordingState(false);
+  stopRealtimeDraftRecognition();
+  resetRealtimeDictationEventDedupe();
+  try { connection?.dc?.close?.(); } catch {}
+  try { connection?.pc?.close?.(); } catch {}
+  try { connection?.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+}
+
+async function ensureRealtimeDictationConnection() {
+  if (realtimeDictationConnection?.dc?.readyState === 'open') return realtimeDictationConnection;
+  if (realtimeDictationConnecting) return realtimeDictationConnecting;
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser cannot capture microphone audio.');
+  realtimeDictationConnecting = (async () => {
+    resetRealtimeDictationTranscript({ baseFromInput: true });
+    resetRealtimeDictationEventDedupe();
+    const tokenResponse = await fetch('/api/realtime/client-secret', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'transcription',
+        language: navigator.language?.split('-')?.[0] || undefined,
+        vadThreshold: 0.22,
+        prefixPaddingMs: 700,
+        silenceDurationMs: 450,
+      }),
+    });
+    const tokenData = await tokenResponse.json().catch(() => ({}));
+    if (!tokenResponse.ok || tokenData?.success === false) {
+      throw new Error(tokenData?.error || `Realtime transcription token request failed (${tokenResponse.status})`);
+    }
+    const clientSecret = extractRealtimeClientSecret(tokenData);
+    if (!clientSecret) throw new Error('Realtime transcription client secret was missing from the gateway response.');
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const pc = new RTCPeerConnection();
+    stream.getAudioTracks().forEach((track) => pc.addTrack(track, stream));
+    const dc = pc.createDataChannel('oai-events');
+    dc.addEventListener('message', (messageEvent) => {
+      try {
+        handleRealtimeTranscriptionEvent(JSON.parse(messageEvent.data));
+      } catch {}
+    });
+    const dcOpen = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Realtime transcription data channel did not open.')), 12000);
+      dc.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
+      dc.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Realtime transcription data channel failed.')); }, { once: true });
+    });
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${clientSecret}`,
+        'Content-Type': 'application/sdp',
+      },
+      body: offer.sdp,
+    });
+    const answerSdp = await sdpResponse.text();
+    if (!sdpResponse.ok) throw new Error(answerSdp || `Realtime transcription call failed (${sdpResponse.status})`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    await dcOpen;
+    realtimeDictationConnection = { pc, dc, stream };
+    pc.addEventListener('connectionstatechange', () => {
+      if (['closed', 'failed', 'disconnected'].includes(pc.connectionState)) {
+        closeRealtimeDictationConnection();
+      }
+    });
+    return realtimeDictationConnection;
+  })().finally(() => {
+    realtimeDictationConnecting = null;
+  });
+  return realtimeDictationConnecting;
+}
+
+function getProviderInfo(kind, provider) {
+  const list = kind === 'stt' ? voiceProvidersStatus.sttProviders : voiceProvidersStatus.ttsProviders;
+  return (Array.isArray(list) ? list : []).find((item) => item.id === provider) || null;
+}
+
+function fallbackVoiceCatalog(provider) {
+  if (provider === 'openai') {
+    return [
+      { id: 'alloy', label: 'Alloy' },
+      { id: 'ash', label: 'Ash' },
+      { id: 'ballad', label: 'Ballad' },
+      { id: 'coral', label: 'Coral' },
+      { id: 'echo', label: 'Echo' },
+      { id: 'fable', label: 'Fable' },
+      { id: 'marin', label: 'Marin' },
+      { id: 'nova', label: 'Nova' },
+      { id: 'onyx', label: 'Onyx' },
+      { id: 'sage', label: 'Sage' },
+      { id: 'shimmer', label: 'Shimmer' },
+      { id: 'verse', label: 'Verse' },
+    ];
+  }
+  if (provider === 'openai_realtime') {
+    return [
+      { id: 'alloy', label: 'Alloy' },
+      { id: 'ash', label: 'Ash' },
+      { id: 'ballad', label: 'Ballad' },
+      { id: 'coral', label: 'Coral' },
+      { id: 'echo', label: 'Echo' },
+      { id: 'sage', label: 'Sage' },
+      { id: 'shimmer', label: 'Shimmer' },
+      { id: 'verse', label: 'Verse' },
+      { id: 'marin', label: 'Marin' },
+      { id: 'cedar', label: 'Cedar' },
+    ];
+  }
+  if (provider === 'xai') return [{ id: 'eve', label: 'Eve' }];
+  return [];
+}
+
+async function getVoiceCatalog(provider) {
+  const id = String(provider || '').trim();
+  if (!id) return [];
+  if (voiceCatalogCache[id]) return voiceCatalogCache[id];
+  try {
+    const response = await fetch(`/api/voice/voices?provider=${encodeURIComponent(id)}`);
+    const data = await response.json().catch(() => ({}));
+    const voices = Array.isArray(data?.voices) && data.voices.length ? data.voices : fallbackVoiceCatalog(id);
+    voiceCatalogCache[id] = voices;
+    return voices;
+  } catch {
+    const voices = fallbackVoiceCatalog(id);
+    voiceCatalogCache[id] = voices;
+    return voices;
+  }
+}
+
+function selectedRegularVoiceProvider() {
+  return voiceTtsProvider === 'openai' || voiceTtsProvider === 'xai' ? voiceTtsProvider : '';
+}
+
+function normalizeRealtimeVoice(value) {
+  const voice = String(value || '').trim();
+  return OPENAI_REALTIME_VOICE_IDS.has(voice) ? voice : 'marin';
+}
+
+function getRenderableVoiceProviders(kind) {
+  const list = kind === 'stt' ? voiceProvidersStatus.sttProviders : voiceProvidersStatus.ttsProviders;
+  const providers = Array.isArray(list) ? list : [];
+  if (kind !== 'tts') return providers;
+  return providers.filter((provider) => provider.id !== 'openai_realtime');
+}
+
+function renderVoiceProviderSelect(kind) {
+  const id = kind === 'stt' ? 'voice-stt-provider' : 'voice-tts-provider';
+  const selected = kind === 'stt' ? voiceSttProvider : voiceTtsProvider;
+  const list = getRenderableVoiceProviders(kind);
+  const select = document.getElementById(id);
+  if (!select || !Array.isArray(list) || !list.length) return;
+  select.innerHTML = list.map((provider) => {
+    const suffix = provider.configured ? '' : ' (key)';
+    return `<option value="${escHtml(provider.id)}">${escHtml(provider.label + suffix)}</option>`;
+  }).join('');
+  select.value = list.some((provider) => provider.id === selected) ? selected : 'browser';
+}
+
+async function renderOutputVoiceSelect() {
+  const label = document.getElementById('voice-output-voice-label');
+  const select = document.getElementById('voice-output-voice');
+  const provider = selectedRegularVoiceProvider();
+  if (!label || !select) return;
+  if (!provider) {
+    label.hidden = true;
+    select.innerHTML = '<option value="">Default</option>';
+    return;
+  }
+  const voices = await getVoiceCatalog(provider);
+  const stored = getStoredVoiceSetting(`voice_${provider}_voice`, provider === 'xai' ? 'eve' : 'alloy');
+  voiceOutputVoice = voices.some((voice) => voice.id === stored) ? stored : (voices[0]?.id || '');
+  select.innerHTML = voices.map((voice) => `<option value="${escHtml(voice.id)}">${escHtml(voice.label || voice.id)}</option>`).join('');
+  select.value = voiceOutputVoice;
+  label.hidden = false;
+}
+
+async function renderRealtimeVoiceSelect() {
+  const select = document.getElementById('realtime-voice-select');
+  if (!select) return;
+  const voices = await getVoiceCatalog('openai_realtime');
+  const allowedVoices = voices.filter((voice) => OPENAI_REALTIME_VOICE_IDS.has(voice.id));
+  const list = allowedVoices.length ? allowedVoices : fallbackVoiceCatalog('openai_realtime');
+  const stored = normalizeRealtimeVoice(getStoredVoiceSetting('realtime_voice', 'marin'));
+  realtimeVoiceSelection = list.some((voice) => voice.id === stored) ? stored : 'marin';
+  if (realtimeVoiceSelection !== stored) storeVoiceSetting('realtime_voice', realtimeVoiceSelection);
+  select.innerHTML = list.map((voice) => `<option value="${escHtml(voice.id)}">${escHtml(voice.label || voice.id)}</option>`).join('');
+  select.value = realtimeVoiceSelection;
+}
+
+function renderVoiceProviderControls() {
+  renderVoiceProviderSelect('stt');
+  renderVoiceProviderSelect('tts');
+  setRegularVoiceControlsVisible(regularVoiceControlsVisible);
+  renderOutputVoiceSelect().catch(() => {});
+  renderRealtimeVoiceSelect().catch(() => {});
+  setRealtimeVoiceButtonState();
+}
+
+async function refreshVoiceProviderStatus() {
+  voiceSttProvider = getStoredVoiceProvider('stt', 'browser');
+  voiceTtsProvider = getStoredVoiceProvider('tts', 'browser');
+  realtimeVoiceSelection = getStoredVoiceSetting('realtime_voice', 'marin');
+  try {
+    const response = await fetch('/api/voice/status');
+    const data = await response.json().catch(() => ({}));
+    if (data?.success) {
+      voiceProvidersStatus = {
+        sttProviders: Array.isArray(data.sttProviders) ? data.sttProviders : [],
+        ttsProviders: Array.isArray(data.ttsProviders) ? data.ttsProviders : [],
+      };
+      realtimeVoiceConfigured = !!getProviderInfo('tts', 'openai_realtime')?.configured;
+      if (voiceTtsProvider === 'openai_realtime') {
+        voiceTtsProvider = 'browser';
+        storeVoiceProvider('tts', voiceTtsProvider);
+      }
+    }
+  } catch {
+    voiceProvidersStatus = {
+      sttProviders: [{ id: 'browser', label: 'Browser dictation', configured: true, free: true }],
+      ttsProviders: [{ id: 'browser', label: 'Browser voice', configured: true, free: true }],
+    };
+    realtimeVoiceConfigured = false;
+  }
+  renderVoiceProviderControls();
+}
+
+function onVoiceProviderChanged() {
+  const stt = document.getElementById('voice-stt-provider');
+  const tts = document.getElementById('voice-tts-provider');
+  const voice = document.getElementById('voice-output-voice');
+  voiceSttProvider = String(stt?.value || 'browser');
+  voiceTtsProvider = String(tts?.value || 'browser');
+  voiceOutputVoice = String(voice?.value || '');
+  storeVoiceProvider('stt', voiceSttProvider);
+  storeVoiceProvider('tts', voiceTtsProvider);
+  const voiceProvider = selectedRegularVoiceProvider();
+  if (voiceProvider && voiceOutputVoice) storeVoiceSetting(`voice_${voiceProvider}_voice`, voiceOutputVoice);
+  renderOutputVoiceSelect().catch(() => {});
+  setRealtimeVoiceButtonState();
+}
+
+function onRealtimeVoiceChanged() {
+  const select = document.getElementById('realtime-voice-select');
+  realtimeVoiceSelection = normalizeRealtimeVoice(select?.value || 'marin');
+  storeVoiceSetting('realtime_voice', realtimeVoiceSelection);
+  if (select) select.value = realtimeVoiceSelection;
+  closeRealtimeVoiceConnection();
+}
+
+async function refreshRealtimeVoiceStatus() {
+  const btn = document.getElementById('chat-realtime-voice-btn');
+  if (!btn) return;
+  try {
+    const response = await fetch('/api/realtime/status');
+    const data = await response.json().catch(() => ({}));
+    realtimeVoiceConfigured = !!data?.configured;
+    btn.classList.toggle('unconfigured', !realtimeVoiceConfigured);
+  } catch {
+    realtimeVoiceConfigured = false;
+  }
+  setRealtimeVoiceButtonState();
+}
+
+async function ensureRealtimeVoiceConnection() {
+  if (realtimeVoiceConnection?.dc?.readyState === 'open') return realtimeVoiceConnection;
+  if (realtimeVoiceConnecting) return realtimeVoiceConnecting;
+  realtimeVoiceConnecting = (async () => {
+    const instructions = await getRealtimeContextPackInstructions();
+    const tokenResponse = await fetch('/api/realtime/client-secret', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
+        instructions,
+      }),
+    });
+    const tokenData = await tokenResponse.json().catch(() => ({}));
+    if (!tokenResponse.ok || tokenData?.success === false) {
+      throw new Error(tokenData?.error || `Realtime token request failed (${tokenResponse.status})`);
+    }
+    const clientSecret = extractRealtimeClientSecret(tokenData);
+    if (!clientSecret) throw new Error('Realtime client secret was missing from the gateway response.');
+
+    const pc = new RTCPeerConnection();
+    const audio = document.getElementById('realtime-voice-audio') || document.createElement('audio');
+    audio.autoplay = true;
+    audio.style.display = 'none';
+    if (!audio.id) {
+      audio.id = 'realtime-voice-audio';
+      document.body.appendChild(audio);
+    }
+    pc.ontrack = (event) => {
+      audio.srcObject = event.streams[0];
+      audio.play?.().catch(() => {});
+    };
+    try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
+    const dc = pc.createDataChannel('oai-events');
+    dc.addEventListener('message', (messageEvent) => {
+      try {
+        const event = JSON.parse(messageEvent.data);
+        const type = String(event?.type || '');
+        if (type === 'response.created' || type === 'response.audio.delta' || type === 'response.output_audio.delta') {
+          realtimeVoicePlaybackActive = true;
+          const responseId = String(event?.response?.id || event?.response_id || '').trim();
+          if (responseId) realtimeVoiceActiveResponseId = responseId;
+        }
+        if (type === 'response.done' || type === 'response.audio.done' || type === 'response.output_audio.done' || type === 'response.cancelled') {
+          realtimeVoicePlaybackActive = false;
+          realtimeVoiceActiveResponseId = '';
+          realtimeVoiceResponseWaiters.splice(0).forEach((resolve) => {
+            try { resolve(); } catch {}
+          });
+        }
+        if (event?.type === 'error') {
+          const message = String(event?.error?.message || event?.error || '');
+          if (/active response in progress/i.test(message)) {
+            realtimeVoicePlaybackActive = true;
+            return;
+          }
+          console.warn('[Realtime voice] server error', event);
+          showToast('Realtime voice error', String(message || 'Unknown realtime error'), 'error');
+        }
+      } catch {}
+    });
+    const dcOpen = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Realtime data channel did not open.')), 12000);
+      dc.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
+      dc.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Realtime data channel failed.')); }, { once: true });
+    });
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${clientSecret}`,
+        'Content-Type': 'application/sdp',
+      },
+      body: offer.sdp,
+    });
+    const answerSdp = await sdpResponse.text();
+    if (!sdpResponse.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResponse.status})`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    await dcOpen;
+    realtimeVoiceConnection = { pc, dc, audio };
+    pc.addEventListener('connectionstatechange', () => {
+      if (['closed', 'failed', 'disconnected'].includes(pc.connectionState)) realtimeVoiceConnection = null;
+    });
+    return realtimeVoiceConnection;
+  })().finally(() => {
+    realtimeVoiceConnecting = null;
+  });
+  return realtimeVoiceConnecting;
+}
+
+async function speakWithRealtimeVoice(text) {
+  const content = String(text || '').trim();
+  if (!content) return;
+  if (getRealtimeWakeGate()?.suppressVoice) return;
+  realtimeVoiceSpeakChain = realtimeVoiceSpeakChain
+    .catch(() => {})
+    .then(() => speakWithRealtimeVoiceManaged(content));
+  return realtimeVoiceSpeakChain;
+}
+
+function waitForRealtimeVoiceResponseSettled(timeoutMs = 700) {
+  if (!realtimeVoicePlaybackActive && !realtimeVoiceActiveResponseId) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      const idx = realtimeVoiceResponseWaiters.indexOf(done);
+      if (idx >= 0) realtimeVoiceResponseWaiters.splice(idx, 1);
+      resolve();
+    }, Math.max(0, Number(timeoutMs) || 0));
+    const done = () => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    realtimeVoiceResponseWaiters.push(done);
+  });
+}
+
+async function cancelRealtimeVoiceResponse(dc, settleMs = 220) {
+  if (!dc || dc.readyState !== 'open') return;
+  if (realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) {
+    try { dc.send(JSON.stringify({ type: 'response.cancel' })); } catch {}
+  }
+  try { dc.send(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
+  const audio = document.getElementById('realtime-voice-audio');
+  try { audio?.pause?.(); } catch {}
+  await waitForRealtimeVoiceResponseSettled(settleMs);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  realtimeVoicePlaybackActive = false;
+  realtimeVoiceActiveResponseId = '';
+}
+
+async function speakWithRealtimeVoiceManaged(content) {
+  const { dc } = await ensureRealtimeVoiceConnection();
+  await cancelRealtimeVoiceResponse(dc);
+  const prompt = `Read this Prometheus response aloud exactly, without adding commentary:\n\n${content.slice(0, 5000)}`;
+  dc.send(JSON.stringify({
+    type: 'conversation.item.create',
+    item: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: prompt }],
+    },
+  }));
+  dc.send(JSON.stringify({
+    type: 'response.create',
+    response: {
+      output_modalities: ['audio'],
+      instructions: 'Speak only the supplied Prometheus response text.',
+    },
+  }));
+  realtimeVoicePlaybackActive = true;
+}
+
+function splitVoiceText(text, maxLength = 180) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!source) return [];
+  const sentences = source.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [source];
+  const chunks = [];
+  let current = '';
+  for (const sentence of sentences) {
+    const next = sentence.trim();
+    if (!next) continue;
+    if ((current + ' ' + next).trim().length <= maxLength) {
+      current = (current + ' ' + next).trim();
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (next.length <= maxLength) {
+      current = next;
+    } else {
+      for (let i = 0; i < next.length; i += maxLength) chunks.push(next.slice(i, i + maxLength));
+      current = '';
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function getRecentRealtimeChatDigest(maxChars = 3500) {
+  const history = Array.isArray(window.chatHistory) ? window.chatHistory : [];
+  const messages = history
+    .filter((msg) => msg && (msg.role === 'user' || msg.role === 'ai' || msg.role === 'assistant'))
+    .slice(-10)
+    .map((msg) => {
+      const role = msg.role === 'user' ? 'User' : 'Prometheus';
+      const content = String(msg.content || '').replace(/\s+/g, ' ').trim();
+      return content ? `${role}: ${content.slice(0, 700)}` : '';
+    })
+    .filter(Boolean);
+  const processEntries = Array.isArray(window.processLogEntries) ? window.processLogEntries : [];
+  const process = processEntries
+    .slice(-8)
+    .map((entry) => {
+      const type = String(entry?.type || 'info').toUpperCase();
+      const content = String(entry?.content || '').replace(/\s+/g, ' ').trim();
+      return content ? `${type}: ${content.slice(0, 300)}` : '';
+    })
+    .filter(Boolean);
+  const gate = getRealtimeWakeGate();
+  const sections = [
+    messages.length ? `Recent chat:\n${messages.join('\n')}` : '',
+    process.length ? `Recent process notes:\n${process.join('\n')}` : '',
+    gate ? `Current wake gate: silent until "${gate.phrase}".` : '',
+  ].filter(Boolean).join('\n\n');
+  return sections.length > maxChars ? `${sections.slice(0, maxChars - 18).trimEnd()}\n...[truncated]` : sections;
+}
+
+async function getRealtimeContextPackInstructions() {
+  const now = Date.now();
+  if (!realtimeContextPackCache || now - realtimeContextPackFetchedAt > 5 * 60 * 1000) {
+    try {
+      const response = await fetch('/api/realtime/context-pack', { cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false) {
+        throw new Error(data?.error || `Realtime context pack failed (${response.status})`);
+      }
+      realtimeContextPackCache = String(data?.instructions || '').trim();
+      realtimeContextPackFetchedAt = now;
+    } catch (err) {
+      console.warn('[Realtime voice] context pack unavailable, using fallback instructions', err);
+      realtimeContextPackCache = [
+        '# Prometheus Realtime Context Pack',
+        'You are Prometheus in live Realtime voice form. Mirror Prometheus identity and route real work to the Prometheus worker.',
+        'You may handle voice controls, wake/silent mode, status, and interrupts. Do not claim you used tools or completed work unless the worker reports it.',
+      ].join('\n\n');
+      realtimeContextPackFetchedAt = now;
+    }
+  }
+  const recent = getRecentRealtimeChatDigest();
+  const localContract = [
+    '## Live Browser-Side Voice State',
+    recent || 'No recent local chat/process context is available in the browser yet.',
+    '',
+    '## Voice Output Instruction',
+    'When asked to speak supplied Prometheus text aloud, speak the supplied text faithfully. Keep Prometheus identity and warmth in delivery, but do not add new claims or extra work results.',
+  ].join('\n');
+  return [realtimeContextPackCache, localContract].filter(Boolean).join('\n\n---\n\n').slice(0, 22000);
+}
+
+function playAudioBase64(audioBase64, mimeType) {
+  return new Promise((resolve, reject) => {
+    const audio = document.getElementById('realtime-voice-audio') || document.createElement('audio');
+    const binary = atob(String(audioBase64 || ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mimeType || 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
+    audio.autoplay = true;
+    audio.style.display = 'none';
+    if (!audio.id) {
+      audio.id = 'realtime-voice-audio';
+      document.body.appendChild(audio);
+    }
+    audio.onended = () => { URL.revokeObjectURL(url); resolve(true); };
+    audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not play generated audio.')); };
+    audio.src = url;
+    audio.play?.().catch((err) => {
+      URL.revokeObjectURL(url);
+      reject(err);
+    });
+  });
+}
+
+function speakWithBrowserVoice(text) {
+  const content = String(text || '').trim();
+  if (!content || !window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(content.slice(0, 5000));
+  utterance.lang = navigator.language || 'en-US';
+  window.speechSynthesis.speak(utterance);
+}
+
+async function speakWithServerTts(text, provider) {
+  const chunks = provider === 'groq' ? splitVoiceText(text, 180) : [String(text || '').trim().slice(0, 6000)];
+  const voiceProvider = provider === 'openai' || provider === 'xai' ? provider : '';
+  const selectedVoice = voiceProvider ? getStoredVoiceSetting(`voice_${voiceProvider}_voice`, voiceProvider === 'xai' ? 'eve' : 'alloy') : '';
+  for (const chunk of chunks.filter(Boolean)) {
+    const body = { provider, text: chunk };
+    if (provider === 'openai' && selectedVoice) body.voice = selectedVoice;
+    if (provider === 'xai' && selectedVoice) body.voiceId = selectedVoice;
+    const response = await fetch('/api/voice/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) throw new Error(data?.error || `TTS failed (${response.status})`);
+    await playAudioBase64(data.audioBase64, data.mimeType);
+  }
+}
+
+async function speakAssistantReply(text) {
+  if (getRealtimeWakeGate()?.suppressVoice) return;
+  if (realtimeVoiceRepliesEnabled) {
+    await speakWithRealtimeVoice(text);
+    return;
+  }
+
+  if (!voiceRepliesEnabled) return;
+  const provider = voiceTtsProvider || 'browser';
+  if (provider === 'browser') {
+    speakWithBrowserVoice(text);
+    return;
+  }
+  if (provider === 'openai_realtime') {
+    await speakWithRealtimeVoice(text);
+    return;
+  }
+  const selected = getProviderInfo('tts', provider);
+  if (selected && !selected.configured) throw new Error(`${selected.label} needs its API key on the gateway.`);
+  await speakWithServerTts(text, provider);
+}
+
+async function toggleRealtimeVoiceReplies() {
+  await refreshRealtimeVoiceStatus();
+  if (!realtimeVoiceConfigured) {
+    showToast('Realtime voice not configured', 'Connect OpenAI Codex OAuth or set an OpenAI Realtime API key on the gateway.', 'error');
+    return;
+  }
+  realtimeVoiceRepliesEnabled = !realtimeVoiceRepliesEnabled;
+  if (realtimeVoiceRepliesEnabled) {
+    voiceRepliesEnabled = false;
+    setRegularVoiceControlsVisible(false);
+    setRealtimeVoiceControlsVisible(true);
+    renderRealtimeVoiceSelect().catch(() => {});
+    if (voiceDictationActive && voiceRecognition) {
+      try { voiceRecognition.stop(); } catch {}
+    }
+    if (backendVoiceRecorder) {
+      try { backendVoiceRecorder.stop(); } catch {}
+    }
+  }
+  setRealtimeVoiceButtonState();
+  if (realtimeVoiceRepliesEnabled) {
+    showToast('Realtime voice on', 'Speak naturally. Prometheus will receive the transcript and answer aloud.', 'success', 2600);
+    renderRealtimeWakeGateState();
+    startRealtimeDraftRecognition();
+    ensureRealtimeDictationConnection().catch((err) => {
+      realtimeVoiceRepliesEnabled = false;
+      clearRealtimeWakeGate({ silent: true });
+      closeRealtimeDictationConnection();
+      closeRealtimeVoiceConnection();
+      stopRealtimeDraftRecognition();
+      setRealtimeVoiceButtonState();
+      showToast('Realtime microphone failed', String(err?.message || err), 'error');
+    });
+    ensureRealtimeVoiceConnection().catch((err) => {
+      realtimeVoiceRepliesEnabled = false;
+      clearRealtimeWakeGate({ silent: true });
+      closeRealtimeDictationConnection();
+      closeRealtimeVoiceConnection();
+      stopRealtimeDraftRecognition();
+      setRealtimeVoiceButtonState();
+      showToast('Realtime voice failed', String(err?.message || err), 'error');
+    });
+  } else {
+    clearRealtimeWakeGate({ silent: true });
+    closeRealtimeDictationConnection();
+    closeRealtimeVoiceConnection();
+    stopRealtimeDraftRecognition();
+    setRealtimeVoiceControlsVisible(false);
+    try { window.speechSynthesis?.cancel?.(); } catch {}
+    showToast('Realtime voice off', '', 'info', 1600);
+  }
 }
 
 const creativeRenderJobClient = createCreativeRenderJobClient({
@@ -8326,13 +11090,18 @@ function updateCanvasWorkspaceChrome() {
 }
 
 function setCanvasProjectState(projectRoot, projectLabel, options = {}) {
+  const hadWorkspaceBrowser = Boolean(canvasProjectRoot || (Array.isArray(canvasWorkspaceTree) && canvasWorkspaceTree.length));
   canvasProjectRoot = normalizeCanvasPath(projectRoot) || null;
   canvasProjectLabel = canvasProjectRoot ? (String(projectLabel || getCanvasProjectDisplayName(canvasProjectRoot)).trim() || null) : null;
   if (!canvasProjectRoot) {
     canvasProjectLink = null;
     canvasPublishState = null;
   }
-  if (canvasProjectRoot) canvasBrowserCollapsed = false;
+  if (canvasProjectRoot && options.expandBrowser !== false) {
+    canvasBrowserCollapsed = false;
+  } else if (canvasProjectRoot && !hadWorkspaceBrowser) {
+    canvasBrowserCollapsed = true;
+  }
   const session = getActiveChatSessionRecord();
   if (session) {
     session.canvasProjectRoot = canvasProjectRoot;
@@ -9353,13 +12122,27 @@ function blobToBase64(blob) {
   });
 }
 
-async function ensureCreativeStorageRootVisible(payload, mode = window.currentCreativeMode) {
+async function ensureCreativeStorageRootVisible(payload, mode = window.currentCreativeMode, options = {}) {
   const storageRoot = normalizeCanvasPath(payload?.storageRoot || '');
   if (!storageRoot) return;
+  const expandBrowser = options.expandBrowser === true;
+  const projectOptions = {
+    refreshPublish: false,
+    expandBrowser,
+  };
   if (!canvasProjectRoot) {
-    setCanvasProjectState(storageRoot, getCreativeWorkspaceLabel(mode), { refreshPublish: false });
+    setCanvasProjectState(storageRoot, getCreativeWorkspaceLabel(mode), projectOptions);
   }
-  await canvasLoadWorkspaceFiles(storageRoot).catch(() => {});
+  if (options.refreshFiles === false) return;
+  await canvasLoadWorkspaceFiles(storageRoot, { expandBrowser }).catch(() => {});
+}
+
+async function ensureCreativeStorageRootQuiet(payload, mode = window.currentCreativeMode) {
+  await ensureCreativeStorageRootVisible(payload, mode, { expandBrowser: false, refreshFiles: false });
+}
+
+async function refreshCreativeStorageRootQuiet(payload, mode = window.currentCreativeMode) {
+  await ensureCreativeStorageRootVisible(payload, mode, { expandBrowser: false });
 }
 
 async function persistCreativeSceneSnapshot(options = {}) {
@@ -9380,7 +12163,7 @@ async function persistCreativeSceneSnapshot(options = {}) {
   if (!response.ok || data?.success === false) {
     throw new Error(data?.error || `HTTP ${response.status}`);
   }
-  await ensureCreativeStorageRootVisible(data, mode);
+  await refreshCreativeStorageRootQuiet(data, mode);
   return data;
 }
 
@@ -9404,7 +12187,31 @@ async function persistCreativeExportArtifact(blob, filename, mimeType, options =
   if (!response.ok || data?.success === false) {
     throw new Error(data?.error || `HTTP ${response.status}`);
   }
-  await ensureCreativeStorageRootVisible(data, mode);
+  await refreshCreativeStorageRootQuiet(data, mode);
+  return data;
+}
+
+async function persistCreativeLayerAssetBatch(layers, options = {}) {
+  const sessionId = getActiveCreativeSessionId();
+  const mode = normalizeCreativeMode(options.mode || window.currentCreativeMode);
+  if (!sessionId || !Array.isArray(layers) || !layers.length) return null;
+  const response = await fetch('/api/canvas/creative-layer-assets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId,
+      mode,
+      root: canvasProjectRoot || '',
+      sceneId: creativeSceneDoc?.id || '',
+      batchName: options.batchName || `${getCreativeArtifactStem(mode)}-layers-${buildCreativeArtifactTimestamp()}`,
+      layers,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success === false) {
+    throw new Error(data?.error || `HTTP ${response.status}`);
+  }
+  await refreshCreativeStorageRootQuiet(data, mode);
   return data;
 }
 
@@ -9591,6 +12398,10 @@ function setCreativeHtmlMotionClip(clip, options = {}) {
     setCreativeSceneDoc(nextDoc, { render: false, persist: false, recordHistory: options.recordHistory === true });
     creativeSelectedId = null;
     creativeTimelineMs = Math.min(creativeTimelineMs, creativeHtmlMotionClip.durationMs);
+    if (options.updateComposition !== false) {
+      creativeComposition = createVideoCompositionFromActiveClip({ htmlMotionClip: creativeHtmlMotionClip, scene: nextDoc });
+      if (session) session.creativeComposition = creativeComposition;
+    }
   }
   if (options.render !== false) renderCreativeWorkspace();
   if (options.persist !== false) persistActiveChat();
@@ -9635,7 +12446,7 @@ async function createCreativeHtmlMotionClip(payload = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) throw new Error(data?.error || `HTTP ${response.status}`);
-  await ensureCreativeStorageRootVisible(data, 'video');
+  await refreshCreativeStorageRootQuiet(data, 'video');
   const clip = setCreativeHtmlMotionClip(data.clip, { updateScene: true, recordHistory: true, render: true, persist: true });
   addProcessEntry('info', `Prometheus Video: saved HTML motion clip ${clip.path}.`);
   return { ...data, clip };
@@ -9730,7 +12541,7 @@ async function patchCreativeHtmlMotionClip(payload = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) throw new Error(data?.error || `HTTP ${response.status}`);
-  await ensureCreativeStorageRootVisible(data, 'video');
+  await ensureCreativeStorageRootQuiet(data, 'video');
   const updatedClip = setCreativeHtmlMotionClip(data.clip || clip, { updateScene: true, recordHistory: true, render: true, persist: true });
   addProcessEntry('info', `Prometheus Video: patched HTML motion clip ${updatedClip.path}.`);
   return { ...data, clip: updatedClip };
@@ -9754,7 +12565,7 @@ async function restoreCreativeHtmlMotionClipRevision(payload = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) throw new Error(data?.error || `HTTP ${response.status}`);
-  await ensureCreativeStorageRootVisible(data, 'video');
+  await ensureCreativeStorageRootQuiet(data, 'video');
   const restoredClip = setCreativeHtmlMotionClip(data.clip || clip, { updateScene: true, recordHistory: true, render: true, persist: true });
   addProcessEntry('info', `Prometheus Video: restored HTML motion revision ${revisionId}.`);
   return { ...data, clip: restoredClip };
@@ -9796,28 +12607,66 @@ async function exportCreativeHtmlMotionClip(payload = {}) {
   if (!clip) throw new Error('No active HTML motion clip. Create one first with creative_create_html_motion_clip.');
   const format = String(payload.format || 'mp4').trim().toLowerCase();
   if (format !== 'mp4') throw new Error('HTML motion clip export currently supports mp4.');
-  const response = await fetch('/api/canvas/html-motion-clip/export', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sessionId: getActiveCreativeSessionId() || 'default',
-      root: canvasProjectRoot || '',
-      path: clip.path,
-      filename: payload.filename || '',
-      width: clip.width,
-      height: clip.height,
-      durationMs: Math.max(1000, Number(clip.durationMs) || 8000),
-      frameRate: Math.max(1, Number(clip.frameRate) || 60),
-      force: payload.force === true,
-    }),
-  });
-  const data = await response.json().catch(() => ({}));
-  updateCreativeHtmlMotionLintFromPayload(data);
-  if (!response.ok || data?.success === false) throw new Error(data?.error || `HTTP ${response.status}`);
-  await ensureCreativeStorageRootVisible(data, 'video');
-  await loadCreativeAssets({ mode: 'video', force: true, silent: true }).catch(() => {});
-  if (data.export?.path) addProcessEntry('info', `Prometheus Video: exported HTML motion MP4 ${data.export.path}.`);
-  return data;
+  const startedAt = Date.now();
+  const durationMs = Math.max(1000, Number(clip.durationMs) || 8000);
+  const frameRate = Math.max(1, Number(clip.frameRate) || 60);
+  creativeExportUiStamp = 0;
+  creativeActiveExport = {
+    format: 'mp4',
+    renderer: 'html-motion',
+    serverJobId: '',
+    startedAt,
+    frameRate,
+    progress: 0,
+    elapsedMs: 0,
+    cancelRequested: false,
+    status: 'capturing',
+    progressLabel: 'Preparing HTML motion render',
+    audioRequested: false,
+    audioEnabled: false,
+    htmlMotionPath: clip.path,
+  };
+  renderCreativeWorkspace({ skipStageRender: true });
+  addProcessEntry('info', `Prometheus Video: started HTML motion MP4 export (${Math.round(durationMs / 1000)}s at ${frameRate} fps).`);
+  try {
+    const response = await fetch('/api/canvas/html-motion-clip/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: getActiveCreativeSessionId() || 'default',
+        root: canvasProjectRoot || '',
+        path: clip.path,
+        filename: payload.filename || '',
+        width: clip.width,
+        height: clip.height,
+        durationMs,
+        frameRate,
+        force: payload.force === true,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    updateCreativeHtmlMotionLintFromPayload(data);
+    if (!response.ok || data?.success === false) throw new Error(data?.error || `HTTP ${response.status}`);
+    refreshCreativeExportChrome({
+      progress: 1,
+      elapsedMs: durationMs,
+      status: 'completed',
+      progressLabel: 'HTML motion export complete',
+    }, { force: true });
+    await refreshCreativeStorageRootQuiet(data, 'video');
+    await loadCreativeAssets({ mode: 'video', force: true, silent: true }).catch(() => {});
+    if (data.export?.path) addProcessEntry('info', `Prometheus Video: exported HTML motion MP4 ${data.export.path}.`);
+    return data;
+  } catch (err) {
+    refreshCreativeExportChrome({
+      status: 'failed',
+      progressLabel: String(err?.message || err || 'HTML motion export failed'),
+    }, { force: true });
+    throw err;
+  } finally {
+    creativeActiveExport = null;
+    renderCreativeWorkspace({ skipStageRender: true });
+  }
 }
 
 async function loadCreativeHtmlMotionBlocks(options = {}) {
@@ -10995,6 +13844,61 @@ async function canvasLoadCreativeSceneAsset(scenePath) {
   }
 }
 
+function isCreativeVideoMediaPath(value = '') {
+  const ext = String(value || '').split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+  return /^(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg|3gp)$/i.test(ext);
+}
+
+function isCreativeImageMediaPath(value = '') {
+  const ext = String(value || '').split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+  return /^(png|jpg|jpeg|webp|gif|svg)$/i.test(ext);
+}
+
+function canvasPlaceCreativeExportOnCanvas(sourcePath, filename = '') {
+  const source = normalizeCanvasPath(sourcePath);
+  if (!source) {
+    showToast('No export path found', 'The selected export does not have a workspace path to place on the canvas.', 'error');
+    return null;
+  }
+  const isVideoAsset = isCreativeVideoMediaPath(source);
+  const isImageAsset = isCreativeImageMediaPath(source);
+  if (!isVideoAsset && !isImageAsset) {
+    showToast('Asset type cannot be placed here', filename || source, 'info');
+    return null;
+  }
+  const mode = normalizeCreativeMode(window.currentCreativeMode);
+  if (isVideoAsset && mode !== 'video') {
+    showToast('Switch to Creative Video first', 'Video exports can be placed as live layers in the video workspace.', 'info');
+    return null;
+  }
+  if (isImageAsset && mode !== 'image') {
+    showToast('Switch to Creative Image first', 'Image assets can be placed as editable image layers in the image workspace.', 'info');
+    return null;
+  }
+  if (isCreativePlaybackActive()) stopCreativePlayback({ persist: false });
+  const result = applyCreativeAddAssetCommand({
+    source,
+    type: isVideoAsset ? 'video' : 'image',
+    x: 0,
+    y: 0,
+    width: Math.max(1, Number(creativeSceneDoc?.width) || 1080),
+    height: Math.max(1, Number(creativeSceneDoc?.height) || 1920),
+    zIndex: (creativeSceneDoc?.elements || []).length,
+    fit: 'contain',
+    radius: 0,
+    muted: true,
+    volume: 0,
+    startMs: 0,
+    durationMs: Math.max(1000, Number(creativeSceneDoc?.durationMs) || 12000),
+    meta: {
+      label: filename || source.split(/[\\/]/).pop() || (isVideoAsset ? 'Video export' : 'Image asset'),
+      sourceKind: isVideoAsset ? 'creative-export' : 'creative-layer-asset',
+    },
+  });
+  showToast(isVideoAsset ? 'Video export placed on canvas' : 'Image asset placed on canvas', filename || source, 'success');
+  return result;
+}
+
 async function buildCreativeExportSvgMarkup() {
   if (isCreativeFabricRendererAvailable(window.currentCreativeMode)) {
     await Promise.resolve(creativeFabricLastRenderPromise).catch(() => null);
@@ -11098,6 +14002,195 @@ async function renderCreativeExportCanvas(format = 'png') {
       return canvas;
   } finally {
     URL.revokeObjectURL(svgUrl);
+  }
+}
+
+function sanitizeCreativeLayerAssetName(raw, fallback = 'layer') {
+  return String(raw || fallback)
+    .trim()
+    .replace(/[^a-zA-Z0-9._\-() ]/g, '_')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || fallback;
+}
+
+function getCreativeLayerAssetExportCandidates(options = {}) {
+  const selectedOnly = options.selectedOnly === true;
+  const selectedId = String(options.elementId || creativeSelectedId || '').trim();
+  return (creativeSceneDoc?.elements || [])
+    .filter((element) => {
+      if (!element || element.visible === false) return false;
+      if (selectedOnly && element.id !== selectedId) return false;
+      const type = String(element.type || '').toLowerCase();
+      if (!['text', 'shape', 'image', 'icon', 'group'].includes(type)) return false;
+      if (Math.max(1, Number(element.width) || 0) <= 1 || Math.max(1, Number(element.height) || 0) <= 1) return false;
+      return true;
+    })
+    .sort((left, right) => (Number(left.zIndex) || 0) - (Number(right.zIndex) || 0));
+}
+
+async function hydrateCreativeLayerExportIcons(root) {
+  const iconNodes = [...root.querySelectorAll('iconify-icon')];
+  if (!iconNodes.length) return;
+  const iconify = window.Iconify;
+  if (!iconify?.renderSVG) return;
+  const names = iconNodes.map((node) => String(node.getAttribute('icon') || '').trim()).filter(Boolean);
+  if (names.length && typeof iconify.loadIcons === 'function') {
+    await new Promise((resolve) => iconify.loadIcons([...new Set(names)], () => resolve()));
+  }
+  iconNodes.forEach((node) => {
+    const iconName = String(node.getAttribute('icon') || '').trim();
+    const svg = iconify.renderSVG(iconName, {
+      width: node.getAttribute('width') || '100%',
+      height: node.getAttribute('height') || '100%',
+    });
+    if (!svg) return;
+    svg.setAttribute('width', node.getAttribute('width') || '100%');
+    svg.setAttribute('height', node.getAttribute('height') || '100%');
+    if (node.style?.color) svg.setAttribute('color', node.style.color);
+    node.replaceWith(svg);
+  });
+}
+
+function sanitizeCreativeLayerExportDom(root, element, width, height) {
+  root.querySelectorAll('[data-creative-resize-handle="true"]').forEach((node) => node.remove());
+  const nodes = [root, ...root.querySelectorAll('*')];
+  nodes.forEach((node) => {
+    if (!(node instanceof HTMLElement) && !(node instanceof SVGElement)) return;
+    [...node.attributes].forEach((attr) => {
+      if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
+    });
+    if (node instanceof HTMLElement) {
+      node.style.outline = 'none';
+      node.style.outlineOffset = '0';
+      node.style.boxShadow = 'none';
+      node.style.cursor = 'default';
+      node.style.pointerEvents = 'none';
+    }
+  });
+  root.style.position = 'absolute';
+  root.style.left = '0';
+  root.style.top = '0';
+  root.style.width = `${width}px`;
+  root.style.height = `${height}px`;
+  root.style.transform = 'none';
+  root.style.zIndex = '0';
+  root.style.margin = '0';
+  root.style.visibility = 'visible';
+  root.style.pointerEvents = 'none';
+  if (element?.type === 'image') {
+    const body = root.firstElementChild;
+    if (body instanceof HTMLElement) body.style.border = 'none';
+  }
+}
+
+async function buildCreativeLayerExportSvgMarkup(element, mode) {
+  const rendered = getRenderedCreativeElement(element, mode);
+  const width = Math.max(1, Math.ceil(Number(rendered.width) || Number(element.width) || 1));
+  const height = Math.max(1, Math.ceil(Number(rendered.height) || Number(element.height) || 1));
+  const previousSelectedId = creativeSelectedId;
+  let markup = '';
+  try {
+    creativeSelectedId = null;
+    markup = renderCreativeStageElementStudioV3({ ...element, x: 0, y: 0, width, height, rotation: 0 }, mode);
+  } finally {
+    creativeSelectedId = previousSelectedId;
+  }
+  const holder = document.createElement('div');
+  holder.innerHTML = markup;
+  const root = holder.firstElementChild;
+  if (!(root instanceof HTMLElement)) throw new Error('Could not prepare layer markup.');
+  sanitizeCreativeLayerExportDom(root, element, width, height);
+  await hydrateCreativeLayerExportIcons(root);
+  return {
+    width,
+    height,
+    svg: `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <foreignObject x="0" y="0" width="${width}" height="${height}">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${width}px;height:${height}px;overflow:hidden;background:transparent;font-family:Manrope, Arial, sans-serif;">
+      ${root.outerHTML}
+    </div>
+  </foreignObject>
+</svg>`,
+  };
+}
+
+async function renderCreativeElementLayerCanvas(element, mode) {
+  const layerSvg = await buildCreativeLayerExportSvgMarkup(element, mode);
+  const svgBlob = new Blob([layerSvg.svg], { type: 'image/svg+xml;charset=utf-8' });
+  const svgUrl = URL.createObjectURL(svgBlob);
+  try {
+    const image = await loadImageFromUrl(svgUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = layerSvg.width;
+    canvas.height = layerSvg.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Layer export canvas is unavailable.');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
+}
+
+function canvasToCreativePngBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not encode layer PNG.'));
+    }, 'image/png', 1);
+  });
+}
+
+async function canvasSaveCreativeLayerAssets(options = {}) {
+  try {
+    const mode = normalizeCreativeMode(window.currentCreativeMode);
+    if (mode !== 'image') {
+      showToast('Switch to Image mode', 'Layer PNG assets are saved from the Image canvas.', 'info');
+      return null;
+    }
+    const candidates = getCreativeLayerAssetExportCandidates(options);
+    if (!candidates.length) {
+      showToast('No layers to save', 'Add or show at least one image, text, shape, icon, or component layer first.', 'info');
+      return null;
+    }
+    const limit = Math.min(candidates.length, Math.max(1, Number(options.limit) || 300));
+    const layers = [];
+    const stamp = buildCreativeArtifactTimestamp();
+    showToast('Saving layer PNGs', `${limit} layer${limit === 1 ? '' : 's'} queued.`, 'info');
+    for (let index = 0; index < limit; index += 1) {
+      const element = candidates[index];
+      const label = getCreativeElementDisplayLabelStudioV3(element, index);
+      const canvas = await renderCreativeElementLayerCanvas(element, mode);
+      const blob = await canvasToCreativePngBlob(canvas);
+      layers.push({
+        elementId: element.id,
+        elementType: element.type,
+        filename: `${String(index + 1).padStart(3, '0')}-${sanitizeCreativeLayerAssetName(label || element.id || `layer-${index + 1}`)}.png`,
+        mimeType: 'image/png',
+        width: canvas.width,
+        height: canvas.height,
+        base64: await blobToBase64(blob),
+        tags: [String(element.type || 'layer').toLowerCase()],
+      });
+    }
+    const result = await persistCreativeLayerAssetBatch(layers, {
+      mode,
+      batchName: `${getCreativeArtifactStem(mode)}-layers-${stamp}`,
+    });
+    const count = Number(result?.count || layers.length || 0);
+    addProcessEntry('info', `${getStructuredCreativeModeLabel(mode)}: saved ${count} layer PNG asset${count === 1 ? '' : 's'} to the Creative asset library.`);
+    showToast('Layer PNGs saved', `${count} asset${count === 1 ? '' : 's'} indexed for reuse.`, 'success');
+    loadCreativeAssets({ force: true }).catch(() => {});
+    renderCreativeWorkspace({ skipStageRender: true });
+    return result;
+  } catch (err) {
+    const message = String(err?.message || err || 'Layer PNG export failed.');
+    addProcessEntry('error', `Layer PNG export failed: ${message}`);
+    showToast('Layer PNG export failed', message, 'error');
+    return null;
   }
 }
 
@@ -11206,6 +14299,10 @@ async function canvasExportCreative(format = 'png', options = {}) {
     const baseName = getCreativeExportBaseName(normalized);
     const skipDownload = options?.skipDownload === true;
     try {
+    const selectedForExport = getSelectedCreativeElement();
+    if (selectedForExport?.type === 'hyperframes' && ['mp4', 'webm', 'mov'].includes(normalized)) {
+      return await window.canvasExportHyperframesClip(selectedForExport.id, normalized);
+    }
     if (isCreativeExportActive()) {
       showToast('Creative export already running', 'Wait for the current export to finish before starting another one.', 'info');
       return;
@@ -11876,6 +14973,373 @@ function canvasApplyCreativeSizePreset(presetKey) {
   addProcessEntry('info', `Creative scene resized to ${preset.label} (${preset.width}x${preset.height}).`);
 }
 
+// HyperFrames controller registry — keyed by element.id. Survives stage
+// re-renders so the iframe doesn't re-mount on every keystroke. Reconciled
+// after every stage.innerHTML write by syncHyperframesControllers().
+const _hfControllers = new Map();
+
+function applyHyperframesExtractionToElement(live, extraction = {}, html = null) {
+  if (!live) return;
+  const meta = { ...(live.meta || {}) };
+  if (typeof html === 'string') meta.html = html;
+  if (Array.isArray(extraction.layers)) meta.layers = extraction.layers;
+  if (Array.isArray(extraction.tracks)) meta.tracks = extraction.tracks;
+  if (Array.isArray(extraction.slots)) meta.slots = extraction.slots;
+  if (Array.isArray(extraction.variableBindings)) meta.variableBindings = extraction.variableBindings;
+  if (Array.isArray(extraction.variables)) meta.variables = extraction.variables;
+  if (typeof extraction.compositionId === 'string' && extraction.compositionId) meta.compositionId = extraction.compositionId;
+  if (Number.isFinite(Number(extraction.durationMs))) meta.durationMs = Math.max(100, Number(extraction.durationMs));
+  if (typeof extraction.advancedBlock === 'boolean') meta.advancedBlock = extraction.advancedBlock;
+  if (Array.isArray(extraction.warnings)) meta.warnings = extraction.warnings;
+  if (Array.isArray(extraction.assets)) meta.assets = extraction.assets;
+  if (extraction.ingest && typeof extraction.ingest === 'object') meta.ingest = extraction.ingest;
+  live.meta = { ...meta, dirty: false };
+}
+
+function syncHyperframesControllers(stage) {
+  if (!stage) return;
+  const liveIds = new Set();
+  const placeholders = stage.querySelectorAll('[data-hyperframes-mount]');
+  for (const placeholder of placeholders) {
+    const elementId = placeholder.getAttribute('data-hyperframes-mount');
+    liveIds.add(elementId);
+    const element = creativeSceneDoc.elements.find((el) => el.id === elementId);
+    if (!element) continue;
+    let entry = _hfControllers.get(elementId);
+    if (!entry) {
+      const controller = createHyperframesController({
+        element,
+        mount: placeholder,
+        api: { post: (url, body) => api(url, { method: 'POST', body }) },
+        onSourceChanged: (html) => {
+          const live = creativeSceneDoc.elements.find((el) => el.id === elementId);
+          if (live) {
+            live.meta = { ...(live.meta || {}), html, dirty: false };
+          }
+        },
+        onLayersChanged: (layers, extraction = {}) => {
+          const live = creativeSceneDoc.elements.find((el) => el.id === elementId);
+          if (live) {
+            applyHyperframesExtractionToElement(live, { ...extraction, layers });
+            if (creativeSelectedId === elementId) {
+              try { renderCreativeWorkspace(); } catch {}
+            }
+          }
+        },
+        onExtractionChanged: (extraction = {}) => {
+          const live = creativeSceneDoc.elements.find((el) => el.id === elementId);
+          if (live) {
+            applyHyperframesExtractionToElement(live, extraction);
+            if (creativeSelectedId === elementId) {
+              try { renderCreativeWorkspace(); } catch {}
+            }
+          }
+        },
+        onPick: (info) => {
+          // Picker hits inside the iframe don't yet move canvas selection —
+          // canvas selection is at the clip level. Logged for the inspector.
+          window._lastHyperframesPick = info;
+        },
+        onError: (err) => console.warn('hyperframes controller error', err),
+      });
+      entry = { controller, element };
+      _hfControllers.set(elementId, entry);
+    } else if (entry.element !== element) {
+      // Element identity changed — refresh source HTML if it differs.
+      if (entry.controller.getHtml() !== element.meta?.html) {
+        entry.controller.setHtml(element.meta?.html || '');
+      }
+      entry.element = element;
+    }
+  }
+  // Dispose controllers whose elements were removed.
+  for (const [id, entry] of _hfControllers) {
+    if (!liveIds.has(id)) {
+      try { entry.controller.dispose(); } catch {}
+      _hfControllers.delete(id);
+    }
+  }
+}
+
+window.canvasOpenHyperframesCatalog = function () {
+  let modal = document.querySelector('#hyperframes-catalog-modal');
+  if (modal) { modal.remove(); modal = null; }
+  modal = document.createElement('div');
+  modal.id = 'hyperframes-catalog-modal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center';
+  const panel = document.createElement('div');
+  panel.style.cssText = 'background:#fff;width:min(960px,90vw);height:min(720px,85vh);border-radius:12px;display:flex;flex-direction:column;overflow:hidden';
+  const header = document.createElement('div');
+  header.style.cssText = 'padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e5e7eb';
+  header.innerHTML = `<div style="font-weight:700">HyperFrames Catalog</div><button id="hf-catalog-close" style="padding:4px 10px">Close</button>`;
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;overflow:hidden;display:flex;flex-direction:column';
+  panel.appendChild(header);
+  panel.appendChild(body);
+  modal.appendChild(panel);
+  document.body.appendChild(modal);
+  header.querySelector('#hf-catalog-close').addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  createHyperframesCatalogBrowser({
+    mount: body,
+    api: { get: (url) => api(url), post: (url, b) => api(url, { method: 'POST', body: b }) },
+    onInsertEditable: (payload) => insertHyperframesClip({ ...payload, advancedBlock: false, modal }),
+    onInsertAdvanced: (payload) => insertHyperframesClip({ ...payload, advancedBlock: true, modal }),
+    onError: (err) => showToast({ message: `HyperFrames catalog: ${err?.message || err}`, kind: 'error' }),
+  });
+};
+
+function renderHyperframesInspector(selected) {
+  const layers = Array.isArray(selected.meta?.layers) ? selected.meta.layers : [];
+  const tracks = Array.isArray(selected.meta?.tracks) ? selected.meta.tracks : [];
+  const slots = Array.isArray(selected.meta?.slots) ? selected.meta.slots : [];
+  const variableBindings = Array.isArray(selected.meta?.variableBindings) ? selected.meta.variableBindings : [];
+  const assets = Array.isArray(selected.meta?.assets) ? selected.meta.assets : [];
+  const warnings = Array.isArray(selected.meta?.warnings) ? selected.meta.warnings : [];
+  const lintErrors = Array.isArray(selected.meta?.lint?.errors) ? selected.meta.lint.errors : [];
+  const lintWarnings = Array.isArray(selected.meta?.lint?.warnings) ? selected.meta.lint.warnings : [];
+  const qaIssues = Array.isArray(selected.meta?.qaReport?.issues) ? selected.meta.qaReport.issues : [];
+  const ingest = selected.meta?.ingest && typeof selected.meta.ingest === 'object' ? selected.meta.ingest : null;
+  const advanced = selected.meta?.advancedBlock === true;
+  const safeElementId = escHtml(selected.id).replace(/'/g, '&#39;');
+  const layerRows = advanced
+    ? `<div style="font-size:11px;color:#a8a29e;padding:8px 0">Advanced block — internals are code-backed. Edit via slots and variables below.</div>`
+    : layers.length
+      ? layers.map((layer) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;margin-bottom:4px">
+            <div>
+              <div style="font-size:12px;color:#fafaf9">${escHtml(layer.name || layer.elementId)}</div>
+              <div style="font-size:10px;color:#a8a29e">${escHtml(layer.kind)} · ${layer.startMs}–${layer.endMs}ms</div>
+            </div>
+            ${layer.editable?.text ? `<button onclick="canvasHyperframesEditLayer('${escHtml(selected.id)}','${escHtml(layer.elementId)}','text')" style="font-size:10px;padding:3px 6px">Edit text</button>` : ''}
+          </div>
+        `).join('')
+      : `<div style="font-size:11px;color:#a8a29e;padding:8px 0">No layers extracted yet — open the clip preview to populate.</div>`;
+
+  const trackRows = tracks.length ? tracks.map((track) => `
+    <div style="display:grid;grid-template-columns:48px 1fr;gap:8px;align-items:center;padding:6px 8px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;margin-bottom:4px">
+      <div style="font-size:10px;color:#a8a29e;font-weight:800">T${escHtml(String(track.index ?? 0))}</div>
+      <div style="min-width:0">
+        <div style="font-size:12px;color:#fafaf9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(track.name || `${track.layers?.length || 0} layers`)}</div>
+        <div style="font-size:10px;color:#a8a29e">${escHtml(String(track.startMs || 0))}-${escHtml(String(track.endMs || 0))}ms | ${escHtml(String(track.layers?.length || 0))} clips</div>
+      </div>
+    </div>
+  `).join('') : '';
+
+  const slotRows = slots.length ? slots.map((slot) => `
+    <div style="margin-bottom:8px">
+      <div style="font-size:10px;color:#a8a29e;margin-bottom:3px">${escHtml(slot.label || slot.id)} · ${escHtml(slot.kind)}</div>
+      <input data-hf-slot="${escHtml(slot.id)}" data-hf-slot-kind="${escHtml(slot.kind)}" data-hf-element="${escHtml(selected.id)}" type="${slot.kind === 'color' ? 'color' : slot.kind === 'number' ? 'number' : 'text'}" ${slot.min !== null ? `min="${slot.min}"` : ''} ${slot.max !== null ? `max="${slot.max}"` : ''} ${slot.step !== null ? `step="${slot.step}"` : ''} value="${escHtml(String(slot.default ?? ''))}" oninput="canvasHyperframesPatchFromSlot(this)" style="width:100%;padding:5px 8px;font-size:12px;background:rgba(255,255,255,0.06);color:#fafaf9;border:1px solid rgba(255,255,255,0.1);border-radius:6px"/>
+    </div>
+  `).join('') : '';
+
+  const variableRows = variableBindings.length ? variableBindings.map((binding) => {
+    const v = binding.variable || {};
+    return `
+      <div style="margin-bottom:8px">
+        <div style="font-size:10px;color:#a8a29e;margin-bottom:3px">${escHtml(v.label || v.id)} · ${escHtml(v.type || 'string')}</div>
+        <input data-hf-variable="${escHtml(v.id)}" data-hf-element="${escHtml(selected.id)}" type="${v.type === 'number' ? 'number' : v.type === 'color' ? 'color' : v.type === 'boolean' ? 'checkbox' : 'text'}" ${v.type === 'boolean' ? (binding.currentValue ? 'checked' : '') : `value="${escHtml(String(binding.currentValue ?? v.default ?? ''))}"`} onchange="canvasHyperframesPatchFromVariable(this)" style="width:100%;padding:5px 8px;font-size:12px;background:rgba(255,255,255,0.06);color:#fafaf9;border:1px solid rgba(255,255,255,0.1);border-radius:6px"/>
+      </div>
+    `;
+  }).join('') : '';
+
+  return `
+    <div style="padding:0 16px 14px">
+      <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e;margin-top:8px">HyperFrames clip</div>
+      <div style="font-size:11px;color:#a8a29e;margin-top:4px">${escHtml(selected.meta?.compositionId || '(unknown composition)')} · ${escHtml(advanced ? 'advanced' : 'editable')}</div>
+      <div style="margin-top:10px">
+        <div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">LAYERS</div>
+        ${layerRows}
+      </div>
+      <div class="creative-pill-row" style="margin-top:10px">
+        <button type="button" class="creative-chip-btn" onclick="canvasRefreshHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:refresh-bold-duotone" width="14" height="14"></iconify-icon>Refresh</button>
+        <button type="button" class="creative-chip-btn" onclick="canvasLintHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:check-circle-bold-duotone" width="14" height="14"></iconify-icon>Lint</button>
+        <button type="button" class="creative-chip-btn" onclick="canvasQaHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:eye-bold-duotone" width="14" height="14"></iconify-icon>QA</button>
+        <button type="button" class="creative-chip-btn creative-chip-btn--accent" onclick="canvasExportHyperframesClip('${safeElementId}', 'mp4')"><iconify-icon icon="solar:videocamera-record-bold-duotone" width="14" height="14"></iconify-icon>Producer MP4</button>
+      </div>
+      ${ingest ? `<div class="creative-info-note" style="margin-top:10px">Catalog ingest: ${escHtml(String(ingest.assetCount ?? assets.length))} assets, ${escHtml(String(ingest.fontCount ?? 0))} fonts, ${escHtml(String(ingest.rewrittenPathCount ?? 0))} paths rewritten.</div>` : ''}
+      ${warnings.length ? `<div class="creative-info-note" style="margin-top:10px;color:#fbbf24">${warnings.slice(0, 3).map((warning) => escHtml(String(warning))).join('<br>')}</div>` : ''}
+      ${lintErrors.length || lintWarnings.length ? `<div class="creative-info-note" style="margin-top:10px">${lintErrors.length} lint errors, ${lintWarnings.length} warnings.</div>` : ''}
+      ${qaIssues.length ? `<div class="creative-info-note" style="margin-top:10px">${qaIssues.length} QA issues found.</div>` : ''}
+      ${trackRows ? `<div style="margin-top:10px"><div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">TRACKS</div>${trackRows}</div>` : ''}
+      ${slotRows ? `<div style="margin-top:10px"><div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">SLOTS</div>${slotRows}</div>` : ''}
+      ${variableRows ? `<div style="margin-top:10px"><div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">VARIABLES</div>${variableRows}</div>` : ''}
+    </div>
+  `;
+}
+
+window.canvasHyperframesEditLayer = function (elementId, layerElementId, kind) {
+  const entry = _hfControllers.get(elementId);
+  if (!entry) return;
+  if (kind === 'text') {
+    const newText = window.prompt('New text for layer:');
+    if (newText === null) return;
+    entry.controller.patch([{ op: 'set-text', elementId: layerElementId, text: newText }]);
+  }
+};
+
+window.canvasHyperframesPatchFromSlot = function (input) {
+  if (!input) return;
+  const elementId = input.getAttribute('data-hf-element');
+  const slotId = input.getAttribute('data-hf-slot');
+  const kind = input.getAttribute('data-hf-slot-kind');
+  const value = input.value;
+  const entry = _hfControllers.get(elementId);
+  if (!entry) return;
+  // Slot dispatch — the slot's `selector` resolved to an element id at extract
+  // time; we just pass through to set-attribute or set-variable depending on
+  // the kind. Element-level slots with selector "#id" route via element id.
+  const slot = (entry.element.meta?.slots || []).find((s) => s.id === slotId);
+  if (!slot) return;
+  if (slot.kind === 'variable') {
+    entry.controller.patch([{ op: 'set-variable', name: slot.variableName || slot.id, value }]);
+    return;
+  }
+  if (!slot.selector || !slot.selector.startsWith('#')) return;
+  const elementHfId = slot.selector.slice(1);
+  if (kind === 'text') entry.controller.patch([{ op: 'set-text', elementId: elementHfId, text: value }]);
+  else if (kind === 'color') entry.controller.patch([{ op: 'set-color', elementId: elementHfId, color: value }]);
+  else if (kind === 'number') entry.controller.patch([{ op: 'set-font-size', elementId: elementHfId, fontSize: Number(value) }]);
+  else if (kind === 'asset') entry.controller.patch([{ op: 'set-asset', elementId: elementHfId, assetPlaceholderId: value }]);
+};
+
+window.canvasHyperframesPatchFromVariable = function (input) {
+  if (!input) return;
+  const elementId = input.getAttribute('data-hf-element');
+  const variableId = input.getAttribute('data-hf-variable');
+  const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+  const entry = _hfControllers.get(elementId);
+  if (!entry) return;
+  entry.controller.patch([{ op: 'set-variable', name: variableId, value }]);
+};
+
+function getHyperframesElementById(elementId) {
+  return creativeSceneDoc.elements.find((element) => element.id === elementId && element.type === 'hyperframes') || null;
+}
+
+function updateHyperframesElementMeta(elementId, patch = {}, options = {}) {
+  const live = getHyperframesElementById(elementId);
+  if (!live) return null;
+  live.meta = { ...(live.meta || {}), ...patch };
+  if (options.render !== false) renderCreativeWorkspace({ skipStageRender: options.skipStageRender === true });
+  persistActiveChat();
+  return live;
+}
+
+window.canvasRefreshHyperframesClip = async function (elementId) {
+  const live = getHyperframesElementById(elementId);
+  if (!live) return;
+  try {
+    const extraction = await api('/api/canvas/hyperframes/extract-layers', { method: 'POST', body: { html: live.meta?.html || '' } });
+    if (!extraction?.success) throw new Error(extraction?.error || 'Could not parse HyperFrames clip');
+    applyHyperframesExtractionToElement(live, extraction);
+    renderCreativeWorkspace({ skipStageRender: true });
+    showToast({ message: 'HyperFrames metadata refreshed.', kind: 'success' });
+  } catch (err) {
+    showToast({ message: `HyperFrames refresh failed: ${err?.message || err}`, kind: 'error' });
+  }
+};
+
+window.canvasLintHyperframesClip = async function (elementId) {
+  const live = getHyperframesElementById(elementId);
+  if (!live) return;
+  try {
+    const lint = await api('/api/canvas/hyperframes/lint', { method: 'POST', body: { html: live.meta?.html || '' } });
+    if (!lint?.success) throw new Error(lint?.error || 'HyperFrames lint failed');
+    const lintResult = lint.lint || lint;
+    updateHyperframesElementMeta(elementId, { lint: lintResult }, { skipStageRender: true });
+    const errorCount = Array.isArray(lintResult.errors) ? lintResult.errors.length : 0;
+    const warningCount = Array.isArray(lintResult.warnings) ? lintResult.warnings.length : 0;
+    showToast({ message: `HyperFrames lint: ${errorCount} errors, ${warningCount} warnings.`, kind: errorCount ? 'error' : 'success' });
+  } catch (err) {
+    showToast({ message: `HyperFrames lint failed: ${err?.message || err}`, kind: 'error' });
+  }
+};
+
+window.canvasQaHyperframesClip = async function (elementId) {
+  const live = getHyperframesElementById(elementId);
+  if (!live) return;
+  try {
+    const qaReport = await api('/api/canvas/hyperframes/qa', { method: 'POST', body: { html: live.meta?.html || '' } });
+    if (!qaReport?.success) throw new Error(qaReport?.error || 'HyperFrames QA failed');
+    const report = qaReport.report || qaReport;
+    updateHyperframesElementMeta(elementId, { qaReport: report }, { skipStageRender: true });
+    const issueCount = Array.isArray(report.issues) ? report.issues.length : 0;
+    showToast({ message: `HyperFrames QA: ${issueCount} issues.`, kind: issueCount ? 'warning' : 'success' });
+  } catch (err) {
+    showToast({ message: `HyperFrames QA failed: ${err?.message || err}`, kind: 'error' });
+  }
+};
+
+window.canvasExportHyperframesClip = async function (elementId, format = 'mp4') {
+  const live = getHyperframesElementById(elementId);
+  if (!live) return;
+  try {
+    showToast({ message: 'Rendering HyperFrames clip with producer...', kind: 'info' });
+    const safeId = String(live.meta?.compositionId || elementId || 'hyperframes').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'hyperframes';
+    const variables = {};
+    (Array.isArray(live.meta?.variableBindings) ? live.meta.variableBindings : []).forEach((binding) => {
+      const id = String(binding?.variable?.id || '').trim();
+      if (id) variables[id] = binding.currentValue;
+    });
+    const result = await api('/api/canvas/hyperframes/render', {
+      method: 'POST',
+      body: {
+        html: live.meta?.html || '',
+        filename: `${safeId}.${String(format || 'mp4').toLowerCase()}`,
+        format,
+        fps: Number(creativeSceneDoc?.frameRate) || 60,
+        quality: 'standard',
+        variables,
+      },
+    });
+    if (!result?.success) throw new Error(result?.error || 'HyperFrames render failed');
+    updateHyperframesElementMeta(elementId, { lastProducerExport: result }, { skipStageRender: true });
+    if (result.outputPath) canvasDownloadFile(result.outputPath, result.outputPath.split(/[\\/]/).pop() || `${safeId}.${format}`);
+    showToast({ message: 'HyperFrames producer export complete.', kind: 'success' });
+  } catch (err) {
+    showToast({ message: `HyperFrames export failed: ${err?.message || err}`, kind: 'error' });
+  }
+};
+
+function insertHyperframesClip({ html, item, durationMs, compositionId, advancedBlock, modal, importResult = null, extraction = null }) {
+  try {
+    const extracted = extraction && typeof extraction === 'object' ? extraction : {};
+    const ingest = importResult?.ingest && typeof importResult.ingest === 'object' ? importResult.ingest : null;
+    const op = {
+      type: 'add',
+      element: {
+        type: 'hyperframes',
+        x: 80,
+        y: 80,
+        width: 1080,
+        height: 1920,
+        meta: {
+          html, compositionId,
+          advancedBlock: !!advancedBlock,
+          durationMs: Number(durationMs) || 6000,
+          catalogId: item?.id || null,
+          sourceFormat: 'hyperframes',
+          layers: Array.isArray(extracted.layers) ? extracted.layers : [],
+          tracks: Array.isArray(extracted.tracks) ? extracted.tracks : [],
+          slots: Array.isArray(extracted.slots) ? extracted.slots : [],
+          variableBindings: Array.isArray(extracted.variableBindings) ? extracted.variableBindings : [],
+          variables: Array.isArray(extracted.variables) ? extracted.variables : {},
+          assets: Array.isArray(importResult?.assets) ? importResult.assets : [],
+          warnings: Array.isArray(importResult?.warnings) ? importResult.warnings : [],
+          ingest,
+        },
+      },
+    };
+    creativeSceneDoc = applySceneGraphOps(creativeSceneDoc, [op]);
+    if (modal) modal.remove();
+    renderCreativeWorkspace();
+    showToast({ message: `Inserted ${item?.name || 'HyperFrames clip'}`, kind: 'success' });
+  } catch (err) {
+    showToast({ message: `Failed to insert: ${err?.message || err}`, kind: 'error' });
+  }
+}
+
 function renderCreativeWorkspace(options = {}) {
   const shell = document.getElementById('canvas-creative-shell');
   const library = document.getElementById('canvas-creative-library');
@@ -11942,7 +15406,7 @@ function renderCreativeWorkspace(options = {}) {
     : 'Shared scene graph with direct composition controls';
 
   const selected = getSelectedCreativeElement();
-  library.innerHTML = Object.entries(getActiveCreativeElementLibrary()).map(([section, items]) => `
+  library.innerHTML = `<div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.06)"><button onclick="canvasOpenHyperframesCatalog()" style="width:100%;text-align:left;padding:8px 10px;border:1px solid rgba(255,255,255,0.12);background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">＋ HyperFrames Catalog</button></div>` + (mode === 'video' ? renderCompositionAssetSection() : '') + Object.entries(getActiveCreativeElementLibrary()).map(([section, items]) => `
     <div style="padding:14px 14px 6px">
       <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e;margin-bottom:8px">${escHtml(section)}</div>
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
@@ -11987,11 +15451,18 @@ function renderCreativeWorkspace(options = {}) {
         const bg = element.meta?.source ? `background-image:url('${escHtml(creativeMediaSourceUrl(element.meta.source)).replace(/'/g, '&#39;')}');background-size:cover;background-position:center center;` : 'background:linear-gradient(135deg,#d6d3d1,#f5f5f4);';
         return `<div onclick="canvasSelectCreativeElement('${element.id}')" style="${baseStyle};border-radius:${Number(element.meta?.radius) || 18}px;border:1px dashed rgba(15,23,42,0.18);${bg}"></div>`;
       }
+      if (element.type === 'hyperframes') {
+        // Mount placeholder — the HyperFrames iframe controller is attached
+        // post-render in syncHyperframesControllers(), which keeps a registry
+        // keyed by element.id so the iframe survives stage re-renders.
+        return `<div onclick="canvasSelectCreativeElement('${element.id}')" data-hyperframes-mount="${escHtml(element.id)}" style="${baseStyle};background:rgba(0,0,0,0.04);overflow:hidden;border-radius:8px"></div>`;
+      }
       const fill = element.meta?.fill || '#111827';
       const stroke = element.meta?.stroke || 'transparent';
       const radius = Number(element.meta?.radius) || 0;
       return `<div onclick="canvasSelectCreativeElement('${element.id}')" style="${baseStyle};background:${escHtml(fill)};border:${Math.max(0, Number(element.meta?.strokeWidth) || 0)}px solid ${escHtml(stroke)};border-radius:${radius}px"></div>`;
     }).join('');
+  syncHyperframesControllers(stage);
   stage.onclick = (event) => {
     if (event.target === stage) setCreativeSelection(null);
   };
@@ -12031,6 +15502,7 @@ function renderCreativeWorkspace(options = {}) {
           ${renderCreativePropertyField('Stroke Width', 'meta.strokeWidth', selected.meta?.strokeWidth || 0)}
         </div>
       </div>` : ''}
+    ${selected.type === 'hyperframes' ? renderHyperframesInspector(selected) : ''}
     ${selected.type === 'icon' ? `
       <div style="padding:0 16px 14px">
         ${renderCreativePropertyField('Icon', 'meta.iconName', selected.meta?.iconName || 'solar:stars-bold-duotone', 'text')}
@@ -12051,7 +15523,7 @@ function renderCreativeWorkspace(options = {}) {
     <div style="padding:18px 16px">
       <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e">Properties</div>
       <div style="font-size:13px;font-weight:700;color:#fafaf9;margin-top:10px">Nothing selected</div>
-      <div style="font-size:11px;color:#a8a29e;line-height:1.7;margin-top:8px">Select an element on the stage and this panel will expose shared scene-graph controls and AI focus context.</div>
+      <div style="font-size:11px;color:#a8a29e;line-height:1.7;margin-top:8px">Select an element on the stage and this panel will expose focused controls and AI context.</div>
     </div>
   `;
 
@@ -12266,7 +15738,7 @@ function renderCreativeWorkspaceV2({ shell, library, stage, props, timeline, tim
   const selectedContext = selected ? buildSceneSelectionContext(creativeSceneDoc, selected.id) : null;
   const selectedRendered = selected ? getRenderedCreativeElement(selected, mode) : null;
 
-  library.innerHTML = Object.entries(getActiveCreativeElementLibrary()).map(([section, items]) => `
+  library.innerHTML = `<div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.06)"><button onclick="canvasOpenHyperframesCatalog()" style="width:100%;text-align:left;padding:8px 10px;border:1px solid rgba(255,255,255,0.12);background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">＋ HyperFrames Catalog</button></div>` + (mode === 'video' ? renderCompositionAssetSection() : '') + Object.entries(getActiveCreativeElementLibrary()).map(([section, items]) => `
     <div style="padding:14px 14px 6px">
       <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e;margin-bottom:8px">${escHtml(section)}</div>
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
@@ -12436,7 +15908,7 @@ function renderCreativeWorkspaceV2({ shell, library, stage, props, timeline, tim
           </div>
         <div><input type="range" data-creative-timeline-range="true" min="0" max="${durationMs}" step="50" value="${creativeTimelineMs}" oninput="canvasSetCreativeTimeline(this.value)" style="width:100%"></div>
         </div>
-      ` + creativeSceneDoc.elements.map((element, idx) => {
+      ` + renderCompositionTimelineStrip() + creativeSceneDoc.elements.map((element, idx) => {
         const label = element.meta?.content || element.meta?.iconName || element.meta?.component || `${element.type} ${idx + 1}`;
         const keyframes = Array.isArray(element.meta?.keyframes) ? element.meta.keyframes.slice().sort((a, b) => (a.atMs || 0) - (b.atMs || 0)) : [];
         const firstAt = keyframes.length ? Math.max(0, Number(keyframes[0].atMs) || 0) : 0;
@@ -12461,6 +15933,358 @@ function renderCreativeWorkspaceV2({ shell, library, stage, props, timeline, tim
     }
   }
 }
+
+// ── Composition asset section (drag source for the timeline) ─────────────────
+function renderCompositionAssetSection() {
+  const assets = Array.isArray(creativeAssetsState?.indexedAssets) ? creativeAssetsState.indexedAssets : [];
+  const exports = Array.isArray(creativeAssetsState?.exports) ? creativeAssetsState.exports : [];
+  const items = [
+    ...assets.map((a) => ({ kind: 'asset', label: a.label || a.filename || a.path, path: a.path || a.absPath, mime: a.mimeType || '', durationMs: a.durationMs || 0, source: a })),
+    ...exports.filter((e) => /\.(mp4|webm|mov|m4v)$/i.test(e.path || e.filename || '')).map((e) => ({ kind: 'export', label: e.filename || e.path, path: e.path, mime: 'video/mp4', durationMs: 0, source: e })),
+  ];
+  if (items.length === 0) {
+    return `<div style="padding:14px 14px 6px"><div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e;margin-bottom:8px">Drop on Timeline</div><div style="font-size:11px;color:#78716c;line-height:1.55">No indexed assets yet. Run creative_search_assets or attach media to populate this list.</div></div>`;
+  }
+  return `
+    <div style="padding:14px 14px 6px">
+      <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e;margin-bottom:8px">Drop on Timeline</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${items.slice(0, 30).map((item) => {
+          const isVideo = /^video\//i.test(item.mime) || /\.(mp4|webm|mov|m4v)$/i.test(String(item.path || ''));
+          const isAudio = /^audio\//i.test(item.mime) || /\.(mp3|wav|m4a|aac|ogg)$/i.test(String(item.path || ''));
+          const lane = isAudio ? 'audio' : 'video';
+          const accent = isVideo ? '#7dd3fc' : isAudio ? '#34d399' : '#fbbf24';
+          return `
+            <div
+              draggable="true"
+              ondragstart="canvasCompositionAssetDragStart(event, ${escHtml(JSON.stringify({ label: item.label, path: item.path, mime: item.mime, durationMs: item.durationMs, lane }))})"
+              style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);cursor:grab">
+              <span style="display:inline-block;width:6px;height:6px;border-radius:999px;background:${accent}"></span>
+              <span style="font-size:11px;color:#f5f5f4;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(String(item.label || '').slice(0, 36))}</span>
+              <span style="font-size:9px;color:#a8a29e">${escHtml(isVideo ? 'video' : isAudio ? 'audio' : 'asset')}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+window.canvasCompositionAssetDragStart = function(event, payload) {
+  try {
+    const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
+    const isAudio = /^audio\//i.test(data.mime || '') || /\.(mp3|wav|m4a|aac|ogg)$/i.test(String(data.path || ''));
+    const isVideo = /^video\//i.test(data.mime || '') || /\.(mp4|webm|mov|m4v)$/i.test(String(data.path || ''));
+    const dropPayload = {
+      label: data.label,
+      path: data.path,
+      mime: data.mime,
+      durationMs: Math.max(1000, Number(data.durationMs) || 4000),
+      lane: isAudio ? 'audio' : '',
+    };
+    event.dataTransfer?.setData('application/x-prom-asset', JSON.stringify(dropPayload));
+    event.dataTransfer?.setData('text/plain', data.label || data.path || '');
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
+  } catch (err) {
+    console.error('asset drag failed', err);
+  }
+};
+
+// ── Composition timeline strip (Premiere-style multi-track) ──────────────────
+function renderCompositionTimelineStrip() {
+  const comp = ensureCreativeComposition();
+  if (!comp) return '';
+  const durationMs = Math.max(1000, Number(comp.durationMs) || 12000);
+  const playheadLeft = Math.max(0, Math.min(100, (creativeTimelineMs / durationMs) * 100));
+  const tracks = (comp.tracks || []).slice().sort((a, b) => (a.index || 0) - (b.index || 0));
+
+  const tracksHtml = tracks.map((track) => {
+    const clips = (comp.clips || []).filter((c) => c.trackId === track.id);
+    const clipsHtml = clips.map((clip) => {
+      const left = Math.max(0, (clip.inMs / durationMs) * 100);
+      const width = Math.max(1.2, ((clip.outMs - clip.inMs) / durationMs) * 100);
+      const isSelected = comp.selectedClipId === clip.id;
+      const palette = track.kind === 'video'
+        ? (isSelected ? 'linear-gradient(90deg,#38bdf8,#60a5fa)' : 'linear-gradient(90deg,#0ea5e9,#3b82f6)')
+        : track.kind === 'audio'
+          ? (isSelected ? 'linear-gradient(90deg,#34d399,#10b981)' : 'linear-gradient(90deg,#059669,#047857)')
+          : (isSelected ? 'linear-gradient(90deg,#facc15,#f59e0b)' : 'linear-gradient(90deg,#d97706,#92400e)');
+      return `
+        <div
+          data-comp-clip="${escHtml(clip.id)}"
+          data-comp-track="${escHtml(track.id)}"
+          onmousedown="canvasCompositionClipMouseDown(event,'${escHtml(clip.id)}')"
+          style="position:absolute;left:${left}%;width:${width}%;top:4px;bottom:4px;border-radius:6px;background:${palette};cursor:grab;display:flex;align-items:center;padding:0 8px;color:#0b1220;font-size:10px;font-weight:800;box-shadow:${isSelected ? '0 0 0 2px #fff' : '0 1px 2px rgba(0,0,0,0.4)'};overflow:hidden">
+          <div onmousedown="event.stopPropagation();canvasCompositionEdgeMouseDown(event,'${escHtml(clip.id)}','head')" style="position:absolute;left:0;top:0;bottom:0;width:6px;cursor:ew-resize;background:rgba(0,0,0,0.25)"></div>
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${escHtml(String(clip.label || clip.lane).slice(0, 24))}</span>
+          <div onmousedown="event.stopPropagation();canvasCompositionEdgeMouseDown(event,'${escHtml(clip.id)}','tail')" style="position:absolute;right:0;top:0;bottom:0;width:6px;cursor:ew-resize;background:rgba(0,0,0,0.25)"></div>
+        </div>
+      `;
+    }).join('');
+    const trackBg = track.kind === 'video' ? 'rgba(56,189,248,0.05)' : track.kind === 'audio' ? 'rgba(16,185,129,0.05)' : 'rgba(245,158,11,0.05)';
+    return `
+      <div style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px;align-items:center;margin-bottom:6px">
+        <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:#a8a29e;font-weight:700">
+          <span style="display:inline-block;width:24px;text-align:center;color:#7dd3fc">${escHtml(track.label)}</span>
+          <button title="Mute lane" onclick="canvasCompositionToggleTrackFlag('${escHtml(track.id)}','muted')" style="border:1px solid rgba(255,255,255,0.12);background:${track.muted ? 'rgba(244,63,94,0.25)' : 'rgba(255,255,255,0.04)'};color:#fff;border-radius:5px;padding:2px 5px;font-size:9px;cursor:pointer">M</button>
+          <button title="Lock lane" onclick="canvasCompositionToggleTrackFlag('${escHtml(track.id)}','locked')" style="border:1px solid rgba(255,255,255,0.12);background:${track.locked ? 'rgba(245,158,11,0.25)' : 'rgba(255,255,255,0.04)'};color:#fff;border-radius:5px;padding:2px 5px;font-size:9px;cursor:pointer">L</button>
+        </div>
+        <div
+          data-comp-lane="${escHtml(track.id)}"
+          ondragover="canvasCompositionLaneDragOver(event,'${escHtml(track.id)}')"
+          ondragleave="canvasCompositionLaneDragLeave(event)"
+          ondrop="canvasCompositionLaneDrop(event,'${escHtml(track.id)}')"
+          style="position:relative;height:32px;border-radius:8px;background:${trackBg};border:1px solid rgba(255,255,255,0.06);overflow:hidden">
+          ${clipsHtml}
+          <div style="position:absolute;left:calc(${playheadLeft}% - 1px);top:0;bottom:0;width:2px;background:#f8fafc;opacity:0.85;pointer-events:none"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const summary = summarizeComposition(comp);
+  return `
+    <div data-composition-strip="true" tabindex="0" onkeydown="canvasCompositionKeyDown(event)" style="margin-bottom:14px;padding:10px;border-radius:10px;border:1px solid rgba(56,189,248,0.18);background:rgba(8,12,24,0.6);outline:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#7dd3fc">Composition · ${summary.clipCount} clips · ${summary.trackCount} tracks</div>
+        <div style="display:flex;gap:4px">
+          <button onclick="canvasCompositionAddTrack('video')" style="border:1px solid rgba(56,189,248,0.35);background:rgba(56,189,248,0.1);color:#7dd3fc;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">+V</button>
+          <button onclick="canvasCompositionAddTrack('audio')" style="border:1px solid rgba(16,185,129,0.35);background:rgba(16,185,129,0.1);color:#34d399;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">+A</button>
+          <button onclick="canvasCompositionAddTrack('caption')" style="border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.1);color:#fbbf24;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">+C</button>
+          <button onclick="canvasCompositionSplitAtPlayhead()" title="Split selected clip at playhead (S)" style="border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);color:#f5f5f4;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">✂ Split</button>
+          <button onclick="canvasCompositionDeleteSelected()" title="Delete selected clip (Del)" style="border:1px solid rgba(244,63,94,0.35);background:rgba(244,63,94,0.1);color:#fca5a5;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">Del</button>
+          <button onclick="canvasCompositionRender()" title="Render composition to MP4" style="border:1px solid rgba(168,85,247,0.35);background:rgba(168,85,247,0.1);color:#c4b5fd;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">▶ Render</button>
+        </div>
+      </div>
+      <div style="position:relative">
+        ${tracksHtml}
+      </div>
+    </div>
+  `;
+}
+
+let _compClipDrag = null;
+
+window.canvasCompositionClipMouseDown = function(event, clipId) {
+  event.preventDefault();
+  const comp = ensureCreativeComposition();
+  if (!comp) return;
+  const clip = comp.clips.find((c) => c.id === clipId);
+  if (!clip) return;
+  const lane = event.target instanceof Element ? event.target.closest('[data-comp-lane]') : null;
+  const laneRect = lane?.getBoundingClientRect();
+  if (!laneRect) return;
+  comp.selectedClipId = clipId;
+  enterClipForEditing(clip);
+  persistCompositionState();
+  _compClipDrag = {
+    mode: 'move',
+    clipId,
+    startX: event.clientX,
+    startInMs: clip.inMs,
+    startOutMs: clip.outMs,
+    durationMs: comp.durationMs,
+    laneWidth: laneRect.width,
+  };
+  document.addEventListener('mousemove', _onCompMouseMove);
+  document.addEventListener('mouseup', _onCompMouseUp);
+  renderCreativeWorkspace?.();
+};
+
+window.canvasCompositionEdgeMouseDown = function(event, clipId, edge) {
+  event.preventDefault();
+  event.stopPropagation();
+  const comp = ensureCreativeComposition();
+  if (!comp) return;
+  const clip = comp.clips.find((c) => c.id === clipId);
+  if (!clip) return;
+  const lane = event.target instanceof Element ? event.target.closest('[data-comp-lane]') : null;
+  const laneRect = lane?.getBoundingClientRect();
+  if (!laneRect) return;
+  comp.selectedClipId = clipId;
+  _compClipDrag = {
+    mode: 'trim',
+    edge,
+    clipId,
+    startX: event.clientX,
+    startInMs: clip.inMs,
+    startOutMs: clip.outMs,
+    durationMs: comp.durationMs,
+    laneWidth: laneRect.width,
+  };
+  document.addEventListener('mousemove', _onCompMouseMove);
+  document.addEventListener('mouseup', _onCompMouseUp);
+};
+
+function _onCompMouseMove(event) {
+  if (!_compClipDrag) return;
+  const comp = creativeComposition;
+  if (!comp) return;
+  const clip = comp.clips.find((c) => c.id === _compClipDrag.clipId);
+  if (!clip) return;
+  const dx = event.clientX - _compClipDrag.startX;
+  const msPerPx = _compClipDrag.durationMs / Math.max(1, _compClipDrag.laneWidth);
+  const deltaMs = Math.round(dx * msPerPx);
+  if (_compClipDrag.mode === 'move') {
+    const dur = _compClipDrag.startOutMs - _compClipDrag.startInMs;
+    clip.inMs = Math.max(0, _compClipDrag.startInMs + deltaMs);
+    clip.outMs = clip.inMs + dur;
+  } else if (_compClipDrag.mode === 'trim') {
+    if (_compClipDrag.edge === 'head') {
+      const target = Math.max(0, Math.min(_compClipDrag.startOutMs - 100, _compClipDrag.startInMs + deltaMs));
+      const trimDelta = target - _compClipDrag.startInMs;
+      clip.inMs = target;
+      clip.trimStartMs = Math.max(0, (clip.trimStartMs || 0) + (trimDelta - (clip.inMs - _compClipDrag.startInMs)) * 0); // re-derive below
+      // simpler: recompute trimStart from absolute change vs original startInMs
+      clip.trimStartMs = Math.max(0, (clip.trimStartMs || 0));
+    } else {
+      const target = Math.max(_compClipDrag.startInMs + 100, _compClipDrag.startOutMs + deltaMs);
+      clip.outMs = target;
+    }
+  }
+  recomputeCompositionDuration(comp);
+  renderCreativeWorkspace?.();
+}
+
+function _onCompMouseUp() {
+  if (_compClipDrag) {
+    persistCompositionState();
+    _compClipDrag = null;
+  }
+  document.removeEventListener('mousemove', _onCompMouseMove);
+  document.removeEventListener('mouseup', _onCompMouseUp);
+}
+
+window.canvasCompositionAddTrack = function(kind) {
+  const comp = ensureCreativeComposition();
+  if (!comp) return;
+  compositionAddTrack(comp, kind);
+  persistCompositionState();
+  renderCreativeWorkspace?.();
+};
+
+window.canvasCompositionToggleTrackFlag = function(trackId, flag) {
+  const comp = ensureCreativeComposition();
+  const track = comp?.tracks.find((t) => t.id === trackId);
+  if (!track) return;
+  track[flag] = !track[flag];
+  persistCompositionState();
+  renderCreativeWorkspace?.();
+};
+
+window.canvasCompositionSplitAtPlayhead = function() {
+  const comp = ensureCreativeComposition();
+  if (!comp || !comp.selectedClipId) return;
+  try {
+    compositionSplitClip(comp, comp.selectedClipId, creativeTimelineMs);
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+  } catch (err) {
+    showToast?.('Split failed', String(err?.message || err), 'error');
+  }
+};
+
+window.canvasCompositionDeleteSelected = function() {
+  const comp = ensureCreativeComposition();
+  if (!comp || !comp.selectedClipId) return;
+  compositionDeleteClip(comp, comp.selectedClipId, { ripple: false });
+  persistCompositionState();
+  renderCreativeWorkspace?.();
+};
+
+window.canvasCompositionRender = async function() {
+  const comp = ensureCreativeComposition();
+  if (!comp) return;
+  const sid = window.currentChatSessionId || 'default';
+  const root = (window.canvasProjectRoot || '').toString();
+  showToast?.('Rendering composition…', 'Encoding frames + muxing audio. Watch progress in the toast log.', 'info');
+  try {
+    const response = await fetch('/api/canvas/composition/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, root, composition: comp, format: 'mp4' }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
+    showToast?.('Render complete', `Saved to ${json.path}`, 'success');
+  } catch (err) {
+    showToast?.('Render failed', String(err?.message || err), 'error');
+  }
+};
+
+window.canvasCompositionKeyDown = function(event) {
+  const key = String(event.key || '').toLowerCase();
+  if (key === 's') { event.preventDefault(); canvasCompositionSplitAtPlayhead(); }
+  else if (key === 'delete' || key === 'backspace') { event.preventDefault(); canvasCompositionDeleteSelected(); }
+  else if (key === 'escape') { event.preventDefault(); exitClipEditing(); }
+};
+
+function enterClipForEditing(clip) {
+  if (!clip || !clip.source) return;
+  showToast?.('Edit source clip', `${clip.lane} clips are edited through HTML Motion, HyperFrames, or Remotion source tools.`, 'info');
+}
+
+function exitClipEditing() {
+  const comp = creativeComposition;
+  if (!comp) return;
+  comp.selectedClipId = null;
+  persistCompositionState();
+  renderCreativeWorkspace?.();
+}
+
+window.canvasCompositionLaneDragOver = function(event, trackId) {
+  event.preventDefault();
+  if (event.currentTarget instanceof Element) {
+    event.currentTarget.style.outline = '2px dashed #38bdf8';
+  }
+};
+window.canvasCompositionLaneDragLeave = function(event) {
+  if (event.currentTarget instanceof Element) {
+    event.currentTarget.style.outline = '';
+  }
+};
+window.canvasCompositionLaneDrop = function(event, trackId) {
+  event.preventDefault();
+  if (event.currentTarget instanceof Element) {
+    event.currentTarget.style.outline = '';
+  }
+  const comp = ensureCreativeComposition();
+  if (!comp) return;
+  const lane = event.currentTarget;
+  const rect = lane.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+  const atMs = Math.round(ratio * comp.durationMs);
+  // application/x-prom-asset payload (Phase 2.2 format)
+  let payload = null;
+  try {
+    const json = event.dataTransfer?.getData('application/x-prom-asset');
+    if (json) payload = JSON.parse(json);
+  } catch {}
+  if (!payload) {
+    showToast?.('Unsupported drop', 'Only assets from the Prometheus library are accepted today.', 'warning');
+    return;
+  }
+  const track = comp.tracks.find((t) => t.id === trackId);
+  if (!track) return;
+  if (!payload.lane || !['html-motion', 'remotion'].includes(payload.lane)) {
+    showToast?.('Use HTML Motion', 'Assets now go into HTML Motion, HyperFrames, or Remotion clips instead of raw timeline layers.', 'warning');
+    return;
+  }
+  try {
+    compositionAddClip(comp, {
+      trackId,
+      atMs,
+      durationMs: payload.durationMs || 4000,
+      lane: payload.lane,
+      label: payload.label || 'Asset',
+      source: payload.source,
+    });
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+  } catch (err) {
+    showToast?.('Drop failed', String(err?.message || err), 'error');
+  }
+};
 
 function getCreativeLibraryItemIconStudioV3(section, item = {}) {
   const kind = String(item.kind || '').toLowerCase();
@@ -13223,6 +17047,7 @@ function renderCreativeDomStageStudioV3(stage, mode) {
   stage.onclick = (event) => {
     if (event.target === stage) setCreativeSelection(null);
   };
+  syncHyperframesControllers(stage);
   syncCreativeVideoElementsToTimeline();
 }
 
@@ -13329,6 +17154,12 @@ function renderCreativeStageStudioV3(stage, mode) {
   if (!stage) return;
   if (normalizeCreativeMode(mode) === 'video' && creativeHtmlMotionClip) {
     if (renderCreativeHtmlMotionStageStudioV3(stage)) return;
+  }
+  if (creativeSceneDoc.elements.some((element) => element.type === 'hyperframes')) {
+    disposeCreativeFabricBridge();
+    creativeFabricLastRenderPromise = Promise.resolve(null);
+    renderCreativeDomStageStudioV3(stage, mode);
+    return;
   }
   if (!isCreativeFabricRendererAvailable(mode)) {
     disposeCreativeFabricBridge();
@@ -13598,6 +17429,7 @@ function getCreativeTimelineElementIconStudioV3(type = 'shape') {
   if (normalized === 'text') return 'solar:text-bold-duotone';
   if (normalized === 'image') return 'solar:gallery-wide-bold-duotone';
   if (normalized === 'video') return 'solar:film-roll-bold-duotone';
+  if (normalized === 'hyperframes') return 'solar:widget-add-bold-duotone';
   if (normalized === 'icon') return 'solar:stars-bold-duotone';
   if (normalized === 'group') return 'solar:widget-4-bold-duotone';
   return 'solar:square-3-bold-duotone';
@@ -13811,6 +17643,16 @@ function renderCreativeLayersPanelStudioV3(mode) {
           <span class="creative-summary-pill">${escHtml(mode === 'video' ? 'Video stack' : 'Image stack')}</span>
           ${hasCreativeAudioTrack() && mode === 'video' ? `<span class="creative-summary-pill">Audio lane ready</span>` : ''}
         </div>
+        ${mode === 'image' && layers.length ? `
+          <div class="creative-pill-row" style="margin-top:12px">
+            <button type="button" class="creative-chip-btn creative-chip-btn--accent" onclick="canvasSaveCreativeLayerAssets()">
+              <iconify-icon icon="solar:gallery-export-bold-duotone" width="14" height="14"></iconify-icon>Save layer PNGs
+            </button>
+            ${creativeSelectedId ? `<button type="button" class="creative-chip-btn" onclick="canvasSaveCreativeLayerAssets({ selectedOnly: true })">
+              <iconify-icon icon="solar:gallery-bold-duotone" width="14" height="14"></iconify-icon>Save selected
+            </button>` : ''}
+          </div>
+        ` : ''}
       </section>
       <section class="creative-inspector-card">
         <div class="creative-section-heading">
@@ -14030,6 +17872,7 @@ function renderCreativeQuickExportCardStudioV3() {
         <div class="creative-export-menu-panel" role="menu">
           <button onclick="canvasExportCreative('png'); this.closest('details').removeAttribute('open')" class="creative-export-menu-item" ${isExporting ? 'disabled' : ''}><iconify-icon icon="solar:gallery-bold-duotone" width="16" height="16"></iconify-icon><span>PNG</span><span class="creative-export-menu-hint">Image</span></button>
           <button onclick="canvasExportCreative('jpeg'); this.closest('details').removeAttribute('open')" class="creative-export-menu-item" ${isExporting ? 'disabled' : ''}><iconify-icon icon="solar:gallery-round-bold-duotone" width="16" height="16"></iconify-icon><span>JPG</span><span class="creative-export-menu-hint">Image</span></button>
+          ${!isVideo ? `<button onclick="canvasSaveCreativeLayerAssets(); this.closest('details').removeAttribute('open')" class="creative-export-menu-item" ${isExporting ? 'disabled' : ''}><iconify-icon icon="solar:layers-bold-duotone" width="16" height="16"></iconify-icon><span>Layer PNGs</span><span class="creative-export-menu-hint">Assets</span></button>` : ''}
           <button onclick="canvasExportCreative('svg'); this.closest('details').removeAttribute('open')" class="creative-export-menu-item" ${isExporting ? 'disabled' : ''}><iconify-icon icon="solar:code-square-bold-duotone" width="16" height="16"></iconify-icon><span>SVG</span><span class="creative-export-menu-hint">Vector</span></button>
           <button onclick="canvasExportCreative('pdf'); this.closest('details').removeAttribute('open')" class="creative-export-menu-item" ${isExporting ? 'disabled' : ''}><iconify-icon icon="solar:document-bold-duotone" width="16" height="16"></iconify-icon><span>PDF</span><span class="creative-export-menu-hint">Document</span></button>
           ${isVideo && gifConfig ? `<button onclick="canvasExportCreative('gif'); this.closest('details').removeAttribute('open')" class="creative-export-menu-item" ${isExporting ? 'disabled' : ''}><iconify-icon icon="solar:gallery-favourite-bold-duotone" width="16" height="16"></iconify-icon><span>${escHtml(isGifExporting ? `GIF ${exportPercent}%` : 'GIF')}</span><span class="creative-export-menu-hint">Animation</span></button>` : ''}
@@ -14045,6 +17888,8 @@ function renderCreativeQuickExportCardStudioV3() {
 function renderCreativeAssetEntryStudioV3(entry, kind = 'scene') {
   const safePath = escHtml(normalizeCanvasPath(entry?.path || '')).replace(/'/g, '&#39;');
   const safeName = escHtml(String(entry?.name || (kind === 'scene' ? 'scene.json' : 'asset'))).replace(/'/g, '&#39;');
+  const isVideoExport = kind === 'export' && isCreativeVideoMediaPath(entry?.path || entry?.name || '');
+  const isPlaceableImage = (kind === 'asset' || kind === 'export') && isCreativeImageMediaPath(entry?.path || entry?.name || '');
   const timestamp = formatCreativeAssetTimestamp(entry?.savedAt || entry?.modifiedAt);
   const summary = kind === 'scene'
     ? describeCreativeSceneAssetSummary(entry)
@@ -14067,6 +17912,7 @@ function renderCreativeAssetEntryStudioV3(entry, kind = 'scene') {
       ${entry?.parseError ? `<div class="creative-asset-empty" style="margin-top:10px">${escHtml(entry.parseError)}</div>` : ''}
       <div class="creative-asset-actions">
         ${kind === 'scene' ? `<button onclick="canvasLoadCreativeSceneAsset('${safePath}')" class="creative-chip-btn creative-chip-btn--accent"><iconify-icon icon="solar:play-bold-duotone" width="14" height="14"></iconify-icon>Load</button>` : ''}
+        ${(isVideoExport || isPlaceableImage) ? `<button onclick="canvasPlaceCreativeExportOnCanvas('${safePath}', '${safeName}')" class="creative-chip-btn creative-chip-btn--accent"><iconify-icon icon="${isVideoExport ? 'solar:play-circle-bold-duotone' : 'solar:gallery-add-bold-duotone'}" width="14" height="14"></iconify-icon>Place</button>` : ''}
         <button onclick="canvasDownloadFile('${safePath}', '${safeName}')" class="creative-chip-btn"><iconify-icon icon="solar:download-minimalistic-bold-duotone" width="14" height="14"></iconify-icon>Download</button>
         <button onclick="openInFileLocation('${safePath}')" class="creative-chip-btn"><iconify-icon icon="solar:folder-open-bold-duotone" width="14" height="14"></iconify-icon>Reveal</button>
       </div>
@@ -14077,6 +17923,7 @@ function renderCreativeAssetEntryStudioV3(entry, kind = 'scene') {
 function renderCreativeRenderJobEntryStudioV3(entry) {
   const safeOutputPath = escHtml(normalizeCanvasPath(entry?.outputPath || '')).replace(/'/g, '&#39;');
   const safeOutputName = escHtml(String(entry?.outputFilename || `${String(entry?.format || 'render').toLowerCase() || 'render'}.bin`)).replace(/'/g, '&#39;');
+  const isVideoOutput = !!safeOutputPath && isCreativeVideoMediaPath(entry?.outputPath || entry?.outputFilename || '');
   const safeJobId = escHtml(String(entry?.id || '')).replace(/'/g, '&#39;');
   const manifest = entry?.manifest && typeof entry.manifest === 'object'
     ? entry.manifest
@@ -14157,6 +18004,7 @@ function renderCreativeRenderJobEntryStudioV3(entry) {
       <div class="creative-asset-actions" style="margin-top:10px">
         ${!isTerminal ? `<button onclick="canvasCancelCreativeRenderJob('${safeJobId}')" class="creative-chip-btn creative-chip-btn--danger"><iconify-icon icon="solar:stop-bold-duotone" width="14" height="14"></iconify-icon>Cancel</button>` : ''}
         ${isRetryable ? `<button onclick="canvasRetryCreativeRenderJob('${safeJobId}')" class="creative-chip-btn"><iconify-icon icon="solar:refresh-bold-duotone" width="14" height="14"></iconify-icon>Retry</button>` : ''}
+        ${isVideoOutput ? `<button onclick="canvasPlaceCreativeExportOnCanvas('${safeOutputPath}', '${safeOutputName}')" class="creative-chip-btn creative-chip-btn--accent"><iconify-icon icon="solar:play-circle-bold-duotone" width="14" height="14"></iconify-icon>Place</button>` : ''}
         ${safeOutputPath ? `<button onclick="canvasDownloadFile('${safeOutputPath}', '${safeOutputName}')" class="creative-chip-btn creative-chip-btn--accent"><iconify-icon icon="solar:download-minimalistic-bold-duotone" width="14" height="14"></iconify-icon>Download</button>` : ''}
         ${safeOutputPath ? `<button onclick="openInFileLocation('${safeOutputPath}')" class="creative-chip-btn"><iconify-icon icon="solar:folder-open-bold-duotone" width="14" height="14"></iconify-icon>Reveal</button>` : ''}
       </div>
@@ -14168,10 +18016,14 @@ function renderCreativeSavedAssetsCardStudioV3() {
   const sceneEntries = Array.isArray(creativeAssetsState.scenes) ? creativeAssetsState.scenes.slice(0, 5) : [];
   const renderJobEntries = Array.isArray(creativeAssetsState.renderJobs) ? creativeAssetsState.renderJobs.slice(0, 5) : [];
   const exportEntries = Array.isArray(creativeAssetsState.exports) ? creativeAssetsState.exports.slice(0, 5) : [];
+  const layerAssetEntries = (Array.isArray(creativeAssetsState.indexedAssets) ? creativeAssetsState.indexedAssets : [])
+    .filter((asset) => Array.isArray(asset?.tags) && asset.tags.includes('layer-asset'))
+    .slice(0, 8);
   const storageLabel = normalizeCanvasPath(creativeAssetsState.storageRootRelative || creativeAssetsState.storageRoot || canvasProjectRoot || '');
   const totalItems = Math.max(0, Number(creativeAssetsState.counts?.scenes) || sceneEntries.length)
     + Math.max(0, Number(creativeAssetsState.counts?.jobs) || renderJobEntries.length)
-    + Math.max(0, Number(creativeAssetsState.counts?.exports) || exportEntries.length);
+    + Math.max(0, Number(creativeAssetsState.counts?.exports) || exportEntries.length)
+    + layerAssetEntries.length;
   const emptyCopy = creativeAssetsState.loading
     ? 'Loading saved scenes and exports from the workspace backend...'
     : (creativeAssetsState.error || 'Save a scene or export an asset and it will appear here.');
@@ -14214,6 +18066,12 @@ function renderCreativeSavedAssetsCardStudioV3() {
           ${exportEntries.length
             ? `<div class="creative-asset-list">${exportEntries.map((entry) => renderCreativeAssetEntryStudioV3(entry, 'export')).join('')}</div>`
             : `<div class="creative-asset-empty">Rendered exports like PNG, PDF, MP4, or WEBM will show up here after each export.</div>`}
+        </div>
+        <div class="creative-assets-section">
+          <div class="creative-assets-section-label">Layer assets</div>
+          ${layerAssetEntries.length
+            ? `<div class="creative-asset-list">${layerAssetEntries.map((entry) => renderCreativeAssetEntryStudioV3(entry, 'asset')).join('')}</div>`
+            : `<div class="creative-asset-empty">Saved layer PNGs will show up here after you extract or export layer assets.</div>`}
         </div>
       </div>
     </section>
@@ -14452,6 +18310,11 @@ function renderCreativeStageElementStudioV3(baseElement, mode) {
       ? `<video data-creative-video-element="${escHtml(baseElement.id)}" src="${source}"${poster} muted playsinline preload="auto" style="width:100%;height:100%;object-fit:${fit};border-radius:${radius}px;display:block;background:#111827;border:1px solid rgba(255,255,255,0.12)"></video>`
       : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:${radius}px;border:1px dashed rgba(249,115,22,0.3);background:linear-gradient(135deg,#1f2937,#3f3f46);color:#fed7aa;font-size:12px;font-weight:800"><iconify-icon icon="solar:film-roll-bold-duotone" width="30" height="30"></iconify-icon></div>`;
     return `<div ${baseAttrs} style="${sharedStyle}">${body}${resizeHandle}</div>`;
+  }
+  if (baseElement.type === 'hyperframes') {
+    const label = escHtml(baseElement.meta?.compositionId || 'HyperFrames clip');
+    const radius = Math.max(0, Number(baseElement.meta?.radius) || 0);
+    return `<div ${baseAttrs} style="${sharedStyle};overflow:hidden;background:#020617;border-radius:${radius}px"><div data-hyperframes-mount="${escHtml(baseElement.id)}" style="position:absolute;inset:0;width:100%;height:100%;overflow:hidden;background:#020617"><div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#93c5fd;font-size:12px;font-weight:800;letter-spacing:0.02em">${label}</div></div>${resizeHandle}</div>`;
   }
   if (baseElement.type === 'lottie') {
     const lottieSrc = escHtml(String(baseElement.meta?.source || ''));
@@ -14740,7 +18603,7 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
   shell.dataset.creativeMode = mode;
   if (title) title.textContent = mode === 'video' ? 'Prometheus Video Studio' : 'Prometheus Image Studio';
   if (subtitle) subtitle.textContent = mode === 'video'
-    ? 'Compose on the frame, animate on the timeline, and keep edits tied to the shared scene graph.'
+    ? 'Build HTML Motion, HyperFrames, and Remotion clips with deterministic frame QA.'
     : 'Build still compositions on a focused studio canvas with the shared scene graph underneath.';
 
   const selected = getSelectedCreativeElement();
@@ -14754,8 +18617,9 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
     .map((pack) => ({ id: String(pack.id), label: pack.label || pack.id, source: pack.source || 'builtin' }));
 
   const _libNavTabs = [
-    { id: 'elements', icon: 'solar:layers-minimalistic-bold-duotone', label: 'Elements' },
-    { id: 'templates', icon: 'solar:clapperboard-play-bold-duotone', label: 'Templates' },
+    ...(mode === 'video' ? [] : [
+      { id: 'elements', icon: 'solar:layers-minimalistic-bold-duotone', label: 'Elements' },
+    ]),
     ...(mode === 'video' ? [{ id: 'blocks', icon: 'solar:widget-add-bold-duotone', label: 'Blocks' }] : []),
     { id: 'icons', icon: 'solar:sticker-smile-circle-2-bold-duotone', label: 'Icons' },
     { id: 'libraries', icon: 'solar:widget-add-bold-duotone', label: 'Packs' },
@@ -14884,24 +18748,15 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
     ${renderCreativeLibraryPacksStudioV3()}
   `;
 
-  const _libPanelTemplates = `
-    <div class="creative-lib-panel-header">
-      <div class="creative-lib-panel-title">Video Templates</div>
-      <div class="creative-lib-panel-sub">Premium editable scenes with timing, brand binding, and QA metadata.</div>
+  const _libPanelHtmlMotionBlocks = mode === 'video' ? `
+    <div style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.06)">
+      <button type="button" class="creative-chip-btn creative-chip-btn--accent" onclick="canvasOpenHyperframesCatalog()" style="width:100%;justify-content:center">
+        <iconify-icon icon="solar:widget-add-bold-duotone" width="14" height="14"></iconify-icon>
+        HyperFrames Catalog
+      </button>
     </div>
-    <div class="creative-lib-cat-items" style="grid-template-columns:1fr;padding:10px">
-      ${CREATIVE_PREMIUM_VIDEO_TEMPLATES.map((template) => `
-        <button onclick="canvasApplyPremiumCreativeTemplate('${escHtml(template.id)}')" class="creative-lib-tile" style="grid-template-columns:34px 1fr;min-height:74px;text-align:left">
-          <span class="creative-lib-tile-icon"><iconify-icon icon="${escHtml(template.icon)}" width="22" height="22"></iconify-icon></span>
-          <span style="min-width:0">
-            <span class="creative-lib-tile-label" style="display:block">${escHtml(template.name)}</span>
-            <span style="display:block;font-size:10px;line-height:1.25;color:#9ca3af;margin-top:3px">${escHtml(template.description)}</span>
-          </span>
-        </button>
-      `).join('')}
-    </div>
-  `;
-  const _libPanelHtmlMotionBlocks = mode === 'video' ? renderCreativeHtmlMotionBlocksPanelStudioV3() : '';
+    ${renderCreativeHtmlMotionBlocksPanelStudioV3()}
+  ` : '';
 
   // Typography panel takes over the library when a text element is selected.
   const _libPanelTypography = (selected && selected.type === 'text') ? `
@@ -14934,7 +18789,6 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
   if (_libPanelTypography) _libPanelInner = _libPanelTypography;
   else if (creativeLibraryNavTab === 'icons') _libPanelInner = _libPanelIconify;
   else if (creativeLibraryNavTab === 'libraries') _libPanelInner = _libPanelLibraries;
-  else if (creativeLibraryNavTab === 'templates') _libPanelInner = _libPanelTemplates;
   else if (creativeLibraryNavTab === 'blocks') _libPanelInner = _libPanelHtmlMotionBlocks;
   else if (creativeLibraryNavTab === 'elements') _libPanelInner = _libPanelElements;
   else _libPanelInner = '';
@@ -15234,6 +19088,8 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
           ${String(selected.meta?.component || 'card') === 'quote' ? renderCreativePropertyFieldStudioV3('Author', 'meta.author', selected.meta?.author || 'Prometheus', 'text') : ''}
         </section>
       `;
+    } else if (selected.type === 'hyperframes') {
+      typeSpecificCard = renderHyperframesInspector(selected);
     } else if (selected.type === 'lottie') {
       typeSpecificCard = `
         <section class="creative-inspector-card">
@@ -15405,13 +19261,17 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
             : (keyframes.length === 1 ? Math.max(0.5, 100 - left) : 100);
           const firstKfId = keyframes.length ? keyframes[0].id : '';
           const lastKfId = keyframes.length ? keyframes[keyframes.length - 1].id : '';
+          const hfTrackCount = element.type === 'hyperframes' && Array.isArray(element.meta?.tracks) ? element.meta.tracks.length : 0;
+          const trackMetaLine = hfTrackCount
+            ? `${hfTrackCount} HyperFrames tracks`
+            : (keyframes.length ? `${keyframes.length} keyframes` : 'Static layer');
           return `
             <div class="creative-timeline-track">
               <button type="button" class="creative-timeline-track-label ${element.id === creativeSelectedId ? 'is-selected' : ''}" onclick="canvasSelectCreativeElement('${element.id}')">
                 <span class="creative-timeline-track-icon"><iconify-icon icon="${escHtml(getCreativeTimelineElementIconStudioV3(element.type))}" width="16" height="16"></iconify-icon></span>
                 <span class="creative-timeline-track-copy">
                   <span class="creative-timeline-track-title">${escHtml(String(label).slice(0, 42))}</span>
-                  <span class="creative-timeline-track-meta-line">${escHtml(keyframes.length ? `${keyframes.length} keyframes` : 'Static layer')}</span>
+                  <span class="creative-timeline-track-meta-line">${escHtml(trackMetaLine)}</span>
                 </span>
               </button>
               <div class="creative-timeline-track-lane" onmousedown="canvasHandleCreativeTimelineLanePointer(event, '${element.id}', this)">
@@ -15591,29 +19451,6 @@ function canvasClearCreativeScene() {
   stopCreativeAudioPreview({ reset: true, dispose: true });
   persistActiveChat();
   renderCreativeWorkspace();
-}
-
-function canvasApplyPremiumCreativeTemplate(templateId) {
-  const template = getCreativePremiumTemplateById(templateId);
-  if (!template) return;
-  ensureCreativeSceneForMode('video');
-  const defaults = template.defaults || {};
-  const payload = {
-    templateId: template.id,
-    title: defaults.title,
-    subtitle: defaults.subtitle,
-    cta: defaults.cta,
-    speaker: defaults.speaker,
-    durationMs: defaults.durationMs,
-    replace: true,
-    runQualityReport: false,
-  };
-  clearCreativeHtmlMotionClip({ render: false, persist: false });
-  const data = applyCreativePremiumTemplateCommand(payload);
-  addProcessEntry('info', `Video Studio: applied premium template ${template.name} with ${data.elements} editable layers.`);
-  showToast('Template applied', template.name, 'success');
-  renderCreativeWorkspace();
-  persistActiveChat();
 }
 
 function canvasSelectCreativeInspectorTab(tab) {
@@ -16514,7 +20351,13 @@ function isCreativeCommandForActiveSession(message) {
 async function ensureCreativeCommandSessionActive(message) {
   const sid = String(message?.sessionId || '').trim();
   if (!sid) return false;
-  if (isCreativeCommandForActiveSession(message)) return true;
+  if (isCreativeCommandForActiveSession(message)) {
+    const activeMode = normalizeCreativeMode(message?.creativeMode);
+    if (activeMode && normalizeCreativeMode(window.currentCreativeMode) !== activeMode) {
+      applySessionCreativeMode(sid, activeMode, { resetScene: message?.resetScene === true });
+    }
+    return true;
+  }
 
   let sess = window.chatSessions.find((session) => session.id === sid);
   if (!sess) {
@@ -16870,6 +20713,9 @@ function applyCreativeAddAssetCommand(payload = {}) {
   const source = String(payload.source || payload.path || payload.url || '').trim();
   if (!source) throw new Error('add_asset requires source.');
   const type = inferCreativeAssetType(source, payload.assetType || payload.type);
+  if (normalizeCreativeMode(window.currentCreativeMode) === 'video' && creativeHtmlMotionClip) {
+    clearCreativeHtmlMotionClip({ render: false, persist: false });
+  }
   const meta = payload.meta && typeof payload.meta === 'object' ? { ...payload.meta } : {};
   meta.source = source;
   meta.fit = String(payload.fit || meta.fit || 'cover').trim();
@@ -16882,6 +20728,8 @@ function applyCreativeAddAssetCommand(payload = {}) {
     meta.timelineStartMs = Math.max(0, Number(payload.startMs ?? payload.timelineStartMs ?? meta.timelineStartMs) || 0);
     if (Number.isFinite(Number(payload.durationMs ?? payload.timelineDurationMs))) {
       meta.timelineDurationMs = Math.max(100, Number(payload.durationMs ?? payload.timelineDurationMs));
+    } else if (Number.isFinite(Number(creativeSceneDoc?.durationMs))) {
+      meta.timelineDurationMs = Math.max(100, Number(creativeSceneDoc.durationMs));
     }
   }
   const nextDoc = executeSceneGraphOps(creativeSceneDoc, [{
@@ -16899,153 +20747,6 @@ function applyCreativeAddAssetCommand(payload = {}) {
   const added = nextDoc.elements[nextDoc.elements.length - 1] || null;
   commitCreativeCommandDoc(nextDoc, { selectedId: added?.id || creativeSelectedId });
   return { addedId: added?.id || null, type, source };
-}
-
-function getCreativePremiumTemplateById(templateId) {
-  const id = String(templateId || '').trim().toLowerCase();
-  return CREATIVE_PREMIUM_VIDEO_TEMPLATES.find((template) => template.id === id) || null;
-}
-
-function getCreativePremiumTemplateBrand(payload = {}) {
-  const brandKit = payload.brandKit && typeof payload.brandKit === 'object' ? payload.brandKit : creativeSceneDoc?.brandKit;
-  const colors = brandKit?.colors && typeof brandKit.colors === 'object' ? brandKit.colors : {};
-  const fonts = brandKit?.fonts && typeof brandKit.fonts === 'object' ? brandKit.fonts : {};
-  return {
-    id: brandKit?.id || 'premium-video',
-    name: brandKit?.name || 'Premium Video',
-    colors: {
-      primary: colors.primary || payload.accent || '#FF4D2D',
-      secondary: colors.secondary || '#16D9FF',
-      accent: colors.accent || payload.accent || '#FFE45E',
-      background: colors.background || payload.background || '#07111F',
-      text: colors.text || '#F8FAFC',
-    },
-    fonts: {
-      heading: fonts.heading || 'Sora',
-      body: fonts.body || 'Inter',
-    },
-    logo: brandKit?.logo || null,
-  };
-}
-
-function buildPremiumVideoVisibilityKeyframes(element, startMs, endMs, durationMs, fromY = 36, fromScale = 1) {
-  const base = { x: element.x, y: element.y, width: element.width, height: element.height, rotation: element.rotation || 0 };
-  const safeStart = Math.max(0, Number(startMs) || 0);
-  const safeEnd = Math.max(safeStart + 300, Number(endMs) || durationMs);
-  const fade = Math.min(520, Math.max(180, Math.round((safeEnd - safeStart) / 5)));
-  const startWidth = Math.round(base.width * fromScale);
-  const startHeight = Math.round(base.height * fromScale);
-  return [
-    { id: createCreativeLocalId('kf'), atMs: 0, ...base, x: base.x + Math.round((base.width - startWidth) / 2), y: base.y + fromY + Math.round((base.height - startHeight) / 2), width: startWidth, height: startHeight, opacity: 0, ease: 'linear' },
-    { id: createCreativeLocalId('kf'), atMs: safeStart, ...base, x: base.x + Math.round((base.width - startWidth) / 2), y: base.y + fromY + Math.round((base.height - startHeight) / 2), width: startWidth, height: startHeight, opacity: 0, ease: 'linear' },
-    { id: createCreativeLocalId('kf'), atMs: Math.min(safeEnd, safeStart + fade), ...base, opacity: element.opacity ?? 1, ease: 'power3.out' },
-    { id: createCreativeLocalId('kf'), atMs: Math.max(safeStart, safeEnd - fade), ...base, opacity: element.opacity ?? 1, ease: 'linear' },
-    { id: createCreativeLocalId('kf'), atMs: safeEnd, ...base, y: base.y - Math.round(fromY * 0.45), opacity: 0, ease: 'power2.in' },
-    { id: createCreativeLocalId('kf'), atMs: Math.max(safeEnd, durationMs), ...base, y: base.y - Math.round(fromY * 0.45), opacity: 0, ease: 'linear' },
-  ];
-}
-
-function buildPremiumCreativeTemplateElements(templateId, payload = {}) {
-  const template = getCreativePremiumTemplateById(templateId);
-  if (!template) throw new Error(`Unknown premium template: ${templateId}`);
-  const width = Math.max(720, Number(payload.width) || 1080);
-  const height = Math.max(720, Number(payload.height) || 1920);
-  const durationMs = Math.max(5000, Number(payload.durationMs) || Number(template.defaults.durationMs) || 9000);
-  const brand = getCreativePremiumTemplateBrand(payload);
-  const colors = brand.colors;
-  const fonts = brand.fonts;
-  const title = String(payload.title || template.defaults.title || template.name).trim();
-  const subtitle = String(payload.subtitle || template.defaults.subtitle || template.description).trim();
-  const cta = String(payload.cta || template.defaults.cta || 'Learn more').trim();
-  const assets = Array.isArray(payload.assets) ? payload.assets : [];
-  const pickAsset = (...slots) => {
-    const slotSet = new Set(slots.map((slot) => String(slot).toLowerCase()));
-    const found = assets.find((asset) => slotSet.has(String(asset?.slot || asset?.kind || '').toLowerCase())) || assets.find((asset) => String(asset?.source || '').trim());
-    return String(found?.source || found?.path || found?.url || '').trim();
-  };
-  const ops = [];
-  const prefix = `premium_${template.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now().toString(36)}`;
-  const add = (element, start = 0, end = durationMs, fromY = 34, fromScale = 1) => {
-    const id = element.id || `${prefix}_${ops.length + 1}`;
-    const withMeta = {
-      op: 'add',
-      ...element,
-      id,
-      meta: {
-        ...(element.meta || {}),
-        templateId: template.id,
-        generatedBy: 'creative_create_from_template',
-        keyframes: element.meta?.keyframes || buildPremiumVideoVisibilityKeyframes(element, start, end, durationMs, fromY, fromScale),
-      },
-    };
-    ops.push(withMeta);
-    return withMeta;
-  };
-  const bg = colors.background;
-  const fg = colors.text;
-  const muted = isProbablyDarkColor(bg) ? '#CBD5E1' : '#475467';
-  const primary = colors.primary;
-  const secondary = colors.secondary;
-  const accent = colors.accent;
-  const safeX = Math.round(width * 0.07);
-  add({ type: 'shape', x: 0, y: 0, width, height, zIndex: 0, meta: { shape: 'rect', fill: bg, radius: 0, effectStack: [{ type: 'saturate', params: { value: 1.08 } }] } }, 0, durationMs, 0);
-  add({ type: 'shape', x: Math.round(width * -0.08), y: Math.round(height * 0.08), width: Math.round(width * 0.66), height: Math.round(width * 0.66), opacity: 0.28, rotation: -12, zIndex: 1, meta: { shape: 'circle', fill: secondary, effectStack: [{ type: 'blur', params: { value: 18 } }], blendMode: 'screen' } }, 0, durationMs, 0, 1.08);
-  add({ type: 'shape', x: Math.round(width * 0.58), y: Math.round(height * -0.05), width: Math.round(width * 0.48), height: Math.round(width * 0.48), opacity: 0.34, rotation: 8, zIndex: 1, meta: { shape: 'rect', fill: primary, radius: 54, blendMode: 'screen', effectStack: [{ type: 'blur', params: { value: 10 } }] } }, 120, durationMs, -24, 1.12);
-
-  if (template.id === 'saas-hero-reveal') {
-    const productSource = pickAsset('productImage', 'image', 'screenshot');
-    const productFrame = { x: Math.round(width * 0.09), y: Math.round(height * 0.47), width: Math.round(width * 0.82), height: Math.round(height * 0.29), opacity: 1, rotation: -1.5 };
-    add({ type: 'text', x: safeX, y: Math.round(height * 0.095), width: Math.round(width * 0.78), height: Math.round(height * 0.18), zIndex: 8, meta: { content: splitCreativeMotionCaptionLines(title, 22, 3), fontSize: 78, fontWeight: 950, fontFamily: fonts.heading, color: fg, lineHeight: 0.96, shadow: '0 22px 80px rgba(0,0,0,0.38)' } }, 120, 5200, 58);
-    add({ type: 'text', x: safeX, y: Math.round(height * 0.305), width: Math.round(width * 0.72), height: 124, zIndex: 8, meta: { content: splitCreativeMotionCaptionLines(subtitle, 34, 3), fontSize: 30, fontWeight: 760, fontFamily: fonts.body, color: muted, lineHeight: 1.14 } }, 430, 6500, 38);
-    add({ type: 'shape', ...productFrame, zIndex: 3, meta: { shape: 'rect', fill: '#0B1220', radius: 36, stroke: 'rgba(255,255,255,0.2)', strokeWidth: 1, shadow: '0 34px 110px rgba(0,0,0,0.42)', effectStack: [{ type: 'drop-shadow', params: { x: 0, y: 22, radius: 38, color: 'rgba(0,0,0,0.35)' } }] } }, 760, durationMs, 74, 0.94);
-    if (productSource) add({ type: 'image', x: productFrame.x + 28, y: productFrame.y + 34, width: productFrame.width - 56, height: productFrame.height - 68, rotation: productFrame.rotation, zIndex: 4, meta: { source: productSource, fit: 'cover', radius: 24, mask: { type: 'round-rect', radius: 24 } } }, 900, durationMs, 70, 0.96);
-    ['Automations', 'CRM Sync', 'Follow-up'].forEach((label, index) => {
-      const chip = { x: safeX + index * Math.round(width * 0.28), y: Math.round(height * 0.79), width: Math.round(width * 0.24), height: 64, opacity: 1 };
-      add({ type: 'shape', ...chip, zIndex: 7, meta: { shape: 'rect', fill: index === 1 ? secondary : 'rgba(255,255,255,0.1)', radius: 999, stroke: 'rgba(255,255,255,0.18)', strokeWidth: 1 } }, 1200 + index * 130, durationMs - 500, 28);
-      add({ type: 'text', x: chip.x + 18, y: chip.y + 18, width: chip.width - 36, height: 30, zIndex: 8, meta: { content: label, fontSize: 20, fontWeight: 900, fontFamily: fonts.body, color: index === 1 ? '#04111F' : fg, textAlign: 'center', lineHeight: 1 } }, 1260 + index * 130, durationMs - 500, 20);
-    });
-    add({ type: 'shape', x: safeX, y: Math.round(height * 0.875), width: Math.round(width * 0.52), height: 74, rotation: -1, zIndex: 9, meta: { shape: 'rect', fill: accent, radius: 999, shadow: '0 22px 60px rgba(255,228,94,0.22)' } }, 1650, durationMs, 32);
-    add({ type: 'text', x: safeX + 34, y: Math.round(height * 0.895), width: Math.round(width * 0.45), height: 38, rotation: -1, zIndex: 10, meta: { content: cta, fontSize: 28, fontWeight: 950, fontFamily: fonts.body, color: '#07111F', textAlign: 'center', lineHeight: 1 } }, 1720, durationMs, 22);
-  } else if (template.id === 'ai-dashboard-flythrough') {
-    add({ type: 'text', x: safeX, y: Math.round(height * 0.08), width: Math.round(width * 0.78), height: Math.round(height * 0.14), zIndex: 8, meta: { content: splitCreativeMotionCaptionLines(title, 24, 3), fontSize: 68, fontWeight: 950, fontFamily: fonts.heading, color: fg, lineHeight: 0.98 } }, 100, 5200, 56);
-    add({ type: 'text', x: safeX, y: Math.round(height * 0.245), width: Math.round(width * 0.76), height: 110, zIndex: 8, meta: { content: splitCreativeMotionCaptionLines(subtitle, 36, 3), fontSize: 28, fontWeight: 760, fontFamily: fonts.body, color: muted, lineHeight: 1.16 } }, 420, 6300, 36);
-    const panelBaseY = Math.round(height * 0.39);
-    for (let index = 0; index < 4; index += 1) {
-      const x = safeX + (index % 2) * Math.round(width * 0.43);
-      const y = panelBaseY + Math.floor(index / 2) * Math.round(height * 0.17);
-      const panel = { x, y, width: Math.round(width * 0.38), height: Math.round(height * 0.135), rotation: index % 2 ? 2 : -2, opacity: 0.94 };
-      add({ type: 'shape', ...panel, zIndex: 3 + index, meta: { shape: 'rect', fill: index === 0 ? 'rgba(255,255,255,0.14)' : '#0F172A', radius: 32, stroke: 'rgba(255,255,255,0.18)', strokeWidth: 1, shadow: '0 24px 84px rgba(0,0,0,0.3)', blendMode: index === 0 ? 'screen' : 'normal' } }, 650 + index * 180, durationMs, 78 - index * 8, 0.92);
-      add({ type: 'text', x: panel.x + 30, y: panel.y + 30, width: panel.width - 60, height: 34, rotation: panel.rotation, zIndex: 12, meta: { content: ['Signal', 'Agents', 'Revenue', 'Memory'][index], fontSize: 22, fontWeight: 900, fontFamily: fonts.body, color: muted, lineHeight: 1 } }, 740 + index * 180, durationMs, 44);
-      add({ type: 'text', x: panel.x + 30, y: panel.y + 72, width: panel.width - 60, height: 60, rotation: panel.rotation, zIndex: 12, meta: { content: (Array.isArray(payload.metrics) ? payload.metrics[index] : null) || ['98%', '24/7', '+38%', '4.2x'][index], fontSize: 44, fontWeight: 950, fontFamily: fonts.heading, color: index % 2 ? secondary : accent, lineHeight: 1 } }, 820 + index * 180, durationMs, 42);
-    }
-    for (let i = 0; i < 9; i += 1) {
-      add({ type: 'shape', x: Math.round(width * (0.12 + (i % 3) * 0.28)), y: Math.round(height * (0.72 + Math.floor(i / 3) * 0.055)), width: 18, height: 18, opacity: 0.72, zIndex: 2, meta: { shape: 'circle', fill: i % 2 ? secondary : primary, blendMode: 'screen', effectStack: [{ type: 'drop-shadow', params: { x: 0, y: 0, radius: 24, color: i % 2 ? secondary : primary } }] } }, 1000 + i * 90, durationMs, 20, 0.4);
-    }
-  } else if (template.id === 'podcast-audiogram-premium') {
-    const coverSource = pickAsset('coverImage', 'image', 'cover');
-    const speaker = String(payload.speaker || template.defaults.speaker || 'Prometheus Radio').trim();
-    add({ type: 'shape', x: safeX, y: Math.round(height * 0.08), width: Math.round(width * 0.86), height: Math.round(height * 0.33), zIndex: 3, meta: { shape: 'rect', fill: '#111827', radius: 44, stroke: 'rgba(255,255,255,0.18)', strokeWidth: 1, shadow: '0 30px 100px rgba(0,0,0,0.42)' } }, 120, durationMs, 48, 0.96);
-    if (coverSource) add({ type: 'image', x: safeX + 36, y: Math.round(height * 0.105), width: Math.round(width * 0.26), height: Math.round(width * 0.26), zIndex: 4, meta: { source: coverSource, fit: 'cover', radius: 32, mask: { type: 'round-rect', radius: 32 } } }, 220, durationMs, 42, 0.96);
-    add({ type: 'text', x: safeX + Math.round(width * 0.34), y: Math.round(height * 0.12), width: Math.round(width * 0.48), height: 60, zIndex: 6, meta: { content: speaker, fontSize: 24, fontWeight: 900, fontFamily: fonts.body, color: accent, lineHeight: 1 } }, 260, durationMs, 32);
-    add({ type: 'text', x: safeX + Math.round(width * 0.34), y: Math.round(height * 0.17), width: Math.round(width * 0.48), height: 150, zIndex: 6, meta: { content: splitCreativeMotionCaptionLines(title, 18, 3), fontSize: 48, fontWeight: 950, fontFamily: fonts.heading, color: fg, lineHeight: 1 } }, 360, durationMs, 38);
-    add({ type: 'text', x: safeX, y: Math.round(height * 0.48), width: Math.round(width * 0.84), height: 210, zIndex: 7, meta: { content: splitCreativeMotionCaptionLines(subtitle, 24, 4), fontSize: 58, fontWeight: 950, fontFamily: fonts.heading, color: fg, lineHeight: 1.02, shadow: '0 18px 70px rgba(0,0,0,0.42)' } }, 650, Math.min(durationMs, 16000), 54);
-    const waveY = Math.round(height * 0.75);
-    for (let i = 0; i < 28; i += 1) {
-      const barH = 32 + ((i * 23) % 116);
-      const x = safeX + i * Math.round(width * 0.031);
-      add({ type: 'shape', x, y: waveY - Math.round(barH / 2), width: Math.max(8, Math.round(width * 0.014)), height: barH, zIndex: 5, meta: { shape: 'rect', fill: i % 4 === 0 ? accent : (i % 2 ? secondary : '#FFFFFF'), radius: 999, keyframes: [
-        { id: createCreativeLocalId('kf'), atMs: 0, x, y: waveY - Math.round(barH * 0.32), width: Math.max(8, Math.round(width * 0.014)), height: Math.round(barH * 0.55), opacity: 0.62, rotation: 0, ease: 'linear' },
-        { id: createCreativeLocalId('kf'), atMs: Math.round(durationMs * 0.5), x, y: waveY - Math.round(barH / 2), width: Math.max(8, Math.round(width * 0.014)), height: barH, opacity: 1, rotation: 0, ease: 'sine.inOut' },
-        { id: createCreativeLocalId('kf'), atMs: durationMs, x, y: waveY - Math.round(barH * 0.38), width: Math.max(8, Math.round(width * 0.014)), height: Math.round(barH * 0.76), opacity: 0.78, rotation: 0, ease: 'sine.inOut' },
-      ] } }, 0, durationMs, 0);
-    }
-    add({ type: 'shape', x: safeX, y: Math.round(height * 0.91), width: Math.round(width * 0.86), height: 16, opacity: 0.26, zIndex: 4, meta: { shape: 'rect', fill: '#FFFFFF', radius: 999, keyframes: [] } }, 0, durationMs, 0);
-    add({ type: 'shape', x: safeX, y: Math.round(height * 0.91), width: Math.round(width * 0.12), height: 16, zIndex: 5, meta: { shape: 'rect', fill: accent, radius: 999, keyframes: [
-      { id: createCreativeLocalId('kf'), atMs: 0, x: safeX, y: Math.round(height * 0.91), width: Math.round(width * 0.08), height: 16, opacity: 1, rotation: 0, ease: 'linear' },
-      { id: createCreativeLocalId('kf'), atMs: durationMs, x: safeX, y: Math.round(height * 0.91), width: Math.round(width * 0.86), height: 16, opacity: 1, rotation: 0, ease: 'linear' },
-    ] } }, 0, durationMs, 0);
-  }
-  return { template, width, height, background: bg, durationMs, frameRate: 60, brandKit: brand, elements: ops };
 }
 
 function buildCreativeTemplateElements(template, payload = {}, mode = normalizeCreativeMode(window.currentCreativeMode)) {
@@ -17315,7 +21016,7 @@ function buildCreativeMotionTemplateSceneElements(instance = {}) {
     return {
       elements: buildCreativeTemplateElements('product_ad', {
         title: text.title || 'Prometheus',
-        subtitle: text.subtitle || text.body || 'A polished product promo built in Creative Mode.',
+      subtitle: text.subtitle || text.body || 'A polished product promo built in the Creative workspace.',
         cta: text.cta || 'Learn more',
         background: instance.input?.brand?.colors?.background || '#0f172a',
         accent: instance.input?.brand?.colors?.primary || '#ff4d2d',
@@ -17360,61 +21061,6 @@ function applyCreativeTemplateCommand(payload = {}) {
   commitCreativeCommandDoc(nextDoc, { selectedId: nextDoc.elements[nextDoc.elements.length - 1]?.id || null });
   if (mode === 'video') setCreativeTimelinePosition(0, { render: false, persist: false });
   return { template, replace, width: nextDoc.width, height: nextDoc.height, elements: nextDoc.elements.length };
-}
-
-function applyCreativePremiumTemplateCommand(payload = {}) {
-  if (normalizeCreativeMode(window.currentCreativeMode) !== 'video') {
-    throw new Error('create_from_template is only available in Video mode.');
-  }
-  const templateId = String(payload.templateId || payload.template || '').trim().toLowerCase();
-  if (!templateId) throw new Error('create_from_template requires templateId.');
-  const built = buildPremiumCreativeTemplateElements(templateId, payload);
-  const replace = payload.replace !== false;
-  const base = replace
-    ? createSceneDocument({
-        width: built.width,
-        height: built.height,
-        background: built.background,
-        durationMs: built.durationMs,
-        frameRate: built.frameRate,
-        brandKit: built.brandKit,
-      })
-    : createSceneDocument({
-        ...creativeSceneDoc,
-        width: built.width || creativeSceneDoc.width,
-        height: built.height || creativeSceneDoc.height,
-        background: built.background || creativeSceneDoc.background,
-        durationMs: Math.max(Number(creativeSceneDoc?.durationMs) || 0, built.durationMs || 0),
-        frameRate: Math.max(Number(creativeSceneDoc?.frameRate) || 0, built.frameRate || 60),
-        brandKit: built.brandKit || creativeSceneDoc.brandKit,
-      });
-  const nextDoc = executeSceneGraphOps(base, built.elements);
-  const finalDoc = createSceneDocument({
-    ...nextDoc,
-    brandKit: built.brandKit,
-    durationMs: Math.max(Number(nextDoc.durationMs) || 0, built.durationMs || 0),
-    frameRate: Math.max(Number(nextDoc.frameRate) || 0, built.frameRate || 60),
-  });
-  commitCreativeCommandDoc(finalDoc, { selectedId: finalDoc.elements[finalDoc.elements.length - 1]?.id || null });
-  setCreativeTimelinePosition(0, { render: false, persist: false });
-  const report = payload.runQualityReport === false ? null : buildCreativeQualityReport({ includeHidden: true });
-  return {
-    template: built.template,
-    templateId: built.template.id,
-    replace,
-    width: finalDoc.width,
-    height: finalDoc.height,
-    durationMs: finalDoc.durationMs,
-    frameRate: finalDoc.frameRate,
-    elements: finalDoc.elements.length,
-    qualityReport: report ? {
-      ok: report.ok,
-      ship: report.ship,
-      score: report.score,
-      issueSummary: report.issueSummary,
-      recommendation: report.recommendation,
-    } : null,
-  };
 }
 
 function buildVisibilityKeyframes(element, startMs, endMs, durationMs) {
@@ -17508,6 +21154,262 @@ function applyCreativeTimelineCommand(payload = {}) {
   throw new Error(`Unknown timeline action: ${action}`);
 }
 
+// ── Composition (multi-clip timeline) ────────────────────────────────────────
+function compositionId(prefix = 'comp') {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function defaultCompositionTracks() {
+  return [
+    { id: compositionId('track'), kind: 'video', label: 'V1', index: 0, height: 56, muted: false, locked: false, hidden: false },
+    { id: compositionId('track'), kind: 'audio', label: 'A1', index: 1, height: 44, muted: false, locked: false, hidden: false },
+    { id: compositionId('track'), kind: 'caption', label: 'C1', index: 2, height: 36, muted: false, locked: false, hidden: false },
+  ];
+}
+
+function createVideoCompositionFromActiveClip(seed = {}) {
+  const doc = seed.scene || creativeSceneDoc || {};
+  const tracks = defaultCompositionTracks();
+  const htmlClip = seed.htmlMotionClip || creativeHtmlMotionClip || null;
+  const videoTrack = tracks[0];
+  const durationMs = Math.max(1000, Number(htmlClip?.durationMs || doc.durationMs) || 12000);
+  const clips = htmlClip?.path ? [{
+    id: `clip_${htmlClip.id || 'html_motion'}`,
+    trackId: videoTrack.id,
+    label: htmlClip.title || 'HTML Motion',
+    inMs: 0,
+    outMs: durationMs,
+    trimStartMs: 0,
+    trimEndMs: 0,
+    lane: 'html-motion',
+    source: { kind: 'html-motion', clipPath: htmlClip.path, compositionId: htmlClip.composition?.id || null },
+    transitionIn: null,
+    transitionOut: null,
+    locked: false,
+    meta: {},
+  }] : [];
+  return {
+    id: `comp_${htmlClip?.id || doc.id || 'video'}`,
+    version: 1,
+    width: Number(htmlClip?.width || doc.width) || 1920,
+    height: Number(htmlClip?.height || doc.height) || 1080,
+    frameRate: Math.max(1, Number(htmlClip?.frameRate || doc.frameRate) || 60),
+    durationMs,
+    background: doc.background || '#000000',
+    tracks,
+    clips,
+    audioTracks: doc.audioTrack && doc.audioTrack.source ? [doc.audioTrack] : [],
+    captions: Array.isArray(doc.captions) ? doc.captions : [],
+    brandKit: doc.brandKit || null,
+    selectedClipId: clips[0]?.id || null,
+    meta: { videoClipLanes: ['html-motion', 'remotion'] },
+  };
+}
+
+function ensureCreativeComposition() {
+  if (!creativeComposition) creativeComposition = createVideoCompositionFromActiveClip();
+  return creativeComposition;
+}
+
+function recomputeCompositionDuration(comp) {
+  const computed = comp.clips.reduce((max, c) => Math.max(max, c.outMs || 0), 0);
+  comp.durationMs = Math.max(1000, computed || comp.durationMs || 1000);
+}
+
+function persistCompositionState() {
+  const sid = window.currentChatSessionId;
+  if (!sid) return;
+  const idx = (window.chatSessions || []).findIndex((s) => s.id === sid);
+  if (idx >= 0) {
+    window.chatSessions[idx].creativeComposition = creativeComposition;
+    window.chatSessions[idx].updatedAt = Date.now();
+  }
+  try { persistActiveChat?.(); } catch {}
+}
+
+function summarizeComposition(comp) {
+  const videoTrackIds = new Set(comp.tracks.filter((t) => t.kind === 'video').map((t) => t.id));
+  return {
+    width: comp.width,
+    height: comp.height,
+    durationMs: comp.durationMs,
+    frameRate: comp.frameRate,
+    trackCount: comp.tracks.length,
+    clipCount: comp.clips.length,
+    videoClipCount: comp.clips.filter((c) => videoTrackIds.has(c.trackId)).length,
+    audioTrackCount: (comp.audioTracks || []).length,
+    captionTrackCount: (comp.captions || []).length,
+  };
+}
+
+function compositionAddTrack(comp, kind, label) {
+  const sameKindCount = comp.tracks.filter((t) => t.kind === kind).length;
+  const track = {
+    id: compositionId('track'),
+    kind,
+    label: label || (kind === 'video' ? `V${sameKindCount + 1}` : kind === 'audio' ? `A${sameKindCount + 1}` : `C${sameKindCount + 1}`),
+    index: comp.tracks.length,
+    height: kind === 'video' ? 56 : kind === 'audio' ? 44 : 36,
+    muted: false, locked: false, hidden: false,
+  };
+  comp.tracks.push(track);
+  return track;
+}
+
+function compositionAddClip(comp, input) {
+  let trackId = input.trackId || '';
+  if (!trackId) {
+    const firstVideo = comp.tracks.find((t) => t.kind === 'video');
+    if (!firstVideo) throw new Error('Composition has no video track to host the clip.');
+    trackId = firstVideo.id;
+  }
+  const track = comp.tracks.find((t) => t.id === trackId);
+  if (!track) throw new Error(`Unknown trackId: ${trackId}`);
+  if (track.locked) throw new Error(`Track ${track.label} is locked.`);
+  const inMs = Number.isFinite(Number(input.inMs)) ? Math.max(0, Number(input.inMs)) : Math.max(0, Number(input.atMs) || 0);
+  const outMs = Number.isFinite(Number(input.outMs))
+    ? Math.max(inMs + 1, Number(input.outMs))
+    : inMs + Math.max(1, Number(input.durationMs) || 4000);
+  const lane = ['html-motion', 'remotion'].includes(input.lane) ? input.lane : '';
+  if (!lane) throw new Error('Video timeline clips must use html-motion or remotion.');
+  const clip = {
+    id: compositionId('clip'),
+    trackId,
+    label: input.label || 'Clip',
+    inMs,
+    outMs,
+    trimStartMs: Math.max(0, Number(input.trimStartMs) || 0),
+    trimEndMs: Math.max(0, Number(input.trimEndMs) || 0),
+    lane,
+    source: input.source || (lane === 'html-motion' ? { kind: 'html-motion', clipPath: '' } : { kind: 'remotion', templateId: '', input: {} }),
+    transitionIn: null,
+    transitionOut: null,
+    locked: false,
+    meta: {},
+  };
+  if (input.ripple === true) {
+    const dur = clip.outMs - clip.inMs;
+    for (const existing of comp.clips) {
+      if (existing.trackId === trackId && existing.inMs >= clip.inMs) {
+        existing.inMs += dur;
+        existing.outMs += dur;
+      }
+    }
+  }
+  comp.clips.push(clip);
+  recomputeCompositionDuration(comp);
+  return clip;
+}
+
+function compositionMoveClip(comp, clipId, options) {
+  const clip = comp.clips.find((c) => c.id === clipId);
+  if (!clip) throw new Error(`Unknown clipId: ${clipId}`);
+  if (clip.locked) throw new Error('Clip is locked.');
+  if (options.trackId && options.trackId !== clip.trackId) {
+    const target = comp.tracks.find((t) => t.id === options.trackId);
+    if (!target) throw new Error(`Unknown trackId: ${options.trackId}`);
+    if (target.locked) throw new Error(`Track ${target.label} is locked.`);
+    clip.trackId = options.trackId;
+  }
+  const dur = clip.outMs - clip.inMs;
+  let newIn = clip.inMs;
+  if (Number.isFinite(Number(options.atMs))) newIn = Math.max(0, Number(options.atMs));
+  else if (Number.isFinite(Number(options.deltaMs))) newIn = Math.max(0, clip.inMs + Number(options.deltaMs));
+  clip.inMs = newIn;
+  clip.outMs = newIn + dur;
+  recomputeCompositionDuration(comp);
+  return clip;
+}
+
+function compositionTrimClip(comp, clipId, edge, toMs) {
+  const clip = comp.clips.find((c) => c.id === clipId);
+  if (!clip) throw new Error(`Unknown clipId: ${clipId}`);
+  if (clip.locked) throw new Error('Clip is locked.');
+  const target = Math.max(0, Number(toMs) || 0);
+  if (edge === 'head') {
+    if (target >= clip.outMs) throw new Error('Head trim would zero out the clip.');
+    const delta = target - clip.inMs;
+    clip.inMs = target;
+    clip.trimStartMs = Math.max(0, clip.trimStartMs + delta);
+  } else {
+    if (target <= clip.inMs) throw new Error('Tail trim would zero out the clip.');
+    const delta = clip.outMs - target;
+    clip.outMs = target;
+    clip.trimEndMs = Math.max(0, clip.trimEndMs + delta);
+  }
+  recomputeCompositionDuration(comp);
+  return clip;
+}
+
+function compositionSplitClip(comp, clipId, atMs) {
+  const idx = comp.clips.findIndex((c) => c.id === clipId);
+  if (idx < 0) throw new Error(`Unknown clipId: ${clipId}`);
+  const clip = comp.clips[idx];
+  if (clip.locked) throw new Error('Clip is locked.');
+  if (atMs <= clip.inMs || atMs >= clip.outMs) throw new Error('Split point must be strictly inside the clip.');
+  const originalOutMs = clip.outMs;
+  const originalTrimEndMs = clip.trimEndMs;
+  const localOffsetMs = atMs - clip.inMs;
+  const rightDuration = originalOutMs - atMs;
+  const right = JSON.parse(JSON.stringify(clip));
+  right.id = compositionId('clip');
+  right.inMs = atMs;
+  right.outMs = originalOutMs;
+  right.trimStartMs = clip.trimStartMs + localOffsetMs;
+  right.trimEndMs = originalTrimEndMs;
+  right.transitionIn = null;
+  clip.outMs = atMs;
+  clip.trimEndMs = originalTrimEndMs + rightDuration;
+  clip.transitionOut = null;
+  comp.clips.splice(idx + 1, 0, right);
+  recomputeCompositionDuration(comp);
+  return { left: clip, right };
+}
+
+function compositionDeleteClip(comp, clipId, options = {}) {
+  const idx = comp.clips.findIndex((c) => c.id === clipId);
+  if (idx < 0) return false;
+  const clip = comp.clips[idx];
+  const removedDuration = clip.outMs - clip.inMs;
+  comp.clips.splice(idx, 1);
+  if (options.ripple === true) {
+    for (const other of comp.clips) {
+      if (other.trackId === clip.trackId && other.inMs >= clip.outMs) {
+        other.inMs = Math.max(0, other.inMs - removedDuration);
+        other.outMs = Math.max(0, other.outMs - removedDuration);
+      }
+    }
+  }
+  if (comp.selectedClipId === clipId) comp.selectedClipId = null;
+  recomputeCompositionDuration(comp);
+  return true;
+}
+
+function compositionSetTransition(comp, clipId, edge, spec) {
+  const clip = comp.clips.find((c) => c.id === clipId);
+  if (!clip) throw new Error(`Unknown clipId: ${clipId}`);
+  if (edge === 'in') clip.transitionIn = spec || null;
+  else clip.transitionOut = spec || null;
+  return clip;
+}
+
+function compositionLint(comp) {
+  const issues = [];
+  for (const track of comp.tracks) {
+    const items = comp.clips.filter((c) => c.trackId === track.id).sort((a, b) => a.inMs - b.inMs);
+    for (let i = 0; i < items.length; i++) {
+      const a = items[i];
+      if (a.outMs <= a.inMs) issues.push({ severity: 'error', code: 'clip_zero_duration', message: 'Clip has non-positive duration.', clipId: a.id, trackId: track.id });
+      for (let j = i + 1; j < items.length; j++) {
+        const b = items[j];
+        if (a.inMs < b.outMs && b.inMs < a.outMs) issues.push({ severity: track.kind === 'video' ? 'warning' : 'info', code: 'clip_overlap', message: `Clips overlap on ${track.label}.`, clipId: a.id, trackId: track.id });
+      }
+    }
+  }
+  if (comp.tracks.filter((t) => t.kind === 'video').length === 0) issues.push({ severity: 'error', code: 'no_video_track', message: 'Composition has no video track.' });
+  return { ok: issues.filter((i) => i.severity === 'error').length === 0, issues };
+}
+
 async function handleCreativeCommandMessage(message) {
   if (!(await ensureCreativeCommandSessionActive(message))) {
     sendCreativeCommandResult(message, {
@@ -17536,36 +21438,35 @@ async function handleCreativeCommandMessage(message) {
       selectionContext: creativeSelectedId ? buildSceneSelectionContext(creativeSceneDoc, creativeSelectedId) : null,
         htmlMotionClip: normalizeCreativeHtmlMotionClip(creativeHtmlMotionClip),
         audioTrack: getCreativeAudioTrackConfig(),
-        creativeLibraries: {
-          iconSystem: 'Iconify',
-          iconAccess: 'Any valid Iconify icon name is accepted in meta.iconName, such as solar:..., lucide:..., mdi:..., simple-icons:..., tabler:..., ph:..., heroicons:..., logos:..., etc.',
-          elementTypes: ['text', 'shape', 'icon', 'image', 'video', 'group'],
-          assetAccess: 'Uploaded image/video workspace paths can be placed as editable layers with creative_add_asset. Image layers use meta.source/fit/radius. Video layers use meta.source/fit/radius/timelineStartMs/timelineDurationMs/trimStartMs/volume/muted and can still be moved, resized, rotated, faded, layered, and animated.',
-          shapeKinds: ['rect', 'circle', 'triangle', 'polygon', 'line', 'arrow'],
-          fontAccess: 'Use any installed/web-safe font family by setting text meta.fontFamily. Manrope is the default.',
-          commonFonts: ['Manrope', 'Inter', 'Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Courier New', 'Montserrat', 'Poppins', 'Bebas Neue'],
-          animationPresetIds: getActiveCreativeAnimationPresetCatalog()
-            .map((preset) => preset.id)
-            .slice(0, 80),
-          animationAccess: 'Use any available built-in or enabled custom animation preset id with creative_apply_animation or add-animation-preset.',
-          stylePresets: CREATIVE_STYLE_PRESETS.map((preset) => ({
-            id: preset.id,
-            label: preset.label,
-            fonts: preset.fonts,
-            colors: preset.colors,
-            recommendedMotion: preset.motion,
-          })),
-          componentPresets: ['cta-card', 'caption-block', 'feature-card', 'logo-lockup', 'lower-third', 'product-callout'],
-          premiumVideoTemplates: CREATIVE_PREMIUM_VIDEO_TEMPLATES.map((template) => ({
-            id: template.id,
-            name: template.name,
-            category: template.category,
-            description: template.description,
-            defaults: template.defaults,
-          })),
-          premiumTemplateAccess: 'Use creative_create_from_template for premium editable video scenes before doing manual layer work. Templates support brandKit, timing, effects, masks, blend modes, and quality_report follow-up.',
-          htmlMotionAccess: 'For polished quick promo/social videos where editable canvas layers are less important, use HTML motion. Create with creative_create_html_motion_clip or creative_apply_html_motion_template, edit existing clips with creative_read_html_motion_clip plus creative_patch_html_motion_clip, inspect with creative_render_html_motion_snapshot, then export with creative_export_html_motion_clip.',
-        },
+        creativeLibraries: normalizeCreativeMode(mode) === 'video'
+          ? {
+              videoSurface: 'HTML Motion, HyperFrames, Remotion, and Pretext only.',
+              htmlMotionAccess: 'Create with creative_create_html_motion_clip or creative_apply_html_motion_template, edit existing clips with creative_read_html_motion_clip plus creative_patch_html_motion_clip, inspect with creative_render_html_motion_snapshot, then export with creative_export_html_motion_clip.',
+              hyperframesAccess: 'Use hyperframes_browse_catalog, hyperframes_insert_clip, hyperframes_apply_patch, hyperframes_lint, hyperframes_qa, and hyperframes_export for component-driven video systems. Use creative_* HyperFrames tools only for legacy compatibility.',
+              remotionAccess: 'Use creative_list_motion_templates, creative_preview_motion_template, creative_apply_motion_template, and creative_generate_motion_variants for Remotion-backed video systems.',
+              removedVideoSurface: ['scene-graph layers', 'shape layers', 'regular animation presets', 'editable video scene templates', 'direct asset layers'],
+            }
+          : {
+              iconSystem: 'Iconify',
+              iconAccess: 'Any valid Iconify icon name is accepted in meta.iconName, such as solar:..., lucide:..., mdi:..., simple-icons:..., tabler:..., ph:..., heroicons:..., logos:..., etc.',
+              elementTypes: ['text', 'shape', 'icon', 'image', 'video', 'group'],
+              assetAccess: 'Uploaded image/video workspace paths can be placed as editable layers with creative_add_asset. Image layers use meta.source/fit/radius. Video layers use meta.source/fit/radius/timelineStartMs/timelineDurationMs/trimStartMs/volume/muted and can still be moved, resized, rotated, faded, layered, and animated.',
+              shapeKinds: ['rect', 'circle', 'triangle', 'polygon', 'line', 'arrow'],
+              fontAccess: 'Use any installed/web-safe font family by setting text meta.fontFamily. Manrope is the default.',
+              commonFonts: ['Manrope', 'Inter', 'Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Courier New', 'Montserrat', 'Poppins', 'Bebas Neue'],
+              animationPresetIds: getActiveCreativeAnimationPresetCatalog()
+                .map((preset) => preset.id)
+                .slice(0, 80),
+              animationAccess: 'Use any available built-in or enabled custom animation preset id with creative_apply_animation or add-animation-preset.',
+              stylePresets: CREATIVE_STYLE_PRESETS.map((preset) => ({
+                id: preset.id,
+                label: preset.label,
+                fonts: preset.fonts,
+                colors: preset.colors,
+                recommendedMotion: preset.motion,
+              })),
+              componentPresets: ['cta-card', 'caption-block', 'feature-card', 'logo-lockup', 'lower-third', 'product-callout'],
+            },
         assets: {
           storageRoot: creativeAssetsState?.storageRoot || '',
           exports: Array.isArray(creativeAssetsState?.exports) ? creativeAssetsState.exports.length : 0,
@@ -18046,9 +21947,6 @@ async function handleCreativeCommandMessage(message) {
   } else if (command === 'apply_template') {
     clearCreativeHtmlMotionClip({ render: false, persist: false });
     data = applyCreativeTemplateCommand(payload);
-  } else if (command === 'create_from_template') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    data = applyCreativePremiumTemplateCommand(payload);
   } else if (command === 'validate_layout') {
     const validation = validateCreativeSceneLayout(creativeSceneDoc, { mode });
     data = {
@@ -18062,25 +21960,25 @@ async function handleCreativeCommandMessage(message) {
         : 'Fix error-level layout issues before export, then run creative_render_snapshot for visual QA.',
     };
   } else if (command === 'create_html_motion_clip') {
-    if (mode !== 'video') throw new Error('create_html_motion_clip requires Video creative mode.');
+    if (mode !== 'video') throw new Error('create_html_motion_clip requires the video workspace.');
     data = await createCreativeHtmlMotionClip(payload);
   } else if (command === 'list_html_motion_templates') {
-    if (mode !== 'video') throw new Error('list_html_motion_templates requires Video creative mode.');
+    if (mode !== 'video') throw new Error('list_html_motion_templates requires the video workspace.');
     data = await listCreativeHtmlMotionTemplates();
   } else if (command === 'apply_html_motion_template') {
-    if (mode !== 'video') throw new Error('apply_html_motion_template requires Video creative mode.');
+    if (mode !== 'video') throw new Error('apply_html_motion_template requires the video workspace.');
     data = await applyCreativeHtmlMotionTemplate(payload);
   } else if (command === 'read_html_motion_clip') {
-    if (mode !== 'video') throw new Error('read_html_motion_clip requires Video creative mode.');
+    if (mode !== 'video') throw new Error('read_html_motion_clip requires the video workspace.');
     data = await readCreativeHtmlMotionClip(payload);
   } else if (command === 'patch_html_motion_clip') {
-    if (mode !== 'video') throw new Error('patch_html_motion_clip requires Video creative mode.');
+    if (mode !== 'video') throw new Error('patch_html_motion_clip requires the video workspace.');
     data = await patchCreativeHtmlMotionClip(payload);
   } else if (command === 'restore_html_motion_revision') {
-    if (mode !== 'video') throw new Error('restore_html_motion_revision requires Video creative mode.');
+    if (mode !== 'video') throw new Error('restore_html_motion_revision requires the video workspace.');
     data = await restoreCreativeHtmlMotionClipRevision(payload);
   } else if (command === 'render_html_motion_snapshot') {
-    if (mode !== 'video') throw new Error('render_html_motion_snapshot requires Video creative mode.');
+    if (mode !== 'video') throw new Error('render_html_motion_snapshot requires the video workspace.');
     const snapshotData = await renderCreativeHtmlMotionSnapshot({ ...payload, includeDataUrl: true });
     const snapshots = (Array.isArray(snapshotData.frames) ? snapshotData.frames : []).map((frame) => ({
       width: frame.width,
@@ -18101,7 +21999,7 @@ async function handleCreativeCommandMessage(message) {
     });
     return;
   } else if (command === 'export_html_motion_clip') {
-    if (mode !== 'video') throw new Error('export_html_motion_clip requires Video creative mode.');
+    if (mode !== 'video') throw new Error('export_html_motion_clip requires the video workspace.');
     data = await exportCreativeHtmlMotionClip(payload);
   } else if (command === 'apply_motion_template') {
     clearCreativeHtmlMotionClip({ render: false, persist: false });
@@ -18173,6 +22071,61 @@ async function handleCreativeCommandMessage(message) {
         snapshots,
       });
       return;
+    }
+    if (mode === 'video') {
+      const requestedClipId = String(payload.clipId || payload.clip_id || payload.elementId || payload.element_id || '').trim();
+      const hyperframesClip = requestedClipId
+        ? getHyperframesElementById(requestedClipId)
+        : (getSelectedCreativeElement()?.type === 'hyperframes'
+            ? getSelectedCreativeElement()
+            : (creativeSceneDoc.elements || []).find((element) => element?.type === 'hyperframes' && element.visible !== false));
+      if (hyperframesClip?.meta?.html) {
+        const durationMs = Math.max(1000, Number(payload.durationMs || payload.duration_ms) || Number(hyperframesClip.meta.durationMs) || Number(creativeSceneDoc.durationMs) || 6000);
+        let sampleTimes = Array.isArray(payload.sampleTimesMs)
+          ? payload.sampleTimesMs.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+          : [];
+        if (payload.contactSheet === true && sampleTimes.length === 0) {
+          sampleTimes = [0, Math.round(durationMs / 2), Math.max(0, durationMs - 50)];
+        }
+        if (!sampleTimes.length && Number.isFinite(Number(payload.atMs))) sampleTimes = [Number(payload.atMs)];
+        const qa = await api('/api/canvas/hyperframes/qa', {
+          method: 'POST',
+          body: {
+            html: hyperframesClip.meta.html,
+            width: Number(payload.width) || Number(hyperframesClip.width) || Number(creativeSceneDoc.width) || 1080,
+            height: Number(payload.height) || Number(hyperframesClip.height) || Number(creativeSceneDoc.height) || 1920,
+            durationMs,
+            samplePoints: sampleTimes,
+            timeoutMs: Number(payload.timeoutMs || payload.timeout_ms) || undefined,
+          },
+        });
+        if (!qa?.success) throw new Error(qa?.error || 'HyperFrames snapshot QA failed.');
+        const report = qa.report || {};
+        const snapshots = (Array.isArray(report.samples) ? report.samples : []).map((frame) => ({
+          width: Number(payload.width) || Number(hyperframesClip.width) || Number(creativeSceneDoc.width) || 1080,
+          height: Number(payload.height) || Number(hyperframesClip.height) || Number(creativeSceneDoc.height) || 1920,
+          atMs: Number(frame.timeMs) || 0,
+          mimeType: 'image/png',
+          screenshotPath: frame.screenshotPath || '',
+          dataUrl: '',
+        }));
+        data = {
+          success: true,
+          hyperframes: true,
+          clipId: hyperframesClip.id,
+          ok: report.ok !== false,
+          sampleCount: snapshots.length,
+          frames: snapshots.map(({ width, height, atMs, mimeType, screenshotPath }) => ({ width, height, atMs, mimeType, screenshotPath })),
+          qa: report,
+        };
+        sendCreativeCommandResult(message, {
+          success: true,
+          data,
+          snapshot: snapshots.length === 1 ? snapshots[0] : null,
+          snapshots,
+        });
+        return;
+      }
     }
     const previousTimeline = creativeTimelineMs;
     const includeDataUrl = true;
@@ -18286,6 +22239,119 @@ async function handleCreativeCommandMessage(message) {
       data = { format, activeExport: creativeActiveExport || null, export: exportResult || null, preExportValidation };
   } else if (command === 'save_scene') {
     data = await canvasSaveCreativeSceneSnapshot({ filename: payload.filename });
+  } else if (command === 'composition_get') {
+    const comp = ensureCreativeComposition();
+    data = { composition: comp, summary: comp ? summarizeComposition(comp) : null };
+  } else if (command === 'composition_add_track') {
+    const comp = ensureCreativeComposition();
+    if (!comp) throw new Error('Composition not available.');
+    const kind = String(payload.kind || 'video').trim().toLowerCase();
+    if (!['video', 'audio', 'caption'].includes(kind)) throw new Error('kind must be video, audio, or caption');
+    const track = compositionAddTrack(comp, kind, payload.label);
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { track, summary: summarizeComposition(comp) };
+  } else if (command === 'composition_add_clip') {
+    const comp = ensureCreativeComposition();
+    if (!comp) throw new Error('Composition not available.');
+    const clip = compositionAddClip(comp, payload || {});
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { clip, summary: summarizeComposition(comp) };
+  } else if (command === 'composition_move_clip') {
+    const comp = ensureCreativeComposition();
+    const clip = compositionMoveClip(comp, payload.clipId, payload || {});
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { clip, summary: summarizeComposition(comp) };
+  } else if (command === 'composition_trim_clip') {
+    const comp = ensureCreativeComposition();
+    const clip = compositionTrimClip(comp, payload.clipId, payload.edge, payload.toMs);
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { clip, summary: summarizeComposition(comp) };
+  } else if (command === 'composition_split_at') {
+    const comp = ensureCreativeComposition();
+    const result = compositionSplitClip(comp, payload.clipId, Number(payload.atMs) || 0);
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { left: result.left, right: result.right, summary: summarizeComposition(comp) };
+  } else if (command === 'composition_delete_clip') {
+    const comp = ensureCreativeComposition();
+    const removed = compositionDeleteClip(comp, payload.clipId, { ripple: payload.ripple === true });
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { removed, summary: summarizeComposition(comp) };
+  } else if (command === 'composition_set_transition') {
+    const comp = ensureCreativeComposition();
+    const clip = compositionSetTransition(comp, payload.clipId, payload.edge, payload.transition || null);
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { clip };
+  } else if (command === 'composition_select_clip') {
+    const comp = ensureCreativeComposition();
+    if (!comp) throw new Error('Composition not available.');
+    const clipId = payload.clipId == null ? null : String(payload.clipId);
+    if (clipId !== null && !comp.clips.find((c) => c.id === clipId)) throw new Error(`Unknown clipId: ${clipId}`);
+    comp.selectedClipId = clipId;
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    data = { selectedClipId: clipId };
+  } else if (command === 'composition_lint') {
+    const comp = ensureCreativeComposition();
+    data = compositionLint(comp);
+  } else if (command === 'composition_save') {
+    const comp = ensureCreativeComposition();
+    if (!comp) throw new Error('Composition not available.');
+    const sid = window.currentChatSessionId || 'default';
+    const root = (window.canvasProjectRoot || '').toString();
+    const filename = String(payload.filename || '').trim();
+    const response = await fetch('/api/canvas/composition', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: sid,
+        root,
+        mode,
+        composition: comp,
+        ...(filename ? { filename } : {}),
+      }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
+    data = { path: json.path, absPath: json.absPath, summary: json.summary };
+  } else if (command === 'composition_render') {
+    const comp = ensureCreativeComposition();
+    if (!comp) throw new Error('Composition not available.');
+    const sid = window.currentChatSessionId || 'default';
+    const root = (window.canvasProjectRoot || '').toString();
+    const format = String(payload.format || 'mp4').toLowerCase();
+    const filename = String(payload.filename || '').trim();
+    const response = await fetch('/api/canvas/composition/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: sid,
+        root,
+        composition: comp,
+        format,
+        ...(filename ? { filename } : {}),
+      }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
+    data = {
+      path: json.path,
+      absPath: json.absPath,
+      format: json.format,
+      durationMs: json.durationMs,
+      width: json.width,
+      height: json.height,
+      frameRate: json.frameRate,
+      clipCount: json.clipCount,
+      audioTrackCount: json.audioTrackCount,
+      elapsedMs: json.elapsedMs,
+    };
   } else {
     throw new Error(`Unknown creative command: ${command}`);
   }
@@ -19852,6 +23918,7 @@ function getCreativeHtmlMotionSelectableTarget(target, frame) {
   const HTMLElementCtor = frame.contentWindow.HTMLElement;
   if (!(target instanceof HTMLElementCtor)) return null;
   let cursor = target;
+  let firstVisible = null;
   const skipTags = new Set(['html', 'body', 'main', 'style', 'script', 'meta', 'link']);
   while (cursor && cursor instanceof HTMLElementCtor) {
     const tag = String(cursor.tagName || '').toLowerCase();
@@ -19860,10 +23927,19 @@ function getCreativeHtmlMotionSelectableTarget(target, frame) {
       continue;
     }
     const rect = cursor.getBoundingClientRect?.();
-    if (!skipTags.has(tag) && rect && rect.width >= 4 && rect.height >= 4) return cursor;
+    if (!skipTags.has(tag) && rect && rect.width >= 4 && rect.height >= 4) {
+      if (!firstVisible) firstVisible = cursor;
+      const role = String(cursor.getAttribute?.('data-role') || '').toLowerCase();
+      const isComponentRoot = cursor.hasAttribute?.('data-prometheus-edit-root')
+        || cursor.hasAttribute?.('data-layout-body')
+        || cursor.hasAttribute?.('data-track-index')
+        || (cursor.hasAttribute?.('data-start') && cursor.hasAttribute?.('data-duration'))
+        || (role && !['stage', 'texture', 'glow'].includes(role));
+      if (isComponentRoot) return cursor;
+    }
     cursor = cursor.parentElement;
   }
-  return null;
+  return firstVisible;
 }
 
 function applyCreativeHtmlMotionPreviewSelection(element, frame) {
@@ -19956,7 +24032,7 @@ function setupCreativeHtmlMotionPreviewSelection(frame) {
         outline-offset: 3px !important;
         box-shadow: inset 0 0 0 9999px rgba(251,191,36,0.08) !important;
       }
-      body[data-prometheus-html-motion-selectable="true"] * {
+      body[data-prometheus-html-motion-selectable="true"] *:not(#prometheus-html-motion-transform-overlay):not(#prometheus-html-motion-transform-overlay *) {
         cursor: crosshair !important;
       }
     `;
@@ -21087,7 +25163,7 @@ function toggleRightPanel() {
   if (!panel) return;
   const wasOpen = panel.classList.contains('open');
   if (wasOpen && isCreativeModeLocked()) {
-    showToast('Exit creative mode to close the canvas workspace.', 'info');
+    showToast('Close the Creative workspace to close the canvas.', 'info');
     return;
   }
   const isOpen = panel.classList.toggle('open');
@@ -21112,7 +25188,7 @@ function toggleCanvas(nextOpen = null, options = {}) {
   const targetOpen = typeof nextOpen === 'boolean' ? nextOpen : !canvasOpen;
   if (!targetOpen && isCreativeModeLocked() && options.force !== true) {
     const meta = getCreativeModeMeta(window.currentCreativeMode);
-    showToast(`Exit ${meta?.title || 'creative mode'} to close the canvas.`, 'info');
+    showToast(`Close ${meta?.title || 'the Creative workspace'} to close the canvas.`, 'info');
     return;
   }
   canvasOpen = targetOpen;
@@ -21772,16 +25848,7 @@ async function stageFiles(fileList) {
       reader.readAsDataURL(file);
     } else if (VIDEO_EXTENSIONS.has(ext) || BINARY_EXTENSIONS.has(ext)) {
       // Binary — upload to server as base64, AI reads by path
-      const reader = new FileReader();
-      reader.onload = e => {
-        // Convert ArrayBuffer to base64
-        const bytes = new Uint8Array(e.target.result);
-        let b64 = '';
-        for (let i = 0; i < bytes.byteLength; i++) b64 += String.fromCharCode(bytes[i]);
-        resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, base64: btoa(b64), isVideo: VIDEO_EXTENSIONS.has(ext) });
-      };
-      reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, isVideo: VIDEO_EXTENSIONS.has(ext) });
-      reader.readAsArrayBuffer(file);
+      resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, base64: null, isVideo: VIDEO_EXTENSIONS.has(ext) });
     } else {
       resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true });
     }
@@ -21811,36 +25878,77 @@ function onChatFileInputChange(event) {
   event.target.value = '';
 }
 
-function getClipboardImageExtension(mimeType = '') {
+function getClipboardFileExtension(mimeType = '', fallbackName = '') {
+  const fallbackExt = String(fallbackName || '').split('.').pop().toLowerCase();
+  if (fallbackExt && fallbackExt !== fallbackName.toLowerCase()) return fallbackExt;
   const type = String(mimeType || '').toLowerCase();
+  if (type.includes('pdf')) return 'pdf';
+  if (type.includes('wordprocessingml')) return 'docx';
+  if (type.includes('msword')) return 'doc';
+  if (type.includes('spreadsheetml')) return 'xlsx';
+  if (type.includes('ms-excel')) return 'xls';
+  if (type.includes('presentationml')) return 'pptx';
+  if (type.includes('ms-powerpoint')) return 'ppt';
+  if (type.includes('zip')) return 'zip';
+  if (type.includes('json')) return 'json';
+  if (type.startsWith('text/')) return 'txt';
   if (type.includes('jpeg') || type.includes('jpg')) return 'jpg';
   if (type.includes('webp')) return 'webp';
   if (type.includes('gif')) return 'gif';
   if (type.includes('bmp')) return 'bmp';
   if (type.includes('svg')) return 'svg';
-  return 'png';
+  if (type.includes('mp4')) return 'mp4';
+  if (type.includes('quicktime')) return 'mov';
+  if (type.includes('x-m4v')) return 'm4v';
+  if (type.includes('webm')) return 'webm';
+  if (type.includes('x-msvideo')) return 'avi';
+  if (type.includes('x-matroska')) return 'mkv';
+  if (type.includes('mpeg')) return 'mpeg';
+  if (type.includes('3gpp')) return '3gp';
+  return '';
 }
 
-function makePastedImageName(file, index = 0) {
+function getClipboardImageExtension(mimeType = '') {
+  return getClipboardFileExtension(mimeType) || 'png';
+}
+
+function getClipboardFileKind(file) {
+  const type = String(file?.type || '').toLowerCase();
+  const ext = getClipboardFileExtension(type, file?.name);
+  if (type.startsWith('image/') || IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (type.startsWith('video/') || VIDEO_EXTENSIONS.has(ext)) return 'video';
+  return 'file';
+}
+
+function makePastedAttachmentName(file, index = 0) {
   const rawName = String(file?.name || '').trim();
-  if (rawName && rawName !== 'image.png' && /\.[a-z0-9]+$/i.test(rawName)) return rawName;
-  const ext = getClipboardImageExtension(file?.type);
+  if (rawName && rawName !== 'image.png' && rawName !== 'video.mp4' && /\.[a-z0-9]+$/i.test(rawName)) return rawName;
+  const kind = getClipboardFileKind(file);
+  const ext = getClipboardFileExtension(file?.type, rawName) || (kind === 'image' ? 'png' : kind === 'video' ? 'mp4' : 'bin');
   const stamp = new Date().toISOString()
     .replace(/\.\d+Z$/, '')
     .replace(/[^\dT]/g, '')
     .replace('T', '-');
   const suffix = index > 0 ? `-${index + 1}` : '';
-  return `pasted-screenshot-${stamp}${suffix}.${ext}`;
+  const prefix = kind === 'image' ? 'pasted-screenshot' : kind === 'video' ? 'pasted-video' : 'pasted-file';
+  return `${prefix}-${stamp}${suffix}.${ext}`;
 }
 
-function normalizePastedImageFile(file, index = 0) {
+function makePastedImageName(file, index = 0) {
+  return makePastedAttachmentName(file, index);
+}
+
+function normalizePastedAttachmentFile(file, index = 0) {
   if (!file) return null;
   const type = String(file.type || '').toLowerCase();
-  if (!type.startsWith('image/')) return null;
-  const name = makePastedImageName(file, index);
+  const kind = getClipboardFileKind(file);
+  if (kind === 'file' && !String(file.name || '').trim()) return null;
+  const name = makePastedAttachmentName(file, index);
+  const ext = getClipboardFileExtension(type, name);
+  const mimeType = file.type || (kind === 'image' ? `image/${ext}` : kind === 'video' ? getMimeType(ext) : '');
   try {
     return new File([file], name, {
-      type: file.type || `image/${getClipboardImageExtension(file.type)}`,
+      type: mimeType,
       lastModified: file.lastModified || Date.now(),
     });
   } catch {
@@ -21849,12 +25957,17 @@ function normalizePastedImageFile(file, index = 0) {
   }
 }
 
-function getClipboardImageFiles(clipboardData) {
+function normalizePastedImageFile(file, index = 0) {
+  const normalized = normalizePastedAttachmentFile(file, index);
+  return getClipboardFileKind(normalized) === 'image' ? normalized : null;
+}
+
+function getClipboardAttachmentFiles(clipboardData) {
   if (!clipboardData) return [];
   const files = [];
   const seen = new Set();
   const addFile = (file) => {
-    const normalized = normalizePastedImageFile(file, files.length);
+    const normalized = normalizePastedAttachmentFile(file, files.length);
     if (!normalized) return;
     const key = `${normalized.name}:${normalized.size}:${normalized.type}`;
     if (seen.has(key)) return;
@@ -21864,11 +25977,16 @@ function getClipboardImageFiles(clipboardData) {
 
   Array.from(clipboardData.files || []).forEach(addFile);
   Array.from(clipboardData.items || []).forEach((item) => {
-    if (!item || item.kind !== 'file' || !String(item.type || '').toLowerCase().startsWith('image/')) return;
+    if (!item || item.kind !== 'file') return;
     try { addFile(item.getAsFile()); } catch {}
   });
 
   return files;
+}
+
+function getClipboardImageFiles(clipboardData) {
+  return getClipboardAttachmentFiles(clipboardData)
+    .filter((file) => getClipboardFileKind(file) === 'image');
 }
 
 function isChatPasteTarget(target) {
@@ -21889,17 +26007,40 @@ function isNonChatEditableTarget(target) {
 
 function handleChatPaste(event) {
   if (!isChatPasteTarget(event.target) || isNonChatEditableTarget(event.target)) return;
-  const imageFiles = getClipboardImageFiles(event.clipboardData);
-  if (!imageFiles.length) return;
+  const files = getClipboardAttachmentFiles(event.clipboardData);
+  if (!files.length) return;
 
   const pastedText = event.clipboardData?.getData?.('text/plain') || '';
   if (!pastedText.trim()) event.preventDefault();
-  stageFiles(imageFiles);
+  stageFiles(files);
+  const videoCount = files.filter((file) => getClipboardFileKind(file) === 'video').length;
+  const imageCount = files.filter((file) => getClipboardFileKind(file) === 'image').length;
+  const title = files.length === 1
+    ? (videoCount ? 'Video staged' : imageCount ? 'Screenshot staged' : 'Attachment staged')
+    : `${files.length} attachments staged`;
   showToast(
-    imageFiles.length === 1 ? 'Screenshot staged' : `${imageFiles.length} images staged`,
+    title,
     'Press Send when you are ready.',
     'success'
   );
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error('No file bytes available'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = String(event.target?.result || '');
+      const base64 = dataUrl.replace(/^data:[^;]+;base64,/, '');
+      if (!base64) reject(new Error('Could not read file bytes'));
+      else resolve(base64);
+    };
+    reader.onerror = () => reject(new Error('Could not read file bytes'));
+    reader.readAsDataURL(file);
+  });
 }
 
 // Upload staged files to workspace/uploads/ and open them in canvas.
@@ -21944,13 +26085,15 @@ async function uploadStagedFilesToCanvas(stagedFiles = pendingChatFiles) {
       } catch (e) {
         results.push({ name: sf.name, ext: sf.ext, workspacePath: null, isImage: true, base64: pureBase64, mimeType, error: e.message });
       }
-    } else if (sf.base64) {
+    } else if (sf.base64 || sf.binary) {
       const mimeType = getMimeType(sf.ext);
+      let base64 = sf.base64;
       try {
+        if (!base64) base64 = await readFileAsBase64(sf.file);
         const r = await fetch('/api/canvas/upload-binary', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: sf.name, base64: sf.base64, mimeType })
+          body: JSON.stringify({ filename: sf.name, base64, mimeType })
         });
         const d = await r.json();
         if (d.success) {
@@ -22594,8 +26737,8 @@ async function canvasUseFolderAsProject(folderPath, folderName, ev) {
   }
 }
 
-// Load workspace file list and show the file browser panel.
-async function canvasLoadWorkspaceFiles(rootOverride = null) {
+// Load workspace file list. Callers can opt into expanding the browser panel.
+async function canvasLoadWorkspaceFiles(rootOverride = null, options = {}) {
   const tree = document.getElementById('canvas-project-tree');
   if (!tree) return;
   tree.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:11px">Loading…</div>';
@@ -22612,7 +26755,10 @@ async function canvasLoadWorkspaceFiles(rootOverride = null) {
     canvasWorkspaceRootPath = nextRoot;
     canvasWorkspaceTree = Array.isArray(d.files) ? d.files : [];
     if (d.projectRoot || canvasProjectRoot) {
-      setCanvasProjectState(d.projectRoot || canvasProjectRoot, d.projectLabel || canvasProjectLabel, { persist: false });
+      setCanvasProjectState(d.projectRoot || canvasProjectRoot, d.projectLabel || canvasProjectLabel, {
+        persist: false,
+        expandBrowser: options.expandBrowser !== false,
+      });
     } else {
       updateCanvasWorkspaceChrome();
     }
@@ -22712,11 +26858,19 @@ function renderSessionApprovalCard(item) {
     </div>
     ${item.summary ? `<div style="font-size:11px;color:${palette.text};margin-bottom:6px;line-height:1.4;opacity:0.9">${escHtml(String(item.summary).slice(0, 180))}</div>` : ''}
     ${item.command ? `<pre style="margin:0 0 8px;background:rgba(255,255,255,0.82);border:1px solid ${palette.border};border-radius:8px;padding:8px;font-size:10px;color:${palette.strongText || palette.text};white-space:pre-wrap;word-break:break-word;font-family:'IBM Plex Mono',monospace">${escHtml(String(item.command).slice(0, 300))}</pre>` : ''}
+    ${item.scopedTarget ? `<div style="font-size:10px;color:${palette.text};margin:-3px 0 7px;line-height:1.3">Scope: ${escHtml(String(item.scopedTarget).slice(0, 140))}</div>` : ''}
     ${systems.length ? `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px">${systems.map((s) => `<span style="font-size:9px;background:rgba(255,255,255,0.74);color:${palette.strongText || palette.text};border:1px solid ${palette.border};border-radius:4px;padding:1px 5px;font-family:monospace">${escHtml(s)}</span>`).join('')}</div>` : ''}
-    <div style="display:flex;gap:6px">
-      <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">✓ Approve</button>
-      <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="flex:1;border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">✕ Deny</button>
-    </div>
+    ${isProposal
+      ? `<div style="display:flex;gap:6px">
+          <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
+          <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="flex:1;border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Deny</button>
+        </div>`
+      : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve Once</button>
+          <button onclick="resolveSessionApproval('${item.id}','approve_session','${approveEndpoint}','session')" style="border:none;background:#0f766e;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">This Session</button>
+          <button onclick="resolveSessionApproval('${item.id}','approve_always','${approveEndpoint}','always')" style="border:none;background:#2563eb;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Always Allow</button>
+          <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Deny</button>
+        </div>`}
   </div>`;
 }
 
@@ -22734,11 +26888,12 @@ async function loadSessionApprovals() {
       .filter((a) => String(a.sourceSessionId || a.sessionId || '').trim() === currentSessionId)
       .map((a) => ({
         id: a.id,
-        title: 'Command approval',
+        title: a.toolName === 'run_command' ? 'Command approval' : 'Tool approval',
         summary: a.reason || a.summary || '',
         riskScore: a.riskScore ?? 0,
         affectedSystems: a.affectedSystems || [],
-        command: a.command || '',
+        command: a.command || a.scopedAction || '',
+        scopedTarget: a.scopedTarget || '',
         status: a.status || 'pending',
         approvalType: 'command',
       }));
@@ -22767,16 +26922,17 @@ async function loadSessionApprovals() {
   }
 }
 
-async function resolveSessionApproval(id, action, endpoint) {
+async function resolveSessionApproval(id, action, endpoint, grantScope = '') {
   try {
     const method = 'POST';
-    const body = '{}';
+    const body = JSON.stringify(grantScope ? { grantScope } : {});
     await api(endpoint, { method, body });
     await loadSessionApprovals();
     if (window.currentMode === 'proposals' && typeof window.loadProposals === 'function') window.loadProposals();
     if (window.currentMode === 'approvals' && typeof window.loadApprovals === 'function') window.loadApprovals();
     if (typeof window.checkPendingProposalsBadge === 'function') window.checkPendingProposalsBadge();
-    addProcessEntry('info', `${action === 'approve' ? '✓ Approved' : '✕ Denied'}: ${id}`);
+    const label = action === 'deny' ? 'Denied' : grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved';
+    addProcessEntry('info', `${label}: ${id}`);
   } catch (err) {
     showToast('Error', err.message || 'Could not resolve action', 'error');
   }
@@ -22911,6 +27067,8 @@ window.renderQueuedPromptsPanel = renderQueuedPromptsPanel;
 window.removeQueuedPrompt = removeQueuedPrompt;
 window.clearQueuedPrompts = clearQueuedPrompts;
 window.updateQueuedPromptUI = updateQueuedPromptUI;
+window.removeVoicePendingTurn = removeVoicePendingTurn;
+window.editVoicePendingTurn = editVoicePendingTurn;
 window.syncActiveSessionRunState = syncActiveSessionRunState;
 window.saveChatSessions = saveChatSessions;
 window.makeSessionTitle = makeSessionTitle;
@@ -22940,6 +27098,12 @@ window.renderFilePills = renderFilePills;
 window.canvasDownloadFile = canvasDownloadFile;
 window.copyGeneratedImagePath = copyGeneratedImagePath;
 window.copyGeneratedImageToClipboard = copyGeneratedImageToClipboard;
+window.copyChatMessage = copyChatMessage;
+window.forkConversationFromAssistantMessage = forkConversationFromAssistantMessage;
+window.startEditUserMessage = startEditUserMessage;
+window.cancelEditUserMessage = cancelEditUserMessage;
+window.submitEditedUserMessage = submitEditedUserMessage;
+window.switchPromptVariant = switchPromptVariant;
 window.saveGeneratedImageFile = saveGeneratedImageFile;
 window.openGeneratedImageInCanvas = openGeneratedImageInCanvas;
 window.canvasExtractLayersFromSource = canvasExtractLayersFromSource;
@@ -22948,6 +27112,8 @@ window.canvasHandleCreativeUploadInput = canvasHandleCreativeUploadInput;
 window.renderArtifacts = renderArtifacts;
 window.openInFileLocation = openInFileLocation;
 window.renderChatMessages = renderChatMessages;
+window.renderMainGoalStrip = renderMainGoalStrip;
+window.mainGoalAction = mainGoalAction;
 window.pushProgressLine = pushProgressLine;
 window.renderProcessPill = renderProcessPill;
 window.formatProcessLines = formatProcessLines;
@@ -22975,6 +27141,11 @@ window.renderAgentExecutionPanel = renderAgentExecutionPanel;
 window.toggleAgentPanel = toggleAgentPanel;
 window.openProcessLogFile = openProcessLogFile;
 window.clearChat = clearChat;
+window.toggleVoiceDictation = toggleVoiceDictation;
+window.toggleRealtimeVoiceReplies = toggleRealtimeVoiceReplies;
+window.onVoiceProviderChanged = onVoiceProviderChanged;
+window.onRealtimeVoiceChanged = onRealtimeVoiceChanged;
+window.clearRealtimeWakeGate = clearRealtimeWakeGate;
 window.getCanvasLang = getCanvasLang;
 window.isHtmlFile = isHtmlFile;
 window.toggleCanvas = toggleCanvas;
@@ -23080,7 +27251,6 @@ window.canvasCreateBlankHtmlMotionComposition = canvasCreateBlankHtmlMotionCompo
 window.canvasUpdateHtmlMotionParameter = canvasUpdateHtmlMotionParameter;
 window.canvasRunHtmlMotionFrameQA = canvasRunHtmlMotionFrameQA;
 window.canvasExportHtmlMotionClip = canvasExportHtmlMotionClip;
-window.canvasApplyPremiumCreativeTemplate = canvasApplyPremiumCreativeTemplate;
 window.canvasSearchIconify = canvasSearchIconify;
 window.canvasAddIconifyIcon = canvasAddIconifyIcon;
 window.canvasSetCreativeLibraryBrowserField = canvasSetCreativeLibraryBrowserField;
@@ -23094,12 +27264,14 @@ window.canvasUndoCreativeChange = canvasUndoCreativeChange;
 window.canvasRedoCreativeChange = canvasRedoCreativeChange;
 window.canvasApplyCreativeSizePreset = canvasApplyCreativeSizePreset;
 window.canvasExportCreative = canvasExportCreative;
+window.canvasSaveCreativeLayerAssets = canvasSaveCreativeLayerAssets;
 window.canvasCancelCreativeExport = canvasCancelCreativeExport;
 window.canvasRefreshCreativeAssets = canvasRefreshCreativeAssets;
 window.canvasCancelCreativeRenderJob = canvasCancelCreativeRenderJob;
 window.canvasRevealCreativeStorageRoot = canvasRevealCreativeStorageRoot;
 window.canvasSaveCreativeSceneSnapshot = canvasSaveCreativeSceneSnapshot;
 window.canvasLoadCreativeSceneAsset = canvasLoadCreativeSceneAsset;
+window.canvasPlaceCreativeExportOnCanvas = canvasPlaceCreativeExportOnCanvas;
 window.toggleCreativePlayback = toggleCreativePlayback;
 window.stopCreativePlayback = stopCreativePlayback;
 window.canvasApplyCreativeAnimationPreset = canvasApplyCreativeAnimationPreset;
@@ -23176,6 +27348,29 @@ wsEventBus.on('boot_greeting', (msg) => {
     syncActiveChat();
     renderChatMessages();
   }
+});
+
+wsEventBus.on('main_chat_goal_updated', async (msg) => {
+  const sid = String(msg?.sessionId || '').trim();
+  if (!sid) return;
+  let sess = window.chatSessions.find(s => s.id === sid);
+  if (!sess) {
+    sess = createEmptyChatSession(sid);
+    window.chatSessions.unshift(sess);
+  }
+  sess.mainChatGoal = msg.goal || null;
+  sess.updatedAt = Date.now();
+  if (sid === window.activeChatSessionId) {
+    renderMainGoalStrip();
+    if (['judged', 'summarized', 'runner_idle', 'runtime_failure'].includes(String(msg?.event || ''))) {
+      sess._needsServerLoad = true;
+      await _loadSessionFromServer(sid);
+      syncActiveChat();
+    }
+  } else {
+    sess.unread = true;
+  }
+  saveChatSessions();
 });
 
 wsEventBus.on('session_notification', (msg) => {
@@ -23451,6 +27646,12 @@ wsEventBus.on('creative_command', (msg) => {
       error: String(err?.message || err || 'Creative command failed.'),
     });
   });
+});
+
+wsEventBus.on('creative_extract_layers_progress', (msg) => {
+  const sid = String(msg?.sessionId || '').trim();
+  if (sid && sid !== String(window.activeChatSessionId || '').trim() && sid !== String(window.agentSessionId || '').trim()) return;
+  canvasApplyExtractProgressEvent(msg);
 });
 
 wsEventBus.on('browser:open', (msg) => {
@@ -23809,12 +28010,35 @@ wsEventBus.on('canvas_publish_state', (msg) => {
     const mode = normalizeCreativeMode(msg?.creativeMode || window.currentCreativeMode);
     const storageRoot = normalizeCanvasPath(msg?.storageRoot || '');
     if (storageRoot && !canvasProjectRoot) {
-      setCanvasProjectState(storageRoot, getCreativeWorkspaceLabel(mode), { refreshPublish: false });
+      setCanvasProjectState(storageRoot, getCreativeWorkspaceLabel(mode), { refreshPublish: false, expandBrowser: false });
     }
     if (storageRoot) {
-      canvasLoadWorkspaceFiles(storageRoot).catch(() => {});
+      canvasLoadWorkspaceFiles(storageRoot, { expandBrowser: false }).catch(() => {});
     }
     loadCreativeAssets({ force: true, silent: true, renderStart: false, mode }).catch(() => {});
+  });
+});
+
+wsEventBus.on('creative_html_motion_export_progress', (msg) => {
+  const sid = String(msg?.sessionId || '').trim();
+  if (!sid || (sid !== window.activeChatSessionId && sid !== window.agentSessionId)) return;
+  if (!creativeActiveExport || creativeActiveExport.renderer !== 'html-motion') return;
+  const phase = String(msg?.phase || '').trim().toLowerCase();
+  const status = phase === 'encode' ? 'encoding' : 'capturing';
+  const frame = Math.max(0, Number(msg?.frame) || 0);
+  const totalFrames = Math.max(0, Number(msg?.totalFrames) || 0);
+  const percent = Number.isFinite(Number(msg?.percent)) ? Number(msg.percent) : null;
+  const progress = percent !== null
+    ? clamp(percent / 100, 0, 0.98)
+    : (totalFrames > 0 ? clamp(frame / totalFrames, 0, 0.98) : getCreativeActiveExportProgress());
+  const label = status === 'encoding'
+    ? 'Encoding HTML motion MP4'
+    : (totalFrames > 0 ? `Capturing HTML motion frame ${frame}/${totalFrames}` : 'Capturing HTML motion frames');
+  refreshCreativeExportChrome({
+    progress,
+    elapsedMs: Math.max(0, Number(msg?.atMs) || 0),
+    status,
+    progressLabel: label,
   });
 });
 
@@ -23824,7 +28048,7 @@ wsEventBus.on('creative_render_job_updated', (msg) => {
   const mode = normalizeCreativeMode(msg?.creativeMode || window.currentCreativeMode);
   const storageRoot = normalizeCanvasPath(msg?.storageRoot || '');
   if (storageRoot && !canvasProjectRoot) {
-    setCanvasProjectState(storageRoot, getCreativeWorkspaceLabel(mode), { refreshPublish: false });
+    setCanvasProjectState(storageRoot, getCreativeWorkspaceLabel(mode), { refreshPublish: false, expandBrowser: false });
   }
   if (msg?.job) {
     mergeCreativeRenderJobEntry(msg.job, { render: false });

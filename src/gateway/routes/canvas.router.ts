@@ -46,29 +46,7 @@ import {
   normalizeCreativeSceneEnvelope,
   summarizeCreativeSceneDoc as summarizeNormalizedCreativeSceneDoc,
 } from '../creative/contracts';
-import {
-  analyzeCreativeAudioSource,
-  enrichCreativeAudioTrack,
-  enrichCreativeSceneDocAudio,
-} from '../creative/audio';
-import {
-  createCreativeMotionPreview,
-  getCreativeMotionCatalog,
-  prepareCreativeMotionTemplate,
-} from '../creative/motion-runtime';
-import {
-  analyzeCreativeAsset,
-  generateCreativeAssetPlaceholder,
-  importCreativeAsset,
-  readCreativeAssetIndex,
-  searchCreativeAssets,
-} from '../creative/assets';
-import { extractCreativeLayers, refineCreativeLayerCutout } from '../creative/layer-extraction';
-import { listCreativeModelStatus } from '../creative/onnx/model-paths';
-import {
-  getCreativePremiumTemplate,
-  listCreativePremiumTemplates,
-} from '../creative/templates';
+import type { HyperframesPatchOp } from '../creative/hyperframes-bridge';
 import {
   buildHtmlMotionCompositionMetadata,
   lintHtmlMotionComposition,
@@ -86,12 +64,19 @@ import {
 } from '../creative/html-motion-templates';
 
 export const router = Router();
-const archiver = require('archiver');
-const mammoth: any = require('mammoth');
-const XLSX: any = require('xlsx');
-const JSZip: any = require('jszip');
 
 const execFileAsync = promisify(execFile);
+
+const getCreativeAudio = () => require('../creative/audio') as typeof import('../creative/audio');
+const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
+const getCreativeAssets = () => require('../creative/assets') as typeof import('../creative/assets');
+const getCreativeLayerExtraction = () => require('../creative/layer-extraction') as typeof import('../creative/layer-extraction');
+const getCreativeModelPaths = () => require('../creative/onnx/model-paths') as typeof import('../creative/onnx/model-paths');
+const getHyperframesBridge = () => require('../creative/hyperframes-bridge') as typeof import('../creative/hyperframes-bridge');
+const getHyperframesQa = () => require('../creative/hyperframes-qa') as typeof import('../creative/hyperframes-qa');
+const getHyperframesExportAdapter = () => require('../creative/hyperframes-export-adapter') as typeof import('../creative/hyperframes-export-adapter');
+const getHyperframesCatalog = () => require('../creative/hyperframes-catalog') as typeof import('../creative/hyperframes-catalog');
+const getHyperframesProducer = () => require('../creative/hyperframes-producer') as typeof import('../creative/hyperframes-producer');
 
 let _requireGatewayAuth: any;
 let _broadcastWS: (msg: any) => void = () => {};
@@ -114,6 +99,15 @@ function isPathInside(basePath: string, targetPath: string): boolean {
   if (!base || !target) return false;
   const rel = path.relative(base, target);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function requireGatewayAuthAllowQueryToken(req: any, res: any, next: any): void {
+  const evaluation = evaluateGatewayRequest(req, { allowQueryToken: true });
+  if (!evaluation.ok) {
+    res.status(evaluation.status).json({ error: evaluation.message });
+    return;
+  }
+  next();
 }
 
 function resolveCanvasPath(rawPath: string): { workspacePath: string; absPath: string; relPath: string; inWorkspace: boolean } {
@@ -179,6 +173,10 @@ function guessContentType(filePath: string): string {
       return 'application/javascript; charset=utf-8';
     case '.json':
       return 'application/json; charset=utf-8';
+    case '.glb':
+      return 'model/gltf-binary';
+    case '.gltf':
+      return 'model/gltf+json; charset=utf-8';
     case '.svg':
       return 'image/svg+xml; charset=utf-8';
     case '.png':
@@ -199,7 +197,7 @@ function guessContentType(filePath: string): string {
   }
 }
 
-type CanvasDocumentPreviewKind = 'pdf' | 'docx' | 'spreadsheet' | 'presentation' | 'unsupported';
+type CanvasDocumentPreviewKind = 'pdf' | 'docx' | 'spreadsheet' | 'presentation' | 'video' | 'unsupported';
 
 function escapePreviewHtml(value: any): string {
   return String(value ?? '')
@@ -239,6 +237,11 @@ function getCanvasDocumentPreviewKind(filePath: string): CanvasDocumentPreviewKi
       return 'spreadsheet';
     case '.pptx':
       return 'presentation';
+    case '.mp4':
+    case '.m4v':
+    case '.mov':
+    case '.webm':
+      return 'video';
     default:
       return 'unsupported';
   }
@@ -595,6 +598,7 @@ function normalizeZipTargetPath(basePath: string, relativeTarget: string): strin
 }
 
 async function buildDocxPreviewHtml(absPath: string, stat: fs.Stats): Promise<string> {
+  const mammoth: any = require('mammoth');
   const result = await mammoth.convertToHtml(
     { path: absPath },
     {
@@ -628,6 +632,7 @@ async function buildDocxPreviewHtml(absPath: string, stat: fs.Stats): Promise<st
 }
 
 async function buildSpreadsheetPreviewHtml(absPath: string, stat: fs.Stats): Promise<string> {
+  const XLSX: any = require('xlsx');
   const workbook = XLSX.readFile(absPath, { cellHTML: true, cellNF: true, cellStyles: true });
   const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames : [];
   const metaHtml = [
@@ -678,6 +683,7 @@ async function buildSpreadsheetPreviewHtml(absPath: string, stat: fs.Stats): Pro
 }
 
 async function buildPptxPreviewHtml(absPath: string, stat: fs.Stats): Promise<string> {
+  const JSZip: any = require('jszip');
   const zip = await JSZip.loadAsync(fs.readFileSync(absPath));
   const readZipText = async (entryPath: string): Promise<string> => {
     const file = zip.file(entryPath);
@@ -799,6 +805,38 @@ function buildUnsupportedDocumentPreviewHtml(absPath: string, stat: fs.Stats): s
         The assistant can still work with this file by exact workspace path.
       </div>
       <div style="margin-top:12px;font-family:Cascadia Code,Consolas,monospace;font-size:12px;color:#51627c">
+        ${escapePreviewHtml(absPath)}
+      </div>
+    </div>`,
+  });
+}
+
+function buildVideoDocumentPreviewHtml(absPath: string, stat: fs.Stats, relPath: string): string {
+  const ext = path.extname(absPath).toLowerCase() || '.mp4';
+  const fileName = path.basename(absPath);
+  const inlineUrl = `/api/canvas/inline?path=${encodeURIComponent(relPath)}`;
+  const mimeType = guessContentType(absPath) || 'video/mp4';
+  const metaHtml = [
+    `<div class="preview-meta-item"><strong>Type</strong> ${escapePreviewHtml(String(mimeType))}</div>`,
+    `<div class="preview-meta-item"><strong>Size</strong> ${escapePreviewHtml(formatDocumentSize(stat.size))}</div>`,
+    `<div class="preview-meta-item"><strong>Extension</strong> ${escapePreviewHtml(ext.replace(/^\./, '').toUpperCase())}</div>`,
+  ].join('');
+  return buildCanvasDocumentShell({
+    title: fileName,
+    eyebrow: 'Video Export',
+    summary: 'This MP4/Web video is loaded as playable media in the canvas.',
+    metaHtml,
+    bodyHtml: `<div class="panel-card" style="padding:0;overflow:hidden;background:#050816">
+      <video
+        src="${escapePreviewHtml(inlineUrl)}"
+        controls
+        playsinline
+        preload="metadata"
+        style="display:block;width:100%;max-height:72vh;background:#050816;object-fit:contain"
+      ></video>
+    </div>
+    <div class="panel-card" style="margin-top:14px">
+      <div style="font-family:Cascadia Code,Consolas,monospace;font-size:12px;color:#51627c;word-break:break-word">
         ${escapePreviewHtml(absPath)}
       </div>
     </div>`,
@@ -1048,7 +1086,7 @@ async function normalizeCreativeSceneDocForStorage(
 ): Promise<ReturnType<typeof normalizeCreativeSceneDoc>> {
   const baseDoc = normalizeCreativeSceneDoc(rawDoc);
   if (!baseDoc.audioTrack.source) return baseDoc;
-  return enrichCreativeSceneDocAudio(storage, baseDoc, {
+  return getCreativeAudio().enrichCreativeSceneDocAudio(storage, baseDoc, {
     resolveLocalPath: (rawSource) => resolveCreativeAudioSourcePath(storage, rawSource),
     forceAnalysis: options.forceAudioAnalysis === true,
   });
@@ -2271,11 +2309,12 @@ function sanitizeHtmlMotionAssetId(raw: any, fallback = ''): string {
 
 function normalizeHtmlMotionAssetType(raw: any, source = ''): string {
   const explicit = String(raw || '').trim().toLowerCase();
-  if (['image', 'video', 'audio', 'font', 'asset'].includes(explicit)) return explicit;
+  if (['image', 'video', 'audio', 'font', 'model', 'asset'].includes(explicit)) return explicit;
   const mime = String(guessContentType(source) || '').toLowerCase();
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
   if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('model/') || /\.glb$|\.gltf$/i.test(String(source || ''))) return 'model';
   if (/\.woff2?$|\.ttf$|\.otf$/i.test(String(source || ''))) return 'font';
   return 'asset';
 }
@@ -2610,6 +2649,26 @@ function renderHtmlMotionClipHtml(storage: ReturnType<typeof resolveCreativeStor
   return html;
 }
 
+function copyThreeVendorForStandalone(targetVendorDir: string): void {
+  const threeRoot = path.resolve(getWorkspaceRoot(), 'node_modules', 'three');
+  if (!fs.existsSync(threeRoot) || !fs.statSync(threeRoot).isDirectory()) return;
+  const copyDir = (fromRel: string) => {
+    const from = path.join(threeRoot, fromRel);
+    const to = path.join(targetVendorDir, 'three', fromRel);
+    if (!fs.existsSync(from)) return;
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.cpSync(from, to, {
+      recursive: true,
+      filter: (source) => {
+        const ext = path.extname(source).toLowerCase();
+        return fs.statSync(source).isDirectory() || ['.js', '.mjs', '.json', '.wasm'].includes(ext);
+      },
+    });
+  };
+  copyDir('build');
+  copyDir(path.join('examples', 'jsm'));
+}
+
 function writeStandaloneHtmlMotionExport(options: {
   storage: ReturnType<typeof resolveCreativeStorage>;
   htmlPath: string;
@@ -2653,6 +2712,10 @@ function writeStandaloneHtmlMotionExport(options: {
       path: relativeAssetPath,
       mimeType: asset.mimeType || null,
     });
+  }
+  if (/\/api\/canvas\/vendor\/three\//.test(html)) {
+    copyThreeVendorForStandalone(path.join(assetsDir, 'vendor'));
+    html = html.replace(/\/api\/canvas\/vendor\/three\//g, 'assets/vendor/three/');
   }
   const lint = lintHtmlMotionComposition(html, {
     ...manifest,
@@ -2946,13 +3009,21 @@ async function openHtmlMotionPage(options: { url: string; width: number; height:
     deviceScaleFactor: 1,
   });
   const page = await context.newPage();
-  page.setDefaultTimeout?.(10_000);
-  page.setDefaultNavigationTimeout?.(15_000);
+  page.setDefaultTimeout?.(20_000);
+  page.setDefaultNavigationTimeout?.(20_000);
   await page.goto(options.url, { waitUntil: 'domcontentloaded', timeout: 15_000 });
   await page.addStyleTag({
     content: 'html,body{margin:0!important;overflow:hidden!important;}',
   });
+  await assertHtmlMotionPageLoaded(page, options.url);
   return { browser, context, page };
+}
+
+async function assertHtmlMotionPageLoaded(page: any, url: string): Promise<void> {
+  const bodyText = await page.evaluate(`() => String(document.body && document.body.innerText || '').trim().slice(0, 300)`).catch(() => '');
+  if (/Account login required|not_authenticated|Unauthorized|Forbidden origin/i.test(String(bodyText || ''))) {
+    throw new Error(`HTML motion preview auth failed for ${url}: ${bodyText}`);
+  }
 }
 
 function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -2971,11 +3042,30 @@ async function setHtmlMotionPageTime(page: any, atMs: number): Promise<void> {
     const doc = globalThis.document;
     globalThis.__PROMETHEUS_HTML_MOTION_TIME_SECONDS__ = timeSeconds;
     globalThis.__PROMETHEUS_HTML_MOTION_TIME_MS__ = Math.round(timeSeconds * 1000);
+    const seekHyperframesTimelines = () => {
+      try {
+        if (typeof globalThis.__PROM_HF_PATCH_TIMELINES__ === 'function') globalThis.__PROM_HF_PATCH_TIMELINES__();
+      } catch {}
+      try {
+        const timelines = globalThis.__timelines || {};
+        Object.keys(timelines).forEach((key) => {
+          const timeline = timelines[key];
+          if (!timeline) return;
+          if (typeof timeline.seek === 'function') timeline.seek(timeSeconds, false);
+          else if (typeof timeline.totalTime === 'function') timeline.totalTime(timeSeconds, false);
+          else if (typeof timeline.time === 'function') timeline.time(timeSeconds, false);
+        });
+      } catch {}
+    };
     try {
       globalThis.dispatchEvent(new CustomEvent('prometheus-html-motion-seek', {
         detail: { timeSeconds, timeMs: Math.round(timeSeconds * 1000) }
       }));
     } catch {}
+    try {
+      globalThis.postMessage({ source: 'hf-parent', action: 'seek', payload: { timeMs: Math.round(timeSeconds * 1000) } }, '*');
+    } catch {}
+    seekHyperframesTimelines();
     try {
       const animations = typeof doc.getAnimations === 'function' ? doc.getAnimations({ subtree: true }) : [];
       for (const animation of animations) {
@@ -3070,9 +3160,56 @@ async function setHtmlMotionPageTime(page: any, atMs: number): Promise<void> {
   }`);
   await page.evaluate(`() => new Promise((resolve) => {
     const raf = globalThis.requestAnimationFrame || ((callback) => setTimeout(callback, 16));
-    raf(() => raf(() => resolve(true)));
+    raf(() => raf(() => {
+      try {
+        const timeSeconds = Number(globalThis.__PROMETHEUS_HTML_MOTION_TIME_SECONDS__) || 0;
+        const timelines = globalThis.__timelines || {};
+        Object.keys(timelines).forEach((key) => {
+          const timeline = timelines[key];
+          if (!timeline) return;
+          if (typeof timeline.seek === 'function') timeline.seek(timeSeconds, false);
+          else if (typeof timeline.totalTime === 'function') timeline.totalTime(timeSeconds, false);
+          else if (typeof timeline.time === 'function') timeline.time(timeSeconds, false);
+        });
+      } catch {}
+      resolve(true);
+    }));
   })`);
   await page.waitForTimeout(20);
+}
+
+async function screenshotHtmlMotionFrame(page: any, options: {
+  pathForFrame?: string;
+  timeoutMs: number;
+  label: string;
+}): Promise<Buffer> {
+  let lastError: any = null;
+  const timeoutMs = Math.max(10_000, Math.round(Number(options.timeoutMs) || 45_000));
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      if (attempt > 1) await page.waitForTimeout(250 * attempt);
+      return await promiseWithTimeout<Buffer>(
+        page.screenshot({
+          type: 'png',
+          path: options.pathForFrame,
+          fullPage: false,
+          animations: 'disabled',
+          caret: 'hide',
+          timeout: timeoutMs,
+        }),
+        timeoutMs + 1_000,
+        `${options.label}${attempt > 1 ? ` retry ${attempt}` : ''}`,
+      );
+    } catch (err: any) {
+      lastError = err;
+      try {
+        await page.evaluate(`() => {
+          try { document.body && document.body.offsetHeight; } catch {}
+        }`);
+      } catch {}
+    }
+  }
+  throw lastError;
 }
 
 async function captureHtmlMotionFrames(options: {
@@ -3097,19 +3234,14 @@ async function captureHtmlMotionFrames(options: {
     const frames: Array<{ width: number; height: number; atMs: number; mimeType: string; dataUrl?: string }> = [];
     for (let index = 0; index < options.sampleTimesMs.length; index += 1) {
       const atMs = Math.max(0, Math.round(Number(options.sampleTimesMs[index]) || 0));
-      const timeoutMs = Math.max(1000, Math.round(Number(options.perFrameTimeoutMs) || 8000));
+      const timeoutMs = Math.max(10_000, Math.round(Number(options.perFrameTimeoutMs) || 45_000));
       await promiseWithTimeout(setHtmlMotionPageTime(page, atMs), timeoutMs, `HTML motion seek frame ${index + 1}`);
       const pathForFrame = options.framePathForIndex ? options.framePathForIndex(index) : undefined;
-      const buffer = await promiseWithTimeout<Buffer>(
-        page.screenshot({
-          type: 'png',
-          path: pathForFrame,
-          fullPage: false,
-          timeout: timeoutMs,
-        }),
-        timeoutMs + 500,
-        `HTML motion screenshot frame ${index + 1}`,
-      );
+      const buffer = await screenshotHtmlMotionFrame(page, {
+        pathForFrame,
+        timeoutMs,
+        label: `HTML motion screenshot frame ${index + 1}`,
+      });
       frames.push({
         width: Math.max(1, Math.round(Number(options.width) || 1080)),
         height: Math.max(1, Math.round(Number(options.height) || 1920)),
@@ -3156,7 +3288,7 @@ async function inspectHtmlMotionPage(options: {
     let exactDuplicateFrameCount = 0;
     for (let index = 0; index < options.sampleTimesMs.length; index += 1) {
       const atMs = Math.max(0, Math.min(Math.max(0, options.durationMs), Math.round(Number(options.sampleTimesMs[index]) || 0)));
-      const timeoutMs = Math.max(1000, Math.round(Number(options.perFrameTimeoutMs) || 8000));
+      const timeoutMs = Math.max(10_000, Math.round(Number(options.perFrameTimeoutMs) || 45_000));
       await promiseWithTimeout(setHtmlMotionPageTime(page, atMs), timeoutMs, `HTML motion inspect seek ${index + 1}`);
       const textIssues = await page.evaluate(`(viewport) => {
         function selectorFor(el) {
@@ -3294,6 +3426,38 @@ async function inspectHtmlMotionPage(options: {
         }
         return findings;
       }`, { width: options.width, height: options.height });
+      const webglIssues = await page.evaluate(`() => {
+        function selectorFor(el) {
+          if (el.id) return '#' + el.id;
+          var role = el.getAttribute && el.getAttribute('data-role');
+          if (role) return el.tagName.toLowerCase() + '[data-role="' + role + '"]';
+          return el.tagName.toLowerCase();
+        }
+        var findings = [];
+        Array.from(document.querySelectorAll('canvas[data-prometheus-webgl="true"],canvas[data-renderer="three"]')).forEach(function(canvas) {
+          var rect = canvas.getBoundingClientRect();
+          var selector = selectorFor(canvas);
+          if (rect.width < 8 || rect.height < 8) {
+            findings.push({ severity:'error', code:'webgl-zero-size', selector:selector, message:'WebGL canvas has no visible render area.' });
+          }
+          var status = String(canvas.dataset.prometheusThreeStatus || '').toLowerCase();
+          if (status === 'loading') {
+            findings.push({ severity:'warning', code:'three-model-loading', selector:selector, message:'Three.js model was still loading at capture time.' });
+          }
+          if (status === 'fallback') {
+            findings.push({ severity:'info', code:'three-fallback-object', selector:selector, message:'Three.js scene rendered a procedural fallback instead of the requested model asset.' });
+          }
+          try {
+            var data = canvas.toDataURL('image/png');
+            if (!data || data.length < 512) {
+              findings.push({ severity:'warning', code:'webgl-empty-data-url', selector:selector, message:'WebGL canvas produced a tiny frame payload; verify the scene is not blank.' });
+            }
+          } catch (err) {
+            findings.push({ severity:'warning', code:'webgl-readback-blocked', selector:selector, message:'WebGL canvas could not be read back for blank-frame QA.' });
+          }
+        });
+        return findings;
+      }`);
       const buffer = await promiseWithTimeout<Buffer>(
         page.screenshot({ type: 'png', fullPage: false, timeout: timeoutMs }),
         timeoutMs + 500,
@@ -3308,10 +3472,13 @@ async function inspectHtmlMotionPage(options: {
       for (const finding of Array.isArray(spatialIssues) ? spatialIssues : []) {
         issues.push({ ...finding, atMs });
       }
+      for (const finding of Array.isArray(webglIssues) ? webglIssues : []) {
+        issues.push({ ...finding, atMs });
+      }
       samples.push({
         atMs,
         textIssueCount: Array.isArray(textIssues) ? textIssues.length : 0,
-        spatialIssueCount: Array.isArray(spatialIssues) ? spatialIssues.length : 0,
+        spatialIssueCount: (Array.isArray(spatialIssues) ? spatialIssues.length : 0) + (Array.isArray(webglIssues) ? webglIssues.length : 0),
         frameHash,
       });
     }
@@ -3373,6 +3540,7 @@ async function renderHtmlMotionVideoFrames(options: {
   frameRate: number;
   tempDir: string;
   maxFrames?: number;
+  perFrameTimeoutMs?: number;
   onProgress?: (progress: { phase: 'frames'; index: number; total: number; atMs: number }) => void;
 }): Promise<{
   framePattern: string;
@@ -3395,7 +3563,7 @@ async function renderHtmlMotionVideoFrames(options: {
     height: options.height,
     sampleTimesMs,
     includeDataUrl: false,
-    perFrameTimeoutMs: 8000,
+    perFrameTimeoutMs: Math.max(10_000, Math.round(Number(options.perFrameTimeoutMs) || 45_000)),
     onProgress: (progress) => {
       if (progress.index === 1 || progress.index === progress.total || progress.index % Math.max(1, Math.ceil(progress.total / 20)) === 0) {
         options.onProgress?.({ phase: 'frames', ...progress });
@@ -4239,6 +4407,8 @@ router.get('/api/canvas/preview-document', (req: any, res: any, next: any) => _r
       html = await buildSpreadsheetPreviewHtml(absPath, stat);
     } else if (previewKind === 'presentation') {
       html = await buildPptxPreviewHtml(absPath, stat);
+    } else if (previewKind === 'video') {
+      html = buildVideoDocumentPreviewHtml(absPath, stat, relPath);
     } else {
       html = buildUnsupportedDocumentPreviewHtml(absPath, stat);
     }
@@ -4440,6 +4610,7 @@ router.get('/api/canvas/project-export', (req: any, res: any, next: any) => _req
       const archiveName = `${sanitizeSlug(projectLabel)}.zip`;
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', `attachment; filename="${archiveName}"`);
+      const archiver = require('archiver');
       const archive = archiver('zip', { zlib: { level: 9 } });
       archive.on('error', (err: Error) => {
         if (!res.headersSent) res.status(500).json({ success: false, error: err.message || 'Could not build ZIP export.' });
@@ -4870,7 +5041,7 @@ router.post('/api/canvas/html-motion-clip/restore', (req: any, res: any, next: a
   }
 });
 
-router.get('/api/canvas/html-motion-clip/preview', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+router.get('/api/canvas/html-motion-clip/preview', requireGatewayAuthAllowQueryToken, (req: any, res: any) => {
   const sessionId = String(req.query?.sessionId || 'default').trim() || 'default';
   const targetPath = String(req.query?.path || '').trim();
   if (!targetPath) {
@@ -4896,7 +5067,34 @@ router.get('/api/canvas/html-motion-clip/preview', (req: any, res: any, next: an
   }
 });
 
-router.get('/api/canvas/html-motion-clip/asset', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+router.get('/api/canvas/vendor/*', (req: any, res: any) => {
+  try {
+    const requested = String(req.params?.[0] || '').replace(/\\/g, '/');
+    if (!requested || requested.includes('..') || !requested.startsWith('three/')) {
+      res.status(403).send('Vendor asset is not allowed.');
+      return;
+    }
+    const threeRoot = path.resolve(getWorkspaceRoot(), 'node_modules', 'three');
+    const rel = requested.replace(/^three\//, '');
+    const absPath = path.resolve(threeRoot, rel);
+    if (!isPathInside(threeRoot, absPath) || !fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+      res.status(404).send('Vendor asset not found.');
+      return;
+    }
+    const ext = path.extname(absPath).toLowerCase();
+    if (!['.js', '.mjs', '.json', '.wasm'].includes(ext)) {
+      res.status(403).send('Vendor asset type is not allowed.');
+      return;
+    }
+    res.setHeader('Content-Type', guessContentType(absPath));
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(absPath);
+  } catch (err: any) {
+    res.status(500).send(String(err?.message || 'Could not serve vendor asset.'));
+  }
+});
+
+router.get('/api/canvas/html-motion-clip/asset', requireGatewayAuthAllowQueryToken, (req: any, res: any) => {
   const sessionId = String(req.query?.sessionId || 'default').trim() || 'default';
   const targetPath = String(req.query?.path || '').trim();
   const assetId = sanitizeHtmlMotionAssetId(req.query?.asset || '');
@@ -5023,7 +5221,7 @@ router.post('/api/canvas/html-motion-clip/inspect', (req: any, res: any, next: a
       height,
       durationMs,
       sampleTimesMs,
-      perFrameTimeoutMs: Math.max(1000, Number(req.body?.perFrameTimeoutMs) || 8000),
+      perFrameTimeoutMs: Math.max(10_000, Number(req.body?.perFrameTimeoutMs) || 45_000),
     });
     res.json({
       success: true,
@@ -5233,7 +5431,7 @@ router.post('/api/canvas/html-motion-clip/export', (req: any, res: any, next: an
         height,
         durationMs,
         sampleTimesMs: qaSamples,
-        perFrameTimeoutMs: Math.max(1000, Number(req.body?.perFrameTimeoutMs) || 8000),
+        perFrameTimeoutMs: Math.max(10_000, Number(req.body?.perFrameTimeoutMs) || 45_000),
       });
       if (!preExportInspect.ok && req.body?.force !== true) {
         res.status(400).json({
@@ -5255,6 +5453,7 @@ router.post('/api/canvas/html-motion-clip/export', (req: any, res: any, next: an
         frameRate,
         tempDir,
         maxFrames,
+        perFrameTimeoutMs: Math.max(10_000, Number(req.body?.perFrameTimeoutMs) || 45_000),
         onProgress: (progress) => {
           _broadcastWS({
             type: 'creative_html_motion_export_progress',
@@ -5454,7 +5653,7 @@ router.get('/api/canvas/creative-assets', (req: any, res: any, next: any) => _re
       ? collectCreativeAssetEntries(storage.exportsDir, storage.workspacePath, storage.rootAbsPath, 'export')
       : [];
     const renderJobEntries = collectCreativeRenderJobEntries(storage);
-    const assetIndex = readCreativeAssetIndex(storage);
+    const assetIndex = getCreativeAssets().readCreativeAssetIndex(storage);
     res.json({
       success: true,
       sessionId,
@@ -5499,14 +5698,14 @@ router.get('/api/canvas/creative-asset-index', (req: any, res: any, next: any) =
       .split(',')
       .map((entry) => entry.trim())
       .filter(Boolean);
-    const assets = searchCreativeAssets(storage, {
+    const assets = getCreativeAssets().searchCreativeAssets(storage, {
       query: String(req.query?.query || '').trim(),
       kinds,
       tags: String(req.query?.tags || '').trim(),
       brandId: String(req.query?.brandId || '').trim() || null,
       limit: Math.max(1, Math.min(200, Number(req.query?.limit) || 50)),
     });
-    const index = readCreativeAssetIndex(storage);
+    const index = getCreativeAssets().readCreativeAssetIndex(storage);
     res.json({
       success: true,
       sessionId,
@@ -5528,7 +5727,7 @@ router.post('/api/canvas/creative-assets/import', (req: any, res: any, next: any
   const requestedRoot = String(req.body?.root || '').trim();
   try {
     const storage = resolveCreativeStorage(sessionId, requestedRoot);
-    const asset = await importCreativeAsset(storage, {
+    const asset = await getCreativeAssets().importCreativeAsset(storage, {
       source: String(req.body?.source || '').trim(),
       filename: String(req.body?.filename || '').trim() || undefined,
       tags: req.body?.tags,
@@ -5558,7 +5757,7 @@ router.post('/api/canvas/creative-assets/analyze', (req: any, res: any, next: an
   const requestedRoot = String(req.body?.root || '').trim();
   try {
     const storage = resolveCreativeStorage(sessionId, requestedRoot);
-    const asset = await analyzeCreativeAsset(storage, {
+    const asset = await getCreativeAssets().analyzeCreativeAsset(storage, {
       source: String(req.body?.source || '').trim(),
       tags: req.body?.tags,
       brandId: req.body?.brandId ? String(req.body.brandId) : null,
@@ -5588,7 +5787,7 @@ router.post('/api/canvas/creative-assets/generate', (req: any, res: any, next: a
   const requestedRoot = String(req.body?.root || '').trim();
   try {
     const storage = resolveCreativeStorage(sessionId, requestedRoot);
-    const asset = await generateCreativeAssetPlaceholder(storage, {
+    const asset = await getCreativeAssets().generateCreativeAssetPlaceholder(storage, {
       prompt: String(req.body?.prompt || '').trim(),
       width: Number(req.body?.width) || undefined,
       height: Number(req.body?.height) || undefined,
@@ -5616,9 +5815,10 @@ router.post('/api/canvas/creative-assets/generate', (req: any, res: any, next: a
 router.post('/api/canvas/creative-extract-layers', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
   const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
   const requestedRoot = String(req.body?.root || '').trim();
+  const requestId = String(req.body?.requestId || '').trim();
   try {
     const storage = resolveCreativeStorage(sessionId, requestedRoot);
-    const extraction = await extractCreativeLayers(storage, {
+    const extraction = await getCreativeLayerExtraction().extractCreativeLayers(storage, {
       source: String(req.body?.source || '').trim(),
       mode: req.body?.mode,
       prompt: req.body?.prompt ? String(req.body.prompt) : undefined,
@@ -5627,13 +5827,24 @@ router.post('/api/canvas/creative-extract-layers', (req: any, res: any, next: an
       preserveOriginal: req.body?.preserveOriginal !== false,
       copySource: req.body?.copySource !== false,
       maxTextLayers: Number(req.body?.maxTextLayers) || undefined,
-      maxShapeLayers: Number(req.body?.maxShapeLayers) || undefined,
-      useVision: req.body?.useVision !== false,
-      useOcr: req.body?.useOcr === true,
-      useSam: req.body?.useSam !== false,
-      inpaintBackground: req.body?.inpaintBackground !== false,
-      vectorTraceShapes: req.body?.vectorTraceShapes !== false,
-    });
+        maxShapeLayers: Number(req.body?.maxShapeLayers) || undefined,
+        useVision: req.body?.useVision !== false,
+        useOcr: req.body?.useOcr === true,
+        useSam: req.body?.useSam !== false,
+        inpaintBackground: req.body?.inpaintBackground !== false,
+        vectorTraceShapes: req.body?.vectorTraceShapes !== false,
+        requestId,
+        onProgress: (event) => {
+          _broadcastWS({
+            type: 'creative_extract_layers_progress',
+            sessionId,
+            creativeMode: getCreativeMode(sessionId) || null,
+            storageRoot: storage.rootAbsPath,
+            storageRootRelative: storage.rootRelPath,
+            ...event,
+          });
+        },
+      });
     _broadcastWS({
       type: 'creative_asset_index_updated',
       sessionId,
@@ -5673,7 +5884,7 @@ router.post('/api/canvas/creative-refine-mask', (req: any, res: any, next: any) 
           .filter((p: any) => Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y)))
           .map((p: any) => ({ x: Number(p.x), y: Number(p.y), positive: p.positive !== false }))
       : [];
-    const result = await refineCreativeLayerCutout({
+    const result = await getCreativeLayerExtraction().refineCreativeLayerCutout({
       storage,
       source,
       bbox: {
@@ -5701,7 +5912,7 @@ router.post('/api/canvas/creative-refine-mask', (req: any, res: any, next: any) 
 
 router.get('/api/canvas/creative-model-status', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (_req: any, res: any) => {
   try {
-    res.json({ success: true, models: listCreativeModelStatus() });
+    res.json({ success: true, models: getCreativeModelPaths().listCreativeModelStatus() });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || 'Could not list creative models') });
   }
@@ -5717,7 +5928,7 @@ router.get('/api/canvas/creative-audio-analysis', (req: any, res: any, next: any
   try {
     const requestedRoot = String(req.query?.root || '').trim();
     const storage = resolveCreativeStorage(sessionId, requestedRoot);
-    const track = await enrichCreativeAudioTrack(storage, {
+    const track = await getCreativeAudio().enrichCreativeAudioTrack(storage, {
       source,
       label: String(req.query?.label || ''),
     }, {
@@ -5749,46 +5960,11 @@ router.get('/api/canvas/creative-motion-templates', (req: any, res: any, next: a
       success: true,
       sessionId,
       creativeMode: getCreativeMode(sessionId) || null,
-      ...getCreativeMotionCatalog(),
+      ...getCreativeMotionRuntime().getCreativeMotionCatalog(),
     });
   } catch (err: any) {
     const message = String(err?.message || 'Could not inspect creative motion templates');
     res.status(500).json({ success: false, error: message });
-  }
-});
-
-router.get('/api/canvas/creative-templates', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
-  const sessionId = String(req.query?.sessionId || 'default').trim() || 'default';
-  try {
-    const templates = listCreativePremiumTemplates();
-    res.json({
-      success: true,
-      sessionId,
-      creativeMode: getCreativeMode(sessionId) || null,
-      templates,
-      counts: { templates: templates.length },
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: String(err?.message || err || 'Failed to list Creative templates.') });
-  }
-});
-
-router.get('/api/canvas/creative-templates/:templateId', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
-  const sessionId = String(req.query?.sessionId || 'default').trim() || 'default';
-  try {
-    const template = getCreativePremiumTemplate(req.params?.templateId);
-    if (!template) {
-      res.status(404).json({ success: false, error: 'Unknown Creative template.' });
-      return;
-    }
-    res.json({
-      success: true,
-      sessionId,
-      creativeMode: getCreativeMode(sessionId) || null,
-      template,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: String(err?.message || err || 'Failed to read Creative template.') });
   }
 });
 
@@ -5797,8 +5973,8 @@ router.post('/api/canvas/creative-motion-preview', (req: any, res: any, next: an
   try {
     const requestedRoot = String(req.body?.root || '').trim();
     const storage = resolveCreativeStorage(sessionId, requestedRoot);
-    const prepared = prepareCreativeMotionTemplate(req.body || {});
-    const previewResult = await createCreativeMotionPreview(storage, prepared.input);
+    const prepared = getCreativeMotionRuntime().prepareCreativeMotionTemplate(req.body || {});
+    const previewResult = await getCreativeMotionRuntime().createCreativeMotionPreview(storage, prepared.input);
     const preview = previewResult.preview;
     const instance = { ...prepared.instance, preview };
     _broadcastWS({
@@ -5838,7 +6014,7 @@ router.post('/api/canvas/creative-motion-preview', (req: any, res: any, next: an
 router.post('/api/canvas/creative-motion-apply', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
   const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
   try {
-    const prepared = prepareCreativeMotionTemplate(req.body || {});
+    const prepared = getCreativeMotionRuntime().prepareCreativeMotionTemplate(req.body || {});
     res.json({
       success: prepared.validation.ok,
       sessionId,
@@ -5858,11 +6034,11 @@ router.post('/api/canvas/creative-motion-variants', (req: any, res: any, next: a
   const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
   try {
     const templateId = String(req.body?.templateId || 'caption-reel').trim().toLowerCase();
-    const catalog = getCreativeMotionCatalog();
+    const catalog = getCreativeMotionRuntime().getCreativeMotionCatalog();
     const template = catalog.templates.find((candidate: any) => candidate.id === templateId) || catalog.templates[0];
     const count = Math.max(1, Math.min(8, Number(req.body?.count) || Math.min(3, template?.presets?.length || 3)));
     const variants = (template?.presets || []).slice(0, count).map((preset: any, index: number) => {
-      const prepared = prepareCreativeMotionTemplate({
+      const prepared = getCreativeMotionRuntime().prepareCreativeMotionTemplate({
         ...(req.body || {}),
         templateId: template.id,
         presetId: preset.id,
@@ -6559,6 +6735,205 @@ router.post('/api/canvas/creative-scene', (req: any, res: any, next: any) => _re
   }
 });
 
+// ── Composition (multi-clip timeline) ─────────────────────────────────────
+router.get('/api/canvas/composition', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const targetPath = String(req.query?.path || '').trim();
+  if (!targetPath) {
+    res.status(400).json({ success: false, error: 'path query param required' });
+    return;
+  }
+  try {
+    const { absPath, relPath } = resolveCanvasPath(targetPath);
+    if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+      res.status(404).json({ success: false, error: 'Creative composition not found.' });
+      return;
+    }
+    const raw = fs.readFileSync(absPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const { normalizeCreativeComposition, summarizeCreativeComposition } = require('../creative/contracts');
+    const composition = normalizeCreativeComposition(parsed?.composition || parsed?.doc || parsed);
+    res.json({
+      success: true,
+      path: relPath,
+      absPath,
+      composition,
+      summary: summarizeCreativeComposition(composition),
+      meta: {
+        savedAt: parsed?.savedAt || null,
+        sessionId: parsed?.sessionId || null,
+        creativeMode: parsed?.creativeMode || null,
+        storageRoot: parsed?.storageRoot || null,
+      },
+    });
+  } catch (err: any) {
+    const message = String(err?.message || 'Could not read composition');
+    const status = /outside workspace|allowed/i.test(message) ? 403 : (/Unexpected token|JSON/i.test(message) ? 400 : 500);
+    res.status(status).json({ success: false, error: message });
+  }
+});
+
+router.post('/api/canvas/composition', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
+  const compositionInput = req.body?.composition || req.body?.doc;
+  if (!compositionInput || typeof compositionInput !== 'object' || Array.isArray(compositionInput)) {
+    res.status(400).json({ success: false, error: 'composition must be an object' });
+    return;
+  }
+  try {
+    const requestedRoot = String(req.body?.root || '').trim();
+    const storage = resolveCreativeStorage(sessionId, requestedRoot);
+    const modeRaw = String(req.body?.mode || getCreativeMode(sessionId) || 'video').trim().toLowerCase();
+    const creativeMode = modeRaw === 'video' ? 'video' : (modeRaw === 'design' ? 'design' : 'canvas');
+    const filename = sanitizeCreativeSceneFilename(req.body?.filename, `${creativeMode}-composition.json`);
+    const relativePath = sanitizeRelativeUploadPath(String(req.body?.relativePath || '').trim());
+    let targetPath = relativePath
+      ? path.resolve(storage.scenesDir, relativePath)
+      : path.join(storage.scenesDir, filename);
+    if (path.extname(targetPath).toLowerCase() !== '.json') {
+      targetPath = `${targetPath}.json`;
+    }
+    if (!isPathInside(storage.scenesDir, targetPath)) {
+      res.status(400).json({ success: false, error: 'relativePath must stay within the creative scenes directory' });
+      return;
+    }
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    const { normalizeCreativeComposition, summarizeCreativeComposition } = require('../creative/contracts');
+    const composition = normalizeCreativeComposition(compositionInput);
+    const summary = summarizeCreativeComposition(composition);
+    const payload = {
+      kind: 'prometheus-creative-composition',
+      version: 1,
+      savedAt: new Date().toISOString(),
+      sessionId,
+      creativeMode,
+      storageRoot: storage.rootRelPath,
+      summary,
+      composition,
+    };
+    fs.writeFileSync(targetPath, JSON.stringify(payload, null, 2), 'utf-8');
+    const relPath = buildCreativeStorageRelativePath(storage.workspacePath, targetPath);
+    _broadcastWS({
+      type: 'creative_composition_saved',
+      sessionId,
+      creativeMode,
+      path: relPath,
+      absPath: targetPath,
+      storageRoot: storage.rootAbsPath,
+      storageRootRelative: storage.rootRelPath,
+      summary,
+    });
+    res.json({
+      success: true,
+      sessionId,
+      creativeMode,
+      path: relPath,
+      absPath: targetPath,
+      storageRoot: storage.rootAbsPath,
+      storageRootRelative: storage.rootRelPath,
+      usesProjectRoot: storage.usesProjectRoot,
+      summary,
+    });
+  } catch (err: any) {
+    const message = String(err?.message || 'Could not save composition');
+    const status = /outside workspace|allowed/i.test(message) ? 403 : 500;
+    res.status(status).json({ success: false, error: message });
+  }
+});
+
+router.post('/api/canvas/composition/render', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
+  const compositionInput = req.body?.composition;
+  if (!compositionInput || typeof compositionInput !== 'object' || Array.isArray(compositionInput)) {
+    res.status(400).json({ success: false, error: 'composition must be an object' });
+    return;
+  }
+  const requestedFormat = String(req.body?.format || 'mp4').toLowerCase();
+  if (requestedFormat !== 'mp4' && requestedFormat !== 'webm') {
+    res.status(400).json({ success: false, error: 'format must be mp4 or webm' });
+    return;
+  }
+  try {
+    const requestedRoot = String(req.body?.root || '').trim();
+    const storage = resolveCreativeStorage(sessionId, requestedRoot);
+    const { normalizeCreativeComposition } = require('../creative/contracts');
+    const { renderComposition } = require('../creative/renderers/composition_renderer');
+    const composition = normalizeCreativeComposition(compositionInput);
+    const exportsDir = path.join(storage.creativeDir, 'exports');
+    fs.mkdirSync(exportsDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = String(req.body?.filename || `composition-${ts}.${requestedFormat}`).trim();
+    const outputPath = path.join(exportsDir, filename);
+    const startedAt = Date.now();
+    const result = await renderComposition({
+      composition,
+      workspacePath: storage.workspacePath,
+      outputPath,
+      format: requestedFormat as 'mp4' | 'webm',
+      onProgress: (event: any) => {
+        _broadcastWS({
+          type: 'creative_composition_render_progress',
+          sessionId,
+          phase: event.phase,
+          clipId: event.clipId,
+          ratio: event.ratio,
+          message: event.message,
+        });
+      },
+    });
+    const relPath = buildCreativeStorageRelativePath(storage.workspacePath, outputPath);
+    _broadcastWS({
+      type: 'creative_composition_rendered',
+      sessionId,
+      path: relPath,
+      absPath: outputPath,
+      format: result.format,
+      durationMs: result.durationMs,
+      width: result.width,
+      height: result.height,
+      frameRate: result.frameRate,
+      elapsedMs: Date.now() - startedAt,
+    });
+    res.json({
+      success: true,
+      sessionId,
+      path: relPath,
+      absPath: outputPath,
+      format: result.format,
+      durationMs: result.durationMs,
+      width: result.width,
+      height: result.height,
+      frameRate: result.frameRate,
+      clipCount: result.clipCount,
+      audioTrackCount: result.audioTrackCount,
+      elapsedMs: Date.now() - startedAt,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || 'Composition render failed') });
+  }
+});
+
+router.post('/api/canvas/composition/lint', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const compositionInput = req.body?.composition;
+  if (!compositionInput || typeof compositionInput !== 'object' || Array.isArray(compositionInput)) {
+    res.status(400).json({ success: false, error: 'composition must be an object' });
+    return;
+  }
+  try {
+    const { normalizeCreativeComposition, summarizeCreativeComposition } = require('../creative/contracts');
+    const { lintComposition } = require('../creative/composition');
+    const composition = normalizeCreativeComposition(compositionInput);
+    const lint = lintComposition(composition);
+    res.json({
+      success: true,
+      ok: lint.ok,
+      issues: lint.issues,
+      summary: summarizeCreativeComposition(composition),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || 'Lint failed') });
+  }
+});
+
 router.post('/api/canvas/creative-export', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
   const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
   const rawBase64 = String(req.body?.base64 || '').trim();
@@ -6620,6 +6995,88 @@ router.post('/api/canvas/creative-export', (req: any, res: any, next: any) => _r
   }
 });
 
+router.post('/api/canvas/creative-layer-assets', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
+  const requestedRoot = String(req.body?.root || '').trim();
+  const rawLayers = Array.isArray(req.body?.layers) ? req.body.layers : [];
+  if (!rawLayers.length) {
+    res.status(400).json({ success: false, error: 'layers are required' });
+    return;
+  }
+  try {
+    const storage = resolveCreativeStorage(sessionId, requestedRoot);
+    const assets = getCreativeAssets();
+    const batchName = sanitizeCreativeAssetFilename(req.body?.batchName, `layers-${Date.now().toString(36)}`).replace(/\.[a-z0-9]+$/i, '');
+    const layerDir = path.join(assets.getCreativeAssetsDir(storage), 'layers', batchName);
+    fs.mkdirSync(layerDir, { recursive: true });
+    if (!isPathInside(assets.getCreativeAssetsDir(storage), layerDir)) {
+      res.status(400).json({ success: false, error: 'layer asset output escaped the creative asset directory' });
+      return;
+    }
+
+    const saved: any[] = [];
+    for (let index = 0; index < Math.min(rawLayers.length, 300); index += 1) {
+      const layer = rawLayers[index] || {};
+      const mimeType = String(layer.mimeType || 'image/png').trim().toLowerCase() === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+      const ext = mimeType === 'image/jpeg' ? '.jpg' : '.png';
+      const fallbackName = `layer-${String(index + 1).padStart(3, '0')}${ext}`;
+      const cleanName = sanitizeCreativeAssetFilename(layer.filename, fallbackName);
+      const filename = path.extname(cleanName) ? cleanName.replace(/\.[a-z0-9]+$/i, ext) : `${cleanName}${ext}`;
+      const targetPath = path.join(layerDir, filename);
+      if (!isPathInside(layerDir, targetPath)) throw new Error('Layer asset filename escaped the batch directory.');
+      const rawBase64 = String(layer.base64 || '').trim();
+      if (!rawBase64) continue;
+      fs.writeFileSync(targetPath, Buffer.from(rawBase64.replace(/^data:.*?;base64,/, ''), 'base64'));
+      const record = await assets.analyzeCreativeAsset(storage, {
+        source: targetPath,
+        tags: ['extracted-layer', 'layer-asset', ...(Array.isArray(layer.tags) ? layer.tags : [])],
+      });
+      const withMetadata = assets.upsertCreativeAssetRecord(storage, {
+        ...record,
+        metadata: {
+          ...(record.metadata || {}),
+          layerAsset: {
+            sourceElementId: layer.elementId ? String(layer.elementId) : null,
+            sourceElementType: layer.elementType ? String(layer.elementType) : null,
+            sourceSceneId: req.body?.sceneId ? String(req.body.sceneId) : null,
+            sourceMode: req.body?.mode ? String(req.body.mode) : getCreativeMode(sessionId) || null,
+            exportedAt: new Date().toISOString(),
+            width: Number.isFinite(Number(layer.width)) ? Number(layer.width) : record.width,
+            height: Number.isFinite(Number(layer.height)) ? Number(layer.height) : record.height,
+          },
+        },
+      });
+      saved.push(withMetadata);
+    }
+
+    const creativeMode = String(req.body?.mode || getCreativeMode(sessionId) || '').trim() || null;
+    _broadcastWS({
+      type: 'creative_asset_index_updated',
+      sessionId,
+      creativeMode,
+      action: 'save_layer_assets',
+      assetCount: saved.length,
+      storageRoot: storage.rootAbsPath,
+      storageRootRelative: storage.rootRelPath,
+    });
+    res.json({
+      success: true,
+      sessionId,
+      creativeMode,
+      batchName,
+      count: saved.length,
+      assets: saved,
+      storageRoot: storage.rootAbsPath,
+      storageRootRelative: storage.rootRelPath,
+      usesProjectRoot: storage.usesProjectRoot,
+    });
+  } catch (err: any) {
+    const message = String(err?.message || 'Could not save layer assets');
+    const status = /outside workspace|allowed|escaped/i.test(message) ? 403 : 500;
+    res.status(status).json({ success: false, error: message });
+  }
+});
+
 // GET /api/creative-mode?sessionId=<id>
 router.get('/api/creative-mode', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
   const sessionId = String(req.query?.sessionId || 'default');
@@ -6633,6 +7090,256 @@ router.post('/api/creative-mode', (req: any, res: any, next: any) => _requireGat
   const creativeMode = setCreativeMode(sessionId, mode);
   _broadcastWS({ type: 'creative_mode_changed', sessionId, creativeMode });
   res.json({ success: true, sessionId, creativeMode });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// HyperFrames bridge routes (Session A + C)
+// ─────────────────────────────────────────────────────────────────────────
+
+// POST /api/canvas/hyperframes/extract-layers  body: { html }
+// Returns Prometheus-shaped layer records the canvas can show in the layers
+// panel. Each layer carries a HyperFrames elementId so inspector edits can
+// round-trip through /apply-patch.
+router.post('/api/canvas/hyperframes/extract-layers', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    if (!html.trim()) {
+      res.status(400).json({ success: false, error: 'html is required' });
+      return;
+    }
+    const extraction = getHyperframesBridge().extractHyperframesLayers(html);
+    res.json({ success: true, ...extraction });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/apply-patch  body: { html, ops: HyperframesPatchOp[] }
+// Returns the patched HTML plus a freshly extracted layer set so the canvas
+// can re-render the inspector without round-tripping through extract-layers.
+router.post('/api/canvas/hyperframes/apply-patch', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    const opsInput = Array.isArray(req.body?.ops) ? req.body.ops : [];
+    if (!html.trim()) {
+      res.status(400).json({ success: false, error: 'html is required' });
+      return;
+    }
+    const ops = opsInput as HyperframesPatchOp[];
+    const result = getHyperframesBridge().applyHyperframesPatch(html, ops);
+    const extraction = getHyperframesBridge().extractHyperframesLayers(result.html);
+    res.json({
+      success: true,
+      html: result.html,
+      warnings: result.warnings,
+      layers: extraction.layers,
+      tracks: extraction.tracks,
+      compositionId: extraction.compositionId,
+      durationMs: extraction.durationMs,
+      variables: extraction.variables,
+      slots: extraction.slots,
+      variableBindings: extraction.variableBindings,
+      advancedBlock: extraction.advancedBlock,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/parse  body: { html }
+// Lightweight inspection: composition metadata + element count. Used by the
+// canvas to decide whether an HTML blob is a HyperFrames composition before
+// instantiating an iframe clip.
+router.post('/api/canvas/hyperframes/parse', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    if (!html.trim()) {
+      res.status(400).json({ success: false, error: 'html is required' });
+      return;
+    }
+    const { parsed, metadata } = getHyperframesBridge().parseHyperframesHtml(html);
+    res.json({
+      success: true,
+      compositionId: metadata.compositionId,
+      compositionDurationMs: typeof metadata.compositionDuration === 'number'
+        ? Math.round(metadata.compositionDuration * 1000)
+        : null,
+      variables: metadata.variables,
+      elementCount: parsed.elements.length,
+      resolution: parsed.resolution,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/preview-html  body: { html }
+// Returns the iframe-ready HTML: input HTML normalized for HF, with the
+// official runtime IIFE inlined. The web-ui drops this into the iframe's
+// srcdoc so the picker + seek + playback bridge work out of the box.
+router.post('/api/canvas/hyperframes/preview-html', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    if (!html.trim()) {
+      res.status(400).json({ success: false, error: 'html is required' });
+      return;
+    }
+    res.json({
+      success: true,
+      previewHtml: getHyperframesBridge().wrapForIframePreview(html),
+      normalizedHtml: getHyperframesBridge().normalizeForHyperframes(html),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/lint  body: { html }
+router.post('/api/canvas/hyperframes/lint', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    if (!html.trim()) {
+      res.status(400).json({ success: false, error: 'html is required' });
+      return;
+    }
+    res.json({ success: true, lint: getHyperframesBridge().lintHyperframes(html) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// GET /api/canvas/hyperframes/catalog?query=&kind=&tag=
+router.get('/api/canvas/hyperframes/catalog', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+  try {
+    const items = getHyperframesCatalog().listHyperframesCatalogItems({
+      query: req.query?.query ? String(req.query.query) : undefined,
+      kind: req.query?.kind ? String(req.query.kind) : undefined,
+      tag: req.query?.tag ? String(req.query.tag) : undefined,
+    });
+    res.json({ success: true, items });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/qa  body: { html, width?, height?, durationMs?, samplePoints? }
+// Headlessly drives the seek protocol and captures screenshots at start/mid/end
+// (plus any explicit timestamps). Returns paths + a verification report.
+router.post('/api/canvas/hyperframes/qa', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    if (!html.trim()) {
+      res.status(400).json({ success: false, error: 'html is required' });
+      return;
+    }
+    const report = await getHyperframesQa().runHyperframesQa(html, {
+      width: Number(req.body?.width) || undefined,
+      height: Number(req.body?.height) || undefined,
+      durationMs: Number(req.body?.durationMs) || undefined,
+      samplePoints: Array.isArray(req.body?.samplePoints) ? req.body.samplePoints.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)) : undefined,
+      timeoutMs: Number(req.body?.timeoutMs) || undefined,
+    });
+    res.json({ success: true, report });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/materialize  body: { elementId, html, compositionId, startMs, endMs, trimStartMs? }
+// Materializes a hyperframes scene element into an on-disk html-motion clip
+// the existing render pipeline can consume. Returns the workspace-relative
+// clipPath and the CreativeClip-shaped descriptor.
+router.post('/api/canvas/hyperframes/materialize', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    const elementId = String(req.body?.elementId || '');
+    if (!html.trim() || !elementId) {
+      res.status(400).json({ success: false, error: 'html and elementId are required' });
+      return;
+    }
+    const workspacePath = getWorkspaceRoot();
+    const clip = getHyperframesExportAdapter().buildHyperframesRenderClip(
+      { id: elementId, type: 'hyperframes', meta: { html, compositionId: req.body?.compositionId } },
+      workspacePath,
+      {
+        startMs: Number(req.body?.startMs) || 0,
+        endMs: Number(req.body?.endMs) || 6000,
+        trimStartMs: Number(req.body?.trimStartMs) || 0,
+      },
+    );
+    res.json({ success: true, clip });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/render  body: { html, filename?, fps?, quality?, format?, variables? }
+// Renders a HyperFrames composition through @hyperframes/producer instead of
+// the legacy HTML Motion screenshot encoder.
+router.post('/api/canvas/hyperframes/render', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const html = String(req.body?.html || '');
+    if (!html.trim()) {
+      res.status(400).json({ success: false, error: 'html is required' });
+      return;
+    }
+    const workspacePath = getWorkspaceRoot();
+    const formatRaw = String(req.body?.format || 'mp4').toLowerCase();
+    const format = ['mp4', 'webm', 'mov', 'png-sequence'].includes(formatRaw) ? formatRaw as any : 'mp4';
+    const ext = format === 'png-sequence' ? '' : `.${format}`;
+    const filename = sanitizeCreativeAssetFilename(req.body?.filename, `hyperframes-render${ext}`) || `hyperframes-render${ext}`;
+    const outputPath = path.join(workspacePath, '.prometheus', 'creative', 'exports', filename);
+    const result = await getHyperframesProducer().renderHyperframesWithProducer({
+      html,
+      workspacePath,
+      outputPath,
+      fps: ([24, 30, 60].includes(Number(req.body?.fps)) ? Number(req.body?.fps) : 60) as any,
+      quality: (['draft', 'standard', 'high'].includes(String(req.body?.quality)) ? String(req.body?.quality) : 'standard') as any,
+      format,
+      variables: req.body?.variables && typeof req.body.variables === 'object' ? req.body.variables : undefined,
+      debug: !!req.body?.debug,
+    });
+    res.json({
+      success: true,
+      outputPath: result.outputPath,
+      projectDir: result.projectDir,
+      job: {
+        id: result.job?.id,
+        status: result.job?.status,
+        outputPath: result.job?.outputPath,
+        duration: result.job?.duration,
+        totalFrames: result.job?.totalFrames,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/canvas/hyperframes/catalog/import  body: { id, ingestAssets? }
+router.post('/api/canvas/hyperframes/catalog/import', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    if (!id) {
+      res.status(400).json({ success: false, error: 'id is required' });
+      return;
+    }
+    const item = getHyperframesCatalog().getHyperframesCatalogItem(id);
+    if (!item) {
+      res.status(404).json({ success: false, error: `Unknown HyperFrames component: ${id}` });
+      return;
+    }
+    // Use existing creative storage shape from the canvas root.
+    const workspacePath = getWorkspaceRoot();
+    const storage: any = { workspacePath, rootAbsPath: workspacePath, creativeDir: path.join(workspacePath, '.prometheus', 'creative') };
+    const ingestAssets = !!req.body?.ingestAssets;
+    const result = ingestAssets
+      ? await getHyperframesCatalog().importHyperframesComponentWithIngest(storage, storage, id)
+      : await getHyperframesCatalog().importHyperframesComponent(storage, id);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
 });
 
 // ─── File Preview Routes (used by Telegram /browse preview feature) ─────────────────────

@@ -33,8 +33,15 @@ const anthropicClearTokens = (...args: any[]) => require('../../auth/anthropic-o
 const anthropicStoreSetupToken = (...args: any[]) => require('../../auth/anthropic-oauth').storeSetupToken(...args);
 import { detectGpu } from '../gpu-detector';
 import { getApprovalQueue } from '../verification-flow';
+import {
+  addCommandPermissionGrant,
+  listCommandPermissionGrants,
+  revokeCommandPermissionGrant,
+  type CommandPermissionScope,
+} from '../command-permissions';
+import { appendAuditEntry } from '../audit-log';
 import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth';
-import { listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
+import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
 
 export const router = Router();
 
@@ -74,6 +81,7 @@ router.get('/api/settings/search', (_req, res) => {
   res.json({
     preferred_provider: cfg.preferred_provider || 'tavily',
     search_rigor: cfg.search_rigor || 'verified',
+    tinyfish_api_key: maskIfSet(cfg.tinyfish_api_key),
     tavily_api_key: maskIfSet(cfg.tavily_api_key),
     google_api_key: maskIfSet(cfg.google_api_key),
     // Stored in the vault for persistence, but returned resolved so the UI can
@@ -84,7 +92,7 @@ router.get('/api/settings/search', (_req, res) => {
 });
 
 router.post('/api/settings/search', (req, res) => {
-  const { preferred_provider, search_rigor, tavily_api_key, google_api_key, google_cx, brave_api_key } = req.body;
+  const { preferred_provider, search_rigor, tinyfish_api_key, tavily_api_key, google_api_key, google_cx, brave_api_key } = req.body;
   const cm = getConfig();
   const current = cm.getConfig() as any;
   // Only write a key field if the user actually entered a new value.
@@ -94,6 +102,7 @@ router.post('/api/settings/search', (req, res) => {
     ...((current.search || {})),
     ...(preferred_provider !== undefined && { preferred_provider }),
     ...(search_rigor !== undefined && { search_rigor }),
+    ...(isNew(tinyfish_api_key) && { tinyfish_api_key }),
     ...(isNew(tavily_api_key) && { tavily_api_key }),
     ...(isNew(google_api_key) && { google_api_key }),
     ...(google_cx !== undefined && { google_cx }),
@@ -116,7 +125,61 @@ router.get('/api/credentials/status', (_req, res) => {
   }
 });
 
-// GET /api/credentials/audit — return last N lines of vault-audit.log (scrubbed)
+const PROVIDER_OAUTH_VAULT_KEYS: Record<string, string[]> = {
+  openai_codex: ['openai.oauth_tokens'],
+  anthropic: ['anthropic.oauth_tokens'],
+};
+
+function hasSavedProviderSecretConfig(providerConfig: any, field: string): boolean {
+  const value = providerConfig?.[field];
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return trimmed.startsWith('vault:') || trimmed.startsWith('env:') || trimmed.length > 0;
+}
+
+function listCredentialedModelProviderIds(): string[] {
+  const cfg = getConfig().getConfig() as any;
+  const configuredProviders = cfg?.llm?.providers && typeof cfg.llm.providers === 'object'
+    ? cfg.llm.providers
+    : {};
+  const keys = new Set(getVault().keys());
+  const ids = new Set<string>();
+
+  for (const [providerId, field] of listProviderSecretFieldPaths()) {
+    if (keys.has(`llm.${providerId}.${field}`)) ids.add(providerId);
+    if (hasSavedProviderSecretConfig(configuredProviders?.[providerId], field)) ids.add(providerId);
+  }
+
+  for (const [providerId, vaultKeys] of Object.entries(PROVIDER_OAUTH_VAULT_KEYS)) {
+    if (vaultKeys.some(key => keys.has(key))) ids.add(providerId);
+  }
+
+  const catalogOrder = new Map<string, number>();
+  listProviderDescriptors().forEach((descriptor, index) => {
+    catalogOrder.set(descriptor.id, index);
+    for (const ownedId of descriptor.ownership?.providerIds || []) {
+      if (!catalogOrder.has(ownedId)) catalogOrder.set(ownedId, index);
+    }
+  });
+
+  return [...ids].sort((a, b) => {
+    const rankA = catalogOrder.has(a) ? catalogOrder.get(a)! : Number.MAX_SAFE_INTEGER;
+    const rankB = catalogOrder.has(b) ? catalogOrder.get(b)! : Number.MAX_SAFE_INTEGER;
+    if (rankA !== rankB) return rankA - rankB;
+    return a.localeCompare(b);
+  });
+}
+
+router.get('/api/settings/credentialed-model-providers', (_req, res) => {
+  try {
+    res.json({ success: true, providers: listCredentialedModelProviderIds() });
+  } catch (err: any) {
+    res.json({ success: false, providers: [], error: err.message });
+  }
+});
+
+// GET /api/credentials/audit - return last N lines of vault-audit.log (scrubbed)
 router.get('/api/credentials/audit', (_req, res) => {
   const fs = require('fs');
   const path = require('path');
@@ -247,33 +310,6 @@ router.delete('/api/installed-apps/aliases', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
-});
-
-router.get('/api/settings/agent', (_req, res) => {
-  const cfg = (getConfig().getConfig() as any).agent_policy || {};
-  res.json({
-    force_web_for_fresh: cfg.force_web_for_fresh !== false,
-    memory_fallback_on_search_failure: cfg.memory_fallback_on_search_failure !== false,
-    auto_store_web_facts: cfg.auto_store_web_facts !== false,
-    natural_language_tool_router: cfg.natural_language_tool_router !== false,
-    retrieval_mode: cfg.retrieval_mode || 'standard',
-  });
-});
-
-router.post('/api/settings/agent', (req, res) => {
-  const { force_web_for_fresh, memory_fallback_on_search_failure, auto_store_web_facts, natural_language_tool_router, retrieval_mode } = req.body;
-  const cm = getConfig();
-  const current = cm.getConfig() as any;
-  const newPolicy = {
-    ...(current.agent_policy || {}),
-    ...(force_web_for_fresh !== undefined && { force_web_for_fresh }),
-    ...(memory_fallback_on_search_failure !== undefined && { memory_fallback_on_search_failure }),
-    ...(auto_store_web_facts !== undefined && { auto_store_web_facts }),
-    ...(natural_language_tool_router !== undefined && { natural_language_tool_router }),
-    ...(retrieval_mode !== undefined && { retrieval_mode }),
-  };
-  cm.updateConfig({ agent_policy: newPolicy } as any);
-  res.json({ success: true });
 });
 
 // ─── Model / Ollama Settings API ──────────────────────────────────────────────────
@@ -467,6 +503,78 @@ const HIDDEN_AGENT_MODEL_DEFAULT_KEYS = [
   'team_subagent',
 ] as const;
 
+type AgentModelDefaultKey = typeof AGENT_MODEL_DEFAULT_KEYS[number];
+type AgentModelDefaultTemplate = {
+  id: string;
+  name: string;
+  defaults: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+};
+
+function normalizeAgentModelDefaults(raw: any): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  const source = raw && typeof raw === 'object' ? raw : {};
+  for (const key of AGENT_MODEL_DEFAULT_KEYS) {
+    const val = source[key];
+    if (typeof val === 'string' && val.trim()) normalized[key] = val.trim();
+  }
+  return normalized;
+}
+
+function slugTemplateId(name: string): string {
+  const base = String(name || 'template')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'template';
+  return `${base}-${Date.now().toString(36)}`;
+}
+
+function normalizeAgentModelTemplates(raw: any): AgentModelDefaultTemplate[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const now = new Date().toISOString();
+  const templates: AgentModelDefaultTemplate[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const name = String(item.name || '').trim();
+    if (!name) continue;
+    let id = String(item.id || '').trim() || slugTemplateId(name);
+    if (seen.has(id)) id = slugTemplateId(name);
+    seen.add(id);
+    templates.push({
+      id,
+      name,
+      defaults: normalizeAgentModelDefaults(item.defaults || {}),
+      created_at: String(item.created_at || now),
+      updated_at: String(item.updated_at || item.created_at || now),
+    });
+  }
+  return templates;
+}
+
+function findTemplateIndex(templates: AgentModelDefaultTemplate[], idOrName: string): number {
+  const key = String(idOrName || '').trim();
+  if (!key) return -1;
+  const lower = key.toLowerCase();
+  return templates.findIndex((template) => template.id === key || template.name.toLowerCase() === lower);
+}
+
+function readTemplateDefaultsFromBody(body: any, currentDefaults: any): Record<string, string> {
+  if (body?.defaults && typeof body.defaults === 'object') return normalizeAgentModelDefaults(body.defaults);
+  const direct: Record<AgentModelDefaultKey, string> = {} as any;
+  let hasDirect = false;
+  for (const key of AGENT_MODEL_DEFAULT_KEYS) {
+    if (typeof body?.[key] === 'string') {
+      direct[key] = body[key];
+      hasDirect = true;
+    }
+  }
+  return hasDirect ? normalizeAgentModelDefaults(direct) : normalizeAgentModelDefaults(currentDefaults || {});
+}
+
 // GET /api/settings/agent-model-defaults
 // Returns the stored per-type defaults and the per-agent overrides for reference.
 router.get('/api/settings/agent-model-defaults', (_req, res) => {
@@ -474,6 +582,8 @@ router.get('/api/settings/agent-model-defaults', (_req, res) => {
   res.json({
     success: true,
     defaults: cfg.agent_model_defaults || {},
+    templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
+    activeTemplateId: cfg.active_agent_model_default_template || '',
     agents: (cfg.agents || []).map((a: any) => ({
       id:    a.id,
       name:  a.name,
@@ -514,6 +624,131 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
   }
   cm.updateConfig({ agent_model_defaults: merged } as any);
   res.json({ success: true, defaults: (cm.getConfig() as any).agent_model_defaults || {} });
+});
+
+// GET /api/settings/agent-model-default-templates
+// List saved named snapshots of agent_model_defaults.
+router.get('/api/settings/agent-model-default-templates', (_req, res) => {
+  const cfg = getConfig().getConfig() as any;
+  res.json({
+    success: true,
+    templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
+    activeTemplateId: cfg.active_agent_model_default_template || '',
+    currentDefaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
+  });
+});
+
+// POST /api/settings/agent-model-default-templates
+// Create or update a named template. Omit defaults to snapshot current defaults.
+router.post('/api/settings/agent-model-default-templates', (req, res) => {
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const body = req.body || {};
+  const name = String(body.name || '').trim();
+  if (!name) {
+    res.status(400).json({ success: false, error: 'Template name is required' });
+    return;
+  }
+
+  const templates = normalizeAgentModelTemplates(current.agent_model_default_templates || []);
+  const id = String(body.id || '').trim();
+  const idx = id ? findTemplateIndex(templates, id) : findTemplateIndex(templates, name);
+  const now = new Date().toISOString();
+  const defaults = readTemplateDefaultsFromBody(body, current.agent_model_defaults || {});
+  let template: AgentModelDefaultTemplate;
+
+  if (idx >= 0) {
+    template = {
+      ...templates[idx],
+      name,
+      defaults,
+      updated_at: now,
+    };
+    templates[idx] = template;
+  } else {
+    template = {
+      id: id || slugTemplateId(name),
+      name,
+      defaults,
+      created_at: now,
+      updated_at: now,
+    };
+    templates.push(template);
+  }
+
+  cm.updateConfig({ agent_model_default_templates: templates } as any);
+  res.json({ success: true, template, templates });
+});
+
+// PATCH /api/settings/agent-model-default-templates/:id
+// Rename or replace a template's defaults.
+router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const templates = normalizeAgentModelTemplates(current.agent_model_default_templates || []);
+  const idx = findTemplateIndex(templates, req.params.id);
+  if (idx < 0) {
+    res.status(404).json({ success: false, error: `Template "${req.params.id}" not found` });
+    return;
+  }
+
+  const body = req.body || {};
+  const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : templates[idx].name;
+  const defaults = (body.defaults && typeof body.defaults === 'object') || AGENT_MODEL_DEFAULT_KEYS.some((key) => typeof body[key] === 'string')
+    ? readTemplateDefaultsFromBody(body, templates[idx].defaults)
+    : templates[idx].defaults;
+  const template = {
+    ...templates[idx],
+    name,
+    defaults,
+    updated_at: new Date().toISOString(),
+  };
+  templates[idx] = template;
+  cm.updateConfig({ agent_model_default_templates: templates } as any);
+  res.json({ success: true, template, templates });
+});
+
+// POST /api/settings/agent-model-default-templates/:id/apply
+// Replace current defaults with the selected template snapshot.
+router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) => {
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const templates = normalizeAgentModelTemplates(current.agent_model_default_templates || []);
+  const idx = findTemplateIndex(templates, req.params.id);
+  if (idx < 0) {
+    res.status(404).json({ success: false, error: `Template "${req.params.id}" not found` });
+    return;
+  }
+  const template = templates[idx];
+  cm.updateConfig({
+    agent_model_defaults: normalizeAgentModelDefaults(template.defaults),
+    active_agent_model_default_template: template.id,
+  } as any);
+  res.json({
+    success: true,
+    template,
+    defaults: (cm.getConfig() as any).agent_model_defaults || {},
+    activeTemplateId: template.id,
+  });
+});
+
+// DELETE /api/settings/agent-model-default-templates/:id
+router.delete('/api/settings/agent-model-default-templates/:id', (req, res) => {
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const templates = normalizeAgentModelTemplates(current.agent_model_default_templates || []);
+  const idx = findTemplateIndex(templates, req.params.id);
+  if (idx < 0) {
+    res.status(404).json({ success: false, error: `Template "${req.params.id}" not found` });
+    return;
+  }
+  const [removed] = templates.splice(idx, 1);
+  const nextActive = current.active_agent_model_default_template === removed.id ? '' : current.active_agent_model_default_template || '';
+  cm.updateConfig({
+    agent_model_default_templates: templates,
+    active_agent_model_default_template: nextActive,
+  } as any);
+  res.json({ success: true, removed, templates, activeTemplateId: nextActive });
 });
 
 // PATCH /api/agents/:id/model
@@ -583,7 +818,7 @@ router.get('/api/system-stats', async (_req, res) => {
   let ollamaCount = 0;
   try {
     const ollamaEndpoint = (getConfig().getConfig() as any).ollama?.endpoint || 'http://localhost:11434';
-    const r = await fetch(`${ollamaEndpoint}/api/tags`, { signal: AbortSignal.timeout(2000) });
+    const r = await fetch(`${ollamaEndpoint}/api/tags`, { signal: AbortSignal.timeout(500) });
     if (r.ok) {
       ollamaRunning = true;
       const data = await r.json() as any;
@@ -603,7 +838,7 @@ router.get('/api/system-stats', async (_req, res) => {
       const { execSync } = await import('child_process');
       const smiOut = execSync(
         'nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits',
-        { timeout: 3000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+        { timeout: 700, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
       );
       const parts = smiOut.trim().split(',').map((s: string) => s.trim());
       if (parts.length >= 4) {
@@ -672,6 +907,8 @@ router.get('/api/approvals', requireGatewayAuth, (req, res) => {
     .map((record) => ({
       ...record,
       command: String(record.toolArgs?.command || ''),
+      scopedAction: record.commandPermissionCandidate?.action || '',
+      scopedTarget: record.commandPermissionCandidate?.targetDisplay || '',
       sourceSessionId: record.sessionId,
     }));
   res.json({ approvals });
@@ -679,9 +916,16 @@ router.get('/api/approvals', requireGatewayAuth, (req, res) => {
 
 function resolveApprovalRequest(req: any, res: any, decision: 'approved' | 'rejected' | undefined, resolvedBy: string) {
   const VALID_DECISIONS = ['approved', 'rejected'];
+  const VALID_GRANT_SCOPES = ['session', 'always'];
   const requestedDecision = decision || req.body?.decision;
   if (!requestedDecision || !VALID_DECISIONS.includes(requestedDecision)) {
     res.status(400).json({ success: false, error: `decision must be one of: ${VALID_DECISIONS.join(', ')}` });
+    return;
+  }
+  const grantScopeRaw = String(req.body?.grantScope || req.body?.permissionScope || '').trim().toLowerCase();
+  const grantScope = VALID_GRANT_SCOPES.includes(grantScopeRaw) ? grantScopeRaw as CommandPermissionScope : '';
+  if (grantScopeRaw && !grantScope) {
+    res.status(400).json({ success: false, error: `grantScope must be one of: ${VALID_GRANT_SCOPES.join(', ')}` });
     return;
   }
   const queue = getApprovalQueue();
@@ -699,12 +943,51 @@ function resolveApprovalRequest(req: any, res: any, decision: 'approved' | 'reje
     res.status(409).json({ success: false, error: 'Approval could not be resolved' });
     return;
   }
+  let permissionGrant: any = null;
+  if (requestedDecision === 'approved' && grantScope && approval.commandPermissionCandidate) {
+    try {
+      permissionGrant = addCommandPermissionGrant(approval.commandPermissionCandidate, grantScope, resolvedBy);
+      appendAuditEntry({
+        sessionId: approval.sessionId,
+        agentId: approval.agentId,
+        actionType: 'approval_resolved',
+        toolName: approval.toolName,
+        toolArgs: approval.toolArgs,
+        policyTier: approval.policyTier,
+        approvalStatus: 'auto_allowed' as any,
+        resultSummary: `Created ${grantScope} scoped tool permission ${permissionGrant.id}`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: `Approval resolved, but command permission could not be saved: ${err?.message || err}` });
+      return;
+    }
+  }
   // Security audit: log every approval action (action name only, no payload)
   import('../../security/log-scrubber').then(({ log }) => {
     log.security('[approvals]', requestedDecision.toUpperCase(), 'approval-id:', req.params.id, 'action:', approval.action);
   }).catch(() => {});
-  res.json({ success: true, decision: requestedDecision, approval: resolved });
+  res.json({ success: true, decision: requestedDecision, approval: resolved, permissionGrant });
 }
+
+router.get('/api/command-permissions', requireGatewayAuth, (req, res) => {
+  const sessionId = String(req.query.sessionId || '').trim() || undefined;
+  res.json({ grants: listCommandPermissionGrants(sessionId) });
+});
+
+router.delete('/api/command-permissions/:id', requireGatewayAuth, (req, res) => {
+  const removed = revokeCommandPermissionGrant(req.params.id);
+  if (!removed) {
+    res.status(404).json({ success: false, error: 'Command permission not found' });
+    return;
+  }
+  appendAuditEntry({
+    actionType: 'approval_resolved',
+    toolName: 'run_command',
+    approvalStatus: 'rejected',
+    resultSummary: `Revoked command permission ${req.params.id}`,
+  });
+  res.json({ success: true });
+});
 
 router.post('/api/approvals/:id', requireGatewayAuth, (req, res) => {
   resolveApprovalRequest(req, res, req.body?.decision, 'web');
@@ -932,28 +1215,17 @@ router.post('/api/settings/bulk', (req, res) => {
     }
 
     if (body.search) {
-      const { preferred_provider, search_rigor, tavily_api_key, google_api_key, google_cx, brave_api_key } = body.search;
+      const { preferred_provider, search_rigor, tinyfish_api_key, tavily_api_key, google_api_key, google_cx, brave_api_key } = body.search;
       const isNew = (v: any) => v !== undefined && v !== '' && v !== '••••••••';
       updates.search = {
         ...((current.search || {})),
         ...(preferred_provider !== undefined && { preferred_provider }),
         ...(search_rigor !== undefined && { search_rigor }),
+        ...(isNew(tinyfish_api_key) && { tinyfish_api_key }),
         ...(isNew(tavily_api_key) && { tavily_api_key }),
         ...(isNew(google_api_key) && { google_api_key }),
         ...(google_cx !== undefined && { google_cx }),
         ...(isNew(brave_api_key) && { brave_api_key }),
-      };
-    }
-
-    if (body.agent_policy) {
-      const p = body.agent_policy;
-      updates.agent_policy = {
-        ...(current.agent_policy || {}),
-        ...(p.force_web_for_fresh !== undefined && { force_web_for_fresh: p.force_web_for_fresh }),
-        ...(p.memory_fallback_on_search_failure !== undefined && { memory_fallback_on_search_failure: p.memory_fallback_on_search_failure }),
-        ...(p.auto_store_web_facts !== undefined && { auto_store_web_facts: p.auto_store_web_facts }),
-        ...(p.natural_language_tool_router !== undefined && { natural_language_tool_router: p.natural_language_tool_router }),
-        ...(p.retrieval_mode !== undefined && { retrieval_mode: p.retrieval_mode }),
       };
     }
 
@@ -1182,4 +1454,3 @@ router.post('/api/settings/hooks/test', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-

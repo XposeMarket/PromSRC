@@ -17,7 +17,7 @@ This preset was captured from the 2026-04-29 globe test that Raul reacted strong
 ## Tool workflow inside Prometheus
 
 1. Read `prometheus-hyperframes-bridge`, `html-motion-video`, and `creative-director-video` if doing broader video work.
-2. Switch or enter video creative mode.
+2. Switch into video creative mode with `switch_creative_mode({ mode: "video" })`.
 3. Create an HTML motion clip using `templates/holographic-rotating-globe-light.html` as the base HTML.
 4. Set composition metadata to:
    - width: `1920`

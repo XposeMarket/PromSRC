@@ -15,7 +15,7 @@ For structural rules, timing units, root metadata, asset placeholders, determini
 
 Inside Prometheus, prefer the Prometheus Creative HTML Motion tools first:
 
-1. `enter_creative_mode({ "mode": "video" })`
+1. `switch_creative_mode({ "mode": "video" })`
 2. `creative_list_html_motion_templates` or `creative_create_html_motion_clip`
 3. `creative_render_html_motion_snapshot`
 4. `creative_patch_html_motion_clip` for revisions

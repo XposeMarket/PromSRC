@@ -288,6 +288,8 @@ export function approveGoal(
       prompt: subTask.description,
       schedule: subTask.schedule,
       subagent_id: subTask.subagentProfile ?? undefined,
+      assignmentTarget: subTask.subagentProfile ? 'subagent' : 'main',
+      deliverToMainChannel: !subTask.subagentProfile,
       priority: subTask.priority,
       enabled: true,
     });

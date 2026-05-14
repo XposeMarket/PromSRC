@@ -18,7 +18,7 @@
 
 import type {
   LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult,
-  GenerateOptions, GenerateResult, ModelInfo, ToolCall,
+  GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ToolCall,
 } from './LLMProvider';
 import {
   buildAuthHeaders, getValidToken, loadTokens,
@@ -29,6 +29,7 @@ import { getConfig } from '../config/config';
 
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
+  'claude-opus-4-7',
   'claude-opus-4-6',
   'claude-sonnet-4-6',
   'claude-sonnet-4-5-20250514',
@@ -445,7 +446,7 @@ export class AnthropicAdapter implements LLMProvider {
     const headers = this.directConfig
       ? this.buildDirectHeaders()
       : buildAuthHeaders(this.configDir!);
-    const isThinkingGeneration = /claude-(sonnet|opus)-4-6/.test(model);
+    const isThinkingGeneration = /claude-(sonnet|opus)-4-(6|7)/.test(model);
     if (isThinkingGeneration && extendedThinkingEnabled) {
       const existing = headers['anthropic-beta'];
       if (existing && !existing.includes('interleaved-thinking')) {
@@ -474,6 +475,23 @@ export class AnthropicAdapter implements LLMProvider {
     return headers;
   }
 
+  private parseUsage(usage: any): ModelUsage | undefined {
+    if (!usage || typeof usage !== 'object') return undefined;
+    const inputTokens = Number(usage.input_tokens || 0);
+    const outputTokens = Number(usage.output_tokens || 0);
+    const cacheReadTokens = Number(usage.cache_read_input_tokens || 0);
+    const cacheWriteTokens = Number(usage.cache_creation_input_tokens || 0);
+    const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+    return {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalTokens,
+      source: 'provider',
+    };
+  }
+
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
     const raw = getConfig().getConfig() as any;
     const anthropicCfg = raw.llm?.providers?.[this.id] || raw.llm?.providers?.anthropic || {};
@@ -493,11 +511,29 @@ export class AnthropicAdapter implements LLMProvider {
     const tools = this.buildTools(options?.tools);
     if (tools) body.tools = tools;
 
-    // Trim system prompt to stay within the 200k token limit.
-    // We compute the budget against the body-without-system so trimming is accurate.
+    // Subscription OAuth gate: Anthropic only routes requests to Pro/Max
+    // subscription quota when the FIRST system block is the Claude Code identity
+    // preamble. Without it, Sonnet/Opus return either a generic 429 "Error" or
+    // a 400 "out of extra usage" (the gate masquerades as a quota error). The
+    // preamble must be sent on EVERY OAuth request — including subagent calls
+    // that may have empty system prompts. API keys don't need this.
+    const isOAuth = !this.directConfig
+      && this.configDir
+      && loadTokens(this.configDir)?.auth_type === 'setup_token';
+    const claudeCodePreamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
+
     if (system) {
       const bodyWithoutSystem = JSON.stringify({ ...body, system: undefined });
-      body.system = this.trimSystemForBudget(system, bodyWithoutSystem);
+      const trimmed = this.trimSystemForBudget(system, bodyWithoutSystem);
+      if (isOAuth) {
+        body.system = trimmed
+          ? [claudeCodePreamble, { type: 'text', text: trimmed }]
+          : [claudeCodePreamble];
+      } else if (trimmed) {
+        body.system = trimmed;
+      }
+    } else if (isOAuth) {
+      body.system = [claudeCodePreamble];
     }
 
     // Extended thinking: enabled via config setting, suppressed for automation turns (think === false)
@@ -506,6 +542,18 @@ export class AnthropicAdapter implements LLMProvider {
       body.thinking = { type: 'enabled', budget_tokens: budget };
       body.max_tokens = Math.max(body.max_tokens, budget + 8192);
     }
+
+    // ─── DEBUG: log request shape so we can diff main-chat vs subagent ────────
+    try {
+      const sysPreview = Array.isArray(body.system)
+        ? `array(${body.system.length}) first="${String(body.system[0]?.text || '').slice(0, 60)}"`
+        : `string(${String(body.system || '').length})`;
+      const headerKeys = Object.keys(headers).join(',');
+      const betaHdr = (headers as any)['anthropic-beta'] || '(none)';
+      const uaHdr = (headers as any)['user-agent'] || '(none)';
+      const authHdrType = (headers as any)['Authorization'] ? 'Bearer' : (headers as any)['x-api-key'] ? 'x-api-key' : 'none';
+      console.log(`[anthropic-debug] model=${model} isOAuth=${isOAuth} system=${sysPreview} auth=${authHdrType} ua=${uaHdr} beta=${betaHdr} headers=[${headerKeys}] tools=${tools?.length || 0} max_tokens=${body.max_tokens}`);
+    } catch {}
 
     // If onToken callback provided, use streaming mode
     if (options?.onToken) {
@@ -550,6 +598,10 @@ export class AnthropicAdapter implements LLMProvider {
     let textContent = '';
     let thinking = '';
     const toolCalls: any[] = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     // Track per-block accumulation: blockIndex → { type, id, name, inputJson }
     const blocks: Record<number, any> = {};
 
@@ -569,6 +621,17 @@ export class AnthropicAdapter implements LLMProvider {
           try {
             const event = JSON.parse(data);
             const type = event.type as string;
+
+            if (type === 'message_start' && event.message?.usage) {
+              const usage = event.message.usage;
+              inputTokens = Number(usage.input_tokens || inputTokens || 0);
+              cacheReadTokens = Number(usage.cache_read_input_tokens || cacheReadTokens || 0);
+              cacheWriteTokens = Number(usage.cache_creation_input_tokens || cacheWriteTokens || 0);
+            }
+
+            if (type === 'message_delta' && event.usage) {
+              outputTokens = Number(event.usage.output_tokens || outputTokens || 0);
+            }
 
             if (type === 'content_block_start') {
               const idx = event.index ?? 0;
@@ -626,7 +689,24 @@ export class AnthropicAdapter implements LLMProvider {
       content:    textContent || null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
-    return { message, thinking: thinking || undefined };
+    return {
+      message,
+      thinking: thinking || undefined,
+      usage: this.mergeStreamingUsage(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+    };
+  }
+
+  private mergeStreamingUsage(inputTokens: number, outputTokens: number, cacheReadTokens: number, cacheWriteTokens: number): ModelUsage | undefined {
+    const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+    if (!totalTokens) return undefined;
+    return {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalTokens,
+      source: 'provider',
+    };
   }
 
   // ─── Parse Anthropic response → ChatResult ──────────────────────────────────
@@ -659,7 +739,7 @@ export class AnthropicAdapter implements LLMProvider {
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
 
-    return { message, thinking: thinking || undefined };
+    return { message, thinking: thinking || undefined, usage: this.parseUsage(data.usage) };
   }
 
   // ─── Generate (single prompt) ────────────────────────────────────────────────

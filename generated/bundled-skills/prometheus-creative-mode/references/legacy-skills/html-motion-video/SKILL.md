@@ -39,7 +39,7 @@ If quality and editability conflict, prefer Python for the ASCII raster pass and
 
 ## Workflow
 
-1. Switch to video creative mode.
+1. Switch to video creative mode with `switch_creative_mode({ mode: "video" })`.
 2. Call `creative_list_html_motion_templates`. Pick the closest template.
 3. Apply it with `creative_apply_html_motion_template` (templateId + inputs). Only fall back to authoring raw HTML via `creative_create_html_motion_clip` if no template fits the brief.
 4. Preview frames with `creative_render_html_motion_snapshot` (start, mid, end at minimum).

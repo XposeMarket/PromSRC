@@ -118,6 +118,11 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       openai_codex: {
         model: process.env.CODEX_MODEL ?? 'gpt-5.4',
       },
+      xai: {
+        api_key: process.env.XAI_API_KEY ? `env:XAI_API_KEY` : '',
+        endpoint: process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
+        model: process.env.XAI_MODEL ?? 'grok-4.20-reasoning',
+      },
     },
   } as any,
   models: {
@@ -139,6 +144,27 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       },
       openai_codex: {
         model: process.env.CODEX_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
+      },
+      xai: {
+        model: process.env.XAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'grok-imagine-image-quality',
+        endpoint: process.env.XAI_IMAGE_ENDPOINT ?? process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
+        resolution: process.env.XAI_IMAGE_RESOLUTION ?? '1k',
+      },
+    },
+  },
+  video_generation: {
+    provider: process.env.PROMETHEUS_VIDEO_PROVIDER ?? 'auto',
+    model: process.env.PROMETHEUS_VIDEO_MODEL ?? process.env.XAI_VIDEO_MODEL ?? 'grok-imagine-video',
+    save_to_workspace: process.env.PROMETHEUS_VIDEO_SAVE_TO_WORKSPACE !== '0',
+    default_output_dir: process.env.PROMETHEUS_VIDEO_OUTPUT_DIR ?? 'generated/videos',
+    duration: process.env.PROMETHEUS_VIDEO_DURATION ? Number(process.env.PROMETHEUS_VIDEO_DURATION) : 6,
+    resolution: process.env.PROMETHEUS_VIDEO_RESOLUTION ?? '480p',
+    providers: {
+      xai: {
+        model: process.env.XAI_VIDEO_MODEL ?? process.env.PROMETHEUS_VIDEO_MODEL ?? 'grok-imagine-video',
+        endpoint: process.env.XAI_VIDEO_ENDPOINT ?? process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
+        resolution: process.env.XAI_VIDEO_RESOLUTION ?? process.env.PROMETHEUS_VIDEO_RESOLUTION ?? '480p',
+        duration: process.env.XAI_VIDEO_DURATION ? Number(process.env.XAI_VIDEO_DURATION) : undefined,
       },
     },
   },
@@ -184,6 +210,9 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     path: WORKSPACE_DIR
   },
   agents: [] as AgentDefinition[],
+  agent_model_defaults: {},
+  agent_model_default_templates: [],
+  active_agent_model_default_template: '',
   session: {
     maxMessages: 120,
     compactionThreshold: 0.7,
@@ -193,6 +222,24 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     rollingCompactionToolTurns: 5,
     rollingCompactionSummaryMaxWords: 220,
     rollingCompactionModel: '',
+    mainChatGoals: {
+      enabled: true,
+      autoResumeOnRestart: true,
+      summaryEveryTurns: 5,
+      summaryMaxWords: 450,
+      judgeModel: '',
+      compactionModel: '',
+      maxConsecutiveJudgeFailures: 3,
+      maxConsecutiveRuntimeFailures: 3,
+      permissions: {
+        approvalMode: 'never',
+        hardDenyEnabled: true,
+        recordDeniedActions: true,
+        denyDestructiveGit: true,
+        denyRemoteScriptExecution: true,
+        denyDesktopCredentialEntry: true,
+      },
+    },
   },
   channels: {
     telegram: {
@@ -200,6 +247,8 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       botToken: '',
       allowedUserIds: [],
       streamMode: 'full',
+      personas: {},
+      teamRooms: {},
     },
     discord: {
       enabled: false,
@@ -502,6 +551,7 @@ const SECRET_FIELD_MAP: Array<[string[], string]> = [
   [['channels', 'discord', 'botToken'],           'channels.discord.botToken'],
   [['channels', 'whatsapp', 'accessToken'],       'channels.whatsapp.accessToken'],
   [['channels', 'whatsapp', 'webhookSecret'],     'channels.whatsapp.webhookSecret'],
+  [['search', 'tinyfish_api_key'],                'search.tinyfish_api_key'],
   [['search', 'tavily_api_key'],                  'search.tavily_api_key'],
   [['search', 'google_api_key'],                  'search.google_api_key'],
   [['search', 'google_cx'],                       'search.google_cx'],
@@ -592,6 +642,17 @@ export class ConfigManager {
             }
           : DEFAULT_CONFIG.image_generation;
 
+        const mergedVideoGeneration = loaded.video_generation
+          ? {
+              ...(DEFAULT_CONFIG.video_generation || {}),
+              ...loaded.video_generation,
+              providers: {
+                ...((DEFAULT_CONFIG.video_generation as any)?.providers || {}),
+                ...((loaded.video_generation as any)?.providers || {}),
+              },
+            }
+          : DEFAULT_CONFIG.video_generation;
+
         const mergedChannels = {
           ...(DEFAULT_CONFIG.channels || {}),
           ...(loaded.channels || {}),
@@ -607,6 +668,7 @@ export class ConfigManager {
           ...loaded,
           llm: mergedLlm,
           image_generation: mergedImageGeneration,
+          video_generation: mergedVideoGeneration,
           channels: mergedChannels as any,
           telegram: (mergedChannels as any).telegram,
         };

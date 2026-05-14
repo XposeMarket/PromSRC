@@ -2,7 +2,7 @@ let providerStatusCache: { checkedAt: number; connected: boolean } | null = null
 let providerStatusChecking = false;
 
 export const PROVIDER_STATUS_CACHE_MS = 5 * 60_000;
-export const PROVIDER_STATUS_TIMEOUT_MS = 15_000;
+export const PROVIDER_STATUS_TIMEOUT_MS = 3_000;
 
 export function markProviderStatus(connected: boolean): void {
   providerStatusChecking = false;

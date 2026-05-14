@@ -4,6 +4,10 @@
 
 import { renderAsciiSourceCanvasParts } from './ascii-html-motion';
 import {
+  renderThreeLogoRevealParts,
+  renderThreeParticleFieldParts,
+} from './three-html-motion';
+import {
   type CreativeStorageLike,
   getCustomHtmlMotionTemplate,
   listCustomHtmlMotionTemplates,
@@ -1823,6 +1827,106 @@ const aiDesignStudioLaunch: HtmlMotionTemplate = {
   },
 };
 
+// ---------------- TEMPLATE 24: three-saas-launch-orbit ----------------
+const threeSaasLaunchOrbit: HtmlMotionTemplate = {
+  id: 'three-saas-launch-orbit',
+  name: 'Three SaaS Launch Orbit',
+  description: 'Premium 3D launch film with a Three.js particle field, procedural 3D logo reveal, kinetic headline, proof chips, and CTA.',
+  bestFor: 'High-end SaaS/product launch promos where depth, camera motion, and WebGL energy should carry the first viewport',
+  defaultWidth: 1080,
+  defaultHeight: 1920,
+  defaultDurationMs: 9000,
+  defaultFrameRate: 60,
+  requiredInputs: [
+    { id: 'product', label: 'Product name', example: 'Prometheus' },
+    { id: 'headline', label: 'Headline', example: 'Build promo videos with real cinematic depth' },
+    { id: 'cta', label: 'CTA', example: 'Launch the 3D canvas' },
+  ],
+  optionalInputs: [
+    { id: 'eyebrow', label: 'Eyebrow', example: 'CREATIVE VIDEO MODE' },
+    { id: 'proof1', label: 'Proof chip 1', example: 'Local Three.js render lane' },
+    { id: 'proof2', label: 'Proof chip 2', example: 'Editable HTML Motion' },
+    { id: 'proof3', label: 'Proof chip 3', example: 'Frame QA before export' },
+    { id: 'accent', label: 'Accent color', example: '#38bdf8' },
+    { id: 'secondary', label: 'Secondary color', example: '#f97316' },
+    { id: 'background', label: 'Background color', example: '#05070d' },
+  ],
+  parameters: [
+    { id: 'accent', label: 'Accent', type: 'color', defaultValue: '#38bdf8', target: { lane: 'html-motion', path: 'css.--accent' } },
+    { id: 'secondary', label: 'Secondary', type: 'color', defaultValue: '#f97316', target: { lane: 'html-motion', path: 'css.--secondary' } },
+    { id: 'particleCount', label: 'Particle count', type: 'range', defaultValue: 1400, min: 200, max: 4000, step: 100, target: { lane: 'html-motion', path: 'three.particleCount' } },
+  ],
+  renderHtml(input) {
+    const product = escapeHtml(pick(input, 'product', 'Prometheus'));
+    const headline = escapeHtml(pick(input, 'headline', 'Build promo videos with real cinematic depth'));
+    const cta = escapeHtml(pick(input, 'cta', 'Launch the 3D canvas'));
+    const eyebrow = escapeHtml(pick(input, 'eyebrow', 'CREATIVE VIDEO MODE'));
+    const proof1 = escapeHtml(pick(input, 'proof1', 'Local Three.js render lane'));
+    const proof2 = escapeHtml(pick(input, 'proof2', 'Editable HTML Motion'));
+    const proof3 = escapeHtml(pick(input, 'proof3', 'Frame QA before export'));
+    const accent = escapeHtml(pick(input, 'accent', '#38bdf8'));
+    const secondary = escapeHtml(pick(input, 'secondary', '#f97316'));
+    const background = escapeHtml(pick(input, 'background', '#05070d'));
+    const particles = renderThreeParticleFieldParts({
+      id: 'three-launch-particles',
+      start: 0,
+      duration: 9,
+      accent,
+      secondary,
+      background,
+      count: pickNumber(input, 'particleCount', 1400),
+      radius: 8,
+      speed: 1,
+      trackIndex: 0,
+    } as any);
+    const logo = renderThreeLogoRevealParts({
+      id: 'three-launch-logo',
+      text: product,
+      start: 0.6,
+      duration: 6.6,
+      accent,
+      secondary,
+      background,
+      intensity: 1,
+      speed: 1,
+      trackIndex: 1,
+    });
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="prometheus:width" content="1080"><meta name="prometheus:height" content="1920"><meta name="prometheus:duration" content="9000"><meta name="prometheus:frameRate" content="60"><style>
+      *,*::before,*::after{box-sizing:border-box}
+      html,body{margin:0;width:1080px;height:1920px;overflow:hidden;background:${background}}
+      body{font-family:Inter,Manrope,-apple-system,"Segoe UI",Arial,sans-serif;color:#fff;-webkit-font-smoothing:antialiased}
+      .stage{position:relative;width:1080px;height:1920px;overflow:hidden;background:${background};--accent:${accent};--secondary:${secondary}}
+      ${particles.css}
+      ${logo.css}
+      #three-launch-particles{z-index:1;opacity:.92}
+      #three-launch-logo{z-index:2;inset:210px 0 520px 0;background:transparent}
+      .veil{position:absolute;z-index:3;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(5,7,13,.2),transparent 30%,rgba(5,7,13,.82) 74%,${background}),radial-gradient(circle at 50% 42%,transparent 0 28%,rgba(0,0,0,.36) 70%)}
+      .grain{position:absolute;z-index:4;inset:0;opacity:.07;mix-blend-mode:screen;pointer-events:none;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.42) 0 1px,transparent 1px 4px),repeating-linear-gradient(90deg,rgba(255,255,255,.22) 0 1px,transparent 1px 5px)}
+      .hud{position:absolute;z-index:5;left:56px;right:56px;top:70px;display:flex;align-items:center;justify-content:space-between;font:850 20px/1 "Consolas","SFMono-Regular",monospace;letter-spacing:.14em;color:var(--accent);text-transform:uppercase;animation:fadeIn .5s .1s both}
+      .hud span:last-child{color:rgba(255,255,255,.7)}
+      .lockup{position:absolute;z-index:6;left:64px;right:64px;bottom:118px}
+      h1{margin:0 0 28px;font:950 92px/.92 Inter,system-ui,sans-serif;letter-spacing:0;text-wrap:balance;text-shadow:0 0 32px rgba(0,0,0,.82),0 12px 54px #000;animation:fadeUp .7s 3.2s both}
+      h1 span{color:var(--accent);text-shadow:0 0 24px var(--accent)}
+      .proof{display:grid;grid-template-columns:1fr;gap:14px;margin:0 0 34px}
+      .proof div{min-height:58px;display:flex;align-items:center;padding:0 18px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.075);backdrop-filter:blur(14px);font:780 22px/1.1 Inter,system-ui,sans-serif;color:rgba(255,255,255,.86);animation:slideIn .5s both}
+      .proof div:nth-child(1){animation-delay:4.05s}.proof div:nth-child(2){animation-delay:4.28s}.proof div:nth-child(3){animation-delay:4.51s}
+      .cta{display:flex;align-items:center;justify-content:center;min-height:86px;padding:0 28px;background:linear-gradient(90deg,var(--accent),var(--secondary));box-shadow:0 0 48px color-mix(in srgb,var(--accent),transparent 55%);color:#020617;font:950 30px/1 Inter,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.05em;animation:scalePop .58s 5.5s both,ctaPulse 1.8s 6.1s infinite}
+      .progress{position:absolute;z-index:6;left:64px;right:64px;bottom:72px;height:5px;background:rgba(255,255,255,.16);overflow:hidden}
+      .progress i{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--accent),var(--secondary),#fff);transform-origin:left;animation:bar 8.6s .2s linear both}
+      @keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes fadeUp{from{opacity:0;transform:translateY(42px)}to{opacity:1;transform:translateY(0)}}@keyframes slideIn{from{opacity:0;transform:translateX(-36px)}to{opacity:1;transform:translateX(0)}}@keyframes scalePop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}@keyframes ctaPulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.18)}}@keyframes bar{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+    </style></head><body><main class="stage" data-composition-id="three-saas-launch-orbit" data-width="1080" data-height="1920" data-duration="9s" data-frame-rate="60">
+      ${particles.html}
+      ${logo.html}
+      <div class="veil"></div><div class="grain"></div>
+      <div class="hud" data-role="hud" data-track-index="2" data-start="0s" data-duration="9s"><span>${eyebrow}</span><span>THREE.JS</span></div>
+      <section class="lockup" data-role="headline" data-track-index="3" data-start="3.1s" data-duration="5.9s"><h1>${headline.replace(/\s+(\S+)$/, ' <span>$1</span>')}</h1><div class="proof"><div>${proof1}</div><div>${proof2}</div><div>${proof3}</div></div><div class="cta" data-role="cta" data-track-index="4" data-start="5.5s" data-duration="3.5s">${cta}</div></section>
+      <div class="progress" data-role="progress" data-track-index="5" data-start="0s" data-duration="9s"><i></i></div>
+      ${particles.js}
+      ${logo.js}
+    </main></body></html>`;
+  },
+};
+
 // ---------------- TEMPLATE 24: ascii-logo-reveal ----------------
 const asciiLogoReveal: HtmlMotionTemplate = {
   id: 'ascii-logo-reveal',
@@ -2078,6 +2182,7 @@ const ALL_TEMPLATES: HtmlMotionTemplate[] = [
   courseLessonPromo,
   squareFeedAnnouncement,
   youtubeIntroPromo,
+  threeSaasLaunchOrbit,
   asciiLogoReveal,
   asciiCyberPoster,
   pythonAsciiRenderShowcase,

@@ -81,6 +81,7 @@ export interface SkillInfo {
   riskLevel?: string;
   name?: string;
   description?: string;
+  triggers?: string[];
   templates?: Array<{ action?: string; label?: string; command?: string }>;
 }
 
@@ -106,6 +107,7 @@ export function loadSkills(): SkillInfo[] {
         riskLevel: pkg.riskLevel,
         name: pkg.name,
         description: pkg.description,
+        triggers: Array.isArray(pkg.triggers) ? pkg.triggers : [],
         templates: Array.isArray((pkg.manifest as any)?.templates) ? (pkg.manifest as any).templates : [],
       });
     }
@@ -128,6 +130,46 @@ function tokenizeSkillQuery(input: string): string[] {
   return Array.from(new Set(tokens));
 }
 
+const SKILL_TRIGGER_STOPWORDS = new Set([
+  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
+  'me', 'my', 'our', 'this', 'that', 'please',
+]);
+
+function normalizeSkillTriggerText(input: string): string {
+  return String(input || '')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ')
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeSkillTriggerTextLoose(input: string): string {
+  return normalizeSkillTriggerText(input)
+    .split(' ')
+    .filter((word) => word && !SKILL_TRIGGER_STOPWORDS.has(word))
+    .join(' ');
+}
+
+function skillTriggerScore(trigger: string, query: string): number {
+  const normalizedTrigger = normalizeSkillTriggerText(trigger);
+  if (!normalizedTrigger) return 0;
+  const normalizedQuery = normalizeSkillTriggerText(query);
+  if (!normalizedQuery) return 0;
+  if (normalizedTrigger.includes(' ')) {
+    if (normalizedQuery.includes(normalizedTrigger)) return 7;
+    const looseTrigger = normalizeSkillTriggerTextLoose(normalizedTrigger);
+    const looseQuery = normalizeSkillTriggerTextLoose(normalizedQuery);
+    return looseTrigger.length >= 4 && looseQuery.includes(looseTrigger) ? 5 : 0;
+  }
+  const words = normalizedQuery.split(/\s+/).filter(Boolean);
+  return words.some((word) => {
+    if (word === normalizedTrigger) return true;
+    if (normalizedTrigger.length < 5 || word.length < 5) return false;
+    return word.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(word);
+  }) ? 5 : 0;
+}
+
 export function selectSkillSlugsForMessage(message: string, max = 2): string[] {
   const query = String(message || '').trim().toLowerCase();
   if (!query) return [];
@@ -141,16 +183,22 @@ export function selectSkillSlugsForMessage(message: string, max = 2): string[] {
     const name = String(s.name || '').toLowerCase();
     const desc = String(s.description || '').toLowerCase();
     const content = String(s.content || '').toLowerCase();
+    const triggers = Array.isArray(s.triggers) ? s.triggers : [];
     const templates = Array.isArray(s.templates) ? s.templates : [];
     let score = 0;
 
     if (slug && query.includes(slug)) score += 8;
     if (name && query.includes(name)) score += 6;
+    for (const trigger of triggers) score += skillTriggerScore(trigger, query);
 
     for (const t of tokens) {
       if (slug.includes(t)) score += 4;
       if (name.includes(t)) score += 3;
       if (desc.includes(t)) score += 2;
+      for (const trigger of triggers) {
+        const normalizedTrigger = normalizeSkillTriggerText(trigger);
+        if (normalizedTrigger.includes(t)) score += 2;
+      }
       if (t.length >= 4 && content.includes(t)) score += 1;
       for (const tpl of templates) {
         const cmd = String(tpl?.command || '').toLowerCase();

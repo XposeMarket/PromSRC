@@ -22,11 +22,11 @@
   "ownership": {
     "providerIds": ["xai"],
     "modelPrefixes": ["grok-"],
-    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "image_generation", "video_generation"]
   },
   "setup": {
     "authType": "api_key",
-    "envVars": ["XAI_API_KEY"],
+    "envVars": ["XAI_API_KEY", "XAI_MODEL", "XAI_IMAGE_MODEL", "XAI_VIDEO_MODEL"],
     "statusMode": "generic",
     "fields": [
       {

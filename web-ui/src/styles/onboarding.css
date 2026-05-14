@@ -1,0 +1,97 @@
+/* Prometheus onboarding overlay — tutorial, model setup, meet & greet, memory seed. */
+
+#prom-onboarding-root {
+  position: fixed; inset: 0; z-index: 999999;
+  background: rgba(8, 12, 24, 0.78);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  font-family: inherit;
+  animation: prom-onb-fade 220ms ease-out;
+}
+
+@keyframes prom-onb-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.prom-onb-card {
+  width: min(720px, 92vw);
+  max-height: 86vh;
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: prom-onb-pop 260ms cubic-bezier(.2,.9,.3,1.2);
+}
+
+@keyframes prom-onb-pop {
+  from { transform: translateY(12px) scale(.98); opacity: 0; }
+  to   { transform: translateY(0)    scale(1);   opacity: 1; }
+}
+
+.prom-onb-header {
+  padding: 18px 24px 6px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.prom-onb-step {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--brand, #0d4faf); text-transform: uppercase;
+}
+.prom-onb-skip {
+  border: none; background: transparent; cursor: pointer;
+  font-size: 12px; color: var(--muted, #888); font-family: inherit;
+  padding: 4px 6px; border-radius: 6px;
+}
+.prom-onb-skip:hover { color: var(--text, #222); background: #f4f4f6; }
+
+.prom-onb-body {
+  flex: 1; overflow-y: auto;
+  padding: 8px 32px 12px;
+}
+
+.prom-onb-illus {
+  height: 180px;
+  margin: 6px auto 18px;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #eef3ff 0%, #f7eefb 100%);
+  border-radius: 14px;
+  position: relative; overflow: hidden;
+}
+.prom-onb-illus svg { width: 80%; height: 78%; }
+
+.prom-onb-title {
+  font-size: 22px; font-weight: 700; color: var(--text, #1a1a1f);
+  margin: 0 0 6px;
+}
+.prom-onb-caption {
+  font-size: 14px; line-height: 1.55; color: var(--muted, #555);
+  margin: 0 0 10px;
+}
+
+.prom-onb-footer {
+  padding: 14px 24px 20px;
+  border-top: 1px solid var(--line, #eee);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.prom-onb-dots { display: flex; gap: 6px; }
+.prom-onb-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #d6d6dc; transition: all 180ms ease;
+}
+.prom-onb-dot.active { background: var(--brand, #0d4faf); transform: scale(1.3); }
+.prom-onb-dot.done   { background: var(--brand, #0d4faf); opacity: 0.5; }
+
+.prom-onb-actions { display: flex; gap: 8px; }
+.prom-onb-btn {
+  padding: 9px 18px;
+  border-radius: 9px; border: 1px solid var(--line, #ddd);
+  background: #fff; color: var(--text, #222);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  font-family: inherit;
+}
+.prom-onb-btn:hover { background: #f6f7fb; }
+.prom-onb-btn.primary {
+  background: var(--brand, #0d4faf); color: #fff; border-color: var(--brand, #0d4faf);
+}
+.prom-onb-btn.primary:hover { background: #0a3d8a; }
+.prom-onb-btn:disabled { opacity: 0.5; cursor: not-allowed; }

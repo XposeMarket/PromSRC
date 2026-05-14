@@ -10,7 +10,7 @@ type SearchResultItem = { title: string; url: string; snippet: string };
 type StructuredSource = { id: number; tier: 'A' | 'B' | 'C'; title: string; url: string; snippet: string; score: number };
 type StructuredEvidence = { id: number; source_id: number; excerpt: string; score: number };
 type StructuredFact = { id: number; claim: string; evidence_ids: number[]; source_ids: number[]; confidence: number };
-type SearchProvider = 'tavily' | 'google' | 'brave' | 'ddg' | 'ddg_html';
+type SearchProvider = 'multi' | 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'ddg_html';
 type SearchProviderAttempt = {
   provider: SearchProvider;
   status: 'success' | 'failed' | 'skipped';
@@ -20,11 +20,12 @@ type SearchProviderAttempt = {
 };
 type SearchDiagnostics = {
   query: string;
-  preferred_provider: 'tavily' | 'google' | 'brave' | 'ddg';
-  provider_order: Array<'tavily' | 'google' | 'brave' | 'ddg'>;
+  preferred_provider: 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
+  provider_order: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg'>;
   attempted: SearchProviderAttempt[];
   selected_provider?: SearchProvider;
 };
+type SearchProviderOption = 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'multi';
 type XMediaDescriptor = {
   type: 'image' | 'video';
   url?: string;
@@ -547,11 +548,13 @@ export function getSearchProvidersSummary(): string {
     const data = cfg.getConfig() as any;
     const searchCfg = data.search || {};
     const preferred = String(searchCfg.preferred_provider || 'ddg').toLowerCase();
+    const tinyfishKey = cfg.resolveSecret(searchCfg.tinyfish_api_key);
     const tavilyKey = cfg.resolveSecret(searchCfg.tavily_api_key);
     const googleKey = cfg.resolveSecret(searchCfg.google_api_key);
     const googleCx = cfg.resolveSecret(searchCfg.google_cx);
     const braveKey = cfg.resolveSecret(searchCfg.brave_api_key);
     const providers: { key: string; label: string; available: boolean }[] = [
+      { key: 'tinyfish', label: 'TinyFish', available: !!tinyfishKey },
       { key: 'tavily', label: 'Tavily', available: !!tavilyKey },
       { key: 'google', label: 'Google', available: !!(googleKey && googleCx) },
       { key: 'brave',  label: 'Brave',  available: !!braveKey },
@@ -568,7 +571,8 @@ export function getSearchProvidersSummary(): string {
 
 // ── Load search config via the app's config system (same source as Settings UI) ──
 function getSearchConfig(): {
-  preferred: 'tavily' | 'google' | 'brave' | 'ddg';
+  preferred: 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
+  tinyfishKey?: string;
   tavilyKey?: string;
   googleKey?: string;
   googleCx?: string;
@@ -582,13 +586,14 @@ function getSearchConfig(): {
     const data = cfg.getConfig() as any;
     const searchCfg = data.search || {};
     const preferredRaw = String(searchCfg.preferred_provider || 'ddg').toLowerCase();
-    const preferred = (['tavily', 'google', 'brave', 'ddg'].includes(preferredRaw) ? preferredRaw : 'ddg') as 'tavily' | 'google' | 'brave' | 'ddg';
+    const preferred = (['tinyfish', 'tavily', 'google', 'brave', 'ddg'].includes(preferredRaw) ? preferredRaw : 'ddg') as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
     // Resolve vault-backed search credentials so saves in Settings are used immediately.
+    const tinyfishKey = cfg.resolveSecret(searchCfg.tinyfish_api_key);
     const tavilyKey = cfg.resolveSecret(searchCfg.tavily_api_key);
     const googleKey = cfg.resolveSecret(searchCfg.google_api_key);
     const googleCx = cfg.resolveSecret(searchCfg.google_cx);
     const braveKey = cfg.resolveSecret(searchCfg.brave_api_key);
-    return { preferred, tavilyKey, googleKey, googleCx, braveKey };
+    return { preferred, tinyfishKey, tavilyKey, googleKey, googleCx, braveKey };
   } catch {
     // Final fallback: try reading config.json directly from known paths
     try {
@@ -601,9 +606,10 @@ function getSearchConfig(): {
         if (fs.existsSync(cfgPath)) {
           const data = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
           const preferredRaw = String(data.search?.preferred_provider || 'ddg').toLowerCase();
-          const preferred = (['tavily', 'google', 'brave', 'ddg'].includes(preferredRaw) ? preferredRaw : 'ddg') as 'tavily' | 'google' | 'brave' | 'ddg';
+          const preferred = (['tinyfish', 'tavily', 'google', 'brave', 'ddg'].includes(preferredRaw) ? preferredRaw : 'ddg') as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
           return {
             preferred,
+            tinyfishKey: data.search?.tinyfish_api_key,
             tavilyKey: data.search?.tavily_api_key,
             googleKey: data.search?.google_api_key,
             googleCx: data.search?.google_cx,
@@ -616,11 +622,40 @@ function getSearchConfig(): {
   return { preferred: 'ddg' };
 }
 // ── Google Custom Search API ─────────────────────────────────────────────---
+async function searchTinyFish(query: string, limit: number, apiKey: string): Promise<ToolResult> {
+  const url = `https://api.search.tinyfish.ai?query=${encodeURIComponent(query)}&location=US&language=en`;
+  const res = await fetch(url, {
+    headers: { 'Accept': 'application/json', 'X-API-Key': apiKey },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`TinyFish HTTP ${res.status}`);
+  const data: any = await res.json();
+  const results = (data.results || []).slice(0, limit).map((r: any) => ({
+    title: r.title || r.site_name || '',
+    url: r.url || '',
+    snippet: r.snippet || '',
+  }));
+  const ranked = rankResults(query, results);
+  const answer = buildDirectPriceAnswer(query, ranked);
+
+  return {
+    success: true,
+    data: { query, results: ranked, answer: answer || undefined, total_results: data.total_results, page: data.page },
+    stdout: (answer ? `${answer}\n\n` : '') + ranked.map((r: any, i: number) =>
+      `[${i + 1}] ${r.title}\n    ${r.url}\n    ${r.snippet.slice(0, 400)}`
+    ).join('\n\n'),
+  };
+}
+
 async function searchGoogle(query: string, limit: number, apiKey: string, cx: string): Promise<ToolResult> {
   const url = `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(query)}&key=${apiKey}&cx=${cx}&num=${limit}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw new Error(`Google HTTP ${res.status}`);
   const data: any = await res.json();
+  if (!res.ok) {
+    const message = data?.error?.message || data?.error?.errors?.[0]?.message || `Google HTTP ${res.status}`;
+    const reason = data?.error?.errors?.[0]?.reason || data?.error?.status || '';
+    throw new Error(`Google HTTP ${res.status}${reason ? ` ${reason}` : ''}: ${message}`);
+  }
   const results = (data.items || []).map((r: any) => ({
     title: r.title || '',
     url: normalizeGoogleUrl(r.link || ''),
@@ -851,51 +886,95 @@ async function searchDDGHtml(query: string, limit: number): Promise<ToolResult> 
 }
 
 // ── Main web_search tool ──────────────────────────────────────────────────────
-export async function executeWebSearch(args: { query: string; max_results?: number; multi_engine?: boolean }): Promise<ToolResult> {
+export async function executeWebSearch(args: { query: string; max_results?: number; multi_engine?: boolean; provider?: SearchProviderOption }): Promise<ToolResult> {
   if (!args.query?.trim()) return { success: false, error: 'query is required' };
   let limit = Math.min(args.max_results ?? 5, 10);
   if (isPriceQuery(args.query)) limit = Math.max(limit, 5);
 
   const cfg = getSearchConfig();
+  const providerRaw = String(args.provider || '').trim().toLowerCase();
+  const providerOverride = (['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'multi'].includes(providerRaw) ? providerRaw : '') as SearchProviderOption | '';
+  const candidates: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg'> = ['tinyfish', 'tavily', 'google', 'brave', 'ddg'];
+  const useMultiEngine = providerOverride === 'multi' || (providerOverride === '' && args.multi_engine !== false);
+  const providerOrder = providerOverride && providerOverride !== 'multi'
+    ? [providerOverride as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg']
+    : !useMultiEngine
+      ? [cfg.preferred]
+      : [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred)];
 
   // ── Multi-engine mode: query all configured providers in parallel, merge results ──
-  // Default ON when 2+ API providers are configured (pass multi_engine:false to force single-engine).
-  if (args.multi_engine !== false) {
+  // Default ON for every configured credentialed provider. Pass multi_engine:false for the Settings preferred provider only.
+  if (useMultiEngine) {
     const tasks: { provider: SearchProvider; promise: Promise<ToolResult> }[] = [];
+    if (cfg.tinyfishKey) tasks.push({ provider: 'tinyfish', promise: searchTinyFish(args.query, limit, cfg.tinyfishKey as string) });
     if (cfg.tavilyKey) tasks.push({ provider: 'tavily', promise: searchTavily(args.query, limit, cfg.tavilyKey as string) });
     if (cfg.googleKey && cfg.googleCx) tasks.push({ provider: 'google', promise: searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string) });
     if (cfg.braveKey)  tasks.push({ provider: 'brave',  promise: searchBrave(args.query, limit, cfg.braveKey as string) });
     if (tasks.length >= 1) {
+      const diagnostics: SearchDiagnostics = {
+        query: args.query,
+        preferred_provider: cfg.preferred,
+        provider_order: tasks.map(t => t.provider).filter((p): p is 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' => p !== 'ddg_html'),
+        attempted: [],
+        selected_provider: 'multi' as SearchProvider,
+      };
       const settled = await Promise.allSettled(tasks.map(t => t.promise));
       const merged: SearchResultItem[] = [];
       const seenUrls = new Set<string>();
+      const attemptedProviders = tasks.map(t => t.provider);
       const usedProviders: string[] = [];
+      const failedProviders: string[] = [];
       for (let i = 0; i < settled.length; i++) {
         const r = settled[i];
         if (r.status === 'fulfilled' && r.value.success && Array.isArray(r.value.data?.results)) {
           usedProviders.push(tasks[i].provider);
+          diagnostics.attempted.push({
+            provider: tasks[i].provider,
+            status: 'success',
+            result_count: r.value.data.results.length,
+          });
           for (const item of r.value.data.results as SearchResultItem[]) {
             if (!seenUrls.has(item.url)) {
               seenUrls.add(item.url);
               merged.push(item);
             }
           }
+        } else {
+          const reason = r.status === 'rejected'
+            ? ((r.reason as any)?.message || String(r.reason))
+            : (r.value.error || 'no_results');
+          failedProviders.push(`${tasks[i].provider}: ${reason}`);
+          diagnostics.attempted.push({
+            provider: tasks[i].provider,
+            status: 'failed',
+            reason,
+            result_count: r.status === 'fulfilled' && Array.isArray(r.value.data?.results) ? r.value.data.results.length : 0,
+          });
         }
       }
       if (merged.length > 0) {
         const capped = merged.slice(0, Math.min(limit * 2, 15));
         const lines = capped.map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`);
+        const successLine = usedProviders.length && usedProviders.length < attemptedProviders.length
+          ? `\n[Successful engines: ${usedProviders.join('+')}]\n`
+          : '';
+        const failedLine = failedProviders.length ? `\n[Failed engines: ${failedProviders.join(' | ')}]\n` : '';
         return {
           success: true,
-          data: { results: capped, provider: 'multi', engines: usedProviders },
-          stdout: `[Multi-engine: ${usedProviders.join('+')}]\n\n` + lines.join('\n\n'),
+          data: {
+            results: capped,
+            provider: 'multi',
+            engines: attemptedProviders,
+            successful_engines: usedProviders,
+            failed_engines: failedProviders,
+            search_diagnostics: diagnostics,
+          },
+          stdout: `[Multi-engine: ${attemptedProviders.join('+')}]${successLine}${failedLine}\n` + lines.join('\n\n'),
         };
       }
       // fall through to single-engine if all parallel calls failed
     }
   }
-  const candidates: Array<'tavily' | 'google' | 'brave' | 'ddg'> = ['tavily', 'google', 'brave', 'ddg'];
-  const providerOrder = [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred)];
   const diagnostics: SearchDiagnostics = {
     query: args.query,
     preferred_provider: cfg.preferred,
@@ -905,6 +984,10 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
 
   let lastErr = null;
   for (const provider of providerOrder) {
+    if (provider === 'tinyfish' && !cfg.tinyfishKey) {
+      diagnostics.attempted.push({ provider, status: 'skipped', reason: 'missing_tinyfish_api_key' });
+      continue;
+    }
     if (provider === 'tavily' && !cfg.tavilyKey) {
       diagnostics.attempted.push({ provider, status: 'skipped', reason: 'missing_tavily_api_key' });
       continue;
@@ -920,6 +1003,20 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
 
     const started = Date.now();
     try {
+      if (provider === 'tinyfish') {
+        const res = await searchTinyFish(args.query, limit, cfg.tinyfishKey as string);
+        await augmentEventContract(args.query, res);
+        const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
+        diagnostics.attempted.push({
+          provider,
+          status: 'success',
+          duration_ms: Date.now() - started,
+          result_count: resultCount,
+        });
+        diagnostics.selected_provider = 'tinyfish';
+        res.data = { ...(res.data || {}), provider: 'tinyfish', search_diagnostics: diagnostics };
+        return res;
+      }
       if (provider === 'tavily') {
         const res = await searchTavily(args.query, limit, cfg.tavilyKey as string);
         await augmentEventContract(args.query, res);
@@ -1002,6 +1099,16 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
     }
   }
 
+  if ((providerOverride && providerOverride !== 'multi') || args.multi_engine === false) {
+    const attempted = diagnostics.attempted[diagnostics.attempted.length - 1];
+    const selectedProvider = (providerOverride && providerOverride !== 'multi') ? providerOverride : cfg.preferred;
+    return {
+      success: false,
+      error: `${selectedProvider} search failed${attempted?.reason ? ` (${attempted.reason})` : ''}.`,
+      data: { query: args.query, provider: selectedProvider, search_diagnostics: diagnostics },
+    };
+  }
+
   // Final fallback if ddg path threw and wasn't already successful
   const fallbackStarted = Date.now();
   try {
@@ -1080,6 +1187,59 @@ function reportWebFetchProgress(
   } catch {
     // Best-effort progress reporting only.
   }
+}
+
+function isTinyFishFetchEligible(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    if (host === 'localhost' || host === '::1' || host.endsWith('.local')) return false;
+    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return false;
+    return !/^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+  } catch {
+    return false;
+  }
+}
+
+async function fetchTinyFishContent(url: string, maxChars: number, apiKey: string): Promise<ToolResult> {
+  const res = await fetch('https://api.fetch.tinyfish.ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-API-Key': apiKey },
+    body: JSON.stringify({ urls: [url], format: 'markdown', links: false, image_links: false }),
+    signal: AbortSignal.timeout(150_000),
+  });
+  if (!res.ok) throw new Error(`TinyFish Fetch HTTP ${res.status}`);
+  const data: any = await res.json();
+  const firstError = Array.isArray(data.errors) ? data.errors.find((e: any) => e?.url === url) || data.errors[0] : null;
+  const page = Array.isArray(data.results) ? data.results[0] : null;
+  if (!page) {
+    return { success: false, error: firstError?.error ? `TinyFish Fetch failed: ${firstError.error}` : 'TinyFish Fetch returned no content' };
+  }
+
+  const rawText = typeof page.text === 'string' ? page.text : JSON.stringify(page.text ?? '', null, 2);
+  const text = clipText(rawText, maxChars);
+  const usefulText = text.trim();
+  if (!usefulText || usefulText === '{}' || usefulText === '[]' || usefulText === 'null') {
+    return { success: false, error: 'TinyFish Fetch returned empty extracted text' };
+  }
+
+  return {
+    success: true,
+    data: {
+      url,
+      final_url: page.final_url || page.url || url,
+      title: page.title,
+      description: page.description,
+      language: page.language,
+      author: page.author,
+      published_date: page.published_date,
+      latency_ms: page.latency_ms,
+      provider: 'tinyfish',
+      length: text.length,
+    },
+    stdout: text,
+  };
 }
 
 function classifyXMediaLabel(imageCount: number, videoCount: number): 'Video' | 'Images' | 'Media' {
@@ -1497,6 +1657,17 @@ export async function executeWebFetch(
     return executeXWebFetch(url, maxChars, progress);
   }
 
+  const searchCfg = getSearchConfig();
+  if (searchCfg.tinyfishKey && isTinyFishFetchEligible(url)) {
+    try {
+      const tinyFishResult = await fetchTinyFishContent(url, maxChars, searchCfg.tinyfishKey);
+      if (tinyFishResult.success) return tinyFishResult;
+      console.error(`[web_fetch] ${tinyFishResult.error || 'TinyFish Fetch returned no content'}; falling back to direct fetch.`);
+    } catch (err: any) {
+      console.error(`[web_fetch] TinyFish Fetch failed for ${url}; falling back to direct fetch:`, err?.message || String(err));
+    }
+  }
+
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0' },
@@ -1539,13 +1710,79 @@ export async function executeWebFetch(
 export const webSearchTool = {
   name: 'web_search',
   get description() {
-    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. When 2+ API providers are configured, automatically queries them in parallel and merges deduplicated results. For complex research, call with different query angles and web_fetch the most relevant URLs.`;
+    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. Defaults to multi-engine mode across every configured credentialed provider and merges deduplicated results. Pass provider to force one engine, or provider:"multi" to force all configured engines. For complex research, call with different query angles and web_fetch the most relevant URLs.`;
   },
   execute: executeWebSearch,
   schema: {
     query: 'string (required) - Search query',
     max_results: 'number (optional, default 5) - Max results to return',
-    multi_engine: 'boolean (optional, default true) - Pass false to disable parallel multi-provider search and use single provider fallback chain instead',
+    multi_engine: 'boolean (optional, default true) - Pass false to use only the preferred search provider from Settings',
+    provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, multi. Use a provider name for single-provider search; use multi for all configured engines',
+  },
+  jsonSchema: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string', description: 'Search query' },
+      max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
+      multi_engine: { type: 'boolean', description: 'Default true. Set false to use only the preferred search provider from Settings.' },
+      provider: {
+        type: 'string',
+        enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg'],
+        description: 'Optional provider selector. Use multi for every configured provider, or a provider name for one provider.',
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const webSearchSingleTool = {
+  name: 'web_search_single',
+  get description() {
+    return `Search using one provider only. Defaults to the preferred provider from Settings. Configured providers: ${getSearchProvidersSummary()}. Use provider to override for testing.`;
+  },
+  execute: (args: { query: string; max_results?: number; provider?: SearchProviderOption }) =>
+    executeWebSearch({ ...args, multi_engine: false }),
+  schema: {
+    query: 'string (required) - Search query',
+    max_results: 'number (optional, default 5) - Max results to return',
+    provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg. Omit to use Settings preferred provider',
+  },
+  jsonSchema: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string', description: 'Search query' },
+      max_results: { type: 'number', description: 'Maximum results to return. Default 5, max 10.' },
+      provider: {
+        type: 'string',
+        enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg'],
+        description: 'Optional provider override. Omit to use Settings preferred provider.',
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const webSearchMultiTool = {
+  name: 'web_search_multi',
+  get description() {
+    return `Search using every configured credentialed provider in parallel, then merge deduplicated results. Configured providers: ${getSearchProvidersSummary()}.`;
+  },
+  execute: (args: { query: string; max_results?: number }) =>
+    executeWebSearch({ ...args, provider: 'multi' }),
+  schema: {
+    query: 'string (required) - Search query',
+    max_results: 'number (optional, default 5) - Max results to return per provider',
+  },
+  jsonSchema: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string', description: 'Search query' },
+      max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
+    },
+    additionalProperties: false,
   },
 };
 
@@ -1561,8 +1798,8 @@ export const webFetchTool = {
 
 // ─── Simple string-returning helpers for executeTool (subagent executor) ────────────
 // These delegate to the registry implementations above so there is one code path.
-export async function webSearch(query: string): Promise<string> {
-  const result = await executeWebSearch({ query });
+export async function webSearch(query: string, options: { max_results?: number; multi_engine?: boolean; provider?: SearchProviderOption } = {}): Promise<string> {
+  const result = await executeWebSearch({ query, ...options });
   if (!result.success) return result.error || `Search failed for "${query}".`;
   return result.stdout || result.data?.answer || `No results for "${query}".`;
 }

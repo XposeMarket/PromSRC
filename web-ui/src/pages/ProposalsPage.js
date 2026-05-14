@@ -113,6 +113,16 @@ function renderProposals(proposals, filter = getProposalFilterValue()) {
         `<span style="font-size:10px;background:var(--panel-2);padding:2px 6px;border-radius:4px;font-family:monospace;border:1px solid var(--line)">${escHtml(file.action)}: ${escHtml(file.path)}</span>`,
       ).join(' ')
       : '';
+    const executionSteps = Array.isArray(proposal.executionSteps)
+      ? proposal.executionSteps.map((step, index) => {
+        const title = String(step?.title || step?.description || '').trim();
+        if (!title) return '';
+        const kind = String(step?.kind || '').trim();
+        const description = String(step?.description || '').trim();
+        const success = String(step?.successCriteria || step?.success_criteria || '').trim();
+        return `<li style="margin-bottom:6px"><strong>${index + 1}. ${escHtml(title)}</strong>${kind ? ` <span style="font-size:10px;color:var(--muted);text-transform:uppercase">[${escHtml(kind)}]</span>` : ''}${description ? `<div style="margin-top:2px;color:var(--fg);opacity:0.82">${escHtml(description)}</div>` : ''}${success ? `<div style="margin-top:2px;color:var(--muted)">Success: ${escHtml(success)}</div>` : ''}</li>`;
+      }).filter(Boolean).join('')
+      : '';
     const resultText = String(proposal.executionResult || '');
     const borderAccent = isPending
       ? 'var(--brand)'
@@ -164,6 +174,7 @@ function renderProposals(proposals, filter = getProposalFilterValue()) {
         </div>
       </div>
       <details style="margin-top:8px"><summary style="font-size:11px;color:var(--muted);cursor:pointer;user-select:none">View details &amp; plan</summary>
+        ${executionSteps ? `<div style="font-size:12px;margin-top:8px;padding:10px 12px;background:var(--panel-2);border-radius:6px;border:1px solid var(--line)"><div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Approved execution steps</div><ol style="margin:0;padding-left:18px;color:var(--fg);line-height:1.45">${executionSteps}</ol></div>` : ''}
         <div class="markdown-body proposal-detail-body" style="font-size:12px;margin-top:8px;padding:10px 12px;background:var(--panel-2);border-radius:6px;overflow:auto;max-height:400px">${(typeof marked !== 'undefined' ? marked.parse(proposal.details || proposal.summary || '', { breaks: true, gfm: true, mangle: false, headerIds: false }) : `<pre style='white-space:pre-wrap'>${escHtml(proposal.details || proposal.summary || '')}</pre>`)}</div>
         ${proposal.diffPreview ? `<pre style="font-size:10px;color:var(--fg);white-space:pre-wrap;margin-top:6px;padding:8px 10px;background:var(--panel-2);border-radius:6px;border:1px solid var(--line);overflow:auto;max-height:240px;font-family:'IBM Plex Mono',monospace;line-height:1.5">${escHtml(proposal.diffPreview)}</pre>` : ''}
       </details>

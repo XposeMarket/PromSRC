@@ -11,6 +11,8 @@ let CONNECTORS = [];
 let connectionsState = {};
 let connectorStatuses = {};
 let activeConnectorId = null;
+let obsidianConnectorState = { bridge: { vaults: [] }, loading: false, syncing: false };
+const oauthPollIntervals = new Map();
 
 function buildConnectorMonogram(name) {
   const tokens = String(name || '')
@@ -222,7 +224,7 @@ function openConnectorView(id) {
         <div style="display:flex;flex-wrap:wrap;gap:5px">
           ${tools.map((tool) => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">${escHtml(tool)}</code>`).join('')}
         </div>
-        <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"connectors"})</code></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"external_apps"})</code></div>
       `;
     } else if (tools.length) {
       aiToolsEl.style.display = '';
@@ -259,9 +261,148 @@ function closeConnectorView() {
   activeConnectorId = null;
 }
 
+function renderObsidianVaultList() {
+  const vaults = obsidianConnectorState.bridge?.vaults || [];
+  if (obsidianConnectorState.loading) {
+    return '<div style="font-size:12px;color:var(--muted);padding:8px 0">Loading vaults...</div>';
+  }
+  if (!vaults.length) {
+    return '<div style="font-size:12px;color:var(--muted);padding:8px 0;line-height:1.5">No vaults connected. Paste a local vault path to enable the Obsidian connector.</div>';
+  }
+  return vaults
+    .map((vault) => {
+      const lastSync = vault.lastSyncedAt ? new Date(vault.lastSyncedAt).toLocaleString() : 'Never synced';
+      return `
+        <div style="border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px;background:var(--panel-2)">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(vault.name || 'Obsidian Vault')}</div>
+              <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(vault.path || '')}</div>
+            </div>
+            <span style="font-size:10.5px;color:${vault.enabled === false ? 'var(--muted)' : 'var(--ok)'};font-weight:700">${vault.enabled === false ? 'Paused' : 'Active'}</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted)">Mode: ${escHtml(vault.mode || 'read_only')} - ${escHtml(lastSync)}</div>
+          <div style="display:flex;gap:7px;flex-wrap:wrap">
+            <button class="cv-btn-connect" style="padding:7px 10px;font-size:11.5px" onclick="syncObsidianConnectorVault('${escHtml(vault.id)}')">Sync</button>
+            <button class="cv-btn-disconnect" style="padding:7px 10px;font-size:11.5px" onclick="removeObsidianConnectorVault('${escHtml(vault.id)}')">Remove</button>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function renderObsidianConnectorActions(connector, isConnected) {
+  const el = document.getElementById('cv-actions');
+  if (!el) return;
+  const disableText = obsidianConnectorState.syncing ? 'Syncing...' : 'Sync All Vaults';
+  el.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;flex-direction:column;gap:9px">
+        <label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Vault path</label>
+        <input id="obsidian-connector-path" type="text" placeholder="C:\\Users\\you\\Documents\\Obsidian Vault" style="width:100%;box-sizing:border-box;padding:9px 11px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:13px;outline:none" />
+        <div style="display:grid;grid-template-columns:1fr 120px;gap:8px">
+          <input id="obsidian-connector-name" type="text" placeholder="Display name" style="min-width:0;padding:9px 11px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:13px;outline:none" />
+          <select id="obsidian-connector-mode" style="min-width:0;padding:9px 8px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:12px;outline:none">
+            <option value="read_only">Read-only</option>
+            <option value="assisted">Assisted</option>
+            <option value="full">Full</option>
+          </select>
+        </div>
+        <button class="cv-btn-connect" onclick="connectObsidianConnectorVault()">
+          Connect Vault
+        </button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Vaults</div>
+        <button class="cv-btn-connect" style="padding:7px 10px;font-size:11.5px" onclick="syncObsidianConnectorVault('')" ${obsidianConnectorState.syncing ? 'disabled' : ''}>${disableText}</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">${renderObsidianVaultList()}</div>
+      ${isConnected ? `<button class="cv-btn-disconnect" onclick="disconnectConnector('${connector.id}')">Disconnect Obsidian</button>` : ''}
+    </div>
+  `;
+}
+
+async function loadObsidianConnectorState() {
+  obsidianConnectorState.loading = true;
+  if (activeConnectorId === 'obsidian') renderObsidianConnectorActions(getConnectorById('obsidian'), !!connectionsState.obsidian?.connected);
+  try {
+    const data = await api(ENDPOINTS.OBSIDIAN_STATUS);
+    obsidianConnectorState.bridge = data?.bridge || { vaults: [] };
+  } catch (e) {
+    showToast('Obsidian unavailable', e.message || 'Could not load vault status.', 'error');
+  } finally {
+    obsidianConnectorState.loading = false;
+    if (activeConnectorId === 'obsidian') renderObsidianConnectorActions(getConnectorById('obsidian'), !!connectionsState.obsidian?.connected);
+  }
+}
+
+async function connectObsidianConnectorVault() {
+  const vaultPath = String(document.getElementById('obsidian-connector-path')?.value || '').trim();
+  const name = String(document.getElementById('obsidian-connector-name')?.value || '').trim();
+  const mode = String(document.getElementById('obsidian-connector-mode')?.value || 'read_only');
+  if (!vaultPath) {
+    showToast('Vault path required', 'Paste the absolute path to a local Obsidian vault.', 'warning');
+    return;
+  }
+  try {
+    const data = await api(ENDPOINTS.OBSIDIAN_VAULTS, {
+      method: 'POST',
+      timeoutMs: 120000,
+      body: JSON.stringify({ path: vaultPath, name, mode, syncNow: true }),
+    });
+    obsidianConnectorState.bridge = data?.bridge || { vaults: [] };
+    await loadConnectionsState();
+    openConnectorView('obsidian');
+    showToast('Obsidian connected', 'Vault notes are now available through the Obsidian connector.', 'success');
+  } catch (e) {
+    showToast('Connect failed', e.message || 'Could not connect vault.', 'error');
+  }
+}
+
+async function syncObsidianConnectorVault(vaultId = '') {
+  obsidianConnectorState.syncing = true;
+  renderObsidianConnectorActions(getConnectorById('obsidian'), !!connectionsState.obsidian?.connected);
+  try {
+    const data = await api(ENDPOINTS.OBSIDIAN_SYNC, {
+      method: 'POST',
+      timeoutMs: 180000,
+      body: JSON.stringify({ vaultId, force: true }),
+    });
+    obsidianConnectorState.bridge = data?.bridge || { vaults: [] };
+    const sync = data?.sync || {};
+    showToast('Obsidian synced', `${sync.indexed || 0} indexed, ${sync.removed || 0} removed.`, 'success');
+  } catch (e) {
+    showToast('Sync failed', e.message || 'Could not sync Obsidian.', 'error');
+  } finally {
+    obsidianConnectorState.syncing = false;
+    await loadConnectionsState();
+    if (activeConnectorId === 'obsidian') openConnectorView('obsidian');
+  }
+}
+
+async function removeObsidianConnectorVault(vaultId) {
+  if (!confirm('Remove this vault from the Obsidian connector? Indexed mirror notes will be removed from Prometheus memory.')) return;
+  try {
+    const data = await api(ENDPOINTS.obsidianVault(vaultId), { method: 'DELETE' });
+    obsidianConnectorState.bridge = data?.bridge || { vaults: [] };
+    await loadConnectionsState();
+    openConnectorView('obsidian');
+    showToast('Vault removed', 'The vault was disconnected.', 'success');
+  } catch (e) {
+    showToast('Remove failed', e.message || 'Could not remove vault.', 'error');
+  }
+}
+
 function renderConnectorActions(connector, isConnected) {
   const el = document.getElementById('cv-actions');
   if (!el) return;
+
+  if (connector.id === 'obsidian') {
+    renderObsidianConnectorActions(connector, isConnected);
+    if (!obsidianConnectorState.loading) loadObsidianConnectorState().catch(() => {});
+    return;
+  }
 
   if (isConnected) {
     const connectedAt = connectionsState[connector.id]?.connectedAt;
@@ -396,7 +537,7 @@ function renderOAuthWaiting(id) {
       <div style="font-size:12px;color:var(--muted);line-height:1.6">
         Complete the ${escHtml(connector.name)} login in the popup window. This panel will refresh automatically when it finishes.
       </div>
-      <button class="cv-btn-disconnect" onclick="openConnectorView('${id}')" style="width:fit-content">Cancel</button>
+      <button class="cv-btn-disconnect" onclick="cancelOAuthPolling('${id}')" style="width:fit-content">Cancel</button>
     </div>
   `;
 }
@@ -579,11 +720,13 @@ async function saveConnectorCredentials(id) {
 }
 
 function pollOAuthCompletion(id) {
+  stopOAuthPolling(id);
   let attempts = 0;
   const interval = setInterval(async () => {
     attempts += 1;
     if (attempts > 120) {
       clearInterval(interval);
+      oauthPollIntervals.delete(id);
       renderOAuthManualFallback(id);
       return;
     }
@@ -595,6 +738,7 @@ function pollOAuthCompletion(id) {
       if (data?.pending !== false) return;
 
       clearInterval(interval);
+      oauthPollIntervals.delete(id);
       if (data.success) {
         await loadConnectionsState();
         openConnectorView(id);
@@ -607,6 +751,18 @@ function pollOAuthCompletion(id) {
       // keep polling quietly
     }
   }, 2000);
+  oauthPollIntervals.set(id, interval);
+}
+
+function stopOAuthPolling(id) {
+  const interval = oauthPollIntervals.get(id);
+  if (interval) clearInterval(interval);
+  oauthPollIntervals.delete(id);
+}
+
+function cancelOAuthPolling(id) {
+  stopOAuthPolling(id);
+  openConnectorView(id);
 }
 
 async function startBrowserLogin(id) {
@@ -776,9 +932,14 @@ window.startOAuthFlow = startOAuthFlow;
 window.renderOAuthWaiting = renderOAuthWaiting;
 window.renderOAuthManualFallback = renderOAuthManualFallback;
 window.pollOAuthCompletion = pollOAuthCompletion;
+window.cancelOAuthPolling = cancelOAuthPolling;
 window.startBrowserLogin = startBrowserLogin;
 window.verifyBrowserLogin = verifyBrowserLogin;
 window.disconnectConnector = disconnectConnector;
 window.loadConnectorActivity = loadConnectorActivity;
+window.loadObsidianConnectorState = loadObsidianConnectorState;
+window.connectObsidianConnectorVault = connectObsidianConnectorVault;
+window.syncObsidianConnectorVault = syncObsidianConnectorVault;
+window.removeObsidianConnectorVault = removeObsidianConnectorVault;
 window.escapeHtml = escapeHtml;
 window.CONNECTORS = CONNECTORS;

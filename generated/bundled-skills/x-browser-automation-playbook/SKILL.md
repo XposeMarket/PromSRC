@@ -1,11 +1,3 @@
----
-name: x-browser-automation-playbook
-description: Use this skill for interactive work on X.com — posting, replying, liking, searching, collecting tweets, and other live browser actions. For plain X status URLs that the user wants fetched or read, default to `web_fetch` first and answer from that result without extra steps unless the user explicitly asks for more.
-emoji: "🧩"
-version: 2.5.0
-triggers: post on x, tweet this, reply to this tweet, like tweets, search x, collect tweets, fetch this x post, read this tweet url, pull this x thread, webfetch this x url, web fetch this x url, get this tweet
----
-
 # X (Twitter) Browser Automation Playbook
 
 Use this file before doing work on X.com.
@@ -38,6 +30,7 @@ This skill covers the tested browser flows for interaction on X **and** the rout
 - **Collection on X.com:** `browser_scroll_collect({ scrolls: 8-15, multiplier: 1.75, delay_ms: 1200-2000 })`
 - **Liking:** keyboard flow = `j` navigation + `browser_get_focused_item()` verification + `l` like
 - **Posting:** prefer `x_post` for text-only, `x_post_with_image` for one image, and `x_post_with_images` for multi-image posts; otherwise use the manual browser fallback below
+- **Bookmarks:** `browser_open("https://x.com/home")`, then either click **Bookmarks** in the left panel or use the shortcut sequence `g` then `b` with `browser_press_key("g")` followed by `browser_press_key("b")`
 - **Avoid waste:** no redundant snapshots between tools that already return one
 
 ---
@@ -47,7 +40,7 @@ This skill covers the tested browser flows for interaction on X **and** the rout
 Use these routing rules to avoid overlap and mis-selection:
 
 - **X-specific interactive/social actions → this skill.**
-  - Examples: compose/post tweets, like/reply/retweet/quote workflows, X feed interaction loops, X-specific keyboard shortcuts.
+  - Examples: compose/post tweets, like/reply/retweet/quote workflows, opening bookmarks, X feed interaction loops, X-specific keyboard shortcuts.
 - **Plain X status URL retrieval → start with `web_fetch`.**
   - If `web_fetch` already returned the text/thread content, do not escalate further by default.
 - **Local or already-downloaded video understanding → `video-analysis-and-transcription`.**
@@ -56,7 +49,7 @@ Use these routing rules to avoid overlap and mis-selection:
 - **Static extraction/crawl/data collection tasks outside X → `web-scraper`.**
 
 **Precedence order for ambiguous prompts:**
-1. If the target is X.com user interaction (post/like/reply/retweet/quote), use this skill.
+1. If the target is X.com user interaction (post/like/reply/retweet/quote/open bookmarks), use this skill.
 2. If the target is an X post/thread URL and the user wants it fetched/read, run `web_fetch` first.
 3. If the target file is already local and the real job is watch/transcribe/summarize, route to `video-analysis-and-transcription`.
 4. If the task is generic browser automation on any site, use `browser-automation-playbook`.
@@ -194,6 +187,27 @@ Use this mode when liking multiple tweets quickly and safely.
 
 ---
 
+## Playbook 6: Open / Find X Bookmarks
+
+Use this when Raul asks to **find my bookmarks**, **open X bookmarks**, **go to bookmarks**, or review saved/bookmarked posts.
+
+### Visual left-panel path
+
+1. `browser_open("https://x.com/home")`
+2. Use the fresh snapshot/vision evidence to locate **Bookmarks** in the left navigation panel. It is normally visible in the left panel as soon as X home opens.
+3. Click the **Bookmarks** nav item if it has a DOM ref. If the DOM is sparse or ambiguous, take `browser_vision_screenshot()` and click the visible left-panel **Bookmarks** label/icon.
+4. Confirm the page URL or heading indicates bookmarks before collecting or interacting with saved posts.
+
+### Keyboard shortcut path
+
+1. `browser_open("https://x.com/home")`
+2. Press the X navigation shortcut sequence: `browser_press_key("g")`, then `browser_press_key("b")`
+3. If the shortcut does not move after one attempt, fall back to the visual left-panel path instead of looping.
+
+**Note:** X displays this shortcut as `g` + `b`. In Prometheus browser tools, send it as two sequential keypresses unless a future tool explicitly supports chord strings like `"g b"`.
+
+---
+
 ## Recovery / Fallback Mode (Only If Fast Mode Fails)
 
 Use this only when keyboard focus fails, `web_fetch` for a read request fails, or shortcuts are blocked.
@@ -201,7 +215,7 @@ Use this only when keyboard focus fails, `web_fetch` for a read request fails, o
 - For reading X URLs: retry with `web_fetch` once if the first result is malformed
 - For browser interaction failures: take one fresh `browser_snapshot()`
 - Use direct `browser_click(@ref)` on visible controls
-- Do **not** treat multi-key shortcut hints shown by X (for example `g h`) as automatically executable through `browser_press_key`. Tool support for chord/sequence shortcuts may differ from what X advertises in the UI.
+- Do **not** treat multi-key shortcut hints shown by X (for example `g h`) as automatically executable through one combined `browser_press_key` call. For known X sequences, send separate keypresses in order (for bookmarks: `browser_press_key("g")`, then `browser_press_key("b")`). Tool support for chord/sequence shortcuts may differ from what X advertises in the UI.
 - If still unstable, `browser_wait(2000)` then retry once
 - Do not loop endlessly; stop and report the blocker after one retry path
 
@@ -222,8 +236,9 @@ Use this only when keyboard focus fails, `web_fetch` for a read request fails, o
 ## Changelog
 
 | Date | Change |
-| 2026-04-25 | v2.5.0: Updated posting guidance to prefer the saved composites `x_post`, `x_post_with_image`, and `x_post_with_images` before any manual browser composer flow. Manual X opening is now explicitly fallback-only for posting when the relevant composite is unavailable or the user wants direct browser control. |
 |------|--------|
+| 2026-05-05 | v2.6.0: Added X Bookmarks guidance: find Bookmarks in the left navigation panel from X home, or use the keyboard shortcut sequence `g` then `b` after `browser_open("https://x.com/home")`. Updated triggers so bookmark requests load this skill. |
+| 2026-04-25 | v2.5.0: Updated posting guidance to prefer the saved composites `x_post`, `x_post_with_image`, and `x_post_with_images` before any manual browser composer flow. Manual X opening is now explicitly fallback-only for posting when the relevant composite is unavailable or the user wants direct browser control. |
 | 2026-04-23 | v2.4.0: Added explicit automation-layer scroll-guard guidance for X. Documented that repeated blind `browser_scroll(...)` calls can be blocked until a real page interaction anchors the session, and that `browser_scroll_collect(...)` is the preferred path when the goal is collection rather than manual feed steering. |
 | 2026-04-22 | v2.3.0: Simplified X URL retrieval guidance so plain status-link requests now default to a straight `web_fetch` read path with no automatic extra download/analysis work. Cleaned the skill back toward interaction-first scope while preserving the fetch-first routing rule. |
 | 2026-04-22 | v2.2.0: Updated posting guidance after live smoke testing. `x_post_text` is now framed as the preferred path only when surfaced in the active toolset, with manual browser posting documented as the direct fallback. Added explicit posting guardrails, warned that `browser_fill` on live X composers can immediately publish, clarified that drafts should not use live composer fill, added the inline-composer `[INPUT]` targeting warning, and documented shortcut-execution limitations for sequences like `g h`. |

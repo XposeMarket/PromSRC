@@ -1545,6 +1545,34 @@ function normalizeElement(element) {
     }
   }
 
+  if (next.type === 'hyperframes') {
+    // HyperFrames clip — source HTML is the editing source of truth. The
+    // canvas renders this via an iframe (createHyperframesPreview); mutations
+    // round-trip through the bridge's apply-patch route so source stays
+    // canonical. `layers` is a cached server-extracted view used by the
+    // inspector / layers panel.
+    next.meta.html = String(next.meta.html || '');
+    next.meta.compositionId = String(next.meta.compositionId || '');
+    next.meta.advancedBlock = next.meta.advancedBlock === true;
+    next.meta.variables = (next.meta.variables && typeof next.meta.variables === 'object' && !Array.isArray(next.meta.variables))
+      ? { ...next.meta.variables }
+      : {};
+    next.meta.layers = Array.isArray(next.meta.layers) ? next.meta.layers : [];
+    next.meta.tracks = Array.isArray(next.meta.tracks) ? next.meta.tracks : [];
+    next.meta.slots = Array.isArray(next.meta.slots) ? next.meta.slots : [];
+    next.meta.variableBindings = Array.isArray(next.meta.variableBindings) ? next.meta.variableBindings : [];
+    next.meta.assets = Array.isArray(next.meta.assets) ? next.meta.assets : [];
+    next.meta.warnings = Array.isArray(next.meta.warnings) ? next.meta.warnings : [];
+    next.meta.ingest = next.meta.ingest && typeof next.meta.ingest === 'object' ? { ...next.meta.ingest } : null;
+    next.meta.lint = next.meta.lint && typeof next.meta.lint === 'object' ? { ...next.meta.lint } : null;
+    next.meta.qaReport = next.meta.qaReport && typeof next.meta.qaReport === 'object' ? { ...next.meta.qaReport } : null;
+    next.meta.durationMs = Math.max(100, Number(next.meta.durationMs) || 6000);
+    next.width = Math.max(120, Number(next.width) || 1080);
+    next.height = Math.max(120, Number(next.height) || 1920);
+    next.meta.aspectLocked = next.meta.aspectLocked !== false;
+    next.meta.dirty = next.meta.dirty === true;
+  }
+
   if (next.type === 'group') {
     const defaults = getComponentMetaDefaults(next.meta.component || 'card');
     next.meta = {
@@ -1700,6 +1728,51 @@ export function createSceneNode(input = {}) {
     id: input.id || createId('el'),
     type: input.type || DEFAULT_ELEMENT.type,
     meta: { ...baseMeta, ...nextMeta },
+  });
+}
+
+/**
+ * Create a HyperFrames clip element for the canvas.
+ *
+ * The source HTML is the editing source of truth — it survives reloads,
+ * round-trips through /api/canvas/hyperframes/apply-patch on every edit,
+ * and is what gets exported. `layers` is a cache the inspector reads;
+ * the canvas should refresh it via /extract-layers after each apply.
+ *
+ * Pass `advancedBlock: true` for catalog blocks that use GSAP/canvas/Lottie/
+ * WebGL — the inspector will then surface variable slots only, instead of
+ * trying to flatten internals into editable layers (Session B).
+ */
+export function createHyperframesElement(input = {}) {
+  return createSceneNode({
+    type: 'hyperframes',
+    x: Number.isFinite(Number(input.x)) ? Number(input.x) : 0,
+    y: Number.isFinite(Number(input.y)) ? Number(input.y) : 0,
+    width: Number.isFinite(Number(input.width)) ? Number(input.width) : 1080,
+    height: Number.isFinite(Number(input.height)) ? Number(input.height) : 1920,
+    rotation: 0,
+    opacity: 1,
+    visible: true,
+    locked: false,
+    zIndex: Number.isFinite(Number(input.zIndex)) ? Number(input.zIndex) : 0,
+    meta: {
+      html: String(input.html || ''),
+      compositionId: String(input.compositionId || ''),
+      advancedBlock: input.advancedBlock === true,
+      variables: input.variables && typeof input.variables === 'object' ? { ...input.variables } : {},
+      layers: Array.isArray(input.layers) ? input.layers : [],
+      tracks: Array.isArray(input.tracks) ? input.tracks : [],
+      slots: Array.isArray(input.slots) ? input.slots : [],
+      variableBindings: Array.isArray(input.variableBindings) ? input.variableBindings : [],
+      assets: Array.isArray(input.assets) ? input.assets : [],
+      warnings: Array.isArray(input.warnings) ? input.warnings : [],
+      ingest: input.ingest && typeof input.ingest === 'object' ? { ...input.ingest } : null,
+      durationMs: Math.max(100, Number(input.durationMs) || 6000),
+      startMs: Math.max(0, Number(input.startMs) || 0),
+      sourceFormat: input.sourceFormat || 'hyperframes',
+      catalogId: input.catalogId || null,
+      ...cloneMeta(input.meta),
+    },
   });
 }
 

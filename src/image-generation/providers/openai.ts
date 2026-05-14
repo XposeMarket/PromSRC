@@ -123,14 +123,14 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         for (const reference of resolvedReferences) {
           if (reference.bytes) {
             form.append(
-              'image[]',
+              'image',
               new Blob([reference.bytes as any], { type: reference.mimeType }),
               reference.fileName,
             );
           } else {
             const downloaded = await fetchBinaryAsset(reference.imageUrl);
             form.append(
-              'image[]',
+              'image',
               new Blob([downloaded.bytes as any], { type: downloaded.mimeType || reference.mimeType }),
               reference.fileName,
             );

@@ -8,7 +8,7 @@
  * OpenAI:             https://api.openai.com
  */
 
-import type { LLMProvider, ChatMessage, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ProviderID } from './LLMProvider';
+import type { LLMProvider, ChatMessage, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ProviderID } from './LLMProvider';
 import { contentToString } from './content-utils';
 import { getConfig } from '../config/config';
 
@@ -25,6 +25,26 @@ const EFFORT_MAP: Record<string, string> = {
 // OpenAI-compat surface. lm_studio / llama_cpp ignore unknown fields, so we
 // leave them alone to avoid confusing local servers.
 const EFFORT_PROVIDERS = new Set<string>(['openai', 'perplexity']);
+
+function parseUsage(data: any): ModelUsage | undefined {
+  const usage = data?.usage;
+  if (!usage || typeof usage !== 'object') return undefined;
+  const inputTokens = Number(usage.prompt_tokens || usage.input_tokens || 0);
+  const outputTokens = Number(usage.completion_tokens || usage.output_tokens || 0);
+  const reasoningTokens = Number(
+    usage.completion_tokens_details?.reasoning_tokens
+    || usage.output_tokens_details?.reasoning_tokens
+    || 0,
+  );
+  const totalTokens = Number(usage.total_tokens || (inputTokens + outputTokens + reasoningTokens));
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    totalTokens,
+    source: 'provider',
+  };
+}
 
 export interface OpenAICompatConfig {
   endpoint: string;
@@ -160,7 +180,7 @@ export class OpenAICompatAdapter implements LLMProvider {
       content: choice?.message?.content ?? '',
       tool_calls: choice?.message?.tool_calls,
     };
-	    return { message };
+	    return { message, usage: parseUsage(data) };
 	  }
 
 	  private async streamChatCompletions(body: any, options?: ChatOptions): Promise<ChatResult> {
@@ -189,6 +209,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	    let content = '';
 	    let thinking = '';
 	    const toolCalls: any[] = [];
+	    let usage: ModelUsage | undefined;
 
 	    const ensureToolCall = (idx: number) => {
 	      if (!toolCalls[idx]) {
@@ -215,6 +236,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	          if (!data || data === '[DONE]') continue;
 	          try {
 	            const event = JSON.parse(data);
+	            if (event.usage) usage = parseUsage(event);
 	            const delta = event.choices?.[0]?.delta || {};
 	            const textDelta = delta.content || '';
 	            if (textDelta) {
@@ -269,7 +291,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      content,
 	      tool_calls: normalizedToolCalls.length > 0 ? normalizedToolCalls : undefined,
 	    };
-	    return { message, thinking: thinking || undefined };
+	    return { message, thinking: thinking || undefined, usage };
 	  }
 
   async generate(prompt: string, model: string, options?: GenerateOptions): Promise<GenerateResult> {
@@ -292,7 +314,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 
 	    const data = await this.post(this.config.chatCompletionsPath || '/v1/chat/completions', body);
     const content = data.choices?.[0]?.message?.content ?? '';
-    return { response: contentToString(content) };
+    return { response: contentToString(content), usage: parseUsage(data) };
   }
 
 	  async listModels(): Promise<ModelInfo[]> {

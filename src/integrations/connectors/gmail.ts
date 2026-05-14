@@ -66,6 +66,11 @@ export class GmailConnector extends OAuthConnector {
 
   // ── Gmail API helpers ────────────────────────────────────────────────────
 
+  private async gmailError(res: Response, action: string): Promise<Error> {
+    const body = await res.text().catch(() => '');
+    return new Error(`Gmail ${action} failed: ${res.status}${body ? ` ${body.slice(0, 500)}` : ''}`);
+  }
+
   async listMessages(maxResults = 20, query = ''): Promise<any[]> {
     const token = await this.getValidAccessToken();
     const params = new URLSearchParams({ maxResults: String(maxResults) });
@@ -73,7 +78,7 @@ export class GmailConnector extends OAuthConnector {
     const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Gmail list failed: ${res.status}`);
+    if (!res.ok) throw await this.gmailError(res, 'list');
     const data = await res.json() as any;
     return data.messages || [];
   }
@@ -83,7 +88,7 @@ export class GmailConnector extends OAuthConnector {
     const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Gmail get message failed: ${res.status}`);
+    if (!res.ok) throw await this.gmailError(res, 'get message');
     return res.json();
   }
 
@@ -92,7 +97,7 @@ export class GmailConnector extends OAuthConnector {
     const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Gmail profile failed: ${res.status}`);
+    if (!res.ok) throw await this.gmailError(res, 'profile');
     return res.json() as any;
   }
 
@@ -123,23 +128,23 @@ export class GmailConnector extends OAuthConnector {
   async sendEmail(to: string, subject: string, body: string, cc?: string, bcc?: string): Promise<{ id: string; threadId: string }> {
     const token = await this.getValidAccessToken();
     const profile = await this.getProfile();
-    const lines = [
+    const headers = [
       `To: ${to}`,
-      cc ? `Cc: ${cc}` : '',
-      bcc ? `Bcc: ${bcc}` : '',
       `From: ${profile.email}`,
       `Subject: ${subject}`,
       'Content-Type: text/plain; charset=utf-8',
-      '',
-      body,
-    ].filter(l => l !== '');
-    const raw = Buffer.from(lines.join('\r\n')).toString('base64url');
+    ];
+    if (cc) headers.push(`Cc: ${cc}`);
+    if (bcc) headers.push(`Bcc: ${bcc}`);
+
+    const message = `${headers.join('\r\n')}\r\n\r\n${body || ''}`;
+    const raw = Buffer.from(message).toString('base64url');
     const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ raw }),
     });
-    if (!res.ok) throw new Error(`Gmail send failed: ${res.status} ${await res.text().catch(() => '')}`);
+    if (!res.ok) throw await this.gmailError(res, 'send');
     return res.json() as any;
   }
 
@@ -148,7 +153,7 @@ export class GmailConnector extends OAuthConnector {
     const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Gmail get thread failed: ${res.status}`);
+    if (!res.ok) throw await this.gmailError(res, 'get thread');
     return res.json();
   }
 
@@ -157,7 +162,7 @@ export class GmailConnector extends OAuthConnector {
     const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/labels', {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Gmail list labels failed: ${res.status}`);
+    if (!res.ok) throw await this.gmailError(res, 'list labels');
     const data = await res.json() as any;
     return data.labels || [];
   }

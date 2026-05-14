@@ -36,7 +36,7 @@
     "docsUrl": "https://console.cloud.google.com/",
     "docsHint": "Google Cloud Console -> Enable Gmail API -> OAuth 2.0 credentials -> Desktop app.",
     "callback": {
-      "port": 19421,
+      "port": 19420,
       "path": "/auth/callback/gmail"
     },
     "fields": [

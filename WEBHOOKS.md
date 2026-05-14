@@ -257,7 +257,7 @@ Use the **Webhooks** applet (formerly Maker). Point the `Make a web request` act
 
 ```yaml
 rest_command:
-  notify_smallclaw:
+  notify_prometheus:
     url: "http://localhost:18789/hooks/agent"
     method: POST
     headers:

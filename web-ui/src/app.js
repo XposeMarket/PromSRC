@@ -150,6 +150,18 @@ export function setSidebarSegTab(tab) {
   const sessionsEditBar = document.getElementById('sessions-edit-bar');
   if (sessionsEditBar) sessionsEditBar.style.display = tab === 'chats' ? 'flex' : 'none';
 
+  // Pinned chats section only shows on the chats tab
+  const pinnedSection = document.getElementById('sidebar-pinned-section');
+  if (pinnedSection) {
+    if (tab === 'chats') {
+      if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+    } else {
+      pinnedSection.style.display = 'none';
+    }
+  }
+
+  window.sidebarTab = tab;
+
   // Load content for the selected tab
   if (tab === 'channels' && typeof window.renderChannelsList === 'function') {
     window.renderChannelsList();

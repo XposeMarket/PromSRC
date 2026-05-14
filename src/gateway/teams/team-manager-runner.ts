@@ -16,6 +16,7 @@ import {
   applyTeamChange,
   getTeamForAgent,
   addTeamContextReference,
+  queueManagerMessage,
   normalizeTeamChangeType,
   type TeamChange,
 } from './managed-teams';
@@ -34,6 +35,67 @@ import { claimAgentForTeamWorkspace } from './team-workspace';
 
 // Backward-compat no-op (server-v2.ts calls this)
 export function setTeamRunAgentFn(_fn: any): void { /* no-op */ }
+
+type ActiveManagerRun = {
+  startedAt: number;
+  kind: 'conversation' | 'review';
+  queuedCount: number;
+  promise: Promise<any>;
+};
+
+const activeManagerRuns = new Map<string, ActiveManagerRun>();
+
+function queueForActiveManager(teamId: string, from: string, message: string): boolean {
+  const text = String(message || '').trim();
+  if (!text) return false;
+  const active = activeManagerRuns.get(teamId);
+  if (active) active.queuedCount += 1;
+  return queueManagerMessage(
+    teamId,
+    from,
+    [
+      '[QUEUED WHILE MANAGER WAS ALREADY RUNNING]',
+      text,
+      '',
+      'Treat this as new user/system context for the current run. Do not restart or duplicate work that is already in progress; update, supersede, or acknowledge only if it changes the active objective.',
+    ].join('\n'),
+  );
+}
+
+async function runWithManagerSingleFlight<T>(
+  teamId: string,
+  kind: ActiveManagerRun['kind'],
+  queuedMessage: string,
+  run: () => Promise<T>,
+  onQueuedMessages?: () => Promise<void>,
+): Promise<{ queued: true } | { queued: false; value: T }> {
+  const active = activeManagerRuns.get(teamId);
+  if (active) {
+    queueForActiveManager(teamId, kind === 'review' ? 'system' : 'team_owner', queuedMessage);
+    return { queued: true };
+  }
+
+  const promise = Promise.resolve().then(run);
+  activeManagerRuns.set(teamId, {
+    startedAt: Date.now(),
+    kind,
+    queuedCount: 0,
+    promise,
+  });
+  try {
+    const value = await promise;
+    const activeRun = activeManagerRuns.get(teamId);
+    while (activeRun && activeRun.promise === promise && activeRun.queuedCount > 0 && onQueuedMessages) {
+      activeRun.queuedCount = 0;
+      await onQueuedMessages();
+    }
+    return { queued: false, value };
+  } finally {
+    if (activeManagerRuns.get(teamId)?.promise === promise) {
+      activeManagerRuns.delete(teamId);
+    }
+  }
+}
 
 // applyChangeToAgent helpers
 
@@ -251,6 +313,8 @@ export async function applyChangeToAgent(change: TeamChange, teamId?: string): P
               status: 'scheduled',
               enabled: true,
               subagent_id: change.targetSubagentId,
+              assignmentTarget: 'team',
+              deliverToMainChannel: false,
             } as any);
           } else {
             scheduler.createJob({
@@ -261,6 +325,8 @@ export async function applyChangeToAgent(change: TeamChange, teamId?: string): P
               tz: String((getConfig().getConfig() as any)?.timezone || 'America/New_York'),
               sessionTarget: 'isolated',
               subagent_id: change.targetSubagentId,
+              assignmentTarget: 'team',
+              deliverToMainChannel: false,
             } as any);
           }
           if (change?.diff) change.diff.after = schedule;
@@ -369,7 +435,23 @@ export async function triggerManagerReview(
   }
 
   console.log(`[TeamCoordinator] Running coordinator review for team "${team.name}" (${team.id})`);
-  await runCoordinatorReview(teamId, broadcastFn);
+  const singleFlight = await runWithManagerSingleFlight(
+    teamId,
+    'review',
+    'A coordinator review was requested while the manager was already running. Review any newly completed team/member work at the next safe checkpoint.',
+    () => runCoordinatorReview(teamId, broadcastFn),
+    () => runCoordinatorReview(teamId, broadcastFn),
+  );
+  if (singleFlight.queued) {
+    return {
+      teamId,
+      analysisPreview: 'Manager already running; review request queued.',
+      changesProposed: 0,
+      changesAutoApplied: 0,
+      chatMessagePosted: false,
+      managerToolsExecuted: 0,
+    };
+  }
 
   return {
     teamId,
@@ -396,7 +478,19 @@ export async function handleManagerConversation(
 ): Promise<void> {
   const team = getManagedTeam(teamId);
   if (!team) return;
-  await runCoordinatorConversation(teamId, userMessage, broadcastFn, autoContinue, options);
+  await runWithManagerSingleFlight(
+    teamId,
+    'conversation',
+    userMessage,
+    () => runCoordinatorConversation(teamId, userMessage, broadcastFn, autoContinue, options),
+    () => runCoordinatorConversation(
+      teamId,
+      '[PROCESS QUEUED MANAGER INBOX]\nProcess the user/system messages that arrived while you were already running. They are in your injected manager inbox. Do not duplicate dispatches already completed or running; only adjust, continue, or respond to the new context.',
+      broadcastFn,
+      false,
+      options,
+    ),
+  );
 }
 
 export async function handleManagerConversationDetailed(
@@ -408,7 +502,28 @@ export async function handleManagerConversationDetailed(
 ): Promise<CoordinatorConversationResult | null> {
   const team = getManagedTeam(teamId);
   if (!team) return null;
-  return runCoordinatorConversationDetailed(teamId, userMessage, broadcastFn, autoContinue, options);
+  const singleFlight = await runWithManagerSingleFlight(
+    teamId,
+    'conversation',
+    userMessage,
+    () => runCoordinatorConversationDetailed(teamId, userMessage, broadcastFn, autoContinue, options),
+    () => runCoordinatorConversationDetailed(
+      teamId,
+      '[PROCESS QUEUED MANAGER INBOX]\nProcess the user/system messages that arrived while you were already running. They are in your injected manager inbox. Do not duplicate dispatches already completed or running; only adjust, continue, or respond to the new context.',
+      broadcastFn,
+      false,
+      options,
+    ).then(() => undefined),
+  );
+  if (singleFlight.queued) {
+    return {
+      teamId,
+      reason: 'manager_busy_queued',
+      turns: 0,
+      managerMessage: 'Manager is already working, so I queued this into the active manager run instead of starting a second one.',
+    };
+  }
+  return singleFlight.value;
 }
 
 export async function verifySubagentResult(

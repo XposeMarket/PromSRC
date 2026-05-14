@@ -6,6 +6,8 @@
 //          TelegramChannelConfig, DiscordChannelConfig, WhatsAppChannelConfig, ChannelsConfig
 
 import { WebSocketServer } from 'ws';
+import fs from 'fs';
+import path from 'path';
 import { getConfig } from '../../config/config';
 import { getTeamNotificationTargets } from '../teams/managed-teams';
 import { triggerManagerReview } from '../teams/team-manager-runner';
@@ -15,11 +17,38 @@ import { triggerManagerReview } from '../teams/team-manager-runner';
 
 let _isModelBusy = false;
 let _lastMainSessionId = 'default';
+let _runtimeHeartbeatTimer: NodeJS.Timeout | null = null;
+
+function writeRuntimeStatus(reason = 'heartbeat'): void {
+  try {
+    const configDir = getConfig().getConfigDir();
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
+      pid: process.pid,
+      timestamp: Date.now(),
+      reason,
+      modelBusy: _isModelBusy,
+      lastMainSessionId: _lastMainSessionId,
+    }), 'utf-8');
+  } catch {}
+}
 
 export function isModelBusy(): boolean { return _isModelBusy; }
-export function setModelBusy(v: boolean): void { _isModelBusy = v; }
+export function setModelBusy(v: boolean): void {
+  _isModelBusy = v;
+  writeRuntimeStatus(v ? 'model_busy' : 'model_idle');
+}
 export function getLastMainSessionId(): string { return _lastMainSessionId; }
-export function setLastMainSessionId(v: string): void { _lastMainSessionId = v; }
+export function setLastMainSessionId(v: string): void {
+  _lastMainSessionId = v;
+  writeRuntimeStatus('session_activity');
+}
+export function startRuntimeHeartbeat(): void {
+  if (_runtimeHeartbeatTimer) return;
+  writeRuntimeStatus('startup');
+  _runtimeHeartbeatTimer = setInterval(() => writeRuntimeStatus('heartbeat'), 5000);
+  if (typeof (_runtimeHeartbeatTimer as any).unref === 'function') (_runtimeHeartbeatTimer as any).unref();
+}
 
 // ─── Telegram ↔ Session Bridge ─────────────────────────────────────────────────
 // Maps a Telegram userId to the session that last communicated outbound to them.
@@ -108,6 +137,29 @@ export type TelegramChannelConfig = {
   botToken: string;
   allowedUserIds: number[];
   streamMode: 'full' | 'partial';
+  personas: Record<string, TelegramPersonaConfig>;
+  teamRooms: Record<string, TelegramTeamRoomConfig>;
+};
+
+export type TelegramPersonaConfig = {
+  enabled: boolean;
+  agentId: string;
+  botToken: string;
+  managedBotUserId?: number;
+  botUsername?: string;
+  allowedUserIds: number[];
+  groupChatIds: number[];
+  requireMentionInGroups: boolean;
+  streamMode: 'full' | 'partial';
+};
+
+export type TelegramTeamRoomConfig = {
+  enabled: boolean;
+  teamId: string;
+  chatId: number;
+  topicId?: number;
+  title?: string;
+  usePersonaIdentities: boolean;
 };
 
 export type DiscordChannelConfig = {
@@ -141,11 +193,56 @@ function resolveToken(raw: string | undefined): string {
 }
 
 export function normalizeTelegramConfig(raw: any): TelegramChannelConfig {
+  const personas: Record<string, TelegramPersonaConfig> = {};
+  const rawPersonas = raw?.personas && typeof raw.personas === 'object' ? raw.personas : {};
+  for (const [key, value] of Object.entries(rawPersonas)) {
+    const accountId = String(key || '').trim();
+    if (!accountId) continue;
+    const persona = value as any;
+    personas[accountId] = {
+      enabled: persona?.enabled !== false,
+      agentId: String(persona?.agentId || accountId).trim(),
+      botToken: resolveToken(persona?.botToken),
+      managedBotUserId: Number.isFinite(Number(persona?.managedBotUserId)) && Number(persona?.managedBotUserId) > 0
+        ? Number(persona?.managedBotUserId)
+        : undefined,
+      botUsername: String(persona?.botUsername || '').replace(/^@/, '').trim() || undefined,
+      allowedUserIds: Array.isArray(persona?.allowedUserIds)
+        ? persona.allowedUserIds.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)
+        : [],
+      groupChatIds: Array.isArray(persona?.groupChatIds)
+        ? persona.groupChatIds.map(Number).filter((n: number) => Number.isFinite(n) && n !== 0)
+        : [],
+      requireMentionInGroups: persona?.requireMentionInGroups !== false,
+      streamMode: persona?.streamMode === 'partial' ? 'partial' : 'full',
+    };
+  }
+
+  const teamRooms: Record<string, TelegramTeamRoomConfig> = {};
+  const rawTeamRooms = raw?.teamRooms && typeof raw.teamRooms === 'object' ? raw.teamRooms : {};
+  for (const [key, value] of Object.entries(rawTeamRooms)) {
+    const room = value as any;
+    const chatId = Number(room?.chatId ?? key);
+    if (!Number.isFinite(chatId) || chatId === 0) continue;
+    const topicId = Number(room?.topicId);
+    const normalizedKey = Number.isFinite(topicId) && topicId > 0 ? `${chatId}:topic:${topicId}` : String(chatId);
+    teamRooms[normalizedKey] = {
+      enabled: room?.enabled !== false,
+      teamId: String(room?.teamId || '').trim(),
+      chatId,
+      topicId: Number.isFinite(topicId) && topicId > 0 ? topicId : undefined,
+      title: String(room?.title || '').trim() || undefined,
+      usePersonaIdentities: room?.usePersonaIdentities !== false,
+    };
+  }
+
   return {
     enabled: raw?.enabled === true,
     botToken: resolveToken(raw?.botToken),
     allowedUserIds: Array.isArray(raw?.allowedUserIds) ? raw.allowedUserIds.map(Number).filter((n: number) => Number.isFinite(n) && n > 0) : [],
     streamMode: raw?.streamMode === 'partial' ? 'partial' : 'full',
+    personas,
+    teamRooms,
   };
 }
 
@@ -264,6 +361,11 @@ export function sendTeamNotificationToChannels(text: string, teamId?: string): v
 // ─── Team SSE Client Registry ─────────────────────────────────────────────────
 
 const teamSseClients = new Map<string, Set<(data: object) => void>>();
+let _teamEventMirror: ((data: object) => void | Promise<void>) | null = null;
+
+export function setTeamEventMirror(fn: ((data: object) => void | Promise<void>) | null): void {
+  _teamEventMirror = fn;
+}
 
 export function addTeamSseClient(teamId: string, send: (data: object) => void): void {
   if (!teamSseClients.has(teamId)) teamSseClients.set(teamId, new Set());
@@ -348,6 +450,11 @@ export function broadcastTeamEvent(data: object): void {
   for (const fn of (teamSseClients.get('*') || [])) targets.add(fn);
   for (const fn of targets) {
     try { fn(data); } catch {}
+  }
+  if (_teamEventMirror) {
+    try {
+      Promise.resolve(_teamEventMirror(data)).catch(() => {});
+    } catch {}
   }
   try {
     const evt: any = data as any;

@@ -117,6 +117,10 @@ export function detectGpu(): GpuInfo {
   return _cached;
 }
 
+export function readCachedGpuInfo(): GpuInfo | null {
+  return _cached;
+}
+
 /** Returns true only if nvidia-smi confirmed an NVIDIA GPU is present. */
 export function isNvidiaAvailable(): boolean {
   return detectGpu().nvidiaAvailable;

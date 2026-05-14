@@ -12,6 +12,7 @@
 
 import { api } from '../api.js';
 import { escHtml, showToast, showConfirm, log } from '../utils.js';
+import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, isCredentialedModelProviderId } from '../components/model-provider-credentials.js';
 
 const SETTINGS_ICON_PATHS = {
   keyboard: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 9h.01"></path><path d="M10 9h.01"></path><path d="M13 9h.01"></path><path d="M16 9h.01"></path><path d="M7 13h.01"></path><path d="M10 13h.01"></path><path d="M13 13h4"></path><path d="M7 17h10"></path>',
@@ -89,7 +90,6 @@ function initSettingsIconLabels() {
 }
 
 function initSettingsStaticIcons() {
-  applySettingsIcon('settings-apps-tab-icon', 'grid', 14);
   applySettingsIcon('settings-shortcuts-tab-icon', 'keyboard', 14);
   applySettingsIcon('settings-search-callout-icon', 'key', 14);
   applySettingsIcon('settings-cred-info-icon', 'lock', 14);
@@ -97,6 +97,7 @@ function initSettingsStaticIcons() {
   applySettingsIcon('agent-hb-title-icon', 'activity', 14);
   initSettingsIconLabels();
   setCredentialToggleIcon(document.getElementById('cred-tavily-visibility-toggle'), false);
+  setCredentialToggleIcon(document.getElementById('cred-tinyfish-visibility-toggle'), false);
   setCredentialToggleIcon(document.getElementById('cred-google-visibility-toggle'), false);
   setCredentialToggleIcon(document.getElementById('cred-brave-visibility-toggle'), false);
 }
@@ -155,6 +156,7 @@ async function setQuickSearchRigor(level) {
     const payload = {
       preferred_provider: s.preferred_provider || 'tavily',
       search_rigor: level,
+      tinyfish_api_key: s.tinyfish_api_key || '',
       tavily_api_key: s.tavily_api_key || '',
       google_api_key: s.google_api_key || '',
       google_cx: s.google_cx || '',
@@ -177,7 +179,7 @@ function setQuickThinkingEffort(level) {
 
 function setSettingsTab(tab) {
   window.settingsTab = tab;
-  const tabs = ['system', 'heartbeat', 'search', 'credentials', 'policy', 'security', 'models', 'agents', 'channels', 'integrations', 'apps', 'shortcuts'];
+  const tabs = ['system', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts'];
 
   tabs.forEach(t => {
     const btn = document.getElementById(`settings-tab-${t}`);
@@ -202,7 +204,7 @@ function setSettingsTab(tab) {
         });
         if (t === 'integrations') loadIntegrationsTab();
         if (t === 'credentials') loadCredentialsTab();
-        if (t === 'apps') loadInstalledAppsPanel();
+        if (t === 'migration') loadMigrationPanel();
         if (t === 'shortcuts') loadShortcutsPanel();
       } else {
         panel.style.display = 'none';
@@ -501,6 +503,7 @@ async function loadCredFields() {
       el.value = val || '';
       el.placeholder = val ? '••••••••  (key stored — enter new value to replace)' : el.getAttribute('data-placeholder') || '';
     };
+    setField('cred-tinyfish-key', s.tinyfish_api_key);
     setField('cred-tavily-key',  s.tavily_api_key);
     setField('cred-google-key',  s.google_api_key);
     setField('cred-brave-key',   s.brave_api_key);
@@ -530,6 +533,7 @@ async function loadCredVaultStatus() {
     el.innerHTML = keys.map(k => {
       const label = {
         'search.tavily_api_key':  'Tavily API Key',
+        'search.tinyfish_api_key': 'TinyFish API Key',
         'search.google_api_key':  'Google API Key',
         'search.google_cx':       'Google CSE ID',
         'search.brave_api_key':   'Brave API Key',
@@ -596,7 +600,7 @@ const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'ope
 const BUILTIN_STATIC_MODEL_FALLBACKS = {
   openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic: ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
@@ -911,10 +915,18 @@ function renderProviderSelectors() {
     ...document.querySelectorAll('select[id^="amd-"][id$="-prov"]'),
     ...document.querySelectorAll('select[id^="brain-"][id$="-prov"]'),
   ].filter(Boolean);
+  const credentialedProviders = filterCredentialedProviderCatalogItems(providers);
   sharedSelects.forEach((select) => {
     const current = select.value;
-    select.innerHTML = `<option value="">— inherit / use primary —</option>${providers.map(provider => `<option value="${escHtml(provider.id)}">${escHtml(provider.name)}</option>`).join('')}`;
-    if (current && providers.some(provider => provider.id === current)) select.value = current;
+    const placeholder = getProviderSelectPlaceholder(select.id);
+    const providerOptions = credentialedProviders.map(provider => (
+      `<option value="${escHtml(provider.id)}">${escHtml(provider.name)}</option>`
+    )).join('');
+    const emptyState = credentialedProviders.length
+      ? ''
+      : '<option value="" disabled>No connected model providers</option>';
+    select.innerHTML = `<option value="">- ${escHtml(placeholder)} -</option>${providerOptions}${emptyState}`;
+    if (current && credentialedProviders.some(provider => provider.id === current)) select.value = current;
   });
 }
 
@@ -928,8 +940,11 @@ function renderDynamicProviderPanels() {
 async function ensureProviderCatalogUIReady() {
   if (providerCatalogCache) return providerCatalogCache;
   if (!providerCatalogPromise) {
-    providerCatalogPromise = api('/api/extensions/catalog?kind=provider')
-      .then((data) => {
+    providerCatalogPromise = Promise.all([
+      api('/api/extensions/catalog?kind=provider'),
+      fetchCredentialedModelProviderIds(),
+    ])
+      .then(([data]) => {
         const items = Array.isArray(data?.items) ? [...data.items] : [];
         items.sort((a, b) => {
           const rankDiff = providerSortRank(a.id) - providerSortRank(b.id);
@@ -970,11 +985,13 @@ function onProviderChange() {
 async function loadModelSettings() {
   try {
     await ensureProviderCatalogUIReady();
+    await fetchCredentialedModelProviderIds(true);
     const data = await api('/api/settings/provider', { timeoutMs: 8000 });
     const llm = data?.llm || { provider: 'ollama', providers: {} };
     const prov = llm.provider || 'ollama';
     window._llmSettingsCache = llm;
     window._llmSettingsLoadedToUI = true;
+    renderProviderSelectors();
     const provSel = document.getElementById('settings-llm-provider');
     if (provSel) provSel.value = prov;
 
@@ -1410,14 +1427,6 @@ async function openSettings(tab) {
     document.getElementById('settings-search-rigor').value = s.search_rigor || 'verified';
     // Keys are loaded via the Credentials tab — not here
   } catch {}
-  try {
-    const p = await api('/api/settings/agent', { timeoutMs: 5000 });
-    document.getElementById('settings-force-web-fresh').checked = p.force_web_for_fresh !== false;
-    document.getElementById('settings-memory-fallback').checked = p.memory_fallback_on_search_failure !== false;
-    document.getElementById('settings-auto-store-web-facts').checked = p.auto_store_web_facts !== false;
-    document.getElementById('settings-nl-tool-router').checked = p.natural_language_tool_router !== false;
-    document.getElementById('settings-retrieval-mode').value = p.retrieval_mode || 'standard';
-  } catch {}
   try { await loadSessionCompactionSettings(); } catch {}
 }
 
@@ -1431,163 +1440,210 @@ function closeSettings() {
   channelsStatusLoaded = false;
 }
 
-// -- Installed Apps panel --------------------------------------------------------------------------------------------------------
-let _installedAppsData = [];
-let _installedAppsGeneratedAt = 0;
-let _installedAppsQuery = '';
-let _installedAppsTotal = 0;
+// -- Migration panel -------------------------------------------------------------------------------------------------------------
+let migrationSources = [];
+let selectedMigrationSourceId = '';
+let selectedMigrationSourcePath = '';
+let selectedMigrationSourceKind = '';
+let lastMigrationPreview = null;
 
-function setInstalledAppsStatus(text, color) {
-  const el = document.getElementById('installed-apps-status');
+function migrationOptions(extra = {}) {
+  const mode = document.getElementById('migration-mode')?.value || 'user-data';
+  return {
+    sourceId: selectedMigrationSourceId || undefined,
+    sourcePath: selectedMigrationSourcePath || undefined,
+    sourceKind: selectedMigrationSourceKind || undefined,
+    mode,
+    includeSecrets: mode === 'full',
+    overwrite: !!document.getElementById('migration-overwrite')?.checked,
+    skillConflict: document.getElementById('migration-skill-conflict')?.value || 'skip',
+    ...extra,
+  };
+}
+
+function setMigrationStatus(message, tone = 'muted') {
+  const el = document.getElementById('migration-status');
   if (!el) return;
-  el.style.color = color || 'var(--muted)';
-  el.textContent = text || '';
+  const colors = { muted: 'var(--muted)', ok: 'var(--ok)', warn: '#9a6700', err: 'var(--err)' };
+  el.style.color = colors[tone] || colors.muted;
+  el.textContent = message || '';
 }
 
-function updateInstalledAppsMeta() {
-  const meta = document.getElementById('installed-apps-meta');
-  const count = document.getElementById('installed-apps-count');
-  if (meta) {
-    const scanned = _installedAppsGeneratedAt ? new Date(_installedAppsGeneratedAt).toLocaleString() : '—';
-    meta.textContent = `Last scan: ${scanned}${_installedAppsQuery ? ` • query: ${_installedAppsQuery}` : ''}`;
-  }
-  if (count) {
-    count.textContent = `${_installedAppsData.length} shown${_installedAppsTotal ? ` of ${_installedAppsTotal}` : ''}`;
-  }
+function migrationSummary(report) {
+  const s = report?.summary || {};
+  return `${s.migrated || 0} importable · ${s.conflict || 0} conflicts · ${s.archived || 0} archived · ${s.skipped || 0} skipped`;
 }
 
-function refreshInstalledAppAliasOptions() {
-  const sel = document.getElementById('installed-app-alias-app');
-  if (!sel) return;
-  const previous = sel.value;
-  sel.innerHTML = '<option value="">Select an app…</option>';
-  _installedAppsData
-    .slice()
-    .sort((a, b) => String(a.displayName || '').localeCompare(String(b.displayName || '')))
-    .forEach((app) => {
-      const opt = document.createElement('option');
-      opt.value = app.id;
-      opt.textContent = `${app.displayName} (${app.id})`;
-      sel.appendChild(opt);
-    });
-  sel.value = previous;
-}
-
-function renderInstalledAppsList() {
-  const container = document.getElementById('installed-apps-list');
-  if (!container) return;
-  if (!_installedAppsData.length) {
-    container.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No installed apps found for the current filter.</div>';
-    updateInstalledAppsMeta();
-    refreshInstalledAppAliasOptions();
+function renderMigrationSources() {
+  const el = document.getElementById('migration-sources-list');
+  if (!el) return;
+  if (!migrationSources.length) {
+    el.innerHTML = '<div style="border:1px dashed var(--line);border-radius:10px;padding:10px;color:var(--muted);font-size:12px">No Hermes, OpenClaw, or LocalClaw folders found automatically. Use a custom source folder below.</div>';
     return;
   }
-
-  const html = _installedAppsData.map((app) => {
-    const methods = (app.launchMethods || []).map((method) => method.type).join(', ') || '—';
-    const aliases = (app.aliases || []).slice(0, 10).map((alias) =>
-      `<span style="display:inline-flex;align-items:center;padding:2px 7px;border-radius:999px;background:var(--bg-soft);border:1px solid var(--line);font-size:11px;color:var(--text)">${escHtml(alias)}</span>`
-    ).join(' ');
-    const processHints = (app.processNameHints || []).slice(0, 6).join(', ');
-    const windowHints = (app.windowTitleHints || []).slice(0, 4).join(', ');
-    const sources = (app.installSources || []).join(', ');
+  if (!selectedMigrationSourceId) selectedMigrationSourceId = migrationSources[0].id;
+  el.innerHTML = migrationSources.map((source) => {
+    const selected = source.id === selectedMigrationSourceId;
+    const kind = source.kind === 'hermes' ? 'Hermes' : source.kind === 'openclaw' ? 'OpenClaw' : source.kind === 'localclaw' ? 'LocalClaw' : 'Custom';
     return `
-      <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#fff">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap">
-          <div>
-            <div style="font-size:13px;font-weight:700;color:var(--text)">${escHtml(app.displayName || 'Unnamed App')}</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px"><code>${escHtml(app.id || '')}</code></div>
-          </div>
-          <div style="font-size:11px;color:var(--muted)">Launch: ${escHtml(methods)}</div>
+      <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid ${selected ? '#bdd3f6' : 'var(--line)'};border-radius:10px;padding:10px;background:${selected ? '#f0f6ff' : '#fff'};cursor:pointer">
+        <input type="radio" name="migration-source" value="${escHtml(source.id)}" ${selected ? 'checked' : ''} style="margin-top:3px" />
+        <div style="min-width:0;flex:1">
+          <div style="font-size:12px;font-weight:700;color:var(--text)">${kind}</div>
+          <div style="font-size:10.5px;color:var(--muted);word-break:break-all;margin-top:2px">${escHtml(source.path || '')}</div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:4px">${escHtml((source.details || []).join(' · ') || 'Candidate source')}</div>
         </div>
-        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">${aliases || '<span style="font-size:11px;color:var(--muted)">No aliases</span>'}</div>
-        ${processHints ? `<div style="margin-top:8px;font-size:11px;color:var(--muted)">Process hints: ${escHtml(processHints)}</div>` : ''}
-        ${windowHints ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">Window hints: ${escHtml(windowHints)}</div>` : ''}
-        ${sources ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">Sources: ${escHtml(sources)}</div>` : ''}
-        ${app.executablePath ? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">Exe: <code>${escHtml(app.executablePath)}</code></div>` : ''}
-        ${app.shortcutPath ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">Shortcut: <code>${escHtml(app.shortcutPath)}</code></div>` : ''}
-        ${app.appUserModelId ? `<div style="margin-top:4px;font-size:11px;color:var(--muted)">AppUserModelID: <code>${escHtml(app.appUserModelId)}</code></div>` : ''}
-      </div>
+      </label>
     `;
   }).join('');
-
-  container.innerHTML = html;
-  updateInstalledAppsMeta();
-  refreshInstalledAppAliasOptions();
+  el.querySelectorAll('[name="migration-source"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      selectedMigrationSourceId = radio.value;
+      selectedMigrationSourcePath = '';
+      selectedMigrationSourceKind = '';
+      lastMigrationPreview = null;
+      renderMigrationSources();
+      renderMigrationPreview(null);
+      setMigrationStatus('Source selected. Preview before importing.');
+    });
+  });
 }
 
-async function loadInstalledAppsPanel(opts = {}) {
-  const refresh = !!opts.refresh;
-  const queryInput = document.getElementById('installed-apps-query');
-  const query = String(opts.query !== undefined ? opts.query : (queryInput?.value || '')).trim();
-  _installedAppsQuery = query;
-  setInstalledAppsStatus(refresh ? 'Rescanning installed apps…' : 'Loading installed apps…', 'var(--muted)');
-  try {
-    const params = new URLSearchParams();
-    params.set('limit', query ? '100' : '400');
-    if (query) params.set('filter', query);
-    if (refresh) params.set('refresh', '1');
-    const data = await api(`/api/installed-apps?${params.toString()}`);
-    _installedAppsData = data.apps || [];
-    _installedAppsGeneratedAt = Number(data.generatedAt || 0);
-    _installedAppsTotal = Number(data.total || _installedAppsData.length || 0);
-    renderInstalledAppsList();
-    setInstalledAppsStatus(refresh ? 'Scan complete.' : '', refresh ? 'var(--ok)' : 'var(--muted)');
-  } catch (err) {
-    const container = document.getElementById('installed-apps-list');
-    if (container) container.innerHTML = `<div style="color:var(--err);font-size:12px;padding:8px 0">${escHtml(err.message || 'Failed to load installed apps.')}</div>`;
-    setInstalledAppsStatus('Failed to load apps.', 'var(--err)');
-  }
-}
-
-async function searchInstalledAppsUI() {
-  await loadInstalledAppsPanel({ query: document.getElementById('installed-apps-query')?.value || '' });
-}
-
-async function clearInstalledAppsSearch() {
-  const input = document.getElementById('installed-apps-query');
-  if (input) input.value = '';
-  await loadInstalledAppsPanel({ query: '' });
-}
-
-async function addInstalledAppAliasUI() {
-  const appId = document.getElementById('installed-app-alias-app')?.value?.trim();
-  const alias = document.getElementById('installed-app-alias-input')?.value?.trim();
-  if (!appId || !alias) {
-    setInstalledAppsStatus('Pick an app and enter an alias first.', 'var(--err)');
+function renderMigrationReports(reports = []) {
+  const el = document.getElementById('migration-reports-list');
+  if (!el) return;
+  if (!reports.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--muted)">No migration reports yet.</div>';
     return;
   }
+  el.innerHTML = reports.slice(0, 6).map((report) => `
+    <div style="border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin-bottom:8px;background:var(--panel-2)">
+      <div style="display:flex;justify-content:space-between;gap:8px">
+        <div style="font-size:12px;font-weight:700;color:var(--text)">${escHtml(report.source || report.sourceKind || 'Migration')}</div>
+        <div style="font-size:10px;color:var(--muted)">${escHtml(report.completedAt ? new Date(report.completedAt).toLocaleString() : '')}</div>
+      </div>
+      <div style="font-size:10.5px;color:var(--muted);margin-top:3px">${escHtml(migrationSummary(report))}</div>
+      <div style="font-size:10px;color:var(--muted);word-break:break-all;margin-top:3px">${escHtml(report.outputDir || '')}</div>
+    </div>
+  `).join('');
+}
+
+function renderMigrationPreview(report) {
+  const el = document.getElementById('migration-preview');
+  if (!el) return;
+  if (!report) {
+    el.innerHTML = 'No preview yet.';
+    return;
+  }
+  const items = Array.isArray(report.items) ? report.items : [];
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:800;color:var(--text)">${escHtml(report.source?.label || 'Migration')}</div>
+      <div style="font-size:11px;color:var(--muted)">${escHtml(migrationSummary(report))}</div>
+    </div>
+    ${items.map((item) => {
+      const color = item.status === 'migrated' ? '#166534' : item.status === 'conflict' ? '#9a6700' : item.status === 'error' ? 'var(--err)' : 'var(--muted)';
+      return `
+        <div style="display:grid;grid-template-columns:86px 1fr;gap:8px;border-top:1px solid var(--line);padding:8px 0">
+          <div style="font-size:10.5px;font-weight:800;color:${color};text-transform:uppercase">${escHtml(item.status)}</div>
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--text)">${escHtml(item.label || item.category)}</div>
+            <div style="font-size:10.5px;color:var(--muted);line-height:1.55;word-break:break-word">${escHtml(item.reason || item.destination || item.source || '')}</div>
+          </div>
+        </div>
+      `;
+    }).join('')}
+  `;
+}
+
+async function loadMigrationPanel(force = false) {
+  if (!force && migrationSources.length) {
+    renderMigrationSources();
+    return;
+  }
+  setMigrationStatus('Scanning for migration sources...');
   try {
-    await api('/api/installed-apps/aliases', {
+    const data = await api('/api/migration/sources');
+    migrationSources = Array.isArray(data?.sources) ? data.sources : [];
+    if (!selectedMigrationSourceId && migrationSources[0]) selectedMigrationSourceId = migrationSources[0].id;
+    renderMigrationSources();
+    renderMigrationReports(data?.reports || []);
+    setMigrationStatus(migrationSources.length ? `${migrationSources.length} source${migrationSources.length === 1 ? '' : 's'} found.` : 'No automatic sources found.', migrationSources.length ? 'ok' : 'warn');
+  } catch (err) {
+    setMigrationStatus(`Scan failed: ${err.message}`, 'err');
+  }
+}
+
+async function previewSelectedMigration() {
+  if (!selectedMigrationSourceId && !selectedMigrationSourcePath) {
+    setMigrationStatus('Choose a source first.', 'warn');
+    return;
+  }
+  setMigrationStatus('Building migration preview...');
+  try {
+    const data = await api('/api/migration/preview', {
       method: 'POST',
-      body: JSON.stringify({ app_id: appId, alias }),
+      body: JSON.stringify(migrationOptions()),
     });
-    setInstalledAppsStatus('Alias saved.', 'var(--ok)');
-    document.getElementById('installed-app-alias-input').value = '';
-    await loadInstalledAppsPanel({ query: _installedAppsQuery });
+    lastMigrationPreview = data.report;
+    renderMigrationPreview(lastMigrationPreview);
+    setMigrationStatus('Preview ready. Nothing has been imported yet.', 'ok');
   } catch (err) {
-    setInstalledAppsStatus(err.message || 'Failed to save alias.', 'var(--err)');
+    setMigrationStatus(`Preview failed: ${err.message}`, 'err');
   }
 }
 
-async function deleteInstalledAppAliasUI() {
-  const appId = document.getElementById('installed-app-alias-app')?.value?.trim();
-  const alias = document.getElementById('installed-app-alias-input')?.value?.trim();
-  if (!appId || !alias) {
-    setInstalledAppsStatus('Pick an app and enter the alias to remove.', 'var(--err)');
+async function previewCustomMigration() {
+  const customPath = String(document.getElementById('migration-custom-path')?.value || '').trim();
+  if (!customPath) {
+    setMigrationStatus('Enter a custom source folder first.', 'warn');
     return;
   }
-  try {
-    await api('/api/installed-apps/aliases', {
-      method: 'DELETE',
-      body: JSON.stringify({ app_id: appId, alias }),
-    });
-    setInstalledAppsStatus('Alias removed.', 'var(--ok)');
-    document.getElementById('installed-app-alias-input').value = '';
-    await loadInstalledAppsPanel({ query: _installedAppsQuery });
-  } catch (err) {
-    setInstalledAppsStatus(err.message || 'Failed to remove alias.', 'var(--err)');
+  selectedMigrationSourceId = '';
+  selectedMigrationSourcePath = customPath;
+  selectedMigrationSourceKind = 'custom';
+  await previewSelectedMigration();
+}
+
+async function executeSelectedMigration() {
+  if (!lastMigrationPreview) {
+    await previewSelectedMigration();
+    if (!lastMigrationPreview) return;
   }
+  const ok = await new Promise((resolve) => showConfirm(
+    'Import selected migration data?',
+    () => resolve(true),
+    () => resolve(false),
+    {
+      title: 'Import selected migration data?',
+      confirmText: 'Import',
+      details: 'Prometheus will import compatible files and settings. Existing data is kept unless your conflict options allow updates.',
+    }
+  ));
+  if (!ok) return;
+  setMigrationStatus('Importing...');
+  try {
+    const data = await api('/api/migration/execute', {
+      method: 'POST',
+      body: JSON.stringify(migrationOptions()),
+      timeoutMs: 120000,
+    });
+    lastMigrationPreview = data.report;
+    renderMigrationPreview(lastMigrationPreview);
+    setMigrationStatus(`Import complete. Report: ${data.report?.outputDir || ''}`, 'ok');
+    addProcessEntry('final', 'Migration import completed.');
+    await loadMigrationReportsOnly();
+  } catch (err) {
+    setMigrationStatus(`Import failed: ${err.message}`, 'err');
+    addProcessEntry('error', `Migration failed: ${err.message}`);
+  }
+}
+
+async function loadMigrationReportsOnly() {
+  try {
+    const data = await api('/api/migration/reports');
+    renderMigrationReports(data?.reports || []);
+  } catch {}
 }
 
 // -- Keyboard Shortcuts panel ---------------------------------------------------------------------------------------------------
@@ -1764,18 +1820,21 @@ function setAgentForm(agent) {
     const hasProv = slashIdx > 0;
     const prov  = hasProv ? raw.slice(0, slashIdx) : '';
     const mdl   = hasProv ? raw.slice(slashIdx + 1) : raw;
+    const canUseProvider = !prov || isCredentialedModelProviderId(prov);
+    const selectedProv = canUseProvider ? prov : '';
+    const selectedModel = canUseProvider ? mdl : '';
     const provSel = document.getElementById('agent-edit-provider');
     const mdlSel  = document.getElementById('agent-edit-model-select');
-    if (provSel) provSel.value = prov;
+    if (provSel) provSel.value = selectedProv;
     if (mdlSel) {
       // Ensure the current model is in the list, then select it
       const existing = Array.from(mdlSel.options).map(o => o.value);
-      if (mdl && !existing.includes(mdl)) {
+      if (selectedModel && !existing.includes(selectedModel)) {
         const opt = document.createElement('option');
-        opt.value = mdl; opt.textContent = mdl;
+        opt.value = selectedModel; opt.textContent = selectedModel;
         mdlSel.appendChild(opt);
       }
-      mdlSel.value = mdl || '';
+      mdlSel.value = selectedModel || '';
     }
   })();
   document.getElementById('agent-edit-max-steps').value = (a.maxSteps || '') + '';
@@ -2063,7 +2122,7 @@ async function loadAgentModelOptions(preserveSelected = false) {
   const STATIC_MODEL_FALLBACKS = {
     openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
     openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-    anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    anthropic: ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
   };
@@ -2664,17 +2723,11 @@ async function saveSettings() {
     const payload = {
       preferred_provider: document.getElementById('settings-provider')?.value || '',
       search_rigor: document.getElementById('settings-search-rigor')?.value || 'verified',
+      tinyfish_api_key: document.getElementById('cred-tinyfish-key')?.value.trim() || '',
       tavily_api_key: document.getElementById('cred-tavily-key')?.value.trim() || '',
       google_api_key: document.getElementById('cred-google-key')?.value.trim() || '',
       google_cx: document.getElementById('cred-google-cx')?.value.trim() || '',
       brave_api_key: document.getElementById('cred-brave-key')?.value.trim() || '',
-    };
-    const policyPayload = {
-      force_web_for_fresh: document.getElementById('settings-force-web-fresh')?.checked ?? true,
-      memory_fallback_on_search_failure: document.getElementById('settings-memory-fallback')?.checked ?? true,
-      auto_store_web_facts: document.getElementById('settings-auto-store-web-facts')?.checked ?? true,
-      natural_language_tool_router: document.getElementById('settings-nl-tool-router')?.checked ?? true,
-      retrieval_mode: document.getElementById('settings-retrieval-mode')?.value || 'standard',
     };
     const primaryModel = (document.getElementById('settings-primary-model') || {}).value || '';
     const modelPayload = {
@@ -2699,7 +2752,6 @@ async function saveSettings() {
       body: JSON.stringify({
         paths: { workspace_path, allowed_paths, blocked_paths },
         search: payload,
-        agent_policy: policyPayload,
         model: modelPayload,
         llm: providerPayload,
         session: sessionPayload,
@@ -3133,7 +3185,6 @@ function showIntegMsg(msg, color, bg) {
 
 // ─── Expose on window for HTML onclick handlers ────────────────
 window._updateHeartbeatMdPreview = _updateHeartbeatMdPreview;
-window.addInstalledAppAliasUI = addInstalledAppAliasUI;
 window.addSiteShortcut = addSiteShortcut;
 window.agentFormNew = agentFormNew;
 window.applyHeartbeatSettingsToForm = applyHeartbeatSettingsToForm;
@@ -3142,7 +3193,6 @@ window.closeSettings = closeSettings;
 window.confirmMemory = confirmMemory;
 window.connectMCPServer = connectMCPServer;
 window.copyWebhookCurl = copyWebhookCurl;
-window.deleteInstalledAppAliasUI = deleteInstalledAppAliasUI;
 window.deleteMCPServer = deleteMCPServer;
 window.deleteSelectedAgent = deleteSelectedAgent;
 window.deleteSiteShortcutUI = deleteSiteShortcutUI;
@@ -3189,10 +3239,14 @@ const AMD_SLOTS = {
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
+
+const AMD_TEMPLATE_CACHE_KEY = 'prometheus_agent_model_default_templates_v1';
+let amdTemplatesCache = [];
+let amdActiveTemplateId = '';
 
 async function amdProviderChange(slotId) {
   const provSel  = document.getElementById('amd-' + slotId + '-prov');
@@ -3205,77 +3259,132 @@ async function amdProviderChange(slotId) {
   }
   modelSel.innerHTML = '<option value="">Loading…</option>';
   try {
-    let models = [];
-    if (prov === 'openai') {
-      models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
-      if (!models.length) { try { await refreshOpenAIModels(true); } catch {} models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean); }
-      if (!models.length) models = [...AMD_STATIC_MODELS.openai];
-    } else if (prov === 'openai_codex') {
-      models = Array.from(document.getElementById('settings-codex-model')?.options || []).map(o => o.value).filter(Boolean);
-      if (!models.length) models = [...AMD_STATIC_MODELS.openai_codex];
-    } else if (prov === 'anthropic') {
-      models = Array.from(document.getElementById('settings-anthropic-model')?.options || []).map(o => o.value).filter(Boolean);
-      if (!models.length) models = [...AMD_STATIC_MODELS.anthropic];
-    } else if (prov === 'perplexity') {
-      models = Array.from(document.getElementById('settings-perplexity-model')?.options || []).map(o => o.value).filter(Boolean);
-      if (!models.length) models = [...AMD_STATIC_MODELS.perplexity];
-    } else if (prov === 'gemini') {
-      models = Array.from(document.getElementById('settings-gemini-model')?.options || []).map(o => o.value).filter(Boolean);
-      if (!models.length) models = [...AMD_STATIC_MODELS.gemini];
-    } else {
-      const llm = typeof buildProviderPayload === 'function' ? buildProviderPayload() : {};
-      llm.provider = prov;
-      const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
-      models = (data?.models || []).map(m => typeof m === 'string' ? m : (m.name || String(m)));
+    await ensureProviderCatalogUIReady();
+    await fetchCredentialedModelProviderIds();
+    if (!isCredentialedModelProviderId(prov)) {
+      modelSel.innerHTML = '<option value="">— provider not connected —</option>';
+      return;
     }
+    const models = await fetchProviderModelsForPicker(prov, { refreshOpenAI: prov === 'openai', includeLive: true });
     if (!models.length) { modelSel.innerHTML = '<option value="">— no models found —</option>'; return; }
-    modelSel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+    modelSel.innerHTML = models.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
   } catch (e) {
     modelSel.innerHTML = '<option value="">— fetch failed —</option>';
     console.warn('amdProviderChange error:', e);
   }
 }
 
-async function loadAgentModelDefaults() {
-  try {
-    const data = await api('/api/settings/agent-model-defaults');
-    const d = data?.defaults || {};
-    for (const slotId of Object.keys(AMD_SLOTS)) {
-      const provSel  = document.getElementById('amd-' + slotId + '-prov');
-      const modelSel = document.getElementById('amd-' + slotId + '-model');
-      if (provSel) provSel.value = '';
-      if (modelSel) modelSel.innerHTML = '<option value="">select provider first</option>';
-    }
-    for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
-      const val = d[field] || '';
-      if (!val) continue;
-      const slashIdx = String(val).indexOf('/');
-      const hasProvider = slashIdx > 0;
-      const prov = hasProvider ? String(val).slice(0, slashIdx) : '';
-      const model = hasProvider ? String(val).slice(slashIdx + 1) : String(val);
-      const provSel  = document.getElementById('amd-' + slotId + '-prov');
-      const modelSel = document.getElementById('amd-' + slotId + '-model');
-      if (provSel) provSel.value = prov;
-      if (prov && modelSel) {
-        await amdProviderChange(slotId);
-      }
-      if (modelSel && model) {
-        if (!Array.from(modelSel.options).find(o => o.value === model)) {
-          modelSel.innerHTML += `<option value="${model}">${model}</option>`;
-        }
-        modelSel.value = model;
-      }
-    }
-  } catch (e) { console.warn('loadAgentModelDefaults error:', e); }
-}
-
-async function saveAgentModelDefaults() {
+function getAgentModelDefaultsFromForm() {
   const payload = {};
   for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
     const prov  = document.getElementById('amd-' + slotId + '-prov')?.value?.trim()  || '';
     const model = document.getElementById('amd-' + slotId + '-model')?.value?.trim() || '';
     payload[field] = (prov && model) ? `${prov}/${model}` : '';
   }
+  return payload;
+}
+
+async function applyAgentModelDefaultsToForm(defaults = {}) {
+  await ensureProviderCatalogUIReady();
+  await fetchCredentialedModelProviderIds();
+  renderProviderSelectors();
+  const d = defaults || {};
+  for (const slotId of Object.keys(AMD_SLOTS)) {
+    const provSel  = document.getElementById('amd-' + slotId + '-prov');
+    const modelSel = document.getElementById('amd-' + slotId + '-model');
+    if (provSel) provSel.value = '';
+    if (modelSel) modelSel.innerHTML = '<option value="">select provider first</option>';
+  }
+  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+    const val = d[field] || '';
+    if (!val) continue;
+    const slashIdx = String(val).indexOf('/');
+    const hasProvider = slashIdx > 0;
+    const prov = hasProvider ? String(val).slice(0, slashIdx) : '';
+    const model = hasProvider ? String(val).slice(slashIdx + 1) : String(val);
+    if (prov && !isCredentialedModelProviderId(prov)) continue;
+    const provSel  = document.getElementById('amd-' + slotId + '-prov');
+    const modelSel = document.getElementById('amd-' + slotId + '-model');
+    if (provSel) provSel.value = prov;
+    if (prov && modelSel) {
+      await amdProviderChange(slotId);
+    }
+    if (modelSel && model) {
+      if (!Array.from(modelSel.options).find(o => o.value === model)) {
+        modelSel.innerHTML += `<option value="${escHtml(model)}">${escHtml(model)}</option>`;
+      }
+      modelSel.value = model;
+    }
+  }
+}
+
+function renderAgentModelDefaultTemplates() {
+  const select = document.getElementById('amd-template-select');
+  const nameInput = document.getElementById('amd-template-name');
+  if (!select) return;
+  const current = select.value || amdActiveTemplateId || '';
+  select.innerHTML = `<option value="">Select template...</option>${amdTemplatesCache.map((template) => (
+    `<option value="${escHtml(template.id)}" ${template.id === current ? 'selected' : ''}>${escHtml(template.name)}</option>`
+  )).join('')}`;
+  if (current && amdTemplatesCache.some((template) => template.id === current)) select.value = current;
+  const selected = amdTemplatesCache.find((template) => template.id === select.value);
+  if (nameInput && selected && !nameInput.value.trim()) nameInput.value = selected.name;
+}
+
+function rememberAgentModelDefaultTemplates() {
+  try {
+    localStorage.setItem(AMD_TEMPLATE_CACHE_KEY, JSON.stringify({
+      activeTemplateId: amdActiveTemplateId,
+      templates: amdTemplatesCache,
+    }));
+  } catch {}
+}
+
+function setAgentModelTemplateStatus(type, text) {
+  const status = document.getElementById('amd-template-status');
+  if (!status) return;
+  setSettingsStatus(status, type, text || '');
+}
+
+function updateAgentModelTemplateCache(data) {
+  amdTemplatesCache = Array.isArray(data?.templates) ? data.templates : [];
+  amdActiveTemplateId = String(data?.activeTemplateId || '');
+  rememberAgentModelDefaultTemplates();
+  renderAgentModelDefaultTemplates();
+}
+
+async function loadAgentModelDefaultTemplates() {
+  try {
+    const data = await api('/api/settings/agent-model-default-templates');
+    updateAgentModelTemplateCache(data);
+  } catch (e) {
+    try {
+      const cached = JSON.parse(localStorage.getItem(AMD_TEMPLATE_CACHE_KEY) || '{}');
+      amdTemplatesCache = Array.isArray(cached.templates) ? cached.templates : [];
+      amdActiveTemplateId = String(cached.activeTemplateId || '');
+      renderAgentModelDefaultTemplates();
+    } catch {}
+    console.warn('loadAgentModelDefaultTemplates error:', e);
+  }
+}
+
+function onAgentModelTemplateSelect() {
+  const select = document.getElementById('amd-template-select');
+  const nameInput = document.getElementById('amd-template-name');
+  const selected = amdTemplatesCache.find((template) => template.id === select?.value);
+  if (nameInput) nameInput.value = selected?.name || '';
+}
+
+async function loadAgentModelDefaults() {
+  try {
+    const data = await api('/api/settings/agent-model-defaults');
+    await applyAgentModelDefaultsToForm(data?.defaults || {});
+    updateAgentModelTemplateCache(data);
+  } catch (e) { console.warn('loadAgentModelDefaults error:', e); }
+}
+
+async function saveAgentModelDefaults() {
+  const payload = getAgentModelDefaultsFromForm();
   const status = document.getElementById('amd-status');
   const btn = document.querySelector('[onclick="saveAgentModelDefaults()"]');
   if (btn?.disabled) return;
@@ -3289,6 +3398,9 @@ async function saveAgentModelDefaults() {
       setSettingsStatus(status, 'success', 'Saved');
       setTimeout(() => { setSettingsStatus(status, 'info', ''); }, 2500);
     }
+    if (payload.main_chat) {
+      showToast('Main model changed', payload.main_chat, 'success', 5000);
+    }
     resetBtn();
   } catch(e) {
     if (status) {
@@ -3299,6 +3411,82 @@ async function saveAgentModelDefaults() {
   } finally {
     clearTimeout(safetyTimer);
   }
+}
+
+async function saveAgentModelDefaultTemplate() {
+  const select = document.getElementById('amd-template-select');
+  const nameInput = document.getElementById('amd-template-name');
+  const status = document.getElementById('amd-template-status');
+  const name = String(nameInput?.value || '').trim();
+  if (!name) {
+    setAgentModelTemplateStatus('error', 'Name the template first.');
+    return;
+  }
+  if (status) status.textContent = 'Saving template...';
+  try {
+    const selectedId = String(select?.value || '').trim();
+    const data = await api('/api/settings/agent-model-default-templates', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: selectedId || undefined,
+        name,
+        defaults: getAgentModelDefaultsFromForm(),
+      }),
+    });
+    updateAgentModelTemplateCache(data);
+    if (select && data?.template?.id) select.value = data.template.id;
+    setAgentModelTemplateStatus('success', `Saved "${data?.template?.name || name}".`);
+    showToast('Model template saved', data?.template?.name || name, 'success', 3500);
+  } catch (e) {
+    setAgentModelTemplateStatus('error', e.message || String(e));
+  }
+}
+
+async function applyAgentModelDefaultTemplate() {
+  const select = document.getElementById('amd-template-select');
+  const id = String(select?.value || '').trim();
+  if (!id) {
+    setAgentModelTemplateStatus('error', 'Choose a template to apply.');
+    return;
+  }
+  setAgentModelTemplateStatus('info', 'Applying template...');
+  try {
+    const data = await api(`/api/settings/agent-model-default-templates/${encodeURIComponent(id)}/apply`, {
+      method: 'POST',
+    });
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {});
+    await loadAgentModelDefaultTemplates();
+    setAgentModelTemplateStatus('success', `Applied "${data?.template?.name || id}".`);
+    showToast('Model template applied', data?.template?.name || id, 'success', 4000);
+  } catch (e) {
+    setAgentModelTemplateStatus('error', e.message || String(e));
+  }
+}
+
+function deleteAgentModelDefaultTemplate() {
+  const select = document.getElementById('amd-template-select');
+  const id = String(select?.value || '').trim();
+  const template = amdTemplatesCache.find((item) => item.id === id);
+  if (!id || !template) {
+    setAgentModelTemplateStatus('error', 'Choose a template to delete.');
+    return;
+  }
+  showConfirm(
+    `Delete model template "${template.name}"?`,
+    async () => {
+      try {
+        await api(`/api/settings/agent-model-default-templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const nameInput = document.getElementById('amd-template-name');
+        if (nameInput) nameInput.value = '';
+        await loadAgentModelDefaultTemplates();
+        setAgentModelTemplateStatus('success', `Deleted "${template.name}".`);
+      } catch (e) {
+        setAgentModelTemplateStatus('error', e.message || String(e));
+      }
+    },
+    null,
+    { title: 'Delete Template', confirmText: 'Delete', danger: true }
+  );
 }
 
 // --- Brain System Model Config --------------------------------------------
@@ -3313,7 +3501,7 @@ async function brainProviderChange(type) {
   try {
     let models = [];
     if (prov === 'anthropic') {
-      models = ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'];
+      models = ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'];
     } else if (prov === 'openai') {
       models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
       if (!models.length) models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
@@ -3400,6 +3588,7 @@ window.brainProviderChange = brainProviderChange;
 window.loadBrainModelConfig = loadBrainModelConfig;
 window.saveBrainModelConfig = saveBrainModelConfig;
 window.loadAgentHeartbeat = loadAgentHeartbeat;
+window.loadAgentModelDefaultTemplates = loadAgentModelDefaultTemplates;
 window.loadAgentModelOptions = loadAgentModelOptions;
 window.loadAgentRunHistory = loadAgentRunHistory;
 window.loadAgentsTab = loadAgentsTab;
@@ -3409,8 +3598,8 @@ window.loadCredVaultLog = loadCredVaultLog;
 window.loadCredVaultStatus = loadCredVaultStatus;
 window.loadCredentialsTab = loadCredentialsTab;
 window.loadHeartbeatSettings = loadHeartbeatSettings;
-window.loadInstalledAppsPanel = loadInstalledAppsPanel;
 window.loadIntegrationsTab = loadIntegrationsTab;
+window.loadMigrationPanel = loadMigrationPanel;
 window.loadMCPServers = loadMCPServers;
 window.loadModelSettings = loadModelSettings;
 window.loadSearchSettingsSummary = loadSearchSettingsSummary;
@@ -3425,6 +3614,8 @@ window.onMCPTransportChange = onMCPTransportChange;
 window.onProviderChange = onProviderChange;
 window.openAgentSettings = openAgentSettings;
 window.openSettings = openSettings;
+window.previewCustomMigration = previewCustomMigration;
+window.previewSelectedMigration = previewSelectedMigration;
 window.prefillMCPServer = prefillMCPServer;
 window.readChannelPayload = readChannelPayload;
 window.refreshAnthropicStatus = refreshAnthropicStatus;
@@ -3435,12 +3626,10 @@ window.refreshOpenAIModels = refreshOpenAIModels;
 window.refreshProviderModels = refreshProviderModels;
 window.rejectMemory = rejectMemory;
 window.renderAgentsList = renderAgentsList;
-window.renderInstalledAppsList = renderInstalledAppsList;
 window.renderShortcutsList = renderShortcutsList;
 window.runMission = runMission;
-window.searchInstalledAppsUI = searchInstalledAppsUI;
-window.clearInstalledAppsSearch = clearInstalledAppsSearch;
 window.runSelectedAgentOnce = runSelectedAgentOnce;
+window.executeSelectedMigration = executeSelectedMigration;
 window.saveAgentFromForm = saveAgentFromForm;
 window.saveAgentHeartbeatConfig = saveAgentHeartbeatConfig;
 window.saveAgentHeartbeatMd = saveAgentHeartbeatMd;
@@ -3450,6 +3639,10 @@ window.saveMCPServer = saveMCPServer;
 window.saveSelectedAgentMd = saveSelectedAgentMd;
 window.saveSelectedChannelSettings = saveSelectedChannelSettings;
 window.saveAgentModelDefaults = saveAgentModelDefaults;
+window.saveAgentModelDefaultTemplate = saveAgentModelDefaultTemplate;
+window.applyAgentModelDefaultTemplate = applyAgentModelDefaultTemplate;
+window.deleteAgentModelDefaultTemplate = deleteAgentModelDefaultTemplate;
+window.onAgentModelTemplateSelect = onAgentModelTemplateSelect;
 window.saveSettings = saveSettings;
 window.saveWebhookSettings = saveWebhookSettings;
 window.selectAgent = selectAgent;

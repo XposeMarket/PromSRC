@@ -22,6 +22,7 @@ import {
   approveProposal,
   denyProposal,
   setProposalStoreBroadcast,
+  type ProposalExecutionMode as ApprovedProposalExecutionMode,
   type ProposalStatus,
 } from '../proposals/proposal-store.js';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
@@ -91,13 +92,203 @@ function normalizeProposalScopePath(rawPath: unknown): string {
 }
 
 function buildProposalMutationScope(proposal: any): { allowedFiles: string[]; allowedDirs: string[] } | undefined {
-  const allowedFiles = Array.from(new Set<string>(
-    (Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [])
-      .map((file: any) => normalizeProposalScopePath(file?.path))
-      .filter((value: string) => !!value),
-  ));
-  if (allowedFiles.length === 0) return undefined;
-  return { allowedFiles, allowedDirs: [] };
+  const allowedFiles: string[] = [];
+  const allowedDirs: string[] = [];
+  for (const file of (Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [])) {
+    const normalized = normalizeProposalScopePath(file?.path);
+    if (!normalized) continue;
+    const rawPath = String(file?.path || '').replace(/\\/g, '/').trim();
+    if (rawPath.endsWith('/')) {
+      allowedDirs.push(normalized);
+    } else {
+      allowedFiles.push(normalized);
+    }
+  }
+  const uniqueFiles = Array.from(new Set(allowedFiles));
+  const uniqueDirs = Array.from(new Set(allowedDirs));
+  if (uniqueFiles.length === 0 && uniqueDirs.length === 0) return undefined;
+  return { allowedFiles: uniqueFiles, allowedDirs: uniqueDirs };
+}
+
+type ProposalExecutionLane = ApprovedProposalExecutionMode;
+
+function legacyInferProposalExecutionLane(proposal: any, opts: { touchesInternalCode: boolean; needsBuild: boolean }): ProposalExecutionLane {
+  if (opts.touchesInternalCode || opts.needsBuild) return 'code_change';
+  const type = String(proposal?.type || 'general').trim().toLowerCase();
+  const text = `${proposal?.title || ''}\n${proposal?.summary || ''}\n${proposal?.details || ''}\n${proposal?.executorPrompt || ''}`.toLowerCase();
+  const hasVerificationIntent = /\b(verify|verification|confirm|check|inspect|audit|review)\b/.test(text);
+  if (hasVerificationIntent && type !== 'task_trigger') return 'review';
+  return 'action';
+}
+
+function normalizeProposalExecutionLane(raw: any): ProposalExecutionLane | null {
+  const value = String(raw || '').trim().toLowerCase();
+  if (value === 'code_change' || value === 'action' || value === 'review') return value as ProposalExecutionLane;
+  return null;
+}
+
+function resolveProposalExecutionLane(proposal: any, opts: { touchesInternalCode: boolean; needsBuild: boolean }): ProposalExecutionLane {
+  if (opts.touchesInternalCode || opts.needsBuild) return 'code_change';
+  return normalizeProposalExecutionLane(proposal?.executionMode || proposal?.execution_mode)
+    || legacyInferProposalExecutionLane(proposal, opts);
+}
+
+function buildAffectedResourcesBlock(proposal: any): string {
+  const affectedFiles = Array.isArray(proposal?.affectedFiles) ? proposal.affectedFiles : [];
+  if (affectedFiles.length === 0) return '';
+  return `\n\nAFFECTED RESOURCES / EXPECTED TOUCHPOINTS:\n${affectedFiles.map((f: any) => `  - ${f.path || '?'}${f.description ? `: ${f.description}` : ''}`).join('\n')}`;
+}
+
+function parseExecutorPromptSteps(executorPrompt: string): string[] {
+  const lines = String(executorPrompt || '').split('\n');
+  const steps: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*(?:Step\s*)?(\d+)[.):]\s+(.+)/i);
+    if (m) steps.push(m[2].trim());
+  }
+  return steps;
+}
+
+function getApprovedExecutionSteps(proposal: any): Array<{ index: number; description: string; status: 'pending' }> {
+  const steps = Array.isArray(proposal?.executionSteps) ? proposal.executionSteps : [];
+  return steps
+    .map((step: any, index: number) => {
+      const title = String(step?.title || step?.description || '').trim();
+      if (!title) return null;
+      const parts = [
+        title,
+        step?.description ? String(step.description).trim() : '',
+        step?.successCriteria ? `Success: ${String(step.successCriteria).trim()}` : '',
+      ].filter(Boolean);
+      return {
+        index,
+        description: parts.join(' - ').slice(0, 300),
+        status: 'pending' as const,
+      };
+    })
+    .filter(Boolean) as Array<{ index: number; description: string; status: 'pending' }>;
+}
+
+function buildExecutionStepsBlock(proposal: any): string {
+  const steps = Array.isArray(proposal?.executionSteps) ? proposal.executionSteps : [];
+  const lines = steps
+    .map((step: any, index: number) => {
+      const title = String(step?.title || step?.description || '').trim();
+      if (!title) return '';
+      const kind = String(step?.kind || '').trim();
+      const criteria = String(step?.successCriteria || step?.success_criteria || '').trim();
+      return [
+        `${index + 1}. ${title}${kind ? ` [${kind}]` : ''}`,
+        step?.description ? `   - ${String(step.description).trim()}` : '',
+        criteria ? `   - Success: ${criteria}` : '',
+      ].filter(Boolean).join('\n');
+    })
+    .filter(Boolean);
+  return lines.length > 0
+    ? `\n\nAPPROVED EXECUTION STEPS:\n${lines.join('\n')}`
+    : '';
+}
+
+function buildOperationalProposalPrompt(opts: {
+  proposal: any;
+  proposalId: string;
+  executorPrompt: string;
+  lane: Exclude<ProposalExecutionLane, 'code_change'>;
+  affectedResourcesBlock: string;
+  diffBlock: string;
+}): string {
+  const { proposal, proposalId, executorPrompt, lane, affectedResourcesBlock, diffBlock } = opts;
+  const modeLabel = lane === 'review' ? 'read-mostly review' : 'bounded action';
+  const teamHint = lane === 'action'
+    ? [
+        ``,
+        `TEAM / TASK ACTION HINT: If this proposal asks you to start or dispatch a team, request the team_ops tool category, call the appropriate team tool once, capture the returned run/task/team identifiers, then stop after verification and a note.`,
+      ].join('\n')
+    : '';
+
+  return [
+    `[PROPOSAL ACTION EXECUTION] Executing approved ${modeLabel} proposal.`,
+    ``,
+    `This is not a source-code implementation proposal. Treat listed resources as context, audit surfaces, or expected outputs unless the proposal explicitly asks for a non-code workspace write.`,
+    `Do not run npm/build commands unless the approved instructions explicitly require them.`,
+    `Do not expand the work into broader implementation. Perform the approved action, verify the outcome, write a concise note, and complete the task.`,
+    teamHint,
+    ``,
+    `TITLE: ${proposal.title || 'Untitled'}`,
+    `PRIORITY: ${proposal.priority || 'medium'}`,
+    `TYPE: ${proposal.type || 'general'}`,
+    `EXECUTION LANE: ${lane}`,
+    ``,
+    `SUMMARY: ${proposal.summary || ''}`,
+    ``,
+    `APPROVED ACTION PLAN:`,
+    proposal.details || proposal.summary || executorPrompt,
+    buildExecutionStepsBlock(proposal),
+    affectedResourcesBlock,
+    diffBlock,
+    proposal.estimatedImpact ? `\nEXPECTED OUTCOME: ${proposal.estimatedImpact}` : '',
+    ``,
+    `GLOBAL RULES:`,
+    `- Execute only the approved proposal scope and approved steps.`,
+    `- Do not call declare_plan; the approved execution_steps are already the task plan.`,
+    `- Call step_complete after each approved step.`,
+    `- If blocked, pause with a concise blocker instead of improvising or broadening scope.`,
+    `- Write exactly one final write_note with tag "task_complete", then complete the task.`,
+    ``,
+    lane === 'review'
+      ? `LANE RULES: Prefer read-only tools. Do not mutate files, teams, schedules, memory, or external systems unless the proposal explicitly approves that exact mutation. If a fix is needed, report findings and recommend a follow-up proposal instead of performing the fix.`
+      : `LANE RULES: Do the approved action exactly once. Capture IDs, paths, URLs, statuses, or returned artifacts. Do not run npm/build/dev commands unless the approved steps explicitly require them.`,
+    ``,
+    `INSTRUCTIONS:`,
+    `1. Inspect only the state needed to carry out the approved ${lane === 'review' ? 'review' : 'action'}.`,
+    `   After inspection is complete, call step_complete before moving on to artifact creation or triggering work.`,
+    lane === 'review'
+      ? `2. Verify/audit the requested condition without expanding into implementation work.`
+      : `2. Perform the action exactly once unless the approved plan explicitly says otherwise.`,
+    `   After the action is complete, call step_complete before verification.`,
+    lane === 'review'
+      ? `3. Record pass/fail/unknown, evidence checked, findings, and recommended next action.`
+      : `3. Verify the action started, completed, or produced the expected artifact/status.`,
+    `   After verification is complete, call step_complete before the final note.`,
+    `4. Write a concise note with identifiers, artifacts, blockers, and next steps, then complete the task.`,
+    ``,
+    executorPrompt ? `ADDITIONAL EXECUTOR INSTRUCTIONS:\n${executorPrompt}` : '',
+    ``,
+    `Proposal ID: ${proposalId}`,
+  ].filter(Boolean).join('\n');
+}
+
+function buildOperationalPlanSteps(
+  lane: Exclude<ProposalExecutionLane, 'code_change'>,
+  executorPrompt: string,
+  details?: string,
+): Array<{ index: number; description: string; status: 'pending' }> {
+  const parsedSteps = parseExecutorPromptSteps(executorPrompt);
+  const detailSteps = parsedSteps.length >= 2 ? [] : parseExecutorPromptSteps(String(details || ''));
+  const approvedSteps = parsedSteps.length >= 2 ? parsedSteps : detailSteps;
+  if (approvedSteps.length >= 2 && approvedSteps.length <= 10) {
+    return approvedSteps.map((desc, index) => ({
+      index,
+      description: desc.slice(0, 300),
+      status: 'pending',
+    }));
+  }
+
+  const descriptions = lane === 'review'
+    ? [
+        'Inspect the approved evidence, resources, and current state needed for verification.',
+        'Verify the requested status or outcome without expanding into implementation work.',
+        'Record the verification result, blockers, and any referenced artifacts.',
+        'Write a concise completion note and finish the proposal task.',
+      ]
+    : [
+        'Inspect the approved context and current state needed for this action.',
+        'Perform the approved action exactly once.',
+        'Verify the result and capture identifiers, statuses, or artifact paths.',
+        'Write a concise completion note and finish the proposal task.',
+      ];
+
+  return descriptions.map((description, index) => ({ index, description, status: 'pending' }));
 }
 
 function proposalTouchesUnsupportedInternalCode(proposal: any): boolean {
@@ -300,7 +491,7 @@ export async function dispatchApprovedProposal(
     throw new Error('Internal code proposal execution is disabled in the public distribution build.');
   }
 	  if (proposalTouchesUnsupportedInternalCode(proposal)) {
-	    throw new Error('Automatic internal-code proposal execution is limited to src-only dev self-edit proposals. Revise the proposal to touch only src/ files.');
+	    throw new Error('Automatic internal-code proposal execution is limited to approved dev self-edit proposals touching only src/ and/or web-ui/ files.');
 	  }
   if (proposal?.teamExecution && proposalTouchesInternalCode(proposal)) {
     throw new Error('Team manager proposals cannot execute Prometheus internal source-code changes. Create dev src proposals from the main/dev agent path instead.');
@@ -323,13 +514,13 @@ export async function dispatchApprovedProposal(
     : undefined;
   const usesDevSrcSelfEditRepair = proposalUsesDevSrcSelfEditRepairMode(proposal);
   const usesDevSrcSelfEdit = !usesDevSrcSelfEditRepair && proposalUsesDevSrcSelfEditMode(proposal);
-  if ((usesDevSrcSelfEdit || usesDevSrcSelfEditRepair) && (!proposalMutationScope || proposalMutationScope.allowedFiles.length === 0)) {
-    throw new Error('Dev src self-edit proposals require at least one approved src/ file in affectedFiles.');
-  }
   const hasWebUiAffectedFiles = Array.isArray(proposal.affectedFiles) && proposal.affectedFiles.some((f: any) => {
     const p = String(f?.path || '').replace(/\\/g, '/').trim();
     return p.startsWith('web-ui/') || p.startsWith('./web-ui/') || p.includes('/web-ui/');
   });
+  if ((usesDevSrcSelfEdit || usesDevSrcSelfEditRepair) && (!proposalMutationScope || proposalMutationScope.allowedFiles.length === 0)) {
+    throw new Error('Dev self-edit proposals require at least one approved src/ or web-ui/ file in affectedFiles.');
+  }
   const needsBuild = Boolean(proposal.requiresBuild) || hasSrcAffectedFiles(proposal.affectedFiles || []) || hasWebUiAffectedFiles;
 		  const needsSrcEdit = Boolean(proposal.requiresSrcEdit) || hasSrcAffectedFiles(proposal.affectedFiles || []);
 		  const needsWebUiEdit = hasWebUiAffectedFiles;
@@ -338,8 +529,16 @@ export async function dispatchApprovedProposal(
   const teamExecution = proposal?.teamExecution && typeof proposal.teamExecution === 'object'
     ? proposal.teamExecution
     : undefined;
+  const executionLane = resolveProposalExecutionLane(proposal, {
+    touchesInternalCode: proposalTouchesInternalCode(proposal),
+    needsBuild,
+  });
+  const usesOperationalExecutionMode = !usesDevSrcSelfEdit && !usesDevSrcSelfEditRepair && executionLane !== 'code_change';
+  if (executionLane === 'code_change' && !usesDevSrcSelfEdit && !usesDevSrcSelfEditRepair) {
+    throw new Error('code_change proposals must touch only approved dev self-edit files under src/ and/or web-ui/. Use action or review for non-code approvals.');
+  }
   const defaultBuildCommand = usesDevSrcSelfEditRepair || usesDevSrcSelfEdit
-    ? 'npm run build:backend'
+    ? (hasWebUiAffectedFiles ? 'npm run sync:web-ui && npm run build:backend' : 'npm run build:backend')
     : 'npm run build';
   const canonicalBuildCommand = String(repairContext?.canonicalBuildCommand || defaultBuildCommand).trim() || defaultBuildCommand;
   const devSrcSandboxBlock = usesDevSrcSelfEditRepair ? [
@@ -347,13 +546,13 @@ export async function dispatchApprovedProposal(
     `SANDBOX MODE: Dev src build repair.`,
     `You are editing an isolated repair copy of a failed proposal sandbox, not the live repo.`,
     `Fix only the captured build failure. Do NOT continue implementing the original proposal in this repair task.`,
-    `Only approved src/ files are writable. After a successful repair build, finish with a concise repair summary; Prometheus will automatically hand the repaired sandbox back to the blocked original task.`,
+    `Only approved src/ and web-ui/ files are writable. After a successful repair build, finish with a concise repair summary; Prometheus will automatically hand the repaired sandbox back to the blocked original task.`,
   ].join('\n') : usesDevSrcSelfEdit ? [
     ``,
     `SANDBOX MODE: Dev src self-edit.`,
     `You are editing an isolated copy of Prometheus source code, not the live repo.`,
-    `Only approved src/ files are writable, and only those scoped src/ files will be promoted back after a successful build.`,
-    `Do not create or edit files outside the approved src/ scope.`,
+    `Only approved src/ and web-ui/ files are writable, and only scoped approved files will be promoted back after a successful build.`,
+    `Do not create or edit files outside the approved code_change scope.`,
   ].join('\n') : '';
 
   const devSrcWorkspace = usesDevSrcSelfEditRepair
@@ -370,6 +569,7 @@ export async function dispatchApprovedProposal(
   const affectedFilesBlock = (proposal.affectedFiles || []).length > 0
     ? `\n\nAFFECTED FILES:\n${(proposal.affectedFiles || []).map((f: any) => `  - [${f.action || 'edit'}] ${f.path || '?'}: ${f.description || ''}`).join('\n')}`
     : '';
+  const affectedResourcesBlock = buildAffectedResourcesBlock(proposal);
   const diffBlock = proposal.diffPreview
     ? `\n\nDIFF PREVIEW / REFERENCE:\n\`\`\`\n${proposal.diffPreview}\n\`\`\``
     : '';
@@ -388,6 +588,9 @@ export async function dispatchApprovedProposal(
     `  • insert_after_source(file, after_line, content)           — insert lines`,
     `  • delete_lines_source(file, start_line, end_line)          — delete lines`,
     `  • write_source(file, content, overwrite?)                  — create/overwrite src file`,
+    `Prefer find_replace_source with a complete exact anchor, or write_source for full-file rewrites.`,
+    `Avoid fragile line-number edits after prior insertions/deletions. If you use line tools, re-read the exact surrounding lines immediately before each edit.`,
+    `Source write tools reject syntactically invalid TypeScript/JavaScript before writing. Treat that as a correction signal and retry with a structurally complete edit.`,
 	  ].join('\n') : '';
 	  const promToolBlock = needsPromRootEdit ? [
 	    ``,
@@ -421,8 +624,25 @@ export async function dispatchApprovedProposal(
     `  • write_webui_source(file, content, overwrite?)                   — create/overwrite web-ui file`,
   ].join('\n') : '';
 
-  const fullPrompt = [
-		    `[PROPOSAL EXECUTION] Executing approved proposal.`,
+  const approvedExecutionSteps = getApprovedExecutionSteps(proposal);
+  const parsedSteps = parseExecutorPromptSteps(executorPrompt);
+  if (!usesDevSrcSelfEditRepair && approvedExecutionSteps.length < 2) {
+    throw new Error('Executable proposals must include at least two approved execution_steps. Revise the proposal with explicit inspect/action-or-edit/verify/complete steps before approval.');
+  }
+
+  const fullPrompt = usesOperationalExecutionMode
+    ? buildOperationalProposalPrompt({
+        proposal,
+        proposalId,
+        executorPrompt,
+        lane: executionLane,
+        affectedResourcesBlock,
+        diffBlock,
+      })
+    : [
+		    `[APPROVED PROPOSAL EXECUTION]`,
+        `LANE: code_change`,
+        `Proposal ID: ${proposalId}`,
         devSrcSandboxBlock,
 		    srcToolBlock,
 		    webUiToolBlock,
@@ -436,10 +656,25 @@ export async function dispatchApprovedProposal(
     ``,
     `FULL IMPLEMENTATION PLAN:`,
     proposal.details || proposal.summary || executorPrompt,
+    buildExecutionStepsBlock(proposal),
     affectedFilesBlock,
     diffBlock,
     proposal.estimatedImpact ? `\nEXPECTED IMPACT: ${proposal.estimatedImpact}` : '',
     needsBuild ? `\nBUILD REQUIRED: Yes — run ${canonicalBuildCommand} after edits. MANDATORY. Stop if build fails — task will pause for assistance.` : '',
+    ``,
+    `GLOBAL RULES:`,
+    `- Execute only the approved proposal scope and approved steps.`,
+    `- Do not call declare_plan; execution_steps are already the task plan.`,
+    `- Call step_complete after each approved step.`,
+    `- If blocked or if an unapproved file is required, pause clearly instead of broadening scope.`,
+    `- Write exactly one final write_note with tag "task_complete", then complete the task.`,
+    ``,
+    `CODE_CHANGE RULES:`,
+    `- Use only source-specific tools for src/ and web-ui/ edits.`,
+    `- Generic workspace write tools are disabled in this lane.`,
+    `- Re-read before fragile line-number edits.`,
+    `- Run the canonical verification command before completion.`,
+    `- If verification fails, stop source edits and follow the repair-proposal flow only when explicitly allowed.`,
     ``,
     `INSTRUCTIONS:`,
 	    `1. Read affected files with ${needsSrcEdit || needsWebUiEdit || needsPromRootEdit ? 'the correct source read tool first (read_source for src/, read_webui_source for web-ui/, read_prom_file for allowlisted prom-root files)' : 'read_file first'} to understand current state.`,
@@ -455,20 +690,18 @@ export async function dispatchApprovedProposal(
 
   // Build plan steps from executorPrompt numbered steps, or fall back to per-file steps
   const planSteps: Array<{ index: number; description: string; status: 'pending' }> = [];
-  const parsedSteps = (() => {
-    const lines = executorPrompt.split('\n');
-    const steps: string[] = [];
-    for (const line of lines) {
-      const m = line.match(/^\s*(?:Step\s*)?(\d+)[.):]\s+(.+)/i);
-      if (m) steps.push(m[2].trim());
+  if (approvedExecutionSteps.length > 0) {
+    planSteps.push(...approvedExecutionSteps);
+    const lastDesc = (approvedExecutionSteps[approvedExecutionSteps.length - 1]?.description || '').toLowerCase();
+    if (needsBuild && !/build|compile|restart/i.test(lastDesc)) {
+      planSteps.push({ index: planSteps.length, description: `Run ${canonicalBuildCommand} to compile and verify. Stop immediately if build fails and hand off to a repair proposal.`, status: 'pending' });
     }
-    return steps;
-  })();
-
-  if (usesDevSrcSelfEditRepair) {
+  } else if (usesOperationalExecutionMode) {
+    planSteps.push(...buildOperationalPlanSteps(executionLane, executorPrompt, proposal.details));
+  } else if (usesDevSrcSelfEditRepair) {
     planSteps.push(
       { index: 0, description: 'Inspect the captured build failure and failed sandbox state.', status: 'pending' },
-      { index: 1, description: 'Apply the minimum repair to the approved src files only.', status: 'pending' },
+      { index: 1, description: 'Apply the minimum repair to the approved src/web-ui files only.', status: 'pending' },
       { index: 2, description: `Run ${canonicalBuildCommand} in the repair sandbox and stop if it fails again.`, status: 'pending' },
     );
   } else if (parsedSteps.length >= 2) {
@@ -553,10 +786,11 @@ export async function dispatchApprovedProposal(
               ? DEV_SRC_SELF_EDIT_REPAIR_MODE
               : usesDevSrcSelfEdit
                 ? DEV_SRC_SELF_EDIT_MODE
-                : 'standard',
+                : executionLane,
             projectRoot: devSrcWorkspace?.projectRoot,
             liveProjectRoot: devSrcWorkspace?.liveProjectRoot,
             buildRequired: needsBuild,
+            canonicalBuildCommand,
             liveFileBaselines: usesDevSrcSelfEdit ? devSrcWorkspace?.liveFileBaselines : undefined,
             promotion: usesDevSrcSelfEdit ? { status: 'pending' } : undefined,
 		        mutationScope: proposalMutationScope,

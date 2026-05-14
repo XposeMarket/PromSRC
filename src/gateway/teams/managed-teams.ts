@@ -30,6 +30,8 @@ export interface TeamChatMessage {
 	  metadata?: {
     source?: string;
     proposalId?: string;
+    scheduleId?: string;
+    scheduleName?: string;
 	    runId?: string;
     agentId?: string;
     runSuccess?: boolean;
@@ -37,9 +39,19 @@ export interface TeamChatMessage {
     targetType?: 'room' | 'team' | 'manager' | 'member' | 'user';
     targetId?: string;
     targetLabel?: string;
+    messageType?: TeamRoomMessageCategory;
     stepCount?: number;
     durationMs?: number;
     thinking?: string;
+    attachmentPreviews?: Array<{
+      kind?: string;
+      name?: string;
+      ext?: string;
+      workspacePath?: string;
+      dataUrl?: string;
+      mimeType?: string;
+      binary?: boolean;
+    }>;
     processEntries?: Array<{
       ts?: string;
       type?: string;
@@ -159,6 +171,8 @@ export interface TeamRoomMessage {
     dispatchId?: string;
     runSuccess?: boolean;
     source?: string;
+    stepCount?: number;
+    durationMs?: number;
   };
 }
 
@@ -693,13 +707,16 @@ function mapChatMessageToRoomMessage(message: TeamChatMessage): TeamRoomMessage 
     actorName: String(message.fromName || (actorType === 'manager' ? 'Manager' : actorType === 'main_agent' ? 'Main Agent' : 'User')).trim(),
     actorId: String(message.fromAgentId || message.metadata?.agentId || '').trim() || undefined,
     content: String(message.content || '').trim(),
-    category: 'chat',
+    category: normalizeTeamRoomMessageCategory(message.metadata?.messageType || 'chat'),
     target: mapChatTargetToRoomTarget(message),
     threadId: String(message.threadId || '').trim() || undefined,
     metadata: message.metadata ? {
+      source: String(message.metadata.source || '').trim() || undefined,
       runId: String(message.metadata.runId || '').trim() || undefined,
       agentId: String(message.metadata.agentId || message.fromAgentId || '').trim() || undefined,
       runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
+      stepCount: Number.isFinite(Number(message.metadata.stepCount)) ? Number(message.metadata.stepCount) : undefined,
+      durationMs: Number.isFinite(Number(message.metadata.durationMs)) ? Number(message.metadata.durationMs) : undefined,
     } : undefined,
   };
 }
@@ -731,9 +748,13 @@ function mapRoomMessageToChatMessage(message: TeamRoomMessage): TeamChatMessage 
     threadId: String(message.threadId || '').trim() || undefined,
     metadata: {
       ...(message.metadata ? {
+        source: String(message.metadata.source || '').trim() || undefined,
+        messageType: normalizeTeamRoomMessageCategory(message.category || 'chat'),
         runId: String(message.metadata.runId || '').trim() || undefined,
         agentId: String(message.metadata.agentId || message.actorId || '').trim() || undefined,
         runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
+        stepCount: Number.isFinite(Number(message.metadata.stepCount)) ? Number(message.metadata.stepCount) : undefined,
+        durationMs: Number.isFinite(Number(message.metadata.durationMs)) ? Number(message.metadata.durationMs) : undefined,
       } : {}),
       ...mapRoomTargetToChatMetadata(message.target),
     },
@@ -760,6 +781,8 @@ function normalizeTeamRoomMessage(raw: any): TeamRoomMessage | null {
       dispatchId: String(raw.metadata.dispatchId || '').trim() || undefined,
       runSuccess: typeof raw.metadata.runSuccess === 'boolean' ? raw.metadata.runSuccess : undefined,
       source: String(raw.metadata.source || '').trim() || undefined,
+      stepCount: Number.isFinite(Number(raw.metadata.stepCount)) ? Number(raw.metadata.stepCount) : undefined,
+      durationMs: Number.isFinite(Number(raw.metadata.durationMs)) ? Number(raw.metadata.durationMs) : undefined,
     } : undefined,
   };
 }
@@ -2495,7 +2518,12 @@ export function buildTeamRoomSummary(
     for (const message of relevantMessages) {
       const actor = message.actorName || message.actorId || message.actorType;
       const target = message.target ? ` -> ${message.target}` : '';
-      lines.push(`  - [${actor}${target}] ${message.content.slice(0, 300)}`);
+      const metaBits: string[] = [];
+      if (Number(message.metadata?.stepCount || 0) > 0) metaBits.push(`${Number(message.metadata?.stepCount)} tools`);
+      if (Number(message.metadata?.durationMs || 0) > 0) metaBits.push(`${Math.max(1, Math.round(Number(message.metadata?.durationMs) / 1000))}s`);
+      if (typeof message.metadata?.runSuccess === 'boolean') metaBits.push(message.metadata.runSuccess ? 'success' : 'failed');
+      const meta = metaBits.length ? ` (${metaBits.join(', ')})` : '';
+      lines.push(`  - [${actor}${target}]${meta} ${message.content.slice(0, 300)}`);
     }
   }
 

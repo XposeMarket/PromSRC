@@ -1,6 +1,7 @@
 import { getConfig } from '../config/config.js';
 import { OpenAIImageGenerationProvider } from './providers/openai.js';
 import { OpenAICodexImageGenerationProvider } from './providers/openai-codex.js';
+import { XAIImageGenerationProvider } from './providers/xai.js';
 import type {
   ImageGenerationProvider,
   ImageGenerationRequest,
@@ -17,6 +18,7 @@ import {
 const PROVIDERS: ImageGenerationProvider[] = [
   new OpenAIImageGenerationProvider(),
   new OpenAICodexImageGenerationProvider(),
+  new XAIImageGenerationProvider(),
 ];
 
 const PROVIDERS_BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]));
@@ -26,13 +28,28 @@ function normalizeProviderId(value?: string): string {
   return normalized === 'auto' ? '' : normalized;
 }
 
+function inferProviderIdFromModel(model?: string): string {
+  const normalized = String(model || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (
+    normalized.startsWith('grok-')
+    || normalized.includes('grok-imagine')
+    || normalized.includes('grok-image')
+  ) {
+    return 'xai';
+  }
+  if (normalized.startsWith('gpt-image-')) return 'openai';
+  return '';
+}
+
 function buildAutoCandidateIds(explicitProvider?: string): string[] {
   const imageCfg = getImageGenerationConfig();
   const llmProvider = String((getConfig().getConfig() as any)?.llm?.provider || '').trim().toLowerCase();
   const ordered = [
     normalizeProviderId(explicitProvider),
     normalizeProviderId(imageCfg.provider),
-    llmProvider === 'openai' || llmProvider === 'openai_codex' ? llmProvider : '',
+    llmProvider === 'openai' || llmProvider === 'openai_codex' || llmProvider === 'xai' ? llmProvider : '',
+    'xai',
     'openai_codex',
     'openai',
   ].filter(Boolean);
@@ -52,7 +69,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
   const imageCfg = getImageGenerationConfig();
   const saveToWorkspace = request.save_to_workspace ?? imageCfg.save_to_workspace;
   const outputDir = request.output_dir || imageCfg.default_output_dir;
-  const requestedProviderId = normalizeProviderId(request.provider);
+  const requestedProviderId = normalizeProviderId(request.provider) || inferProviderIdFromModel(request.model);
 
   if (!prompt) {
     return buildImageGenerationError({
@@ -119,7 +136,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     model: request.model,
     prompt,
     aspectRatio,
-    error: 'No image generation provider is available. Configure OpenAI API access or connect OpenAI Codex OAuth.',
+    error: 'No image generation provider is available. Configure xAI/OpenAI API access or connect OpenAI Codex OAuth.',
     errorType: 'provider_unavailable',
   });
 }

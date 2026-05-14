@@ -23,6 +23,7 @@ import { wsEventBus } from '../ws.js';
 
 let schedules  = [];
 let brainStatus = null;
+let teamsById = {};
 let editingScheduleId = null;
 
 // --- TOGGLE SWITCH RENDERER -------------------------------------------------
@@ -44,14 +45,21 @@ function _toggleHtml(enabled, onClickFn, title = '') {
 
 async function refreshSchedules() {
   try {
-    const [schedResult, brainResult] = await Promise.all([
+    const [schedResult, brainResult, teamsResult] = await Promise.all([
       api('/api/schedules'),
       api('/api/brain/status').catch(() => null),
+      api('/api/teams').catch(() => null),
     ]);
     if (schedResult.success && Array.isArray(schedResult.schedules)) {
       schedules = schedResult.schedules;
     }
     brainStatus = (brainResult?.success) ? brainResult : null;
+    teamsById = {};
+    if (teamsResult?.success && Array.isArray(teamsResult.teams)) {
+      for (const team of teamsResult.teams) {
+        if (team?.id) teamsById[team.id] = team;
+      }
+    }
     renderScheduleList();
   } catch (err) {
     console.error('Failed to load schedules:', err);
@@ -150,6 +158,8 @@ function _renderBrainCards() {
 // --- CRON JOB CARDS ---------------------------------------------------------
 
 function _renderCronCard(job) {
+  if (job.team_id) return _renderTeamScheduleCard(job);
+
   const enabled    = job.enabled !== false;
   const running    = job.status === 'running';
   const isPaused   = job.status === 'paused';
@@ -201,6 +211,105 @@ function _renderCronCard(job) {
                  border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;
                  cursor:pointer;white-space:nowrap"
           title="Run now">Run Now</button>
+        <button onclick="event.stopPropagation(); deleteSchedule('${job.id}')"
+          style="border:1px solid #ff6b6b;background:#ffe0e0;color:#8b0000;
+                 border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;
+                 cursor:pointer;white-space:nowrap"
+          title="Delete">Delete</button>
+      </div>
+    </div>`;
+}
+
+function _formatMaybeDate(value) {
+  return value ? new Date(value).toLocaleString() : 'Never';
+}
+
+function _formatScheduleSummary(job) {
+  const cron = String(job.cron || job.schedule || '').trim();
+  const runAt = job.run_at || job.runAt;
+  if (runAt) return `One-time run at ${_formatMaybeDate(runAt)}`;
+  const tz = job.timezone || job.tz || 'local time';
+  const parts = cron.split(/\s+/);
+  if (parts.length >= 5) {
+    const [minute, hour, dom, month, dow] = parts;
+    const time = /^(\d+)$/.test(hour) && /^(\d+)$/.test(minute)
+      ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+      : '';
+    if (minute === '0' && hour === '*') return `Every hour (${tz})`;
+    if (/^\*\/\d+$/.test(minute) && hour === '*') return `Every ${minute.slice(2)} minutes (${tz})`;
+    if (time && dom === '*' && month === '*' && dow === '*') return `Every day at ${time} (${tz})`;
+    if (time && dom === '*' && month === '*' && dow === '1-5') return `Weekdays at ${time} (${tz})`;
+    if (time && dom === '*' && month === '*' && dow !== '*') return `Weekly at ${time} (${tz})`;
+    if (time && month === '*' && dow === '*') return `Monthly at ${time} (${tz})`;
+  }
+  return cron ? `${cron} (${tz})` : 'Manual schedule';
+}
+
+function _openScheduledTeam(teamId) {
+  if (typeof window.setMode === 'function') window.setMode('teams');
+  setTimeout(() => {
+    if (typeof window.openTeamBoard === 'function') window.openTeamBoard(teamId);
+  }, 120);
+}
+
+function _renderTeamScheduleCard(job) {
+  const enabled    = job.enabled !== false;
+  const running    = job.status === 'running';
+  const isPaused   = job.status === 'paused';
+  const isDisabled = !enabled;
+  const teamId     = String(job.team_id || '').trim();
+  const team       = teamsById[teamId] || null;
+  const teamName   = team?.name || teamId || 'Team';
+  const memberCount = Array.isArray(team?.subagentIds) ? team.subagentIds.length : null;
+  const purpose = String(team?.purpose || team?.mission || team?.teamContext || team?.description || job.prompt || '').trim();
+  const statusLabel = running ? 'running' : isDisabled ? 'disabled' : isPaused ? 'paused' : 'active';
+  const statusBg    = running ? 'rgba(20,184,166,.16)' : isDisabled ? '#e5e7eb' : isPaused ? '#fff4d6' : '#d9f7ed';
+  const statusTxt   = running ? '#0f766e' : isDisabled ? '#374151' : isPaused ? '#7d5700' : '#066046';
+  const scheduleText = _formatScheduleSummary(job);
+  const nextRun = _formatMaybeDate(job.next_run || job.nextRun);
+  const lastRun = _formatMaybeDate(job.last_run || job.lastRun);
+
+  return `
+    <div style="display:flex;align-items:start;justify-content:space-between;gap:12px;padding:14px;
+                background:linear-gradient(180deg,color-mix(in srgb,#14b8a6 8%,var(--panel)),var(--panel));
+                border:1px solid color-mix(in srgb,#14b8a6 32%,var(--line));border-radius:10px;
+                border-left:3px solid #14b8a6;cursor:pointer"
+         onclick="editSchedule('${job.id}')">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+          <div style="font-weight:800;font-size:13px">${escHtml(job.name || 'Team schedule')}</div>
+          <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:6px;
+                       background:${statusBg};color:${statusTxt}">${statusLabel}</span>
+          <span style="font-size:10px;padding:2px 7px;border-radius:5px;
+                       background:rgba(20,184,166,.14);color:#0f766e;font-weight:800">Team Run</span>
+          ${memberCount !== null ? `<span style="font-size:10px;color:var(--muted);font-weight:700">${memberCount} member${memberCount === 1 ? '' : 's'}</span>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px">
+          <button onclick="event.stopPropagation(); _openScheduledTeam('${escHtml(teamId)}')"
+             title="Open team board"
+             style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(20,184,166,.35);
+                    background:rgba(20,184,166,.10);color:#0f766e;border-radius:999px;padding:3px 10px;
+                    font-size:11px;font-weight:800;cursor:pointer;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+             TEAM ${escHtml(teamName)}</button>
+          <span style="font-size:11px;color:var(--muted);font-weight:700">${escHtml(scheduleText)}</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.45;margin-bottom:8px">
+          Manager wakes first, reads the team goal and memory, then dispatches the right agents for this run.
+          ${purpose ? `<span style="display:block;margin-top:3px">${escHtml(purpose.slice(0, 110))}${purpose.length > 110 ? '...' : ''}</span>` : ''}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px;color:var(--muted);margin-bottom:5px">
+          <div><strong>Next:</strong> ${nextRun}</div>
+          <div><strong>Last:</strong> ${lastRun}</div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);font-family:monospace">team_id: ${escHtml(teamId)}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex-shrink:0;padding-top:2px">
+        ${_toggleHtml(enabled, `toggleJobEnabled('${job.id}', ${!enabled})`)}
+        <button onclick="event.stopPropagation(); runScheduleNow('${job.id}')"
+          style="border:1px solid rgba(20,184,166,.35);background:rgba(20,184,166,.10);color:#0f766e;
+                 border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;
+                 cursor:pointer;white-space:nowrap"
+          title="Start team run now">Run Team</button>
         <button onclick="event.stopPropagation(); deleteSchedule('${job.id}')"
           style="border:1px solid #ff6b6b;background:#ffe0e0;color:#8b0000;
                  border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;
@@ -501,6 +610,8 @@ async function saveSchedule() {
   const channel   = document.getElementById('schedule-channel').value;
   const subagentId = document.getElementById('schedule-subagent').value.trim();
   const pattern   = _resolveSchedulePattern();
+  const currentJob = editingScheduleId ? schedules.find(j => j.id === editingScheduleId) : null;
+  const currentTeamId = String(currentJob?.team_id || '').trim();
 
   const mcpServers = Array.from(
     document.querySelectorAll('#schedule-mcp-checkboxes input[type=checkbox]:checked')
@@ -523,6 +634,7 @@ async function saveSchedule() {
       timezone,
       delivery_channel: channel,
       confirm: true,
+      ...(currentTeamId && !subagentId ? { team_id: currentTeamId } : {}),
       ...(subagentId    ? { subagent_id:      subagentId }    : {}),
       ...(mcpServers.length > 0 ? { mcp_servers: mcpServers } : {}),
       ...(_scheduleRefLinks.length > 0 ? { reference_links: _scheduleRefLinks } : {}),
@@ -594,6 +706,7 @@ window.runBrainNow             = runBrainNow;
 window.runScheduleNow          = runScheduleNow;
 window.onScheduleOccurrenceChange = onScheduleOccurrenceChange;
 window.addScheduleRefLink      = addScheduleRefLink;
+window._openScheduledTeam      = _openScheduledTeam;
 
 // ─── WS Event Handlers ─────────────────────────────────────────
 wsEventBus.on('jobs_update', (msg) => {

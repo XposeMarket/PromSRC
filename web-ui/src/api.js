@@ -26,10 +26,15 @@ function buildApiCandidateUrls(path) {
   if (rawPath.startsWith('/api/')) {
     try {
       const origin = String(window.location?.origin || '').trim();
-      if (/^https?:/i.test(origin)) pushCandidate(origin.replace(/\/$/, '') + rawPath);
+      if (API && /^https?:/i.test(origin)) pushCandidate(origin.replace(/\/$/, '') + rawPath);
     } catch {}
 
-    pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
+    try {
+      const currentOrigin = String(window.location?.origin || '').replace(/\/$/, '');
+      if (currentOrigin !== LOCAL_GATEWAY_ORIGIN) pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
+    } catch {
+      pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
+    }
   }
 
   return candidates;
@@ -51,8 +56,16 @@ function shouldRetryApiRequest(err) {
 export async function api(path, opts = {}) {
   const candidates = buildApiCandidateUrls(path);
   let lastError = null;
-  const timeoutMs = Number(opts.timeoutMs || 30000);
+  const timeoutMs = Number(opts.timeoutMs || 10000);
   const { timeoutMs: _timeoutMs, ...fetchOpts } = opts;
+  const body = fetchOpts.body;
+  const shouldStringifyBody = body
+    && typeof body === 'object'
+    && !(body instanceof FormData)
+    && !(body instanceof Blob)
+    && !(body instanceof ArrayBuffer)
+    && !(body instanceof URLSearchParams);
+  if (shouldStringifyBody) fetchOpts.body = JSON.stringify(body);
 
   for (let index = 0; index < candidates.length; index++) {
     const controller = new AbortController();
@@ -95,6 +108,21 @@ export const ENDPOINTS = {
   BG_TASKS: '/api/bg-tasks',
   bgTask: (id) => `/api/bg-tasks/${id}`,
   bgTaskAction: (id, action) => `/api/bg-tasks/${id}/${action}`,
+  bgTaskSkillProposal: (id) => `/api/bg-tasks/${encodeURIComponent(id)}/skill-proposal`,
+
+  // Processes / command runs
+  PROCESSES: '/api/processes',
+  processRun: (id) => `/api/processes/${encodeURIComponent(id)}`,
+  processRunLog: (id) => `/api/processes/${encodeURIComponent(id)}/log`,
+  processRunAction: (id, action) => `/api/processes/${encodeURIComponent(id)}/${action}`,
+
+  // Coding workspace
+  CODING_SESSION: '/api/coding/session',
+  CODING_STATUS: '/api/coding/status',
+  CODING_DIFF: '/api/coding/diff',
+  CODING_BRANCH: '/api/coding/branch',
+  CODING_STAGE: '/api/coding/stage',
+  CODING_COMMIT: '/api/coding/commit',
 
   // Schedule / Jobs
   JOBS: '/api/jobs',
@@ -125,12 +153,16 @@ export const ENDPOINTS = {
   memoryRecord: (id) => `/api/memory/record/${encodeURIComponent(id)}`,
   MEMORY_CREATE: '/api/memory/create',
   MEMORY_REFRESH: '/api/memory/refresh',
+  OBSIDIAN_STATUS: '/api/obsidian/status',
+  OBSIDIAN_VAULTS: '/api/obsidian/vaults',
+  obsidianVault: (id) => `/api/obsidian/vaults/${encodeURIComponent(id)}`,
+  OBSIDIAN_SYNC: '/api/obsidian/sync',
+  OBSIDIAN_WRITEBACK: '/api/obsidian/writeback',
 
   // Settings
   SETTINGS_PROVIDER: '/api/settings/provider',
   SETTINGS_MODEL: '/api/settings/model',
   SETTINGS_SEARCH: '/api/settings/search',
-  SETTINGS_AGENT: '/api/settings/agent',
   SETTINGS_PATHS: '/api/settings/paths',
   SETTINGS_HEARTBEAT: '/api/settings/heartbeat',
   SETTINGS_HOOKS: '/api/settings/hooks',

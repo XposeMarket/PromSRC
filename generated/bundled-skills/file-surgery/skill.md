@@ -1,10 +1,10 @@
 ---
 name: File Surgery
 description: >
-  Safe, exact file-editing playbook for workspace files, markdown, configs, skills, docs, and other non-source assets. Use this before any file mutation when the user asks to update a file, edit a skill, patch markdown, rewrite config, add a section, fix formatting, remove duplicated text, or inspect and surgically modify workspace content. Triggers on: update this file, edit the markdown, patch the skill, replace these lines, add a section, fix the config, clean up this file, rewrite the doc, apply a file change, or verify a file edit. This skill emphasizes native file tools, line-numbered reads, bottom-to-top edits, and immediate verification; it explicitly avoids shell scripts for file inspection/editing when Prometheus file tools exist.
+  Safe, exact file-editing and cautious coding playbook for workspace files, markdown, configs, skills, docs, scripts, and source-adjacent assets. Use this before any file mutation when the user asks to update a file, edit a skill, patch markdown, rewrite config, add a section, fix formatting, remove duplicated text, inspect code before editing, make a careful code change, or verify a file edit. This skill emphasizes native file tools, line-numbered reads, risk checks, small patches, user-change preservation, bottom-to-top edits, and immediate verification; it explicitly avoids shell scripts for file inspection/editing when Prometheus file tools exist.
 emoji: "🧩"
-version: 2.0.0
-triggers: update file, edit file, patch file, file edit, file surgery, edit markdown, update skill, patch skill, replace lines, add section, remove section, fix config, rewrite document, verify file edit, clean up file
+version: 2.1.0
+triggers: update file, edit file, patch file, file edit, file surgery, edit markdown, update skill, patch skill, replace lines, add section, remove section, fix config, rewrite document, verify file edit, clean up file, careful code edit, inspect before editing, verify build
 ---
 
 # File Surgery Playbook
@@ -13,9 +13,9 @@ Use this when Prometheus needs to inspect, modify, or verify workspace files saf
 
 Core loop:
 
-**STAT → READ/SEARCH → PLAN → EDIT → VERIFY**
+**STAT → READ/SEARCH → RISK CHECK → PLAN → EDIT → VERIFY → REPORT**
 
-Skipping any step is how files get corrupted, duplicated, partially overwritten, or edited with stale assumptions.
+Skipping any step is how files get corrupted, duplicated, partially overwritten, edited with stale assumptions, or changed without enough proof that the patch is correct.
 
 ---
 
@@ -24,6 +24,22 @@ Skipping any step is how files get corrupted, duplicated, partially overwritten,
 For workspace files, use the native file tools. Do **not** use `run_command`, PowerShell, Python, Node one-liners, `sed`, or shell redirection for file inspection or editing when file tools can do the job.
 
 Use shell only for actual process execution, builds, tests, git operations, or a transformation the native file tools genuinely cannot perform.
+
+---
+
+## Coding Ops Addendum
+
+When the file change affects code, scripts, routes, prompts, generated artifacts, or behavior-bearing config, add these constraints to the core loop:
+
+- Understand the current flow before changing it. Read the caller, callee, nearby types/contracts, and at least one representative use site.
+- Preserve user work. Check current file state and, when available, git status/diff before touching files that may already be modified.
+- Prefer the smallest behaviorally complete patch. Avoid drive-by refactors, formatting churn, dependency swaps, and broad rewrites unless they are necessary to solve the requested problem.
+- Match local patterns. Use existing helpers, naming, error handling, logging style, validation conventions, and test structure.
+- Keep generated and source copies in sync only when this repo's structure clearly expects both. If unsure, inspect build/copy scripts before editing both.
+- Verify at the right level: syntax/parse checks for data files, targeted unit checks for isolated logic, build/typecheck for TypeScript changes, and runtime/browser checks for UI behavior.
+- Report any verification you could not run and why. Do not imply safety that was not actually checked.
+
+Escalate or pause before editing when the requested change is ambiguous, touches secrets/auth/payment/destructive data paths, requires deleting user work, or would change broad architecture without an explicit request.
 
 ---
 
@@ -49,7 +65,7 @@ For `src/`, `web-ui/`, or Prometheus root source surfaces, follow the source/pro
 
 ---
 
-## The Five-Step Loop
+## The Seven-Step Loop
 
 ### Step 1: STAT
 
@@ -83,7 +99,17 @@ search_files({ "directory": "skills", "pattern": "old phrase", "file_glob": "*.m
 
 **Never edit from memory or from a prior conversation. Re-read if there is any doubt.**
 
-### Step 3: PLAN the edit
+### Step 3: RISK CHECK
+
+Before planning the mutation, classify the edit:
+
+- Low risk: docs wording, unique text replacement, isolated markdown section.
+- Medium risk: JSON/YAML/config, scripts, generated assets, duplicated source/workspace copies.
+- High risk: `src/`, `web-ui/`, auth/secrets, migrations, scheduling, persistence, external APIs, or anything that can delete/overwrite data.
+
+For medium/high-risk changes, inspect related files and decide the minimum viable verification before editing. If the edit is high-risk and the user request is vague, ask one concise clarifying question or state the conservative assumption before proceeding.
+
+### Step 4: PLAN the edit
 
 Before mutating anything, know:
 
@@ -91,12 +117,15 @@ Before mutating anything, know:
 - Exact line range or exact text to replace
 - The complete replacement content
 - What should remain above and below the edit
+- Current behavior and the local convention you are preserving
+- Expected behavior after the patch
+- Verification command or manual check to run afterward
 - Whether multiple edits must be ordered bottom-to-top
 - Whether a full rewrite is safer than line surgery
 
 If editing multiple non-adjacent line ranges in one file, plan all ranges before executing any and work from the highest line number down.
 
-### Step 4: EDIT with the safest tool
+### Step 5: EDIT with the safest tool
 
 Prefer the smallest safe edit.
 
@@ -163,7 +192,7 @@ write_file({
 
 Do not use `create_file` for an existing file. Use `write_file` only when overwriting is intentional.
 
-### Step 5: VERIFY immediately
+### Step 6: VERIFY immediately
 
 After every mutation, re-read the changed file or exact changed window.
 
@@ -179,8 +208,13 @@ Confirm:
 - No missing headers, frontmatter, braces, or code fences
 - Formatting and indentation survived
 - Version/changelog/metadata were updated if this is a skill or doc upgrade
+- Behavior-bearing edits passed the smallest relevant automated or manual check available
 
 If verification fails, stop and fix the real current file state. Do not continue stacking edits on broken assumptions.
+
+### Step 7: REPORT
+
+Summarize what changed, where it changed, and what verification was performed. If tests/builds were skipped, say exactly why. If there are many unrelated existing git changes, mention only that the workspace was already dirty and your edit was scoped to the requested file(s).
 
 ---
 
@@ -224,7 +258,7 @@ For `.md` and `SKILL.md` files:
 - Preserve YAML frontmatter exactly: opening `---`, closing `---`, valid keys, no tabs.
 - If upgrading a skill, bump `version` and improve `description`/`triggers` if they are weak.
 - Keep skill bodies under ~400 lines unless the topic truly needs more.
-- Verify code fences: every ``` opening has a matching closing fence.
+- Verify code fences: every fenced code block opening has a matching closing fence.
 - Check headings, lists, and tables after editing.
 - Prefer full rewrite for small, old skills when the structure is broadly outdated.
 
@@ -267,9 +301,12 @@ If a file contains secrets, tokens, API keys, credentials, or auth material, loa
 
 For ordinary workspace scripts, use this skill plus extra verification:
 
-- Check imports after edits
-- Visually balance `{}`, `()`, `[]`, template strings, and JSX tags
-- If behavior changed, run the relevant test/build with `run_command` only after file edits are done
+- Read related imports, exported types, call sites, and existing tests before editing.
+- Check imports after edits and remove unused imports only when they are yours or clearly made obsolete by the patch.
+- Visually balance `{}`, `()`, `[]`, template strings, and JSX tags.
+- Preserve error handling and async/concurrency semantics unless the request is specifically to change them.
+- If behavior changed, run the relevant test/build with `run_command` only after file edits are done.
+- If no targeted test exists, run the narrowest available static check or explain the manual verification performed.
 
 For Prometheus product source under `src/` or `web-ui/`, do not directly edit from main chat. Use source inspection, proposal rigor, and approved source-write execution.
 
@@ -288,6 +325,10 @@ For Prometheus product source under `src/` or `web-ui/`, do not directly edit fr
 | Tiny line edit for a structurally broken file | Can leave hidden corruption | Use a careful full rewrite |
 | Skipping verification | Silent corruption survives | Re-read immediately |
 | Editing source files outside proposal flow | Can bypass review/build discipline | Use source/proposal route |
+| Changing code without reading callers | Fix works locally but breaks integration | Read caller/callee/use sites first |
+| Refactoring while fixing a bug | Enlarges blast radius and hides the real change | Make the requested fix, then suggest follow-up refactor separately |
+| Updating one copy of a mirrored skill or asset | Runtime uses the stale copy | Inspect sync/build conventions and update expected mirrors together |
+| Claiming tests passed when they were not run | Gives false confidence | State exactly what ran and what did not |
 
 ---
 

@@ -80,6 +80,8 @@ const MAX_TEAM_CHAT_QUEUE = 8;
 let teamChatAbortControllersByTeam = {}; // teamId -> AbortController
 let teamChatQueueByTeam = {}; // teamId -> [{ content }]
 let teamChatQueueDrainTimers = {}; // teamId -> timer id
+let teamChatPendingFilesByTeam = {}; // teamId -> staged attachment previews before send
+let teamChatFileStagingPromisesByTeam = {}; // teamId -> Promise[]
 let teamDispatchStreamsByTeam = {}; // teamId -> { taskId -> live dispatch bubble state }
 let teamDispatchExpanded = {};      // `${teamId}::${taskId}` -> true
 let teamDispatchTicker = null;
@@ -87,6 +89,8 @@ let teamDispatchRefreshTimers = {}; // teamId -> timeout handle
 let teamManagerStreamsByTeam = {};  // teamId -> { streamId -> live manager turn state }
 let teamMemberStreamsByTeam = {};   // teamId -> { streamId -> live member room turn state }
 let teamChatMentionState = null;
+let teamRunStartPendingByTeam = {}; // teamId -> true while Start Run is waiting for manager stream
+let teamRunAbortInFlightByTeam = {}; // teamId -> true while Pause is requesting abort
 
 function normalizeTeamChatMentionSearch(value) {
   return String(value || '')
@@ -234,18 +238,355 @@ function renderTeamChatTextWithMentions(text, teamOrId, options = {}) {
   return html;
 }
 
-function getLeadingTeamChatTarget(text, teamOrId) {
+const TEAM_CHAT_TEXT_EXTENSIONS = new Set([
+  'txt','md','csv','json','js','ts','jsx','tsx','html','htm','css','scss','less',
+  'py','rb','php','java','c','cpp','h','go','rs','sh','bash','yaml','yml',
+  'toml','ini','cfg','conf','xml','svg','sql','graphql','vue','svelte','log'
+]);
+const TEAM_CHAT_IMAGE_EXTENSIONS = new Set(['png','jpg','jpeg','webp','gif','bmp','ico','svg']);
+const TEAM_CHAT_VIDEO_EXTENSIONS = new Set(['mp4','mov','m4v','webm','avi','mkv','mpeg','mpg','3gp']);
+
+function teamChatJsArg(value) {
+  return JSON.stringify(String(value ?? ''))
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function getTeamChatFiles(teamId) {
+  if (!teamChatPendingFilesByTeam[teamId]) teamChatPendingFilesByTeam[teamId] = [];
+  return teamChatPendingFilesByTeam[teamId];
+}
+
+function getTeamChatStagingPromises(teamId) {
+  if (!teamChatFileStagingPromisesByTeam[teamId]) teamChatFileStagingPromisesByTeam[teamId] = [];
+  return teamChatFileStagingPromisesByTeam[teamId];
+}
+
+function getTeamChatFileIcon(ext) {
+  const e = String(ext || '').toLowerCase();
+  if (TEAM_CHAT_IMAGE_EXTENSIONS.has(e)) return '🖼️';
+  if (TEAM_CHAT_VIDEO_EXTENSIONS.has(e)) return '🎥';
+  if (['mp3','wav','ogg','flac','m4a'].includes(e)) return '🎵';
+  if (e === 'pdf') return '📄';
+  if (['zip','rar','7z','tar','gz'].includes(e)) return '📦';
+  if (['doc','docx'].includes(e)) return '📃';
+  if (['xls','xlsx','csv'].includes(e)) return '📈';
+  if (['ppt','pptx'].includes(e)) return '📊';
+  if (['js','ts','jsx','tsx','py','rb','java','c','cpp','go','rs'].includes(e)) return '💻';
+  if (['html','htm','css','scss'].includes(e)) return '🌐';
+  if (['json','yaml','yml','toml','xml'].includes(e)) return '⚙️';
+  if (['md','txt'].includes(e)) return '📝';
+  return '📎';
+}
+
+function getTeamChatMimeType(ext) {
+  const map = {
+    pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    doc: 'application/msword', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    xls: 'application/vnd.ms-excel', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ppt: 'application/vnd.ms-powerpoint', zip: 'application/zip',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml',
+    mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime', webm: 'video/webm',
+    avi: 'video/x-msvideo', mkv: 'video/x-matroska', mpeg: 'video/mpeg', mpg: 'video/mpeg', '3gp': 'video/3gpp',
+  };
+  return map[String(ext || '').toLowerCase()] || 'application/octet-stream';
+}
+
+function stageTeamChatFiles(teamId, fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  if (!teamId || !files.length) return Promise.resolve([]);
+  const promises = files.map(file => new Promise(resolve => {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (TEAM_CHAT_TEXT_EXTENSIONS.has(ext)) {
+      const reader = new FileReader();
+      reader.onload = e => resolve({ file, name: file.name, ext, text: e.target.result, dataUrl: null, binary: false });
+      reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, base64: null });
+      reader.readAsText(file);
+      return;
+    }
+    if (TEAM_CHAT_IMAGE_EXTENSIONS.has(ext)) {
+      const reader = new FileReader();
+      reader.onload = e => resolve({ file, name: file.name, ext, text: null, dataUrl: e.target.result, binary: false, isImage: true });
+      reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, isImage: true, base64: null });
+      reader.readAsDataURL(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+      const bytes = new Uint8Array(e.target.result);
+      let raw = '';
+      for (let i = 0; i < bytes.byteLength; i++) raw += String.fromCharCode(bytes[i]);
+      resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, base64: btoa(raw), isVideo: TEAM_CHAT_VIDEO_EXTENSIONS.has(ext) });
+    };
+    reader.onerror = () => resolve({ file, name: file.name, ext, text: null, dataUrl: null, binary: true, base64: null });
+    reader.readAsArrayBuffer(file);
+  }));
+  const stagingPromise = Promise.all(promises).then((staged) => {
+    getTeamChatFiles(teamId).push(...staged);
+    renderTeamChatAttachmentStaging(teamId);
+    return staged;
+  }).finally(() => {
+    teamChatFileStagingPromisesByTeam[teamId] = getTeamChatStagingPromises(teamId).filter((p) => p !== stagingPromise);
+  });
+  getTeamChatStagingPromises(teamId).push(stagingPromise);
+  return stagingPromise;
+}
+
+async function waitForTeamChatFileStaging(teamId) {
+  while (getTeamChatStagingPromises(teamId).length) {
+    await Promise.allSettled(getTeamChatStagingPromises(teamId).slice());
+  }
+}
+
+function teamStagedFilesToAttachmentPreviews(stagedFiles) {
+  return (Array.isArray(stagedFiles) ? stagedFiles : []).map((sf) => {
+    if (sf.isImage && sf.dataUrl) {
+      return { kind: 'image', name: sf.name, ext: sf.ext || '', workspacePath: '', dataUrl: sf.dataUrl };
+    }
+    return {
+      kind: sf.isVideo ? 'video' : 'file',
+      name: sf.name,
+      ext: sf.ext || '',
+      workspacePath: '',
+      mimeType: sf.binary || sf.isVideo ? getTeamChatMimeType(sf.ext) : '',
+      binary: !!sf.binary,
+    };
+  });
+}
+
+function teamUploadResultsToAttachmentPreviews(uploadResults) {
+  return (Array.isArray(uploadResults) ? uploadResults : []).map((r) => {
+    if (r.isImage && r.base64 && r.mimeType) {
+      return { kind: 'image', name: r.name, ext: r.ext || '', workspacePath: r.workspacePath || '', dataUrl: `data:${r.mimeType};base64,${r.base64}` };
+    }
+    return {
+      kind: r.isVideo ? 'video' : 'file',
+      name: r.name,
+      ext: r.ext || '',
+      workspacePath: r.workspacePath || '',
+      mimeType: r.mimeType || '',
+      binary: !!r.binary,
+    };
+  });
+}
+
+async function uploadTeamChatStagedFiles(stagedFiles) {
+  if (!Array.isArray(stagedFiles) || !stagedFiles.length) return [];
+  if (typeof window.uploadStagedFilesToCanvas === 'function') {
+    return window.uploadStagedFilesToCanvas(stagedFiles);
+  }
+  const results = [];
+  for (const sf of stagedFiles) {
+    if (sf.text !== null) {
+      try {
+        const r = await fetch('/api/canvas/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: sf.name, content: sf.text })
+        });
+        const d = await r.json();
+        results.push(d.success ? { name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath } : { name: sf.name, ext: sf.ext, error: d.error });
+      } catch (e) {
+        results.push({ name: sf.name, ext: sf.ext, error: e.message });
+      }
+    } else {
+      const base64 = sf.isImage && sf.dataUrl ? sf.dataUrl.replace(/^data:[^;]+;base64,/, '') : sf.base64;
+      const mimeType = sf.isImage && sf.dataUrl ? (sf.dataUrl.split(';')[0].replace('data:', '') || getTeamChatMimeType(sf.ext)) : getTeamChatMimeType(sf.ext);
+      if (!base64) {
+        results.push({ name: sf.name, ext: sf.ext, binary: true, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: 'Could not read file bytes' });
+        continue;
+      }
+      try {
+        const r = await fetch('/api/canvas/upload-binary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: sf.name, base64, mimeType })
+        });
+        const d = await r.json();
+        results.push(d.success
+          ? { name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, base64: sf.isImage ? base64 : undefined, mimeType }
+          : { name: sf.name, ext: sf.ext, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: d.error });
+      } catch (e) {
+        results.push({ name: sf.name, ext: sf.ext, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: e.message });
+      }
+    }
+  }
+  return results;
+}
+
+function buildTeamChatFileContextNote(uploadResults) {
+  if (typeof window.buildFileContextNote === 'function') return window.buildFileContextNote(uploadResults);
+  if (!uploadResults.length) return '';
+  const lines = uploadResults.map((r) => r.workspacePath
+    ? `  - "${r.name}" -> saved to: ${r.workspacePath}`
+    : `  - "${r.name}" - upload failed: ${r.error || 'unknown error'}`);
+  return `\n\n[UPLOADED FILES]\n${lines.join('\n')}\nUse the exact workspace paths above to read, edit, place, or process files.`;
+}
+
+function renderTeamAttachmentPreviews(attachments, ownerId, messageId) {
+  const list = Array.isArray(attachments) ? attachments : [];
+  if (!list.length) return '';
+  return `<div class="team-chat-attachment-list">${list.map((item, idx) => {
+    const name = String(item?.name || 'file');
+    if (item?.kind === 'image' && item.dataUrl) {
+      return `<button type="button" class="team-chat-attachment-thumb" title="${escHtml(name)}" onclick="openTeamChatAttachmentPreview(${teamChatJsArg(ownerId)}, ${teamChatJsArg(messageId)}, ${idx})"><img src="${item.dataUrl}" alt=""></button>`;
+    }
+    return `<button type="button" class="team-chat-attachment-file" title="${escHtml(name)}" onclick="openTeamChatAttachmentPreview(${teamChatJsArg(ownerId)}, ${teamChatJsArg(messageId)}, ${idx})"><span>${getTeamChatFileIcon(item?.ext)}</span><strong>${escHtml(name)}</strong><em>${escHtml(String(item?.ext || 'file'))}</em></button>`;
+  }).join('')}</div>`;
+}
+
+function stripTeamChatUploadNote(text, attachments = []) {
+  const raw = String(text || '');
+  return (attachments && attachments.length ? raw.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '') : raw).trim();
+}
+
+function renderTeamChatAttachmentStaging(teamId) {
+  const staging = document.getElementById('team-chat-file-staging');
+  if (!staging) return;
+  const files = getTeamChatFiles(teamId);
+  if (!files.length) {
+    staging.style.display = 'none';
+    staging.innerHTML = '';
+    return;
+  }
+  staging.style.display = 'flex';
+  staging.innerHTML = files.map((f, idx) => {
+    const preview = f.isImage && f.dataUrl
+      ? `<img src="${f.dataUrl}" style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0" alt="">`
+      : `<span class="pill-icon">${getTeamChatFileIcon(f.ext)}</span>`;
+    return `<div class="chat-file-pill">
+      ${preview}
+      <span class="pill-name" title="${escHtml(f.name)}">${escHtml(f.name)}</span>
+      <span class="pill-ext">${escHtml(f.ext || 'file')}</span>
+      <button class="pill-remove" onclick="removeTeamChatFile(${teamChatJsArg(teamId)}, ${idx})" title="Remove">&times;</button>
+    </div>`;
+  }).join('');
+}
+
+function removeTeamChatFile(teamId, idx) {
+  getTeamChatFiles(teamId).splice(Number(idx), 1);
+  renderTeamChatAttachmentStaging(teamId);
+}
+
+function openTeamChatFilePicker(teamId) {
+  document.getElementById('team-chat-file-input')?.click();
+}
+
+function onTeamChatFilesChosen(teamId, input) {
+  if (!input?.files?.length) return;
+  stageTeamChatFiles(teamId, input.files);
+  input.value = '';
+}
+
+function getTeamChatClipboardFiles(clipboardData) {
+  const files = [];
+  const seen = new Set();
+  const addFile = (file) => {
+    if (!file) return;
+    const key = `${file.name}:${file.size}:${file.type}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(file);
+  };
+  Array.from(clipboardData?.files || []).forEach(addFile);
+  Array.from(clipboardData?.items || []).forEach((item) => {
+    if (!item || item.kind !== 'file') return;
+    try { addFile(item.getAsFile()); } catch {}
+  });
+  return files;
+}
+
+function handleTeamChatPaste(event, teamId) {
+  const files = getTeamChatClipboardFiles(event.clipboardData);
+  if (!files.length) return;
+  const pastedText = event.clipboardData?.getData?.('text/plain') || '';
+  if (!pastedText.trim()) event.preventDefault();
+  stageTeamChatFiles(teamId, files);
+  showToast(files.length === 1 ? 'Attachment staged' : `${files.length} attachments staged`, 'Press Send when you are ready.', 'success');
+}
+
+function bindTeamChatAttachmentListeners(teamId) {
+  const shell = document.getElementById('team-chat-tab-shell');
+  if (!shell || shell.dataset.attachBound === teamId) return;
+  shell.dataset.attachBound = teamId;
+  shell.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    shell.classList.add('team-chat-drag-over');
+  });
+  shell.addEventListener('dragleave', (event) => {
+    if (!shell.contains(event.relatedTarget)) shell.classList.remove('team-chat-drag-over');
+  });
+  shell.addEventListener('drop', (event) => {
+    event.preventDefault();
+    shell.classList.remove('team-chat-drag-over');
+    const files = event.dataTransfer?.files;
+    if (files?.length) stageTeamChatFiles(teamId, files);
+  });
+}
+
+async function openTeamChatAttachmentPreview(teamId, messageId, attachmentIndex) {
+  const message = teamChatMessages.find((entry) => String(entry.id) === String(messageId));
+  const attachment = message?.metadata?.attachmentPreviews?.[Number(attachmentIndex)];
+  if (!attachment) return;
+  await openTeamPanelAttachmentPreview('team-chat-tab-shell', attachment);
+}
+
+async function openTeamPanelAttachmentPreview(containerId, attachment) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  closeTeamPanelAttachmentPreview(containerId);
+  const overlay = document.createElement('div');
+  overlay.className = 'panel-attachment-preview-overlay';
+  overlay.dataset.previewHost = containerId;
+  overlay.innerHTML = `<button type="button" class="panel-attachment-preview-close" title="Close" onclick="closeTeamPanelAttachmentPreview(${teamChatJsArg(containerId)})">&times;</button><div class="panel-attachment-preview-body">Loading...</div>`;
+  host.appendChild(overlay);
+  const body = overlay.querySelector('.panel-attachment-preview-body');
+  const name = String(attachment.name || 'file');
+  try {
+    if (attachment.kind === 'image' && attachment.dataUrl) {
+      body.innerHTML = `<img src="${attachment.dataUrl}" alt="${escHtml(name)}"><div class="panel-attachment-preview-name">${escHtml(name)}</div>`;
+      return;
+    }
+    if (attachment.workspacePath) {
+      const res = await fetch(`/api/canvas/file?path=${encodeURIComponent(attachment.workspacePath)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.isImage && data.base64 && data.mimeType) {
+        body.innerHTML = `<img src="data:${data.mimeType};base64,${data.base64}" alt="${escHtml(name)}"><div class="panel-attachment-preview-name">${escHtml(name)}</div>`;
+      } else if (data.content !== undefined) {
+        body.innerHTML = `<div class="panel-attachment-preview-name">${escHtml(name)}</div><pre>${escHtml(String(data.content || ''))}</pre>`;
+      } else {
+        body.innerHTML = `<div class="panel-attachment-preview-file"><div>${getTeamChatFileIcon(attachment.ext)}</div><strong>${escHtml(name)}</strong><span>${escHtml(attachment.workspacePath)}</span><button type="button" onclick="canvasPresentFile(${teamChatJsArg(attachment.workspacePath)}, ${teamChatJsArg(name)})">Open in Canvas</button></div>`;
+      }
+    } else {
+      body.innerHTML = `<div class="panel-attachment-preview-file"><div>${getTeamChatFileIcon(attachment.ext)}</div><strong>${escHtml(name)}</strong><span>Upload completes when the message sends.</span></div>`;
+    }
+  } catch (err) {
+    body.innerHTML = `<div class="panel-attachment-preview-file"><strong>Preview unavailable</strong><span>${escHtml(String(err?.message || err))}</span></div>`;
+  }
+}
+
+function closeTeamPanelAttachmentPreview(containerId = 'team-chat-tab-shell') {
+  document.querySelectorAll(`#${CSS.escape(containerId)} .panel-attachment-preview-overlay`).forEach((el) => el.remove());
+}
+
+function getTeamChatRouteTarget(text, teamOrId) {
   const raw = String(text || '');
   const trimmed = raw.trimStart();
   const leadingOffset = raw.length - trimmed.length;
   const mentions = findTeamChatMentions(raw, teamOrId);
-  const leading = mentions.find((mention) => mention.start === leadingOffset);
-  if (!leading) return { type: 'team', targetId: '', targetLabel: 'team', routedMessage: raw.trim() };
-  const routedMessage = raw.slice(leading.end).trim() || raw.trim();
+  const explicit = mentions.find((mention) => mention.start === leadingOffset)
+    || mentions.find((mention) => mention?.participant?.type === 'manager' || mention?.participant?.type === 'member');
+  if (!explicit) return { type: 'team', targetId: '', targetLabel: 'team', routedMessage: raw.trim() };
+  const before = raw.slice(0, explicit.start).trimEnd();
+  const after = raw.slice(explicit.end).trimStart();
+  const routedMessage = `${before}${before && after ? ' ' : ''}${after}`.trim() || raw.trim();
   return {
-    type: leading.participant.type,
-    targetId: leading.participant.type === 'member' ? leading.participant.id : '',
-    targetLabel: leading.participant.label,
+    type: explicit.participant.type,
+    targetId: explicit.participant.type === 'member' ? explicit.participant.id : '',
+    targetLabel: explicit.participant.label,
     routedMessage,
   };
 }
@@ -260,10 +601,13 @@ function bindTeamChatInputListeners(input, teamId) {
     refreshTeamChatMentionState(teamId);
   });
   input.addEventListener('keydown', (event) => handleTeamChatInputKeydown(event, teamId));
+  input.addEventListener('paste', (event) => handleTeamChatPaste(event, teamId));
   input.addEventListener('click', () => refreshTeamChatMentionState(teamId));
   input.addEventListener('keyup', () => refreshTeamChatMentionState(teamId));
   input.addEventListener('scroll', () => syncTeamChatInputMirror(teamId));
   syncTeamChatInputMirror(teamId);
+  renderTeamChatAttachmentStaging(teamId);
+  bindTeamChatAttachmentListeners(teamId);
 }
 
 function syncTeamChatInputMirror(teamId) {
@@ -435,21 +779,97 @@ function isTeamChatBusy(teamId) {
   return !!(teamChatStreamingState && teamChatStreamingState.teamId === teamId && teamChatStreamingState.completed !== true);
 }
 
+function hasActiveTeamStream(streamMap) {
+  return Object.values(streamMap || {}).some((stream) => stream && stream.completed !== true);
+}
+
+function isTeamRunWorking(teamId) {
+  if (!teamId) return false;
+  if (teamRunStartPendingByTeam[teamId] === true) return true;
+  if (hasActiveTeamStream(getTeamManagerStreamMap(teamId))) return true;
+  if (hasActiveTeamStream(getTeamMemberStreamMap(teamId))) return true;
+  if (hasActiveTeamStream(getTeamDispatchStreamMap(teamId))) return true;
+  if (teamActiveRunsByTeam[teamId] && Object.keys(teamActiveRunsByTeam[teamId]).length > 0) return true;
+  return isTeamChatBusy(teamId);
+}
+
+function refreshTeamHeaderControls(teamId) {
+  if (activeTeamId !== teamId) return;
+  const startBtn = document.getElementById(`team-start-run-btn-${teamId}`);
+  const pauseBtn = document.getElementById(`team-abort-run-btn-${teamId}`);
+  const working = isTeamRunWorking(teamId);
+  const aborting = teamRunAbortInFlightByTeam[teamId] === true;
+  if (startBtn) {
+    startBtn.textContent = working ? 'Working...' : '▶ Start Run';
+    startBtn.disabled = working || aborting;
+    startBtn.style.opacity = working || aborting ? '0.78' : '1';
+    startBtn.style.cursor = working || aborting ? 'default' : 'pointer';
+  }
+  if (pauseBtn) {
+    pauseBtn.textContent = aborting ? 'Stopping...' : '⏸ Pause';
+    pauseBtn.disabled = aborting;
+    pauseBtn.style.opacity = aborting ? '0.78' : '1';
+    pauseBtn.style.cursor = aborting ? 'default' : 'pointer';
+  }
+}
+
+function configureTeamHeaderRunControls(teamId) {
+  const header = document.getElementById('team-board-header');
+  if (!header) return;
+  const buttons = header.querySelectorAll('button');
+  const startBtn = buttons[0];
+  const pauseBtn = buttons[1];
+  if (startBtn) {
+    startBtn.id = `team-start-run-btn-${teamId}`;
+    startBtn.title = 'Start a manager-coordinated run';
+    startBtn.onclick = () => toggleTeamRunPause(teamId);
+    startBtn.style.border = '1px solid var(--brand)';
+    startBtn.style.background = 'var(--brand)';
+    startBtn.style.color = '#fff';
+  }
+  if (pauseBtn) {
+    pauseBtn.id = `team-abort-run-btn-${teamId}`;
+    pauseBtn.title = 'Abort the current team run and in-flight API calls';
+    pauseBtn.onclick = () => pauseTeam(teamId);
+    pauseBtn.style.color = 'var(--muted)';
+  }
+  refreshTeamHeaderControls(teamId);
+}
+
+function markTeamRunInterruptedLocally(teamId) {
+  const finishStream = (stream) => {
+    if (!stream) return;
+    stream.completed = true;
+    stream.status = stream.status === 'failed' ? stream.status : 'interrupted';
+    stream.finishedAt = Date.now();
+    stream.durationMs = Math.max(Number(stream.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
+    pushTeamDispatchProgressLine(stream, 'Interrupted by user');
+  };
+  Object.values(getTeamManagerStreamMap(teamId)).forEach(finishStream);
+  Object.values(getTeamMemberStreamMap(teamId)).forEach(finishStream);
+  Object.values(getTeamDispatchStreamMap(teamId)).forEach(finishStream);
+  teamActiveRunsByTeam[teamId] = {};
+  delete teamRunStartPendingByTeam[teamId];
+  refreshTeamDispatchTicker();
+  refreshTeamHeaderControls(teamId);
+}
+
 function getTeamChatQueue(teamId, create = false) {
   if (!teamId) return [];
   if (!teamChatQueueByTeam[teamId] && create) teamChatQueueByTeam[teamId] = [];
   return teamChatQueueByTeam[teamId] || [];
 }
 
-function queueTeamChatMessage(teamId, content) {
+function queueTeamChatMessage(teamId, content, files = []) {
   const text = String(content || '').trim();
-  if (!text) return false;
+  const stagedFiles = Array.isArray(files) ? files.slice() : [];
+  if (!text && !stagedFiles.length) return false;
   const queue = getTeamChatQueue(teamId, true);
   if (queue.length >= MAX_TEAM_CHAT_QUEUE) {
     bgtToast('Queue full', 'Wait for the team chat to catch up before adding more.');
     return false;
   }
-  queue.push({ content: text });
+  queue.push({ content: text, files: stagedFiles });
   bgtToast('Queued', 'This will send after the current team turn.');
   return true;
 }
@@ -462,8 +882,8 @@ function scheduleNextTeamQueuedMessage(teamId) {
     delete teamChatQueueDrainTimers[teamId];
     if (teamChatStreamingState && teamChatStreamingState.teamId === teamId) return;
     const next = getTeamChatQueue(teamId).shift();
-    if (!next?.content) return;
-    sendTeamChat(teamId, next.content);
+    if (!next?.content && !next?.files?.length) return;
+    sendTeamChat(teamId, next);
   }, 120);
   refreshTeamChatComposerState(teamId);
 }
@@ -1085,7 +1505,8 @@ function renderTeamChatMessageBubble(message) {
   const isUser = message.from === 'user';
   const label = String(message.fromName || (isUser ? 'You' : message.from === 'manager' ? 'Manager' : 'Subagent'));
   const timeLabel = timeAgo(message.timestamp);
-  const content = String(message.content || '');
+  const attachments = Array.isArray(message?.metadata?.attachmentPreviews) ? message.metadata.attachmentPreviews : [];
+  const content = stripTeamChatUploadNote(message.content || '', attachments);
   const renderedContent = renderTeamChatTextWithMentions(content, activeTeamId, { markdown: !isUser });
   const processHtml = !isUser ? renderTeamChatProcessPill(message.metadata?.processEntries || [], 'team_msg_proc') : '';
   const runMetaBits = [];
@@ -1095,7 +1516,7 @@ function renderTeamChatMessageBubble(message) {
     ? `<div style="margin-top:10px;font-size:10px;color:var(--muted)">${escHtml(runMetaBits.join(' · '))}</div>`
     : '';
   const targetLabel = String(message?.metadata?.targetLabel || '').trim();
-  const targetLine = isUser && targetLabel
+  const targetLine = targetLabel
     ? `<div style="font-size:10px;color:#79c0ff;font-weight:700">to @${escHtml(buildTeamChatHandleLabel(targetLabel))}</div>`
     : '';
   return renderTeamChatBubbleFrame({
@@ -1107,7 +1528,7 @@ function renderTeamChatMessageBubble(message) {
     bubbleBorder: isUser ? '1px solid rgba(125,182,255,0.34)' : '1px solid var(--line)',
     radius: isUser ? '18px 18px 8px 18px' : '18px 18px 18px 8px',
     shadow: isUser ? '0 10px 24px rgba(46,111,255,0.18)' : '0 6px 18px rgba(0,0,0,0.10)',
-    bodyHtml: `<div>${renderedContent}</div>`,
+    bodyHtml: `${renderTeamAttachmentPreviews(attachments, activeTeamId, message.id)}${renderedContent ? `<div>${renderedContent}</div>` : ''}`,
     metaLine: runMetaHtml,
     processHtml,
   });
@@ -1183,6 +1604,7 @@ function renderTeamMemberStreamingBubble(stream) {
 
 function renderTeamChatStreamingBubble(team) {
   if (!teamChatStreamingState || teamChatStreamingState.teamId !== team.id) return '';
+  if (!teamChatStreamingState.managerStarted) return '';
   const progressHtml = Array.isArray(teamChatStreamingState.progressLines) && teamChatStreamingState.progressLines.length
     ? `<div id="team-chat-streaming-progress-lines" style="margin:6px 0 8px 0;font-size:11px;line-height:1.6;color:var(--muted)">
         ${teamChatStreamingState.progressLines.map((line) => `<div>&bull; ${escHtml(line)}</div>`).join('')}
@@ -1208,9 +1630,17 @@ function renderTeamChatStreamingBubble(team) {
   });
 }
 
+function markTeamChatManagerStarted(teamId) {
+  if (!teamChatStreamingState || teamChatStreamingState.teamId !== teamId) return false;
+  if (teamChatStreamingState.managerStarted) return false;
+  teamChatStreamingState.managerStarted = true;
+  return true;
+}
+
 function refreshTeamChatStreamingUI(teamId, force = false) {
   if (!teamChatStreamingState || teamChatStreamingState.teamId !== teamId || activeTeamId !== teamId || teamBoardTab !== 'chat') return;
   refreshTeamChatComposerState(teamId);
+  if (!teamChatStreamingState.managerStarted) return;
   if (force) {
     renderActiveTeamChat(teamId, { forceBottom: true });
   } else {
@@ -2181,6 +2611,8 @@ function renderTeamBoard(teamId) {
   const header = document.getElementById('team-board-header');
   const body = document.getElementById('team-board-body');
   if (!header || !body) return;
+  const runWorking = isTeamRunWorking(teamId);
+  const runAborting = teamRunAbortInFlightByTeam[teamId] === true;
 
   header.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
@@ -2199,10 +2631,15 @@ function renderTeamBoard(teamId) {
       <button onclick="closeTeamBoard()" style="border:0;background:none;font-size:18px;cursor:pointer;color:var(--muted);line-height:1">&#x2715;</button>
     </div>`;
 
+  configureTeamHeaderRunControls(teamId);
+
   // Tabs
   const tabs = ['context','subagents','workspace','memory','runs','chat'];
   const tabLabels = { context:'Context', subagents:'Subagents', workspace:'Workspace', memory:'Memory', runs:'Runs', chat:'Team Chat' };
   const pendingCount = (team.pendingChanges||[]).length;
+  const tabContentStyle = teamBoardTab === 'chat'
+    ? 'flex:1;min-height:0;overflow:hidden;padding:0;display:flex;flex-direction:column;gap:0;position:relative'
+    : 'flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px';
   body.innerHTML = `
     <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 16px;flex-shrink:0;background:var(--panel-2)">
       ${tabs.map(t => `
@@ -2211,7 +2648,7 @@ function renderTeamBoard(teamId) {
           ${tabLabels[t]}${t==='memory'&&pendingCount>0?` <span style="background:#e05c5c;color:#fff;border-radius:999px;font-size:10px;padding:1px 6px">${pendingCount}</span>`:''}
         </button>`).join('')}
     </div>
-    <div id="team-tab-content" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px">
+    <div id="team-tab-content" style="${tabContentStyle}">
       ${renderTeamTabContent(team)}
     </div>`;
 
@@ -3571,20 +4008,27 @@ function renderTeamChatTab(team) {
   const isSending = isTeamChatBusy(team.id);
   const queuedCount = getTeamChatQueue(team.id).length;
   return `
-    <div id="team-chat-messages" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:calc(100% - 80px)">
-      ${_renderTeamChatMessagesInner(team)}
-    </div>
-    <div id="team-chat-composer-shell" style="flex-shrink:0;border-top:1px solid var(--line);padding:12px 0 0;margin-top:10px;display:flex;gap:10px;align-items:flex-end">
-      <div id="team-chat-composer" style="flex:1;position:relative">
-        <div id="team-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;margin-bottom:6px">${queuedCount} queued</div>
-        <div id="team-chat-mention-popover" style="display:none;position:absolute;left:0;right:0;bottom:calc(100% + 10px);z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 38px rgba(0,0,0,0.22);overflow:hidden"></div>
-        <div style="position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden">
-          <div id="team-chat-input-mirror" aria-hidden="true" style="position:absolute;inset:0;padding:12px 14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;pointer-events:none;color:var(--text);overflow:hidden"></div>
-          <div id="team-chat-input-placeholder" style="position:absolute;left:14px;right:14px;top:12px;font-size:13px;line-height:1.6;color:var(--muted);pointer-events:none">${isSending ? 'Queue a message for the team, or use @manager or @someone...' : 'Message the team, or use @manager or @someone...'}</div>
-          <textarea id="team-chat-input" rows="3" spellcheck="true" style="position:relative;z-index:1;width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:transparent;caret-color:var(--text);outline:none;min-height:64px"></textarea>
-        </div>
+    <div id="team-chat-tab-shell" class="panel-chat-shell" style="position:absolute;inset:16px;display:flex;flex-direction:column;min-height:0;box-sizing:border-box">
+      <div id="team-chat-messages" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
+        ${_renderTeamChatMessagesInner(team)}
       </div>
-      <button id="team-chat-send-button" onclick="${isSending ? `abortTeamChat('${team.id}')` : `sendTeamChat('${team.id}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:12px;padding:10px 16px;font-size:12px;font-weight:800;cursor:pointer;height:42px;min-width:64px;box-shadow:${isSending ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)'}">${isSending ? 'Stop' : 'Send'}</button>
+      <div id="team-chat-composer-shell" style="flex:0 0 auto;border-top:1px solid var(--line);padding:12px 0 0;margin-top:10px;display:flex;gap:10px;align-items:flex-end">
+        <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openTeamChatFilePicker(${teamChatJsArg(team.id)})">
+          <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
+        </button>
+        <input id="team-chat-file-input" type="file" multiple style="display:none" onchange="onTeamChatFilesChosen(${teamChatJsArg(team.id)}, this)" />
+        <div id="team-chat-composer" style="flex:1;position:relative">
+          <div id="team-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;margin-bottom:6px">${queuedCount} queued</div>
+          <div id="team-chat-file-staging" class="chat-file-staging panel-chat-file-staging" style="display:none"></div>
+          <div id="team-chat-mention-popover" style="display:none;position:absolute;left:0;right:0;bottom:calc(100% + 10px);z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 38px rgba(0,0,0,0.22);overflow:hidden"></div>
+          <div style="position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden">
+            <div id="team-chat-input-mirror" aria-hidden="true" style="position:absolute;inset:0;padding:12px 14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;pointer-events:none;color:var(--text);overflow:hidden"></div>
+            <div id="team-chat-input-placeholder" style="position:absolute;left:14px;right:14px;top:12px;font-size:13px;line-height:1.6;color:var(--muted);pointer-events:none">${isSending ? 'Queue a message for the team, or use @manager or @someone...' : 'Message the team, or use @manager or @someone...'}</div>
+            <textarea id="team-chat-input" rows="3" spellcheck="true" style="position:relative;z-index:1;width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:transparent;caret-color:var(--text);outline:none;min-height:64px"></textarea>
+          </div>
+        </div>
+        <button id="team-chat-send-button" onclick="${isSending ? `abortTeamChat('${team.id}')` : `sendTeamChat('${team.id}')`}" style="background:${isSending ? '#e05c5c' : 'var(--brand)'};color:#fff;border:none;border-radius:12px;padding:10px 16px;font-size:12px;font-weight:800;cursor:pointer;height:42px;min-width:64px;box-shadow:${isSending ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)'}">${isSending ? 'Stop' : 'Send'}</button>
+      </div>
     </div>`;
 }
 
@@ -3630,14 +4074,23 @@ async function sendTeamChat(teamId, queuedMessage = null) {
   const inp = document.getElementById('team-chat-input');
   const fromQueue = queuedMessage !== null && queuedMessage !== undefined;
   if (!inp && !fromQueue) return;
-  const msg = fromQueue ? String(queuedMessage || '').trim() : String(inp?.value || '').trim();
-  if (!msg) return;
+  await waitForTeamChatFileStaging(teamId);
+  const queuedTurn = fromQueue && typeof queuedMessage === 'object' && !Array.isArray(queuedMessage)
+    ? queuedMessage
+    : { content: queuedMessage, files: [] };
+  const queuedFiles = Array.isArray(queuedTurn.files) ? queuedTurn.files.slice() : [];
+  const filesToUpload = fromQueue ? queuedFiles : getTeamChatFiles(teamId).slice();
+  const rawMsg = fromQueue ? String(queuedTurn.content || '').trim() : String(inp?.value || '').trim();
+  const msg = rawMsg || (filesToUpload.length ? 'Please review the attached file(s).' : '');
+  if (!msg && !filesToUpload.length) return;
 
   if (isTeamChatBusy(teamId)) {
-    const queued = queueTeamChatMessage(teamId, msg);
+    const queued = queueTeamChatMessage(teamId, msg, filesToUpload);
     if (queued && !fromQueue && inp) {
       inp.value = '';
       teamChatDraftByTeam[teamId] = '';
+      teamChatPendingFilesByTeam[teamId] = [];
+      renderTeamChatAttachmentStaging(teamId);
       resizeTeamChatInput();
     }
     hideTeamChatMentionPopover();
@@ -3650,7 +4103,22 @@ async function sendTeamChat(teamId, queuedMessage = null) {
     return;
   }
 
-  const routeTarget = getLeadingTeamChatTarget(msg, teamId);
+  const routeTarget = getTeamChatRouteTarget(msg, teamId);
+  let messageForRuntime = msg;
+  let attachmentPreviews = teamStagedFilesToAttachmentPreviews(filesToUpload);
+  if (!fromQueue) {
+    teamChatPendingFilesByTeam[teamId] = [];
+    renderTeamChatAttachmentStaging(teamId);
+  }
+  if (filesToUpload.length) {
+    const uploadResults = await uploadTeamChatStagedFiles(filesToUpload);
+    const fileContextNote = buildTeamChatFileContextNote(uploadResults);
+    attachmentPreviews = teamUploadResultsToAttachmentPreviews(uploadResults);
+    messageForRuntime = fileContextNote ? `${msg}${fileContextNote}` : msg;
+  }
+  const routedMessage = routeTarget.routedMessage && routeTarget.routedMessage !== msg
+    ? `${routeTarget.routedMessage}${messageForRuntime.slice(msg.length)}`
+    : messageForRuntime;
   if (inp && !fromQueue) inp.value = '';
   if (!fromQueue) teamChatDraftByTeam[teamId] = '';
   hideTeamChatMentionPopover();
@@ -3660,7 +4128,8 @@ async function sendTeamChat(teamId, queuedMessage = null) {
     content: '',
     thinking: '',
     processEntries: [],
-    progressLines: ['Manager is thinking...'],
+    progressLines: [],
+    managerStarted: false,
     completed: false,
     finalReply: '',
     fallbackTimer: null,
@@ -3679,11 +4148,12 @@ async function sendTeamChat(teamId, queuedMessage = null) {
       },
       signal: controller.signal,
       body: JSON.stringify({
-        message: msg,
+        message: messageForRuntime,
         targetType: routeTarget.type,
         targetId: routeTarget.targetId || undefined,
         targetLabel: routeTarget.targetLabel || undefined,
-        routedMessage: routeTarget.routedMessage || msg,
+        routedMessage,
+        attachmentPreviews,
       }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3711,17 +4181,19 @@ async function sendTeamChat(teamId, queuedMessage = null) {
           case 'token': {
             const chunk = String(event.text || '');
             if (chunk) {
+              const becameVisible = markTeamChatManagerStarted(teamId);
               streamState.content = `${streamState.content || ''}${chunk}`;
-              refreshTeamChatStreamingUI(teamId);
+              refreshTeamChatStreamingUI(teamId, becameVisible);
             }
             break;
           }
           case 'thinking_delta': {
             const chunk = String(event.thinking || event.text || '');
             if (chunk) {
+              const becameVisible = markTeamChatManagerStarted(teamId);
               streamState.thinking = `${streamState.thinking || ''}${chunk}`;
               pushTeamChatProgressLine('Thinking...');
-              refreshTeamChatStreamingUI(teamId);
+              refreshTeamChatStreamingUI(teamId, becameVisible);
             }
             break;
           }
@@ -3729,6 +4201,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
           case 'agent_thought': {
             const thought = String(event.thinking || event.text || '').trim();
             if (thought) {
+              markTeamChatManagerStarted(teamId);
               streamState.thinking = streamState.thinking ? `${streamState.thinking}\n\n${thought}` : thought;
               addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
               refreshTeamChatStreamingUI(teamId, true);
@@ -3738,6 +4211,8 @@ async function sendTeamChat(teamId, queuedMessage = null) {
           case 'info': {
             const info = String(event.message || '').trim();
             if (info) {
+              if (/^Broadcasting to team members before manager reply/i.test(info)) break;
+              markTeamChatManagerStarted(teamId);
               pushTeamChatProgressLine(info);
               addTeamChatProcessEntry('info', info, event.actor ? { actor: event.actor } : undefined);
               refreshTeamChatStreamingUI(teamId, true);
@@ -3746,7 +4221,10 @@ async function sendTeamChat(teamId, queuedMessage = null) {
           }
           case 'heartbeat': {
             const heartbeatMsg = String(event.message || event.current_step || event.state || '').trim();
-            if (heartbeatMsg && !/^processing$/i.test(heartbeatMsg)) pushTeamChatProgressLine(heartbeatMsg);
+            if (heartbeatMsg && !/^processing$/i.test(heartbeatMsg)) {
+              markTeamChatManagerStarted(teamId);
+              pushTeamChatProgressLine(heartbeatMsg);
+            }
             refreshTeamChatStreamingUI(teamId);
             break;
           }
@@ -3755,13 +4233,17 @@ async function sendTeamChat(teamId, queuedMessage = null) {
             const activeIndex = Number(event.activeIndex || -1);
             const activeItem = activeIndex >= 0 ? items[activeIndex] : null;
             const activeText = String(activeItem?.text || '').trim();
-            if (activeText) pushTeamChatProgressLine(activeText);
+            if (activeText) {
+              markTeamChatManagerStarted(teamId);
+              pushTeamChatProgressLine(activeText);
+            }
             refreshTeamChatStreamingUI(teamId);
             break;
           }
           case 'tool_call': {
             const action = String(event.action || '').trim();
             if (action) {
+              markTeamChatManagerStarted(teamId);
               const stepNum = Number(event.stepNum || 0);
               const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
               const args = (event.args && typeof event.args === 'object') ? event.args : null;
@@ -3778,6 +4260,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
             const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
             const text = String(event.result || '').trim();
             const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+            markTeamChatManagerStarted(teamId);
             pushTeamChatProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`);
             addTeamChatProcessEntry(ok ? 'result' : 'error', `${stepPrefix}${action} => ${text || '(no output)'}`, event.actor ? { actor: event.actor } : undefined);
             refreshTeamChatStreamingUI(teamId, true);
@@ -3787,6 +4270,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
             const action = String(event.action || '').trim();
             const progressMsg = String(event.message || '').trim();
             if (action && progressMsg) {
+              markTeamChatManagerStarted(teamId);
               pushTeamChatProgressLine(`${action}: ${progressMsg}`);
               addTeamChatProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
               refreshTeamChatStreamingUI(teamId, true);
@@ -3796,6 +4280,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
           case 'final': {
             const reply = String(event.reply || event.text || '').trim();
             if (reply) {
+              markTeamChatManagerStarted(teamId);
               streamState.finalReply = reply;
               if (!streamState.content) streamState.content = reply;
               addTeamChatProcessEntry('final', reply);
@@ -3806,6 +4291,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
           case 'done': {
             const reply = String(event.reply || event.text || '').trim();
             if (reply) {
+              markTeamChatManagerStarted(teamId);
               streamState.finalReply = reply;
               if (!streamState.content) streamState.content = reply;
             }
@@ -3903,8 +4389,11 @@ async function triggerManagerReview(teamId) {
 
 async function runAllTeamAgents(teamId) {
   const team = teamsData.find(t => t.id === teamId);
+  if (team?.manager?.paused) team.manager.paused = false;
   if (team?.manager?.paused) { bgtToast('⏸️ Team paused', 'Resume the team before running agents'); return; }
   try {
+    teamRunStartPendingByTeam[teamId] = true;
+    refreshTeamHeaderControls(teamId);
     const kickoffTaskRaw = String(team?.currentFocus || '').trim();
     const kickoffTask = kickoffTaskRaw || 'N/A';
     bgtToast('🧠 Manager kickoff', 'Manager is reading purpose/task and dispatching the right subagents');
@@ -3920,6 +4409,8 @@ async function runAllTeamAgents(teamId) {
       renderActiveTeamChat(teamId, { forceBottom: true });
     }
   } catch (err) {
+    delete teamRunStartPendingByTeam[teamId];
+    refreshTeamHeaderControls(teamId);
     bgtToast('❌ Run failed', err.message || 'Unknown error');
   }
 }
@@ -3928,6 +4419,8 @@ async function runAllTeamAgents(teamId) {
 async function toggleTeamRunPause(teamId) {
   const team = teamsData.find(t => t.id === teamId);
   if (!team) return;
+  if (isTeamRunWorking(teamId)) return;
+  if (team.manager?.paused) team.manager.paused = false;
   if (team.manager?.paused) {
     // Resume first, then kick off a run
     try {
@@ -4105,7 +4598,7 @@ async function uploadTeamContextFile(teamId, input) {
   input.value = '';
 }
 
-async function pauseTeam(teamId) {
+async function pauseTeamPersistently(teamId) {
   try {
     await api(`/api/teams/${teamId}/pause`, { method:'POST', body: JSON.stringify({ reason: 'Paused from Teams UI' }) });
     await refreshTeams();
@@ -4116,6 +4609,30 @@ async function pauseTeam(teamId) {
     bgtToast('⏸️ Team paused', 'Schedules and manager reviews are paused');
   } catch (err) {
     bgtToast('? Error', err.message || 'Could not pause team');
+  }
+}
+
+async function pauseTeam(teamId) {
+  if (teamRunAbortInFlightByTeam[teamId]) return;
+  teamRunAbortInFlightByTeam[teamId] = true;
+  abortTeamChat(teamId);
+  refreshTeamHeaderControls(teamId);
+  try {
+    const result = await api(`/api/teams/${teamId}/pause`, { method:'POST', body: JSON.stringify({ reason: 'Interrupted by user', abortOnly: true }) });
+    markTeamRunInterruptedLocally(teamId);
+    await refreshTeams();
+    if (activeTeamId === teamId) {
+      await loadTeamBoardData(teamId);
+      markTeamRunInterruptedLocally(teamId);
+      renderTeamBoard(teamId);
+    }
+    bgtToast('Team interrupted', result?.aborted ? `Abort requested for ${result.aborted} live call${result.aborted !== 1 ? 's' : ''}` : 'No live calls were running');
+  } catch (err) {
+    markTeamRunInterruptedLocally(teamId);
+    bgtToast('? Error', err.message || 'Could not interrupt team run');
+  } finally {
+    delete teamRunAbortInFlightByTeam[teamId];
+    refreshTeamHeaderControls(teamId);
   }
 }
 
@@ -4420,6 +4937,7 @@ async function saveCreateTeam() {
 function handleTeamWsEvent(msg) {
   if (msg.type === 'task_running') {
     if (msg.teamId && msg.taskId) {
+      delete teamRunStartPendingByTeam[msg.teamId];
       if (!teamActiveRunsByTeam[msg.teamId]) teamActiveRunsByTeam[msg.teamId] = {};
       teamActiveRunsByTeam[msg.teamId][msg.taskId] = {
         id: `live_${msg.taskId}`,
@@ -4442,6 +4960,7 @@ function handleTeamWsEvent(msg) {
         progressLines: ['Working...'],
       });
       if (activeTeamId === msg.teamId) {
+        refreshTeamHeaderControls(msg.teamId);
         _refreshTeamProgressPanel(msg.teamId);
         refreshVisibleTeamChat(msg.teamId, false);
       }
@@ -4486,6 +5005,7 @@ function handleTeamWsEvent(msg) {
         if (msg.summary && !stream.finalReply) stream.finalReply = String(msg.summary);
       }
       if (activeTeamId === msg.teamId) {
+        refreshTeamHeaderControls(msg.teamId);
         if (teamBoardTab === 'chat') {
           _refreshTeamProgressPanel(msg.teamId);
           refreshVisibleTeamChat(msg.teamId, false);
@@ -4518,6 +5038,7 @@ function handleTeamWsEvent(msg) {
         if (msg.summary && !stream.finalReply) stream.finalReply = String(msg.summary);
       }
       if (activeTeamId === msg.teamId) {
+        refreshTeamHeaderControls(msg.teamId);
         if (teamBoardTab === 'chat') {
           _refreshTeamProgressPanel(msg.teamId);
           refreshVisibleTeamChat(msg.teamId, false);
@@ -4577,12 +5098,14 @@ function handleTeamWsEvent(msg) {
   }
   if (msg.type === 'team_manager_stream_start') {
     if (msg.teamId && msg.streamId) {
+      delete teamRunStartPendingByTeam[msg.teamId];
       ensureTeamManagerStream(msg.teamId, msg.streamId, {
         startedAt: Number(msg.startedAt || Date.now()),
         source: String(msg.source || 'conversation'),
         turn: Number(msg.turn || 1),
         completed: false,
       });
+      refreshTeamHeaderControls(msg.teamId);
       refreshVisibleTeamChat(msg.teamId, false);
     }
   }
@@ -4609,6 +5132,8 @@ function handleTeamWsEvent(msg) {
         stream.finishedAt = Number(msg.completedAt || Date.now());
         stream.durationMs = Math.max(Number(stream.durationMs || 0), Number(msg.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
       }
+      delete teamRunStartPendingByTeam[msg.teamId];
+      refreshTeamHeaderControls(msg.teamId);
       setTimeout(() => {
         const stillThere = getTeamManagerStreamMap(msg.teamId)?.[msg.streamId];
         if (!stillThere) return;
@@ -4620,12 +5145,14 @@ function handleTeamWsEvent(msg) {
   }
   if (msg.type === 'team_member_stream_start') {
     if (msg.teamId && msg.streamId) {
+      delete teamRunStartPendingByTeam[msg.teamId];
       ensureTeamMemberStream(msg.teamId, msg.streamId, {
         agentId: String(msg.agentId || '').trim(),
         agentName: String(msg.agentName || msg.agentId || 'Team Member').trim(),
         startedAt: Number(msg.startedAt || Date.now()),
         completed: false,
       });
+      refreshTeamHeaderControls(msg.teamId);
       refreshVisibleTeamChat(msg.teamId, false);
     }
   }
@@ -4652,6 +5179,7 @@ function handleTeamWsEvent(msg) {
         stream.finishedAt = Number(msg.completedAt || Date.now());
         stream.durationMs = Math.max(Number(stream.durationMs || 0), Number(msg.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
       }
+      refreshTeamHeaderControls(msg.teamId);
       setTimeout(() => {
         const stillThere = getTeamMemberStreamMap(msg.teamId)?.[msg.streamId];
         if (!stillThere) return;
@@ -4917,6 +5445,14 @@ function handleTeamWsEvent(msg) {
   if (msg.type === 'approval_denied' || msg.type === 'approval_expired') {
     if (currentMode === 'approvals' && typeof loadApprovals === 'function') loadApprovals();
   }
+  if (msg.type === 'team_run_aborted') {
+    if (msg.teamId) {
+      markTeamRunInterruptedLocally(msg.teamId);
+      if (activeTeamId === msg.teamId) {
+        loadTeamBoardData(msg.teamId).then(() => renderTeamBoard(msg.teamId));
+      }
+    }
+  }
   if (msg.type === 'team_paused' || msg.type === 'team_resumed' || msg.type === 'team_deleted' || msg.type === 'team_updated' || msg.type === 'team_created') {
     if (msg.type === 'team_paused') bgtToast(`⏸️ ${msg.teamName || 'Team'}`, 'Paused');
     if (msg.type === 'team_resumed') bgtToast(`▶️ ${msg.teamName || 'Team'}`, 'Resumed');
@@ -4991,6 +5527,11 @@ window.renderTeamCharacters = renderTeamCharacters;
 window.sendTeamChat = sendTeamChat;
 window.abortTeamChat = abortTeamChat;
 window.selectTeamChatMention = selectTeamChatMention;
+window.openTeamChatFilePicker = openTeamChatFilePicker;
+window.onTeamChatFilesChosen = onTeamChatFilesChosen;
+window.removeTeamChatFile = removeTeamChatFile;
+window.openTeamChatAttachmentPreview = openTeamChatAttachmentPreview;
+window.closeTeamPanelAttachmentPreview = closeTeamPanelAttachmentPreview;
 window.triggerManagerReview = triggerManagerReview;
 window.runAllTeamAgents = runAllTeamAgents;
 window.toggleTeamRunPause = toggleTeamRunPause;

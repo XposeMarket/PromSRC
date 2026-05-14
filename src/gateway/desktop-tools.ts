@@ -18,6 +18,11 @@ import {
   resolveInstalledAppLaunch,
   resolveInstalledAppLaunchByQuery,
 } from './installed-apps.js';
+import {
+  desktopBackgroundCommand,
+  desktopBackgroundPrepareSandbox,
+  desktopBackgroundStatus,
+} from './desktop-background.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -749,6 +754,10 @@ async function listWindowsInternal(): Promise<DesktopWindowInfo[]> {
 async function activeWindowInternal(): Promise<DesktopWindowInfo | null> {
   const ctx = await gatherDesktopContextInternal();
   return ctx.activeWindow;
+}
+
+export async function getDesktopActiveWindowInfo(): Promise<DesktopWindowInfo | null> {
+  return activeWindowInternal();
 }
 
 /** Lightweight monitor list for coordinate conversion (desktop_click / scroll). */
@@ -3377,6 +3386,12 @@ export async function desktopWindowScreenshot(
   ].join('\n');
 }
 
+export {
+  desktopBackgroundCommand,
+  desktopBackgroundPrepareSandbox,
+  desktopBackgroundStatus,
+};
+
 export function getDesktopToolDefinitions(): any[] {
   return [
     {
@@ -3746,6 +3761,54 @@ export function getDesktopToolDefinitions(): any[] {
         name: 'desktop_diff_screenshot',
         description: 'Describe what changed between the last two desktop screenshots (OCR + window diff). Call desktop_screenshot first.',
         parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_background_status',
+        description:
+          'Check the non-interrupting background desktop setup. Explains why host desktop tools are foreground-only and reports Windows Sandbox/Hyper-V/RDP/bridge readiness.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_background_prepare_sandbox',
+        description:
+          'Create a Windows Sandbox .wsb profile, mapped bridge folder, and PowerShell worker so Prometheus can control an isolated desktop without stealing host mouse/keyboard focus. Pass launch=true to open it.',
+        parameters: {
+          type: 'object',
+          properties: {
+            launch: { type: 'boolean', description: 'Open Windows Sandbox after generating the profile.' },
+            networking: { type: 'string', enum: ['enable', 'disable', 'default'], description: 'Sandbox networking setting.' },
+            vgpu: { type: 'string', enum: ['enable', 'disable', 'default'], description: 'Sandbox virtual GPU setting.' },
+            memory_mb: { type: 'number', description: 'Sandbox memory in MB. Default 4096.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_background_command',
+        description:
+          'Send a command to the isolated background desktop worker through the folder bridge. Supported actions: screenshot, click, type, key, run, wait. This does not target the host desktop.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['screenshot', 'click', 'type', 'key', 'run', 'wait'] },
+            x: { type: 'number', description: 'X coordinate for click inside the background desktop.' },
+            y: { type: 'number', description: 'Y coordinate for click inside the background desktop.' },
+            text: { type: 'string', description: 'Text for type action.' },
+            key: { type: 'string', description: 'PowerShell SendKeys syntax, e.g. {ENTER}, {TAB}, ^s.' },
+            command: { type: 'string', description: 'Command for run action inside the background desktop.' },
+            ms: { type: 'number', description: 'Milliseconds for wait action.' },
+            timeout_ms: { type: 'number', description: 'Milliseconds to wait for worker response.' },
+          },
+        },
       },
     },
     // Window text reader via UI Automation

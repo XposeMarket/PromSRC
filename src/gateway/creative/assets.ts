@@ -13,7 +13,7 @@ export type CreativeAssetStorage = {
   creativeDir: string;
 };
 
-export type CreativeAssetKind = 'image' | 'video' | 'audio' | 'lottie' | 'svg' | 'document' | 'other' | 'remote';
+export type CreativeAssetKind = 'image' | 'video' | 'audio' | 'lottie' | 'svg' | 'model' | 'document' | 'other' | 'remote';
 
 export type CreativeAssetRecord = {
   id: string;
@@ -119,6 +119,8 @@ export function guessCreativeAssetMimeType(filePath: string): string {
     case '.ogg': return 'audio/ogg';
     case '.flac': return 'audio/flac';
     case '.json': return 'application/json';
+    case '.glb': return 'model/gltf-binary';
+    case '.gltf': return 'model/gltf+json';
     case '.pdf': return 'application/pdf';
     default: return 'application/octet-stream';
   }
@@ -132,6 +134,7 @@ export function inferCreativeAssetKind(source: string, mimeType = ''): CreativeA
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
   if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('model/') || ext === '.glb' || ext === '.gltf') return 'model';
   if (ext === '.json') return 'lottie';
   if (mime === 'application/pdf' || ext === '.pdf') return 'document';
   return 'other';
@@ -262,6 +265,63 @@ async function createVideoThumbnail(storage: CreativeAssetStorage, absPath: stri
   }
 }
 
+function parseGltfJson(absPath: string): Record<string, any> | null {
+  try {
+    const ext = path.extname(absPath).toLowerCase();
+    if (ext === '.gltf') return JSON.parse(fs.readFileSync(absPath, 'utf-8'));
+    if (ext !== '.glb') return null;
+    const buffer = fs.readFileSync(absPath);
+    if (buffer.length < 20 || buffer.toString('utf-8', 0, 4) !== 'glTF') return null;
+    const jsonLength = buffer.readUInt32LE(12);
+    const chunkType = buffer.toString('utf-8', 16, 20);
+    if (chunkType !== 'JSON' || jsonLength <= 0 || 20 + jsonLength > buffer.length) return null;
+    return JSON.parse(buffer.toString('utf-8', 20, 20 + jsonLength).trim());
+  } catch {
+    return null;
+  }
+}
+
+function analyzeModelAsset(absPath: string): Record<string, any> {
+  const parsed = parseGltfJson(absPath);
+  if (!parsed) {
+    return {
+      format: path.extname(absPath).toLowerCase().replace(/^\./, '') || 'model',
+      parseError: 'Could not parse GLTF/GLB metadata.',
+    };
+  }
+  let bounds: { min: number[]; max: number[]; size: number[]; maxDimension: number } | null = null;
+  const accessors = Array.isArray(parsed.accessors) ? parsed.accessors : [];
+  for (const accessor of accessors) {
+    if (!Array.isArray(accessor?.min) || !Array.isArray(accessor?.max) || accessor.min.length < 3 || accessor.max.length < 3) continue;
+    const min = accessor.min.slice(0, 3).map((value: any) => Number(value)).filter(Number.isFinite);
+    const max = accessor.max.slice(0, 3).map((value: any) => Number(value)).filter(Number.isFinite);
+    if (min.length !== 3 || max.length !== 3) continue;
+    if (!bounds) {
+      const size = max.map((value: number, index: number) => value - min[index]);
+      bounds = { min, max, size, maxDimension: Math.max(...size.map(Math.abs)) };
+    } else {
+      bounds.min = bounds.min.map((value: number, index: number) => Math.min(value, min[index]));
+      bounds.max = bounds.max.map((value: number, index: number) => Math.max(value, max[index]));
+      bounds.size = bounds.max.map((value, index) => value - bounds!.min[index]);
+      bounds.maxDimension = Math.max(...bounds.size.map(Math.abs));
+    }
+  }
+  return {
+    format: path.extname(absPath).toLowerCase() === '.glb' ? 'glb' : 'gltf',
+    assetVersion: parsed.asset?.version || null,
+    generator: parsed.asset?.generator || null,
+    sceneCount: Array.isArray(parsed.scenes) ? parsed.scenes.length : null,
+    nodeCount: Array.isArray(parsed.nodes) ? parsed.nodes.length : null,
+    meshCount: Array.isArray(parsed.meshes) ? parsed.meshes.length : null,
+    materialCount: Array.isArray(parsed.materials) ? parsed.materials.length : null,
+    textureCount: Array.isArray(parsed.textures) ? parsed.textures.length : null,
+    imageCount: Array.isArray(parsed.images) ? parsed.images.length : null,
+    animationCount: Array.isArray(parsed.animations) ? parsed.animations.length : null,
+    extensionsUsed: Array.isArray(parsed.extensionsUsed) ? parsed.extensionsUsed.slice(0, 40) : [],
+    bounds,
+  };
+}
+
 function normalizeTags(input: any): string[] {
   const tags = Array.isArray(input) ? input : String(input || '').split(',');
   return [...new Set(tags.map((tag) => String(tag || '').trim().toLowerCase()).filter(Boolean))].slice(0, 40);
@@ -300,7 +360,7 @@ export function normalizeCreativeAssetRecord(input: any): CreativeAssetRecord {
   const now = nowIso();
   return {
     id: String(input?.id || assetIdFor(input?.source || input?.path || input?.absPath || now, input?.hash || null)),
-    kind: (['image', 'video', 'audio', 'lottie', 'svg', 'document', 'other', 'remote'].includes(String(input?.kind || '')) ? input.kind : 'other') as CreativeAssetKind,
+    kind: (['image', 'video', 'audio', 'lottie', 'svg', 'model', 'document', 'other', 'remote'].includes(String(input?.kind || '')) ? input.kind : 'other') as CreativeAssetKind,
     name: String(input?.name || path.basename(String(input?.absPath || input?.path || input?.source || 'asset'))),
     ext: String(input?.ext || path.extname(String(input?.name || input?.source || '')).toLowerCase()),
     source: String(input?.source || input?.path || input?.absPath || ''),
@@ -471,6 +531,10 @@ export async function analyzeCreativeAsset(storage: CreativeAssetStorage, option
     }
   }
 
+  if (kind === 'model') {
+    metadata = { model: analyzeModelAsset(resolved.absPath) };
+  }
+
   const record = normalizeCreativeAssetRecord({
     id,
     kind,
@@ -490,7 +554,9 @@ export async function analyzeCreativeAsset(storage: CreativeAssetStorage, option
     frameRate,
     codec,
     hasAlpha,
-    tags: options.tags,
+    tags: kind === 'model'
+      ? normalizeTags([...(Array.isArray(options.tags) ? options.tags : String(options.tags || '').split(',')), '3d', 'model'])
+      : options.tags,
     brandId: options.brandId || null,
     license: options.license || null,
     thumbnailPath,

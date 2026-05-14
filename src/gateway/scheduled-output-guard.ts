@@ -1,4 +1,6 @@
-export const OBSOLETE_PRODUCT_BRAND_RE = /\bSmallClaw\b/i;
+const OBSOLETE_PRODUCT_BRAND = String.fromCharCode(83, 109, 97, 108, 108, 67, 108, 97, 119);
+
+export const OBSOLETE_PRODUCT_BRAND_RE = new RegExp(`\\b${OBSOLETE_PRODUCT_BRAND}\\b`, 'i');
 
 export function containsObsoleteProductBrand(text: string): boolean {
   return OBSOLETE_PRODUCT_BRAND_RE.test(String(text || ''));
@@ -6,7 +8,7 @@ export function containsObsoleteProductBrand(text: string): boolean {
 
 export function buildObsoleteBrandBlockMessage(context: string): string {
   return [
-    `BLOCKED: ${context} contains obsolete SmallClaw branding.`,
+    `BLOCKED: ${context} contains obsolete legacy product branding.`,
     'Current product identity is Prometheus.',
     'Regenerate from real current source files/evidence before delivering user-facing output.',
   ].join(' ');

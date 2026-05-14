@@ -114,6 +114,10 @@ export interface BrowserSessionInfo {
   active: boolean;
   url?: string;
   title?: string;
+  sessionId?: string;
+  originLabel?: string;
+  debugPort?: number;
+  profileDir?: string;
   mode?: BrowserInteractionMode;
   captured?: boolean;
   controlOwner?: BrowserInteractionState['controlOwner'];
@@ -123,6 +127,17 @@ export interface BrowserSessionInfo {
   lastActor?: BrowserInteractionState['lastActor'];
   lastActorSummary?: string;
   recentUserActions?: BrowserUserAction[];
+}
+
+export interface BrowserSessionListEntry extends BrowserSessionInfo {
+  sessionId: string;
+  ownerType: BrowserSessionMetadata['ownerType'];
+  ownerId: string;
+  label: string;
+  taskPrompt: string;
+  spawnerSessionId: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export type BrowserTeachPhase = 'idle' | 'recording' | 'approval_pending' | 'verifying' | 'verified';
@@ -651,13 +666,99 @@ export function getBrowserSessionMetadata(sessionId: string): BrowserSessionMeta
 
 function buildBrowserSessionMetadataPayload(sessionId: string): Record<string, any> {
   const metadata = getBrowserSessionMetadata(sessionId);
+  const originLabel = formatBrowserSessionOriginLabel(sessionId, metadata);
   return {
     browserOwnerType: metadata.ownerType,
     browserOwnerId: metadata.ownerId || '',
-    browserLabel: metadata.label || buildDefaultBrowserLabel(sessionId, metadata.ownerType),
+    browserLabel: metadata.label || originLabel || buildDefaultBrowserLabel(sessionId, metadata.ownerType),
+    browserOriginLabel: originLabel,
     browserTaskPrompt: metadata.taskPrompt || '',
     browserSpawnerSessionId: metadata.spawnerSessionId || '',
   };
+}
+
+function lookupAgentName(agentId: string): string {
+  const id = String(agentId || '').trim();
+  if (!id) return '';
+  try {
+    const agent = (require('../config/config') as typeof import('../config/config')).getAgentById(id) as any;
+    return String(agent?.name || id).trim();
+  } catch {
+    return id;
+  }
+}
+
+function lookupTaskSummary(taskId: string): { title: string; subagentProfile: string; teamAgentId: string; teamId: string } {
+  const id = String(taskId || '').trim();
+  if (!id) return { title: '', subagentProfile: '', teamAgentId: '', teamId: '' };
+  try {
+    const task = (require('./tasks/task-store') as typeof import('./tasks/task-store')).loadTask(id) as any;
+    return {
+      title: String(task?.title || task?.prompt || '').trim(),
+      subagentProfile: String(task?.subagentProfile || '').trim(),
+      teamAgentId: String(task?.teamSubagent?.agentId || task?.agentId || '').trim(),
+      teamId: String(task?.teamSubagent?.teamId || task?.teamId || '').trim(),
+    };
+  } catch {
+    return { title: '', subagentProfile: '', teamAgentId: '', teamId: '' };
+  }
+}
+
+function lookupTeamForAgent(agentId: string): { teamId: string; teamName: string } {
+  const id = String(agentId || '').trim();
+  if (!id) return { teamId: '', teamName: '' };
+  try {
+    const managed = require('./teams/managed-teams') as typeof import('./teams/managed-teams');
+    const team = managed.getTeamForAgent(id) as any;
+    return {
+      teamId: String(team?.id || '').trim(),
+      teamName: String(team?.name || '').trim(),
+    };
+  } catch {
+    return { teamId: '', teamName: '' };
+  }
+}
+
+function parseTeamDispatchAgentId(sessionId: string): string {
+  const match = String(sessionId || '').trim().match(/^team_dispatch_(.+)_\d+$/);
+  return String(match?.[1] || '').trim();
+}
+
+function formatBrowserSessionOriginLabel(sessionId: string, metadata = getBrowserSessionMetadata(sessionId)): string {
+  const sid = String(sessionId || '').trim();
+  const ownerId = String(metadata.ownerId || '').trim();
+  if (metadata.ownerType === 'main') return 'Main Chat';
+  if (metadata.ownerType === 'background') {
+    const suffix = ownerId ? ` ${ownerId}` : '';
+    return `Background agent (background_spawn)${suffix}`;
+  }
+  if (metadata.ownerType === 'task') {
+    const task = lookupTaskSummary(ownerId || sid.replace(/^task_/, ''));
+    if (task.teamAgentId || task.teamId) {
+      const agentId = task.teamAgentId || task.subagentProfile;
+      const team = task.teamId
+        ? (() => {
+            try {
+              const managed = require('./teams/managed-teams') as typeof import('./teams/managed-teams');
+              const t = managed.getManagedTeam(task.teamId) as any;
+              return { teamId: task.teamId, teamName: String(t?.name || task.teamId).trim() };
+            } catch {
+              return { teamId: task.teamId, teamName: task.teamId };
+            }
+          })()
+        : lookupTeamForAgent(agentId);
+      return `Team Subagent (${team.teamName || team.teamId || 'Team'} / ${lookupAgentName(agentId) || agentId || 'agent'})`;
+    }
+    if (task.subagentProfile) return `Subagent (${task.subagentProfile})`;
+    return `Background task${task.title ? ` (${task.title.slice(0, 60)})` : ''}`;
+  }
+  if (metadata.ownerType === 'team-agent') {
+    const agentId = parseTeamDispatchAgentId(sid) || ownerId;
+    const team = lookupTeamForAgent(agentId);
+    return `Team Subagent (${team.teamName || team.teamId || 'Team'} / ${lookupAgentName(agentId) || agentId || 'agent'})`;
+  }
+  if (metadata.ownerType === 'detached') return `Detached browser (${metadata.label || ownerId || sid})`;
+  return metadata.label || buildDefaultBrowserLabel(sid, metadata.ownerType);
 }
 type BrowserLiveStreamFocus = 'passive' | 'interactive';
 type BrowserLiveStreamTransport = 'cdp' | 'snapshot';
@@ -1802,21 +1903,68 @@ function sanitizeBrowserProfileSegment(value: string, fallback: string): string 
 
 function getStableBrowserIdentity(sessionId: string, metadata: BrowserSessionMetadata): string {
   const ownerId = String(metadata.ownerId || '').trim();
+  const teamId = String(metadata.spawnerSessionId || '').trim();
   const sid = String(sessionId || '').trim();
   if (metadata.ownerType === 'team-agent') {
-    const match = sid.match(/^team_dispatch_([^_]+)_/);
-    if (match?.[1]) return `team-${match[1]}`;
+    if (teamId && ownerId) return `team-${teamId}-${ownerId}`;
+    if (ownerId) return `team-${ownerId}`;
+    const roomMatch = sid.match(/^team_room_member_(.+)___AGENT___(.+)$/);
+    if (roomMatch?.[1] && roomMatch?.[2]) return `team-${roomMatch[1]}-${roomMatch[2]}`;
+    const dispatchMatch = sid.match(/^team_dispatch_(.+)_\d+$/);
+    if (dispatchMatch?.[1]) return `team-${dispatchMatch[1]}`;
   }
   if (metadata.ownerType === 'background' && ownerId) return `background-${ownerId}`;
-  if (metadata.ownerType === 'task' && ownerId) return `task-${ownerId}`;
+  if (metadata.ownerType === 'task' && ownerId) {
+    const task = lookupTaskSummary(ownerId || sid.replace(/^task_/, ''));
+    if (task.teamId && task.teamAgentId) return `team-${task.teamId}-${task.teamAgentId}`;
+    if (task.teamAgentId) return `team-${task.teamAgentId}`;
+    return `task-${ownerId}`;
+  }
   if (ownerId && ownerId !== sid) return `${metadata.ownerType}-${ownerId}`;
   return `${metadata.ownerType}-${sid || 'default'}`;
 }
 
+function getPersistentBrowserProfileRoot(): string {
+  return process.env.CHROME_PROFILES_DIR
+    || path.join(os.homedir(), '.prometheus', 'chrome-profiles');
+}
+
 function getPersistentBrowserProfileDir(identity: string): string {
+  return path.join(getPersistentBrowserProfileRoot(), sanitizeBrowserProfileSegment(identity, 'default'));
+}
+
+function getLegacyBrowserIdentities(sessionId: string, metadata: BrowserSessionMetadata): string[] {
+  const ownerId = String(metadata.ownerId || '').trim();
+  const sid = String(sessionId || '').trim();
+  const identities: string[] = [];
+  if (metadata.ownerType === 'team-agent') {
+    if (ownerId) identities.push(`team-${ownerId}`, `team-agent-${ownerId}`);
+    const teamId = String(metadata.spawnerSessionId || '').trim();
+    if (teamId && ownerId) identities.push(`team-${teamId}-${ownerId}`);
+    const dispatchMatch = sid.match(/^team_dispatch_(.+)_\d+$/);
+    if (dispatchMatch?.[1]) identities.push(`team-${dispatchMatch[1]}`);
+  }
+  if (metadata.ownerType === 'task') {
+    const task = lookupTaskSummary(ownerId || sid.replace(/^task_/, ''));
+    if (task.teamAgentId) identities.push(`team-${task.teamAgentId}`, `team-agent-${task.teamAgentId}`);
+    if (task.teamId && task.teamAgentId) identities.push(`team-${task.teamId}-${task.teamAgentId}`);
+  }
+  return Array.from(new Set(identities.filter(Boolean)));
+}
+
+function resolvePersistentBrowserProfileDir(identity: string, sessionId: string, metadata: BrowserSessionMetadata): string {
   const root = process.env.CHROME_PROFILES_DIR
     || path.join(os.homedir(), '.prometheus', 'chrome-profiles');
-  return path.join(root, sanitizeBrowserProfileSegment(identity, 'default'));
+  const primary = path.join(root, sanitizeBrowserProfileSegment(identity, 'default'));
+  if (fs.existsSync(primary)) return primary;
+  for (const legacyIdentity of getLegacyBrowserIdentities(sessionId, metadata)) {
+    const legacy = path.join(root, sanitizeBrowserProfileSegment(legacyIdentity, 'default'));
+    if (legacy !== primary && fs.existsSync(legacy)) {
+      console.log(`[Browser] Reusing legacy persistent profile ${legacy} for stable identity ${identity}`);
+      return legacy;
+    }
+  }
+  return primary;
 }
 
 function getPersistentBrowserPort(identity: string): number {
@@ -1837,7 +1985,7 @@ async function connectOrLaunchPersistentChrome(
     : getPersistentBrowserPort(identity);
   const profileDir = metadata.ownerType === 'main'
     ? (process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile'))
-    : getPersistentBrowserProfileDir(identity);
+    : resolvePersistentBrowserProfileDir(identity, sessionId, metadata);
 
   if (await isPortOpen(debugPort)) {
     try {
@@ -5221,6 +5369,53 @@ export function getBrowserToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'inspect_console',
+        description:
+          'Inspect browser console health for the current page. Installs a lightweight in-page console/error collector on first call, then returns captured logs, errors, warnings, unhandled rejections, URL, and title.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['read', 'clear'], description: 'read returns captured entries; clear empties the collector. Default read.' },
+            max_entries: { type: 'number', description: 'Maximum console entries to return. Default 100.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'run_accessibility_check',
+        description:
+          'Run a lightweight browser accessibility sanity check on the current page: title, lang, images without alt, unlabeled controls, duplicate ids, invalid links, heading order, and low semantic landmarks.',
+        parameters: {
+          type: 'object',
+          properties: {
+            max_results: { type: 'number', description: 'Maximum findings to return. Default 100.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_smoke_test',
+        description:
+          'Open a URL, wait for it to settle, capture a snapshot, inspect console errors, and run the accessibility sanity check in one typed workflow.',
+        parameters: {
+          type: 'object',
+          required: ['url'],
+          properties: {
+            url: { type: 'string', description: 'URL to test, including localhost URLs.' },
+            wait_ms: { type: 'number', description: 'Milliseconds to wait after navigation. Default 1500.' },
+            max_console_entries: { type: 'number', description: 'Maximum console entries to include. Default 50.' },
+            max_a11y_results: { type: 'number', description: 'Maximum accessibility findings. Default 50.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'browser_element_watch',
         description:
           'Wait until a DOM element appears, disappears, or contains specific text — without burning tokens on repeated snapshots. ' +
@@ -6332,11 +6527,15 @@ export async function browserTeachVerify(
 export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
+  const metadata = getBrowserSessionMetadata(resolved);
+  const originLabel = formatBrowserSessionOriginLabel(resolved, metadata);
   const interactionState = browserInteractionStates.get(resolveBrowserInteractionStateId(sessionId));
   const liveStream = browserLiveStreams.get(resolved);
   if (!session) {
     return {
       active: false,
+      sessionId: resolved,
+      originLabel,
       mode: interactionState?.mode,
       captured: interactionState?.captured,
       controlOwner: interactionState?.controlOwner,
@@ -6353,8 +6552,12 @@ export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
     const title = session.lastPageTitle || undefined;
     return {
       active: true,
+      sessionId: resolved,
+      originLabel,
       url,
       title,
+      debugPort: session.debugPort,
+      profileDir: session.profileDir,
       mode: interactionState?.mode,
       captured: interactionState?.captured,
       controlOwner: interactionState?.controlOwner,
@@ -6368,6 +6571,10 @@ export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
   } catch {
     return {
       active: true,
+      sessionId: resolved,
+      originLabel,
+      debugPort: session.debugPort,
+      profileDir: session.profileDir,
       mode: interactionState?.mode,
       captured: interactionState?.captured,
       controlOwner: interactionState?.controlOwner,
@@ -6379,6 +6586,45 @@ export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
       recentUserActions: interactionState?.recentUserActions ? [...interactionState.recentUserActions] : [],
     };
   }
+}
+
+export function listBrowserSessions(): BrowserSessionListEntry[] {
+  const entries: BrowserSessionListEntry[] = [];
+  const seen = new Set<string>();
+  const seenSessionObjects = new Set<BrowserSession>();
+  for (const [sessionId, session] of sessions.entries()) {
+    if (seen.has(sessionId)) continue;
+    if (seenSessionObjects.has(session)) continue;
+    seen.add(sessionId);
+    seenSessionObjects.add(session);
+    const metadata = getBrowserSessionMetadata(sessionId);
+    const info = getBrowserSessionInfo(sessionId);
+    entries.push({
+      ...info,
+      active: true,
+      sessionId,
+      ownerType: metadata.ownerType,
+      ownerId: metadata.ownerId || '',
+      label: metadata.label || '',
+      originLabel: info.originLabel || formatBrowserSessionOriginLabel(sessionId, metadata),
+      taskPrompt: metadata.taskPrompt || '',
+      spawnerSessionId: metadata.spawnerSessionId || '',
+      createdAt: session.createdAt || metadata.createdAt || 0,
+      updatedAt: metadata.updatedAt || session.createdAt || 0,
+      debugPort: session.debugPort,
+      profileDir: session.profileDir,
+    });
+  }
+  return entries.sort((a, b) => {
+    const weight = (entry: BrowserSessionListEntry) => {
+      if (entry.ownerType === 'main') return 0;
+      if (entry.ownerType === 'background') return 1;
+      if (entry.ownerType === 'task') return 2;
+      if (entry.ownerType === 'team-agent') return 3;
+      return 4;
+    };
+    return weight(a) - weight(b) || (b.createdAt || 0) - (a.createdAt || 0);
+  });
 }
 
 async function resolveNamedBrowserElement(

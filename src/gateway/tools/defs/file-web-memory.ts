@@ -609,7 +609,8 @@ export function getFileWebMemoryTools(): any[] {
         name: 'find_replace_source',
         description:
           'Find exact text in a src/ file and replace it. The surgical edit tool for source code changes. ' +
-          'ALWAYS call read_source first to confirm the exact text to find. ' +
+          'Prefer this over line-number edits when possible. ALWAYS call read_source first to confirm the exact text to find. ' +
+          'Edits that would make TypeScript/JavaScript syntax invalid are rejected before writing. ' +
           'Only available in proposal execution sessions. ' +
           'Pass the path relative to src/, e.g. "gateway/terminal-ui.ts".',
         parameters: {
@@ -628,7 +629,8 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'replace_lines_source',
         description:
-          'Replace specific line numbers in a src/ file. Use read_source first to see line numbers. ' +
+          'Replace specific line numbers in a src/ file. Fragile after insertions/deletions; prefer find_replace_source or write_source when possible. Use read_source immediately first to see current line numbers. ' +
+          'Edits that would make TypeScript/JavaScript syntax invalid are rejected before writing. ' +
           'Only available in proposal execution sessions. ' +
           'Pass the path relative to src/, e.g. "gateway/terminal-ui.ts".',
         parameters: {
@@ -647,7 +649,8 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'insert_after_source',
         description:
-          'Insert new lines after a specific line number in a src/ file. Use 0 to insert at beginning. ' +
+          'Insert new lines after a specific line number in a src/ file. Fragile after insertions/deletions; prefer find_replace_source with an exact anchor when possible. Use read_source immediately first. Use 0 to insert at beginning. ' +
+          'Edits that would make TypeScript/JavaScript syntax invalid are rejected before writing. ' +
           'Only available in proposal execution sessions. ' +
           'Pass the path relative to src/, e.g. "gateway/terminal-ui.ts".',
         parameters: {
@@ -665,7 +668,8 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'delete_lines_source',
         description:
-          'Delete specific lines from a src/ file. Use read_source first to see line numbers. ' +
+          'Delete specific lines from a src/ file. Fragile after insertions/deletions; prefer find_replace_source with an exact removable block when possible. Use read_source immediately first to see current line numbers. ' +
+          'Edits that would make TypeScript/JavaScript syntax invalid are rejected before writing. ' +
           'Only available in proposal execution sessions. ' +
           'Pass the path relative to src/, e.g. "gateway/terminal-ui.ts".',
         parameters: {
@@ -684,6 +688,7 @@ export function getFileWebMemoryTools(): any[] {
 	        name: 'write_source',
         description:
           'Create or overwrite a file in src/ directly. Use for deterministic full-file writes, including creating new src files. ' +
+          'For complex TypeScript edits, this can be safer than repeated line surgery after you have read the full file. Syntax-invalid TypeScript/JavaScript is rejected before writing. ' +
           'Only available in proposal execution sessions. ' +
           'Pass the path relative to src/, e.g. "gateway/new-file.ts".',
         parameters: {
@@ -823,10 +828,46 @@ export function getFileWebMemoryTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'web_search',
-        description: 'Search the web for current information. Use web_fetch on result URLs to read full page content.',
+        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers. Use provider to force one engine, or provider:"multi" to force all configured engines. Use web_fetch on result URLs to read full page content.',
         parameters: {
           type: 'object', required: ['query'],
-          properties: { query: { type: 'string', description: 'Search query' } },
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
+            multi_engine: { type: 'boolean', description: 'Default true. When true, queries every configured credentialed provider. Set false to use only the preferred search provider from Settings.' },
+            provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg'], description: 'Optional engine selector. Use multi for every configured engine, or a provider name for a true single-provider search.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'web_search_single',
+        description: 'Search using one provider only. Defaults to the preferred provider from Settings. Use provider to override for testing or provider-specific checks.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            max_results: { type: 'number', description: 'Maximum results to return. Default 5, max 10.' },
+            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg'], description: 'Optional provider override. Omit to use Settings preferred provider.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'web_search_multi',
+        description: 'Search using every configured credentialed provider in parallel, then merge deduplicated results.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
+          },
         },
       },
     },
@@ -838,6 +879,396 @@ export function getFileWebMemoryTools(): any[] {
         parameters: {
           type: 'object', required: ['url'],
           properties: { url: { type: 'string', description: 'Full URL to fetch (from web_search results or any URL)' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_diff',
+        description: 'Show git diff for the workspace or a specific file/path. Use before summarizing edits.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Optional file or directory path to diff.' },
+            staged: { type: 'boolean', description: 'If true, show staged diff. Default false.' },
+            stat: { type: 'boolean', description: 'If true, show diffstat instead of full patch.' },
+            max_chars: { type: 'number', description: 'Maximum characters to return. Default 12000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'preview_patch',
+        description: 'Validate a unified diff patch against workspace files without applying it.',
+        parameters: { type: 'object', required: ['patch'], properties: { patch: { type: 'string', description: 'Unified diff patch text.' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_patch',
+        description: 'Apply a unified diff patch to workspace files after validating target paths.',
+        parameters: {
+          type: 'object', required: ['patch'],
+          properties: {
+            patch: { type: 'string', description: 'Unified diff patch text.' },
+            check: { type: 'boolean', description: 'If true, validate only and do not apply.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'format_changed_files',
+        description: 'Run the project formatter for changed files when a formatter script or prettier is available.',
+        parameters: {
+          type: 'object',
+          properties: {
+            script: { type: 'string', description: 'Optional package.json script name to run. Defaults to format if present.' },
+            check_only: { type: 'boolean', description: 'Run a formatter check when supported instead of writing changes.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'revert_last_tool_change',
+        description: 'Restore files from the most recent snapshot_workspace snapshot. Requires confirm=true.',
+        parameters: {
+          type: 'object',
+          properties: {
+            snapshot_id: { type: 'string', description: 'Optional snapshot id. Defaults to latest.' },
+            confirm: { type: 'boolean', description: 'Must be true to restore files.' },
+            dry_run: { type: 'boolean', description: 'Preview files that would be restored.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'revert_own_patch',
+        description: 'Alias for revert_last_tool_change. Restore files from a snapshot_workspace snapshot. Requires confirm=true.',
+        parameters: {
+          type: 'object',
+          properties: {
+            snapshot_id: { type: 'string', description: 'Optional snapshot id. Defaults to latest.' },
+            confirm: { type: 'boolean', description: 'Must be true to restore files.' },
+            dry_run: { type: 'boolean', description: 'Preview files that would be restored.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'git_status',
+        description: 'Return concise local git status for the workspace or a subdirectory.',
+        parameters: { type: 'object', properties: { cwd: { type: 'string', description: 'Optional working directory inside the workspace.' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'git_diff',
+        description: 'Return local git diff. Supports staged/full/stat options.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Optional pathspec to diff.' },
+            staged: { type: 'boolean', description: 'Show staged diff.' },
+            stat: { type: 'boolean', description: 'Show diffstat.' },
+            max_chars: { type: 'number', description: 'Maximum characters to return. Default 12000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'git_log',
+        description: 'Return recent local git commits.',
+        parameters: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', description: 'Number of commits. Default 10, max 50.' },
+            path: { type: 'string', description: 'Optional pathspec.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'git_branch',
+        description: 'List, create, or switch local git branches. Mutating actions are policy-gated.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', description: 'list, create, or switch. Default list.' },
+            branch: { type: 'string', description: 'Branch name for create/switch.' },
+            start_point: { type: 'string', description: 'Optional start point for create.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'git_commit',
+        description: 'Create a local git commit. Requires message. Use all=true to stage all changed files first.',
+        parameters: {
+          type: 'object', required: ['message'],
+          properties: {
+            message: { type: 'string', description: 'Commit message.' },
+            all: { type: 'boolean', description: 'Stage all modified/deleted files before committing.' },
+            paths: { type: 'array', items: { type: 'string' }, description: 'Optional paths to stage before committing.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'git_push',
+        description: 'Push the current or specified branch to a remote. Mutating and networked.',
+        parameters: {
+          type: 'object',
+          properties: {
+            remote: { type: 'string', description: 'Remote name. Default origin.' },
+            branch: { type: 'string', description: 'Branch name. Defaults to current branch.' },
+            set_upstream: { type: 'boolean', description: 'Add --set-upstream.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'open_pr',
+        description: 'Open a pull request using GitHub CLI if available. Requires a pushed branch.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'PR title.' },
+            body: { type: 'string', description: 'PR body.' },
+            base: { type: 'string', description: 'Base branch.' },
+            draft: { type: 'boolean', description: 'Create as draft PR.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'run_tests',
+        description: 'Run the project test script or a provided test command.',
+        parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, timeout_ms: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'run_linter',
+        description: 'Run the project lint script or an explicit lint command.',
+        parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, timeout_ms: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'run_formatter',
+        description: 'Run the project formatter script or an explicit format command.',
+        parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, timeout_ms: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'run_typecheck',
+        description: 'Run the project typecheck script, build:backend, or tsc --noEmit fallback.',
+        parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, timeout_ms: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'start_dev_server',
+        description: 'Start a long-running dev server process and return a process id for read_process_output/stop_process.',
+        parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, name: { type: 'string' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'stop_process',
+        description: 'Stop a process started by start_dev_server.',
+        parameters: { type: 'object', required: ['process_id'], properties: { process_id: { type: 'string' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_process_output',
+        description: 'Read buffered stdout/stderr from a process started by start_dev_server.',
+        parameters: { type: 'object', required: ['process_id'], properties: { process_id: { type: 'string' }, max_chars: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'snapshot_workspace',
+        description: 'Create a bounded file snapshot of the current workspace for later restore_snapshot/revert_last_tool_change.',
+        parameters: { type: 'object', properties: { label: { type: 'string' }, max_files: { type: 'number' }, max_bytes: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'restore_snapshot',
+        description: 'Restore files from a snapshot_workspace snapshot. Requires confirm=true.',
+        parameters: { type: 'object', properties: { snapshot_id: { type: 'string' }, confirm: { type: 'boolean' }, dry_run: { type: 'boolean' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'scan_secrets',
+        description: 'Scan workspace files for likely secrets/tokens using conservative regexes.',
+        parameters: { type: 'object', properties: { path: { type: 'string' }, max_results: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'scan_large_files',
+        description: 'Find large files in the workspace that may be unsafe to commit or process.',
+        parameters: { type: 'object', properties: { path: { type: 'string' }, min_bytes: { type: 'number' }, max_results: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'operation_plan',
+        description: 'Create a structured dry-run plan for file/git operations. Does not mutate anything.',
+        parameters: { type: 'object', properties: { operations: { type: 'array', items: { type: 'object' } } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'code_outline',
+        description: 'Return a TypeScript/JavaScript AST outline for a file: imports, exports, classes, functions, methods, and constants with line numbers.',
+        parameters: { type: 'object', required: ['file'], properties: { file: { type: 'string' }, max_symbols: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_symbols',
+        description: 'Search TypeScript/JavaScript symbols by name across the workspace.',
+        parameters: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' }, max_results: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'go_to_definition',
+        description: 'Find likely definition locations for a TypeScript/JavaScript symbol.',
+        parameters: { type: 'object', required: ['symbol'], properties: { symbol: { type: 'string' }, path: { type: 'string' }, max_results: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'find_references',
+        description: 'Find references to a symbol across workspace code with file and line numbers.',
+        parameters: { type: 'object', required: ['symbol'], properties: { symbol: { type: 'string' }, path: { type: 'string' }, max_results: { type: 'number' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'copy_file',
+        description: 'Copy one workspace file to another path. Refuses to overwrite unless overwrite=true.',
+        parameters: {
+          type: 'object', required: ['source', 'destination'],
+          properties: {
+            source: { type: 'string', description: 'Source file path relative to workspace root, or absolute path inside allowed paths.' },
+            destination: { type: 'string', description: 'Destination file path relative to workspace root, or absolute path inside allowed paths.' },
+            overwrite: { type: 'boolean', description: 'Allow replacing an existing destination file. Default false.' },
+            create_dirs: { type: 'boolean', description: 'Create missing parent directories. Default true.' },
+            dry_run: { type: 'boolean', description: 'Preview the operation without copying.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'move_file',
+        description: 'Move or rename one workspace file. Refuses to overwrite unless overwrite=true.',
+        parameters: {
+          type: 'object', required: ['source', 'destination'],
+          properties: {
+            source: { type: 'string', description: 'Source file path relative to workspace root, or absolute path inside allowed paths.' },
+            destination: { type: 'string', description: 'Destination file path relative to workspace root, or absolute path inside allowed paths.' },
+            overwrite: { type: 'boolean', description: 'Allow replacing an existing destination file. Default false.' },
+            create_dirs: { type: 'boolean', description: 'Create missing parent directories. Default true.' },
+            dry_run: { type: 'boolean', description: 'Preview the operation without moving.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'copy_directory',
+        description: 'Recursively copy a workspace directory. Refuses to overwrite existing destination contents unless overwrite=true.',
+        parameters: {
+          type: 'object', required: ['source', 'destination'],
+          properties: {
+            source: { type: 'string', description: 'Source directory path relative to workspace root, or absolute path inside allowed paths.' },
+            destination: { type: 'string', description: 'Destination directory path relative to workspace root, or absolute path inside allowed paths.' },
+            overwrite: { type: 'boolean', description: 'Allow replacing existing destination files. Default false.' },
+            dry_run: { type: 'boolean', description: 'Preview affected file counts without copying.' },
+            max_entries: { type: 'number', description: 'Safety cap for recursive copy. Default 2000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'move_directory',
+        description: 'Move or rename a workspace directory. Refuses to overwrite unless overwrite=true.',
+        parameters: {
+          type: 'object', required: ['source', 'destination'],
+          properties: {
+            source: { type: 'string', description: 'Source directory path relative to workspace root, or absolute path inside allowed paths.' },
+            destination: { type: 'string', description: 'Destination directory path relative to workspace root, or absolute path inside allowed paths.' },
+            overwrite: { type: 'boolean', description: 'Allow replacing an existing destination directory. Default false.' },
+            dry_run: { type: 'boolean', description: 'Preview affected file counts without moving.' },
+            max_entries: { type: 'number', description: 'Safety cap for recursive move. Default 2000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'path_exists',
+        description: 'Check whether a workspace path exists and return basic type/stat metadata when it does.',
+        parameters: {
+          type: 'object', required: ['path'],
+          properties: {
+            path: { type: 'string', description: 'Path relative to workspace root, or absolute path inside allowed paths.' },
+          },
         },
       },
     },
@@ -875,18 +1306,44 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'generate_image',
-        description: 'Generate a new raster image from a text prompt using the configured AI image provider/GPT image model such as gpt-image-2. Use this for one-shot image generation, including brand kits, posters, thumbnails, concept art, and requests that reference uploaded files. Saves to generated/images by default.',
+        description: 'Generate a new raster image from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. Use this for one-shot image generation, including brand kits, posters, thumbnails, concept art, and requests that reference uploaded files. Saves to generated/images by default.',
         parameters: {
           type: 'object', required: ['prompt'],
           properties: {
             prompt: { type: 'string', description: 'Text prompt describing the image to generate' },
-            reference_images: { type: 'array', items: { type: 'string' }, maxItems: 16, description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs. These are sent as actual image inputs for gpt-image-2 reference/edit generation.' },
+            reference_images: { type: 'array', items: { type: 'string' }, maxItems: 16, description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs. These are sent as actual image inputs for supported reference/edit generation.' },
             aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired image aspect ratio' },
             count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many images to generate at once' },
-            provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex'], description: 'Optional image provider override' },
-            model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium' },
+            provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Optional image provider override. Use xai for Grok Imagine.' },
+            model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/images' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'generate_video',
+        description: 'Generate a short raster video using a configured AI video provider such as xAI Grok Imagine Video. Use this for one-shot text-to-video, image-to-video, reference-to-video, video editing, or video extension when the user wants an AI-generated MP4 rather than an editable timeline project. Saves to generated/videos by default.',
+        parameters: {
+          type: 'object', required: ['prompt'],
+          properties: {
+            prompt: { type: 'string', description: 'Text prompt describing the video to generate, edit, or extend' },
+            image: { type: 'string', description: 'Optional source image path, URL, or data URL for image-to-video' },
+            reference_images: { type: 'array', items: { type: 'string' }, maxItems: 7, description: 'Optional reference images as local/workspace paths, HTTPS URLs, or data URLs for reference-to-video' },
+            video: { type: 'string', description: 'Optional source video path, URL, or data URL for edit/extend modes' },
+            mode: { type: 'string', enum: ['generate', 'edit', 'extend'], description: 'Video request mode. Defaults to generate, or edit when video is provided.' },
+            aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired video aspect ratio' },
+            duration: { type: 'integer', minimum: 1, maximum: 15, description: 'Video duration in seconds. xAI supports 1-15 for generation, max 10 for reference/extension.' },
+            resolution: { type: 'string', enum: ['480p', '720p'], description: 'Video resolution' },
+            provider: { type: 'string', enum: ['auto', 'xai'], description: 'Optional video provider override. Use xai for Grok Imagine Video.' },
+            model: { type: 'string', description: 'Optional video model override, e.g. grok-imagine-video' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/videos' },
+            save_to_workspace: { type: 'boolean', description: 'If false, keep the video only in Prometheus cache' },
+            poll_interval_ms: { type: 'integer', minimum: 1000, maximum: 30000, description: 'Optional polling interval in milliseconds' },
+            timeout_ms: { type: 'integer', minimum: 30000, maximum: 1800000, description: 'Optional generation timeout in milliseconds' },
           },
         },
       },
@@ -972,7 +1429,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_search',
-        description: 'Search long-term memory with layered retrieval: (1) exact ID/key lookup, (2) operational layer — canonical decisions, preferences, proposals, task_outcomes, project_facts extracted from audit history, (3) evidence fallback — raw indexed session/transcript chunks. Operational records lead results; evidence fills remaining slots. Hits include layer ("operational"|"evidence"), recordType, canonicalKey, and whyMatched fields. Use record_id from hits with memory_read_record to fetch full record.',
+          description: 'Search long-term memory with SQLite/FTS/vector hybrid retrieval when available, falling back to the JSON index. Results blend exact/FTS recall, operational records (canonical decisions, preferences, proposals, task_outcomes, project_facts), semantic vectors, recency, durability, authority, status/supersession, and evidence chunks. Hits include layer ("operational"|"evidence"), recordType, canonicalKey, whyMatched, and citation/source span fields. Use record_id from hits with memory_read_record to fetch full record.',
         parameters: {
           type: 'object',
           required: ['query'],
@@ -983,7 +1440,7 @@ export function getFileWebMemoryTools(): any[] {
             project_id: { type: 'string', description: 'Filter results to a specific project ID.' },
             date_from: { type: 'string', description: 'Lower date bound YYYY-MM-DD or ISO timestamp (evidence layer only).' },
             date_to: { type: 'string', description: 'Upper date bound YYYY-MM-DD or ISO timestamp (evidence layer only).' },
-            source_types: { type: 'array', items: { type: 'string' }, description: 'Source type filter (skips operational layer when set). Types: chat_session, chat_transcript, chat_compaction, task_state, proposal_state, memory_root, project_state, etc.' },
+            source_types: { type: 'array', items: { type: 'string' }, description: 'Source type filter (skips operational layer when set). Types: chat_session, chat_transcript, chat_compaction, task_state, proposal_state, memory_root, memory_note, obsidian_note, project_state, etc.' },
             min_durability: { type: 'number', description: 'Minimum durability 0..1 (evidence layer only).' },
           },
         },
@@ -1072,6 +1529,131 @@ export function getFileWebMemoryTools(): any[] {
           type: 'object',
           required: [],
           properties: {},
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_provider_status',
+        description: 'Show configured memory backends and their capabilities/status: sqlite-local, Obsidian adapter slot, external-vector adapter slot, and cloud-memory adapter slot.',
+        parameters: { type: 'object', required: [], properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_embedding_status',
+        description: 'Show memory embedding provider preference, active provider, and availability for OpenAI, Ollama, LM Studio, Voyage, Jina, and hash fallback.',
+        parameters: { type: 'object', required: [], properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_embedding_backfill',
+        description: 'Backfill stored memory embeddings with a real provider when available. Keeps hash vectors as fallback. Use after configuring OpenAI/Ollama/LM Studio/Voyage/Jina embedding credentials.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            provider: { type: 'string', description: 'Optional provider override: openai, ollama, lmstudio, voyage, jina, hash.' },
+            limit: { type: 'number', description: 'Maximum records to backfill this run. Default 500.' },
+            force: { type: 'boolean', description: 'Recompute even if a non-hash embedding already exists.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_debug_search',
+        description: 'Run memory search with first-class diagnostics explaining why each hit appeared: FTS score, vector score, authority, recency, temporal decay, durability, status, source, and MMR score.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string', description: 'Memory search query.' },
+            mode: { type: 'string', description: 'quick, deep, project, or timeline.' },
+            limit: { type: 'number', description: 'Maximum hits. Default 12.' },
+            project_id: { type: 'string', description: 'Optional project filter.' },
+            rerank: { type: 'boolean', description: 'Set false to disable MMR reranking.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_consolidate',
+        description: 'Extract durable memory claims from recent audit/session/task/project evidence. Produces reviewable claims; auto_accept only accepts high-confidence explicit user/correction claims.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            max_sources: { type: 'number', description: 'Maximum source files to scan. Default 120.' },
+            max_claims: { type: 'number', description: 'Maximum proposed claims. Default 80.' },
+            auto_accept: { type: 'boolean', description: 'Automatically accept only high-confidence explicit user facts/corrections.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_review_claims',
+        description: 'List proposed/accepted/rejected/superseded curated memory claims for human or agent review.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            status: { type: 'string', description: 'Claim status to list. Default proposed.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_accept_claim',
+        description: 'Accept a proposed memory claim and write it as durable indexed memory evidence.',
+        parameters: {
+          type: 'object',
+          required: ['claim_id'],
+          properties: {
+            claim_id: { type: 'string', description: 'Claim id from memory_review_claims or memory_consolidate.' },
+            note: { type: 'string', description: 'Optional review note.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_reject_claim',
+        description: 'Reject a proposed memory claim so it is not promoted into durable memory.',
+        parameters: {
+          type: 'object',
+          required: ['claim_id'],
+          properties: {
+            claim_id: { type: 'string', description: 'Claim id from memory_review_claims or memory_consolidate.' },
+            note: { type: 'string', description: 'Optional review note.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'memory_supersede_record',
+        description: 'Mark a proposed/accepted curated memory claim as superseded. Use when newer evidence replaces an older claim.',
+        parameters: {
+          type: 'object',
+          required: ['claim_id'],
+          properties: {
+            claim_id: { type: 'string', description: 'Claim id to supersede.' },
+            note: { type: 'string', description: 'Optional supersession note.' },
+          },
         },
       },
     },

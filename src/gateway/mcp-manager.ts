@@ -92,10 +92,11 @@ export class MCPManager {
   /**
    * Resolve vault: references in an env map.
    * Values like "vault:integrations.github.pat" are decrypted at spawn time.
-   * Missing or expired vault entries are skipped with a warning (never crash the spawn).
+   * Missing or expired vault entries fail the MCP connection before spawning.
    */
-  private resolveEnvSecrets(env: Record<string, string>): Record<string, string> {
+  private resolveEnvSecrets(env: Record<string, string>): { env: Record<string, string>; missingRefs: string[] } {
     const out: Record<string, string> = {};
+    const missingRefs: string[] = [];
     let vault: SecretVault | null = null;
 
     for (const [k, v] of Object.entries(env)) {
@@ -107,16 +108,18 @@ export class MCPManager {
           if (secret) {
             out[k] = secret.expose();
           } else {
+            missingRefs.push(`${k}=${v}`);
             log.warn(`[MCP] vault ref "${v}" for env var "${k}" not found — skipping`);
           }
         } catch (e: any) {
+          missingRefs.push(`${k}=${v}`);
           log.warn(`[MCP] Failed to resolve vault ref "${v}": ${e.message}`);
         }
       } else {
         out[k] = v;
       }
     }
-    return out;
+    return { env: out, missingRefs };
   }
 
   static normalizeTransport(raw: any): MCPTransport {
@@ -345,7 +348,13 @@ export class MCPManager {
       try {
         // HIGH-04: resolve vault: refs, then sanitize env vars
         const resolvedEnv = this.resolveEnvSecrets(cfg.env || {});
-        const safeUserEnv = MCPManager.sanitizeEnv(resolvedEnv);
+        if (resolvedEnv.missingRefs.length > 0) {
+          session.status = 'error';
+          session.error = `Missing vault secret(s): ${resolvedEnv.missingRefs.join(', ')}`;
+          resolve({ success: false, error: session.error });
+          return;
+        }
+        const safeUserEnv = MCPManager.sanitizeEnv(resolvedEnv.env);
         const env = { ...process.env, ...safeUserEnv };
 
         // CRIT-02: shell: false always — args are passed as a list, not a shell string.
@@ -453,11 +462,16 @@ export class MCPManager {
 
     try {
       const resolvedHeaders = this.resolveEnvSecrets(cfg.headers || {});
+      if (resolvedHeaders.missingRefs.length > 0) {
+        session.status = 'error';
+        session.error = `Missing vault secret(s): ${resolvedHeaders.missingRefs.join(', ')}`;
+        return { success: false, error: session.error };
+      }
       const baseHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/event-stream',
         'MCP-Protocol-Version': MCP_PROTOCOL_VERSION,
-        ...resolvedHeaders,
+        ...resolvedHeaders.env,
       };
       // Debug logging
       const headerKeys = Object.keys(baseHeaders).filter(k => k !== 'Content-Type' && k !== 'Accept' && k !== 'MCP-Protocol-Version');

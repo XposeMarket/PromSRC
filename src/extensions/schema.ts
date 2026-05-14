@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ExtensionDescriptor } from './types.js';
 
 const ExtensionKindSchema = z.enum(['provider', 'connector', 'mcp_preset']);
+const ExtensionTrustLevelSchema = z.enum(['core', 'bundled', 'local', 'third_party', 'marketplace']);
 const ExtensionSetupFieldInputSchema = z.enum([
   'text',
   'password',
@@ -50,12 +51,33 @@ export const ExtensionDescriptorSchema = z.object({
   kind: ExtensionKindSchema,
   name: z.string().min(1),
   description: z.string().min(1),
+  trustLevel: ExtensionTrustLevelSchema.optional(),
   category: z.string().optional(),
   enabledByDefault: z.boolean().optional(),
   docsUrl: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  activation: z
+    .object({
+      onStartup: z.boolean().optional(),
+      whenToolsRequested: z.array(z.string()).optional(),
+      whenCapabilityRequested: z.array(z.string()).optional(),
+      whenConnected: z.boolean().optional(),
+    })
+    .optional(),
+  contracts: z
+    .object({
+      tools: z.array(z.string()).optional(),
+      capabilities: z.array(z.string()).optional(),
+      connectors: z.array(z.string()).optional(),
+      providers: z.array(z.string()).optional(),
+      mcpPresets: z.array(z.string()).optional(),
+      memorySources: z.array(z.string()).optional(),
+      contextProviders: z.array(z.string()).optional(),
+    })
+    .optional(),
   runtime: z.object({
     binding: z.string().min(1),
+    entrypoint: z.string().min(1).optional(),
     options: ExtensionRuntimeOptionsSchema.optional(),
   }),
   ui: z

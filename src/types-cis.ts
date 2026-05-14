@@ -92,7 +92,7 @@ export interface AuditLogEntry {
   /** Policy tier that was applied */
   policyTier?: 'read' | 'propose' | 'commit';
   /** Approval status if commit-tier */
-  approvalStatus?: 'auto' | 'approved' | 'rejected' | 'pending';
+  approvalStatus?: 'auto' | 'auto_allowed' | 'approved' | 'rejected' | 'pending';
   /** Brief summary of what happened */
   resultSummary?: string;
   /** Error message if the action failed */

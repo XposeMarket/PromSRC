@@ -11,6 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { ToolResult } from '../types.js';
+import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from '../gateway/scheduling/schedule-agent';
 
 // ─── Dependency injection (set from server-v2 at boot) ─────────────────────────
 
@@ -231,6 +232,7 @@ export const scheduleJobTool = {
   name: 'schedule_job',
   description:
     'Manage scheduled cron jobs and run agents immediately. ' +
+    'Cron jobs are schedule-owner-subagent backed by default; create/update auto-assigns a dedicated owner when needed. ' +
     'IMPORTANT: For agents in the Agents panel (like "news_harvester_v1"), use action="run_now" ' +
     'with agent_id — NOT job_id. Cron jobs on the Tasks page have job IDs like "job_xxxxx". ' +
     'Actions: run_now, list, create, update, delete.',
@@ -242,6 +244,7 @@ export const scheduleJobTool = {
     name: 'Job name (for create)',
     prompt: 'Job prompt (for create)',
     schedule: 'Cron expression e.g. "0 9 * * *" (for create/update)',
+    team_id: 'Managed team ID. If set, the schedule wakes the team manager first and the manager dispatches agents from the team goal.',
     enabled: 'true/false (for update)',
   },
   jsonSchema: {
@@ -258,6 +261,7 @@ export const scheduleJobTool = {
       name: { type: 'string' },
       prompt: { type: 'string' },
       schedule: { type: 'string' },
+      team_id: { type: 'string' },
       enabled: { type: 'boolean' },
     },
     additionalProperties: false,
@@ -340,6 +344,8 @@ export const scheduleJobTool = {
       if (!_cronScheduler) return { success: false, error: 'Scheduler not initialized' };
       const name = String(args?.name || '').trim();
       const prompt = String(args?.prompt || '').trim();
+      const teamId = String(args?.team_id || '').trim();
+      if (teamId && !_getManagedTeam?.(teamId)) return { success: false, error: `Team "${teamId}" not found` };
       if (!name || !prompt) return { success: false, error: 'name and prompt are required for create' };
       const job = _cronScheduler.createJob({
         name,
@@ -347,8 +353,41 @@ export const scheduleJobTool = {
         schedule: args?.schedule || '0 9 * * *',
         enabled: args?.enabled !== false,
         type: 'recurring',
+        sessionTarget: 'isolated',
+        team_id: teamId || undefined,
+        assignmentTarget: teamId ? 'team' : 'main',
+        deliverToMainChannel: !teamId,
       });
-      return { success: true, stdout: `Created job "${job.name}" (${job.id}). Next run: ${job.nextRun}`, data: job };
+      if (teamId) {
+        return {
+          success: true,
+          stdout: `Created team schedule "${job.name}" (${job.id}) for team "${teamId}". Next run: ${job.nextRun}`,
+          data: job,
+        };
+      }
+      const owner = ensureScheduleOwnerAgent({
+        scheduleId: job.id,
+        scheduleName: job.name,
+        prompt: job.prompt,
+        model: job.model,
+      });
+      ensureScheduleRuntimeForAgent(owner.agentId, {
+        scheduleId: job.id,
+        scheduleName: job.name,
+        prompt: job.prompt,
+        model: job.model,
+      });
+      const updated = _cronScheduler.updateJob(job.id, {
+        subagent_id: owner.agentId,
+        sessionTarget: 'isolated',
+        assignmentTarget: 'main',
+        deliverToMainChannel: true,
+      }) || job;
+      return {
+        success: true,
+        stdout: `Created job "${updated.name}" (${updated.id}) and assigned schedule owner "${owner.agentId}". Next run: ${updated.nextRun}`,
+        data: updated,
+      };
     }
 
     // ── update ───────────────────────────────────────────────────────────────
@@ -361,9 +400,44 @@ export const scheduleJobTool = {
       if (args?.prompt !== undefined) updates.prompt = args.prompt;
       if (args?.enabled !== undefined) updates.enabled = Boolean(args.enabled);
       if (args?.name !== undefined) updates.name = args.name;
-      const updated = _cronScheduler.updateJob(jobId, updates);
+      if (args?.team_id !== undefined) {
+        const teamId = String(args.team_id || '').trim();
+        if (teamId && !_getManagedTeam?.(teamId)) return { success: false, error: `Team "${teamId}" not found` };
+        updates.team_id = teamId || undefined;
+        if (teamId) {
+          updates.subagent_id = undefined;
+          updates.assignmentTarget = 'team';
+          updates.deliverToMainChannel = false;
+        }
+      }
+      updates.sessionTarget = 'isolated';
+      let updated = _cronScheduler.updateJob(jobId, updates);
       if (!updated) return { success: false, error: `Job "${jobId}" not found` };
-      return { success: true, stdout: `Updated job "${updated.name}" (${updated.id})`, data: updated };
+      if (String(updated.team_id || '').trim()) {
+        return { success: true, stdout: `Updated team schedule "${updated.name}" (${updated.id}) for team "${updated.team_id}".`, data: updated };
+      }
+      const existingOwnerId = String(updated.subagent_id || '').trim();
+      const owner = existingOwnerId
+        ? { agentId: existingOwnerId, created: false }
+        : ensureScheduleOwnerAgent({
+            scheduleId: updated.id,
+            scheduleName: updated.name,
+            prompt: updated.prompt,
+            model: updated.model,
+          });
+      ensureScheduleRuntimeForAgent(owner.agentId, {
+        scheduleId: updated.id,
+        scheduleName: updated.name,
+        prompt: updated.prompt,
+        model: updated.model,
+      });
+      updated = _cronScheduler.updateJob(updated.id, {
+        subagent_id: owner.agentId,
+        sessionTarget: 'isolated',
+        assignmentTarget: owner.created ? 'main' : updated.assignmentTarget,
+        deliverToMainChannel: owner.created ? true : updated.deliverToMainChannel,
+      }) || updated;
+      return { success: true, stdout: `Updated job "${updated.name}" (${updated.id}) with schedule owner "${owner.agentId}".`, data: updated };
     }
 
     // ── delete ───────────────────────────────────────────────────────────────

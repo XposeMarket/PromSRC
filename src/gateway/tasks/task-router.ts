@@ -421,6 +421,8 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       kind: 'scheduled_job',
       name: j.name,
       schedule: j.schedule || null,
+      team_id: j.team_id || null,
+      subagent_id: j.subagent_id || null,
       type: j.type,
       status: j.status,
       enabled: j.enabled,

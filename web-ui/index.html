@@ -1857,6 +1857,12 @@
       </div>
     </div><!-- end nav-group -->
 
+    <!-- PINNED CHATS (sits between More and Sessions) -->
+    <div class="sidebar-section" id="sidebar-pinned-section" style="display:none">
+      <div class="section-title">Pinned Chats</div>
+      <div id="pinned-chats-list" class="session-list"></div>
+    </div>
+
     <!-- SESSION SECTION (only shown in chat mode) -->
     <div class="sidebar-section" id="sidebar-sessions-section">
       <div class="section-title">Sessions</div>
@@ -2035,6 +2041,7 @@
         <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
       </div>
     </div>
+    <div id="main-goal-strip" class="main-goal-strip" style="display:none"></div>
 
     <div class="chat-input-area">
       <!-- Queued prompts panel -->
@@ -2049,6 +2056,7 @@
       <div id="chat-design-selection-pills" class="chat-file-staging" style="display:none"></div>
       <!-- Staged file pills (appear above input row) -->
       <div id="chat-file-staging" class="chat-file-staging" style="display:none"></div>
+      <div id="chat-slash-command-popover" class="chat-slash-command-popover" style="display:none"></div>
       <!-- Hidden file input -->
       <input type="file" id="chat-file-input" multiple style="display:none" onchange="onChatFileInputChange(event)">
       <!-- Input row -->
@@ -2056,16 +2064,24 @@
         <button class="chat-attach-btn" onclick="document.getElementById('chat-file-input').click()" title="Attach file(s)">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
+        <button class="chat-voice-btn" id="chat-voice-btn" type="button" onclick="toggleVoiceDictation()" title="Dictate message" aria-label="Dictate message">
+          <iconify-icon icon="solar:microphone-3-bold-duotone" width="16" height="16"></iconify-icon>
+        </button>
+        <button id="chat-command-chip" class="chat-command-chip" type="button" style="display:none" onclick="clearActiveSlashCommand()" title="Clear command"></button>
         <textarea
           id="chat-input"
           placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
           rows="1"
           autocomplete="off"
         ></textarea>
+        <button class="chat-voice-btn" id="chat-realtime-voice-btn" type="button" onclick="toggleRealtimeVoiceReplies()" title="OpenAI Realtime replies" aria-label="OpenAI Realtime replies">
+          <iconify-icon icon="solar:soundwave-bold-duotone" width="17" height="17"></iconify-icon>
+        </button>
         <button class="send-btn" id="send-btn" onclick="handleSendStop()" title="Send">
           <svg id="send-icon" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
           <svg id="stop-icon" width="13" height="13" viewBox="0 0 14 14" fill="currentColor" style="display:none"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>
         </button>
+        <audio id="realtime-voice-audio" autoplay style="display:none"></audio>
       </div>
       <!-- Bottom row: hint left, context button right -->
       <div class="agent-toggle" style="margin-bottom:0;margin-top:6px">
@@ -2077,6 +2093,15 @@
           <span style="color:var(--muted)"> via <span id="chat-provider-name">Prometheus</span></span>
           <span id="token-count-badge" style="margin-left:8px;color:var(--muted);font-size:10px"></span>
           <span id="queued-prompts-indicator" style="display:none;margin-left:8px;color:var(--brand);font-weight:700"></span>
+          <span class="voice-provider-controls" id="voice-provider-controls" hidden>
+            <label>Mic <select id="voice-stt-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
+            <label>Speak <select id="voice-tts-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
+            <label id="voice-output-voice-label" hidden>Voice <select id="voice-output-voice" onchange="onVoiceProviderChanged()"><option value="">Default</option></select></label>
+          </span>
+          <span class="voice-provider-controls realtime-voice-provider-controls" id="realtime-voice-provider-controls" hidden>
+            <label>Voice <select id="realtime-voice-select" onchange="onRealtimeVoiceChanged()"><option value="marin">Marin</option></select></label>
+            <span class="realtime-wake-gate-status" id="realtime-wake-gate-status" hidden></span>
+          </span>
         </div>
         <!-- Model switcher popover -->
         <div id="model-switcher-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);left:16px;background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 4px 20px rgba(16,32,64,0.13);padding:10px;z-index:100;min-width:220px">
@@ -2289,7 +2314,7 @@
     <div class="hub-header">
       <div class="hub-header-left">
         <div class="hub-title">Hub</div>
-        <div class="hub-subtitle">Skill usage, achievements, and tool activity</div>
+        <div class="hub-subtitle">Skill usage, goals, and tool activity</div>
       </div>
       <div class="hub-header-right">
         <div class="hub-range-seg" id="hub-range-seg">
@@ -2302,17 +2327,37 @@
     </div>
 
     <div class="hub-section">
-      <div class="hub-section-title">Top Skills</div>
+      <div class="hub-skills-topbar">
+        <div class="hub-section-title">Top Skills</div>
+        <input class="hub-skill-search" id="hub-skill-search" type="search" placeholder="Search skills" aria-label="Search skills" autocomplete="off">
+      </div>
       <div class="hub-skills-grid" id="hub-skills-grid"></div>
     </div>
 
     <div class="hub-split">
       <div class="hub-split-pane hub-pane-achievements">
-        <div class="hub-section-title">Achievements</div>
+        <div class="hub-section-title">Goals</div>
         <div class="hub-achievements-grid" id="hub-achievements-grid"></div>
       </div>
       <div class="hub-split-divider"></div>
       <div class="hub-split-pane hub-pane-heatmap">
+        <div class="hub-stats-card">
+          <div class="hub-stats-toolbar">
+            <div class="hub-stats-tabs" id="hub-stats-tabs">
+              <button class="hub-stats-tab active" data-mode="overview" type="button">Overview</button>
+              <button class="hub-stats-tab" data-mode="models" type="button">Models</button>
+            </div>
+            <div class="hub-stats-range" id="hub-stats-range">
+              <button class="hub-stats-range-btn active" data-range="all" type="button">All</button>
+              <button class="hub-stats-range-btn" data-range="30d" type="button">30d</button>
+              <button class="hub-stats-range-btn" data-range="7d" type="button">7d</button>
+            </div>
+          </div>
+          <div class="hub-stats-tiles" id="hub-stats-tiles"></div>
+          <div class="hub-stats-models" id="hub-stats-models" style="display:none"></div>
+          <div class="hub-stats-footnote" id="hub-stats-footnote"></div>
+        </div>
+
         <div class="hub-heatmap-header">
           <div class="hub-section-title">Tool Usage</div>
           <div class="hub-heatmap-nav">
@@ -2345,7 +2390,13 @@
   <div class="hub-modal-card">
     <div class="hub-modal-header">
       <div class="hub-modal-title">
-        <span class="hub-modal-emoji" id="hub-modal-emoji">🧩</span>
+        <span class="hub-modal-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="4" y="5" width="16" height="11" rx="2"></rect>
+            <path d="M9 20h6"></path>
+            <path d="M12 16v4"></path>
+          </svg>
+        </span>
         <span id="hub-modal-name">Skill</span>
         <span class="hub-modal-version" id="hub-modal-version"></span>
       </div>
@@ -3066,18 +3117,13 @@
 	    <div style="padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:8px">
 	      <button id="settings-tab-system" class="sidebar-action" onclick="setSettingsTab('system')">System</button>
 	      <button id="settings-tab-heartbeat" class="sidebar-action" onclick="setSettingsTab('heartbeat')">Heartbeat</button>
-	      <button id="settings-tab-search" class="sidebar-action" onclick="setSettingsTab('search')">Search</button>
+      <button id="settings-tab-search" class="sidebar-action" onclick="setSettingsTab('search')">Search</button>
       <button id="settings-tab-credentials" class="sidebar-action" onclick="setSettingsTab('credentials')">Credentials</button>
-      <button id="settings-tab-policy" class="sidebar-action" onclick="setSettingsTab('policy')">Agent Policy</button>
       <button id="settings-tab-security" class="sidebar-action" onclick="setSettingsTab('security')">Security</button>
       <button id="settings-tab-models" class="sidebar-action" onclick="setSettingsTab('models')">Models</button>
       <button id="settings-tab-agents" class="sidebar-action" onclick="setSettingsTab('agents')">Agents</button>
       <button id="settings-tab-channels" class="sidebar-action" onclick="setSettingsTab('channels')">Channels</button>
 	      <button id="settings-tab-integrations" class="sidebar-action" onclick="setSettingsTab('integrations')">Integrations</button>
-	      <button id="settings-tab-apps" class="sidebar-action" onclick="setSettingsTab('apps')" style="display:flex;align-items:center;gap:6px">
-	        <span id="settings-apps-tab-icon" style="display:inline-flex" aria-hidden="true"></span>
-	        <span>Apps</span>
-	      </button>
 	      <button id="settings-tab-shortcuts" class="sidebar-action" onclick="setSettingsTab('shortcuts')" style="display:flex;align-items:center;gap:6px">
 	        <span id="settings-shortcuts-tab-icon" style="display:inline-flex" aria-hidden="true"></span>
 	        <span>Shortcuts</span>
@@ -3172,6 +3218,7 @@
         <div class="right-section-title" style="margin-bottom:8px">Web Search</div>
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Preferred Provider</label>
         <select id="settings-provider" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:13px">
+          <option value="tinyfish">TinyFish</option>
           <option value="tavily">Tavily</option>
           <option value="google">Google CSE</option>
           <option value="brave">Brave</option>
@@ -3191,6 +3238,14 @@
         <div style="border:1px solid var(--line);border-radius:12px;padding:14px">
           <div class="right-section-title" style="margin-bottom:4px">Search Provider Keys</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Stored encrypted in vault — never written to config.json in plain text.</div>
+
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">TinyFish API Key</label>
+          <div style="display:flex;gap:6px;margin-bottom:10px">
+            <input id="cred-tinyfish-key" type="password" placeholder="tf-..." autocomplete="new-password"
+              style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;font-family:var(--font-mono, monospace)" />
+            <button id="cred-tinyfish-visibility-toggle" onclick="toggleCredVis('cred-tinyfish-key',this)" title="Show value" aria-label="Show value"
+              style="padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);font-size:13px;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:38px"></button>
+          </div>
 
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Tavily API Key</label>
           <div style="display:flex;gap:6px;margin-bottom:10px">
@@ -3255,34 +3310,6 @@
             </div>
             </div>
             </div>
-
-    <div id="settings-panel-policy" style="display:none;padding:14px 16px">
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-        <div class="right-section-title" style="margin-bottom:8px">Agent Freshness + Memory Policy</div>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
-          <input type="checkbox" id="settings-force-web-fresh" />
-          Force at least one web search for freshness/current queries
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
-          <input type="checkbox" id="settings-memory-fallback" />
-          Allow memory fallback when all providers fail
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px">
-          <input type="checkbox" id="settings-auto-store-web-facts" />
-          Auto-store verified web facts into memory
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:10px">
-          <input type="checkbox" id="settings-nl-tool-router" />
-          Enable natural-language tool routing ("look it up", "use web", "verify that")
-        </label>
-        <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Code Retrieval Mode</label>
-        <select id="settings-retrieval-mode" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:13px">
-          <option value="fast">Fast (smaller snippets, fewer reads)</option>
-          <option value="standard">Standard</option>
-          <option value="deep">Deep (larger snippets, more context)</option>
-        </select>
-      </div>
-    </div>
 
     <div id="settings-panel-security" style="display:none;padding:14px 16px">
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px">
@@ -3545,6 +3572,20 @@
           <div class="right-section-title" style="margin:0 0 4px">Agent Model Defaults</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5">
             Preset which model each agent type uses. Agents without an override fall back to the primary model.
+          </div>
+
+          <div style="border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;margin-bottom:14px">
+            <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">Templates</div>
+            <select id="amd-template-select" class="settings-input" style="width:100%;margin-bottom:8px" onchange="onAgentModelTemplateSelect()">
+              <option value="">Select template...</option>
+            </select>
+            <input id="amd-template-name" class="settings-input" style="width:100%;margin-bottom:8px" placeholder="Template name" />
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">
+              <button onclick="saveAgentModelDefaultTemplate()" class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)">Save</button>
+              <button onclick="applyAgentModelDefaultTemplate()" class="btn btn-sm">Apply</button>
+              <button onclick="deleteAgentModelDefaultTemplate()" class="btn btn-sm" style="background:#fff;border:1px solid #fecaca;color:#dc2626">Delete</button>
+            </div>
+            <div id="amd-template-status" style="font-size:11px;min-height:16px"></div>
           </div>
 
           <!-- Main Chat -->
@@ -4260,50 +4301,7 @@
       </div>
     </div>
 
-    
-	    <!-- Installed Apps Panel -->
-	    <div id="settings-panel-apps" style="display:none;padding:14px 16px">
-	      <div style="display:grid;grid-template-columns:minmax(280px,320px) 1fr;gap:14px">
-	        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;display:flex;flex-direction:column;gap:10px">
-	          <div class="right-section-title">Installed Apps</div>
-	          <div style="font-size:12px;color:var(--muted);line-height:1.6">
-	            Prometheus scans Start Menu entries, Windows app IDs, App Paths, and common install folders so the desktop tools can launch apps by stable <code>app_id</code> instead of guessing names.
-	          </div>
-	          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:3px">Search</label>
-	          <div style="display:flex;gap:8px">
-	            <input id="installed-apps-query" type="text" placeholder="e.g. claude, codex, vscode" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box" onkeydown="if(event.key==='Enter'){event.preventDefault();searchInstalledAppsUI()}" />
-	            <button onclick="searchInstalledAppsUI()" style="padding:7px 12px;background:var(--brand);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Search</button>
-	          </div>
-	          <div style="display:flex;gap:8px;flex-wrap:wrap">
-	            <button onclick="loadInstalledAppsPanel({ refresh: true })" style="padding:7px 12px;background:#fff;color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Rescan</button>
-	            <button onclick="clearInstalledAppsSearch()" style="padding:7px 12px;background:#fff;color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Show All</button>
-	          </div>
-	          <div id="installed-apps-meta" style="font-size:11px;color:var(--muted)"></div>
-	          <div style="height:1px;background:var(--line);margin:2px 0"></div>
-	          <div class="right-section-title" style="font-size:13px">Add Alias</div>
-	          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:3px">App</label>
-	          <select id="installed-app-alias-app" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box">
-	            <option value="">Select an app…</option>
-	          </select>
-	          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:3px">Alias</label>
-	          <input id="installed-app-alias-input" type="text" placeholder="e.g. vscode, claude-desktop" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box" />
-	          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-	            <button onclick="addInstalledAppAliasUI()" style="padding:7px 14px;background:var(--brand);color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Save Alias</button>
-	            <button onclick="deleteInstalledAppAliasUI()" style="padding:7px 14px;background:#fff;color:var(--text);border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Delete Alias</button>
-	            <span id="installed-apps-status" style="font-size:11px;color:var(--ok)"></span>
-	          </div>
-	        </div>
-	        <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;display:flex;flex-direction:column;gap:10px">
-	          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-	            <div class="right-section-title">Discovered Apps</div>
-	            <div id="installed-apps-count" style="font-size:11px;color:var(--muted)">Loading…</div>
-	          </div>
-	          <div id="installed-apps-list" style="overflow-y:auto;max-height:460px;font-size:12px"></div>
-	        </div>
-	      </div>
-	    </div>
-
-	    <!-- Keyboard Shortcuts Panel -->
+    <!-- Keyboard Shortcuts Panel -->
 	    <div id="settings-panel-shortcuts" style="display:none;padding:14px 16px">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
 
@@ -4995,13 +4993,22 @@ function renderSessionsList() {
   const unpinned = sorted.filter(s => !_pinnedChats.includes(s.id));
   const displayedUnpinned = unpinned.slice(0, _sessionShowCount);
   const hasMore = unpinned.length > _sessionShowCount;
-  const pinnedHtml = pinned.length
-    ? `<div class="sessions-section-header pinned-chats-heading">Pinned Chats</div>${pinned.map(renderChatSessionCard).join('')}`
-    : '';
-  const sessionsHeading = pinned.length && displayedUnpinned.length
-    ? '<div class="sessions-section-header">Sessions</div>'
-    : '';
-  const html = pinnedHtml + sessionsHeading + displayedUnpinned.map(renderChatSessionCard).join('');
+
+  // Render pinned chats into the dedicated section above Sessions
+  const pinnedSection = document.getElementById('sidebar-pinned-section');
+  const pinnedListEl = document.getElementById('pinned-chats-list');
+  const onChatsTab = (window.sidebarTab || 'chats') === 'chats' || document.querySelector('[data-tab="chats"]')?.classList.contains('active');
+  if (pinnedSection && pinnedListEl) {
+    if (pinned.length && onChatsTab) {
+      pinnedListEl.innerHTML = pinned.map(renderChatSessionCard).join('');
+      pinnedSection.style.display = '';
+    } else {
+      pinnedListEl.innerHTML = '';
+      pinnedSection.style.display = 'none';
+    }
+  }
+
+  const html = displayedUnpinned.map(renderChatSessionCard).join('');
 
   let content = html || (
     _sessionSearchLoading
@@ -5600,16 +5607,18 @@ async function resolveApproval(id, decision) {
 }
 
 let systemStatsFetchInFlight = false;
+let lastSystemStatsOkAt = 0;
 async function loadSystemStats() {
   if (systemStatsFetchInFlight) return;
   systemStatsFetchInFlight = true;
   try {
-    const stats = await api('/api/system-stats');
+    const stats = await api('/api/system-stats', { timeoutMs: 2500 });
     const cpu = stats?.system?.cpu_percent;
     const ram = stats?.system?.memory_percent;
     const gpu = stats?.gpu?.gpu_util_percent;
     const vram = stats?.gpu?.vram_used_percent;
     const gpuAvailable = !!stats?.gpu?.available;
+    lastSystemStatsOkAt = Date.now();
 
     setText('quick-system-stats', `CPU ${fmtPercent(cpu)} • RAM ${fmtPercent(ram)} • GPU ${gpuAvailable ? fmtPercent(gpu) : '--%'}`);
 
@@ -5648,6 +5657,7 @@ async function loadSystemStats() {
       `${memUsage}${memPart} • Gateway ${gatewayRss.toFixed(0)} MB${gpuName ? ` • ${gpuName}` : ''} • ${updated}`
     );
   } catch {
+    if (lastSystemStatsOkAt && (window.isThinking || Date.now() - lastSystemStatsOkAt < 60_000)) return;
     setText('quick-system-stats', 'CPU --% • RAM --% • GPU --%');
     setText('sys-cpu', '--%');
     setText('sys-ram', '--%');
@@ -5670,9 +5680,13 @@ const PROVIDER_LABELS = {
   openai: 'OpenAI', openai_codex: 'ChatGPT', anthropic: 'Claude',
   perplexity: 'Perplexity', gemini: 'Gemini'
 };
+let statusFetchInFlight = false;
+let lastStatusOkAt = 0;
 async function checkStatus() {
+  if (statusFetchInFlight) return;
+  statusFetchInFlight = true;
   try {
-    const status = await api('/api/status');
+    const status = await api('/api/status', { timeoutMs: 2500 });
     const provider = status.provider || 'ollama';
     const providerLabel = PROVIDER_LABELS[provider] || provider;
     const isCloud = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';
@@ -5681,7 +5695,7 @@ async function checkStatus() {
 
     // For cloud providers, always show as online if gateway is up
 	    const providerChecking = !!status.providerChecking;
-	    const backendOnline = status.providerOnline !== undefined ? !!status.providerOnline : !!status.ollama;
+	    const backendOnline = isCloud ? true : (status.providerOnline !== undefined ? !!status.providerOnline : !!status.ollama);
 	    dot.className = providerChecking ? 'dot' : 'dot ' + (backendOnline ? 'online' : 'offline');
 	    document.getElementById('ollama-status').textContent = providerChecking
 	      ? `${providerLabel} Checking...`
@@ -5706,8 +5720,15 @@ async function checkStatus() {
 	    const cpn = document.getElementById('chat-provider-name');
 	    if (cpn) cpn.textContent = providerLabel;
       if (window._llmSettingsCache) applyReasoningPrefsFromProviderConfig(window._llmSettingsCache, provider);
+      lastStatusOkAt = Date.now();
 	  } catch {
-    document.getElementById('ollama-dot').className = 'dot offline';
+    if (lastStatusOkAt && (window.isThinking || Date.now() - lastStatusOkAt < 60_000)) return;
+    const dot = document.getElementById('ollama-dot');
+    if (dot) dot.className = 'dot offline';
+    const statusEl = document.getElementById('ollama-status');
+    if (statusEl) statusEl.textContent = 'Gateway warming...';
+  } finally {
+    statusFetchInFlight = false;
   }
 }
 

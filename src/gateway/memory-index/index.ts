@@ -3,7 +3,17 @@ import path from 'path';
 import crypto from 'crypto';
 import { refreshOperationalIndex, searchOperationalLayer, getOperationalRecord, getRelatedOperationalRecords } from './operational.js';
 import { parseMemoryNoteDocument } from './memory-note.js';
+import {
+  backfillSqliteMemoryEmbeddings,
+  getRelatedSqliteMemory,
+  getSqliteMemoryGraphSnapshot,
+  readSqliteMemoryRecord,
+  searchSqliteMemoryIndexAsync,
+  searchSqliteMemoryIndex,
+  syncSqliteMemoryIndex,
+} from './sqlite-store.js';
 export { getOperationalRecord } from './operational.js';
+export { backfillSqliteMemoryEmbeddings, getSqliteMemoryStatus } from './sqlite-store.js';
 
 export type MemoryIndexSourceType =
   | 'chat_session'
@@ -18,6 +28,7 @@ export type MemoryIndexSourceType =
   | 'project_state'
   | 'memory_root'
   | 'memory_note'
+  | 'obsidian_note'
   | 'audit_misc';
 
 export interface MemorySearchParams {
@@ -29,6 +40,9 @@ export interface MemorySearchParams {
   dateFrom?: string;
   dateTo?: string;
   minDurability?: number;
+  debug?: boolean;
+  rerank?: boolean;
+  queryRoute?: string;
 }
 
 export interface MemorySearchHit {
@@ -46,7 +60,38 @@ export interface MemorySearchHit {
   layer?: 'operational' | 'evidence';
   recordType?: string;
   canonicalKey?: string;
-  whyMatched?: { exactTerms: string[]; entities: string[]; lexical: string[]; recordTypeReason?: string };
+  whyMatched?: { exactTerms: string[]; entities: string[]; lexical: string[]; recordTypeReason?: string; recencyReason?: string };
+  diagnostics?: {
+    backend: string;
+    queryRoute: string;
+    ftsScore: number;
+    vectorScore: number;
+    lexicalScore: number;
+    authorityScore: number;
+    recencyScore: number;
+    temporalDecay: number;
+    durabilityScore: number;
+    confidenceScore: number;
+    statusPenalty: number;
+    layerBoost: number;
+    finalScoreBeforeMmr: number;
+    finalScore: number;
+    mmrScore?: number;
+    matchedTerms: string[];
+    embeddingProvider?: string;
+    embeddingModel?: string;
+    embeddingDimensions?: number;
+  };
+  citation?: {
+    sourceType: string;
+    sourcePath: string;
+    sourceSection?: string;
+    sourceStartLine?: number;
+    sourceEndLine?: number;
+    authority: string;
+    confidence: number;
+    status: string;
+  };
 }
 
 export interface MemorySearchResult {
@@ -54,7 +99,8 @@ export interface MemorySearchResult {
   mode: string;
   totalCandidates: number;
   hits: MemorySearchHit[];
-  stats: { records: number; chunks: number; indexedAt: string };
+  citations?: NonNullable<MemorySearchHit['citation']>[];
+  stats: { records: number; chunks: number; indexedAt: string; backend?: string; sqlite?: any; embedding?: any; rerank?: string };
 }
 
 export interface ResolvedMemoryRecord {
@@ -72,6 +118,14 @@ type RecordItem = {
   day: string;
   projectId?: string;
   durability: number;
+  sourceSection?: string;
+  sourceStartLine?: number;
+  sourceEndLine?: number;
+  contentHash?: string;
+  authority?: string;
+  confidence?: number;
+  status?: string;
+  supersedesId?: string;
 };
 
 type ChunkItem = {
@@ -81,6 +135,10 @@ type ChunkItem = {
   text: string;
   terms: string[];
   embedding: number[];
+  sourceSection?: string;
+  sourceStartLine?: number;
+  sourceEndLine?: number;
+  contentHash?: string;
 };
 
 type RelationItem = {
@@ -109,17 +167,50 @@ const EMBEDDING_DIM = 96;
 const MAX_SOURCE_BYTES = 450000;
 const MAX_RECORDS_FOR_SEMANTIC_RELATIONS = 900;
 const STOP = new Set(['a','an','and','are','as','at','be','by','for','from','had','has','have','i','if','in','is','it','its','of','on','or','that','the','their','them','they','this','to','was','we','were','what','when','where','who','why','will','with','you','your']);
-const ROOT_DIRS = ['chats', 'tasks', 'cron', 'teams', 'proposals', 'memory', 'projects', 'schedules'] as const;
+const ROOT_DIRS = ['chats', 'tasks', 'cron', 'teams', 'proposals', 'memory', 'projects', 'schedules', 'obsidian'] as const;
+const MEMORY_PROFILE = process.env.PROMETHEUS_MEMORY_PROFILE === '1';
+let memoryProfileT0 = 0;
+let memoryProfileLast = 0;
+function memoryMark(label: string): void {
+  if (!MEMORY_PROFILE) return;
+  const now = Date.now();
+  if (!memoryProfileT0) {
+    memoryProfileT0 = now;
+    memoryProfileLast = now;
+  }
+  console.error(`[memory-index] +${String(now - memoryProfileT0).padStart(6)}ms delta=${String(now - memoryProfileLast).padStart(6)}ms ${label}`);
+  memoryProfileLast = now;
+}
 
 function idxPaths(workspacePath: string) {
   const root = path.join(workspacePath, 'audit', '_index', 'memory');
   return { root, store: path.join(root, 'store.json'), manifest: path.join(root, 'manifest.json'), readme: path.join(root, 'README.md') };
 }
 
+function readIndexStatsFromLightFiles(workspacePath: string, fallbackUpdatedAt?: string): { totalRecords: number; totalChunks: number; updatedAt: string } {
+  const { manifest: manifestPath, readme } = idxPaths(workspacePath);
+  const manifest = readJson<Manifest>(manifestPath, { version: INDEX_VERSION, updatedAt: fallbackUpdatedAt || new Date(0).toISOString(), lastRunAtMs: 0, files: {} });
+  let totalChunks = 0;
+  try {
+    const raw = fs.existsSync(readme) ? fs.readFileSync(readme, 'utf-8') : '';
+    const match = raw.match(/^Chunks:\s*(\d+)/mi);
+    if (match?.[1]) totalChunks = Number(match[1]) || 0;
+  } catch {}
+  if (!totalChunks) {
+    for (const entry of Object.values(manifest.files || {})) totalChunks += Array.isArray(entry.chunkIds) ? entry.chunkIds.length : 0;
+  }
+  return {
+    totalRecords: Object.keys(manifest.files || {}).length,
+    totalChunks,
+    updatedAt: manifest.updatedAt || fallbackUpdatedAt || new Date(0).toISOString(),
+  };
+}
+
 type MemoryRefreshOptions = {
   force?: boolean;
   minIntervalMs?: number;
   maxChangedFiles?: number;
+  syncSqlite?: boolean;
 };
 
 type MemoryRefreshState = {
@@ -133,6 +224,7 @@ const memoryRefreshStates = new Map<string, MemoryRefreshState>();
 function mergeMemoryRefreshOptions(current: MemoryRefreshOptions, next?: MemoryRefreshOptions): MemoryRefreshOptions {
   const merged: MemoryRefreshOptions = {
     force: Boolean(current.force || next?.force),
+    syncSqlite: Boolean(current.syncSqlite || next?.syncSqlite),
   };
   const currentMin = Number.isFinite(Number(current.minIntervalMs)) ? Number(current.minIntervalMs) : null;
   const nextMin = Number.isFinite(Number(next?.minIntervalMs)) ? Number(next?.minIntervalMs) : null;
@@ -185,6 +277,17 @@ function writeJson(p: string, data: unknown): void { ensureDir(path.dirname(p));
 function rel(abs: string, root: string): string { return path.relative(root, abs).replace(/\\/g, '/'); }
 function id(prefix: string, input: string): string { return `${prefix}_${crypto.createHash('sha1').update(input).digest('hex').slice(0, 16)}`; }
 function norm(s: string): string { return String(s || '').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n').trim(); }
+function contentHash(s: string): string { return crypto.createHash('sha1').update(String(s || '')).digest('hex'); }
+function lineAtOffset(text: string, offset: number): number {
+  const capped = Math.max(0, Math.min(String(text || '').length, offset));
+  return String(text || '').slice(0, capped).split('\n').length;
+}
+function markdownSectionAtOffset(text: string, offset: number): string | undefined {
+  const before = String(text || '').slice(0, Math.max(0, offset));
+  const matches = [...before.matchAll(/^#{1,4}\s+(.+)$/gm)];
+  const last = matches[matches.length - 1]?.[1]?.trim();
+  return last || undefined;
+}
 function stem(t: string): string { let x = t.toLowerCase(); if (x.endsWith('ing') && x.length > 5) x = x.slice(0, -3); else if (x.endsWith('ed') && x.length > 4) x = x.slice(0, -2); else if (x.endsWith('s') && x.length > 3) x = x.slice(0, -1); return x; }
 function terms(s: string): string[] { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/).map(v => stem(v.trim())).filter(v => v.length > 2 && !STOP.has(v)); }
 function uniqTop(arr: string[], n: number): string[] { const m = new Map<string, number>(); for (const a of arr) m.set(a, (m.get(a) || 0) + 1); return [...m.entries()].sort((a,b) => b[1]-a[1]).slice(0, n).map(([k]) => k); }
@@ -233,12 +336,13 @@ function inferType(r: string): MemoryIndexSourceType {
   if (r.startsWith('projects/state/')) return 'project_state';
   if (r.startsWith('memory/root/')) return 'memory_root';
   if (r.startsWith('memory/files/')) return 'memory_note';
+  if (r.startsWith('obsidian/vaults/')) return 'obsidian_note';
   return 'audit_misc';
 }
-function durability(t: MemoryIndexSourceType): number { return ({ memory_root: 1, proposal_state: 0.88, project_state: 0.82, chat_compaction: 0.76, task_state: 0.72, chat_session: 0.64, schedule_state: 0.6, cron_job: 0.58, chat_transcript: 0.56, team_state: 0.54, cron_run: 0.5, memory_note: 0.45, audit_misc: 0.5 } as Record<string, number>)[t] || 0.5; }
+function durability(t: MemoryIndexSourceType): number { return ({ memory_root: 1, proposal_state: 0.88, project_state: 0.82, chat_compaction: 0.76, task_state: 0.72, obsidian_note: 0.7, chat_session: 0.64, schedule_state: 0.6, cron_job: 0.58, chat_transcript: 0.56, team_state: 0.54, cron_run: 0.5, memory_note: 0.45, audit_misc: 0.5 } as Record<string, number>)[t] || 0.5; }
 function projectFrom(relPath: string, obj: any): string | undefined {
   const m = relPath.match(/^projects\/state\/([^/]+)/); if (m?.[1]) return m[1];
-  for (const v of [obj?.projectId, obj?.project_id, obj?.project, obj?.metadata?.projectId]) { const s = String(v || '').trim(); if (s) return s; }
+  for (const v of [obj?.projectId, obj?.project_id, obj?.project, obj?.metadata?.projectId, obj?.frontmatter?.projectId, obj?.frontmatter?.project]) { const s = String(v || '').trim(); if (s) return s; }
   return undefined;
 }
 function tsFrom(relPath: string, st: fs.Stats, obj: any): number {
@@ -264,6 +368,26 @@ function parseContent(abs: string, relPath: string): { text: string; parsed?: an
   let raw = ''; try { raw = fs.readFileSync(abs, 'utf-8'); } catch { return null; }
   if (!raw.trim()) return null; if (raw.length > MAX_SOURCE_BYTES) raw = `${raw.slice(0, MAX_SOURCE_BYTES)}\n...[truncated_for_index]`;
   const lower = relPath.toLowerCase();
+  if (lower.endsWith('.md') && relPath.startsWith('obsidian/vaults/')) {
+    const match = raw.match(/^<!--\s*PROMETHEUS_OBSIDIAN_META\s*\n([\s\S]*?)\n-->\s*/);
+    let meta: any = {};
+    let content = raw.trim();
+    if (match) {
+      try { meta = JSON.parse(match[1]); } catch { meta = {}; }
+      content = raw.slice(match[0].length).trim();
+    }
+    const titleMatch = content.match(/^#\s+(.+)$/m);
+    if (!meta.title && titleMatch?.[1]) meta.title = titleMatch[1].trim();
+    const noteSection = content.match(/(?:^|\n)##\s+Obsidian Note\s*\n+([\s\S]*)$/i);
+    const text = [
+      meta.vaultName ? `Vault: ${meta.vaultName}` : '',
+      meta.relativePath ? `Obsidian path: ${meta.relativePath}` : '',
+      Array.isArray(meta.tags) && meta.tags.length ? `Tags: ${meta.tags.join(', ')}` : '',
+      Array.isArray(meta.wikilinks) && meta.wikilinks.length ? `Wiki links: ${meta.wikilinks.join(', ')}` : '',
+      noteSection?.[1] || content,
+    ].filter(Boolean).join('\n\n');
+    return { text, parsed: meta };
+  }
   if (lower.endsWith('.md') && relPath.startsWith('memory/files/')) {
     const note = parseMemoryNoteDocument(raw);
     const text = [
@@ -319,6 +443,9 @@ function makeChunks(record: RecordItem, text: string): ChunkItem[] {
     const piece = clean.slice(start, end).trim();
     if (piece) {
       const chunkTerms = uniqTop(terms(piece), 72);
+      const chunkStartLine = lineAtOffset(clean, start);
+      const chunkEndLine = lineAtOffset(clean, end);
+      const chunkSection = markdownSectionAtOffset(clean, start) || record.sourceSection;
       out.push({
         id: id('chk', `${record.id}:${idx}:${piece.slice(0, 80)}`),
         recordId: record.id,
@@ -326,6 +453,10 @@ function makeChunks(record: RecordItem, text: string): ChunkItem[] {
         text: piece,
         terms: chunkTerms,
         embedding: embedTerms(chunkTerms),
+        sourceSection: chunkSection,
+        sourceStartLine: chunkStartLine,
+        sourceEndLine: chunkEndLine,
+        contentHash: contentHash(piece),
       });
     }
     if (end >= clean.length) break;
@@ -514,28 +645,30 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
   return deduped;
 }
 
-export function refreshMemoryIndexFromAudit(workspacePath: string, options?: { force?: boolean; minIntervalMs?: number; maxChangedFiles?: number }): { indexedFiles: number; skippedFiles: number; removedFiles: number; deferredFiles: number; totalRecords: number; totalChunks: number; updatedAt: string } {
+export function refreshMemoryIndexFromAudit(workspacePath: string, options?: MemoryRefreshOptions): { indexedFiles: number; skippedFiles: number; removedFiles: number; deferredFiles: number; totalRecords: number; totalChunks: number; updatedAt: string } {
+  memoryMark('refresh entered');
   const { root, store: storePath, manifest: manifestPath, readme } = idxPaths(workspacePath);
   const auditRoot = path.join(workspacePath, 'audit');
   const now = Date.now(); const nowIso = new Date(now).toISOString();
-  const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
   const manifest = readJson<Manifest>(manifestPath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), lastRunAtMs: 0, files: {} });
+  memoryMark('manifest loaded');
   const minIntervalMs = Math.max(0, Number(options?.minIntervalMs ?? 20000));
   if (!options?.force && now - Number(manifest.lastRunAtMs || 0) < minIntervalMs) {
-    return { indexedFiles: 0, skippedFiles: 0, removedFiles: 0, deferredFiles: 0, totalRecords: Object.keys(store.records).length, totalChunks: Object.keys(store.chunks).length, updatedAt: store.updatedAt };
+    const stats = readIndexStatsFromLightFiles(workspacePath, manifest.updatedAt);
+    memoryMark('refresh throttled');
+    return { indexedFiles: 0, skippedFiles: 0, removedFiles: 0, deferredFiles: 0, ...stats };
   }
   if (!fs.existsSync(auditRoot)) return { indexedFiles: 0, skippedFiles: 0, removedFiles: 0, deferredFiles: 0, totalRecords: 0, totalChunks: 0, updatedAt: nowIso };
 
   const filesAbs = ROOT_DIRS.flatMap((d) => listFilesRecursive(path.join(auditRoot, d)));
+  memoryMark(`files listed (${filesAbs.length})`);
   const rels = filesAbs.map((a) => rel(a, auditRoot)).filter((r) => r && !r.startsWith('_index/') && !r.endsWith('/INDEX.md') && !r.endsWith('/README.md'));
   const relSet = new Set(rels);
   let removed = 0; let skipped = 0; let indexed = 0;
+  const removedRels: string[] = [];
   for (const oldRel of Object.keys(manifest.files)) {
     if (relSet.has(oldRel)) continue;
-    const ent = manifest.files[oldRel];
-    for (const cid of ent.chunkIds || []) { const c = store.chunks[cid]; if (c) { removeChunkIndex(store.tokenIndex, c); delete store.chunks[cid]; } }
-    delete store.records[ent.recordId];
-    delete manifest.files[oldRel];
+    removedRels.push(oldRel);
     removed += 1;
   }
   const changed: string[] = [];
@@ -544,11 +677,25 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: { f
     const prev = manifest.files[relPath];
     if (!prev || prev.mtimeMs !== st.mtimeMs || prev.size !== st.size) changed.push(relPath); else skipped += 1;
   }
+  memoryMark(`changes compared (changed=${changed.length}, removed=${removed})`);
   const maxChanged = Math.max(1, Number(options?.maxChangedFiles ?? 200));
   const nowChanges = changed.slice(0, maxChanged);
   const deferred = Math.max(0, changed.length - nowChanges.length);
   if (removed === 0 && nowChanges.length === 0) {
-    return { indexedFiles: 0, skippedFiles: skipped, removedFiles: 0, deferredFiles: deferred, totalRecords: Object.keys(store.records).length, totalChunks: Object.keys(store.chunks).length, updatedAt: store.updatedAt };
+    manifest.lastRunAtMs = now;
+    manifest.updatedAt = manifest.updatedAt || nowIso;
+    writeJson(manifestPath, manifest);
+    const stats = readIndexStatsFromLightFiles(workspacePath, manifest.updatedAt);
+    memoryMark('no-op refresh complete');
+    return { indexedFiles: 0, skippedFiles: skipped, removedFiles: 0, deferredFiles: deferred, ...stats };
+  }
+  const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
+  memoryMark('store loaded');
+  for (const oldRel of removedRels) {
+    const ent = manifest.files[oldRel];
+    for (const cid of ent?.chunkIds || []) { const c = store.chunks[cid]; if (c) { removeChunkIndex(store.tokenIndex, c); delete store.chunks[cid]; } }
+    if (ent?.recordId) delete store.records[ent.recordId];
+    delete manifest.files[oldRel];
   }
   for (const relPath of nowChanges) {
     const abs = path.join(auditRoot, relPath); const st = fs.statSync(abs);
@@ -561,17 +708,35 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: { f
     if (!parsed || !norm(parsed.text)) { delete manifest.files[relPath]; indexed += 1; continue; }
     const type = inferType(relPath); const ts = tsFrom(relPath, st, parsed.parsed); const recId = id('rec', relPath);
     const title = String(parsed.parsed?.title || path.basename(relPath, path.extname(relPath)) || path.basename(relPath)).trim();
-    const rec: RecordItem = { id: recId, sourcePath: relPath, sourceType: type, title, timestampMs: ts, day: day(ts), projectId: projectFrom(relPath, parsed.parsed), durability: durability(type) };
+    const rec: RecordItem = {
+      id: recId,
+      sourcePath: relPath,
+      sourceType: type,
+      title,
+      timestampMs: ts,
+      day: day(ts),
+      projectId: projectFrom(relPath, parsed.parsed),
+      durability: durability(type),
+      sourceSection: relPath.endsWith('.md') ? markdownSectionAtOffset(parsed.text, 0) : undefined,
+      sourceStartLine: 1,
+      sourceEndLine: parsed.text.split('\n').length,
+      contentHash: contentHash(parsed.text),
+      confidence: type === 'memory_root' ? 1 : type === 'chat_transcript' || type === 'chat_session' ? 0.62 : 0.8,
+      status: 'active',
+    };
     store.records[recId] = rec;
     const chunks = makeChunks(rec, parsed.text);
     for (const c of chunks) { store.chunks[c.id] = c; addChunkIndex(store.tokenIndex, c); }
     manifest.files[relPath] = { mtimeMs: st.mtimeMs, size: st.size, recordId: recId, chunkIds: chunks.map((c) => c.id) };
     indexed += 1;
   }
+  memoryMark(`changes indexed (${indexed})`);
   store.relations = buildRelations(store.records, store.chunks);
+  memoryMark(`relations built (${store.relations.length})`);
   store.version = INDEX_VERSION; store.updatedAt = nowIso;
   manifest.version = INDEX_VERSION; manifest.updatedAt = nowIso; manifest.lastRunAtMs = now;
   ensureDir(root); writeJson(storePath, store); writeJson(manifestPath, manifest);
+  memoryMark('store and manifest written');
   const graphPath = path.join(root, 'graph.json');
   const nodes = Object.values(store.records).map((r) => ({
     id: r.id,
@@ -597,9 +762,15 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: { f
     nodes,
     edges,
   });
+  memoryMark('graph written');
   fs.writeFileSync(readme, `# Memory Index\n\nGenerated from workspace/audit.\n\nUpdated: ${nowIso}\nRecords: ${Object.keys(store.records).length}\nChunks: ${Object.keys(store.chunks).length}\nTokens: ${Object.keys(store.tokenIndex).length}\nRelations: ${store.relations.length}\nGraph: graph.json\n`, 'utf-8');
   // Refresh operational layer alongside evidence rebuild (throttled — max once per 60s)
   try { refreshOperationalIndex(workspacePath, { minIntervalMs: 60000 }); } catch { /* non-fatal */ }
+  memoryMark('operational refresh checked');
+  if (options?.syncSqlite) {
+    try { syncSqliteMemoryIndex(workspacePath, store); } catch { /* non-fatal: JSON index remains the fallback */ }
+    memoryMark('sqlite sync checked');
+  }
   return { indexedFiles: indexed, skippedFiles: skipped, removedFiles: removed, deferredFiles: deferred, totalRecords: Object.keys(store.records).length, totalChunks: Object.keys(store.chunks).length, updatedAt: nowIso };
 }
 
@@ -656,17 +827,23 @@ function normalizeOperationalRecord(record: any): any {
     timestamp,
     projectId: record?.projectId ?? null,
     durability: Number(record?.durability ?? 0),
+    sourceSection: primarySource?.sourceSection,
+    sourceStartLine: primarySource?.sourceStartLine,
+    sourceEndLine: primarySource?.sourceEndLine,
+    authority: primarySource?.sourceType === 'memory_root' ? 'durable_memory_file' : 'verified_task_outcome',
+    status: Array.isArray(record?.supersededBy) && record.supersededBy.length ? 'superseded' : String(record?.status || 'active'),
   };
 }
 
 function toOperationalMemoryHit(hit: any): MemorySearchHit {
+  const source = hit?.sourceRefs?.[0] || {};
   return {
     rank: 0,
     score: Number((hit?.score || 0).toFixed(4)),
     chunkId: String(hit?.id || ''),
     recordId: String(hit?.id || ''),
-    sourceType: (hit?.sourceRefs?.[0]?.sourceType || 'audit_misc') as MemoryIndexSourceType,
-    sourcePath: String(hit?.sourceRefs?.[0]?.sourcePath || ''),
+    sourceType: (source.sourceType || 'audit_misc') as MemoryIndexSourceType,
+    sourcePath: String(source.sourcePath || ''),
     timestamp: hit?.day ? `${hit.day}T00:00:00.000Z` : new Date(0).toISOString(),
     title: String(hit?.title || hit?.canonicalKey || hit?.id || 'Operational record'),
     preview: String(hit?.summary || hit?.body || '').trim(),
@@ -675,11 +852,25 @@ function toOperationalMemoryHit(hit: any): MemorySearchHit {
     recordType: hit?.recordType,
     canonicalKey: hit?.canonicalKey,
     whyMatched: hit?.whyMatched,
+    citation: {
+      sourceType: String(source.sourceType || 'audit_misc'),
+      sourcePath: String(source.sourcePath || ''),
+      sourceSection: source.sourceSection,
+      sourceStartLine: source.sourceStartLine,
+      sourceEndLine: source.sourceEndLine,
+      authority: source.sourceType === 'memory_root' ? 'durable_memory_file' : 'verified_task_outcome',
+      confidence: Number(hit?.confidence ?? source.confidence ?? 0.8),
+      status: hit?.supersededBy?.length ? 'superseded' : String(hit?.status || 'active'),
+    },
   };
 }
 
 export function searchMemoryIndex(workspacePath: string, params: MemorySearchParams): MemorySearchResult {
   scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  try {
+    const sqliteResult = searchSqliteMemoryIndex(workspacePath, params);
+    if (sqliteResult) return sqliteResult;
+  } catch { /* non-fatal: fall back to JSON index */ }
   const store = readStoreSnapshot(workspacePath);
   const q = String(params.query || '').trim(); const mode = String(params.mode || 'quick'); const qTerms = uniqTop(terms(q), 24);
   const qEmbedding = embedTerms(qTerms);
@@ -708,7 +899,29 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
   for (const { c, r, s } of scored) {
     if ((mode === 'quick' || mode === 'project') && seenRec.has(r.id)) continue;
     seenRec.add(r.id);
-    evidenceHits.push({ rank: 0, score: Number(s.toFixed(4)), chunkId: c.id, recordId: r.id, sourceType: r.sourceType, sourcePath: r.sourcePath, timestamp: new Date(r.timestampMs).toISOString(), title: r.title, preview: preview(c.text), projectId: r.projectId, layer: 'evidence' });
+    evidenceHits.push({
+      rank: 0,
+      score: Number(s.toFixed(4)),
+      chunkId: c.id,
+      recordId: r.id,
+      sourceType: r.sourceType,
+      sourcePath: r.sourcePath,
+      timestamp: new Date(r.timestampMs).toISOString(),
+      title: r.title,
+      preview: preview(c.text),
+      projectId: r.projectId,
+      layer: 'evidence',
+      citation: {
+        sourceType: r.sourceType,
+        sourcePath: r.sourcePath,
+        sourceSection: c.sourceSection || r.sourceSection,
+        sourceStartLine: c.sourceStartLine,
+        sourceEndLine: c.sourceEndLine,
+        authority: r.authority || (r.sourceType === 'memory_root' ? 'durable_memory_file' : r.sourceType.startsWith('chat_') ? 'raw_transcript' : 'raw_evidence'),
+        confidence: Number(r.confidence || 0.8),
+        status: String(r.status || 'active'),
+      },
+    });
     if (evidenceHits.length >= limit * 2) break;
   }
 
@@ -738,11 +951,31 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
   hits.slice(0, limit).forEach((h, i) => { h.rank = i + 1; });
   const finalHits = hits.slice(0, limit);
 
-  return { query: q, mode, totalCandidates: scored.length, hits: finalHits, stats: { records: Object.keys(store.records).length, chunks: Object.keys(store.chunks).length, indexedAt: store.updatedAt } };
+  return {
+    query: q,
+    mode,
+    totalCandidates: scored.length,
+    hits: finalHits,
+    citations: finalHits.map((hit) => hit.citation).filter(Boolean) as NonNullable<MemorySearchHit['citation']>[],
+    stats: { records: Object.keys(store.records).length, chunks: Object.keys(store.chunks).length, indexedAt: store.updatedAt, backend: 'json_hybrid' },
+  };
+}
+
+export async function searchMemoryIndexAsync(workspacePath: string, params: MemorySearchParams): Promise<MemorySearchResult> {
+  scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  try {
+    const sqliteResult = await searchSqliteMemoryIndexAsync(workspacePath, params);
+    if (sqliteResult) return sqliteResult;
+  } catch { /* non-fatal: fall back to sync memory index */ }
+  return searchMemoryIndex(workspacePath, params);
 }
 
 export function readMemoryRecord(workspacePath: string, recordId: string): ResolvedMemoryRecord {
   scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
+  try {
+    const sqliteRecord = readSqliteMemoryRecord(workspacePath, recordId);
+    if (sqliteRecord?.record) return sqliteRecord;
+  } catch { /* non-fatal: fall back to JSON index */ }
   const store = readStoreSnapshot(workspacePath);
   const evidence = readEvidenceRecordFromStore(store, recordId);
   if (evidence.record) return { layer: 'evidence', record: evidence.record, chunks: evidence.chunks };
@@ -767,6 +1000,10 @@ export function searchMemoryTimeline(workspacePath: string, query: string, dateF
 export function getMemoryGraphSnapshot(workspacePath: string): { generatedAt: string; nodeCount: number; edgeCount: number; nodes: any[]; edges: any[] } {
   const { root, store: storePath } = idxPaths(workspacePath);
   const graphPath = path.join(root, 'graph.json');
+  try {
+    const sqliteGraph = getSqliteMemoryGraphSnapshot(workspacePath);
+    if (sqliteGraph) return sqliteGraph;
+  } catch { /* non-fatal: fall back to JSON graph */ }
 
   // If a cached graph already exists, return it immediately and kick off a background refresh.
   // This prevents the first page-load from timing out on large workspaces.
@@ -797,6 +1034,10 @@ export function getMemoryGraphSnapshot(workspacePath: string): { generatedAt: st
 
 export function getRelatedMemory(workspacePath: string, recordId: string, limit = 8): MemorySearchHit[] {
   scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
+  try {
+    const sqliteRelated = getRelatedSqliteMemory(workspacePath, recordId, limit);
+    if (sqliteRelated) return sqliteRelated;
+  } catch { /* non-fatal: fall back to JSON graph */ }
   const store = readStoreSnapshot(workspacePath);
   const base = store.records[String(recordId || '').trim()];
   if (!base) {
@@ -835,6 +1076,16 @@ export function getRelatedMemory(workspacePath: string, recordId: string, limit 
       title: r.title,
       preview: c ? preview(c.text) : '',
       projectId: r.projectId,
+      citation: {
+        sourceType: r.sourceType,
+        sourcePath: r.sourcePath,
+        sourceSection: c?.sourceSection || r.sourceSection,
+        sourceStartLine: c?.sourceStartLine,
+        sourceEndLine: c?.sourceEndLine,
+        authority: r.authority || (r.sourceType === 'memory_root' ? 'durable_memory_file' : r.sourceType.startsWith('chat_') ? 'raw_transcript' : 'raw_evidence'),
+        confidence: Number(r.confidence || 0.8),
+        status: String(r.status || 'active'),
+      },
     }];
   });
 }

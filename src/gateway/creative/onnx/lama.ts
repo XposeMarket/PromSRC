@@ -24,6 +24,22 @@ function nextMultiple(n: number, m: number): number {
   return Math.ceil(n / m) * m;
 }
 
+function resolveStaticDim(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+function getInputShape(session: ort.InferenceSession, inputName: string): unknown[] {
+  const meta = (session as any).inputMetadata;
+  const entry = Array.isArray(meta)
+    ? meta.find((item: any) => item?.name === inputName)
+    : meta?.[inputName];
+  return Array.isArray(entry?.dimensions)
+    ? entry.dimensions
+    : Array.isArray(entry?.shape)
+      ? entry.shape
+      : [];
+}
+
 function jimpToImage01CHW(img: Jimp, width: number, height: number): Float32Array {
   const out = new Float32Array(3 * width * height);
   const planeSize = width * height;
@@ -65,12 +81,25 @@ export async function inpaintWithLama(opts: {
   const origW = original.bitmap.width;
   const origH = original.bitmap.height;
 
-  const longest = Math.max(origW, origH);
-  const scale = longest > LAMA_MAX_SIDE ? LAMA_MAX_SIDE / longest : 1;
-  const targetW = nextMultiple(Math.max(8, Math.round(origW * scale)), LAMA_PAD_MULTIPLE);
-  const targetH = nextMultiple(Math.max(8, Math.round(origH * scale)), LAMA_PAD_MULTIPLE);
+  const inputs = session.inputNames;
+  const imageInputName = inputs.find((n) => /image|img|input(?!.*mask)/i.test(n)) || inputs[0];
+  const maskInputName = inputs.find((n) => /mask/i.test(n)) || inputs[1];
+  if (!imageInputName || !maskInputName) {
+    throw new Error(`LaMa ONNX inputs unexpected: [${inputs.join(', ')}]`);
+  }
+  const imageDims = getInputShape(session, imageInputName);
+  const staticH = resolveStaticDim(imageDims[2]);
+  const staticW = resolveStaticDim(imageDims[3]);
+  const fixedInput = !!staticW && !!staticH;
+  const scale = fixedInput
+    ? Math.min(staticW! / origW, staticH! / origH)
+    : Math.min(1, LAMA_MAX_SIDE / Math.max(origW, origH));
+  const resizedW = Math.max(1, Math.round(origW * scale));
+  const resizedH = Math.max(1, Math.round(origH * scale));
+  const targetW = fixedInput ? staticW! : nextMultiple(Math.max(8, resizedW), LAMA_PAD_MULTIPLE);
+  const targetH = fixedInput ? staticH! : nextMultiple(Math.max(8, resizedH), LAMA_PAD_MULTIPLE);
 
-  const resized = original.clone().resize(Math.round(origW * scale), Math.round(origH * scale), Jimp.RESIZE_BILINEAR);
+  const resized = original.clone().resize(resizedW, resizedH, Jimp.RESIZE_BILINEAR);
   const padded = new Jimp(targetW, targetH, 0x000000ff);
   padded.composite(resized, 0, 0);
 
@@ -83,12 +112,6 @@ export async function inpaintWithLama(opts: {
     }
   }
 
-  const inputs = session.inputNames;
-  const imageInputName = inputs.find((n) => /image|img|input(?!.*mask)/i.test(n)) || inputs[0];
-  const maskInputName = inputs.find((n) => /mask/i.test(n)) || inputs[1];
-  if (!imageInputName || !maskInputName) {
-    throw new Error(`LaMa ONNX inputs unexpected: [${inputs.join(', ')}]`);
-  }
   const feeds: Record<string, ort.Tensor> = {
     [imageInputName]: new ort.Tensor('float32', imageTensor, [1, 3, targetH, targetW]),
     [maskInputName]: new ort.Tensor('float32', maskPlane, [1, 1, targetH, targetW]),

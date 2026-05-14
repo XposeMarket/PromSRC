@@ -79,6 +79,12 @@ extraMetadata:
 directories:
   output: release-public
 
+# Lock the installer filename so the local artifact matches the URL recorded
+# in latest.yml (electron-builder hyphenates spaces when publishing). Keeping
+# both sides identical lets the auto-updater find the file whether it's served
+# from GitHub Releases or a local folder during QA.
+artifactName: ${productName}-Setup-${version}.${ext}
+
 win:
   target:
     - target: nsis

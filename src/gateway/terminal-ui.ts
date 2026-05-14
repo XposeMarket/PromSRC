@@ -61,6 +61,10 @@ export function suppressStartupLogs(): void {
 // logs never bleed into the terminal UI.
 export function restoreConsole(): void { /* intentionally suppressed forever */ }
 export function getStartupLogs(): string[] { return [..._logBuffer]; }
+export function captureStartupLog(line: string): void {
+  const text = String(line || '').trim();
+  if (text) _logBuffer.push(text);
+}
 
 // ─── Server-ready signal ──────────────────────────────────────────────────────
 
@@ -183,6 +187,17 @@ const STATUS_MSGS = [
 ];
 const SPARKLES = ['✦', '✧', '✦', '✧', '★'];
 
+function latestStartupStatus(): string {
+  const recent = _logBuffer
+    .slice(-20)
+    .map((line) => strip(String(line || '')).replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith('> prometheus@') && !line.startsWith('> tsx ') && !line.startsWith('> node '));
+  const last = recent[recent.length - 1] || '';
+  if (!last) return '';
+  return last.length > 56 ? `${last.slice(0, 53)}...` : last;
+}
+
 export async function runLoadingScreen(): Promise<void> {
   if (!process.stdout.isTTY) {
     out(co(C.orange, '⚡ Prometheus Gateway starting...\n'));
@@ -213,6 +228,9 @@ export async function runLoadingScreen(): Promise<void> {
     progress      = _serverReady ? 1.0 : raw;
     msgIdx        = Math.min(Math.floor(raw * STATUS_MSGS.length), STATUS_MSGS.length - 1);
     spinIdx++;
+    const statusMessage = !_serverReady && elapsed > 8000
+      ? (latestStartupStatus() || 'Still starting gateway...')
+      : STATUS_MSGS[msgIdx];
 
     const filled = Math.floor(progress * 30);
     const bar    = co(C.orange, '█'.repeat(filled)) + co(C.gray, '░'.repeat(30 - filled));
@@ -247,20 +265,20 @@ export async function runLoadingScreen(): Promise<void> {
     boxRow(BOX_TOP_ROW + 4 + TORCH_H, barText);
 
     // Status message
-    boxRow(BOX_TOP_ROW + 5 + TORCH_H, ` ${co(C.gray, STATUS_MSGS[msgIdx])}`);
+    boxRow(BOX_TOP_ROW + 5 + TORCH_H, ` ${co(C.gray, statusMessage)}`);
 
     // Bottom border
     moveTo(BOX_TOP_ROW + 6 + TORCH_H, 1); eraseLine();
     out(co(C.orange, '╚' + '═'.repeat(BOX_W) + '╝'));
   };
 
+  render();
   startTorch(render);
 
   const MIN_MS = 2000;
   while (true) {
     const el = Date.now() - start;
     if (_serverReady && el >= MIN_MS) break;
-    if (el > 15000) break;
     await sleep(50);
   }
 

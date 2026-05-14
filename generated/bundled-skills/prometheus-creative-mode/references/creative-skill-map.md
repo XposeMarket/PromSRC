@@ -1,52 +1,47 @@
 # Creative Skill Consolidation Map
 
-This bundle is the new home for Prometheus creative/video guidance.
+Prometheus Creative Mode is HyperFrames-first. Older HyperFrames, Remotion, Pretext, and animation-adapter skills are retained as references or archived compatibility material, but the broad creative workflow should route through `prometheus-creative-mode`.
 
-The full legacy skill bodies are preserved under `references/legacy-skills/` so an agent can load only the relevant deep reference when needed.
+## Active Skills
 
-## Core
+- `prometheus-creative-mode`: default HyperFrames-first route for video canvas work, editable HTML-in-motion, media analysis, catalog adaptation, text flow, QA, and export.
+- `hyperframes-catalog-assets`: narrow companion for looking up and adapting HeyGen HyperFrames catalog blocks/components.
 
-- `references/PROMETHEUS_HTML_MOTION_SPEC.md`: canonical engineering spec for valid Prometheus HTML Motion clips.
-- `prometheus-html-motion-spec`: canonical HTML Motion structure, timing, lint, QA, and export contract.
-- `prometheus-hyperframes-bridge`: Prometheus-first routing for HyperFrames-style video work.
-- `html-motion-video`: normal clip creation/editing/export workflow.
-- `creative-director-video`: creative direction and edit decision guidance.
+## Primary Stack
 
-## Motion And Rendering
+- HyperFrames composition model: `data-composition-id`, timed clips, tracks, nested compositions, variables, GSAP timelines, runtime seeking.
+- Prometheus editability layer: asset placeholders, layer extraction, slot metadata, inspector patching, snapshots, QA, and export.
+- `@hyperframes/core`: parse/generate/lint/validate/compile/inject runtime.
+- `@hyperframes/player`: playback reference, iframe bridge reference, and mobile audio behavior reference.
 
-- `gsap`: GSAP timelines and effects.
-- `web-animations`: CSS and WAAPI patterns.
-- HTML-in-Canvas experiments now live as first-party adapter/block snippets inside the Prometheus runtime. Use them only as feature-detected progressive enhancement.
-- `remotion-best-practices`: Remotion concepts and constraints.
-- `remotion-to-hyperframes`: Remotion-to-HTML Motion conversion guidance.
-- `hyperframes`: upstream HyperFrames composition reference.
-- `hyperframes-cli`: standalone CLI reference only.
-- `hyperframes-registry`: block/registry ideas.
+## Prometheus-Native Bridge Files
 
-## Text And Typography
+- `src/gateway/creative/hyperframes-bridge.ts`: official core parser/linter/runtime bridge, layer extraction, variables, slots, and patch operations.
+- `src/gateway/creative/hyperframes-catalog.ts`: catalog import/adaptation support.
+- `src/gateway/creative/hyperframes-export-adapter.ts`: materializes HyperFrames clips for the existing renderer.
+- `src/gateway/creative/hyperframes-qa.ts`: sample-frame QA over HyperFrames HTML.
+- `src/gateway/creative/html-motion-spec.ts`: compatibility lint for older Prometheus HTML Motion clips.
 
-- `pretext-html-motion`: Pretext-style kinetic typography.
-- `pretext-html-motion-video`: finished Pretext video workflows.
-- `nous-pretext-upstream`: upstream Pretext reference.
+## Reference Lanes
 
-## ASCII
+- HyperFrames: keep `legacy-skills/hyperframes`, `legacy-skills/hyperframes-cli`, and `legacy-skills/hyperframes-registry` as the main authoring and reusable-block references.
+- Remotion: keep `legacy-skills/remotion-best-practices` for concepts and `legacy-skills/remotion-to-hyperframes` only for explicit source migration.
+- Pretext: keep `legacy-skills/pretext-html-motion`, `legacy-skills/pretext-html-motion-video`, and `legacy-skills/nous-pretext-upstream` for text-fit, text flow, and kinetic typography references.
+- ASCII: keep `legacy-skills/nous-ascii-video` as the Python/FFmpeg ASCII lane, composed back through HyperFrames/HTML.
+- Website/video analysis: keep `legacy-skills/website-to-hyperframes` and `legacy-skills/video-analysis-and-transcription` as planning/analysis references adapted to HyperFrames-first Prometheus.
 
-- `nous-ascii-video`: premium Python/FFmpeg ASCII rendering.
-- HTML Motion remains the composition pass for captions, overlays, CTAs, frames, and export.
+## Adapter References
 
-## Media And Website Workflows
+GSAP, CSS/WAAPI, Lottie, Three, Anime.js, and Tailwind guidance should be loaded only when a specific composition needs that adapter. These adapters must remain deterministic, finite, and compatible with HyperFrames runtime seeking.
 
-- `video-analysis-and-transcription`: source video analysis before edit assembly.
-- `website-to-hyperframes`: website-to-video process adapted for Prometheus.
+## Archived Standalone Skills
 
-## Presets
-
-- `html-motion-preset-author`: preserve successful clips as reusable presets.
-- `holographic-globe-hyperframes-preset`: reusable globe effect.
+The old standalone creative folders are under `workspace/skills/.archived-creative-legacy/standalone-adapters-2026-05-09/` so the skill scanner does not load multiple broad creative front doors at once. Their contents remain available as recoverable references.
 
 ## Migration Direction
 
-1. New creative requests should trigger `prometheus-creative-mode`.
-2. Older skills should become thin compatibility pointers over time.
-3. New creative additions should be added as references/templates inside this bundle, not as top-level skills, unless they are truly unrelated to Creative Mode.
-4. Once trigger behavior is validated, retire or hide redundant top-level creative skills from the active skill manifest.
+1. New creative requests trigger `prometheus-creative-mode`.
+2. Prometheus authors HyperFrames-compatible HTML by default.
+3. Prometheus exposes editability through parsed layers, declared variables, and explicit slots.
+4. HyperFrames catalog reuse may trigger `hyperframes-catalog-assets`, then implementation returns to `prometheus-creative-mode`.
+5. New creative additions should land as references, templates, blocks, variables, or slots inside this HyperFrames-first bundle unless they are genuinely unrelated to video/HTML composition work.

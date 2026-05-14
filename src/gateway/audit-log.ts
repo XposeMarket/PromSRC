@@ -15,7 +15,7 @@
  *   toolName?:      name of the tool
  *   toolArgs?:      args (scrubbed of secrets)
  *   policyTier?:    'read' | 'propose' | 'commit'
- *   approvalStatus?: 'auto' | 'approved' | 'rejected' | 'pending'
+ *   approvalStatus?: 'auto' | 'auto_allowed' | 'approved' | 'rejected' | 'pending'
  *   resultSummary?: short string summary of the result
  *   error?:         error message if the call failed
  * }
@@ -118,7 +118,7 @@ export interface AuditQueryOptions {
   /** Filter by policyTier */
   tier?: 'read' | 'propose' | 'commit';
   /** Filter by approvalStatus */
-  status?: 'auto' | 'approved' | 'rejected' | 'pending';
+  status?: 'auto' | 'auto_allowed' | 'approved' | 'rejected' | 'pending';
   /** Max number of entries to return (default 200) */
   limit?: number;
   /** Page offset (default 0) */

@@ -13,12 +13,18 @@
  * Tool calls come back as response.output items with type "function_call".
  */
 
-import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo } from './LLMProvider';
+import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
 import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { contentToString } from './content-utils';
 import { getConfig } from '../config/config';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
+function envMs(name: string, fallback: number, minimum: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? Math.max(minimum, value) : fallback;
+}
+const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 240_000, 30_000);
+const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 75_000, 15_000);
 
 // Models available via Codex OAuth (latest first; includes standard GPT and Codex variants)
 export const CODEX_MODELS = [
@@ -56,6 +62,25 @@ function getChatgptAccountCompatibleModel(model: string): string {
 
 function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string): boolean {
   return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
+}
+
+function parseUsage(usage: any): ModelUsage | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const inputTokens = Number(usage.input_tokens || usage.prompt_tokens || 0);
+  const outputTokens = Number(usage.output_tokens || usage.completion_tokens || 0);
+  const reasoningTokens = Number(
+    usage.output_tokens_details?.reasoning_tokens
+    || usage.completion_tokens_details?.reasoning_tokens
+    || 0,
+  );
+  const totalTokens = Number(usage.total_tokens || (inputTokens + outputTokens + reasoningTokens));
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    totalTokens,
+    source: 'provider',
+  };
 }
 
 // Reasoning effort levels accepted by the Codex Responses API.
@@ -213,6 +238,34 @@ export class OpenAICodexAdapter implements LLMProvider {
     const input = this.buildInput(messages);
 
     const runRequest = async (requestedModel: string, allowFallback: boolean): Promise<ChatResult> => {
+      const controller = new AbortController();
+      let abortReason = '';
+      let requestTimeout: ReturnType<typeof setTimeout> | null = null;
+      let idleTimeout: ReturnType<typeof setTimeout> | null = null;
+      const abortFor = (reason: string) => {
+        if (controller.signal.aborted) return;
+        abortReason = reason;
+        controller.abort();
+      };
+      const clearTimers = () => {
+        if (requestTimeout) clearTimeout(requestTimeout);
+        if (idleTimeout) clearTimeout(idleTimeout);
+        requestTimeout = null;
+        idleTimeout = null;
+      };
+      const resetIdleTimer = () => {
+        if (idleTimeout) clearTimeout(idleTimeout);
+        idleTimeout = setTimeout(() => {
+          abortFor(`openai_codex stream had no activity for ${Math.round(CODEX_STREAM_IDLE_TIMEOUT_MS / 1000)}s`);
+        }, CODEX_STREAM_IDLE_TIMEOUT_MS);
+      };
+      const onExternalAbort = () => abortFor('openai_codex request canceled by client');
+      options?.abortSignal?.addEventListener?.('abort', onExternalAbort, { once: true });
+      requestTimeout = setTimeout(() => {
+        abortFor(`openai_codex request exceeded ${Math.round(CODEX_REQUEST_TIMEOUT_MS / 1000)}s`);
+      }, CODEX_REQUEST_TIMEOUT_MS);
+      resetIdleTimer();
+
       const body: any = {
         model: requestedModel,
         store: false,
@@ -245,28 +298,40 @@ export class OpenAICodexAdapter implements LLMProvider {
         }));
       }
 
-      const response = await fetch(CODEX_ENDPOINT, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
+      try {
+        const response = await fetch(CODEX_ENDPOINT, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        resetIdleTimer();
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        const fallbackModel = getChatgptAccountCompatibleModel(requestedModel);
-        if (
-          allowFallback
-          && fallbackModel
-          && fallbackModel !== requestedModel
-          && isUnsupportedChatgptAccountCodexModel(response.status, text)
-        ) {
-          console.warn(`[openai_codex] Model "${requestedModel}" is unsupported for this ChatGPT account. Retrying with "${fallbackModel}".`);
-          return runRequest(fallbackModel, false);
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          const fallbackModel = getChatgptAccountCompatibleModel(requestedModel);
+          if (
+            allowFallback
+            && fallbackModel
+            && fallbackModel !== requestedModel
+            && isUnsupportedChatgptAccountCodexModel(response.status, text)
+          ) {
+            console.warn(`[openai_codex] Model "${requestedModel}" is unsupported for this ChatGPT account. Retrying with "${fallbackModel}".`);
+            return runRequest(fallbackModel, false);
+          }
+          throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
         }
-        throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
-      }
 
-      return this.parseSSEStream(response, options?.onToken, options?.onThinking, options?.onReasoningSummary);
+        return await this.parseSSEStream(response, options?.onToken, options?.onThinking, options?.onReasoningSummary, resetIdleTimer);
+      } catch (err: any) {
+        if (controller.signal.aborted || err?.name === 'AbortError') {
+          throw new Error(abortReason || 'openai_codex request aborted');
+        }
+        throw err;
+      } finally {
+        clearTimers();
+        options?.abortSignal?.removeEventListener?.('abort', onExternalAbort);
+      }
     };
 
     return runRequest(String(model || '').trim(), true);
@@ -277,6 +342,7 @@ export class OpenAICodexAdapter implements LLMProvider {
 	    onToken?: (chunk: string) => void,
 	    onThinking?: (chunk: string) => void,
 	    onReasoningSummary?: (chunk: string) => void,
+	    onActivity?: () => void,
 	  ): Promise<ChatResult> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body from Codex endpoint');
@@ -286,6 +352,7 @@ export class OpenAICodexAdapter implements LLMProvider {
 		    let finalContent = '';
 		    let thinking = '';
 		    let toolCalls: any[] = [];
+		    let usage: ModelUsage | undefined;
 		    const toolCallByOutputIndex = new Map<number, any>();
 		    const toolCallByItemId = new Map<string, any>();
 		    const toolCallByCallId = new Map<string, any>();
@@ -312,6 +379,7 @@ export class OpenAICodexAdapter implements LLMProvider {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        onActivity?.();
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split('\n');
@@ -391,6 +459,7 @@ export class OpenAICodexAdapter implements LLMProvider {
 	
 	            // response.completed contains the full final snapshot
             if (type === 'response.completed') {
+              usage = parseUsage(event.response?.usage);
               const outputs = event.response?.output || [];
               for (const item of outputs) {
                 if (item.type === 'message') {
@@ -436,7 +505,7 @@ export class OpenAICodexAdapter implements LLMProvider {
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
 
-	    return { message, thinking: thinking || undefined };
+	    return { message, thinking: thinking || undefined, usage };
 	  }
 
   async generate(prompt: string, model: string, options?: GenerateOptions): Promise<GenerateResult> {
@@ -447,7 +516,7 @@ export class OpenAICodexAdapter implements LLMProvider {
       max_tokens:  options?.max_tokens,
       think:       options?.think,
     });
-    return { response: contentToString(result.message.content) };
+    return { response: contentToString(result.message.content), usage: result.usage };
   }
 
   async listModels(): Promise<ModelInfo[]> {

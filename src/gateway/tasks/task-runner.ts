@@ -15,8 +15,8 @@ import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
 import { registerBrowserSessionMetadata } from '../browser-tools';
+import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getActivatedToolCategories, getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
-import { getRuntimeToolCategories } from '../tool-builder';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -157,6 +157,7 @@ export class TaskRunner {
           num_ctx: 8192,
           num_predict: 2048,
           think: false,
+          usageContext: { sessionId: this.state.id || 'background_task', agentId: 'background_task' },
         });
         response = result.message;
 
@@ -409,6 +410,8 @@ export interface EphemeralBackgroundWaitResult {
 interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   promise: Promise<void>;
   spawnerSessionId?: string;
+  abortSignal?: { aborted: boolean };
+  promptPreview?: string;
 }
 
 const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
@@ -421,7 +424,7 @@ type BgHandleChat = (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   extra?: any,
-  abortSignal?: AbortSignal,
+  abortSignal?: { aborted: boolean },
   callerContext?: string,
   modelOverride?: string,
   executionMode?: string,
@@ -519,7 +522,7 @@ function createBackgroundPrompt(prompt: string): any[] {
       role: 'system',
       content:
         'You are executing a one-time ephemeral background task in parallel with the main chat. ' +
-        'You have full access to all tools (files, browser, memory, shell, etc.) — same as the main agent. ' +
+        'You inherit the main chat session tool categories and can request additional categories when needed. ' +
         'Complete your task efficiently and report the outcome.',
     },
     {
@@ -531,24 +534,38 @@ function createBackgroundPrompt(prompt: string): any[] {
 
 function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: string): Promise<void> {
   return (async () => {
+    const abortSignal = record.abortSignal || { aborted: false };
+    record.abortSignal = abortSignal;
+    const runtimeSessionId = `background_${record.id}`;
+    const runtimeId = registerLiveRuntime({
+      kind: 'background_agent',
+      label: 'Background agent',
+      sessionId: runtimeSessionId,
+      taskId: record.id,
+      source: 'background_spawn',
+      detail: String(prompt || '').slice(0, 160),
+      abortSignal,
+      onAbort: () => {
+        if (!isBackgroundTerminal(record)) {
+          record.state = 'failed';
+          record.error = 'Aborted by operator.';
+          record.completedAt = Date.now();
+        }
+      },
+    });
     record.state = 'in_progress';
     console.log(`[Background Agent] ${record.id} started`);
 
     // ── Full handleChat path (preferred — full tool execution loop + live SSE) ──
     if (_bgDeps?.handleChat) {
       const { handleChat, broadcastWS } = _bgDeps;
-      const sessionId = `background_${record.id}`;
+      const sessionId = runtimeSessionId;
       const { spawnerSessionId } = record;
       try {
-        const runtimeCategories = getRuntimeToolCategories();
         const inheritedCategories = spawnerSessionId
           ? Array.from(getActivatedToolCategories(spawnerSessionId))
           : [];
-        const categories = Array.from(new Set([
-          ...runtimeCategories,
-          ...inheritedCategories,
-        ]));
-        setActivatedToolCategories(sessionId, categories);
+        setActivatedToolCategories(sessionId, inheritedCategories);
         if (spawnerSessionId) {
           const parentWorkspace = getWorkspace(spawnerSessionId);
           if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);
@@ -615,7 +632,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           sessionId,
           sendSSE,
           undefined,   // extra
-          undefined,   // abortSignal
+          abortSignal,
           `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly.`,
           record.model,   // modelOverride
           'background_agent',
@@ -626,6 +643,16 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         );
         // handleChat returns a ChatResult object — extract .text, not the whole object
         const finalText = String((chatResult as any)?.text ?? chatResult ?? '').trim();
+        if (abortSignal.aborted) {
+          record.error = 'Aborted by operator.';
+          record.state = 'failed';
+          record.completedAt = Date.now();
+          if (spawnerSessionId) {
+            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+          }
+          finishLiveRuntime(runtimeId);
+          return;
+        }
 
         const toolSummary = toolCallLog.length > 0
           ? `\n\n---\n**Tool calls made:**\n${toolCallLog.join('\n')}`
@@ -647,6 +674,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, bgId: record.id, state: 'failed', error: record.error, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
         }
       }
+      finishLiveRuntime(runtimeId);
       return;
     }
 
@@ -658,6 +686,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         num_ctx: 8192,
         num_predict: 2048,
         think: false,
+        usageContext: { sessionId: record.id, agentId: 'background_agent' },
       });
       const text = String(out?.message?.content || '').trim();
       record.result = text || 'Background task completed with no textual output.';
@@ -669,6 +698,8 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.state = 'failed';
       record.completedAt = Date.now();
       console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
+    } finally {
+      finishLiveRuntime(runtimeId);
     }
   })();
 }
@@ -693,6 +724,8 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     tags: Array.isArray(input?.tags) ? input.tags.map((v) => String(v)).filter(Boolean).slice(0, 12) : undefined,
     startedAt: Date.now(),
     promise: Promise.resolve(),
+    abortSignal: { aborted: false },
+    promptPreview: prompt.slice(0, 160),
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
@@ -739,6 +772,25 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
 }
 
 export const backgroundProgress = backgroundStatus;
+
+export function listBackgroundStatuses(): EphemeralBackgroundStatus[] {
+  return Array.from(_ephemeralBackgroundRuns.values())
+    .map(statusFromRecord)
+    .sort((a, b) => b.startedAt - a.startedAt);
+}
+
+export function backgroundAbort(backgroundId: string): { ok: boolean; status?: EphemeralBackgroundStatus; error?: string } {
+  const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
+  if (!rec) return { ok: false, error: 'Background agent not found.' };
+  if (isBackgroundTerminal(rec)) {
+    return { ok: false, status: statusFromRecord(rec), error: `Background agent is already ${rec.state}.` };
+  }
+  if (rec.abortSignal) rec.abortSignal.aborted = true;
+  rec.state = 'failed';
+  rec.error = 'Aborted by operator.';
+  rec.completedAt = Date.now();
+  return { ok: true, status: statusFromRecord(rec) };
+}
 
 function isBackgroundTerminal(rec: EphemeralBackgroundRecord): boolean {
   return rec.state === 'completed' || rec.state === 'failed' || rec.state === 'timed_out';

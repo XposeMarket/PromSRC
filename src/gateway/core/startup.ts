@@ -15,7 +15,7 @@ import fs from 'fs';
 import { getConfig } from '../../config/config';
 import { getAgentById } from '../../config/config';
 import { spawnAgent } from '../../agents/spawner';
-import { logGpuStatus } from '../gpu-detector';
+import { detectGpu, logGpuStatus } from '../gpu-detector';
 import { getMCPManager } from '../mcp-manager';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
@@ -54,6 +54,20 @@ import { startAuditMaterializer } from '../audit/materializer';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { markProviderStatus, markProviderStatusChecking, resolveProviderStatus } from '../provider-status';
 import { getProvider } from '../../providers/factory';
+
+const STARTUP_PROFILE = process.env.PROMETHEUS_STARTUP_PROFILE === '1';
+let startupT0 = 0;
+let startupLast = 0;
+function startupMark(label: string): void {
+  if (!STARTUP_PROFILE) return;
+  const now = Date.now();
+  if (!startupT0) {
+    startupT0 = now;
+    startupLast = now;
+  }
+  console.error(`[startup:run] +${String(now - startupT0).padStart(5)}ms Δ${String(now - startupLast).padStart(5)}ms ${label}`);
+  startupLast = now;
+}
 
 // ─── Deps contract ────────────────────────────────────────────────────────────
 // All singletons that live in server-v2.ts and are needed during startup wiring.
@@ -182,9 +196,15 @@ function scheduleStartupProviderWarmup(): void {
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
 }
 
+function yieldStartup(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 // ─── Main startup function ────────────────────────────────────────────────────
 
 export async function runStartup(deps: StartupDeps): Promise<void> {
+  startupMark('runStartup entered');
+  await yieldStartup();
   const {
     HOST, PORT, config, skillsManager,
     cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
@@ -192,23 +212,27 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   } = deps;
 
   // Detect GPU hardware once — caches result for /api/system-stats, no repeated probes.
-  logGpuStatus();
+  setImmediate(() => {
+    try {
+      logGpuStatus();
+      detectGpu();
+      startupMark('gpu detected asynchronously');
+    } catch (err: any) {
+      console.warn('[GPU] Deferred detection failed:', err?.message || err);
+    }
+  });
+  startupMark('gpu detection deferred');
 
   const liveConfig = getConfig().getConfig();
   const searchCfg = (liveConfig as any).search || {};
   // HIGH-03: resolve vault references before checking presence — never log the key value itself
   const cm = getConfig();
   const tavilyKey = cm.resolveSecret(searchCfg.tavily_api_key);
+  const tinyfishKey = cm.resolveSecret(searchCfg.tinyfish_api_key);
   const googleKey = cm.resolveSecret(searchCfg.google_api_key);
-  const hasSearch = tavilyKey ? '✓ Tavily' : googleKey ? '✓ Google' : '✗ None (configure in Settings → Search)';
+  const hasSearch = tinyfishKey ? '✓ TinyFish' : tavilyKey ? '✓ Tavily' : googleKey ? '✓ Google' : '✗ None (configure in Settings → Search)';
 
-  // Build GPU display string from cached detection
-  const { detectGpu } = require('../gpu-detector') as typeof import('../gpu-detector');
-  const gpuInfo = detectGpu();
-  let gpuDisplay = 'CPU only';
-  if (gpuInfo.backend === 'nvidia')             gpuDisplay = `${gpuInfo.name ?? 'NVIDIA'} (CUDA)`;
-  else if (gpuInfo.backend === 'amd')           gpuDisplay = `${gpuInfo.name ?? 'AMD'} (ROCm)`;
-  else if (gpuInfo.backend === 'apple-silicon') gpuDisplay = 'Apple Silicon (Metal)';
+  const gpuDisplay = 'Detecting GPU...';
 
   const activeProvider = (liveConfig as any).llm?.provider || 'ollama';
   const effectiveModel =
@@ -230,6 +254,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       gpuInfo: gpuDisplay,
       cronJobCount: cronScheduler.getJobs().length,
     });
+    startupMark('terminal notified ready');
   } catch {
     // terminal-ui not loaded (e.g. called without CLI wrapper) — fall back to plain log
     console.log(`\n╔════════════════════════════════════════════════════════════════╗`);
@@ -239,12 +264,20 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     console.log(`║  Model:     ${liveConfig.models.primary}`);
     console.log(`╚════════════════════════════════════════════════════════════════╝\n`);
   }
+  await yieldStartup();
 
-  // Auto-connect enabled MCP servers
-  getMCPManager().startEnabledServers().catch((err: any) => console.warn('[MCP] Startup error:', err?.message));
+  // Auto-connect enabled MCP servers after the gateway is already responsive.
+  // Network handshakes and broken credentials should not hold the startup UI hostage.
+  const mcpStartupTimer = setTimeout(() => {
+    getMCPManager().startEnabledServers().catch((err: any) => console.warn('[MCP] Startup error:', err?.message));
+  }, 120_000);
+  if (typeof (mcpStartupTimer as any).unref === 'function') (mcpStartupTimer as any).unref();
+  startupMark('mcp startup deferred');
 
   cronScheduler.start();
   console.log('[CronScheduler] Tick loop started.');
+  startupMark('cron started');
+  await yieldStartup();
 
   // Wire handleChat into background agent executor so spawned bg agents run full tool loop
   try {
@@ -252,6 +285,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   } catch (e: any) {
     console.warn('[BackgroundAgent] Could not wire background agent deps:', e?.message);
   }
+  startupMark('background deps wired');
 
   // Inject full handleChat-based agent runner into team-manager-runner
   try {
@@ -280,6 +314,8 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   } catch (e: any) {
     console.warn('[TeamTools] Could not inject team tool deps:', e.message);
   }
+  startupMark('team tools deps injected');
+  await yieldStartup();
 
   // CIS Phase 2: Inject analysis team deps
   try {
@@ -316,6 +352,8 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   } catch (e: any) {
     console.warn('[Connectors] Could not init connector registry:', e.message);
   }
+  startupMark('connector registry initialized');
+  await yieldStartup();
 
   // Inject team deps into Telegram channel so /teams command works
   try {
@@ -348,6 +386,8 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
             runAt: parsed.toISOString(),
             sessionTarget: 'isolated',
             subagent_id: targetAgentId,
+            assignmentTarget: 'team',
+            deliverToMainChannel: false,
           } as any);
           appendTeamChat(teamId, {
             from: 'manager',
@@ -583,19 +623,30 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   } catch (e: any) {
     console.warn('[TeamCoordinator] Could not wire coordinator deps:', e.message);
   }
+  startupMark('team coordinator deps wired');
+  await yieldStartup();
 
   // Intelligence pipeline jobs are managed via cron/jobs.json — not hardcoded here.
 
-  try {
-    for (const team of listManagedTeams()) {
-      initTeamWorkspaceArtifacts(team);
-    }
-    console.log('[TeamWorkspace] Existing team workspace artifacts verified.');
-  } catch (e: any) {
-    console.warn('[TeamWorkspace] Existing team artifact migration skipped:', e?.message || e);
+  if (process.env.PROMETHEUS_STARTUP_TEAM_WORKSPACE_VERIFY === '1') {
+    const teamWorkspaceTimer = setTimeout(() => {
+      try {
+        for (const team of listManagedTeams()) {
+          initTeamWorkspaceArtifacts(team);
+        }
+        console.log('[TeamWorkspace] Existing team workspace artifacts verified.');
+        startupMark('team workspace artifacts verified');
+      } catch (e: any) {
+        console.warn('[TeamWorkspace] Existing team artifact migration skipped:', e?.message || e);
+      }
+    }, 10 * 60_000);
+    if (typeof (teamWorkspaceTimer as any).unref === 'function') (teamWorkspaceTimer as any).unref();
   }
+  startupMark('team workspace artifact verification skipped');
 
   heartbeatRunner.start();
+  startupMark('heartbeat runner started');
+  await yieldStartup();
 
   // Brain system — continuous self-reflection (thoughts every 6h, dream nightly)
   try {
@@ -606,7 +657,10 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   }
   console.log('[HeartbeatRunner] Started — interval:', heartbeatRunner.getConfig().intervalMinutes, 'min');
 
-  telegramChannel.start().then(() => {
+  startupMark('brain runner started');
+  await yieldStartup();
+
+  const startTelegram = () => telegramChannel.start().then(() => {
     // Deliver any queued startup/hot-restart notices that target Telegram.
     try {
       const pending = listPendingStartupNotifications().filter((n) =>
@@ -654,6 +708,11 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       }
     }
   }).catch((err: any) => console.error('[Telegram] Start failed:', err.message));
+  const telegramStartDelayMs = Math.max(0, Number(process.env.PROMETHEUS_TELEGRAM_STARTUP_DELAY_MS ?? 5 * 60_000));
+  const telegramStartTimer = setTimeout(startTelegram, telegramStartDelayMs);
+  if (typeof (telegramStartTimer as any).unref === 'function') (telegramStartTimer as any).unref();
+  startupMark('telegram startup deferred');
+  await yieldStartup();
 
   const bootWorkspace = getConfig().getWorkspacePath() || (getConfig().getConfig() as any).workspace?.path || '';
   if (bootWorkspace) {
@@ -670,8 +729,11 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     }
 
     loadWorkspaceHooks(bootWorkspace);
-    hookBus
-      .fire({ type: 'gateway:startup', workspacePath: bootWorkspace })
-      .catch((err: any) => console.warn('[hooks] gateway:startup error:', err?.message || err));
+    setImmediate(() => {
+      hookBus
+        .fire({ type: 'gateway:startup', workspacePath: bootWorkspace })
+        .catch((err: any) => console.warn('[hooks] gateway:startup error:', err?.message || err));
+    });
   }
+  startupMark('runStartup complete');
 }

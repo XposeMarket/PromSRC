@@ -12,6 +12,12 @@
 import { getProvider, getModelForRole, getPrimaryModel, resetProvider } from '../providers/factory';
 import type { LLMProvider } from '../providers/LLMProvider';
 export type { LLMProvider };
+import {
+  appendModelUsageEvent,
+  estimateMessagesTokens,
+  estimateTextTokens,
+  normalizeUsage,
+} from '../providers/model-usage';
 import { AgentRole } from '../types';
 
 export interface GenerateOutput {
@@ -45,14 +51,17 @@ export class OllamaClient {
       onToken?: (chunk: string) => void;
       onThinking?: (chunk: string) => void;
       onReasoningSummary?: (chunk: string) => void;
+      abortSignal?: AbortSignal;
       /** Per-call provider override — used by switch_model tool for turn-scoped routing. Does NOT mutate global config. */
       provider?: LLMProvider;
       /** Strip [TODAY_NOTES] from system prompt — set when switch_model is active to reduce context bloat. */
       omitIntradayNotes?: boolean;
+      usageContext?: { sessionId?: string; agentId?: string };
     }
   ): Promise<ChatOutput> {
     const model = String(options?.model || '').trim() || getModelForRole(role);
     const activeProvider = options?.provider ?? this.provider;
+    const startedAt = Date.now();
     const result = await activeProvider.chat(messages, model, {
       temperature:       options?.temperature,
       max_tokens:        options?.num_predict,
@@ -62,7 +71,21 @@ export class OllamaClient {
       onToken:           options?.onToken,
       onThinking:        options?.onThinking,
       onReasoningSummary: options?.onReasoningSummary,
+      abortSignal:       options?.abortSignal,
       omitIntradayNotes: options?.omitIntradayNotes,
+    });
+    const usage = normalizeUsage(result.usage, {
+      inputTokens: estimateMessagesTokens(messages),
+      outputTokens: estimateMessagesTokens([result.message]) + estimateTextTokens(result.thinking),
+    });
+    appendModelUsageEvent({
+      provider: activeProvider.id,
+      model,
+      callType: 'chat',
+      sessionId: options?.usageContext?.sessionId,
+      agentId: options?.usageContext?.agentId,
+      ...usage,
+      durationMs: Date.now() - startedAt,
     });
     return { message: result.message, thinking: result.thinking };
   }
@@ -79,10 +102,13 @@ export class OllamaClient {
       num_ctx?: number;
       num_predict?: number;
       think?: boolean | 'high' | 'medium' | 'low';
+      usageContext?: { sessionId?: string; agentId?: string };
     }
   ): Promise<GenerateOutput> {
     const model = getModelForRole(role);
-    return this.provider.generate(prompt, model, {
+    const activeProvider = this.provider;
+    const startedAt = Date.now();
+    const result = await activeProvider.generate(prompt, model, {
       temperature: options?.temperature,
       format:      options?.format,
       system:      options?.system,
@@ -90,6 +116,20 @@ export class OllamaClient {
       max_tokens:  options?.num_predict,
       think:       options?.think,
     });
+    const usage = normalizeUsage(result.usage, {
+      inputTokens: estimateTextTokens(`${options?.system || ''}\n${prompt}`),
+      outputTokens: estimateTextTokens(result.response) + estimateTextTokens(result.thinking),
+    });
+    appendModelUsageEvent({
+      provider: activeProvider.id,
+      model,
+      callType: 'generate',
+      sessionId: options?.usageContext?.sessionId,
+      agentId: options?.usageContext?.agentId,
+      ...usage,
+      durationMs: Date.now() - startedAt,
+    });
+    return result;
   }
 
   async generate(prompt: string, role: AgentRole, options?: Parameters<OllamaClient['generateWithThinking']>[2]): Promise<string> {

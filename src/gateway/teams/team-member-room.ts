@@ -21,8 +21,8 @@ import {
 import { ensureTeamWorkspace, ensureTeamAgentIdentity, getTeamWorkspacePath } from './team-workspace';
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { _activeAgentSessions, type RunAgentResult } from './team-dispatch-runtime';
-import { getRuntimeToolCategories } from '../tool-builder';
 import { runWithWorkspace } from '../../tools/workspace-context';
+import { setActivatedToolCategories } from '../session';
 
 type HandleChatFn = (
   message: string,
@@ -769,8 +769,7 @@ export async function runTeamMemberRoomTurn(
   activeTeamMemberRoomSessions.add(sessionId);
   try {
 	    try {
-	      const { setActivatedToolCategories, setWorkspace } = require('../session');
-	      setActivatedToolCategories(sessionId, getRuntimeToolCategories());
+	      const { setWorkspace } = require('../session');
 	      setWorkspace(sessionId, getTeamWorkspacePath(teamId));
 	    } catch { /* non-fatal */ }
 
@@ -793,6 +792,12 @@ export async function runTeamMemberRoomTurn(
       captureTeamMemberStreamEvent(tracker, event, data);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
+
+    // Reset activated tool categories so this subagent turn matches main-chat
+    // behavior: autoActivateToolCategories repopulates from the message content.
+    // Without this, sessions keep ALL categories activated from prior runs and
+    // ship 270+ tools to Anthropic — which trips the OAuth subscription gate.
+    try { setActivatedToolCategories(sessionId, []); } catch {}
 
     const result = await runWithWorkspace(
       getTeamWorkspacePath(teamId),
@@ -996,8 +1001,7 @@ export async function runTeamMemberDirectTurn(
   activeTeamMemberDirectTurns.add(conversationKey);
   try {
 	    try {
-	      const { setActivatedToolCategories, setWorkspace } = require('../session');
-	      setActivatedToolCategories(thread.sessionId, getRuntimeToolCategories());
+	      const { setWorkspace } = require('../session');
 	      setWorkspace(thread.sessionId, getTeamWorkspacePath(teamId));
 	    } catch { /* non-fatal */ }
 
@@ -1021,6 +1025,8 @@ export async function runTeamMemberDirectTurn(
       captureTeamMemberStreamEvent(tracker, event, data);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
+
+    try { setActivatedToolCategories(thread.sessionId, []); } catch {}
 
     const result = await runWithWorkspace(
       getTeamWorkspacePath(teamId),

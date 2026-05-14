@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "x-browser-automation-playbook",
+  "name": "x-browser-automation-playbook",
+  "description": "Use this skill for interactive work on X.com — posting, replying, liking, searching, collecting tweets, opening bookmarks, and other live browser actions. For plain X status URLs that the user wants fetched or read, default to `web_fetch` first and answer from that result without extra steps unless the user explicitly asks for more. Triggers on requests like post on X, tweet this, reply to this tweet, like tweets, search X, collect tweets, find my X bookmarks, open X bookmarks, go to bookmarks, fetch this X post, read this tweet URL, pull this X thread, or webfetch this X URL.",
+  "emoji": "🧩",
+  "version": "2.6.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "post on x",
+    "tweet this",
+    "reply to this tweet",
+    "like tweets",
+    "search x",
+    "collect tweets",
+    "open x bookmarks",
+    "find my x bookmarks",
+    "go to x bookmarks",
+    "x bookmarks",
+    "fetch this x post",
+    "read this tweet url",
+    "pull this x thread",
+    "webfetch this x url",
+    "web fetch this x url",
+    "get this tweet"
+  ],
+  "categories": [
+    "browser",
+    "social",
+    "x",
+    "twitter",
+    "automation"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "web"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

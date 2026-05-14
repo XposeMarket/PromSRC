@@ -20,6 +20,10 @@ async function dt() {
   return import('../gateway/desktop-tools.js');
 }
 
+async function bg() {
+  return import('../gateway/desktop-background.js');
+}
+
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
 const DESKTOP_SESSION = '__reactor__';
@@ -794,6 +798,112 @@ export const desktopDiffScreenshotTool: Tool = {
   },
 };
 
+export const desktopBackgroundStatusTool: Tool = {
+  name: 'desktop_background_status',
+  description:
+    'Explain whether non-interrupting background desktop automation is available on this machine. ' +
+    'Checks the sandbox/VM bridge and reports why normal host desktop tools are foreground-only.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  },
+  execute: async (): Promise<ToolResult> => {
+    try {
+      const { desktopBackgroundStatus } = await bg();
+      return ok(await desktopBackgroundStatus());
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopBackgroundPrepareSandboxTool: Tool = {
+  name: 'desktop_background_prepare_sandbox',
+  description:
+    'Create a Windows Sandbox profile and folder bridge for an isolated Prometheus desktop worker. ' +
+    'Use launch=true to open the sandbox. Once the worker is running, desktop_background_command can drive that isolated desktop without stealing host mouse/keyboard focus.',
+  schema: {
+    launch: 'true to open the generated .wsb sandbox profile after preparing it',
+    networking: 'enable | disable | default',
+    vgpu: 'enable | disable | default',
+    memory_mb: 'Memory assigned to Windows Sandbox in MB',
+  },
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      launch: { type: 'boolean', description: 'Open Windows Sandbox after generating the profile.' },
+      networking: { type: 'string', enum: ['enable', 'disable', 'default'] },
+      vgpu: { type: 'string', enum: ['enable', 'disable', 'default'] },
+      memory_mb: { type: 'number', description: 'Sandbox memory in MB (default 4096).' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopBackgroundPrepareSandbox } = await bg();
+      return wrapResult(await desktopBackgroundPrepareSandbox({
+        launch: args?.launch === true,
+        networking: args?.networking,
+        vgpu: args?.vgpu,
+        memory_mb: args?.memory_mb == null ? undefined : Number(args.memory_mb),
+      }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopBackgroundCommandTool: Tool = {
+  name: 'desktop_background_command',
+  description:
+    'Send a command to the isolated background desktop worker through the bridge. ' +
+    'Supported actions: screenshot, click, type, key, run, wait. This targets the sandbox/VM worker, not the host desktop.',
+  schema: {
+    action: 'screenshot | click | type | key | run | wait',
+    x: 'X coordinate for click inside the background desktop',
+    y: 'Y coordinate for click inside the background desktop',
+    text: 'Text for type action',
+    key: 'SendKeys key string for key action, e.g. {ENTER} or ^s',
+    command: 'Shell command for run action inside the background desktop',
+    ms: 'Milliseconds for wait action',
+    timeout_ms: 'Milliseconds to wait for worker response',
+  },
+  jsonSchema: {
+    type: 'object',
+    required: ['action'],
+    properties: {
+      action: { type: 'string', enum: ['screenshot', 'click', 'type', 'key', 'run', 'wait'] },
+      x: { type: 'number' },
+      y: { type: 'number' },
+      text: { type: 'string' },
+      key: { type: 'string', description: 'PowerShell SendKeys syntax, e.g. {ENTER}, {TAB}, ^s.' },
+      command: { type: 'string' },
+      ms: { type: 'number' },
+      timeout_ms: { type: 'number' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopBackgroundCommand } = await bg();
+      return wrapResult(await desktopBackgroundCommand({
+        action: args?.action,
+        x: args?.x == null ? undefined : Number(args.x),
+        y: args?.y == null ? undefined : Number(args.y),
+        text: args?.text == null ? undefined : String(args.text),
+        key: args?.key == null ? undefined : String(args.key),
+        command: args?.command == null ? undefined : String(args.command),
+        ms: args?.ms == null ? undefined : Number(args.ms),
+        timeout_ms: args?.timeout_ms == null ? undefined : Number(args.timeout_ms),
+      } as any));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
@@ -822,4 +932,8 @@ export const allDesktopTools: Tool[] = [
   // Screenshot diffing (Phase 3)
   desktopWaitForChangeTool,
   desktopDiffScreenshotTool,
+  // Background desktop target (sandbox/VM bridge)
+  desktopBackgroundStatusTool,
+  desktopBackgroundPrepareSandboxTool,
+  desktopBackgroundCommandTool,
 ];

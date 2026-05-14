@@ -13,12 +13,35 @@ import cors from 'cors';
 import path from 'path';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { buildGatewayCorsOptions } from '../gateway-auth';
+import { isModelBusy, getLastMainSessionId } from '../comms/broadcaster';
+import { listLiveRuntimes } from '../live-runtime-registry';
+
+const startedAt = Date.now();
 
 export function createApp(): express.Application {
   const app = express();
 
   app.use(cors(buildGatewayCorsOptions()));
   app.use(express.json({ limit: '50mb' }));
+
+  app.get('/api/health', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      uptimeMs: Date.now() - startedAt,
+      pid: process.pid,
+      timestamp: Date.now(),
+      modelBusy: isModelBusy(),
+      lastMainSessionId: getLastMainSessionId(),
+      activeRuntimes: listLiveRuntimes().map((runtime) => ({
+        id: runtime.id,
+        kind: runtime.kind,
+        label: runtime.label,
+        startedAt: runtime.startedAt,
+        sessionId: runtime.sessionId,
+      })),
+    });
+  });
 
   const root = resolvePrometheusRoot();
   const webUiPath = isPublicDistributionBuild() && hasPublicWebUiBuild()

@@ -30,7 +30,7 @@ import {
   type PauseReason,
   type TaskPauseSnapshot,
 } from './task-store';
-import { clearHistory, addMessage, getHistory, flushSession, activateToolCategory, clearSessionMutationScope, setSessionMutationScope, setWorkspace, setActivatedToolCategories } from '../session';
+import { clearHistory, addMessage, getHistory, flushSession, activateToolCategory, clearSessionMutationScope, setSessionMutationScope, setWorkspace } from '../session';
 import {
   buildTaskPauseSnapshot,
   formatTaskPauseSnapshot,
@@ -59,7 +59,6 @@ import {
 import type { ProposalRepairContext } from '../proposals/repair-context.js';
 // task-self-healer / synthesis round removed — lastResultSummary is delivered directly
 import { runWithWorkspace } from '../../tools/workspace-context';
-import { getRuntimeToolCategories } from '../tool-builder';
 import {
 	  formatTelegramProgressState,
 	  formatTelegramToolCall,
@@ -574,9 +573,9 @@ export class BackgroundTaskRunner {
 		    if (isProposalLikeSourceSessionId(task.sessionId || '')) {
 		      const buildFailure = task.proposalExecution?.buildFailure;
 	          const sandboxNote = isDevSrcSelfEditRepairTask(task)
-	            ? `- This run is repairing an isolated failed dev src sandbox at ${task.proposalExecution?.projectRoot || task.agentWorkspace || '(unknown sandbox)'}. Fix only the scoped build failure, then hand the repaired sandbox back to the blocked original proposal task.`
+	            ? `- This run is repairing an isolated failed code_change sandbox at ${task.proposalExecution?.projectRoot || task.agentWorkspace || '(unknown sandbox)'}. Fix only the scoped build failure, then hand the repaired sandbox back to the blocked original proposal task.`
 	            : isDevSrcSelfEditTask(task)
-	              ? `- This run is editing an isolated dev src sandbox at ${task.proposalExecution?.projectRoot || task.agentWorkspace || '(unknown sandbox)'}. Only approved src/ files may be written, and a successful sandbox build is required before promotion back into the live repo.`
+	              ? `- This run is editing an isolated code_change sandbox at ${task.proposalExecution?.projectRoot || task.agentWorkspace || '(unknown sandbox)'}. Only approved src/ and web-ui/ files may be written, and a successful sandbox build is required before promotion back into the live repo.`
 	            : '';
 		      const recoveryNote = buildFailure?.status === 'resolved'
 		        ? `- The previous build failure was repaired${buildFailure.repairProposalId ? ` by proposal ${buildFailure.repairProposalId}` : ''}. The current workspace already includes that fix. Continue from the current step only and do not redo earlier edits.`
@@ -1417,6 +1416,20 @@ export class BackgroundTaskRunner {
     // can resolve the task record from the session ID.
     const sessionId = `task_${taskId}`;
     clearHistory(sessionId);
+    if (initialTask.teamSubagent?.teamId && initialTask.teamSubagent?.agentId) {
+      try {
+        const { registerBrowserSessionMetadata } = await import('../browser-tools');
+        registerBrowserSessionMetadata(sessionId, {
+          ownerType: 'team-agent',
+          ownerId: initialTask.teamSubagent.agentId,
+          label: `Team Subagent (${initialTask.teamSubagent.teamId} / ${initialTask.teamSubagent.agentName || initialTask.teamSubagent.agentId})`,
+          taskPrompt: initialTask.prompt || initialTask.title || '',
+          spawnerSessionId: initialTask.teamSubagent.teamId,
+        });
+      } catch {
+        // Non-fatal: browser tools can still infer team identity from the task record.
+      }
+    }
     if (initialTask.agentWorkspace) {
       try {
         setWorkspace(sessionId, initialTask.agentWorkspace);
@@ -2016,10 +2029,6 @@ export class BackgroundTaskRunner {
               ].filter(Boolean).join('\n');
 
 	      firstRound = false;
-	      if (liveTask.subagentProfile || liveTask.teamSubagent) {
-	        setActivatedToolCategories(sessionId, getRuntimeToolCategories());
-	      }
-
       // Parse task.executorProvider ("providerId/model") → per-round model + provider override.
       // Set at task creation time by dispatchApprovedProposal when proposal has a risk_tier.
       let taskModelOverride: string | undefined;

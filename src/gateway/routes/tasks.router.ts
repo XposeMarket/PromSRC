@@ -6,7 +6,7 @@ import { getConfig } from '../../config/config';
 import { addMessage } from '../session';
 import { broadcastWS } from '../comms/broadcaster';
 import {
-  loadTask, listTaskSummaries, deleteTask, updateTaskStatus,
+  loadTask, listTaskSummaries, deleteTask, updateTaskStatus, saveTask,
   getEvidenceBusSnapshot, appendJournal,
 } from '../tasks/task-store';
 import { loadScheduleMemory, loadRunLog } from '../scheduling/schedule-memory';
@@ -21,6 +21,7 @@ import { hookBus } from '../hooks';
 import { updateResumeContext, type TaskStatus } from '../tasks/task-store';
 import { getErrorAudit } from '../../security/error-audit';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
+import { buildTaskPauseSnapshot, formatTaskPauseSnapshot } from '../tasks/task-recovery';
 
 
 export const router = Router();
@@ -72,6 +73,8 @@ router.post('/api/tasks', (req, res) => {
     systemEventText,
     model,
     subagent_id,
+    assignmentTarget: subagent_id ? 'subagent' : 'main',
+    deliverToMainChannel: !subagent_id,
   });
   res.json({ success: true, job });
 });
@@ -331,6 +334,93 @@ router.get('/api/bg-tasks/:id/evidence', (req, res) => {
   res.json({ success: true, taskId: bus.taskId, entries: bus.entries, updatedAt: bus.updatedAt });
 });
 
+function skillSlugFromTitle(title: string): string {
+  return String(title || 'task-skill')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'task-skill';
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(String(value || ''));
+}
+
+function buildSkillProposalContent(task: any): string {
+  const title = String(task?.title || task?.prompt || 'Task skill').slice(0, 120);
+  const slug = skillSlugFromTitle(title);
+  const usefulJournal = Array.isArray(task?.journal)
+    ? task.journal
+      .filter((entry: any) => ['tool_call', 'tool_result', 'status_push', 'plan_mutation', 'resume'].includes(String(entry?.type || '')))
+      .slice(-24)
+      .map((entry: any, idx: number) => {
+        const stamp = Number.isFinite(Number(entry?.t)) ? new Date(Number(entry.t)).toISOString() : 'unknown-time';
+        return `${idx + 1}. ${stamp} ${entry?.type || 'status'}: ${String(entry?.content || '').slice(0, 900)}`;
+      })
+      .join('\n')
+    : '';
+  const plan = Array.isArray(task?.plan)
+    ? task.plan.map((step: any, idx: number) => `${idx + 1}. ${step?.title || step?.text || step?.description || `Step ${idx + 1}`} [${step?.status || 'unknown'}]`).join('\n')
+    : '';
+
+  return [
+    '---',
+    `name: ${yamlString(slug)}`,
+    `description: ${yamlString(`Draft skill distilled from task: ${title}`)}`,
+    'category: coding',
+    'risk: medium',
+    'status: draft',
+    `source_task_id: ${yamlString(String(task?.id || ''))}`,
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    'Use this skill when a future task resembles the workflow, tools, or failure modes captured from the source background task.',
+    '',
+    '## Trigger',
+    '',
+    `- Similar request: ${String(task?.prompt || task?.title || '').slice(0, 1000)}`,
+    '- The task benefits from Prometheus running a repeatable coding/workspace procedure rather than improvising every step.',
+    '',
+    '## Workflow',
+    '',
+    plan || '- Inspect the current workspace state before acting.\n- Reuse the validated command and file-editing flow from the journal below.\n- Verify with the smallest meaningful test/build command.',
+    '',
+    '## Verified Outcome',
+    '',
+    task?.finalSummary ? String(task.finalSummary).slice(0, 2000) : '- Fill this in after reviewing the completed task outcome.',
+    '',
+    '## Operational Notes',
+    '',
+    '- Keep edits scoped to files relevant to the request.',
+    '- Prefer supervised process runs for commands so output, exit state, and cancellation remain visible in the task panel.',
+    '- Do not install this draft until a human reviews and trims the captured journal into durable instructions.',
+    '',
+    '## Source Journal',
+    '',
+    usefulJournal || '- No useful journal snippets were captured.',
+    '',
+  ].join('\n');
+}
+
+router.post('/api/bg-tasks/:id/skill-proposal', (req, res) => {
+  try {
+    const task = loadTask(req.params.id);
+    if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+    const content = buildSkillProposalContent(task);
+    const slug = skillSlugFromTitle(task.title || task.prompt || task.id);
+    const dir = path.join(_CONFIG_DIR_PATH || getConfig().getConfigDir(), 'skills', 'proposals', `${slug}-${Date.now()}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, 'SKILL.md');
+    fs.writeFileSync(filePath, content, 'utf-8');
+    appendJournal(task.id, { type: 'status_push' as any, content: `Draft skill proposal created: ${filePath}` });
+    broadcastWS({ type: 'skill_proposal_created', taskId: task.id, path: filePath, title: task.title || slug });
+    res.json({ success: true, path: filePath, content });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to create skill proposal' });
+  }
+});
+
 // Schedule memory endpoint — returns persistent memory for a schedule
 router.get('/api/schedules/:scheduleId/memory', (req, res) => {
   const mem = loadScheduleMemory(req.params.scheduleId);
@@ -377,9 +467,89 @@ router.delete('/api/bg-tasks/:id', (req, res) => {
   res.json({ success: true });
 });
 
+function buildTaskResumeInstruction(task: any, mode: 'resume' | 'restart'): string {
+  const snapshot = task.pauseSnapshot || buildTaskPauseSnapshot(task);
+  const totalSteps = Math.max(1, Number(snapshot.totalSteps || task.plan?.length || 1));
+  const currentStep = Math.min(Number(snapshot.currentStepIndex || 0) + 1, totalSteps);
+  const recentJournal = Array.isArray(task.journal)
+    ? task.journal.slice(-16).map((entry: any, idx: number) => {
+      const stamp = Number.isFinite(Number(entry?.t)) ? new Date(Number(entry.t)).toISOString() : 'unknown-time';
+      return `${idx + 1}. [${entry?.type || 'status'}] (${stamp}) ${String(entry?.content || '').slice(0, 500)}`;
+    }).join('\n')
+    : '(none)';
+  const runContext = [
+    task.finalSummary ? `Previous final summary/error: ${String(task.finalSummary).slice(0, 1600)}` : '',
+    task.pauseReason ? `Pause/failure reason: ${task.pauseReason}` : '',
+    task.lastToolCall ? `Last tool call before interruption/failure: ${task.lastToolCall}` : '',
+  ].filter(Boolean).join('\n');
+
+  if (mode === 'restart') {
+    return [
+      '[TASK RESTARTED AFTER FAILED RUN]',
+      `Original task: ${task.prompt || task.title || '(none)'}`,
+      '',
+      'The previous run failed or was stopped before completion. You are starting a fresh attempt, but you must use the prior run as context.',
+      runContext ? `\nWhat happened last run:\n${runContext}` : '',
+      '',
+      'Prior progress snapshot:',
+      formatTaskPauseSnapshot(snapshot, { maxChars: 24_000 }),
+      '',
+      'Recent task journal:',
+      recentJournal,
+      '',
+      'Restart instructions:',
+      '- Start again from step 1 with awareness of what happened last run.',
+      '- Do not blindly repeat the same failing action; adjust based on the prior error, last tool call, and journal.',
+      '- If the task requires current browser/file/system state, inspect it fresh before acting.',
+      '- Continue through the plan and call step_complete after each completed step.',
+      '[/TASK RESTARTED AFTER FAILED RUN]',
+    ].filter(Boolean).join('\n');
+  }
+
+  return [
+    '[TASK RESUMED AFTER INTERRUPTION]',
+    `Original task: ${task.prompt || task.title || '(none)'}`,
+    '',
+    `The task was interrupted and is now being resumed at step ${currentStep}/${totalSteps}.`,
+    runContext ? `\nInterruption context:\n${runContext}` : '',
+    '',
+    'Progress snapshot:',
+    formatTaskPauseSnapshot(snapshot, { maxChars: 24_000 }),
+    '',
+    'Recent task journal:',
+    recentJournal,
+    '',
+    'Resume instructions:',
+    '- Continue from the current step; do not restart completed work.',
+    '- Use the completed plan steps, journal, and transcript to understand what was already done.',
+    '- If the task requires current browser/file/system state, inspect it fresh before acting.',
+    '- If the interruption happened mid-tool or mid-page action, re-check state before retrying that action.',
+    '- Continue through the plan and call step_complete after each completed step.',
+    '[/TASK RESUMED AFTER INTERRUPTION]',
+  ].filter(Boolean).join('\n');
+}
+
+function persistTaskPauseSnapshot(taskId: string, reason: string): void {
+  const task = loadTask(taskId);
+  if (!task) return;
+  task.pauseSnapshot = buildTaskPauseSnapshot(task);
+  task.resumeBrief = undefined;
+  saveTask(task);
+  appendJournal(taskId, {
+    type: 'pause',
+    content: `Task interrupted by pause: ${reason}`,
+  });
+}
+
+function launchTaskRunner(taskId: string): void {
+  const runner = new BackgroundTaskRunner(taskId, _handleChat, _makeBroadcastForTask(taskId), _telegramChannel);
+  runner.start().catch(err => console.error(`[BackgroundTaskRunner] Resume ${taskId} error:`, err.message));
+}
+
 router.post('/api/bg-tasks/:id/pause', (req, res) => {
   const task = updateTaskStatus(req.params.id, 'paused', { pauseReason: 'user_pause' });
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+  persistTaskPauseSnapshot(req.params.id, 'user_pause');
   BackgroundTaskRunner.requestPause(req.params.id);
   const sid = task.sessionId || 'default';
   const ws = getWorkspace(sid) || (getConfig().getConfig() as any).workspace?.path || '';
@@ -397,7 +567,7 @@ router.post('/api/bg-tasks/:id/pause', (req, res) => {
 router.post('/api/bg-tasks/:id/resume', (req, res) => {
   const task = loadTask(req.params.id);
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
-  const resumableStatuses: TaskStatus[] = ['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input', 'running', 'failed'];
+  const resumableStatuses: TaskStatus[] = ['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input', 'running'];
   if (resumableStatuses.includes(task.status as TaskStatus)) {
     // If status is 'running' but no active runner exists, the runner died without cleanup.
     // Treat it as resumable — reset to queued and start a fresh runner.
@@ -409,13 +579,78 @@ router.post('/api/bg-tasks/:id/resume', (req, res) => {
     if (task.status === 'running') {
       BackgroundTaskRunner.forceRelease(task.id);
     }
+    task.pauseSnapshot = task.pauseSnapshot || buildTaskPauseSnapshot(task);
+    const resumeInstruction = buildTaskResumeInstruction(task, 'resume');
+    task.resumeContext = {
+      ...(task.resumeContext || { messages: [], browserSessionActive: false, round: 0, orchestrationLog: [] }),
+      onResumeInstruction: resumeInstruction,
+    };
+    task.resumeBrief = {
+      createdAt: Date.now(),
+      content: resumeInstruction,
+      approvedAction: 'resume',
+    };
+    task.selfHealAttempts = 0;
+    task.resynthAttempts = 0;
+    saveTask(task);
+    appendJournal(task.id, {
+      type: 'resume',
+      content: `Task resumed with interruption context at step ${task.currentStepIndex + 1}/${Math.max(1, task.plan.length)}.`,
+    });
     updateTaskStatus(task.id, 'queued');
-    const runner = new BackgroundTaskRunner(task.id, _handleChat, _makeBroadcastForTask(task.id), _telegramChannel);
-    runner.start().catch(err => console.error(`[BackgroundTaskRunner] Resume ${task.id} error:`, err.message));
+    launchTaskRunner(task.id);
     res.json({ success: true });
   } else {
-    res.json({ success: false, error: `Task status is ${task.status}, cannot resume` });
+    res.json({ success: false, error: task.status === 'failed' ? 'Failed tasks must be restarted.' : `Task status is ${task.status}, cannot resume` });
   }
+});
+
+router.post('/api/bg-tasks/:id/restart', (req, res) => {
+  const task = loadTask(req.params.id);
+  if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+  if (task.status === 'running' && BackgroundTaskRunner.isRunning(task.id)) {
+    res.json({ success: false, error: 'Task is already actively running.' });
+    return;
+  }
+  if (task.status === 'running') BackgroundTaskRunner.forceRelease(task.id);
+
+  task.pauseSnapshot = task.pauseSnapshot || buildTaskPauseSnapshot(task);
+  const restartInstruction = buildTaskResumeInstruction(task, 'restart');
+  task.status = 'queued';
+  task.pauseReason = undefined;
+  task.currentStepIndex = 0;
+  task.completedAt = undefined;
+  task.finalSummary = undefined;
+  task.lastToolCall = undefined;
+  task.lastToolCallAt = undefined;
+  task.lastProgressAt = Date.now();
+  task.selfHealAttempts = 0;
+  task.resynthAttempts = 0;
+  task.plan = (task.plan || []).map((step: any, idx: number) => ({
+    ...step,
+    index: idx,
+    status: 'pending',
+    completedAt: undefined,
+  }));
+  task.resumeContext = {
+    ...(task.resumeContext || { messages: [], browserSessionActive: false, round: 0, orchestrationLog: [] }),
+    messages: [],
+    browserSessionActive: false,
+    browserUrl: undefined,
+    round: 0,
+    orchestrationLog: [],
+    fileOpState: undefined,
+    onResumeInstruction: restartInstruction,
+  };
+  task.resumeBrief = {
+    createdAt: Date.now(),
+    content: restartInstruction,
+    approvedAction: 'rerun',
+  };
+  saveTask(task);
+  appendJournal(task.id, { type: 'resume', content: 'Failed task restarted with previous-run context.' });
+  launchTaskRunner(task.id);
+  res.json({ success: true });
 });
 
 // ─── Error Response Endpoint ────────────────────────────────────────────────

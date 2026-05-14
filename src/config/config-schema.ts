@@ -83,6 +83,16 @@ const ImageGenerationConfigSchema = z.object({
   providers: z.record(z.record(z.unknown())).optional(),
 });
 
+const VideoGenerationConfigSchema = z.object({
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  save_to_workspace: z.boolean().optional(),
+  default_output_dir: z.string().optional(),
+  duration: z.number().optional(),
+  resolution: z.string().optional(),
+  providers: z.record(z.record(z.unknown())).optional(),
+});
+
 // ─── Tool Permissions ────────────────────────────────────────────────────────
 
 const ToolPermissionsSchema = z.object({
@@ -155,11 +165,34 @@ const AgentDefinitionSchema = z.object({
 
 // ─── Channel Configs ─────────────────────────────────────────────────────────
 
+const TelegramPersonaConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  agentId: z.string(),
+  botToken: z.string().optional(),
+  managedBotUserId: z.number().optional(),
+  botUsername: z.string().optional(),
+  allowedUserIds: z.array(z.number()).optional(),
+  groupChatIds: z.array(z.number()).optional(),
+  requireMentionInGroups: z.boolean().optional(),
+  streamMode: z.enum(['full', 'partial']).optional(),
+});
+
+const TelegramTeamRoomConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  teamId: z.string(),
+  chatId: z.number(),
+  topicId: z.number().optional(),
+  title: z.string().optional(),
+  usePersonaIdentities: z.boolean().optional(),
+});
+
 const TelegramConfigSchema = z.object({
   enabled:        z.boolean(),
   botToken:       z.string(),
   allowedUserIds: z.array(z.number()),
   streamMode:     z.enum(['full', 'partial']),
+  personas:       z.record(TelegramPersonaConfigSchema).optional(),
+  teamRooms:      z.record(TelegramTeamRoomConfigSchema).optional(),
 });
 
 const DiscordConfigSchema = z.object({
@@ -241,6 +274,35 @@ export const PrometheusConfigSchema = z.object({
     background_agent:              z.string().optional(),
   }).optional(),
 
+  agent_model_default_templates: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    defaults: z.object({
+      main_chat:                     z.string().optional(),
+      proposal_executor_high_risk:   z.string().optional(),
+      proposal_executor_low_risk:    z.string().optional(),
+      manager:                       z.string().optional(),
+      team_manager:                  z.string().optional(),
+      subagent:                      z.string().optional(),
+      team_subagent:                 z.string().optional(),
+      background_task:               z.string().optional(),
+      subagent_planner:              z.string().optional(),
+      subagent_orchestrator:         z.string().optional(),
+      subagent_researcher:           z.string().optional(),
+      subagent_analyst:              z.string().optional(),
+      subagent_builder:              z.string().optional(),
+      subagent_operator:             z.string().optional(),
+      subagent_verifier:             z.string().optional(),
+      switch_model_low:              z.string().optional(),
+      switch_model_medium:           z.string().optional(),
+      coordinator:                   z.string().optional(),
+      background_agent:              z.string().optional(),
+    }).optional().default({}),
+    created_at: z.string().optional(),
+    updated_at: z.string().optional(),
+  })).optional(),
+  active_agent_model_default_template: z.string().optional(),
+
   tools: z.object({
     enabled:     z.array(z.string()),
     permissions: ToolPermissionsSchema,
@@ -285,6 +347,24 @@ export const PrometheusConfigSchema = z.object({
     rollingCompactionToolTurns: z.number().int().min(1).max(12).optional(),
     rollingCompactionSummaryMaxWords: z.number().int().min(80).max(500).optional(),
     rollingCompactionModel: z.string().optional(),
+    mainChatGoals: z.object({
+      enabled: z.boolean().optional(),
+      autoResumeOnRestart: z.boolean().optional(),
+      summaryEveryTurns: z.number().int().min(1).max(50).optional(),
+      summaryMaxWords: z.number().int().min(120).max(1200).optional(),
+      judgeModel: z.string().optional(),
+      compactionModel: z.string().optional(),
+      maxConsecutiveJudgeFailures: z.number().int().min(1).max(20).optional(),
+      maxConsecutiveRuntimeFailures: z.number().int().min(1).max(20).optional(),
+      permissions: z.object({
+        approvalMode: z.enum(['normal', 'never']).optional(),
+        hardDenyEnabled: z.boolean().optional(),
+        recordDeniedActions: z.boolean().optional(),
+        denyDestructiveGit: z.boolean().optional(),
+        denyRemoteScriptExecution: z.boolean().optional(),
+        denyDesktopCredentialEntry: z.boolean().optional(),
+      }).optional(),
+    }).optional(),
   }).optional(),
 
   // Legacy top-level telegram (kept for backward compat)
@@ -298,6 +378,7 @@ export const PrometheusConfigSchema = z.object({
 
   search: z.object({
     preferred_provider: z.string().optional(),
+    tinyfish_api_key:   z.string().optional(),
     tavily_api_key:     z.string().optional(),
     google_api_key:     z.string().optional(),
     google_cx:          z.string().optional(),
@@ -307,6 +388,7 @@ export const PrometheusConfigSchema = z.object({
 
   llm: LLMConfigSchema.optional(),
   image_generation: ImageGenerationConfigSchema.optional(),
+  video_generation: VideoGenerationConfigSchema.optional(),
 
   hooks: z.object({
     enabled: z.boolean(),
@@ -315,11 +397,7 @@ export const PrometheusConfigSchema = z.object({
   }).optional(),
 
   agent_policy: z.object({
-    force_web_for_fresh:               z.boolean().optional(),
-    memory_fallback_on_search_failure: z.boolean().optional(),
-    auto_store_web_facts:              z.boolean().optional(),
-    natural_language_tool_router:      z.boolean().optional(),
-    retrieval_mode:                    z.string().optional(),
+    retrieval_mode: z.string().optional(),
   }).optional(),
 
   agent_builder: z.object({

@@ -1,0 +1,36 @@
+{
+  "id": "obsidian",
+  "kind": "connector",
+  "name": "Obsidian",
+  "description": "Connect local Obsidian vaults so Prometheus can index Markdown notes and optionally write selected memories back to a vault.",
+  "category": "Knowledge",
+  "enabledByDefault": true,
+  "docsUrl": "https://obsidian.md/",
+  "tags": ["obsidian", "markdown", "notes", "knowledge", "local"],
+  "runtime": {
+    "binding": "integrations/connectors/obsidian"
+  },
+  "ui": {
+    "color": "#7C3AED",
+    "permissions": [
+      { "icon": "[]", "label": "Index Markdown notes from selected vaults" },
+      { "icon": "+", "label": "Write back only in assisted or full mode" },
+      { "icon": "?", "label": "Promote tagged notes into operational memory" }
+    ]
+  },
+  "ownership": {
+    "toolNamespaces": ["connector_obsidian"],
+    "capabilities": ["memory", "notes", "knowledge"],
+    "tools": [
+      "connector_obsidian_status",
+      "connector_obsidian_connect_vault",
+      "connector_obsidian_sync",
+      "connector_obsidian_writeback"
+    ]
+  },
+  "setup": {
+    "authType": "none",
+    "statusMode": "generic",
+    "docsHint": "Paste the absolute path to a local Obsidian vault. Prometheus never scans a vault until you connect it."
+  }
+}

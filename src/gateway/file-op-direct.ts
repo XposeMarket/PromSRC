@@ -94,7 +94,9 @@ export class FileOpProgressWatchdog {
 const FILE_MUTATION_TOOLS = new Set([
   'create_file', 'write', 'write_file',
   'replace_lines', 'find_replace', 'insert_after', 'delete_lines',
-  'edit', 'apply_patch', 'append_file', 'delete_file', 'move_file', 'mkdir',
+  'edit', 'apply_patch', 'append_file', 'delete_file', 'rename_file', 'copy_file', 'move_file',
+  'copy_directory', 'move_directory', 'restore_snapshot', 'revert_last_tool_change', 'revert_own_patch',
+  'git_branch', 'git_commit', 'git_push', 'open_pr', 'run_formatter', 'format_changed_files', 'mkdir',
 ]);
 
 const FILE_CREATE_TOOLS = new Set(['create_file', 'write', 'write_file']);

@@ -48,6 +48,8 @@ export function listConnectors(): string[] {
 
 // Tracks in-flight callback listener promises keyed by connector ID
 const pendingCallbacks = new Map<string, Promise<OAuthCallbackResult>>();
+const completedCallbacks = new Map<string, { result: OAuthCallbackResult; expiresAt: number }>();
+const COMPLETED_CALLBACK_TTL_MS = 10 * 60 * 1000;
 
 /**
  * Start an OAuth flow for a connector.
@@ -57,13 +59,28 @@ const pendingCallbacks = new Map<string, Promise<OAuthCallbackResult>>();
 export function startOAuthFlowForConnector(id: string): OAuthStartResult | { success: false; error: string } {
   const connector = connectors.get(id);
   if (!connector) return { success: false, error: `Unknown connector: ${id}` };
+  completedCallbacks.delete(id);
 
   // Start the local callback listener (non-blocking)
   const callbackPromise = connector.listenForCallback();
   pendingCallbacks.set(id, callbackPromise);
 
-  // Clean up after resolution
-  callbackPromise.then(() => pendingCallbacks.delete(id)).catch(() => pendingCallbacks.delete(id));
+  // Keep the completed result briefly so the UI cannot miss it between polls.
+  callbackPromise
+    .then((result) => {
+      pendingCallbacks.delete(id);
+      completedCallbacks.set(id, {
+        result,
+        expiresAt: Date.now() + COMPLETED_CALLBACK_TTL_MS,
+      });
+    })
+    .catch((err: any) => {
+      pendingCallbacks.delete(id);
+      completedCallbacks.set(id, {
+        result: { success: false, error: err?.message || String(err) },
+        expiresAt: Date.now() + COMPLETED_CALLBACK_TTL_MS,
+      });
+    });
 
   return connector.startFlow();
 }
@@ -73,6 +90,12 @@ export function startOAuthFlowForConnector(id: string): OAuthStartResult | { suc
  * Returns null if still pending, or the result if done.
  */
 export async function pollOAuthResult(id: string): Promise<OAuthCallbackResult | null> {
+  const completed = completedCallbacks.get(id);
+  if (completed) {
+    completedCallbacks.delete(id);
+    if (Date.now() <= completed.expiresAt) return completed.result;
+  }
+
   const pending = pendingCallbacks.get(id);
   if (!pending) return null;
 

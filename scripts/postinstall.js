@@ -60,10 +60,22 @@ function installPackage(pkg) {
   }
 }
 
+function patchHyperframesEsm() {
+  // @hyperframes/core 0.5.x ships extensionless ESM imports; patch in place
+  // so .mjs scripts and ESM consumers can load it. Idempotent.
+  try {
+    const { execSync } = require('child_process');
+    execSync('node scripts/patch-hyperframes-esm.mjs', { stdio: 'ignore' });
+  } catch {
+    /* best-effort; gateway is CJS so this is only needed for ESM consumers */
+  }
+}
+
 function run() {
   console.log('\n' + dim('─'.repeat(52)));
   console.log('  Prometheus — document skill dependency check');
   console.log(dim('─'.repeat(52)));
+  patchHyperframesEsm();
 
   const missing = PACKAGES.filter(p => !isInstalled(p));
   const present = PACKAGES.filter(p =>  isInstalled(p));

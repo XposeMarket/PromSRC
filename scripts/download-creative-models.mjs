@@ -43,6 +43,17 @@ const TARGETS = [
       'https://huggingface.co/aka7774/lama-onnx/resolve/main/big-lama.onnx',
     ],
   },
+  {
+    key: 'rmbg',
+    file: 'rmbg.onnx',
+    envUrl: 'PROMETHEUS_RMBG_URL',
+    optional: true,
+    urls: [
+      'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx',
+      'https://huggingface.co/briaai/RMBG-2.0/resolve/main/onnx/model.onnx',
+      'https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/main/onnx/model.onnx',
+    ],
+  },
 ];
 
 function fetchToFile(url, destPath) {
@@ -131,7 +142,7 @@ async function downloadOne(target) {
     } catch (err) {
       console.error(`✗ ${t.file}: ${err?.message || err}`);
       console.error(`  Set ${t.envUrl}=<url> with a working mirror or place the file manually at ${path.join(MODELS_DIR, t.file)}.`);
-      process.exitCode = 1;
+      if (!t.optional) process.exitCode = 1;
     }
   }
   console.log('Done.');

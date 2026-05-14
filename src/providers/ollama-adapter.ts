@@ -5,7 +5,7 @@
  */
 
 import { Ollama } from 'ollama';
-import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo } from './LLMProvider';
+import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
 
 /**
  * Coerce a message's content to a plain string.
@@ -19,6 +19,19 @@ function contentToString(content: string | ContentPart[] | null): string {
     .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
     .map(p => p.text)
     .join('\n');
+}
+
+function parseOllamaUsage(chunk: any): ModelUsage | undefined {
+  const inputTokens = Number(chunk?.prompt_eval_count || 0);
+  const outputTokens = Number(chunk?.eval_count || 0);
+  const totalTokens = inputTokens + outputTokens;
+  if (!totalTokens) return undefined;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    source: 'provider',
+  };
 }
 
 export class OllamaAdapter implements LLMProvider {
@@ -77,8 +90,10 @@ export class OllamaAdapter implements LLMProvider {
           let fullThinking = '';
           let tool_calls: any[] | undefined;
           let lastMessage: any = null;
+          let lastChunk: any = null;
 
           for await (const chunk of stream) {
+            lastChunk = chunk;
             const delta = chunk?.message?.content || '';
             const thinkDelta = chunk?.message?.thinking || '';
             if (delta) {
@@ -100,12 +115,12 @@ export class OllamaAdapter implements LLMProvider {
             lastMessage = chunk?.message;
           }
 
-          const message = {
+	          const message = {
             role: 'assistant' as const,
             content: fullContent,
             ...(tool_calls ? { tool_calls } : {}),
           };
-          return { message, thinking: fullThinking || undefined };
+          return { message, thinking: fullThinking || undefined, usage: parseOllamaUsage(lastChunk) };
         }
 
         // ── Non-streaming mode (no onToken callback) ─────────────────────────
@@ -129,7 +144,9 @@ export class OllamaAdapter implements LLMProvider {
         let fullContent = '';
         let fullThinking = '';
         let tool_calls: any[] | undefined;
+        let lastChunk: any = null;
         for await (const chunk of internalStream) {
+          lastChunk = chunk;
           fullContent += chunk?.message?.content || '';
           fullThinking += chunk?.message?.thinking || '';
           if (chunk?.message?.tool_calls?.length) tool_calls = chunk.message.tool_calls;
@@ -139,7 +156,7 @@ export class OllamaAdapter implements LLMProvider {
           content: fullContent,
           ...(tool_calls ? { tool_calls } : {}),
         };
-        return { message, thinking: fullThinking || undefined };
+        return { message, thinking: fullThinking || undefined, usage: parseOllamaUsage(lastChunk) };
       } catch (error: any) {
         lastError = error;
         const msg = String(error?.message || error || '');
@@ -176,11 +193,13 @@ export class OllamaAdapter implements LLMProvider {
 
         let fullResponse = '';
         let fullThinking = '';
+        let lastChunk: any = null;
         for await (const chunk of stream) {
+          lastChunk = chunk;
           if (chunk.response) fullResponse += chunk.response;
           if ((chunk as any).thinking) fullThinking += (chunk as any).thinking;
         }
-        return { response: fullResponse, thinking: fullThinking || undefined };
+        return { response: fullResponse, thinking: fullThinking || undefined, usage: parseOllamaUsage(lastChunk) };
       } catch (error: any) {
         lastError = error;
         const msg = String(error?.message || error || '');

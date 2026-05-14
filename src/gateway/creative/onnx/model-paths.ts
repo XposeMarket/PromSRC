@@ -2,18 +2,20 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../../config/config';
 
-export type CreativeModelKey = 'sam_encoder' | 'sam_decoder' | 'lama';
+export type CreativeModelKey = 'sam_encoder' | 'sam_decoder' | 'lama' | 'rmbg';
 
 const FILE_NAMES: Record<CreativeModelKey, string> = {
   sam_encoder: 'mobile_sam_encoder.onnx',
   sam_decoder: 'mobile_sam_decoder.onnx',
   lama: 'lama.onnx',
+  rmbg: 'rmbg.onnx',
 };
 
 const ENV_OVERRIDES: Record<CreativeModelKey, string> = {
   sam_encoder: 'PROMETHEUS_MOBILESAM_ENCODER_PATH',
   sam_decoder: 'PROMETHEUS_MOBILESAM_DECODER_PATH',
   lama: 'PROMETHEUS_LAMA_PATH',
+  rmbg: 'PROMETHEUS_RMBG_PATH',
 };
 
 export const CREATIVE_MODEL_URL_HINTS: Record<CreativeModelKey, string[]> = {
@@ -26,6 +28,11 @@ export const CREATIVE_MODEL_URL_HINTS: Record<CreativeModelKey, string[]> = {
   lama: [
     'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx',
     'https://huggingface.co/aka7774/lama-onnx/resolve/main/big-lama.onnx',
+  ],
+  rmbg: [
+    'https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx',
+    'https://huggingface.co/briaai/RMBG-2.0/resolve/main/onnx/model.onnx',
+    'https://huggingface.co/onnx-community/BiRefNet-ONNX/resolve/main/onnx/model.onnx',
   ],
 };
 

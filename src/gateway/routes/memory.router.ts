@@ -9,6 +9,7 @@ import {
   getRelatedMemory,
   refreshMemoryIndexFromAudit,
 } from '../memory-index';
+import { getSqliteMemoryStatus } from '../memory-index/sqlite-store.js';
 import { buildMemoryNoteDocument, parseMemoryNoteDocument, type MemoryNoteAttachment } from '../memory-index/memory-note.js';
 
 type StoreChunk = { id: string; recordId: string; index: number; text: string };
@@ -300,9 +301,17 @@ router.post('/api/memory/refresh', (_req: Request, res: Response) => {
   try {
     const workspacePath = getWorkspacePath();
     const result = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500 });
-    res.json({ success: true, ...result });
+    res.json({ success: true, ...result, sqlite: getSqliteMemoryStatus(workspacePath) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to refresh memory index' });
+  }
+});
+
+router.get('/api/memory/sqlite/status', (_req: Request, res: Response) => {
+  try {
+    res.json({ success: true, ...getSqliteMemoryStatus(getWorkspacePath()) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to read SQLite memory status' });
   }
 });
 

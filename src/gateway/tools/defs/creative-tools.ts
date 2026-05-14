@@ -12,7 +12,7 @@ export function getCreativeToolDefs() {
       type: 'function',
       function: {
         name: 'get_creative_mode',
-        description: 'Return the active persistent creative runtime mode for this session, if any.',
+        description: 'Return the selected Creative editor workspace for this session, if any.',
         parameters: emptyObjectSchema(),
       },
     },
@@ -20,7 +20,7 @@ export function getCreativeToolDefs() {
       type: 'function',
       function: {
         name: 'creative_list_references',
-        description: 'List the session Creative References bucket populated from fetched/downloaded media. Use this in Creative mode to recover exact reference images, video frame paths, source URLs, authority, intent, and analysis notes before deciding visual direction.',
+        description: 'List the session Creative References bucket populated from fetched/downloaded media. Use this during creative work to recover exact reference images, video frame paths, source URLs, authority, intent, and analysis notes before deciding visual direction.',
         parameters: {
           type: 'object',
           required: [],
@@ -36,13 +36,13 @@ export function getCreativeToolDefs() {
       function: {
         name: 'switch_creative_mode',
         description:
-          'Switch this session into a persistent creative runtime mode. Use image only for an editable Canva-like canvas/workspace, video for CapCut-like motion/video work, and design for live HTML/app design. Do not use this for one-shot AI image generation; use generate_image for GPT image models such as gpt-image-2.',
+          'Select the persistent Creative editor workspace for this session, or pass mode:null to clear it. This is editor state only; it does not change assistant runtime, prompt profile, history, or non-creative tool availability. Use image for editable canvas/workspace, video for motion/video work, and design for live HTML/app design. Do not use this for one-shot AI image generation; use generate_image for GPT image models such as gpt-image-2.',
         parameters: {
           type: 'object',
           required: ['mode'],
           properties: {
-            mode: { type: 'string', enum: [...CREATIVE_MODE_ENUM], description: 'Creative mode to activate. canvas is accepted as a legacy alias for image.' },
-            reason: { type: 'string', description: 'Short reason for the mode switch.' },
+            mode: { type: ['string', 'null'], enum: [...CREATIVE_MODE_ENUM, null], description: 'Creative workspace to select, or null to clear the workspace. canvas is accepted as a legacy alias for image.' },
+            reason: { type: 'string', description: 'Short reason for the workspace selection.' },
             initialIntent: { type: 'string', description: 'Optional creative objective to carry into the workspace.' },
           },
           additionalProperties: false,
@@ -63,7 +63,7 @@ export function getCreativeToolDefs() {
       function: {
         name: 'creative_apply_ops',
         description:
-          'Apply deterministic scene-graph operations to the active Image/Video workspace. Use this for multi-property edits, layout changes, additions, deletions, keyframes, and animation presets.',
+          'Apply deterministic scene-graph operations to the active Image workspace. Removed from Video mode; use HTML Motion, HyperFrames, Remotion templates, and Pretext QA tools for video work.',
         parameters: {
           type: 'object',
           required: [],
@@ -103,7 +103,7 @@ export function getCreativeToolDefs() {
       type: 'function',
       function: {
         name: 'creative_set_canvas',
-        description: 'Set canvas/document properties such as width, height, background, durationMs, and frameRate. Video mode defaults to 60fps; use frameRate >= 60 unless the user explicitly requests lower-frame-rate output.',
+        description: 'Set Image canvas/document properties such as width, height, and background. Removed from Video mode; set video dimensions/duration through HTML Motion, HyperFrames, or Remotion template inputs.',
         parameters: {
           type: 'object',
           required: [],
@@ -122,7 +122,7 @@ export function getCreativeToolDefs() {
       type: 'function',
       function: {
         name: 'creative_add_element',
-          description: 'Add a text, shape, icon, image, video, or group element to the active Image/Video workspace. In Video mode, do not rely on generic rectangles alone for rich scenes; combine typography, Iconify icons, media/graphic systems, safe-area placement, z-index, and motion. Icons use Iconify: any valid Iconify icon name can be placed in meta.iconName, not just examples.',
+          description: 'Add a text, shape, icon, image, video, or group element to the active Image workspace. Removed from Video mode; author video visuals as HTML Motion/HyperFrames/Remotion instead of primitive scene layers.',
           parameters: {
             type: 'object',
             required: ['type'],
@@ -145,7 +145,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
           name: 'creative_add_asset',
-          description: 'Place an uploaded workspace image or video file as an editable creative asset layer. Use exact paths from [UPLOADED FILES]. Asset layers support normal geometry, opacity, rotation, layering, fit/radius, and animations.',
+          description: 'Place an uploaded workspace image or video file as an editable Image/canvas asset layer. Removed from Video mode; import assets for use inside HTML Motion, HyperFrames, or Remotion inputs instead.',
           parameters: {
             type: 'object',
             required: ['source'],
@@ -211,12 +211,15 @@ export function getCreativeToolDefs() {
               preserveOriginal: { type: 'boolean', description: 'Keep the original raster as a locked full-canvas reference/background layer. Defaults true.' },
               applyToScene: { type: 'boolean', description: 'Apply the extracted scene to the active Image workspace. Defaults true.' },
               replaceScene: { type: 'boolean', description: 'Reset the current Image scene before applying extracted layers. Defaults true.' },
-              copySource: { type: 'boolean', description: 'Copy the image into the Creative asset library before extraction. Defaults true.' },
-              useVision: { type: 'boolean', description: 'Use configured OpenAI vision analysis for semantic layer proposals when available. Defaults true.' },
-              useOcr: { type: 'boolean', description: 'Run Tesseract OCR as an extra text-layer pass. Defaults false and should only be enabled for clean, text-heavy graphics.' },
-              maxTextLayers: { type: 'number', description: 'Maximum editable text layers to create.' },
-              maxShapeLayers: { type: 'number', description: 'Maximum shape/object candidate layers to create.' },
-            },
+                copySource: { type: 'boolean', description: 'Copy the image into the Creative asset library before extraction. Defaults true.' },
+                useVision: { type: 'boolean', description: 'Use configured OpenAI vision analysis for semantic layer proposals when available. Defaults true.' },
+                useOcr: { type: 'boolean', description: 'Run Tesseract OCR as an extra text-layer pass. Defaults false and should only be enabled for clean, text-heavy graphics.' },
+                useSam: { type: 'boolean', description: 'Use local SAM segmentation to create transparent object cutout layers when models are installed. Defaults true.' },
+                inpaintBackground: { type: 'boolean', description: 'Generate a clean-plate background with LaMa/flat-fill. Defaults true so extracted layers can be moved while the initial image still looks intact.' },
+                vectorTraceShapes: { type: 'boolean', description: 'Vector-trace simple shape regions when possible. Defaults true.' },
+                maxTextLayers: { type: 'number', description: 'Maximum editable text layers to create.' },
+                maxShapeLayers: { type: 'number', description: 'Maximum shape/object candidate layers to create.' },
+              },
             additionalProperties: false,
           },
         },
@@ -299,7 +302,7 @@ export function getCreativeToolDefs() {
             required: [],
             properties: {
               query: { type: 'string', description: 'Search words such as dashboard, background, phone, founder, logo, texture, overlay, music.' },
-              kinds: { type: 'array', items: { type: 'string', enum: ['image', 'video', 'audio', 'lottie', 'svg', 'document', 'other', 'remote'] } },
+              kinds: { type: 'array', items: { type: 'string', enum: ['image', 'video', 'audio', 'lottie', 'svg', 'model', 'document', 'other', 'remote'] } },
               tags: { type: ['array', 'string'], items: { type: 'string' } },
               brandId: { type: 'string' },
               limit: { type: 'number', description: 'Defaults 50, max 200.' },
@@ -383,7 +386,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
           name: 'creative_add_effect',
-          description: 'Add an editable effect to an element effect stack, such as blur, brightness, contrast, saturate, hue-rotate, or drop-shadow. Effects can be timed with startMs/durationMs and are preserved in the scene graph.',
+          description: 'Add an editable effect to an Image/canvas element effect stack, such as blur, brightness, contrast, saturate, hue-rotate, or drop-shadow. Removed from Video mode; encode effects in HTML/CSS/JS or Remotion.',
           parameters: {
             type: 'object',
             required: ['id', 'type'],
@@ -403,7 +406,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
           name: 'creative_set_blend_mode',
-          description: 'Set CSS/canvas blend mode for an element so overlays, textures, lights, screenshots, and graphics can composite with the scene.',
+          description: 'Set CSS/canvas blend mode for an Image/canvas element. Removed from Video mode; use HTML/CSS compositing or Remotion instead.',
           parameters: {
             type: 'object',
             required: ['id', 'blendMode'],
@@ -419,7 +422,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
           name: 'creative_add_mask',
-          description: 'Add or replace an editable clipping mask on an element. Use for rounded reveals, circular crops, polygon wipes, inset masks, and shape-based composition.',
+          description: 'Add or replace an editable clipping mask on an Image/canvas element. Removed from Video mode; use CSS masks/clips in HTML Motion or Remotion composition code instead.',
           parameters: {
             type: 'object',
             required: ['id', 'mask'],
@@ -435,7 +438,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
           name: 'creative_trim_clip',
-          description: 'Set timeline clip timing for an image/video/group/text element: start/end/duration, trim start/end, speed, and loop. This is the timeline-v2 clip timing surface.',
+          description: 'Set timeline clip timing for an Image/canvas element. Removed from Video mode; use HTML Motion timing attributes, Remotion sequencing, or composition clip trimming instead.',
           parameters: {
             type: 'object',
             required: ['id'],
@@ -457,7 +460,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
           name: 'creative_apply_brand_kit',
-          description: 'Attach a persistent brand kit to the active creative scene and optionally apply its colors/fonts to the current scene. Use so videos stay on-brand across templates, captions, graphics, intros, outros, and CTA components.',
+          description: 'Attach a persistent brand kit to an Image/canvas scene and optionally apply its colors/fonts. Removed from Video mode; pass brand values into HTML Motion, HyperFrames, or Remotion template inputs instead.',
           parameters: {
             type: 'object',
             required: ['brandKit'],
@@ -492,7 +495,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
           name: 'creative_search_animations',
-          description: 'Search available built-in and enabled custom creative animation preset ids by concept/target so video work does not rely only on starter examples. Use this for most Video Mode work before choosing text, shape, icon, media, caption, CTA, and transition motion.',
+          description: 'Search available built-in and enabled custom scene-graph animation preset ids for Image/canvas work. Removed from Video mode; use HTML/CSS/JS timing, HyperFrames blocks, or Remotion animation systems instead.',
           parameters: {
             type: 'object',
             required: [],
@@ -864,42 +867,6 @@ export function getCreativeToolDefs() {
       {
         type: 'function',
         function: {
-          name: 'creative_list_templates',
-          description: 'List premium editable Creative Video templates such as SaaS Hero Reveal, AI Dashboard Flythrough, and Podcast Audiogram Premium. These materialize into normal scene layers with timing, effects, brand binding, and QA metadata.',
-          parameters: emptyObjectSchema(),
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'creative_create_from_template',
-          description: 'Create an editable Video Mode scene from a premium template. Use this before manually building videos from scratch when the user wants polished motion design, product promos, dashboard flythroughs, launch videos, or audiograms.',
-          parameters: {
-            type: 'object',
-            required: ['templateId'],
-            properties: {
-              templateId: { type: 'string', enum: ['saas-hero-reveal', 'ai-dashboard-flythrough', 'podcast-audiogram-premium'] },
-              title: { type: 'string' },
-              subtitle: { type: 'string' },
-              cta: { type: 'string' },
-              speaker: { type: 'string' },
-              metrics: { type: 'array', items: { type: 'string' } },
-              assets: { type: 'array', items: { type: 'object' }, description: 'Optional image/video/audio assets. Use objects with source, kind, label, or slot.' },
-              brandKit: { type: 'object', description: 'Optional brand kit with colors, fonts, and logo.' },
-              socialFormat: { type: 'string', enum: ['reel', 'short', 'story', 'square', 'feed45', 'youtube'] },
-              width: { type: 'number' },
-              height: { type: 'number' },
-              durationMs: { type: 'number' },
-              replace: { type: 'boolean', description: 'Replace current scene. Defaults true.' },
-              runQualityReport: { type: 'boolean', description: 'Run quality report after creating the scene when available. Defaults true.' },
-            },
-            additionalProperties: false,
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
           name: 'creative_list_motion_templates',
           description: 'List Remotion-backed Creative Motion templates and social/video presets such as Caption Reel, Audio Visualizer, and Product Promo.',
           parameters: emptyObjectSchema(),
@@ -994,7 +961,7 @@ export function getCreativeToolDefs() {
         type: 'function',
         function: {
         name: 'creative_update_element',
-        description: 'Update properties on an existing creative element. Prefer {"id","patch":{...}} or {"id","meta":{...}}. Also accepts common direct fields like text, fontSize, fill, x, y, width, height, rotation, and opacity.',
+        description: 'Update properties on an existing Image/canvas element. Removed from Video mode; patch the active HTML Motion clip or update Remotion/HyperFrames inputs instead.',
         parameters: {
           type: 'object',
           required: ['id'],
@@ -1027,8 +994,8 @@ export function getCreativeToolDefs() {
     {
       type: 'function',
       function: {
-        name: 'creative_delete_element',
-        description: 'Delete an element from the active creative workspace.',
+          name: 'creative_delete_element',
+        description: 'Delete an element from the active Image/canvas workspace. Removed from Video mode; patch or replace the active HTML Motion/Remotion clip instead.',
         parameters: {
           type: 'object',
           required: ['id'],
@@ -1041,7 +1008,7 @@ export function getCreativeToolDefs() {
       type: 'function',
       function: {
         name: 'creative_apply_animation',
-        description: 'Apply an animation preset to an element in Video mode, or to an element prepared for motion. Use any built-in or enabled custom preset id from creative_get_state, not only the examples.',
+        description: 'Apply a scene-graph animation preset to an Image/canvas element. Removed from Video mode; use HTML/CSS/JS, HyperFrames, or Remotion motion instead.',
         parameters: {
           type: 'object',
           required: ['id', 'preset'],
@@ -1058,9 +1025,9 @@ export function getCreativeToolDefs() {
     {
       type: 'function',
       function: {
-        name: 'creative_arrange',
-        description:
-          'Perform designer-native arrangement actions: align, distribute, center, layer ordering, duplicate, lock/unlock, show/hide, or remove elements.',
+          name: 'creative_arrange',
+          description:
+          'Perform Image/canvas arrangement actions: align, distribute, center, layer ordering, duplicate, lock/unlock, show/hide, or remove elements. Removed from Video mode.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -1085,9 +1052,9 @@ export function getCreativeToolDefs() {
     {
       type: 'function',
       function: {
-        name: 'creative_apply_style',
-        description:
-          'Apply style properties to one or more elements. Prefer {"ids":[...],"style":{...},"meta":{...}}. Also accepts common direct fields like fill/color/fontSize/opacity.',
+          name: 'creative_apply_style',
+          description:
+          'Apply style properties to one or more Image/canvas elements. Removed from Video mode; use CSS variables, HTML patches, or Remotion input/style props instead.',
         parameters: {
           type: 'object',
           required: [],
@@ -1111,9 +1078,9 @@ export function getCreativeToolDefs() {
     {
       type: 'function',
       function: {
-        name: 'creative_fit_asset',
-        description:
-          'Update an image/video-like asset element source and fit behavior. Use for replace image, cover/contain/fill, radius, and crop-position style changes.',
+          name: 'creative_fit_asset',
+          description:
+          'Update an Image/canvas asset element source and fit behavior. Removed from Video mode; replace assets through HTML Motion patching, HyperFrames inputs, or Remotion props.',
         parameters: {
           type: 'object',
           required: ['id'],
@@ -1131,9 +1098,9 @@ export function getCreativeToolDefs() {
     {
       type: 'function',
       function: {
-        name: 'creative_apply_template',
-        description:
-          'Replace or seed the active Image/Video workspace with a polished starter layout/template such as product_ad, app_launch, event_flyer, testimonial, carousel, tiktok_caption_reel, audiogram, social_post, thumbnail, promo_flyer, quote_card, or video_promo. In Video mode, treat starter templates as rough structure only: refine typography, icons/media, motion, pacing, safe areas, validate layout, and run frame QA before export.',
+          name: 'creative_apply_template',
+          description:
+          'Replace or seed the active Image workspace with a polished starter layout/template such as product_ad, social_post, thumbnail, promo_flyer, or quote_card. Removed from Video mode; use HTML Motion, HyperFrames, or Remotion video systems instead.',
         parameters: {
           type: 'object',
           required: ['template'],
@@ -1188,6 +1155,361 @@ export function getCreativeToolDefs() {
     {
       type: 'function',
       function: {
+        name: 'creative_list_hyperframes_components',
+        description:
+          'Legacy compatibility: list bundled HyperFrames catalog entries that Prometheus can import into Video Mode as HTML Motion templates or blocks. For agent-created HyperFrames videos, prefer hyperframes_browse_catalog so follow-up edits/lint/QA/export stay on the first-class HyperFrames tool path.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            query: { type: 'string', description: 'Optional text search over id/name/description/tags, such as x post, instagram, shader, chart, logo, transition, or grain.' },
+            kind: { type: 'string', description: 'Optional kind filter: template, block, blocks, components, or component.' },
+            tag: { type: 'string', description: 'Optional tag filter such as social, overlay, shader, transition, chart, component, or block.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_import_hyperframes_component',
+        description:
+          'Import one HyperFrames catalog component from the upstream registry into the current Prometheus Creative project. Full HyperFrames compositions become custom HTML Motion templates; snippet components become custom HTML Motion blocks. This fetches source HTML/assets and adapts external runtime dependencies for Prometheus snapshots/export.',
+        parameters: {
+          type: 'object',
+          required: ['componentId'],
+          properties: {
+            componentId: { type: 'string', description: 'HyperFrames component id, such as x-post, instagram-follow, logo-outro, data-chart, or grain-overlay.' },
+            id: { type: 'string', description: 'Alias for componentId.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_sync_hyperframes_catalog',
+        description:
+          'Legacy compatibility: bulk-import HyperFrames catalog components into the current Creative project so they appear in creative_list_html_motion_templates and creative_list_html_motion_blocks. Prefer hyperframes_browse_catalog plus hyperframes_insert_clip for new agent-created HyperFrames clips.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            ids: {
+              oneOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
+              description: 'Optional component ids to import. A comma-separated string is accepted.',
+            },
+            query: { type: 'string', description: 'Optional query to import only matching components.' },
+            limit: { type: 'number', description: 'Optional maximum number of matching components to import.' },
+            live: { type: 'boolean', description: 'When true, fetch the latest HyperFrames docs index before importing. Defaults false for the bundled snapshot.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_apply_hyperframes_component',
+        description:
+          'Legacy compatibility: import and immediately apply a HyperFrames catalog component in active Video Mode. For new HyperFrames videos, prefer hyperframes_insert_clip so the clip remains source-backed and can be edited with hyperframes_set_* / hyperframes_apply_patch.',
+        parameters: {
+          type: 'object',
+          required: ['componentId'],
+          properties: {
+            componentId: { type: 'string', description: 'HyperFrames component id, such as x-post, instagram-follow, logo-outro, data-chart, or grain-overlay.' },
+            id: { type: 'string', description: 'Alias for componentId.' },
+            inputs: { type: 'object', description: 'Optional template/block input values.' },
+            assets: {
+              type: 'array',
+              description: 'Optional replacement or extra named assets available to the generated HTML as {{asset.id}} placeholders.',
+              items: {
+                type: 'object',
+                required: ['id', 'source'],
+                properties: {
+                  id: { type: 'string' },
+                  source: { type: 'string' },
+                  type: { type: 'string', enum: ['image', 'video', 'audio', 'font', 'asset'] },
+                  label: { type: 'string' },
+                  mimeType: { type: 'string' },
+                },
+                additionalProperties: false,
+              },
+            },
+            title: { type: 'string' },
+            filename: { type: 'string' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+            durationMs: { type: 'number' },
+            frameRate: { type: 'number' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_browse_catalog',
+        description:
+          'Browse the HyperFrames catalog as an agent-friendly motion vocabulary. Use this before creating HyperFrames videos so you can choose validated blocks/components instead of hand-writing raw HTML.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            query: { type: 'string', description: 'Search id/name/description/tags, e.g. app showcase, money counter, youtube lower third, shader transition.' },
+            kind: { type: 'string', description: 'Optional filter: template, block, blocks, components, component.' },
+            tag: { type: 'string', description: 'Optional tag filter such as social, overlay, shader, transition, chart, cta, product.' },
+            limit: { type: 'number', description: 'Maximum results to return. Defaults 40.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_insert_clip',
+        description:
+          'Insert a HyperFrames catalog component or raw HyperFrames HTML as a source-backed editable clip in active Video Mode. Returns the new clip id plus extracted layer/slot/variable counts for follow-up edits.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            catalogId: { type: 'string', description: 'HyperFrames catalog id, e.g. app-showcase, apple-money-count, yt-lower-third. Alias: componentId/id.' },
+            componentId: { type: 'string' },
+            id: { type: 'string' },
+            html: { type: 'string', description: 'Optional raw HyperFrames HTML. Use catalogId when possible.' },
+            inputs: { type: 'object', description: 'Template/block input values and variable defaults.' },
+            input: { type: 'object', description: 'Alias for inputs.' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+            startMs: { type: 'number', description: 'Clip start on the Prometheus timeline.' },
+            durationMs: { type: 'number', description: 'Clip duration in ms.' },
+            zIndex: { type: 'number' },
+            advanced: { type: 'boolean', description: 'Force advanced-block mode for opaque GSAP/canvas/WebGL blocks.' },
+          },
+          additionalProperties: true,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_apply_patch',
+        description:
+          'Apply typed HyperFrames patch ops to the selected/source-backed HyperFrames clip, then refresh extracted layers/slots/variables in the canvas inspector.',
+        parameters: {
+          type: 'object',
+          required: ['ops'],
+          properties: {
+            clipId: { type: 'string', description: 'Prometheus canvas HyperFrames clip id. If omitted, uses the selected clip.' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            ops: {
+              type: 'array',
+              items: { type: 'object' },
+              description: 'HyperFrames patch ops: set-text, set-color, set-font-size, set-position, set-size, set-src, set-timing, set-variable, set-asset, add-animation, update-animation, remove-animation, raw set-attribute/set-style.',
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_set_text',
+        description: 'Set text on an inner HyperFrames layer by layerId inside a selected/source-backed HyperFrames clip.',
+        parameters: {
+          type: 'object',
+          required: ['layerId', 'text'],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            layerId: { type: 'string', description: 'Inner HyperFrames element id from extraction/layers.' },
+            text: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_set_color',
+        description: 'Set text/color styling on an inner HyperFrames layer.',
+        parameters: {
+          type: 'object',
+          required: ['layerId', 'color'],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            layerId: { type: 'string' },
+            color: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_set_timing',
+        description: 'Set start/duration/z-index timing for an inner HyperFrames layer.',
+        parameters: {
+          type: 'object',
+          required: ['layerId'],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            layerId: { type: 'string' },
+            startMs: { type: 'number' },
+            durationMs: { type: 'number' },
+            zIndex: { type: 'number' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_set_variable',
+        description: 'Set a HyperFrames composition variable or data-prom-slot-variable binding on the selected/source-backed clip.',
+        parameters: {
+          type: 'object',
+          required: ['name', 'value'],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            name: { type: 'string' },
+            value: {},
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_set_asset',
+        description: 'Swap an inner media layer to a Prometheus asset placeholder such as {{asset.logo}}.',
+        parameters: {
+          type: 'object',
+          required: ['layerId', 'assetId'],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            layerId: { type: 'string' },
+            assetId: { type: 'string', description: 'Asset placeholder id, without {{asset. }} wrapper.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_add_animation',
+        description: 'Add a GSAP animation definition to the selected/source-backed HyperFrames clip.',
+        parameters: {
+          type: 'object',
+          required: ['animation'],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            animation: { type: 'object' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_lint',
+        description: 'Lint supplied HyperFrames HTML or the selected/source-backed HyperFrames clip with @hyperframes/core.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            html: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_qa',
+        description:
+          'Run Playwright snapshot QA on supplied HyperFrames HTML or the selected/source-backed clip. Captures start/mid/end frames, reports network/console failures, and uses the Prometheus seek bridge.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            html: { type: 'string' },
+            width: { type: 'number' },
+            height: { type: 'number' },
+            durationMs: { type: 'number' },
+            samplePoints: { type: 'array', items: { type: 'number' } },
+            timeoutMs: { type: 'number' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_materialize',
+        description: 'Materialize supplied or selected HyperFrames HTML into an on-disk HTML Motion clip descriptor that the existing renderer can consume.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            clipId: { type: 'string' },
+            elementId: { type: 'string', description: 'Alias for clipId.' },
+            html: { type: 'string' },
+            compositionId: { type: 'string' },
+            startMs: { type: 'number' },
+            endMs: { type: 'number' },
+            durationMs: { type: 'number' },
+            trimStartMs: { type: 'number' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'hyperframes_export',
+        description: 'Export the active Video workspace containing HyperFrames clips through the existing Prometheus export pipeline. Defaults to MP4.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            format: { type: 'string', enum: ['mp4', 'webm', 'gif'], description: 'Defaults mp4.' },
+            workspaceOnly: { type: 'boolean', description: 'Save to workspace creative exports. Defaults true.' },
+            download: { type: 'boolean', description: 'Also trigger browser download. Defaults false.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'creative_list_library_packs',
         description:
           'List Creative element/motion library packs available to the current project, including built-in packs and custom packs Prometheus has created. Returns enabled state, source, category, includes, and optional element/preset payloads.',
@@ -1206,7 +1528,7 @@ export function getCreativeToolDefs() {
       function: {
         name: 'creative_create_library_pack',
         description:
-          'Create a reusable custom Creative library pack for Prometheus with element presets and/or animation presets, then optionally enable it for the current project. Use this when a brand/style/system needs reusable blocks in Creative mode.',
+          'Create a reusable custom Creative library pack for Prometheus with element presets and/or animation presets, then optionally enable it for the current project. Use this when a brand/style/system needs reusable blocks in the Creative workspace.',
         parameters: {
           type: 'object',
           required: [],
@@ -1496,7 +1818,7 @@ export function getCreativeToolDefs() {
           type: 'object',
           required: [],
           properties: {
-            category: { type: 'string', description: 'Optional category filter such as captions, layout, charts, transitions, cta, utility.' },
+            category: { type: 'string', description: 'Optional category filter such as captions, layout, charts, transitions, cta, utility, or 3d.' },
             query: { type: 'string', description: 'Optional text search over id/name/tags/bestFor.' },
             packId: { type: 'string', description: 'Optional pack filter. Core backend pack is prometheus-core.' },
           },
@@ -1716,6 +2038,202 @@ export function getCreativeToolDefs() {
           required: [],
           properties: {
             filename: { type: 'string', description: 'Optional scene filename, e.g. promo-poster-scene.json.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    // ── Composition (multi-clip timeline) ─────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_get',
+        description: 'Return the active multi-clip composition for the current Video session, including tracks, clips, audioTracks, captions, and a summary. Use this before mutating HTML Motion or Remotion clips on the master timeline.',
+        parameters: emptyObjectSchema(),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_add_track',
+        description: 'Add a new track lane (video, audio, or caption) to the active composition.',
+        parameters: {
+          type: 'object',
+          required: ['kind'],
+          properties: {
+            kind: { type: 'string', enum: ['video', 'audio', 'caption'] },
+            label: { type: 'string', description: 'Optional label, e.g. V2 or Music.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_add_clip',
+        description: 'Place an HTML Motion or Remotion clip on a track at a specific master-timeline position. Scene-graph clips are not part of Video mode.',
+        parameters: {
+          type: 'object',
+          required: ['lane', 'source'],
+          properties: {
+            trackId: { type: 'string' },
+            lane: { type: 'string', enum: ['html-motion', 'remotion'] },
+            source: { type: 'object', description: 'Source descriptor matching the lane: { kind:"html-motion", clipPath } or { kind:"remotion", templateId, presetId?, input }.' },
+            atMs: { type: 'number', description: 'Master-timeline insertion point in ms.' },
+            durationMs: { type: 'number', description: 'Clip duration in ms when outMs is not provided.' },
+            inMs: { type: 'number' },
+            outMs: { type: 'number' },
+            trimStartMs: { type: 'number' },
+            trimEndMs: { type: 'number' },
+            label: { type: 'string' },
+            ripple: { type: 'boolean', description: 'When true, push subsequent clips on the same track later by this clip\'s duration.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_move_clip',
+        description: 'Move a clip to a new master-timeline position and/or to a different track. Provide atMs for absolute position or deltaMs for relative shift.',
+        parameters: {
+          type: 'object',
+          required: ['clipId'],
+          properties: {
+            clipId: { type: 'string' },
+            trackId: { type: 'string' },
+            atMs: { type: 'number' },
+            deltaMs: { type: 'number' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_trim_clip',
+        description: 'Trim a clip\'s head or tail to a master-timeline position. trimStartMs/trimEndMs (against the source) are updated automatically.',
+        parameters: {
+          type: 'object',
+          required: ['clipId', 'edge', 'toMs'],
+          properties: {
+            clipId: { type: 'string' },
+            edge: { type: 'string', enum: ['head', 'tail'] },
+            toMs: { type: 'number', description: 'New master-timeline position for the chosen edge.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_split_at',
+        description: 'Split a clip at a master-timeline position, creating two adjacent clips that share the same source.',
+        parameters: {
+          type: 'object',
+          required: ['clipId', 'atMs'],
+          properties: {
+            clipId: { type: 'string' },
+            atMs: { type: 'number' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_delete_clip',
+        description: 'Remove a clip from the composition. Pass ripple=true to close the gap on the same track.',
+        parameters: {
+          type: 'object',
+          required: ['clipId'],
+          properties: {
+            clipId: { type: 'string' },
+            ripple: { type: 'boolean' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_set_transition',
+        description: 'Set or clear the in/out transition on a clip (cut, fade, crossfade, wipe-left, wipe-right, dip-to-color).',
+        parameters: {
+          type: 'object',
+          required: ['clipId', 'edge'],
+          properties: {
+            clipId: { type: 'string' },
+            edge: { type: 'string', enum: ['in', 'out'] },
+            transition: {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: ['cut', 'fade', 'crossfade', 'wipe-left', 'wipe-right', 'dip-to-color'] },
+                durationMs: { type: 'number' },
+                color: { type: 'string' },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_select_clip',
+        description: 'Select an HTML Motion or Remotion clip on the timeline. Pass null to deselect.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            clipId: { type: ['string', 'null'] },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_lint',
+        description: 'Run structural lint on the active composition. Reports overlaps, gaps, missing video track, and zero-duration clips.',
+        parameters: emptyObjectSchema(),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_render',
+        description: 'Render the active multi-clip composition to a single MP4 (or webm) using the server-side ffmpeg pipeline. Each clip is rendered to PNG frames per its lane, encoded, concatenated, and audio tracks are mixed and muxed. Returns the workspace path of the output file.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            format: { type: 'string', enum: ['mp4', 'webm'], description: 'Output container/codec. Defaults to mp4.' },
+            filename: { type: 'string', description: 'Optional output filename. Defaults to composition-{timestamp}.{ext}.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'creative_composition_save',
+        description: 'Persist the active composition as a JSON file under the creative scenes directory.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            filename: { type: 'string', description: 'Optional filename, defaults to {mode}-composition.json.' },
           },
           additionalProperties: false,
         },

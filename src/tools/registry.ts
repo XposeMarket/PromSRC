@@ -1,7 +1,7 @@
 import { ToolResult } from '../types.js';
 import { shellTool } from './shell.js';
 import { readTool, writeTool, editTool, listTool, deleteTool, renameTool, copyTool, mkdirTool, statTool, appendTool, applyPatchTool, grepFilesTool, grepFileTool, searchFilesTool, fileStatsTool } from './files.js';
-import { webSearchTool, webFetchTool } from './web.js';
+import { webSearchTool, webSearchSingleTool, webSearchMultiTool, webFetchTool } from './web.js';
 import { allSkillTools } from './skills.js';
 import { timeNowTool } from './time.js';
 import { personaReadTool, personaUpdateTool } from './persona.js';
@@ -13,11 +13,15 @@ import { uploadImageTool, fetchImageTool } from './image-tools.js';
 import { downloadUrlTool, downloadMediaTool } from './download-tools.js';
 import { analyzeImageTool, analyzeVideoTool } from './media-analysis.js';
 import { generateImageTool } from './generate-image.js';
+import { generateVideoTool } from './generate-video.js';
 import { vercelDeployTool, vercelEnvTool } from './vercel-tools.js';
 import { writeNoteTool } from './write-note.js';
 import { deployAnalysisTeamTool, injectAnalysisTeamDeps } from './deploy-analysis-team.js';
 import { viewConnectionsTool } from './view-connections.js';
+import { allProcessTools } from './process-tools.js';
 import { isPublicDistributionBuild } from '../runtime/distribution.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter.js';
+import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry.js';
 
 // ── Phase 5: Policy engine + audit log ──────────────────────────────────────
 import { getPolicyEngine } from '../gateway/policy.js';
@@ -59,31 +63,33 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
   ],
   // Research worker: web search + read-only file access. No mutations, no browser UI.
   researcher: [
-    'web_search', 'web_fetch', 'read_file', 'list_files', 'list_directory',
+    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'read_file', 'list_files', 'list_directory',
     'write_note', 'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'task_control',
   ],
   // Shell-only worker: run commands and read/write files.
   shell_runner: [
-    'run_command', 'read_file', 'create_file', 'replace_lines', 'insert_after',
+    'run_command', 'run_command_supervised', 'start_process', 'process_status', 'process_log', 'process_wait', 'process_kill', 'process_submit',
+    'read_file', 'create_file', 'replace_lines', 'insert_after',
     'delete_lines', 'find_replace', 'delete_file', 'list_files', 'list_directory',
     'mkdir', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_index_refresh', 'task_control',
   ],
   // Read-only auditor: inspect files and memory, no writes.
   reader_only: [
-    'read_file', 'list_files', 'list_directory', 'web_search', 'web_fetch',
+    'read_file', 'list_files', 'list_directory', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch',
     'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'task_control', 'source_stats', 'webui_source_stats',
   ],
   // Code writer: full file + shell access, no browser/desktop.
   code_writer: [
     'read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines',
     'find_replace', 'delete_file', 'list_files', 'list_directory', 'mkdir',
-    'run_command', 'web_search', 'web_fetch', 'write_note',
-    'generate_image',
+    'run_command', 'run_command_supervised', 'start_process', 'process_status', 'process_log', 'process_wait', 'process_kill', 'process_submit',
+    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'write_note',
+    'generate_image', 'generate_video',
     'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'memory_index_refresh', 'task_control', 'grep_files', 'grep_file', 'search_files', 'file_stats', 'source_stats', 'webui_source_stats',
   ],
   // Data analyst: read files + web, no writes or shell mutations.
   analyst: [
-    'read_file', 'list_files', 'list_directory', 'web_search', 'web_fetch',
+    'read_file', 'list_files', 'list_directory', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch',
     'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'write_note', 'task_control',
   ],
   // Browser automation agent: full browser + file access, no desktop.
@@ -96,7 +102,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_extract_structured', 'browser_element_watch',
     'browser_vision_screenshot', 'browser_vision_click', 'browser_vision_type',
     'browser_send_to_telegram',
-    'web_search', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
+    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
   // Scraper: browser + write output files.
@@ -107,7 +113,7 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'browser_get_focused_item', 'browser_get_page_text', 'browser_send_to_telegram',
     'browser_scroll_collect', 'browser_scroll_collect_v2', 'browser_snapshot_delta',
     'browser_extract_structured', 'browser_element_watch',
-    'web_search', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
+    'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
 };
@@ -144,6 +150,9 @@ const TOOL_PROFILE_TOOL_NAMES: Record<Exclude<ToolProfile, 'full'>, ReadonlySet<
     'desktop_get_process_list',
     'desktop_wait_for_change',
     'desktop_diff_screenshot',
+    'desktop_background_status',
+    'desktop_background_prepare_sandbox',
+    'desktop_background_command',
     'write_note',
     'time_now',
     'manage_team_goal',
@@ -174,6 +183,8 @@ const TOOL_PROFILE_TOOL_NAMES: Record<Exclude<ToolProfile, 'full'>, ReadonlySet<
   ]),
   web: new Set([
     'web_search',
+    'web_search_single',
+    'web_search_multi',
     'web_fetch',
     'write_note',
     'manage_team_goal',
@@ -218,6 +229,9 @@ class ToolRegistry {
   constructor() {
     // Core filesystem + shell
     this.registerSafe(shellTool);
+    for (const tool of allProcessTools) {
+      this.registerSafe(tool);
+    }
     this.registerSafe(readTool);
     this.registerSafe(writeTool);
     this.registerSafe(editTool);
@@ -236,6 +250,8 @@ class ToolRegistry {
     this.registerSafe(fileStatsTool);
     // Web tools
     this.registerSafe(webSearchTool);
+    this.registerSafe(webSearchSingleTool);
+    this.registerSafe(webSearchMultiTool);
     this.registerSafe(webFetchTool);
     // Memory tools are provided by the subagent runtime executor
     // (memory_browse, memory_write, memory_read over USER.md/SOUL.md/MEMORY.md).
@@ -280,6 +296,7 @@ class ToolRegistry {
     this.registerSafe(downloadUrlTool);
     this.registerSafe(downloadMediaTool);
     this.registerSafe(generateImageTool);
+    this.registerSafe(generateVideoTool);
     this.registerSafe(analyzeImageTool);
     this.registerSafe(analyzeVideoTool);
     // Vercel deployment tools
@@ -287,6 +304,29 @@ class ToolRegistry {
     this.registerSafe(vercelEnvTool);
     this.registerSafe(deployAnalysisTeamTool);
     this.registerSafe(viewConnectionsTool);
+    try {
+      ensurePrometheusExtensionRuntimeLoaded();
+      for (const extensionTool of getExtensionRuntimeRegistry().listTools()) {
+        this.registerSafe({
+          name: extensionTool.name,
+          description: extensionTool.description,
+          schema: {},
+          jsonSchema: extensionTool.parameters,
+          execute: async (args: any) => {
+            const result = await getExtensionRuntimeRegistry().executeTool(extensionTool.name, args);
+            return {
+              success: !result.error,
+              stdout: result.result,
+              data: result.data ?? result.extra,
+              artifacts: result.artifacts,
+              error: result.error ? result.result : undefined,
+            };
+          },
+        });
+      }
+    } catch (err: any) {
+      console.warn(`[tools] Extension tools unavailable: ${String(err?.message || err)}`);
+    }
     // Desktop automation tools (Phase 2 — ToolRegistry integration)
     for (const tool of allDesktopTools) {
       this.registerSafe(tool);

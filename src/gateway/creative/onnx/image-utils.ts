@@ -94,6 +94,40 @@ export async function applyMaskToImage(imageAbsPath: string, mask: Float32Array 
   return { buffer: await img.getBufferAsync(Jimp.MIME_PNG), bbox, width: img.bitmap.width, height: img.bitmap.height };
 }
 
+export async function applyAlphaMaskToImage(imageAbsPath: string, mask: Uint8Array, maskWidth: number, maskHeight: number, threshold = 8): Promise<{ buffer: Buffer; bbox: { x: number; y: number; width: number; height: number } | null; width: number; height: number }> {
+  const img = await Jimp.read(imageAbsPath);
+  const W = img.bitmap.width;
+  const H = img.bitmap.height;
+  const scaleX = maskWidth / W;
+  const scaleY = maskHeight / H;
+  let minX = W, minY = H, maxX = -1, maxY = -1;
+  for (let y = 0; y < H; y++) {
+    const my = Math.min(maskHeight - 1, Math.floor(y * scaleY));
+    for (let x = 0; x < W; x++) {
+      const mx = Math.min(maskWidth - 1, Math.floor(x * scaleX));
+      const alpha = mask[my * maskWidth + mx] || 0;
+      const idx = (y * W + x) * 4;
+      img.bitmap.data[idx + 3] = alpha;
+      if (alpha >= threshold) {
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX >= 0 && maxY >= 0) {
+    const cropped = img.clone().crop(minX, minY, maxX - minX + 1, maxY - minY + 1);
+    return {
+      buffer: await cropped.getBufferAsync(Jimp.MIME_PNG),
+      bbox: { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 },
+      width: img.bitmap.width,
+      height: img.bitmap.height,
+    };
+  }
+  return { buffer: await img.getBufferAsync(Jimp.MIME_PNG), bbox: null, width: img.bitmap.width, height: img.bitmap.height };
+}
+
 export function unionMasks(masks: { mask: Float32Array | Uint8Array; width: number; height: number; threshold?: number; padPx?: number }[], targetWidth: number, targetHeight: number): Uint8Array {
   const out = new Uint8Array(targetWidth * targetHeight);
   for (const entry of masks) {

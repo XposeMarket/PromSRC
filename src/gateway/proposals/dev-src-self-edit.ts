@@ -31,6 +31,34 @@ function isSrcPath(normalizedPath: string): boolean {
   return normalizedPath.startsWith('src/');
 }
 
+function isWebUiPath(normalizedPath: string): boolean {
+  return normalizedPath.startsWith('web-ui/');
+}
+
+function isDevSelfEditPath(normalizedPath: string): boolean {
+  return isSrcPath(normalizedPath) || isWebUiPath(normalizedPath);
+}
+
+function generatedPublicWebUiPathForWebUiPath(normalizedPath: string): string | null {
+  if (normalizedPath === 'web-ui/index.html') return 'generated/public-web-ui/index.html';
+  if (normalizedPath.startsWith('web-ui/src/')) {
+    return `generated/public-web-ui/static/${normalizedPath.slice('web-ui/src/'.length)}`;
+  }
+  return null;
+}
+
+function expandPromotionPaths(allowedFiles: string[]): string[] {
+  const expanded: string[] = [];
+  for (const rawPath of allowedFiles) {
+    const normalizedPath = normalizeProposalPath(rawPath);
+    if (!normalizedPath) continue;
+    if (isDevSelfEditPath(normalizedPath)) expanded.push(normalizedPath);
+    const generatedPath = generatedPublicWebUiPathForWebUiPath(normalizedPath);
+    if (generatedPath) expanded.push(generatedPath);
+  }
+  return Array.from(new Set(expanded));
+}
+
 function ensureSafeSandboxPath(targetPath: string, liveProjectRoot: string): void {
   const sandboxBase = path.resolve(liveProjectRoot, '.prometheus', 'proposal-workspaces');
   const resolvedTarget = path.resolve(targetPath);
@@ -78,9 +106,10 @@ export function proposalUsesDevSrcSelfEditMode(proposal: any): boolean {
     .map((file: any) => normalizeProposalPath(file?.path))
     .filter(Boolean);
   if (normalizedPaths.length === 0) return false;
-  const allSrc = normalizedPaths.every(isSrcPath);
+  const allAllowed = normalizedPaths.every(isDevSelfEditPath);
   const hasSrc = normalizedPaths.some(isSrcPath);
-  return allSrc && hasSrc;
+  const hasWebUi = normalizedPaths.some(isWebUiPath);
+  return allAllowed && (hasSrc || hasWebUi);
 }
 
 export function captureLiveSrcFileBaselines(
@@ -88,9 +117,9 @@ export function captureLiveSrcFileBaselines(
   allowedFiles: string[],
 ): Record<string, ProposalFileBaseline> {
   const baselines: Record<string, ProposalFileBaseline> = {};
-  for (const rawPath of allowedFiles) {
+  for (const rawPath of expandPromotionPaths(allowedFiles)) {
     const normalizedPath = normalizeProposalPath(rawPath);
-    if (!isSrcPath(normalizedPath)) continue;
+    if (!isDevSelfEditPath(normalizedPath) && !normalizedPath.startsWith('generated/public-web-ui/')) continue;
     const liveAbsPath = path.resolve(liveProjectRoot, normalizedPath);
     const rel = path.relative(liveProjectRoot, liveAbsPath);
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -125,6 +154,8 @@ function prepareWorkspaceFromProjectRoot(
     'package-lock.json',
     '.npmrc',
     'src',
+    'web-ui',
+    'generated',
     'scripts',
   ];
   for (const entry of rootEntriesToCopy) {
@@ -154,7 +185,7 @@ function prepareWorkspaceFromProjectRoot(
       createdAt: Date.now(),
       allowedFiles: captureLiveBaselines
         ? Object.keys(baselines)
-        : Array.from(new Set(allowedFiles.map(normalizeProposalPath).filter(isSrcPath))),
+        : expandPromotionPaths(allowedFiles),
     }, null, 2),
     'utf-8',
   );
@@ -208,7 +239,7 @@ export function promoteDevSrcSelfEditWorkspace(opts: {
 }): { promotedFiles: string[]; deletedFiles: string[] } {
   const projectRoot = path.resolve(opts.projectRoot);
   const liveProjectRoot = path.resolve(opts.liveProjectRoot);
-  const allowedFiles = Array.from(new Set((opts.allowedFiles || []).map(normalizeProposalPath).filter(isSrcPath)));
+  const allowedFiles = expandPromotionPaths(opts.allowedFiles || []);
   const baselines = opts.liveFileBaselines || {};
   const conflicts: string[] = [];
   const promotedFiles: string[] = [];

@@ -14,6 +14,7 @@ const TYPE_COLORS = {
   project_state: '#8ce99a',
   memory_root: '#ffde7d',
   memory_note: '#f5a3ff',
+  obsidian_note: '#8fddc7',
   audit_misc: '#b0b8c9',
   unknown: '#b0b8c9',
 };
@@ -27,6 +28,7 @@ const CATEGORY_META = {
   teams: { label: 'Teams', color: '#69d5e8' },
   projects: { label: 'Projects', color: '#8fe39d' },
   memory: { label: 'Memory', color: '#f4b0ff' },
+  obsidian: { label: 'Obsidian', color: '#8fddc7' },
   misc: { label: 'Other', color: '#aab4c5' },
 };
 
@@ -124,6 +126,7 @@ function toCategoryId(sourceType) {
   if (type.startsWith('team_')) return 'teams';
   if (type.startsWith('project_')) return 'projects';
   if (type.startsWith('memory_')) return 'memory';
+  if (type.startsWith('obsidian_')) return 'obsidian';
   return 'misc';
 }
 
@@ -1793,5 +1796,4 @@ window.openAddMemoryDrawer = openAddMemoryDrawer;
 window.shuffleMemoryGraph = shuffleMemoryGraph;
 window.triggerMemoryImageInput = triggerMemoryImageInput;
 window.toggleDefaultShape = toggleDefaultShape;
-
 init();

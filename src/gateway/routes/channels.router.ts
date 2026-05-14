@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { getConfig, getAgents, getAgentById, ensureAgentWorkspace, resolveAgentWorkspace } from '../../config/config';
 import { broadcastWS, broadcastTeamEvent, resolveChannelsConfig, normalizeTelegramConfig, normalizeDiscordConfig, normalizeWhatsAppConfig } from '../comms/broadcaster';
-import { listManagedTeams, saveManagedTeam, deleteManagedTeam } from '../teams/managed-teams';
+import { listManagedTeams, getManagedTeam, saveManagedTeam, deleteManagedTeam } from '../teams/managed-teams';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
 import { spawnAgent } from '../../agents/spawner';
 import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
@@ -14,14 +14,19 @@ import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
 import { checkForTeamSuggestion } from '../teams/team-detector';
 import { getTeamWorkspacePath } from '../teams/team-workspace';
+import type { RuntimeVisionAttachment } from '../chat/attachment-context';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
 
 export const router = Router();
 
+const getAttachmentContext = () => require('../chat/attachment-context') as typeof import('../chat/attachment-context');
+
 let _cronScheduler: any;
 let _telegramChannel: any;
+let _telegramPersonaBots: any;
+let _telegramTeamRoomBridge: any;
 
 
 let _dispatchToAgent: (agentId: string, message: string, context: string | undefined, source: string) => Promise<any>;
@@ -40,6 +45,8 @@ let _runInteractiveTurn: (
 export function initChannelsRouter(deps: {
   cronScheduler: any;
   telegramChannel: any;
+  telegramPersonaBots?: any;
+  telegramTeamRoomBridge?: any;
   dispatchToAgent: (agentId: string, message: string, context: string | undefined, source: string) => Promise<any>;
   runInteractiveTurn: (
     message: string,
@@ -55,6 +62,8 @@ export function initChannelsRouter(deps: {
 }): void {
   _cronScheduler = deps.cronScheduler;
   _telegramChannel = deps.telegramChannel;
+  _telegramPersonaBots = deps.telegramPersonaBots;
+  _telegramTeamRoomBridge = deps.telegramTeamRoomBridge;
   _dispatchToAgent = deps.dispatchToAgent;
   _runInteractiveTurn = deps.runInteractiveTurn;
 }
@@ -118,6 +127,8 @@ router.get('/api/channels/status', (_req, res) => {
       enabled: channels.telegram.enabled,
       hasToken: !!channels.telegram.botToken,
       allowedUserIds: channels.telegram.allowedUserIds,
+      personaBots: _telegramPersonaBots?.getStatus ? _telegramPersonaBots.getStatus() : { enabled: false, accounts: [] },
+      teamRooms: _telegramTeamRoomBridge?.getStatus ? _telegramTeamRoomBridge.getStatus() : { rooms: [] },
     },
     discord: {
       enabled: channels.discord.enabled,
@@ -163,15 +174,307 @@ router.post('/api/channels/config', async (req, res) => {
   } as any);
 
   _telegramChannel.updateConfig(mergedTelegram);
+  _telegramTeamRoomBridge?.updateConfig?.(mergedTelegram);
+  await _telegramPersonaBots?.updateConfig?.(mergedTelegram);
 
   res.json({
     success: true,
     channels: {
-      telegram: { enabled: mergedTelegram.enabled, hasToken: !!mergedTelegram.botToken, allowedUserIds: mergedTelegram.allowedUserIds },
+      telegram: {
+        enabled: mergedTelegram.enabled,
+        hasToken: !!mergedTelegram.botToken,
+        allowedUserIds: mergedTelegram.allowedUserIds,
+        personas: Object.fromEntries(Object.entries(mergedTelegram.personas || {}).map(([accountId, persona]: [string, any]) => [accountId, {
+          enabled: persona.enabled,
+          agentId: persona.agentId,
+          hasToken: !!persona.botToken,
+          managedBotUserId: persona.managedBotUserId,
+          botUsername: persona.botUsername,
+          allowedUserIds: persona.allowedUserIds,
+          groupChatIds: persona.groupChatIds,
+          requireMentionInGroups: persona.requireMentionInGroups,
+          streamMode: persona.streamMode,
+        }])),
+        teamRooms: Object.fromEntries(Object.entries(mergedTelegram.teamRooms || {}).map(([key, room]: [string, any]) => [key, {
+          enabled: room.enabled,
+          teamId: room.teamId,
+          chatId: room.chatId,
+          topicId: room.topicId,
+          title: room.title,
+          usePersonaIdentities: room.usePersonaIdentities,
+        }])),
+      },
       discord: { enabled: mergedDiscord.enabled, hasToken: !!mergedDiscord.botToken, hasWebhook: !!mergedDiscord.webhookUrl },
       whatsapp: { enabled: mergedWhatsApp.enabled, hasAccessToken: !!mergedWhatsApp.accessToken, phoneNumberId: mergedWhatsApp.phoneNumberId },
     },
   });
+});
+
+router.get('/api/channels/telegram/team-rooms/status', (_req, res) => {
+  res.json({
+    success: true,
+    ...( _telegramTeamRoomBridge?.getStatus ? _telegramTeamRoomBridge.getStatus() : { rooms: [] } ),
+  });
+});
+
+router.post('/api/channels/telegram/team-rooms/bind', async (req, res) => {
+  const chatId = Number(req.body?.chatId);
+  const topicId = Number(req.body?.topicId);
+  const teamId = String(req.body?.teamId || '').trim();
+  if (!Number.isFinite(chatId) || chatId === 0) return res.status(400).json({ success: false, error: 'chatId is required' });
+  if (!teamId) return res.status(400).json({ success: false, error: 'teamId is required' });
+  if (!getManagedTeam(teamId)) return res.status(404).json({ success: false, error: `Team "${teamId}" was not found` });
+
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const existing = resolveChannelsConfig();
+  const key = Number.isFinite(topicId) && topicId > 0 ? `${chatId}:topic:${topicId}` : String(chatId);
+  const mergedTelegram = normalizeTelegramConfig({
+    ...existing.telegram,
+    teamRooms: {
+      ...(existing.telegram.teamRooms || {}),
+      [key]: {
+        enabled: req.body?.enabled !== false,
+        teamId,
+        chatId,
+        topicId: Number.isFinite(topicId) && topicId > 0 ? topicId : undefined,
+        title: String(req.body?.title || '').trim() || undefined,
+        usePersonaIdentities: req.body?.usePersonaIdentities !== false,
+      },
+    },
+  });
+  cm.updateConfig({
+    channels: {
+      ...(current.channels || {}),
+      telegram: mergedTelegram,
+      discord: existing.discord,
+      whatsapp: existing.whatsapp,
+    },
+    telegram: mergedTelegram,
+  } as any);
+  _telegramChannel.updateConfig(mergedTelegram);
+  _telegramTeamRoomBridge?.updateConfig?.(mergedTelegram);
+  await _telegramPersonaBots?.updateConfig?.(mergedTelegram);
+  res.json({ success: true, room: mergedTelegram.teamRooms[key], status: _telegramTeamRoomBridge?.getStatus?.() || null });
+});
+
+router.get('/api/channels/telegram/personas/status', (_req, res) => {
+  res.json({
+    success: true,
+    ...( _telegramPersonaBots?.getStatus ? _telegramPersonaBots.getStatus() : { enabled: false, accounts: [] } ),
+  });
+});
+
+router.post('/api/channels/telegram/personas/:accountId/test', async (req, res) => {
+  const accountId = String(req.params.accountId || '').trim();
+  try {
+    if (!_telegramPersonaBots?.testAccount) {
+      res.status(503).json({ success: false, error: 'Telegram persona bot manager is not initialized' });
+      return;
+    }
+    const result = await _telegramPersonaBots.testAccount(accountId, req.body || undefined);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+function sanitizeTelegramBotUsernamePart(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+function buildSuggestedBotUsername(prefix: string, accountId: string): string {
+  const cleanPrefix = sanitizeTelegramBotUsernamePart(prefix || 'prometheus') || 'prometheus';
+  const cleanAccount = sanitizeTelegramBotUsernamePart(accountId) || 'agent';
+  const suffix = 'bot';
+  const baseMax = 32 - suffix.length;
+  const base = `${cleanPrefix}_${cleanAccount}`.slice(0, baseMax).replace(/_+$/g, '') || 'prometheus_agent';
+  return `${base}${suffix}`;
+}
+
+function buildTelegramPersonaSetupPlan(opts?: { managerBotUsername?: string; prefix?: string; scope?: string }) {
+  const channels = resolveChannelsConfig();
+  const teams = listManagedTeams();
+  const teamAgentIds = new Set<string>();
+  for (const team of teams) {
+    for (const agentId of Array.isArray(team.subagentIds) ? team.subagentIds : []) {
+      const clean = _sanitizeAgentId(agentId);
+      if (clean) teamAgentIds.add(clean);
+    }
+  }
+
+  const scope = String(opts?.scope || 'teams').toLowerCase();
+  const candidates = scope === 'all'
+    ? getAgents().filter((agent: any) => agent?.id && agent.id !== 'main').map((agent: any) => _sanitizeAgentId(agent.id))
+    : Array.from(teamAgentIds);
+  const managerStatus = _telegramChannel?.getStatus ? _telegramChannel.getStatus() : {};
+  const managerBotUsername = String(opts?.managerBotUsername || managerStatus?.username || '').replace(/^@/, '').trim();
+  const prefix = String(opts?.prefix || 'prometheus').trim() || 'prometheus';
+
+  const agents = candidates
+    .map((agentId) => {
+      const agent = getAgentById(agentId);
+      if (!agent) return null;
+      const existing = channels.telegram.personas?.[agentId];
+      const suggestedUsername = existing?.botUsername || buildSuggestedBotUsername(prefix, agentId);
+      const suggestedName = String((agent as any)?.name || agentId).slice(0, 64);
+      const createUrl = managerBotUsername
+        ? `https://t.me/newbot/${encodeURIComponent(managerBotUsername)}/${encodeURIComponent(suggestedUsername)}?name=${encodeURIComponent(suggestedName)}`
+        : null;
+      const teamNames = teams
+        .filter((team) => Array.isArray(team.subagentIds) && team.subagentIds.includes(agentId))
+        .map((team) => team.name || team.id);
+      return {
+        accountId: agentId,
+        agentId,
+        agentName: (agent as any)?.name || agentId,
+        teams: teamNames,
+        configured: !!existing,
+        hasToken: !!existing?.botToken || !!existing?.managedBotUserId,
+        managedBotUserId: existing?.managedBotUserId,
+        botUsername: existing?.botUsername || null,
+        suggestedUsername,
+        suggestedName,
+        createUrl,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    managerBotUsername: managerBotUsername || null,
+    managerHasToken: !!channels.telegram.botToken,
+    managerCanGenerateLinks: !!managerBotUsername,
+    teams: teams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      subagentIds: Array.isArray(team.subagentIds) ? team.subagentIds : [],
+    })),
+    agents,
+    nextSteps: [
+      'Enable Bot Management Mode for the manager bot in BotFather.',
+      'Save/apply this plan so Prometheus seeds persona entries for each team agent.',
+      'Open each createUrl in Telegram and approve creating the managed bot.',
+      'Copy each created bot user_id into the bind endpoint or config as managedBotUserId.',
+      'Add all created bots to the same group, run /whereami, and put the group chatId in groupChatIds.',
+    ],
+  };
+}
+
+router.get('/api/channels/telegram/personas/setup-plan', (req, res) => {
+  res.json({
+    success: true,
+    plan: buildTelegramPersonaSetupPlan({
+      managerBotUsername: String(req.query.managerBotUsername || ''),
+      prefix: String(req.query.prefix || ''),
+      scope: String(req.query.scope || 'teams'),
+    }),
+  });
+});
+
+router.post('/api/channels/telegram/personas/setup-plan/apply', async (req, res) => {
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const existing = resolveChannelsConfig();
+  const plan = buildTelegramPersonaSetupPlan({
+    managerBotUsername: String(req.body?.managerBotUsername || ''),
+    prefix: String(req.body?.prefix || ''),
+    scope: String(req.body?.scope || 'teams'),
+  });
+  const groupChatIds = Array.isArray(req.body?.groupChatIds)
+    ? req.body.groupChatIds.map(Number).filter((n: number) => Number.isFinite(n) && n !== 0)
+    : [];
+  const personas: Record<string, any> = { ...(existing.telegram.personas || {}) };
+  for (const agentPlan of plan.agents as any[]) {
+    const accountId = String(agentPlan.accountId || '').trim();
+    if (!accountId) continue;
+    const currentPersona = personas[accountId] || {};
+    personas[accountId] = {
+      ...currentPersona,
+      enabled: currentPersona.enabled !== false,
+      agentId: agentPlan.agentId,
+      botToken: currentPersona.botToken || '',
+      managedBotUserId: currentPersona.managedBotUserId,
+      botUsername: currentPersona.botUsername || agentPlan.suggestedUsername,
+      allowedUserIds: Array.isArray(currentPersona.allowedUserIds) && currentPersona.allowedUserIds.length > 0
+        ? currentPersona.allowedUserIds
+        : [],
+      groupChatIds: Array.isArray(currentPersona.groupChatIds) && currentPersona.groupChatIds.length > 0
+        ? currentPersona.groupChatIds
+        : groupChatIds,
+      requireMentionInGroups: currentPersona.requireMentionInGroups !== false,
+      streamMode: currentPersona.streamMode === 'partial' ? 'partial' : 'full',
+    };
+  }
+
+  const mergedTelegram = normalizeTelegramConfig({
+    ...existing.telegram,
+    personas,
+  });
+  cm.updateConfig({
+    channels: {
+      ...(current.channels || {}),
+      telegram: mergedTelegram,
+      discord: existing.discord,
+      whatsapp: existing.whatsapp,
+    },
+    telegram: mergedTelegram,
+  } as any);
+  _telegramChannel.updateConfig(mergedTelegram);
+  _telegramTeamRoomBridge?.updateConfig?.(mergedTelegram);
+  await _telegramPersonaBots?.updateConfig?.(mergedTelegram);
+
+  res.json({
+    success: true,
+    plan: buildTelegramPersonaSetupPlan({
+      managerBotUsername: plan.managerBotUsername || '',
+      prefix: String(req.body?.prefix || ''),
+      scope: String(req.body?.scope || 'teams'),
+    }),
+  });
+});
+
+router.post('/api/channels/telegram/personas/:accountId/bind-managed-bot', async (req, res) => {
+  const accountId = _sanitizeAgentId(req.params.accountId);
+  const userId = Number(req.body?.managedBotUserId || req.body?.userId || req.body?.botId);
+  if (!accountId) return res.status(400).json({ success: false, error: 'accountId is required' });
+  if (!Number.isFinite(userId) || userId <= 0) return res.status(400).json({ success: false, error: 'managedBotUserId is required' });
+
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const existing = resolveChannelsConfig();
+  const currentPersona = existing.telegram.personas?.[accountId];
+  if (!currentPersona) return res.status(404).json({ success: false, error: `Persona "${accountId}" is not configured. Apply a setup plan first.` });
+
+  const personas = {
+    ...(existing.telegram.personas || {}),
+    [accountId]: {
+      ...currentPersona,
+      managedBotUserId: userId,
+      botUsername: String(req.body?.botUsername || currentPersona.botUsername || '').replace(/^@/, '').trim() || currentPersona.botUsername,
+    },
+  };
+  const mergedTelegram = normalizeTelegramConfig({
+    ...existing.telegram,
+    personas,
+  });
+  cm.updateConfig({
+    channels: {
+      ...(current.channels || {}),
+      telegram: mergedTelegram,
+      discord: existing.discord,
+      whatsapp: existing.whatsapp,
+    },
+    telegram: mergedTelegram,
+  } as any);
+  _telegramChannel.updateConfig(mergedTelegram);
+  _telegramTeamRoomBridge?.updateConfig?.(mergedTelegram);
+  await _telegramPersonaBots?.updateConfig?.(mergedTelegram);
+
+  res.json({ success: true, accountId, managedBotUserId: userId, status: _telegramPersonaBots?.getStatus?.() || null });
 });
 
 router.post('/api/channels/test/:channel', async (req, res) => {
@@ -401,6 +704,17 @@ function getSubagentChatSessionId(agentId: string): string {
   return `subagent_chat_${_sanitizeAgentId(agentId)}`;
 }
 
+function getChannelSubagentChatSessionId(channel: string, accountId: string, agentId: string, peerId?: string): string {
+  const bits = [
+    'subagent_chat',
+    _sanitizeAgentId(channel),
+    _sanitizeAgentId(accountId),
+    _sanitizeAgentId(agentId),
+    peerId ? String(peerId).replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80) : '',
+  ].filter(Boolean);
+  return bits.join('_');
+}
+
 function loadAgentIdentityPrompt(agentWorkspace: string): string {
   const candidates = [
     path.join(agentWorkspace, 'system_prompt.md'),
@@ -483,6 +797,12 @@ async function runSubagentChatTurn(
   timeoutMs: number,
   sendSSE?: (event: string, data: any) => void,
   externalAbortSignal?: { aborted: boolean },
+  visionAttachments?: RuntimeVisionAttachment[],
+  options?: {
+    sessionIdOverride?: string;
+    source?: string;
+    seedFromSharedChatStore?: boolean;
+  },
 ): Promise<{ result: { type: string; text: string; thinking?: string }; historyEntry: any; messages: any[] }> {
   const startedAt = Date.now();
   const cfg = getConfig().getConfig() as any;
@@ -492,8 +812,12 @@ async function runSubagentChatTurn(
   const effectiveModel = resolveEffectiveAgentModel(cfg, agent, isManager, teamMemberIds.has(agentId));
   const mainWorkspace = getConfig().getWorkspacePath();
   const artifactWorkspace = ensureAgentWorkspace(agent);
-  const sessionId = getSubagentChatSessionId(agentId);
-  seedSubagentSessionFromChatStore(agentId, sessionId, mainWorkspace);
+  const sessionId = options?.sessionIdOverride || getSubagentChatSessionId(agentId);
+  if (options?.seedFromSharedChatStore !== false) {
+    seedSubagentSessionFromChatStore(agentId, sessionId, mainWorkspace);
+  } else {
+    setWorkspace(sessionId, mainWorkspace);
+  }
   const callerContext = buildSubagentCallerContext(agentId, agent, mainWorkspace, artifactWorkspace);
   const abortSignal = externalAbortSignal || { aborted: false };
   const baseEmit = sendSSE || (() => {});
@@ -536,7 +860,7 @@ async function runSubagentChatTurn(
         abortSignal,
         callerContext,
         undefined,
-        undefined,
+        Array.isArray(visionAttachments) && visionAttachments.length > 0 ? visionAttachments : undefined,
         effectiveModel.model || undefined,
       ),
       timeoutErr,
@@ -556,6 +880,7 @@ async function runSubagentChatTurn(
       content: reply,
       metadata: {
         source: 'subagent_chat',
+        channelSource: options?.source,
         success: true,
         mode: result?.type || 'chat',
         durationMs: finishedAt - startedAt,
@@ -590,11 +915,66 @@ async function runSubagentChatTurn(
     const agentMessage = appendSubagentChatMessage(agentId, {
       role: 'agent',
       content: `Error: ${err.message}`,
-      metadata: { source: 'subagent_chat', success: false },
+      metadata: { source: 'subagent_chat', channelSource: options?.source, success: false },
     });
     broadcastWS({ type: 'subagent_chat_message', agentId, message: agentMessage });
     throw err;
   }
+}
+
+export async function runSubagentChatTurnFromChannel(params: {
+  agentId: string;
+  message: string;
+  source: string;
+  accountId?: string;
+  peerId?: string;
+  userLabel?: string;
+  timeoutMs?: number;
+  sessionId?: string;
+  seedFromSharedChatStore?: boolean;
+}): Promise<{ result: { type: string; text: string; thinking?: string }; historyEntry: any; messages: any[] }> {
+  const agentId = _sanitizeAgentId(params.agentId);
+  const agent = getAgentById(agentId);
+  if (!agent) throw new Error(`Agent "${agentId}" not found`);
+  if (!_runInteractiveTurn) throw new Error('Subagent chat runtime is not initialized');
+
+  const message = String(params.message || '').trim();
+  if (!message) throw new Error('message is required');
+
+  const timeoutMs = Number.isFinite(Number(params.timeoutMs)) && Number(params.timeoutMs) > 0
+    ? Math.floor(Number(params.timeoutMs))
+    : 300000;
+  const source = String(params.source || 'external_subagent_chat').trim() || 'external_subagent_chat';
+  const accountId = String(params.accountId || 'default').trim() || 'default';
+  const peerId = params.peerId ? String(params.peerId) : undefined;
+  const sessionId = params.sessionId || getChannelSubagentChatSessionId(source, accountId, agentId, peerId);
+  const content = params.userLabel ? `[${params.userLabel}]\n${message}` : message;
+
+  const userMessage = appendSubagentChatMessage(agentId, {
+    role: 'user',
+    content,
+    metadata: {
+      source,
+      accountId,
+      peerId,
+    },
+  });
+  broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
+
+  return runSubagentChatTurn(
+    agentId,
+    agent,
+    content,
+    timeoutMs,
+    undefined,
+    undefined,
+    undefined,
+    {
+      sessionIdOverride: sessionId,
+      source,
+      seedFromSharedChatStore: params.seedFromSharedChatStore,
+    },
+  );
 }
 
 router.get('/api/agents', (_req, res) => {
@@ -687,7 +1067,10 @@ router.post('/api/agents/:id/chat', async (req, res) => {
   const userMessage = appendSubagentChatMessage(agentId, {
     role: 'user',
     content: message,
-    metadata: { source: 'subagent_chat' },
+    metadata: {
+      source: 'subagent_chat',
+      attachmentPreviews: Array.isArray(req.body?.attachmentPreviews) ? req.body.attachmentPreviews : undefined,
+    },
   });
   broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
 
@@ -696,7 +1079,17 @@ router.post('/api/agents/:id/chat', async (req, res) => {
     : 300000;
 
   try {
-    const payload = await runSubagentChatTurn(agentId, agent, message, timeoutMs);
+    const attachmentContext = await getAttachmentContext().buildAttachmentRuntimeContext(req.body?.attachmentPreviews);
+    const runtimeMessage = getAttachmentContext().appendAttachmentContextToMessage(message, attachmentContext.block);
+    const payload = await runSubagentChatTurn(
+      agentId,
+      agent,
+      runtimeMessage,
+      timeoutMs,
+      undefined,
+      undefined,
+      attachmentContext.visionAttachments,
+    );
     res.json({ success: true, ...payload });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message, messages: getSubagentChatHistory(agentId, 100) });
@@ -740,12 +1133,25 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
   const userMessage = appendSubagentChatMessage(agentId, {
     role: 'user',
     content: message,
-    metadata: { source: 'subagent_chat' },
+    metadata: {
+      source: 'subagent_chat',
+      attachmentPreviews: Array.isArray(req.body?.attachmentPreviews) ? req.body.attachmentPreviews : undefined,
+    },
   });
   broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
 
   try {
-    const payload = await runSubagentChatTurn(agentId, agent, message, timeoutMs, sendSSE, abortSignal);
+    const attachmentContext = await getAttachmentContext().buildAttachmentRuntimeContext(req.body?.attachmentPreviews);
+    const runtimeMessage = getAttachmentContext().appendAttachmentContextToMessage(message, attachmentContext.block);
+    const payload = await runSubagentChatTurn(
+      agentId,
+      agent,
+      runtimeMessage,
+      timeoutMs,
+      sendSSE,
+      abortSignal,
+      attachmentContext.visionAttachments,
+    );
     if (!abortSignal.aborted) {
       sendSSE('final', { text: payload.result?.text || '' });
       sendSSE('done', {

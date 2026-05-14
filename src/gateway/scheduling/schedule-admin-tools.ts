@@ -11,6 +11,7 @@ import { listInternalWatches } from '../internal-watch/internal-watch-store';
 import { observeInternalWatchTarget } from '../internal-watch/internal-watch-runner';
 import { listTasks, loadTask, saveTask, updateTaskStatus } from '../tasks/task-store';
 import { peekPendingEvents } from '../teams/notify-bridge';
+import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
 
 export interface SchedulerAdminResult {
   success: boolean;
@@ -90,6 +91,9 @@ function summarizeJob(job: CronJob): Record<string, any> {
     pausedReason: job.pausedReason || null,
     lastOutputSessionId: job.lastOutputSessionId || null,
     subagent_id: job.subagent_id || null,
+    team_id: (job as any).team_id || null,
+    assignmentTarget: (job as any).assignmentTarget || null,
+    deliverToMainChannel: (job as any).deliverToMainChannel === true,
     model: job.model || null,
     sessionTarget: job.sessionTarget || 'isolated',
     expectedOutputs: normalizeExpectedOutputs((job as any).expectedOutputs || []),
@@ -425,6 +429,26 @@ function buildSchedulePatch(args: any): { patch: Record<string, any>; errors: st
   if (args?.model_override !== undefined || args?.model !== undefined) {
     patch.model = String(args.model_override ?? args.model ?? '').trim() || undefined;
   }
+  if (args?.team_id !== undefined || args?.teamId !== undefined) {
+    const teamId = String(args.team_id ?? args.teamId ?? '').trim();
+    patch.team_id = teamId || undefined;
+    if (teamId) {
+      patch.subagent_id = undefined;
+      patch.assignmentTarget = 'team';
+      patch.deliverToMainChannel = false;
+      patch.sessionTarget = 'isolated';
+    }
+  }
+  if (args?.subagent_id !== undefined || args?.subagentId !== undefined) {
+    const subagentId = String(args.subagent_id ?? args.subagentId ?? '').trim();
+    patch.subagent_id = subagentId || undefined;
+    if (subagentId) {
+      patch.team_id = undefined;
+      patch.assignmentTarget = 'subagent';
+      patch.deliverToMainChannel = false;
+      patch.sessionTarget = 'isolated';
+    }
+  }
   if (args?.enabled !== undefined) {
     patch.enabled = args.enabled === true || String(args.enabled).toLowerCase() === 'true';
     patch.status = patch.enabled ? 'scheduled' : 'paused';
@@ -436,7 +460,11 @@ function buildSchedulePatch(args: any): { patch: Record<string, any>; errors: st
     const channel = String(delivery.channel || args.channel || 'web').toLowerCase();
     if (channel !== 'web') errors.push(`Delivery channel "${channel}" is not enabled for scheduler jobs yet.`);
     const target = String(delivery.session_target || args.session_target || '').toLowerCase();
-    if (target === 'main' || target === 'isolated') patch.sessionTarget = target;
+    if (target === 'main' || target === 'isolated') patch.sessionTarget = 'isolated';
+    if (target === 'main') {
+      patch.assignmentTarget = 'main';
+      patch.deliverToMainChannel = true;
+    }
   }
   const rawKind = String(schedule.kind || args?.kind || '').trim().toLowerCase();
   if (rawKind === 'one_shot' || rawKind === 'one-shot') patch.type = 'one-shot';
@@ -488,12 +516,41 @@ export function scheduleJobPatchTool(scheduler: SchedulerLike, args: any): Sched
       data: { job: summarizeJob(job), changes, patch, needs_confirmation: true },
     };
   }
-  const updated = scheduler.updateJob(job.id, patch as Partial<CronJob>);
+  let updated = scheduler.updateJob(job.id, patch as Partial<CronJob>);
   if (!updated) return { success: false, error: `Job not found: ${job.id}` };
+  if (String((updated as any).team_id || '').trim()) {
+    return {
+      success: true,
+      message: `Applied ${changes.length} change(s) to team schedule "${updated.name}".`,
+      data: { job: summarizeJob(updated), changes, assigned_team: (updated as any).team_id },
+    };
+  }
+  const owner = String(updated.subagent_id || '').trim()
+    ? { agentId: String(updated.subagent_id || '').trim(), created: false }
+    : ensureScheduleOwnerAgent({
+        scheduleId: updated.id,
+        scheduleName: updated.name,
+        prompt: updated.prompt,
+        model: updated.model,
+      });
+  ensureScheduleRuntimeForAgent(owner.agentId, {
+    scheduleId: updated.id,
+    scheduleName: updated.name,
+    prompt: updated.prompt,
+    model: updated.model,
+  });
+  if (updated.subagent_id !== owner.agentId || updated.sessionTarget !== 'isolated') {
+    updated = scheduler.updateJob(updated.id, {
+      subagent_id: owner.agentId,
+      sessionTarget: 'isolated',
+      assignmentTarget: owner.created ? 'main' : (updated as any).assignmentTarget,
+      deliverToMainChannel: owner.created ? true : (updated as any).deliverToMainChannel,
+    } as Partial<CronJob>) || updated;
+  }
   return {
     success: true,
-    message: `Applied ${changes.length} change(s) to "${updated.name}".`,
-    data: { job: summarizeJob(updated), changes },
+    message: `Applied ${changes.length} change(s) to "${updated.name}" and confirmed schedule owner "${owner.agentId}".`,
+    data: { job: summarizeJob(updated), changes, assigned_owner: owner },
   };
 }
 

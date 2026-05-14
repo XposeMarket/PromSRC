@@ -1,5 +1,6 @@
 // src/gateway/verification-flow.ts
 import crypto from 'crypto';
+import type { ToolPermissionCandidate } from './command-permissions';
 
 interface VerificationSession {
   id: string;
@@ -31,6 +32,8 @@ export interface ApprovalRecord {
   /** Human-readable description of what will happen */
   action: string;
   reason?: string;
+  /** Exact command/cwd/workspace tuple that can be trusted after approval */
+  commandPermissionCandidate?: ToolPermissionCandidate;
   /** Phase 5 policy fields */
   policyTier: 'propose' | 'commit';
   riskScore: number;

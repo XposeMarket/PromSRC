@@ -13,8 +13,10 @@ import { executeAgentList, executeAgentInfo } from '../../tools/agent-control';
 import { executeDownloadMedia, executeDownloadUrl } from '../../tools/download-tools';
 import { executeAnalyzeImage, executeAnalyzeVideo } from '../../tools/media-analysis';
 import { executeGenerateImage } from '../../tools/generate-image';
+import { executeGenerateVideo } from '../../tools/generate-video';
 import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope } from '../../tools/workspace-context';
 import { getMCPManager } from '../mcp-manager';
+import { getProcessSupervisor } from '../process/supervisor';
 import { executeAgentBuilderTool } from './agent-builder-integration';
 import { SubagentManager } from './subagent-manager';
 import { appendSubagentChatMessage } from './subagent-chat-store';
@@ -28,6 +30,7 @@ import {
   appendTeamChat,
   appendTeamRoomMessage,
   appendMainAgentThread,
+  queueAgentMessage,
   updateTeamFocus,
   updateTeamMission,
   logCompletedWork,
@@ -40,6 +43,10 @@ import {
   shareTeamArtifact,
   createTeamDispatchRecord,
   updateTeamDispatchRecord,
+  listTeamContextReferences,
+  addTeamContextReference,
+  updateTeamContextReference,
+  deleteTeamContextReference,
 } from '../teams/managed-teams';
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
 import { buildTeamDispatchTask, _bgAgentResults } from '../teams/team-dispatch-runtime';
@@ -104,11 +111,15 @@ import {
   desktopGetProcessList,
   desktopGetMonitorsSummary,
   desktopWaitForChange,
+  getDesktopActiveWindowInfo,
   desktopDiffScreenshot,
   desktopWindowScreenshot,
   desktopWindowControl,
   desktopScroll,
   desktopSendToTelegram,
+  desktopBackgroundStatus,
+  desktopBackgroundPrepareSandbox,
+  desktopBackgroundCommand,
 } from '../desktop-tools';
 import {
   refreshMemoryIndexFromAudit,
@@ -139,19 +150,9 @@ import {
   type ToolResult,
   type TaskControlResponse,
 } from '../tool-builder';
-import { activateToolCategory, addCreativeReferences, formatCreativeReferencesForPrompt, getCanvasProjectRoot, getCreativeMode, getCreativeReferences, getSessionMutationScope, isBusinessContextEnabled, normalizeCreativeMode, setBusinessContextEnabled, setCreativeMode } from '../session';
+import { activateSkillForSession, activateToolCategory, addCreativeReferences, formatCreativeReferencesForPrompt, getCanvasProjectRoot, getCreativeMode, getCreativeReferences, getSessionMutationScope, isBusinessContextEnabled, normalizeCreativeMode, setBusinessContextEnabled, setCreativeMode } from '../session';
 import { sendCreativeCommand } from '../creative/command-bus';
-import { getCreativeMotionCatalog, prepareCreativeMotionTemplate } from '../creative/motion-runtime';
-import {
-  analyzeCreativeAsset,
-  generateCreativeAssetPlaceholder,
-  importCreativeAsset,
-  readCreativeAssetIndex,
-  searchCreativeAssets,
-} from '../creative/assets';
-import { extractCreativeLayers } from '../creative/layer-extraction';
-import { renderCreativeAsciiAsset } from '../creative/ascii-render-runtime';
-import { listCreativePremiumTemplates } from '../creative/templates';
+import type { HyperframesPatchOp } from '../creative/hyperframes-bridge';
 import { summarizeHtmlMotionTemplates, applyHtmlMotionTemplate } from '../creative/html-motion-templates';
 import { lintHtmlMotionComposition } from '../creative/html-motion-spec';
 import { checkTextFit, reportHtmlTextFit } from '../creative/pretext-measure';
@@ -165,17 +166,27 @@ import {
   toggleCreativeLibraryPack,
 } from '../creative/custom-registries';
 import { buildConnectorStatus } from '../tool-builder';
-import { handleConnectorTool } from '../tools/handlers/connector-handlers';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
+import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
 import { appendJournal, createTask, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus } from '../tasks/task-store';
+import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
 import type { SkillWindow } from '../prompt-context';
 import { isToolHiddenInPublicBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { getApprovalQueue } from '../verification-flow.js';
+import { findCommandPermissionGrant, type ToolPermissionCandidate } from '../command-permissions';
+import {
+  evaluateHardToolDeny,
+  formatHardToolDeny,
+  type HardToolDenyDecision,
+  type ToolExecutionPolicy,
+} from '../tool-deny-policy';
 import { DEV_SRC_SELF_EDIT_MODE, DEV_SRC_SELF_EDIT_REPAIR_MODE } from '../proposals/dev-src-self-edit.js';
 import {
   cancelMainChatTimer,
   createMainChatTimer,
   listMainChatTimers,
+  updateMainChatTimer,
 } from '../timers/timer-store';
 import {
   cancelInternalWatch,
@@ -192,6 +203,54 @@ import {
   scheduleJobPatchTool,
   scheduleJobStuckControlTool,
 } from '../scheduling/schedule-admin-tools';
+import { executeRegisteredCapabilityTool } from './capabilities/registry';
+
+const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
+const getCreativeAssets = () => require('../creative/assets') as typeof import('../creative/assets');
+const getCreativeLayerExtraction = () => require('../creative/layer-extraction') as typeof import('../creative/layer-extraction');
+const getCreativeAsciiRenderRuntime = () => require('../creative/ascii-render-runtime') as typeof import('../creative/ascii-render-runtime');
+const getHyperframesCatalog = () => require('../creative/hyperframes-catalog') as typeof import('../creative/hyperframes-catalog');
+const getHyperframesBridge = () => require('../creative/hyperframes-bridge') as typeof import('../creative/hyperframes-bridge');
+const getHyperframesExportAdapter = () => require('../creative/hyperframes-export-adapter') as typeof import('../creative/hyperframes-export-adapter');
+const getHyperframesQa = () => require('../creative/hyperframes-qa') as typeof import('../creative/hyperframes-qa');
+const getHyperframesProducer = () => require('../creative/hyperframes-producer') as typeof import('../creative/hyperframes-producer');
+
+const VIDEO_MODE_REMOVED_SCENE_TOOL_NAMES = new Set([
+  'creative_apply_ops',
+  'creative_add_element',
+  'creative_add_asset',
+  'creative_add_effect',
+  'creative_set_blend_mode',
+  'creative_add_mask',
+  'creative_trim_clip',
+  'creative_set_canvas',
+  'creative_apply_brand_kit',
+  'creative_search_animations',
+  'creative_update_element',
+  'creative_delete_element',
+  'creative_apply_animation',
+  'creative_arrange',
+  'creative_apply_style',
+  'creative_fit_asset',
+  'creative_apply_template',
+]);
+
+function videoModeHtmlMotionOnlyError(name: string, args: any = {}): ToolResult {
+  return {
+    name,
+    args,
+    result:
+      `${name}: scene-graph/shape animation tools have been removed from Video mode. ` +
+      'Use HTML Motion, HyperFrames, Remotion motion templates, and Pretext QA tools instead.',
+    error: true,
+  };
+}
+
+function isLegacySceneGraphCompositionPayload(args: any): boolean {
+  const lane = String(args?.lane || '').trim().toLowerCase();
+  const sourceKind = String(args?.source?.kind || '').trim().toLowerCase();
+  return lane === 'scene-graph' || sourceKind === 'scene-graph' || (!lane && !sourceKind);
+}
 
 export interface ExecuteToolDeps {
   cronScheduler: any;
@@ -221,6 +280,8 @@ export interface ExecuteToolDeps {
   skillsManager: any;
   getSessionSkillWindows: (sessionId: string) => Map<string, SkillWindow>;
   sessionCurrentTurn: Map<string, number>;
+  executionPolicy?: ToolExecutionPolicy;
+  onHardToolDeny?: (event: { sessionId: string; toolName: string; args: any; decision: HardToolDenyDecision }) => void;
 }
 
 function looksLikeNativeFileToolBypass(command: string): boolean {
@@ -236,6 +297,20 @@ function looksLikeNativeFileToolBypass(command: string): boolean {
     /(^|\s)(echo|printf|type|copy|set-content|add-content|out-file)\b[\s\S]*(>|>>|\|\s*(set-content|add-content|out-file)\b)/.test(lower);
 
   return (isInlineInterpreter && hasWriteApi) || hasShellRedirect;
+}
+
+function commandContainsBlockedPattern(command: string, blockedPatterns: string[] | undefined): string | null {
+  const cmd = String(command || '').toLowerCase();
+  for (const rawBlocked of blockedPatterns || []) {
+    const blocked = String(rawBlocked || '').trim().toLowerCase();
+    const token = blocked.replace(/\s+/g, '');
+    if (!token) continue;
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(^|[\\s;&|()])${escaped}($|[\\s;&|()])`, 'i').test(cmd)) {
+      return blocked;
+    }
+  }
+  return null;
 }
 
 async function maybeSendCreativeExportToTelegram(sessionId: string, creativeResult: any, telegramChannel: any): Promise<void> {
@@ -256,7 +331,7 @@ async function maybeSendCreativeExportToTelegram(sessionId: string, creativeResu
   const caption = `Prometheus creative export (${format})`;
   if (typeof telegramChannel.sendFileToChat === 'function') {
     try {
-      await telegramChannel.sendFileToChat(Number(hint.chatId), exportPath, caption);
+      await telegramChannel.sendFileToChat(Number(hint.chatId), exportPath, caption, { forceDocument: true });
       return;
     } catch (err: any) {
       console.warn(`[Telegram] Creative export upload failed; sending path fallback: ${err?.message || err}`);
@@ -269,6 +344,16 @@ async function maybeSendCreativeExportToTelegram(sessionId: string, creativeResu
 
 // Track last-used filename per session for when model forgets to pass it.
 export const lastFilenameUsed = new Map<string, string>();
+
+const devServerProcesses = new Map<string, {
+  child: any;
+  name: string;
+  command: string;
+  cwd: string;
+  startedAt: number;
+  output: string[];
+  exitCode?: number | null;
+}>();
 
 const BROWSER_CONTROL_GATED_TOOLS = new Set([
   'browser_open',
@@ -348,6 +433,182 @@ function resolveWorkspaceFilePath(workspacePath: string, rawPath: string): strin
     throw new Error(`file not found: ${requested}`);
   }
   return absPath;
+}
+
+function mergeHyperframesInputs(args: any = {}): Record<string, any> {
+  const reserved = new Set([
+    'catalogId',
+    'catalog_id',
+    'componentId',
+    'component_id',
+    'id',
+    'html',
+    'inputs',
+    'input',
+    'clipId',
+    'clip_id',
+    'elementId',
+    'element_id',
+    'layerId',
+    'layer_id',
+    'x',
+    'y',
+    'width',
+    'height',
+    'startMs',
+    'start_ms',
+    'durationMs',
+    'duration_ms',
+    'zIndex',
+    'z_index',
+    'advanced',
+    'advancedBlock',
+    'replaceScene',
+    'force',
+    'filename',
+    'format',
+    'samplePoints',
+    'sample_points',
+    'timeoutMs',
+    'timeout_ms',
+  ]);
+  const topLevel = Object.fromEntries(Object.entries(args || {})
+    .filter(([key, value]) => !reserved.has(key) && ['string', 'number', 'boolean'].includes(typeof value)));
+  const explicit = args?.input && typeof args.input === 'object' && !Array.isArray(args.input) ? args.input : {};
+  const plural = args?.inputs && typeof args.inputs === 'object' && !Array.isArray(args.inputs) ? args.inputs : {};
+  return { ...topLevel, ...explicit, ...plural };
+}
+
+function wrapHyperframesBlockAsDocument(rendered: any, options: any = {}) {
+  const width = Math.max(1, Number(options?.width) || 1080);
+  const height = Math.max(1, Number(options?.height) || 1920);
+  const durationMs = Math.max(100, Number(options?.durationMs ?? options?.duration_ms) || 6000);
+  const frameRate = Math.max(1, Number(options?.frameRate) || 60);
+  const compositionId = sanitizeCreativeStorageSegment(
+    options?.compositionId || rendered?.block?.id || 'hyperframes-block',
+    'hyperframes-block',
+  );
+  return `<!doctype html>
+<html data-composition-id="${compositionId}" data-composition-duration="${durationMs / 1000}" data-width="${width}" data-height="${height}">
+<head>
+<meta charset="utf-8">
+<style>
+html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;background:transparent}
+#stage{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:transparent}
+${String(rendered?.css || '')}
+</style>
+</head>
+<body>
+<main id="stage" data-composition-id="${compositionId}" data-width="${width}" data-height="${height}" data-duration="${durationMs}ms" data-frame-rate="${frameRate}" data-role="stage" data-start="0ms" data-track-index="0">
+${String(rendered?.html || '')}
+</main>
+${String(rendered?.js || '').trim() ? `<script>\n${String(rendered.js)}\n</script>` : ''}
+</body>
+</html>`;
+}
+
+async function readSelectedHyperframesClipFromEditor(
+  deps: ExecuteToolDeps,
+  sessionId: string,
+  creativeMode: string,
+  clipId: string,
+  toolName: string,
+): Promise<{ clip: any; state: any }> {
+  if (clipId) {
+    await sendCreativeCommand(deps.broadcastWS, {
+      sessionId,
+      mode: creativeMode,
+      command: 'select_element',
+      payload: { id: clipId },
+      timeoutMs: resolveCreativeEditorTimeoutMs('creative_select_element'),
+    }).catch(() => undefined);
+  }
+  const state = await sendCreativeCommand(deps.broadcastWS, {
+    sessionId,
+    mode: creativeMode,
+    command: 'get_state',
+    payload: {},
+    timeoutMs: resolveCreativeEditorTimeoutMs('creative_get_state'),
+  });
+  if (!state.success) {
+    throw new Error(state.error || 'could not read creative editor state.');
+  }
+  let clip = (state as any).data?.selectedElement || (state as any).selectedElement || null;
+  if (!clip || String(clip.type || '').toLowerCase() !== 'hyperframes') {
+    const sceneElements = Array.isArray((state as any).data?.scene?.elements)
+      ? (state as any).data.scene.elements
+      : [];
+    const hyperframesElements = sceneElements.filter((element: any) => String(element?.type || '').toLowerCase() === 'hyperframes');
+    const fallbackId = clipId || (hyperframesElements.length === 1 ? String(hyperframesElements[0]?.id || '').trim() : '');
+    if (fallbackId) {
+      await sendCreativeCommand(deps.broadcastWS, {
+        sessionId,
+        mode: creativeMode,
+        command: 'select_element',
+        payload: { id: fallbackId },
+        timeoutMs: resolveCreativeEditorTimeoutMs('creative_select_element'),
+      }).catch(() => undefined);
+      const refreshed = await sendCreativeCommand(deps.broadcastWS, {
+        sessionId,
+        mode: creativeMode,
+        command: 'get_state',
+        payload: {},
+        timeoutMs: resolveCreativeEditorTimeoutMs('creative_get_state'),
+      });
+      if (refreshed.success) {
+        const refreshedClip = (refreshed as any).data?.selectedElement || (refreshed as any).selectedElement || null;
+        if (refreshedClip && String(refreshedClip.type || '').toLowerCase() === 'hyperframes') {
+          clip = refreshedClip;
+          (state as any).data = { ...((state as any).data || {}), recoveredSelectionId: fallbackId };
+        }
+      }
+    }
+    if ((!clip || String(clip.type || '').toLowerCase() !== 'hyperframes') && hyperframesElements.length > 1 && !clipId) {
+      const ids = hyperframesElements.map((element: any) => element?.id).filter(Boolean).join(', ');
+      throw new Error(`${toolName} found multiple HyperFrames clips; pass clipId. Available clip ids: ${ids}`);
+    }
+  }
+  if (!clip || String(clip.type || '').toLowerCase() !== 'hyperframes') {
+    throw new Error(`${toolName} requires a selected HyperFrames clip${clipId ? ` (${clipId})` : ''}.`);
+  }
+  if (!String(clip?.meta?.html || '').trim()) {
+    throw new Error(`${toolName}: selected HyperFrames clip has no source HTML.`);
+  }
+  return { clip, state };
+}
+
+async function patchHyperframesClipInEditor(input: {
+  deps: ExecuteToolDeps;
+  sessionId: string;
+  creativeMode: string;
+  clip: any;
+  ops: HyperframesPatchOp[];
+}) {
+  const html = String(input.clip?.meta?.html || '');
+  const patched = getHyperframesBridge().applyHyperframesPatch(html, input.ops);
+  const extraction = getHyperframesBridge().extractHyperframesLayers(patched.html);
+  const meta = {
+    html: patched.html,
+    layers: extraction.layers,
+    variables: extraction.variables,
+    slots: extraction.slots,
+    variableBindings: extraction.variableBindings,
+    advancedBlock: extraction.advancedBlock,
+    durationMs: extraction.durationMs || Number(input.clip?.meta?.durationMs) || 6000,
+    compositionId: extraction.compositionId || input.clip?.meta?.compositionId || '',
+    dirty: true,
+  };
+  const updated = await sendCreativeCommand(input.deps.broadcastWS, {
+    sessionId: input.sessionId,
+    mode: input.creativeMode,
+    command: 'update_element',
+    payload: { id: input.clip.id, meta },
+    timeoutMs: resolveCreativeEditorTimeoutMs('creative_update_element'),
+  });
+  if (!updated.success) {
+    throw new Error(updated.error || 'could not update HyperFrames clip in the creative editor.');
+  }
+  return { patched, extraction, updated };
 }
 
 function extractXStatusId(raw: any): string | null {
@@ -470,12 +731,17 @@ async function extractCreativeAudioFromVideo(sourceAbsPath: string, outputDir: s
   return outputPath;
 }
 
-function resolveCreativeEditorTimeoutMs(toolName: string): number {
+function resolveCreativeEditorTimeoutMs(toolName: string, args?: any): number {
   if (toolName === 'creative_export' || toolName === 'creative_export_html_motion_clip') return 720000;
   if (toolName === 'creative_attach_audio_from_url' || toolName === 'creative_attach_audio_from_file') return 120000;
-  if (toolName === 'creative_create_from_template' || toolName === 'creative_create_html_motion_clip') return 60000;
+  if (toolName === 'creative_create_html_motion_clip') return 60000;
   if (toolName === 'creative_set_canvas' || toolName === 'creative_apply_motion_template') return 45000;
-  if (toolName === 'creative_render_snapshot' || toolName === 'creative_render_html_motion_snapshot') return 45000;
+  if (toolName === 'creative_render_snapshot' || toolName === 'creative_render_html_motion_snapshot') {
+    const sampleCount = Array.isArray(args?.sampleTimesMs) && args.sampleTimesMs.length
+      ? Math.min(12, args.sampleTimesMs.length)
+      : (args?.sampleEveryFrame === true || Number(args?.frameStepMs) > 0 ? 12 : 3);
+    return Math.max(90000, Math.min(240000, 30000 + sampleCount * 20000));
+  }
   if (toolName === 'creative_search_icons' || toolName === 'creative_search_animations') return 30000;
   return 30000;
 }
@@ -580,6 +846,189 @@ function inferTeamNoteContext(sessionId: string): {
   return null;
 }
 
+type MainAgentTeamRoute = {
+  route: 'team' | 'member' | 'manager';
+  targetLabel?: string;
+  targetAgentId?: string;
+  text: string;
+};
+
+function normalizeTeamRouteKey(value: any): string {
+  return String(value || '').trim().toLowerCase().replace(/^@+/, '').replace(/[^a-z0-9]+/g, '');
+}
+
+function parseMainAgentTeamRoute(message: string): MainAgentTeamRoute {
+  const raw = String(message || '').trim();
+  const managerMatch = raw.match(/^\s*\[TO_MANAGER\]\s*/i);
+  if (managerMatch) {
+    return { route: 'manager', text: raw.slice(managerMatch[0].length).trim() || raw };
+  }
+
+  const askMatch = raw.match(/^\s*\[ASK_AGENT:([^\]]+)\]\s*/i);
+  if (askMatch) {
+    const targetLabel = String(askMatch[1] || '').trim();
+    return {
+      route: 'member',
+      targetLabel,
+      text: raw.slice(askMatch[0].length).trim() || raw,
+    };
+  }
+
+  const broadcastMatch = raw.match(/^\s*\[BROADCAST_TO_TEAM\]\s*/i);
+  if (broadcastMatch) {
+    return { route: 'team', targetLabel: 'team', text: raw.slice(broadcastMatch[0].length).trim() || raw };
+  }
+
+  return { route: 'team', targetLabel: 'team', text: raw };
+}
+
+function resolveMainAgentTeamMemberId(team: any, label: string): string | null {
+  const wanted = normalizeTeamRouteKey(label);
+  if (!wanted) return null;
+  for (const memberAgentId of Array.isArray(team?.subagentIds) ? team.subagentIds : []) {
+    const agent = getAgentById(memberAgentId) as any;
+    const candidates = [
+      memberAgentId,
+      agent?.id,
+      agent?.name,
+      agent?.teamRole,
+      agent?.role,
+      agent?.description,
+    ];
+    if (candidates.some((candidate) => normalizeTeamRouteKey(candidate) === wanted)) {
+      return memberAgentId;
+    }
+  }
+  return null;
+}
+
+function buildMainAgentTeamBroadcastPrompt(message: string): string {
+  return [
+    `[TEAM BROADCAST FROM MAIN AGENT]`,
+    `The main Prometheus agent addressed @team:`,
+    message,
+    ``,
+    `Reply once in the shared room. Be conversational and useful.`,
+    `Do not start execution work unless the message explicitly asks for work to begin.`,
+  ].join('\n');
+}
+
+function buildMainAgentDirectMemberPrompt(message: string, targetLabel: string): string {
+  return [
+    `[DIRECT TEAM MESSAGE FROM MAIN AGENT]`,
+    `The main Prometheus agent addressed you (${targetLabel || 'this team member'}):`,
+    message,
+    ``,
+    `Reply once in the shared room so the rest of the team can follow the exchange.`,
+  ].join('\n');
+}
+
+async function deliverMainAgentMessageToTeamMembers(
+  teamId: string,
+  team: any,
+  message: string,
+  targetAgentId?: string,
+  targetLabel?: string,
+): Promise<{ deliveredCount: number; completedCount: number }> {
+  const memberAgentIds = targetAgentId
+    ? [targetAgentId]
+    : (Array.isArray(team?.subagentIds) ? team.subagentIds : []).filter((memberAgentId: string) =>
+        memberAgentId && team?.agentPauseStates?.[memberAgentId]?.paused !== true
+      );
+
+  for (const memberAgentId of memberAgentIds) {
+    queueAgentMessage(
+      teamId,
+      memberAgentId,
+      targetAgentId
+        ? `[From Main Agent to ${targetLabel || memberAgentId}] ${message}`
+        : `[From Main Agent to @team] ${message}`,
+    );
+  }
+
+  const results = await Promise.allSettled(
+    memberAgentIds.map((memberAgentId: string) =>
+      runTeamMemberRoomTurn(
+        teamId,
+        memberAgentId,
+        targetAgentId
+          ? buildMainAgentDirectMemberPrompt(message, targetLabel || memberAgentId)
+          : buildMainAgentTeamBroadcastPrompt(message),
+        {
+          autoWakeReason: targetAgentId
+            ? 'The main agent addressed this member in the team room.'
+            : 'The main agent addressed the whole team in the room.',
+          autoWakeSource: 'manager_message',
+        },
+      )
+    ),
+  );
+
+  return {
+    deliveredCount: memberAgentIds.length,
+    completedCount: results.filter((result) => result.status === 'fulfilled').length,
+  };
+}
+
+function buildMainAgentMembersRespondedPrompt(
+  message: string,
+  deliveredCount: number,
+  completedCount: number,
+  targetLabel?: string,
+): string {
+  const audience = targetLabel ? `member "${targetLabel}"` : '@team';
+  return [
+    `[TEAM BROADCAST MEMBERS RESPONDED]`,
+    `The main Prometheus agent addressed ${audience}. The system delivered the message to ${deliveredCount} unpaused member(s), and ${completedCount} member room turn(s) have settled.`,
+    `Review the current team room messages before replying. The addressed members have already had their chance to answer, so do not call request_team_member_turn for this message and do not re-ask members to weigh in.`,
+    `Reply last as the manager with a concise synthesis or acknowledgement if useful.`,
+    ``,
+    `[MAIN AGENT MESSAGE]`,
+    message,
+  ].join('\n');
+}
+
+function appendAndBroadcastTeamChat(
+  deps: ExecuteToolDeps,
+  team: any,
+  message: {
+    from: 'manager' | 'subagent' | 'user';
+    fromName: string;
+    fromAgentId?: string;
+    content: string;
+    metadata?: Record<string, any>;
+  },
+) {
+  const chatMsg = appendTeamChat(String(team?.id || ''), message);
+  try {
+    deps.broadcastTeamEvent?.({
+      type: 'team_chat_message',
+      teamId: team?.id,
+      teamName: team?.name,
+      chatMessage: chatMsg,
+      text: String(chatMsg?.content || message.content || ''),
+      message: String(chatMsg?.content || message.content || ''),
+    });
+  } catch {}
+  return chatMsg;
+}
+
+function getTeamChatTargetMetadata(targetAgentId: string) {
+  const target = String(targetAgentId || '').trim();
+  if (target === 'all') {
+    return { targetType: 'team', targetId: 'all', targetLabel: 'team' };
+  }
+  if (target === 'manager') {
+    return { targetType: 'manager', targetId: 'manager', targetLabel: 'manager' };
+  }
+  const targetAgent = getAgentById(target) as any;
+  return {
+    targetType: 'member',
+    targetId: target,
+    targetLabel: String(targetAgent?.name || target).trim(),
+  };
+}
+
 function isProposalLikeSourceSessionId(sessionId: string): boolean {
   const sid = String(sessionId || '');
   return sid.startsWith('proposal_') || sid.startsWith('code_exec');
@@ -609,6 +1058,20 @@ const GENERIC_WORKSPACE_MUTATION_TOOLS = new Set([
   'find_replace',
   'delete_file',
   'rename_file',
+  'copy_file',
+  'move_file',
+  'copy_directory',
+  'move_directory',
+  'apply_patch',
+  'restore_snapshot',
+  'revert_last_tool_change',
+  'revert_own_patch',
+  'git_branch',
+  'git_commit',
+  'git_push',
+  'open_pr',
+  'run_formatter',
+  'format_changed_files',
   'mkdir',
 ]);
 
@@ -724,12 +1187,57 @@ function maybeStartTeamStatusTaskMirror(
 
 function getSourceVerificationCommandForSession(sessionId: string): string {
   const task = resolveTaskForSession(sessionId);
-  const explicit = String(task?.proposalExecution?.repairContext?.canonicalBuildCommand || '').trim();
+  const explicit = String(
+    task?.proposalExecution?.canonicalBuildCommand
+    || task?.proposalExecution?.repairContext?.canonicalBuildCommand
+    || '',
+  ).trim();
   if (explicit) return explicit;
   const mode = task?.proposalExecution?.mode;
   return mode === DEV_SRC_SELF_EDIT_MODE || mode === DEV_SRC_SELF_EDIT_REPAIR_MODE
     ? 'npm run build:backend'
     : 'npm run build';
+}
+
+function validateSourceSyntaxBeforeWrite(absPath: string, content: string): string | null {
+  const ext = path.extname(absPath).toLowerCase();
+  if (!['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'].includes(ext)) return null;
+  try {
+    const ts = require('typescript') as typeof import('typescript');
+    const scriptKind = ext === '.tsx'
+      ? ts.ScriptKind.TSX
+      : ext === '.jsx'
+        ? ts.ScriptKind.JSX
+        : ext === '.js'
+          ? ts.ScriptKind.JS
+          : ts.ScriptKind.TS;
+    const sf = ts.createSourceFile(absPath, content, ts.ScriptTarget.Latest, true, scriptKind);
+    const diagnostics = (sf as any).parseDiagnostics || [];
+    if (diagnostics.length === 0) return null;
+    return diagnostics.slice(0, 3).map((diag: any) => {
+      const pos = typeof diag.start === 'number'
+        ? sf.getLineAndCharacterOfPosition(diag.start)
+        : { line: 0, character: 0 };
+      const message = ts.flattenDiagnosticMessageText(diag.messageText, ' ');
+      return `${path.basename(absPath)}:${pos.line + 1}:${pos.character + 1} TS${diag.code}: ${message}`;
+    }).join('\n');
+  } catch {
+    return null;
+  }
+}
+
+function rejectInvalidSourceEdit(toolName: string, args: any, absPath: string, content: string): ToolResult | null {
+  const syntaxError = validateSourceSyntaxBeforeWrite(absPath, content);
+  if (!syntaxError) return null;
+  return {
+    name: toolName,
+    args,
+    result:
+      `EDIT REJECTED: proposed edit would make ${path.basename(absPath)} syntactically invalid.\n` +
+      `${syntaxError}\n` +
+      'No file was written. Re-read the surrounding lines and retry with a structurally complete edit, preferably find_replace_source with a larger exact anchor or write_source with full file content.',
+    error: true,
+  };
 }
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
@@ -763,6 +1271,37 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	  // In proposal/code_exec sessions, src/ paths should resolve to PROJECT_ROOT/src/
 	  // (one level up from workspace) so edits land in the actual source tree.
 	  // All other paths resolve to workspace as normal.
+  const hardDeny = evaluateHardToolDeny({
+    toolName: name,
+    args,
+    sessionId,
+    executionPolicy: deps.executionPolicy,
+  });
+  if (hardDeny.denied) {
+    try {
+      deps.onHardToolDeny?.({ sessionId, toolName: name, args, decision: hardDeny });
+    } catch {}
+    try {
+      appendAuditEntry({
+        timestamp: new Date().toISOString(),
+        sessionId,
+        agentId: inferAgentIdFromSession(sessionId, args),
+        actionType: 'approval_resolved',
+        toolName: name,
+        toolArgs: args,
+        policyTier: 'commit',
+        approvalStatus: 'rejected',
+        resultSummary: `Blocked by hard goal policy: ${hardDeny.category || 'hard_denied_action'}`,
+      });
+    } catch {}
+    return {
+      name,
+      args,
+      result: formatHardToolDeny(hardDeny),
+      error: true,
+    };
+  }
+
 	  const _isProposalSession = isProposalExecutionSession(sessionId);
   function hasPrometheusSourceShape(candidateRoot: string): boolean {
     const root = path.resolve(String(candidateRoot || ''));
@@ -988,6 +1527,206 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	    const resolved = resolveAllowedWorkspacePath(relPath, opts);
 	    return { absPath: resolved.absPath, normalizedRel: resolved.normalizedRel };
 	  }
+  function resolveWorkspaceDirectory(relPath: string, opts: { allowEmpty?: boolean } = {}): { absPath: string; normalizedRel: string; displayPath: string } {
+    return resolveAllowedWorkspacePath(relPath, { requireDirectory: true, allowEmpty: opts.allowEmpty === true });
+  }
+  function quoteArg(value: string): string {
+    const raw = String(value || '');
+    return `"${raw.replace(/"/g, '\\"')}"`;
+  }
+  function truncateText(value: string, maxChars = 12000): string {
+    const text = String(value || '');
+    return text.length > maxChars ? `${text.slice(0, maxChars)}\n...[truncated ${text.length - maxChars} chars]` : text;
+  }
+  function isSkippableWorkspaceEntry(entry: string): boolean {
+    return new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.cache', '.turbo', '.prometheus/snapshots']).has(entry.replace(/\\/g, '/'));
+  }
+  function walkFiles(rootDir: string, options: { maxFiles?: number; maxBytes?: number; includeHidden?: boolean } = {}): Array<{ absPath: string; relPath: string; size: number }> {
+    const maxFiles = Math.max(1, Math.min(20000, Number(options.maxFiles || 5000)));
+    const maxBytes = Math.max(1, Number(options.maxBytes || Number.MAX_SAFE_INTEGER));
+    const root = path.resolve(rootDir);
+    const out: Array<{ absPath: string; relPath: string; size: number }> = [];
+    let totalBytes = 0;
+    const walk = (dir: string) => {
+      if (out.length >= maxFiles || totalBytes >= maxBytes) return;
+      let entries: fs.Dirent[] = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (out.length >= maxFiles || totalBytes >= maxBytes) break;
+        const abs = path.join(dir, entry.name);
+        const rel = path.relative(root, abs).replace(/\\/g, '/');
+        if (!options.includeHidden && (entry.name.startsWith('.') || isSkippableWorkspaceEntry(rel) || rel.split('/').some(part => isSkippableWorkspaceEntry(part)))) {
+          if (entry.isDirectory()) continue;
+        }
+        if (entry.isDirectory()) {
+          if (isSkippableWorkspaceEntry(rel) || ['.git', 'node_modules', 'dist', 'build', '.next', '.cache', '.turbo'].includes(entry.name)) continue;
+          walk(abs);
+        } else if (entry.isFile()) {
+          let stat: fs.Stats;
+          try { stat = fs.statSync(abs); } catch { continue; }
+          if (totalBytes + stat.size > maxBytes) break;
+          totalBytes += stat.size;
+          out.push({ absPath: abs, relPath: rel, size: stat.size });
+        }
+      }
+    };
+    walk(root);
+    return out;
+  }
+  function countDirectoryFiles(absDir: string, maxEntries = 2000): { files: number; directories: number; bytes: number; truncated: boolean } {
+    let files = 0;
+    let directories = 0;
+    let bytes = 0;
+    let truncated = false;
+    const walk = (dir: string) => {
+      if (files + directories >= maxEntries) {
+        truncated = true;
+        return;
+      }
+      let entries: fs.Dirent[] = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (files + directories >= maxEntries) {
+          truncated = true;
+          return;
+        }
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          directories += 1;
+          walk(abs);
+        } else if (entry.isFile()) {
+          files += 1;
+          try { bytes += fs.statSync(abs).size; } catch {}
+        }
+      }
+    };
+    walk(absDir);
+    return { files, directories, bytes, truncated };
+  }
+  function extractPatchTargetPaths(patchText: string): string[] {
+    const paths = new Set<string>();
+    const normalize = (raw: string) => {
+      let p = String(raw || '').trim().replace(/^"|"$/g, '');
+      if (!p || p === '/dev/null') return '';
+      if (p.startsWith('a/') || p.startsWith('b/')) p = p.slice(2);
+      return p;
+    };
+    for (const line of String(patchText || '').split(/\r?\n/)) {
+      if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+        const token = line.slice(4).trim().split(/\s+/)[0] || '';
+        const p = normalize(token);
+        if (p) paths.add(p);
+      } else if (line.startsWith('rename from ')) {
+        const p = normalize(line.slice('rename from '.length));
+        if (p) paths.add(p);
+      } else if (line.startsWith('rename to ')) {
+        const p = normalize(line.slice('rename to '.length));
+        if (p) paths.add(p);
+      }
+    }
+    return Array.from(paths);
+  }
+  function validatePatchTargetPaths(patchText: string): string[] {
+    const targets = extractPatchTargetPaths(patchText);
+    if (!targets.length) throw new Error('No target paths found in patch. Include standard unified diff headers.');
+    for (const target of targets) {
+      if (path.isAbsolute(target)) throw new Error(`Patch path must be relative: ${target}`);
+      resolveAllowedWorkspacePath(target, { allowEmpty: false });
+    }
+    return targets;
+  }
+  async function runCapturedToolCommand(command: string, cwd: string, timeoutMs = 120000): Promise<ToolResult> {
+    const captured = await deps.runCommandCaptured(command, cwd, timeoutMs);
+    const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
+    const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
+    return {
+      name,
+      args,
+      result: `${command} [${exitLabel}]\n${truncateText(output || '(no output)', 12000)}`,
+      error: (captured.code !== 0 && !captured.timedOut),
+    };
+  }
+  function readPackageScripts(cwd: string): Record<string, string> {
+    try {
+      const pkgPath = path.join(cwd, 'package.json');
+      if (!fs.existsSync(pkgPath)) return {};
+      const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      return parsed?.scripts && typeof parsed.scripts === 'object' ? parsed.scripts : {};
+    } catch {
+      return {};
+    }
+  }
+  function snapshotRoot(): string {
+    return path.join(getConfig().getConfigDir(), 'snapshots');
+  }
+  function listSnapshots(): any[] {
+    const root = snapshotRoot();
+    if (!fs.existsSync(root)) return [];
+    return fs.readdirSync(root)
+      .map(id => {
+        try {
+          const manifest = JSON.parse(fs.readFileSync(path.join(root, id, 'manifest.json'), 'utf-8'));
+          return { id, ...manifest };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  }
+  function isCodeFile(rel: string): boolean {
+    return /\.(tsx?|jsx?|mjs|cjs)$/i.test(rel) && !rel.includes('/node_modules/') && !rel.includes('/dist/');
+  }
+  function getLineAndCharacterFromPos(text: string, pos: number): { line: number; character: number } {
+    const prefix = text.slice(0, Math.max(0, pos));
+    const lines = prefix.split(/\r?\n/);
+    return { line: lines.length, character: (lines[lines.length - 1] || '').length + 1 };
+  }
+  async function buildCodeOutlineForFile(filePath: string, maxSymbols = 300): Promise<any> {
+    const ts = await import('typescript');
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const kind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : filePath.endsWith('.jsx') ? ts.ScriptKind.JSX : filePath.endsWith('.js') || filePath.endsWith('.mjs') || filePath.endsWith('.cjs') ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+    const sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, kind);
+    const symbols: any[] = [];
+    const push = (node: any, type: string, nameValue: string) => {
+      if (!nameValue || symbols.length >= maxSymbols) return;
+      const start = getLineAndCharacterFromPos(content, node.getStart(sf));
+      const end = getLineAndCharacterFromPos(content, node.getEnd());
+      symbols.push({ type, name: nameValue, line: start.line, character: start.character, end_line: end.line });
+    };
+    const visit = (node: any) => {
+      if (symbols.length >= maxSymbols) return;
+      if (ts.isImportDeclaration(node)) push(node, 'import', (node.moduleSpecifier as any)?.text || '');
+      else if (ts.isClassDeclaration(node)) push(node, 'class', node.name?.text || '<anonymous>');
+      else if (ts.isFunctionDeclaration(node)) push(node, 'function', node.name?.text || '<anonymous>');
+      else if (ts.isMethodDeclaration(node)) push(node, 'method', node.name?.getText(sf) || '');
+      else if (ts.isInterfaceDeclaration(node)) push(node, 'interface', node.name?.text || '');
+      else if (ts.isTypeAliasDeclaration(node)) push(node, 'type', node.name?.text || '');
+      else if (ts.isEnumDeclaration(node)) push(node, 'enum', node.name?.text || '');
+      else if (ts.isVariableStatement(node)) {
+        for (const decl of node.declarationList.declarations || []) push(decl, 'variable', decl.name?.getText(sf) || '');
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return { file: path.relative(workspacePath, filePath).replace(/\\/g, '/'), symbols, count: symbols.length };
+  }
+  async function collectCodeSymbols(rootDir: string, query = '', maxResults = 100): Promise<any[]> {
+    const files = walkFiles(rootDir, { maxFiles: 3000, maxBytes: 80_000_000 }).filter(f => isCodeFile(f.relPath));
+    const q = query.trim().toLowerCase();
+    const results: any[] = [];
+    for (const file of files) {
+      if (results.length >= maxResults) break;
+      try {
+        const outline = await buildCodeOutlineForFile(file.absPath, 500);
+        for (const sym of outline.symbols) {
+          if (results.length >= maxResults) break;
+          if (!q || String(sym.name || '').toLowerCase().includes(q)) results.push({ ...sym, file: outline.file });
+        }
+      } catch {}
+    }
+    return results;
+  }
 	  const mutationScope = getSessionMutationScope(sessionId);
 	  const normalizeScopePath = (value: string): string =>
 	    String(value || '').trim().replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
@@ -1029,7 +1768,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             name: toolName,
             args,
             result: target === 'src'
-              ? `ERROR: ${toolName} is only available for approved dev src self-edit proposal tasks. Use write_proposal to request src/ changes from regular sessions.`
+              ? `ERROR: ${toolName} is only available for approved code_change proposal tasks. Use write_proposal with execution_mode="code_change" to request src/ changes from regular sessions.`
               : `ERROR: ${toolName} is only available for approved internal-code proposal tasks.`,
             error: true,
           };
@@ -1039,15 +1778,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          return {
 	            name: toolName,
 	            args,
-	            result: `BLOCKED: ${toolName} is not enabled for this proposal task. Automatic self-edit execution is restricted to approved dev src/ proposal tasks, so ${targetLabel} write access is unavailable here.`,
+	            result: `BLOCKED: ${toolName} is not enabled for this proposal task. Automatic self-edit execution is restricted to approved code_change proposal tasks, so ${targetLabel} write access is unavailable here.`,
 	            error: true,
 	          };
 	        }
-        if (target !== 'src') {
+        if (target === 'prom-root') {
           return {
             name: toolName,
             args,
-            result: `BLOCKED: ${toolName} is disabled in dev src self-edit mode. Only approved src/ files may be written in this proposal lane.`,
+            result: `BLOCKED: ${toolName} is disabled in code_change self-edit mode. Only approved src/ and web-ui/ files may be written in this proposal lane.`,
             error: true,
           };
         }
@@ -1092,7 +1831,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return {
           name,
           args,
-          result: `BLOCKED: ${name} is disabled in dev src proposal tasks. Use the src-specific source tools against approved src/ files only.`,
+          result: `BLOCKED: ${name} is disabled in code_change proposal tasks. Use the src/web-ui-specific source tools against approved files only.`,
           error: true,
         };
       }
@@ -1121,6 +1860,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
       resultSummary: evaluation.reason,
     });
   } catch { /* policy evaluation is non-blocking — never fail a tool call because of it */ }
+
+  const isGoalAutonomousApprovalBypass =
+    deps.executionPolicy?.mode === 'goal_autonomous'
+    && deps.executionPolicy?.approvalMode === 'never';
 
   function resolveRunCommandCwd(rawCwd?: unknown): { cwd: string; displayCwd: string } {
     const requested = String(rawCwd || '').trim();
@@ -1193,6 +1936,73 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return null;
   }
 
+  function stableToolArgsForPermission(toolName: string, toolArgs: any): string {
+    const clean = (value: any): any => {
+      if (value == null || typeof value !== 'object') return value;
+      if (Array.isArray(value)) return value.map(clean);
+      const out: Record<string, any> = {};
+      for (const key of Object.keys(value).sort()) {
+        if (/screenshot|image|base64|blob|dataurl|password|token|secret/i.test(key)) continue;
+        out[key] = clean(value[key]);
+      }
+      return out;
+    };
+    try {
+      return `${toolName}:${JSON.stringify(clean(toolArgs || {}))}`;
+    } catch {
+      return `${toolName}:[unserializable args]`;
+    }
+  }
+
+  function normalizeUrlOrigin(rawUrl: string): string {
+    const value = String(rawUrl || '').trim();
+    if (!value) return '';
+    try {
+      const parsed = new URL(value);
+      return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+    } catch {
+      return value.toLowerCase();
+    }
+  }
+
+  async function buildScopedToolPermissionCandidate(toolName: string, toolArgs: any, riskScore: number): Promise<ToolPermissionCandidate | null> {
+    const action = stableToolArgsForPermission(toolName, toolArgs);
+    if (/^desktop_(press_key|type|type_raw|click|drag|scroll)$/i.test(toolName)) {
+      const activeWindow = await getDesktopActiveWindowInfo().catch(() => null);
+      if (!activeWindow) return null;
+      const processName = String(activeWindow.processName || '').trim().toLowerCase();
+      const title = String(activeWindow.title || '').trim().replace(/\s+/g, ' ');
+      if (!processName && !title) return null;
+      return {
+        sessionId,
+        toolName,
+        action,
+        targetKind: 'desktop_window',
+        target: `${processName}|${title.toLowerCase()}`,
+        targetDisplay: `${title || '(untitled)'} (${processName || 'unknown process'})`,
+        workspaceRoot: path.resolve(workspacePath),
+        riskScore,
+      } satisfies ToolPermissionCandidate;
+    }
+    if (/^browser_(click|fill|press_key|type|scroll|drag|upload_file|click_and_download|run_js)$/i.test(toolName)) {
+      const info = getBrowserSessionInfo(sessionId);
+      if (!info.active) return null;
+      const origin = normalizeUrlOrigin(String(info.url || ''));
+      const title = String(info.title || '').trim().replace(/\s+/g, ' ');
+      return {
+        sessionId,
+        toolName,
+        action,
+        targetKind: 'browser_page',
+        target: `${info.sessionId || sessionId}|${origin}|${title.toLowerCase()}`,
+        targetDisplay: `${title || '(untitled page)'}${origin ? ` (${origin})` : ''}`,
+        workspaceRoot: path.resolve(workspacePath),
+        riskScore,
+      } satisfies ToolPermissionCandidate;
+    }
+    return null;
+  }
+
 	  if (name === 'run_command' && evaluation.tier === 'commit') {
 	    const rawCmd = String(args?.command || '').trim();
 	    if (!rawCmd) return { name, args, result: 'command is required', error: true };
@@ -1206,10 +2016,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
     }
 
     const cmd = rawCmd.toLowerCase();
-    for (const blocked of deps.BLOCKED_PATTERNS) {
-      if (cmd.includes(String(blocked || '').toLowerCase())) {
-        return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blocked}"`, error: true };
-      }
+    const blockedPattern = commandContainsBlockedPattern(cmd, deps.BLOCKED_PATTERNS);
+    if (blockedPattern) {
+      return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blockedPattern}"`, error: true };
     }
 
     const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
@@ -1223,6 +2032,45 @@ export async function executeTool(name: string, args: any, workspacePath: string
         error: true,
       };
 	    }
+
+    let commandCwdForApproval: { cwd: string; displayCwd: string };
+    try {
+      commandCwdForApproval = resolveRunCommandCwd(args?.cwd);
+    } catch (err: any) {
+      return { name, args, result: `Invalid cwd for run_command: ${err.message || err}`, error: true };
+    }
+
+    const permissionCandidate: ToolPermissionCandidate = {
+      sessionId,
+      toolName: 'run_command' as const,
+      action: normalizedCmd,
+      targetKind: 'command_cwd' as const,
+      target: commandCwdForApproval.cwd,
+      targetDisplay: commandCwdForApproval.displayCwd,
+      command: normalizedCmd,
+      cwd: commandCwdForApproval.cwd,
+      cwdDisplay: commandCwdForApproval.displayCwd,
+      workspaceRoot: path.resolve(workspacePath),
+      riskScore: Number(evaluation.riskScore || 0),
+    };
+    const existingCommandGrant = findCommandPermissionGrant(permissionCandidate);
+    if (existingCommandGrant || isGoalAutonomousApprovalBypass) {
+      try {
+        appendAuditEntry({
+          timestamp: new Date().toISOString(),
+          sessionId,
+          agentId: inferAgentIdFromSession(sessionId, args),
+          actionType: 'approval_resolved',
+          toolName: name,
+          toolArgs: args,
+          policyTier: evaluation.tier,
+          approvalStatus: 'auto_allowed',
+          resultSummary: existingCommandGrant
+            ? `Allowed by ${existingCommandGrant.scope} command permission ${existingCommandGrant.id}`
+            : 'Auto-allowed by main-chat goal autonomous policy.',
+        });
+      } catch {}
+    } else {
 
 	    const approvalQueue = getApprovalQueue();
 	    const activeTask = resolveTaskForSession(sessionId);
@@ -1245,12 +2093,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
 	      } catch {}
 	    }
-      let approvalCwd = '.';
-      try {
-        approvalCwd = resolveRunCommandCwd(args?.cwd).displayCwd;
-      } catch {
-        approvalCwd = String(args?.cwd || '.');
-      }
+      const approvalCwd = commandCwdForApproval.displayCwd;
 	    const approval = approvalQueue.create({
 	      sessionId,
 	      taskId: activeTaskId,
@@ -1259,6 +2102,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	      originLabel: approvalOrigin.originLabel,
 	      toolName: name,
 	      toolArgs: { ...args, command: rawCmd },
+      commandPermissionCandidate: permissionCandidate,
       action: `Run command in ${approvalCwd}: ${rawCmd}`,
       reason: evaluation.reason,
       policyTier: 'commit',
@@ -1336,6 +2180,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        error: true,
 	      };
 	    }
+    }
 	  }
 
   if (name !== 'run_command' && evaluation.tier === 'commit') {
@@ -1351,7 +2196,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
     })();
     const action = `Run ${name}${summaryArgs && summaryArgs !== '{}' ? ` with ${summaryArgs}` : ''}`;
+    const permissionCandidate = await buildScopedToolPermissionCandidate(name, args, Number(evaluation.riskScore || 0));
+    const existingToolGrant = permissionCandidate ? findCommandPermissionGrant(permissionCandidate) : null;
 
+    if (existingToolGrant || isGoalAutonomousApprovalBypass) {
+      try {
+        appendAuditEntry({
+          timestamp: new Date().toISOString(),
+          sessionId,
+          agentId: inferAgentIdFromSession(sessionId, args),
+          actionType: 'approval_resolved',
+          toolName: name,
+          toolArgs: args,
+          policyTier: evaluation.tier,
+          approvalStatus: 'auto_allowed',
+          resultSummary: existingToolGrant
+            ? `Allowed by ${existingToolGrant.scope} scoped tool permission ${existingToolGrant.id}`
+            : 'Auto-allowed by main-chat goal autonomous policy.',
+        });
+      } catch {}
+    } else {
     if (activeTaskId) {
       updateTaskStatus(activeTaskId, 'needs_assistance', { pauseReason: 'awaiting_command_approval' });
       appendJournal(activeTaskId, {
@@ -1378,6 +2242,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       originLabel: approvalOrigin.originLabel,
       toolName: name,
       toolArgs: args,
+      commandPermissionCandidate: permissionCandidate || undefined,
       action,
       reason: evaluation.reason,
       policyTier: 'commit',
@@ -1455,6 +2320,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
         error: true,
       };
     }
+    }
+  }
+
+  const capabilityDispatch = await executeRegisteredCapabilityTool({
+    name,
+    args,
+    workspacePath,
+    deps,
+    sessionId,
+  });
+  if (capabilityDispatch.handled) {
+    return capabilityDispatch.result;
   }
 
 	  const broadcastBrowserStatus = async (toolName: string) => {
@@ -1527,11 +2404,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const team = teams.find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(targetAgentId));
           if (!team) return { name, args, result: `ERROR: Could not find a team containing agent "${targetAgentId}". Check the agent ID.`, error: true };
           queueAgentMessage(team.id, targetAgentId, message);
-          appendTeamChat(team.id, {
+          appendAndBroadcastTeamChat(deps, team, {
             from: 'manager',
             fromName: 'Manager',
             content: message,
-            metadata: { agentId: targetAgentId },
+            metadata: {
+              source: 'talk_to_subagent',
+              agentId: targetAgentId,
+              ...getTeamChatTargetMetadata(targetAgentId),
+            },
           });
           try {
             const subagentChatMsg = appendSubagentChatMessage(targetAgentId, {
@@ -1600,11 +2481,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
           if (!team) return { name, args, result: `ERROR: Team not found: ${noteContext.teamId}`, error: true };
           const fromAgent = getAgentById(fromAgentId) as any;
           queueManagerMessage(team.id, fromAgentId, message);
-          appendTeamChat(team.id, {
+          appendAndBroadcastTeamChat(deps, team, {
             from: 'subagent',
             fromName: String(fromAgent?.name || fromAgentId).trim(),
             fromAgentId,
-            content: `${waitForReply ? 'Question for manager' : 'Message to manager'}: ${message}`,
+            content: message,
+            metadata: {
+              source: 'talk_to_manager',
+              agentId: fromAgentId,
+              waitForReply,
+              messageType: waitForReply ? 'blocker' : 'chat',
+              ...getTeamChatTargetMetadata('manager'),
+            },
           });
           try {
             const subagentChatMsg = appendSubagentChatMessage(fromAgentId, {
@@ -1688,6 +2576,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
           });
           deps.broadcastWS?.({ type: 'subagent_chat_message', agentId: fromAgentId, message: subagentChatMsg });
         } catch {}
+
+        appendAndBroadcastTeamChat(deps, team, {
+          from: 'subagent',
+          fromName: String(fromAgent?.name || fromAgentId).trim(),
+          fromAgentId,
+          content: message,
+          metadata: {
+            source: name,
+            agentId: fromAgentId,
+            waitForReply,
+            messageType: 'blocker',
+            ...getTeamChatTargetMetadata('manager'),
+          },
+        });
 
         routeTeamEvent({
           type: 'member_blocked',
@@ -2143,15 +3045,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const isSubagentSpeaker = teamContext?.teamId === teamId && teamContext.authorType === 'subagent';
         const speakerAgentId = isSubagentSpeaker ? teamContext?.authorId : undefined;
         const speakerAgent = speakerAgentId ? getAgentById(speakerAgentId) as any : null;
-        const chatMsg = appendTeamChat(teamId, {
+        const chatMsg = appendAndBroadcastTeamChat(deps, team, {
           from: isSubagentSpeaker ? 'subagent' : 'manager',
           fromName: isSubagentSpeaker
             ? String(speakerAgent?.name || speakerAgentId || 'Subagent')
             : 'Manager',
           fromAgentId: speakerAgentId,
           content: message,
+          metadata: {
+            source: 'post_to_team_chat',
+            agentId: speakerAgentId,
+            ...getTeamChatTargetMetadata('all'),
+          },
         });
-        deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, message });
         return { name, args, result: JSON.stringify({ success: true, team_id: teamId, message_id: chatMsg?.id || null }, null, 2), error: false };
       }
 
@@ -2186,13 +3092,79 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!teamId || !message) return { name, args, result: 'ERROR: reply_to_team requires team_id and message', error: true };
         const team = getManagedTeam(teamId);
         if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
-        appendMainAgentThread(teamId, { from: 'main_agent', content: message, read: true, type: 'reply' });
-        const chatMsg = appendTeamChat(teamId, { from: 'user', fromName: 'Main Agent', content: message });
-        deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, message });
-        handleManagerConversation(teamId, `[MAIN AGENT REPLY]\n${message}`, deps.broadcastTeamEvent, true).catch((err: any) =>
-          console.error('[reply_to_team] Coordinator resume failed:', err?.message || err)
+        const route = parseMainAgentTeamRoute(message);
+        const visibleMessage = route.text || message;
+        if (route.route === 'member') {
+          const targetAgentId = resolveMainAgentTeamMemberId(team, route.targetLabel || '');
+          if (!targetAgentId) {
+            return {
+              name,
+              args,
+              result: `ERROR: Could not find team member "${route.targetLabel || ''}" on team "${team.name}".`,
+              error: true,
+            };
+          }
+          route.targetAgentId = targetAgentId;
+        }
+
+        appendMainAgentThread(teamId, {
+          from: 'main_agent',
+          content: visibleMessage,
+          read: true,
+          type: 'reply',
+        });
+        const chatMsg = appendTeamChat(teamId, {
+          from: 'user',
+          fromName: 'Main Agent',
+          content: visibleMessage,
+          metadata: {
+            source: 'reply_to_team',
+            targetType: route.route,
+            targetLabel: route.targetLabel,
+            targetId: route.targetAgentId,
+          },
+        });
+        deps.broadcastTeamEvent({ type: 'team_chat_message', teamId, teamName: team.name, chatMessage: chatMsg, message: visibleMessage });
+
+        if (route.route === 'manager') {
+          handleManagerConversation(teamId, `[MAIN AGENT REPLY]\n${visibleMessage}`, deps.broadcastTeamEvent, true).catch((err: any) =>
+            console.error('[reply_to_team] Coordinator resume failed:', err?.message || err)
+          );
+          return { name, args, result: JSON.stringify({ success: true, team_id: teamId, routed_to: 'manager', resumed: true }, null, 2), error: false };
+        }
+
+        (async () => {
+          const delivery = await deliverMainAgentMessageToTeamMembers(
+            teamId,
+            team,
+            visibleMessage,
+            route.targetAgentId,
+            route.route === 'member' ? route.targetLabel : undefined,
+          );
+          const managerPrompt = buildMainAgentMembersRespondedPrompt(
+            visibleMessage,
+            delivery.deliveredCount,
+            delivery.completedCount,
+            route.route === 'member' ? route.targetLabel : undefined,
+          );
+          await handleManagerConversation(teamId, managerPrompt, deps.broadcastTeamEvent, false);
+        })().catch((err: any) =>
+          console.error('[reply_to_team] Team broadcast delivery failed:', err?.message || err)
         );
-        return { name, args, result: JSON.stringify({ success: true, team_id: teamId, resumed: true }, null, 2), error: false };
+
+        return {
+          name,
+          args,
+          result: JSON.stringify({
+            success: true,
+            team_id: teamId,
+            routed_to: route.route,
+            target_agent_id: route.targetAgentId || null,
+            team_delivery_started: true,
+            manager_resumes_after_member_responses: true,
+          }, null, 2),
+          error: false,
+        };
       }
 
       case 'manage_team_goal': {
@@ -2269,6 +3241,91 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
         }
         return { name, args, result: JSON.stringify({ success: ok, ...data }, null, 2), error: !ok };
+      }
+
+      case 'manage_team_context_ref': {
+        const action = String(args?.action || '').trim().toLowerCase();
+        const teamId = String(args?.team_id || '').trim();
+        if (!action) return { name, args, result: 'ERROR: manage_team_context_ref requires action', error: true };
+
+        if (action === 'list') {
+          if (teamId) {
+            const team = getManagedTeam(teamId);
+            if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
+            const references = listTeamContextReferences(teamId);
+            return {
+              name,
+              args,
+              result: JSON.stringify({ success: true, team_id: teamId, team_name: team.name, references }, null, 2),
+              error: false,
+            };
+          }
+          const teams = listManagedTeams().map((team: any) => ({
+            id: team.id,
+            name: team.name,
+            reference_count: listTeamContextReferences(team.id).length,
+          }));
+          return { name, args, result: JSON.stringify({ success: true, teams }, null, 2), error: false };
+        }
+
+        if (!teamId) return { name, args, result: 'ERROR: team_id is required for add/update/delete', error: true };
+        const team = getManagedTeam(teamId);
+        if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
+
+        if (action === 'add') {
+          const title = String(args?.title || '').trim();
+          const content = String(args?.content || '').trim();
+          if (!title || !content) return { name, args, result: 'ERROR: title and content are required for add', error: true };
+          const reference = addTeamContextReference(teamId, {
+            title,
+            content,
+            actor: 'tool:manage_team_context_ref',
+          });
+          if (!reference) return { name, args, result: 'ERROR: Could not create context reference', error: true };
+          deps.broadcastTeamEvent({ type: 'team_updated', teamId, teamName: team.name });
+          return {
+            name,
+            args,
+            result: JSON.stringify({ success: true, action, team_id: teamId, reference }, null, 2),
+            error: false,
+          };
+        }
+
+        if (action === 'update') {
+          const refId = String(args?.ref_id || '').trim();
+          if (!refId) return { name, args, result: 'ERROR: ref_id is required for update', error: true };
+          const patch: { title?: string; content?: string; actor?: string } = { actor: 'tool:manage_team_context_ref' };
+          if (args?.title !== undefined) patch.title = String(args.title);
+          if (args?.content !== undefined) patch.content = String(args.content);
+          if (patch.title === undefined && patch.content === undefined) {
+            return { name, args, result: 'ERROR: update requires title or content', error: true };
+          }
+          const reference = updateTeamContextReference(teamId, refId, patch);
+          if (!reference) return { name, args, result: `ERROR: Context reference not found or invalid update: ${refId}`, error: true };
+          deps.broadcastTeamEvent({ type: 'team_updated', teamId, teamName: team.name });
+          return {
+            name,
+            args,
+            result: JSON.stringify({ success: true, action, team_id: teamId, reference }, null, 2),
+            error: false,
+          };
+        }
+
+        if (action === 'delete') {
+          const refId = String(args?.ref_id || '').trim();
+          if (!refId) return { name, args, result: 'ERROR: ref_id is required for delete', error: true };
+          const success = deleteTeamContextReference(teamId, refId);
+          if (!success) return { name, args, result: `ERROR: Context reference not found: ${refId}`, error: true };
+          deps.broadcastTeamEvent({ type: 'team_updated', teamId, teamName: team.name });
+          return {
+            name,
+            args,
+            result: JSON.stringify({ success: true, action, team_id: teamId, ref_id: refId }, null, 2),
+            error: false,
+          };
+        }
+
+        return { name, args, result: `ERROR: Unknown manage_team_context_ref action "${action}". Valid: list, add, update, delete`, error: true };
       }
 
       case 'list_files': {
@@ -2545,6 +3602,137 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
 	        }
 	      }
+
+      case 'copy_file':
+      case 'move_file': {
+        const source = args.source || args.from || args.old_path || args.filename || args.path;
+        const destination = args.destination || args.dest || args.to || args.new_path;
+        if (!source || !destination) return { name, args, result: 'source and destination are required', error: true };
+        try {
+          const src = resolveAllowedWorkspacePath(String(source), { requireFile: true });
+          const dest = resolveAllowedWorkspacePath(String(destination));
+          const srcBlocked = enforceMutationScope(src.normalizedRel, 'file', name);
+          if (srcBlocked) return srcBlocked;
+          const destBlocked = enforceMutationScope(dest.normalizedRel, 'file', name);
+          if (destBlocked) return destBlocked;
+          const overwrite = args.overwrite === true;
+          if (fs.existsSync(dest.absPath) && !overwrite) {
+            return { name, args, result: `ERROR: destination exists: ${dest.displayPath}. Pass overwrite=true to replace it.`, error: true };
+          }
+          const plan = { operation: name, from: src.displayPath, to: dest.displayPath, overwrite, will_overwrite: fs.existsSync(dest.absPath) };
+          if (args.dry_run === true) return { name, args, result: JSON.stringify(plan, null, 2), error: false };
+          if (args.create_dirs !== false) fs.mkdirSync(path.dirname(dest.absPath), { recursive: true });
+          if (fs.existsSync(dest.absPath) && overwrite) fs.rmSync(dest.absPath, { force: true });
+          if (name === 'copy_file') fs.copyFileSync(src.absPath, dest.absPath);
+          else fs.renameSync(src.absPath, dest.absPath);
+          return { name, args, result: `OK ${name === 'copy_file' ? 'copied' : 'moved'} ${src.displayPath} to ${dest.displayPath}.`, error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'copy_directory':
+      case 'move_directory': {
+        const source = args.source || args.from || args.old_path || args.path;
+        const destination = args.destination || args.dest || args.to || args.new_path;
+        if (!source || !destination) return { name, args, result: 'source and destination are required', error: true };
+        try {
+          const src = resolveAllowedWorkspacePath(String(source), { requireDirectory: true });
+          const dest = resolveAllowedWorkspacePath(String(destination));
+          const srcBlocked = enforceMutationScope(src.normalizedRel, 'dir', name);
+          if (srcBlocked) return srcBlocked;
+          const destBlocked = enforceMutationScope(dest.normalizedRel, 'dir', name);
+          if (destBlocked) return destBlocked;
+          const maxEntries = Math.max(1, Math.min(20000, Number(args.max_entries || 2000)));
+          const counts = countDirectoryFiles(src.absPath, maxEntries);
+          if (counts.truncated) return { name, args, result: `ERROR: source exceeds max_entries=${maxEntries}. Increase max_entries intentionally or narrow the operation.`, error: true };
+          const overwrite = args.overwrite === true;
+          if (fs.existsSync(dest.absPath) && !overwrite) {
+            return { name, args, result: `ERROR: destination exists: ${dest.displayPath}. Pass overwrite=true to replace it.`, error: true };
+          }
+          const plan = { operation: name, from: src.displayPath, to: dest.displayPath, overwrite, will_overwrite: fs.existsSync(dest.absPath), ...counts };
+          if (args.dry_run === true) return { name, args, result: JSON.stringify(plan, null, 2), error: false };
+          if (fs.existsSync(dest.absPath) && overwrite) fs.rmSync(dest.absPath, { recursive: true, force: true });
+          fs.mkdirSync(path.dirname(dest.absPath), { recursive: true });
+          if (name === 'copy_directory') fs.cpSync(src.absPath, dest.absPath, { recursive: true, force: overwrite, errorOnExist: !overwrite });
+          else fs.renameSync(src.absPath, dest.absPath);
+          return { name, args, result: `OK ${name === 'copy_directory' ? 'copied' : 'moved'} directory ${src.displayPath} to ${dest.displayPath} (${counts.files} files).`, error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'path_exists': {
+        const requested = args.path || args.filename || args.file;
+        if (!requested) return { name, args, result: 'path is required', error: true };
+        try {
+          const resolved = resolveAllowedWorkspacePath(String(requested));
+          if (!fs.existsSync(resolved.absPath)) return { name, args, result: JSON.stringify({ path: resolved.displayPath, exists: false }, null, 2), error: false };
+          const stat = fs.statSync(resolved.absPath);
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              path: resolved.displayPath,
+              exists: true,
+              is_file: stat.isFile(),
+              is_directory: stat.isDirectory(),
+              bytes: stat.size,
+              modified: stat.mtime.toISOString(),
+            }, null, 2),
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'show_diff':
+      case 'git_diff': {
+        try {
+          const maxChars = Math.max(1000, Math.min(100000, Number(args.max_chars || 12000)));
+          const parts = ['git diff'];
+          if (args.staged === true) parts.push('--cached');
+          if (args.stat === true) parts.push('--stat');
+          if (args.path) {
+            const resolved = resolveAllowedWorkspacePath(String(args.path));
+            parts.push('--', quoteArg(resolved.displayPath));
+          }
+          const result = await runCapturedToolCommand(parts.join(' '), workspacePath, 120000);
+          result.result = truncateText(result.result, maxChars);
+          return result;
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'preview_patch':
+      case 'apply_patch': {
+        const patchText = String(args.patch || '');
+        if (!patchText.trim()) return { name, args, result: 'patch is required', error: true };
+        try {
+          const targets = validatePatchTargetPaths(patchText);
+          const tmpPath = path.join(getConfig().getConfigDir(), `patch-${Date.now()}-${Math.random().toString(36).slice(2)}.diff`);
+          fs.writeFileSync(tmpPath, patchText, 'utf-8');
+          try {
+            const check = await deps.runCommandCaptured(`git apply --check --whitespace=nowarn ${quoteArg(tmpPath)}`, workspacePath, 120000);
+            const checkOutput = [check.stdout, check.stderr].filter(Boolean).join('\n').trim();
+            if (check.code !== 0 || check.timedOut) {
+              return { name, args, result: `Patch check failed:\n${truncateText(checkOutput || `exit ${check.code}`, 8000)}`, error: true };
+            }
+            if (name === 'preview_patch' || args.check === true) {
+              return { name, args, result: JSON.stringify({ checked_only: true, files: targets, file_count: targets.length }, null, 2), error: false };
+            }
+            const applied = await deps.runCommandCaptured(`git apply --whitespace=nowarn ${quoteArg(tmpPath)}`, workspacePath, 120000);
+            const appliedOutput = [applied.stdout, applied.stderr].filter(Boolean).join('\n').trim();
+            return { name, args, result: applied.code === 0 ? `Patch applied to ${targets.length} file(s).` : `Patch apply failed:\n${truncateText(appliedOutput, 8000)}`, error: applied.code !== 0 };
+          } finally {
+            try { fs.unlinkSync(tmpPath); } catch {}
+          }
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
 
 	      case 'file_stats': {
         const filename = args.filename || args.name || args.path;
@@ -3331,6 +4519,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const frs_updated = frs_replaceAll
           ? frs_content.split(frs_find).join(frs_replace)
           : frs_content.replace(frs_find, frs_replace);
+        const frs_invalidEdit = rejectInvalidSourceEdit(name, args, frs_absPath, frs_updated);
+        if (frs_invalidEdit) return frs_invalidEdit;
         fs.writeFileSync(frs_absPath, frs_updated, 'utf-8');
         const frs_display = 'src/' + frs_absPath.slice(frs_srcRoot.length + 1).replace(/\\/g, '/');
         const frs_buildCommand = getSourceVerificationCommandForSession(sessionId);
@@ -3365,7 +4555,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const rls_endClamped = Math.min(rls_end, rls_lines.length);
         rls_lines.splice(rls_start - 1, rls_endClamped - rls_start + 1, ...rls_newContent.split('\n'));
-        fs.writeFileSync(rls_absPath, rls_lines.join('\n'), 'utf-8');
+        const rls_updated = rls_lines.join('\n');
+        const rls_invalidEdit = rejectInvalidSourceEdit(name, args, rls_absPath, rls_updated);
+        if (rls_invalidEdit) return rls_invalidEdit;
+        fs.writeFileSync(rls_absPath, rls_updated, 'utf-8');
         const rls_display = 'src/' + rls_absPath.slice(rls_srcRoot.length + 1).replace(/\\/g, '/');
         const rls_buildCommand = getSourceVerificationCommandForSession(sessionId);
         console.log(`[edit_source] replace_lines_source: ${rls_display} lines ${rls_start}-${rls_endClamped} (verify with ${rls_buildCommand}, session: ${rls_sid})`);
@@ -3396,7 +4589,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const ias_lines = fs.readFileSync(ias_absPath, 'utf-8').split('\n');
         const ias_insertAt = Math.min(ias_afterLine, ias_lines.length);
         ias_lines.splice(ias_insertAt, 0, ...ias_content.split('\n'));
-        fs.writeFileSync(ias_absPath, ias_lines.join('\n'), 'utf-8');
+        const ias_updated = ias_lines.join('\n');
+        const ias_invalidEdit = rejectInvalidSourceEdit(name, args, ias_absPath, ias_updated);
+        if (ias_invalidEdit) return ias_invalidEdit;
+        fs.writeFileSync(ias_absPath, ias_updated, 'utf-8');
         const ias_display = 'src/' + ias_absPath.slice(ias_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] insert_after_source: ${ias_display} after line ${ias_afterLine} (session: ${ias_sid})`);
         return { name, args, result: `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_lines.length} lines). Call run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) to compile and verify.`, error: false };
@@ -3429,7 +4625,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const dls_endClamped = Math.min(dls_end, dls_lines.length);
         dls_lines.splice(dls_start - 1, dls_endClamped - dls_start + 1);
-        fs.writeFileSync(dls_absPath, dls_lines.join('\n'), 'utf-8');
+        const dls_updated = dls_lines.join('\n');
+        const dls_invalidEdit = rejectInvalidSourceEdit(name, args, dls_absPath, dls_updated);
+        if (dls_invalidEdit) return dls_invalidEdit;
+        fs.writeFileSync(dls_absPath, dls_updated, 'utf-8');
         const dls_display = 'src/' + dls_absPath.slice(dls_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] delete_lines_source: ${dls_display} lines ${dls_start}-${dls_endClamped} (session: ${dls_sid})`);
         return { name, args, result: `✅ ${dls_display}: deleted lines ${dls_start}-${dls_endClamped} (now ${dls_lines.length} lines). Call run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) to compile and verify.`, error: false };
@@ -3456,6 +4655,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!ws_overwrite && fs.existsSync(ws_absPath)) {
           return { name, args, result: `File already exists: src/${ws_rel.replace(/^\.?\/?src\//, '')}. Set overwrite:true to replace it.`, error: true };
         }
+        const ws_invalidEdit = rejectInvalidSourceEdit(name, args, ws_absPath, ws_content);
+        if (ws_invalidEdit) return ws_invalidEdit;
         fs.mkdirSync(path.dirname(ws_absPath), { recursive: true });
         fs.writeFileSync(ws_absPath, ws_content, 'utf-8');
         const ws_display = 'src/' + ws_absPath.slice(ws_srcRoot.length + 1).replace(/\\/g, '/');
@@ -3590,10 +4791,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const frwu_updated = frwu_replaceAll
           ? frwu_content.split(frwu_find).join(frwu_replace)
           : frwu_content.replace(frwu_find, frwu_replace);
+        const frwu_invalidEdit = rejectInvalidSourceEdit(name, args, frwu_absPath, frwu_updated);
+        if (frwu_invalidEdit) return frwu_invalidEdit;
         fs.writeFileSync(frwu_absPath, frwu_updated, 'utf-8');
         const frwu_display = 'web-ui/' + frwu_absPath.slice(frwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] find_replace_webui_source: ${frwu_display} (session: ${frwu_sid})`);
-        return { name, args, result: `✅ ${frwu_display} updated (${frwu_occurrences} occurrence${frwu_occurrences !== 1 ? 's' : ''} replaced). No build step needed for web-ui changes.`, error: false };
+        const frwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
+        return { name, args, result: `OK ${frwu_display} updated (${frwu_occurrences} occurrence${frwu_occurrences !== 1 ? 's' : ''} replaced). Verify with ${frwu_verifyCommand}.`, error: false };
       }
 
       // ── replace_lines_webui_source ────────────────────────────────────────────
@@ -3624,10 +4828,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const rlwu_endClamped = Math.min(rlwu_end, rlwu_lines.length);
         rlwu_lines.splice(rlwu_start - 1, rlwu_endClamped - rlwu_start + 1, ...rlwu_newContent.split('\n'));
-        fs.writeFileSync(rlwu_absPath, rlwu_lines.join('\n'), 'utf-8');
+        const rlwu_updated = rlwu_lines.join('\n');
+        const rlwu_invalidEdit = rejectInvalidSourceEdit(name, args, rlwu_absPath, rlwu_updated);
+        if (rlwu_invalidEdit) return rlwu_invalidEdit;
+        fs.writeFileSync(rlwu_absPath, rlwu_updated, 'utf-8');
         const rlwu_display = 'web-ui/' + rlwu_absPath.slice(rlwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] replace_lines_webui_source: ${rlwu_display} lines ${rlwu_start}-${rlwu_endClamped} (session: ${rlwu_sid})`);
-        return { name, args, result: `✅ ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines). No build step needed for web-ui changes.`, error: false };
+        const rlwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
+        return { name, args, result: `OK ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines). Verify with ${rlwu_verifyCommand}.`, error: false };
       }
 
       // ── insert_after_webui_source ─────────────────────────────────────────────
@@ -3654,10 +4862,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const iawu_lines = fs.readFileSync(iawu_absPath, 'utf-8').split('\n');
         const iawu_insertAt = Math.min(iawu_afterLine, iawu_lines.length);
         iawu_lines.splice(iawu_insertAt, 0, ...iawu_content.split('\n'));
-        fs.writeFileSync(iawu_absPath, iawu_lines.join('\n'), 'utf-8');
+        const iawu_updated = iawu_lines.join('\n');
+        const iawu_invalidEdit = rejectInvalidSourceEdit(name, args, iawu_absPath, iawu_updated);
+        if (iawu_invalidEdit) return iawu_invalidEdit;
+        fs.writeFileSync(iawu_absPath, iawu_updated, 'utf-8');
         const iawu_display = 'web-ui/' + iawu_absPath.slice(iawu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] insert_after_webui_source: ${iawu_display} after line ${iawu_afterLine} (session: ${iawu_sid})`);
-        return { name, args, result: `✅ ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines). No build step needed for web-ui changes.`, error: false };
+        const iawu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
+        return { name, args, result: `OK ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines). Verify with ${iawu_verifyCommand}.`, error: false };
       }
 
       // ── delete_lines_webui_source ─────────────────────────────────────────────
@@ -3687,10 +4899,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const dlwu_endClamped = Math.min(dlwu_end, dlwu_lines.length);
         dlwu_lines.splice(dlwu_start - 1, dlwu_endClamped - dlwu_start + 1);
-        fs.writeFileSync(dlwu_absPath, dlwu_lines.join('\n'), 'utf-8');
+        const dlwu_updated = dlwu_lines.join('\n');
+        const dlwu_invalidEdit = rejectInvalidSourceEdit(name, args, dlwu_absPath, dlwu_updated);
+        if (dlwu_invalidEdit) return dlwu_invalidEdit;
+        fs.writeFileSync(dlwu_absPath, dlwu_updated, 'utf-8');
         const dlwu_display = 'web-ui/' + dlwu_absPath.slice(dlwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] delete_lines_webui_source: ${dlwu_display} lines ${dlwu_start}-${dlwu_endClamped} (session: ${dlwu_sid})`);
-        return { name, args, result: `✅ ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines). No build step needed for web-ui changes.`, error: false };
+        const dlwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
+        return { name, args, result: `OK ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines). Verify with ${dlwu_verifyCommand}.`, error: false };
       }
 
       // ── write_webui_source: create or overwrite a file in web-ui/ ────────────
@@ -3714,12 +4930,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!wwu_overwrite && fs.existsSync(wwu_absPath)) {
           return { name, args, result: `File already exists: web-ui/${wwu_rel}. Set overwrite:true to replace it.`, error: true };
         }
+        const wwu_invalidEdit = rejectInvalidSourceEdit(name, args, wwu_absPath, wwu_content);
+        if (wwu_invalidEdit) return wwu_invalidEdit;
         fs.mkdirSync(path.dirname(wwu_absPath), { recursive: true });
         fs.writeFileSync(wwu_absPath, wwu_content, 'utf-8');
         const wwu_display = 'web-ui/' + wwu_absPath.slice(wwu_webUiRoot.length + 1).replace(/\\/g, '/');
         const wwu_lineCount = wwu_content.split('\n').length;
         console.log(`[edit_webui] write_webui_source: ${wwu_display} (${wwu_lineCount} lines, session: ${wwu_sid})`);
-        return { name, args, result: `✅ ${wwu_display} written (${wwu_lineCount} lines). No build step needed for web-ui changes.`, error: false };
+        const wwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
+        return { name, args, result: `OK ${wwu_display} written (${wwu_lineCount} lines). Verify with ${wwu_verifyCommand}.`, error: false };
       }
 
       // ── send_telegram: proactively push text or screenshot to Telegram ────────
@@ -3747,7 +4966,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        fs.unlinkSync(dwu_absPath);
 	        const dwu_display = 'web-ui/' + dwu_absPath.slice(dwu_webUiRoot.length + 1).replace(/\\/g, '/');
 	        console.log(`[edit_webui] delete_webui_source: ${dwu_display} (session: ${dwu_sid})`);
-	        return { name, args, result: `OK ${dwu_display} deleted. Run npm run build if the change affects packaged frontend output.`, error: false };
+	        const dwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
+	        return { name, args, result: `OK ${dwu_display} deleted. Verify with ${dwu_verifyCommand}.`, error: false };
 	      }
 
 	      case 'send_telegram': {
@@ -3820,22 +5040,47 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!mode) {
           return { name, args, result: 'enter_creative_mode: mode must be "design", "image", "canvas", or "video"', error: true };
         }
+        const previousMode = getCreativeMode(sessionId);
         const creativeMode = setCreativeMode(sessionId, mode);
-        deps.sendSSE?.('creative_mode', { sessionId, creativeMode, resetScene: true });
-        deps.broadcastWS?.({ type: 'creative_mode_changed', sessionId, creativeMode, resetScene: true });
-        return { name, args, result: `Creative mode "${creativeMode}" activated for this session with a blank canvas. Canvas should stay open and this mode now persists across turns until exited.`, error: false, data: { creativeMode, previousMode: null, resetScene: true } };
+        deps.sendSSE?.('creative_mode', { sessionId, creativeMode, previousMode, resetScene: true });
+        deps.broadcastWS?.({ type: 'creative_mode_changed', sessionId, creativeMode, previousMode, resetScene: true });
+        return { name, args, result: `Creative workspace "${creativeMode}" opened with a blank canvas.`, error: false, data: { creativeMode, previousMode, resetScene: true } };
       }
 
       case 'switch_creative_mode': {
-        const mode = normalizeCreativeMode(args?.mode);
-        if (!mode) {
-          return { name, args, result: 'switch_creative_mode: mode must be "design", "image", "canvas", or "video"', error: true };
-        }
+        const hasMode = !!args && typeof args === 'object' && Object.prototype.hasOwnProperty.call(args, 'mode');
+        const rawMode = hasMode ? args?.mode : undefined;
+        const rawModeText = String(rawMode ?? '').trim().toLowerCase();
+        const shouldExit = hasMode && (
+          rawMode == null
+          || rawModeText === 'null'
+          || rawModeText === 'none'
+          || rawModeText === 'off'
+          || rawModeText === 'normal'
+          || rawModeText === 'default'
+          || rawModeText === 'chat'
+        );
         const previousMode = getCreativeMode(sessionId);
+        if (shouldExit) {
+          setCreativeMode(sessionId, null);
+          deps.sendSSE?.('creative_mode', { sessionId, creativeMode: null, previousMode, reason: args?.reason || '', initialIntent: args?.initialIntent || '' });
+          deps.broadcastWS?.({ type: 'creative_mode_changed', sessionId, creativeMode: null, previousMode, reason: args?.reason || '', initialIntent: args?.initialIntent || '' });
+          return {
+            name,
+            args,
+            result: previousMode ? `Creative workspace "${previousMode}" cleared.` : 'No Creative workspace was selected for this session.',
+            error: false,
+            data: { creativeMode: null, previousMode },
+          };
+        }
+        const mode = normalizeCreativeMode(rawMode);
+        if (!mode) {
+          return { name, args, result: 'switch_creative_mode: mode must be "design", "image", "canvas", "video", or null to exit', error: true };
+        }
         const creativeMode = setCreativeMode(sessionId, mode);
         deps.sendSSE?.('creative_mode', { sessionId, creativeMode, previousMode, reason: args?.reason || '', initialIntent: args?.initialIntent || '', resetScene: true });
         deps.broadcastWS?.({ type: 'creative_mode_changed', sessionId, creativeMode, previousMode, reason: args?.reason || '', initialIntent: args?.initialIntent || '', resetScene: true });
-        return { name, args, result: `Creative mode switched from "${previousMode || 'none'}" to "${creativeMode}" with a blank canvas.`, error: false, data: { creativeMode, previousMode, resetScene: true } };
+        return { name, args, result: `Creative workspace changed from "${previousMode || 'none'}" to "${creativeMode}" with a blank canvas.`, error: false, data: { creativeMode, previousMode, resetScene: true } };
       }
 
       case 'get_creative_mode': {
@@ -3843,7 +5088,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return {
           name,
           args,
-          result: creativeMode ? `Active creative mode: ${creativeMode}` : 'No creative mode is active.',
+          result: creativeMode ? `Selected Creative workspace: ${creativeMode}` : 'No Creative workspace is selected.',
           error: false,
           data: { creativeMode },
         };
@@ -3871,14 +5116,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return {
           name,
           args,
-          result: previousMode ? `Creative mode "${previousMode}" exited. Session returned to normal chat mode.` : 'No creative mode was active for this session.',
+          result: previousMode ? `Creative workspace "${previousMode}" cleared.` : 'No Creative workspace was selected for this session.',
           error: false,
           data: { creativeMode: null, previousMode },
         };
       }
 
       case 'creative_list_motion_templates': {
-        const catalog = getCreativeMotionCatalog();
+        const catalog = getCreativeMotionRuntime().getCreativeMotionCatalog();
         return {
           name,
           args,
@@ -3888,26 +5133,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
         };
       }
 
-      case 'creative_list_templates': {
-        const templates = listCreativePremiumTemplates();
-        return {
-          name,
-          args,
-          result: `Found ${templates.length} premium Creative video templates.`,
-          error: false,
-          data: { templates },
-        };
-      }
-
       case 'creative_preview_motion_template':
       case 'creative_generate_motion_variants': {
-        const catalog = getCreativeMotionCatalog();
+        const catalog = getCreativeMotionRuntime().getCreativeMotionCatalog();
         if (name === 'creative_generate_motion_variants') {
           const templateId = String(args?.templateId || 'caption-reel').trim().toLowerCase();
           const template = catalog.templates.find((candidate: any) => candidate.id === templateId) || catalog.templates[0];
           const count = Math.max(1, Math.min(8, Number(args?.count) || Math.min(3, template?.presets?.length || 3)));
           const variants = (template?.presets || []).slice(0, count).map((preset: any, index: number) => {
-            const prepared = prepareCreativeMotionTemplate({
+            const prepared = getCreativeMotionRuntime().prepareCreativeMotionTemplate({
               ...(args || {}),
               templateId: template.id,
               presetId: preset.id,
@@ -3932,7 +5166,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             data: { template, variants },
           };
         }
-        const prepared = prepareCreativeMotionTemplate(args || {});
+        const prepared = getCreativeMotionRuntime().prepareCreativeMotionTemplate(args || {});
         return {
           name,
           args,
@@ -3946,7 +5180,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_import_asset': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
-        const asset = await importCreativeAsset(storage, {
+        const asset = await getCreativeAssets().importCreativeAsset(storage, {
           source: String(args?.source || '').trim(),
           filename: args?.filename ? String(args.filename) : undefined,
           tags: args?.tags,
@@ -3968,10 +5202,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!url) {
           return { name, args, result: 'creative_attach_audio_from_url: url is required', error: true };
         }
-        const creativeMode = getCreativeMode(sessionId);
-        if (creativeMode !== 'video') {
-          return { name, args, result: 'creative_attach_audio_from_url: Video creative mode must be active first. Call switch_creative_mode with mode="video".', error: true };
-        }
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
         const downloadsDir = path.join(storage.creativeDir, 'source-audio');
         fs.mkdirSync(downloadsDir, { recursive: true });
@@ -4000,7 +5231,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             data: { download: downloadResult.data || null },
           };
         }
-        const asset = await importCreativeAsset(storage, {
+        const asset = await getCreativeAssets().importCreativeAsset(storage, {
           source: downloadedPath,
           tags: normalizeCreativeAudioTags(args?.tags),
           copy: true,
@@ -4058,10 +5289,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!source) {
           return { name, args, result: 'creative_attach_audio_from_file: source is required', error: true };
         }
-        const creativeMode = getCreativeMode(sessionId);
-        if (creativeMode !== 'video') {
-          return { name, args, result: 'creative_attach_audio_from_file: Video creative mode must be active first. Call switch_creative_mode with mode="video".', error: true };
-        }
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
         let sourceAbsPath = '';
         try {
@@ -4085,7 +5313,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             };
           }
         }
-        const asset = await importCreativeAsset(storage, {
+        const asset = await getCreativeAssets().importCreativeAsset(storage, {
           source: audioInputPath,
           tags: normalizeCreativeAudioTags([...(Array.isArray(args?.tags) ? args.tags : String(args?.tags || '').split(',')), extractedFromVideo ? 'extracted-audio' : 'source-audio']),
           copy: true,
@@ -4141,7 +5369,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_analyze_asset': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
-        const asset = await analyzeCreativeAsset(storage, {
+        const asset = await getCreativeAssets().analyzeCreativeAsset(storage, {
           source: String(args?.source || '').trim(),
           tags: args?.tags,
           brandId: args?.brandId ? String(args.brandId) : null,
@@ -4160,14 +5388,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_search_assets': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
-        const assets = searchCreativeAssets(storage, {
+        const assets = getCreativeAssets().searchCreativeAssets(storage, {
           query: String(args?.query || '').trim(),
           kinds: Array.isArray(args?.kinds) ? args.kinds : [],
           tags: args?.tags,
           brandId: args?.brandId ? String(args.brandId) : null,
           limit: Math.max(1, Math.min(200, Number(args?.limit) || 50)),
         });
-        const index = readCreativeAssetIndex(storage);
+        const index = getCreativeAssets().readCreativeAssetIndex(storage);
         return {
           name,
           args,
@@ -4181,7 +5409,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_generate_asset': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
-        const asset = await generateCreativeAssetPlaceholder(storage, {
+        const asset = await getCreativeAssets().generateCreativeAssetPlaceholder(storage, {
           prompt: String(args?.prompt || '').trim(),
           width: Number(args?.width) || undefined,
           height: Number(args?.height) || undefined,
@@ -4200,7 +5428,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_render_ascii_asset': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
-        const render = await renderCreativeAsciiAsset(storage, {
+        const render = await getCreativeAsciiRenderRuntime().renderCreativeAsciiAsset(storage, {
           source: args?.source ? String(args.source).trim() : undefined,
           mode: args?.mode,
           width: Number(args?.width) || undefined,
@@ -4272,7 +5500,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
         let extraction;
         try {
-          extraction = await extractCreativeLayers(storage, {
+          extraction = await getCreativeLayerExtraction().extractCreativeLayers(storage, {
             source: String(args?.source || '').trim(),
             mode: args?.mode,
             prompt: args?.prompt ? String(args.prompt) : undefined,
@@ -4284,6 +5512,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
             maxShapeLayers: Number(args?.maxShapeLayers) || undefined,
             useVision: args?.useVision !== false,
             useOcr: args?.useOcr === true,
+            useSam: args?.useSam !== false,
+            inpaintBackground: args?.inpaintBackground !== false,
+            vectorTraceShapes: args?.vectorTraceShapes !== false,
           });
         } catch (err: any) {
           return {
@@ -4336,7 +5567,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             ? 'Extracted scene was applied to the active Image workspace.'
             : creativeMode === 'image' || creativeMode === 'canvas'
               ? `Scene was extracted but not applied: ${applyResult?.error || resetResult?.error || 'creative editor did not accept the command.'}`
-              : 'Scene was extracted but not applied because Image creative mode is not active.';
+          : 'Scene was extracted but not applied because an image workspace is not selected.';
         return {
           name,
           args,
@@ -4369,6 +5600,88 @@ export async function executeTool(name: string, args: any, workspacePath: string
           error: false,
           data: { templates },
         };
+      }
+
+      case 'creative_list_hyperframes_components': {
+        const components = getHyperframesCatalog().listHyperframesCatalogItems({
+          query: args?.query,
+          kind: args?.kind,
+          tag: args?.tag,
+        });
+        return {
+          name,
+          args,
+          result: `${name}: ${components.length} HyperFrames catalog component${components.length === 1 ? '' : 's'} available.\n${JSON.stringify({ components }).slice(0, 5000)}`,
+          error: false,
+          data: { components },
+        };
+      }
+
+      case 'creative_import_hyperframes_component': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        const componentId = String(args?.componentId || args?.id || '').trim();
+        if (!componentId) {
+          return { name, args, result: `${name}: componentId is required.`, error: true };
+        }
+        try {
+          const imported = await getHyperframesCatalog().importHyperframesComponent(storage, componentId);
+          const saved = imported.template || imported.block;
+          return {
+            name,
+            args,
+            result: `${name}: imported HyperFrames ${imported.item.name} as ${imported.importedAs} ${saved?.id || ''} with ${imported.assets.length} asset reference${imported.assets.length === 1 ? '' : 's'}.\n${JSON.stringify({
+              importedAs: imported.importedAs,
+              template: imported.template,
+              block: imported.block,
+              assets: imported.assets,
+              warnings: imported.warnings,
+            }).slice(0, 5000)}`,
+            error: false,
+            data: imported,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_sync_hyperframes_catalog': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        const rawIds = Array.isArray(args?.ids)
+          ? args.ids
+          : typeof args?.ids === 'string'
+            ? String(args.ids).split(',').map((part) => part.trim()).filter(Boolean)
+            : [];
+        try {
+          const synced = await getHyperframesCatalog().importHyperframesCatalog(storage, {
+            ids: rawIds,
+            query: args?.query,
+            limit: Number(args?.limit) || undefined,
+            live: args?.live === true,
+          });
+          const templates = synced.imported.filter((entry) => entry.importedAs === 'template').length;
+          const blocks = synced.imported.filter((entry) => entry.importedAs === 'block').length;
+          return {
+            name,
+            args,
+            result: `${name}: imported ${synced.imported.length}/${synced.selectedCount} HyperFrames component${synced.selectedCount === 1 ? '' : 's'} (${templates} templates, ${blocks} blocks). ${synced.failed.length ? `${synced.failed.length} failed.` : 'No failures.'}\n${JSON.stringify({
+              catalogCount: synced.catalogCount,
+              selectedCount: synced.selectedCount,
+              imported: synced.imported.map((entry) => ({
+                id: entry.item.id,
+                name: entry.item.name,
+                importedAs: entry.importedAs,
+                savedId: entry.template?.id || entry.block?.id,
+                assetCount: entry.assets.length,
+                warnings: entry.warnings,
+              })),
+              failed: synced.failed,
+            }).slice(0, 7000)}`,
+            error: synced.imported.length === 0 && synced.failed.length > 0,
+            data: synced,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
       }
 
       case 'creative_list_library_packs': {
@@ -4433,10 +5746,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         let html = typeof args?.html === 'string' ? String(args.html) : '';
         let activeClip: any = null;
         if (!html.trim() && args?.useActiveClip !== false) {
-          const creativeMode = getCreativeMode(sessionId);
-          if (creativeMode !== 'video') {
-            return { name, args, result: `${name}: provide html, or activate Video creative mode with an HTML motion clip to save.`, error: true };
-          }
+          const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
           const read = await sendCreativeCommand(deps.broadcastWS, {
             sessionId,
             mode: creativeMode,
@@ -4493,10 +5803,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'creative_promote_scene_to_template': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
-        const creativeMode = getCreativeMode(sessionId);
-        if (!creativeMode || creativeMode === 'design') {
-          return { name, args, result: `${name}: Image or Video creative mode must be active first.`, error: true };
-        }
+        const currentCreativeMode = getCreativeMode(sessionId);
+        const creativeMode = currentCreativeMode && currentCreativeMode !== 'design'
+          ? currentCreativeMode
+          : (setCreativeMode(sessionId, 'image') || 'image');
         try {
           const save = await sendCreativeCommand(deps.broadcastWS, {
             sessionId,
@@ -4701,11 +6011,535 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
       }
 
-      case 'creative_apply_html_motion_template': {
-        const creativeMode = getCreativeMode(sessionId);
-        if (creativeMode !== 'video') {
-          return { name, args, result: `${name}: Video creative mode must be active first. Call switch_creative_mode with mode="video".`, error: true };
+      case 'hyperframes_browse_catalog': {
+        const items = getHyperframesCatalog().listHyperframesCatalogItems({
+          query: args?.query,
+          kind: args?.kind,
+          tag: args?.tag,
+        });
+        const limit = Math.max(1, Math.min(100, Number(args?.limit) || 40));
+        const payload = { items: items.slice(0, limit), total: items.length };
+        return {
+          name,
+          args,
+          result: `${name}: ${payload.total} catalog item(s) matched.\n${JSON.stringify(payload).slice(0, 6000)}`,
+          error: false,
+          data: payload,
+        };
+      }
+
+      case 'hyperframes_insert_clip': {
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        const catalogId = String(args?.catalogId || args?.catalog_id || args?.componentId || args?.component_id || args?.id || '').trim();
+        const inputs = mergeHyperframesInputs(args);
+        let html = typeof args?.html === 'string' ? String(args.html) : '';
+        let imported: any = null;
+        let rendered: any = null;
+        try {
+          if (catalogId) {
+            imported = await getHyperframesCatalog().importHyperframesComponentWithIngest(storage, storage, catalogId).catch(async () => getHyperframesCatalog().importHyperframesComponent(storage, catalogId) as any);
+            if (imported.importedAs === 'block') {
+              rendered = renderHtmlMotionBlock(imported.block.id, inputs, storage);
+              html = wrapHyperframesBlockAsDocument(rendered, {
+                ...args,
+                durationMs: Number(args?.durationMs ?? args?.duration_ms) || rendered?.block?.defaultDurationMs || 6000,
+                compositionId: `hyperframes-${imported.item.id}`,
+              });
+            } else {
+              rendered = applyHtmlMotionTemplate(imported.template.id, inputs, storage);
+              html = rendered.html;
+            }
+          }
+          if (!html.trim()) {
+            return { name, args, result: `${name}: provide catalogId/componentId or raw html.`, error: true };
+          }
+          const extraction = getHyperframesBridge().extractHyperframesLayers(html);
+          const metadata = (() => {
+            try { return getHyperframesBridge().parseHyperframesHtml(html).metadata; } catch { return null; }
+          })();
+          const width = Math.max(120, Number(args?.width) || Number(rendered?.width) || Number((metadata as any)?.resolution?.width) || 1080);
+          const height = Math.max(120, Number(args?.height) || Number(rendered?.height) || Number((metadata as any)?.resolution?.height) || 1920);
+          const durationMs = Math.max(100, Number(args?.durationMs ?? args?.duration_ms) || Number(rendered?.durationMs) || Number(extraction.durationMs) || 6000);
+          const element = {
+            type: 'hyperframes',
+            x: Number.isFinite(Number(args?.x)) ? Number(args.x) : 80,
+            y: Number.isFinite(Number(args?.y)) ? Number(args.y) : 80,
+            width,
+            height,
+            opacity: 1,
+            zIndex: Number.isFinite(Number(args?.zIndex ?? args?.z_index)) ? Number(args?.zIndex ?? args?.z_index) : 10,
+            meta: {
+              html,
+              compositionId: extraction.compositionId || catalogId || '',
+              sourceFormat: 'hyperframes',
+              catalogId: catalogId || null,
+              advancedBlock: args?.advanced === true || args?.advancedBlock === true || extraction.advancedBlock === true,
+              durationMs,
+              startMs: Math.max(0, Number(args?.startMs ?? args?.start_ms) || 0),
+              layers: extraction.layers,
+              slots: extraction.slots,
+              variables: extraction.variables,
+              variableBindings: extraction.variableBindings,
+              assets: Array.isArray(imported?.assets) ? imported.assets : [],
+              ingest: imported?.ingest || null,
+            },
+          };
+          const applied = await sendCreativeCommand(deps.broadcastWS, {
+            sessionId,
+            mode: 'video',
+            command: 'apply_ops',
+            payload: {
+              ops: [
+                ...(args?.replaceScene === true ? [{ op: 'set_canvas', width, height, durationMs }] : []),
+                { op: 'add', element },
+              ],
+            },
+            timeoutMs: resolveCreativeEditorTimeoutMs('creative_apply_ops'),
+          });
+          if (!applied.success) {
+            return { name, args, result: `${name}: ${applied.error || 'creative editor command failed.'}`, error: true, data: applied };
+          }
+          const selected = (applied as any).selectedElement || applied.data?.selectedElement || null;
+          const payload = {
+            clipId: selected?.id || null,
+            catalogId: catalogId || null,
+            item: imported?.item || null,
+            importedAs: imported?.importedAs || (catalogId ? 'unknown' : 'raw-html'),
+            width,
+            height,
+            durationMs,
+            layerCount: extraction.layers.length,
+            slotCount: extraction.slots.length,
+            variableCount: Array.isArray(extraction.variables) ? extraction.variables.length : 0,
+            warnings: imported?.warnings || [],
+            editor: applied.data || applied,
+          };
+          return {
+            name,
+            args,
+            result: `${name}: inserted HyperFrames clip${payload.clipId ? ` ${payload.clipId}` : ''} (${payload.layerCount} layers, ${payload.slotCount} slots).\n${JSON.stringify(payload).slice(0, 5000)}`,
+            error: false,
+            data: payload,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
         }
+      }
+
+      case 'hyperframes_apply_patch':
+      case 'hyperframes_set_text':
+      case 'hyperframes_set_color':
+      case 'hyperframes_set_timing':
+      case 'hyperframes_set_variable':
+      case 'hyperframes_set_asset':
+      case 'hyperframes_add_animation': {
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
+        const clipId = String(args?.clipId || args?.clip_id || args?.elementId || args?.element_id || '').trim();
+        const layerId = String(args?.layerId || args?.layer_id || args?.hfElementId || args?.hf_element_id || '').trim();
+        try {
+          const { clip } = await readSelectedHyperframesClipFromEditor(deps, sessionId, creativeMode, clipId, name);
+          let ops: HyperframesPatchOp[] = Array.isArray(args?.ops) ? args.ops as HyperframesPatchOp[] : [];
+          if (name === 'hyperframes_set_text') {
+            if (!layerId) throw new Error('layerId is required.');
+            ops = [{ op: 'set-text', elementId: layerId, text: String(args?.text ?? args?.value ?? '') }];
+          } else if (name === 'hyperframes_set_color') {
+            if (!layerId) throw new Error('layerId is required.');
+            ops = [{ op: 'set-color', elementId: layerId, color: String(args?.color || args?.value || '') }];
+          } else if (name === 'hyperframes_set_timing') {
+            if (!layerId) throw new Error('layerId is required.');
+            ops = [{
+              op: 'set-timing',
+              elementId: layerId,
+              startMs: Number.isFinite(Number(args?.startMs ?? args?.start_ms)) ? Number(args?.startMs ?? args?.start_ms) : undefined,
+              durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+              zIndex: Number.isFinite(Number(args?.zIndex ?? args?.z_index)) ? Number(args?.zIndex ?? args?.z_index) : undefined,
+            }];
+          } else if (name === 'hyperframes_set_variable') {
+            const variableName = String(args?.name || args?.variable || args?.variableName || '').trim();
+            if (!variableName) throw new Error('name/variable is required.');
+            ops = [{ op: 'set-variable', name: variableName, value: args?.value }];
+          } else if (name === 'hyperframes_set_asset') {
+            if (!layerId) throw new Error('layerId is required.');
+            const assetId = String(args?.assetId || args?.asset_id || args?.value || '').trim();
+            if (!assetId) throw new Error('assetId is required.');
+            ops = [{ op: 'set-asset', elementId: layerId, assetPlaceholderId: assetId }];
+          } else if (name === 'hyperframes_add_animation') {
+            const animation = args?.animation && typeof args.animation === 'object' ? args.animation : args;
+            ops = [{ op: 'add-animation', animation } as HyperframesPatchOp];
+          }
+          if (!ops.length) throw new Error('ops are required.');
+          const patched = await patchHyperframesClipInEditor({ deps, sessionId, creativeMode, clip, ops });
+          const payload = {
+            clipId: clip.id,
+            warnings: patched.patched.warnings,
+            layerCount: patched.extraction.layers.length,
+            slotCount: patched.extraction.slots.length,
+            variableCount: Array.isArray(patched.extraction.variables) ? patched.extraction.variables.length : 0,
+            layers: patched.extraction.layers.slice(0, 40),
+            slots: patched.extraction.slots,
+            variables: patched.extraction.variables,
+          };
+          return {
+            name,
+            args,
+            result: `${name}: patched HyperFrames clip ${clip.id} (${ops.length} op${ops.length === 1 ? '' : 's'}).\n${JSON.stringify(payload).slice(0, 5000)}`,
+            error: false,
+            data: payload,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'hyperframes_lint':
+      case 'hyperframes_qa':
+      case 'hyperframes_materialize':
+      case 'hyperframes_export': {
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
+        try {
+          if (name === 'hyperframes_export') {
+            let html = typeof args?.html === 'string' ? String(args.html) : '';
+            let clip: any = null;
+            if (!html.trim()) {
+              const clipId = String(args?.clipId || args?.clip_id || args?.elementId || args?.element_id || '').trim();
+              try {
+                const read = await readSelectedHyperframesClipFromEditor(deps, sessionId, creativeMode, clipId, name);
+                clip = read.clip;
+                html = String(clip?.meta?.html || '');
+              } catch (selectionErr: any) {
+                const activeRead = await sendCreativeCommand(deps.broadcastWS, {
+                  sessionId,
+                  mode: creativeMode,
+                  command: 'read_html_motion_clip',
+                  payload: { includeHtml: true },
+                  timeoutMs: resolveCreativeEditorTimeoutMs('creative_read_html_motion_clip'),
+                });
+                const activeAny: any = activeRead;
+                const activeClip = activeAny?.data?.clip || activeAny?.clip || null;
+                const activeHtml = String(activeAny?.data?.clip?.html || activeAny?.clip?.html || activeAny?.data?.html || '');
+                const looksMaterializedHyperframes = /data-runtime-source=["']hyperframes-core["']|data-prometheus-hyperframes-runtime|HyperFrames Materialized|data-hf-authored-duration/i
+                  .test(`${activeHtml}\n${activeClip?.title || ''}\n${activeClip?.path || ''}`);
+                if (activeRead.success && activeHtml.trim() && looksMaterializedHyperframes) {
+                  clip = {
+                    id: String(activeClip?.id || args?.clipId || args?.clip_id || 'active-html-motion-hyperframes'),
+                    width: Number(activeClip?.width) || Number(args?.width) || 1080,
+                    height: Number(activeClip?.height) || Number(args?.height) || 1920,
+                    timing: { durationMs: Number(activeClip?.durationMs) || Number(args?.durationMs ?? args?.duration_ms) || 6000 },
+                    meta: {
+                      html: activeHtml,
+                      compositionId: String(activeClip?.composition?.compositionId || args?.compositionId || args?.composition_id || '').trim(),
+                      durationMs: Number(activeClip?.durationMs) || Number(args?.durationMs ?? args?.duration_ms) || 6000,
+                      variableBindings: [],
+                    },
+                  };
+                  html = activeHtml;
+                } else {
+                  throw selectionErr;
+                }
+              }
+            }
+            if (!html.trim()) {
+              return { name, args, result: `${name}: selected HyperFrames clip has no HTML source to export.`, error: true };
+            }
+            const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+            const durationMs = Math.max(1000, Number(args?.durationMs ?? args?.duration_ms) || Number(clip?.meta?.durationMs) || Number(clip?.timing?.durationMs) || 6000);
+            const width = Math.max(320, Number(args?.width) || Number(clip?.width) || 1080);
+            const height = Math.max(320, Number(args?.height) || Number(clip?.height) || 1920);
+            const htmlCompositionId = /\bdata-composition-id\s*=\s*(["'])(.*?)\1/i.exec(html)?.[2] || '';
+            const compositionId = String(clip?.meta?.compositionId || args?.compositionId || args?.composition_id || htmlCompositionId || 'hyperframes-clip').trim() || 'hyperframes-clip';
+            const clipId = String(clip?.id || args?.clipId || args?.clip_id || args?.elementId || args?.element_id || 'hyperframes-clip').trim();
+            const formatRaw = String(args?.format || 'mp4').toLowerCase();
+            const format = (['mp4', 'webm', 'mov', 'png-sequence'].includes(formatRaw) ? formatRaw : 'mp4') as any;
+            const fpsRaw = Number(args?.fps ?? args?.frameRate ?? args?.frame_rate) || 30;
+            const fps = ([24, 30, 60].includes(fpsRaw) ? fpsRaw : 30) as any;
+            const qualityRaw = String(args?.quality || 'standard').toLowerCase();
+            const quality = (['draft', 'standard', 'high'].includes(qualityRaw) ? qualityRaw : 'standard') as any;
+            const useHtmlMotionFallback = args?.legacyHtmlMotion === true
+              || args?.legacy_html_motion === true
+              || String(args?.renderer || args?.engine || '').toLowerCase() === 'html-motion';
+            let producerFailure: { name: string; message: string } | null = null;
+            if (!useHtmlMotionFallback) {
+              const safeBase = sanitizeCreativeStorageSegment(compositionId, 'hyperframes-clip');
+              const extension = format === 'png-sequence' ? '' : `.${format}`;
+              const filename = sanitizeCreativeStorageSegment(String(args?.filename || `${safeBase}-hyperframes${extension}`), `${safeBase}-hyperframes${extension}`);
+              const outputPath = path.join(storage.rootAbsPath, '.prometheus', 'creative', 'exports', filename);
+              const variables = args?.variables && typeof args.variables === 'object' && !Array.isArray(args.variables)
+                ? args.variables
+                : {};
+              if (!Object.keys(variables).length) {
+                for (const binding of Array.isArray(clip?.meta?.variableBindings) ? clip.meta.variableBindings : []) {
+                  const id = String(binding?.variable?.id || '').trim();
+                  if (id) (variables as any)[id] = binding.currentValue;
+                }
+              }
+              try {
+                const rendered = await getHyperframesProducer().renderHyperframesWithProducer({
+                  html,
+                  workspacePath: storage.rootAbsPath,
+                  outputPath,
+                  compositionId,
+                  fps,
+                  quality,
+                  format,
+                  workers: Math.max(1, Math.min(4, Math.round(Number(args?.workers) || 1))),
+                  timeoutMs: Math.max(
+                    30_000,
+                    Math.min(
+                      15 * 60_000,
+                      Math.round(Number(args?.producerTimeoutMs ?? args?.producer_timeout_ms ?? args?.timeoutMs ?? args?.timeout_ms) || 120_000),
+                    ),
+                  ),
+                  variables,
+                  debug: args?.debug === true,
+                });
+                return {
+                  name,
+                  args,
+                  result: `${name}: exported HyperFrames with @hyperframes/producer to ${buildCreativeWorkspaceRelativePath(storage.rootAbsPath, rendered.outputPath)}.\n${JSON.stringify({ outputPath: rendered.outputPath, projectDir: rendered.projectDir, job: rendered.job }).slice(0, 5000)}`,
+                  error: false,
+                  data: {
+                    engine: '@hyperframes/producer',
+                    outputPath: rendered.outputPath,
+                    outputRelPath: buildCreativeWorkspaceRelativePath(storage.rootAbsPath, rendered.outputPath),
+                    projectDir: rendered.projectDir,
+                    entryFile: rendered.entryFile,
+                    job: rendered.job,
+                  },
+                };
+              } catch (err: any) {
+                producerFailure = {
+                  name: err?.name || 'HyperframesProducerError',
+                  message: err?.message || String(err || 'producer render failed'),
+                };
+                const fallbackDisabled = args?.fallback === false
+                  || args?.fallbackToHtmlMotion === false
+                  || args?.fallback_to_html_motion === false;
+                if (fallbackDisabled) {
+                  return {
+                    name,
+                    args,
+                    result: `${name}: @hyperframes/producer export failed: ${producerFailure.message}`,
+                    error: true,
+                    data: { engine: '@hyperframes/producer', producerFailure },
+                  };
+                }
+              }
+            }
+            const built = getHyperframesExportAdapter().buildHyperframesRenderClip(
+              { id: clipId, type: 'hyperframes', meta: { html, compositionId } },
+              storage.rootAbsPath,
+              {
+                startMs: 0,
+                endMs: durationMs,
+                trimStartMs: Number(args?.trimStartMs ?? args?.trim_start_ms) || 0,
+              },
+            );
+            const materializedHtml = fs.readFileSync(built.materialized.absClipPath, 'utf-8');
+            const safeBase = compositionId.toLowerCase().replace(/[^a-z0-9._-]+/g, '-') || 'hyperframes-clip';
+            const created = await sendCreativeCommand(deps.broadcastWS, {
+              sessionId,
+              mode: 'video',
+              command: 'create_html_motion_clip',
+              payload: {
+                title: `${compositionId} HyperFrames Export`,
+                filename: `${safeBase}-hyperframes-materialized.html`,
+                html: materializedHtml,
+                width,
+                height,
+                durationMs,
+                frameRate: fps,
+                assets: [],
+              },
+              timeoutMs: resolveCreativeEditorTimeoutMs('creative_create_html_motion_clip'),
+            });
+            if (!created.success) {
+              return {
+                name,
+                args,
+                result: `${name}: materialized HyperFrames clip, but could not create exportable HTML Motion clip: ${created.error || 'unknown error'}`,
+                error: true,
+                data: { materialized: built, created },
+              };
+            }
+            const createdClip = created.data?.clip || created.data?.data?.clip || created.data?.source?.clip || null;
+            const exportPath = String(createdClip?.path || createdClip?.htmlPath || `${storage.rootRelPath}/prometheus-creative/html-motion/${safeBase}-hyperframes-materialized.html`);
+            const exported = await sendCreativeCommand(deps.broadcastWS, {
+              sessionId,
+              mode: 'video',
+              command: 'export_html_motion_clip',
+              payload: {
+                path: exportPath,
+                format: args?.format || 'mp4',
+                filename: args?.filename || `${safeBase}-hyperframes.mp4`,
+                width,
+                height,
+                durationMs,
+                frameRate: fps,
+                perFrameTimeoutMs: Number(args?.perFrameTimeoutMs ?? args?.per_frame_timeout_ms) || 45_000,
+                workspaceOnly: args?.workspaceOnly !== false,
+                download: args?.download === true,
+                force: args?.force === true,
+                skipSpatialQa: args?.skipSpatialQa === true,
+              },
+              timeoutMs: resolveCreativeEditorTimeoutMs('creative_export_html_motion_clip'),
+            });
+            return {
+              name,
+              args,
+              result: exported.success
+                ? `${name}: ${producerFailure ? `@hyperframes/producer failed (${producerFailure.message}); ` : ''}materialized and exported HyperFrames through the HTML Motion renderer.\n${JSON.stringify({ producerFailure, materialized: built, created: created.data, exported: exported.data || exported }).slice(0, 5000)}`
+                : `${name}: ${producerFailure ? `@hyperframes/producer failed (${producerFailure.message}); ` : ''}materialized HyperFrames, but HTML Motion export failed: ${exported.error || 'export failed.'}`,
+              error: !exported.success,
+              data: { producerFailure, materialized: built, created, exported },
+            };
+          }
+          let html = typeof args?.html === 'string' ? String(args.html) : '';
+          let clip: any = null;
+          if (!html.trim()) {
+            const clipId = String(args?.clipId || args?.clip_id || args?.elementId || args?.element_id || '').trim();
+            const read = await readSelectedHyperframesClipFromEditor(deps, sessionId, creativeMode, clipId, name);
+            clip = read.clip;
+            html = String(clip?.meta?.html || '');
+          }
+          if (name === 'hyperframes_lint') {
+            const lint = getHyperframesBridge().lintHyperframes(html);
+            return {
+              name,
+              args,
+              result: `${name}: ${((lint as any).valid === false || (lint as any).ok === false) ? 'blocked' : 'ok'}.\n${JSON.stringify(lint).slice(0, 5000)}`,
+              error: false,
+              data: lint,
+            };
+          }
+          if (name === 'hyperframes_qa') {
+            const report = await getHyperframesQa().runHyperframesQa(html, {
+              width: Number(args?.width) || Number(clip?.width) || undefined,
+              height: Number(args?.height) || Number(clip?.height) || undefined,
+              durationMs: Number(args?.durationMs ?? args?.duration_ms) || Number(clip?.meta?.durationMs) || undefined,
+              samplePoints: Array.isArray(args?.samplePoints) ? args.samplePoints.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n)) : undefined,
+              timeoutMs: Number(args?.timeoutMs ?? args?.timeout_ms) || undefined,
+            });
+            return {
+              name,
+              args,
+              result: `${name}: ${report.ok ? 'ok' : 'needs fixes'} (${report.samples.length} sample frames, ${report.networkErrors.length} network errors, ${report.consoleErrors.length} console errors).\n${JSON.stringify(report).slice(0, 5000)}`,
+              error: false,
+              data: report,
+            };
+          }
+          const clipId = String(clip?.id || args?.clipId || args?.clip_id || args?.elementId || args?.element_id || 'hyperframes-clip').trim();
+          const built = getHyperframesExportAdapter().buildHyperframesRenderClip(
+            { id: clipId, type: 'hyperframes', meta: { html, compositionId: clip?.meta?.compositionId || args?.compositionId } },
+            workspacePath,
+            {
+              startMs: Number(args?.startMs ?? args?.start_ms) || 0,
+              endMs: Number(args?.endMs ?? args?.end_ms) || Number(args?.durationMs ?? args?.duration_ms) || Number(clip?.meta?.durationMs) || 6000,
+              trimStartMs: Number(args?.trimStartMs ?? args?.trim_start_ms) || 0,
+            },
+          );
+          let activated: any = null;
+          if (name === 'hyperframes_materialize' && args?.activate !== false) {
+            const materializedHtml = fs.readFileSync(built.materialized.absClipPath, 'utf-8');
+            const safeBase = sanitizeCreativeStorageSegment(built.materialized.compositionId, 'hyperframes-clip');
+            activated = await sendCreativeCommand(deps.broadcastWS, {
+              sessionId,
+              mode: 'video',
+              command: 'create_html_motion_clip',
+              payload: {
+                title: `${built.materialized.compositionId} HyperFrames Materialized`,
+                filename: `${safeBase}-hyperframes-materialized.html`,
+                html: materializedHtml,
+                width: Number(args?.width) || Number(clip?.width) || 1080,
+                height: Number(args?.height) || Number(clip?.height) || 1920,
+                durationMs: Number(args?.durationMs ?? args?.duration_ms) || Number(clip?.meta?.durationMs) || 6000,
+                frameRate: Number(args?.frameRate ?? args?.frame_rate) || 60,
+                assets: [],
+              },
+              timeoutMs: resolveCreativeEditorTimeoutMs('creative_create_html_motion_clip'),
+            });
+          }
+          return {
+            name,
+            args,
+            result: `${name}: materialized HyperFrames clip ${built.id} at ${built.materialized.clipPath}${activated ? ' and activated it as the current HTML Motion clip' : ''}.\n${JSON.stringify({ ...built, activated }).slice(0, 4000)}`,
+            error: activated ? !activated.success : false,
+            data: activated ? { ...built, activated } : built,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_apply_hyperframes_component': {
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
+        const componentId = String(args?.componentId || args?.id || '').trim();
+        if (!componentId) {
+          return { name, args, result: `${name}: componentId is required.`, error: true };
+        }
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        let imported;
+        try {
+          imported = await getHyperframesCatalog().importHyperframesComponent(storage, componentId);
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+        if (imported.importedAs === 'block') {
+          try {
+            const rendered = renderHtmlMotionBlock(imported.block.id, args?.inputs && typeof args.inputs === 'object' ? args.inputs : {}, storage);
+            return {
+              name,
+              args,
+              result: `${name}: imported and rendered HyperFrames block ${imported.item.name} (${imported.block.id}). Use creative_patch_html_motion_clip to insert the returned snippets into an active HTML motion clip.\n${JSON.stringify({ rendered, assets: imported.assets, warnings: imported.warnings }).slice(0, 5000)}`,
+              error: false,
+              data: { imported, rendered },
+            };
+          } catch (err: any) {
+            return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true, data: imported };
+          }
+        }
+        let rendered;
+        try {
+          rendered = applyHtmlMotionTemplate(imported.template.id, args?.inputs && typeof args.inputs === 'object' ? args.inputs : {}, storage);
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true, data: imported };
+        }
+        const payload = {
+          html: rendered.html,
+          title: String(args?.title || rendered.title || imported.item.name || ''),
+          filename: String(args?.filename || ''),
+          width: Number(args?.width) || rendered.width,
+          height: Number(args?.height) || rendered.height,
+          durationMs: Number(args?.durationMs) || rendered.durationMs,
+          frameRate: Number(args?.frameRate) || rendered.frameRate,
+          assets: [
+            ...imported.assets,
+            ...(Array.isArray(args?.assets) ? args.assets : []),
+          ],
+        };
+        const result = await sendCreativeCommand(deps.broadcastWS, {
+          sessionId,
+          mode: 'video',
+          command: 'create_html_motion_clip',
+          payload,
+          timeoutMs: resolveCreativeEditorTimeoutMs('creative_create_html_motion_clip'),
+        });
+        const summary = result.success
+          ? `${name}: applied HyperFrames component ${imported.item.name} (${imported.template.id}) as an HTML motion clip.`
+          : `${name}: ${result.error || 'creative editor command failed.'}`;
+        return {
+          name,
+          args,
+          result: result.success && result.data
+            ? `${summary}\n${JSON.stringify({ template: rendered.template, assets: imported.assets, warnings: imported.warnings, ...result.data }).slice(0, 5000)}`
+            : summary,
+          error: !result.success,
+          data: { imported, template: rendered.template, ...result },
+        };
+      }
+
+      case 'creative_apply_html_motion_template': {
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
         const templateId = String(args?.templateId || '').trim();
         if (!templateId) {
           return { name, args, result: `${name}: templateId is required.`, error: true };
@@ -4818,7 +6652,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
         case 'creative_add_mask':
         case 'creative_trim_clip':
         case 'creative_apply_brand_kit':
-        case 'creative_create_from_template':
         case 'creative_search_icons':
         case 'creative_search_animations':
       case 'creative_update_element':
@@ -4840,10 +6673,30 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'creative_timeline':
       case 'creative_render_snapshot':
       case 'creative_export':
-      case 'creative_save_scene': {
-        const creativeMode = getCreativeMode(sessionId);
-        if (!creativeMode || creativeMode === 'design') {
-          return { name, args, result: `${name}: Image or Video creative mode must be active first. Call switch_creative_mode with mode="image" or mode="video".`, error: true };
+      case 'creative_save_scene':
+      case 'creative_composition_get':
+      case 'creative_composition_add_track':
+      case 'creative_composition_add_clip':
+      case 'creative_composition_move_clip':
+      case 'creative_composition_trim_clip':
+      case 'creative_composition_split_at':
+      case 'creative_composition_delete_clip':
+      case 'creative_composition_set_transition':
+      case 'creative_composition_select_clip':
+      case 'creative_composition_lint':
+      case 'creative_composition_save':
+      case 'creative_composition_render': {
+        const currentCreativeMode = getCreativeMode(sessionId);
+        const creativeMode = currentCreativeMode && currentCreativeMode !== 'design'
+          ? currentCreativeMode
+          : (setCreativeMode(sessionId, 'video') || 'video');
+        if (creativeMode === 'video') {
+          if (VIDEO_MODE_REMOVED_SCENE_TOOL_NAMES.has(name)) {
+            return videoModeHtmlMotionOnlyError(name, args);
+          }
+          if (name === 'creative_composition_add_clip' && isLegacySceneGraphCompositionPayload(args)) {
+            return videoModeHtmlMotionOnlyError(name, args);
+          }
         }
           const commandByTool: Record<string, string> = {
           creative_get_state: 'get_state',
@@ -4881,7 +6734,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
           creative_add_mask: 'apply_ops',
           creative_trim_clip: 'apply_ops',
           creative_apply_brand_kit: 'apply_ops',
-          creative_create_from_template: 'create_from_template',
           creative_search_icons: 'search_icons',
           creative_search_animations: 'search_animations',
         creative_update_element: 'update_element',
@@ -4904,6 +6756,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
           creative_render_snapshot: 'render_snapshot',
           creative_export: 'export',
           creative_save_scene: 'save_scene',
+          creative_composition_get: 'composition_get',
+          creative_composition_add_track: 'composition_add_track',
+          creative_composition_add_clip: 'composition_add_clip',
+          creative_composition_move_clip: 'composition_move_clip',
+          creative_composition_trim_clip: 'composition_trim_clip',
+          creative_composition_split_at: 'composition_split_at',
+          creative_composition_delete_clip: 'composition_delete_clip',
+          creative_composition_set_transition: 'composition_set_transition',
+          creative_composition_select_clip: 'composition_select_clip',
+          creative_composition_lint: 'composition_lint',
+          creative_composition_save: 'composition_save',
+          creative_composition_render: 'composition_render',
         };
         const renderAliasPayload = (() => {
           if (name === 'video_render_contact_sheet') {
@@ -4987,6 +6851,34 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
           return null;
         })();
+        if (creativeMode === 'video' && name === 'creative_export') {
+          const quality = await sendCreativeCommand(deps.broadcastWS, {
+            sessionId,
+            mode: creativeMode,
+            command: 'quality_report',
+            payload: {},
+            timeoutMs: resolveCreativeEditorTimeoutMs('creative_quality_report'),
+          });
+          const qualityData: any = (quality as any)?.data || quality || {};
+          const ship = qualityData?.ship;
+          const ok = qualityData?.ok;
+          if ((quality as any)?.success && (ship === false || ok === false)) {
+            const findings = Array.isArray(qualityData?.findings)
+              ? qualityData.findings.slice(0, 6).map((f: any) => `- ${String(f?.message || f?.title || f || '').trim()}`).join('\n')
+              : '';
+            return {
+              name,
+              args,
+              result: [
+                'Blocked export: creative_quality_report returned no-ship.',
+                `score: ${qualityData?.score ?? 'unknown'}`,
+                findings ? `findings:\n${findings}` : 'Run render/quality tools, fix the clip, then export again.',
+              ].join('\n'),
+              error: true,
+              data: { quality: qualityData },
+            };
+          }
+        }
         const result = await sendCreativeCommand(deps.broadcastWS, {
           sessionId,
           mode: creativeMode,
@@ -4994,7 +6886,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           payload: renderAliasPayload || (name === 'creative_render_snapshot'
             ? { ...(args || {}), includeDataUrl: true }
             : (args || {})),
-          timeoutMs: resolveCreativeEditorTimeoutMs(name),
+          timeoutMs: resolveCreativeEditorTimeoutMs(name, renderAliasPayload || args),
         });
         if (result.success && name === 'creative_get_state') {
           let renderResult = result;
@@ -5120,7 +7012,28 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       case 'web_search': {
-        const result = await webSearch(args.query || '');
+        const result = await webSearch(args.query || '', {
+          max_results: args.max_results != null ? Number(args.max_results) : undefined,
+          multi_engine: typeof args.multi_engine === 'boolean' ? args.multi_engine : undefined,
+          provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
+        });
+        return { name, args, result, error: false };
+      }
+
+      case 'web_search_single': {
+        const result = await webSearch(args.query || '', {
+          max_results: args.max_results != null ? Number(args.max_results) : undefined,
+          multi_engine: false,
+          provider: args.provider != null ? String(args.provider).toLowerCase() as any : undefined,
+        });
+        return { name, args, result, error: false };
+      }
+
+      case 'web_search_multi': {
+        const result = await webSearch(args.query || '', {
+          max_results: args.max_results != null ? Number(args.max_results) : undefined,
+          provider: 'multi' as any,
+        });
         return { name, args, result, error: false };
       }
 
@@ -5232,6 +7145,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		      case 'generate_image': {
 		        const toolResult = await executeGenerateImage({
 		          prompt: String(args.prompt || ''),
+		          reference_images: Array.isArray(args.reference_images)
+		            ? args.reference_images.map((item: any) => String(item))
+		            : (args.reference_images != null ? [String(args.reference_images)] : undefined),
 		          aspect_ratio: args.aspect_ratio != null ? String(args.aspect_ratio) : undefined,
 		          count: args.count != null ? Number(args.count) : undefined,
 		          provider: args.provider != null ? String(args.provider) : undefined,
@@ -5254,6 +7170,40 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		                generated_images: Array.isArray(toolResult.data?.images)
 		                  ? toolResult.data.images
 		                  : [toolResult.data],
+		              }
+		            : undefined,
+		        };
+		      }
+
+		      case 'generate_video': {
+		        const toolResult = await executeGenerateVideo({
+		          prompt: String(args.prompt || ''),
+		          image: args.image != null ? String(args.image) : undefined,
+		          reference_images: Array.isArray(args.reference_images)
+		            ? args.reference_images.map((item: any) => String(item))
+		            : (args.reference_images != null ? [String(args.reference_images)] : undefined),
+		          video: args.video != null ? String(args.video) : undefined,
+		          mode: args.mode != null ? String(args.mode) : undefined,
+		          aspect_ratio: args.aspect_ratio != null ? String(args.aspect_ratio) : undefined,
+		          duration: args.duration != null ? Number(args.duration) : undefined,
+		          resolution: args.resolution != null ? String(args.resolution) : undefined,
+		          provider: args.provider != null ? String(args.provider) : undefined,
+		          model: args.model != null ? String(args.model) : undefined,
+		          output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
+		          save_to_workspace: args.save_to_workspace != null ? args.save_to_workspace === true : undefined,
+		          poll_interval_ms: args.poll_interval_ms != null ? Number(args.poll_interval_ms) : undefined,
+		          timeout_ms: args.timeout_ms != null ? Number(args.timeout_ms) : undefined,
+		        });
+		        return {
+		          name,
+		          args,
+		          result: toolResult.success
+		            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'generate_video complete' }, null, 2)
+		            : `ERROR: ${toolResult.error || 'generate_video failed'}`,
+		          error: toolResult.success !== true,
+		          extra: toolResult.success && toolResult.data
+		            ? {
+		                generated_video: toolResult.data?.video || toolResult.data,
 		              }
 		            : undefined,
 		        };
@@ -5312,6 +7262,456 @@ export async function executeTool(name: string, args: any, workspacePath: string
         };
       }
 
+      case 'git_status': {
+        try {
+          const cwd = args.cwd ? resolveAllowedWorkspacePath(String(args.cwd), { requireDirectory: true }).absPath : workspacePath;
+          return runCapturedToolCommand('git status --short --branch', cwd, 120000);
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'git_log': {
+        try {
+          const limit = Math.max(1, Math.min(50, Number(args.limit || 10)));
+          const parts = [`git log --oneline --decorate -n ${limit}`];
+          if (args.path) {
+            const resolved = resolveAllowedWorkspacePath(String(args.path));
+            parts.push('--', quoteArg(resolved.displayPath));
+          }
+          return runCapturedToolCommand(parts.join(' '), workspacePath, 120000);
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'git_branch': {
+        try {
+          const action = String(args.action || 'list').trim().toLowerCase();
+          if (action === 'list') return runCapturedToolCommand('git branch --all --verbose', workspacePath, 120000);
+          const branch = String(args.branch || '').trim();
+          if (!/^[A-Za-z0-9._\/-]+$/.test(branch)) return { name, args, result: 'ERROR: branch is required and must be a safe branch name.', error: true };
+          if (action === 'create') {
+            const startPoint = String(args.start_point || '').trim();
+            return runCapturedToolCommand(`git branch ${quoteArg(branch)}${startPoint ? ` ${quoteArg(startPoint)}` : ''}`, workspacePath, 120000);
+          }
+          if (action === 'switch' || action === 'checkout') {
+            return runCapturedToolCommand(`git switch ${quoteArg(branch)}`, workspacePath, 120000);
+          }
+          return { name, args, result: 'ERROR: action must be list, create, or switch.', error: true };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'git_commit': {
+        const message = String(args.message || '').trim();
+        if (!message) return { name, args, result: 'message is required', error: true };
+        try {
+          if (Array.isArray(args.paths) && args.paths.length) {
+            const pathspecs = args.paths.map((p: any) => quoteArg(resolveAllowedWorkspacePath(String(p)).displayPath)).join(' ');
+            const add = await deps.runCommandCaptured(`git add -- ${pathspecs}`, workspacePath, 120000);
+            if (add.code !== 0) return { name, args, result: `git add failed:\n${add.stderr || add.stdout}`, error: true };
+          } else if (args.all === true) {
+            const add = await deps.runCommandCaptured('git add -A', workspacePath, 120000);
+            if (add.code !== 0) return { name, args, result: `git add -A failed:\n${add.stderr || add.stdout}`, error: true };
+          }
+          return runCapturedToolCommand(`git commit -m ${quoteArg(message)}`, workspacePath, 120000);
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'git_push': {
+        try {
+          const remote = String(args.remote || 'origin').trim();
+          let branch = String(args.branch || '').trim();
+          if (!branch) {
+            const current = await deps.runCommandCaptured('git branch --show-current', workspacePath, 120000);
+            branch = String(current.stdout || '').trim();
+          }
+          if (!/^[A-Za-z0-9._\/-]+$/.test(remote) || !/^[A-Za-z0-9._\/-]+$/.test(branch)) {
+            return { name, args, result: 'ERROR: remote/branch must be safe names.', error: true };
+          }
+          const upstream = args.set_upstream === true ? '--set-upstream ' : '';
+          return runCapturedToolCommand(`git push ${upstream}${quoteArg(remote)} ${quoteArg(branch)}`, workspacePath, 120000);
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'open_pr': {
+        try {
+          const cmd = [
+            'gh pr create',
+            args.title ? `--title ${quoteArg(String(args.title))}` : '',
+            args.body ? `--body ${quoteArg(String(args.body))}` : '--fill',
+            args.base ? `--base ${quoteArg(String(args.base))}` : '',
+            args.draft === true ? '--draft' : '',
+          ].filter(Boolean).join(' ');
+          return runCapturedToolCommand(cmd, workspacePath, 120000);
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'run_tests':
+      case 'run_linter':
+      case 'run_formatter':
+      case 'run_typecheck': {
+        try {
+          const cwd = args.cwd ? resolveAllowedWorkspacePath(String(args.cwd), { requireDirectory: true }).absPath : workspacePath;
+          const scripts = readPackageScripts(cwd);
+          let command = String(args.command || '').trim();
+          if (!command) {
+            if (name === 'run_tests') command = scripts.test ? 'npm test' : '';
+            if (name === 'run_linter') command = scripts.lint ? 'npm run lint' : '';
+            if (name === 'run_formatter') command = scripts.format ? 'npm run format' : (scripts['format:check'] ? 'npm run format:check' : '');
+            if (name === 'run_typecheck') command = scripts.typecheck ? 'npm run typecheck' : (scripts['build:backend'] ? 'npm run build:backend' : 'npx tsc --noEmit');
+          }
+          if (!command) return { name, args, result: `ERROR: no suitable script found for ${name}; pass command explicitly.`, error: true };
+          const timeoutMs = Math.max(1000, Math.min(20 * 60 * 1000, Number(args.timeout_ms || 120000)));
+          return runCapturedToolCommand(command, cwd, timeoutMs);
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'format_changed_files': {
+        const scripts = readPackageScripts(workspacePath);
+        const script = String(args.script || '').trim() || (scripts.format ? 'format' : (scripts['format:check'] ? 'format:check' : ''));
+        if (script) return runCapturedToolCommand(`npm run ${script}`, workspacePath, 120000);
+        return runCapturedToolCommand(args.check_only === true ? 'npx prettier --check .' : 'npx prettier --write .', workspacePath, 120000);
+      }
+
+      case 'start_dev_server': {
+        try {
+          const cwd = args.cwd ? resolveAllowedWorkspacePath(String(args.cwd), { requireDirectory: true }).absPath : workspacePath;
+          const scripts = readPackageScripts(cwd);
+          const command = String(args.command || '').trim() || (scripts.dev ? 'npm run dev' : (scripts.start ? 'npm start' : 'npm run dev'));
+          const pathScopeBlock = validateRunCommandPathScope(command);
+          if (pathScopeBlock) return pathScopeBlock;
+          const { spawn } = await import('child_process');
+          const child = spawn(command, { cwd, shell: true, windowsHide: true, env: process.env });
+          const processId = `dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const proc = { child, name: String(args.name || processId), command, cwd, startedAt: Date.now(), output: [] as string[], exitCode: undefined as number | null | undefined };
+          const append = (chunk: any) => {
+            proc.output.push(String(chunk));
+            const joined = proc.output.join('');
+            if (joined.length > 200000) proc.output = [joined.slice(-200000)];
+          };
+          child.stdout?.on('data', append);
+          child.stderr?.on('data', append);
+          child.on('close', (code: number | null) => { proc.exitCode = code; append(`\n[process exited ${code}]\n`); });
+          devServerProcesses.set(processId, proc);
+          return { name, args, result: JSON.stringify({ process_id: processId, command, cwd, pid: child.pid, name: proc.name }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'read_process_output': {
+        const processId = String(args.process_id || '').trim();
+        const proc = devServerProcesses.get(processId);
+        if (!proc) return { name, args, result: `ERROR: process not found: ${processId}`, error: true };
+        const maxChars = Math.max(1000, Math.min(100000, Number(args.max_chars || 8000)));
+        return { name, args, result: truncateText(proc.output.join('') || '(no output yet)', maxChars), error: false };
+      }
+
+      case 'stop_process': {
+        const processId = String(args.process_id || '').trim();
+        const proc = devServerProcesses.get(processId);
+        if (!proc) return { name, args, result: `ERROR: process not found: ${processId}`, error: true };
+        try { proc.child.kill(); } catch {}
+        devServerProcesses.delete(processId);
+        return { name, args, result: `Stopped ${processId} (${proc.command}).`, error: false };
+      }
+
+      case 'snapshot_workspace': {
+        try {
+          const id = `snap_${new Date().toISOString().replace(/[:.]/g, '-')}_${Math.random().toString(36).slice(2, 8)}`;
+          const root = snapshotRoot();
+          const snapDir = path.join(root, id);
+          const filesDir = path.join(snapDir, 'files');
+          fs.mkdirSync(filesDir, { recursive: true });
+          const files = walkFiles(workspacePath, {
+            maxFiles: Math.max(1, Math.min(20000, Number(args.max_files || 2000))),
+            maxBytes: Math.max(1, Number(args.max_bytes || 50_000_000)),
+          });
+          for (const file of files) {
+            const dest = path.join(filesDir, file.relPath);
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.copyFileSync(file.absPath, dest);
+          }
+          const manifest = {
+            id,
+            label: String(args.label || '').trim(),
+            workspacePath,
+            createdAt: Date.now(),
+            fileCount: files.length,
+            totalBytes: files.reduce((sum, f) => sum + f.size, 0),
+            files: files.map(f => ({ path: f.relPath, size: f.size })),
+          };
+          fs.writeFileSync(path.join(snapDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf-8');
+          return { name, args, result: JSON.stringify(manifest, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'restore_snapshot':
+      case 'revert_last_tool_change':
+      case 'revert_own_patch': {
+        try {
+          const snapshots = listSnapshots();
+          const snapshotId = String(args.snapshot_id || snapshots[0]?.id || '').trim();
+          if (!snapshotId) return { name, args, result: 'ERROR: no snapshots available.', error: true };
+          const snapDir = path.join(snapshotRoot(), snapshotId);
+          const manifestPath = path.join(snapDir, 'manifest.json');
+          if (!fs.existsSync(manifestPath)) return { name, args, result: `ERROR: snapshot not found: ${snapshotId}`, error: true };
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+          const files = Array.isArray(manifest.files) ? manifest.files : [];
+          const preview = { snapshot_id: snapshotId, file_count: files.length, files: files.slice(0, 200).map((f: any) => f.path), truncated: files.length > 200 };
+          if (args.dry_run === true) return { name, args, result: JSON.stringify(preview, null, 2), error: false };
+          if (args.confirm !== true) return { name, args, result: `ERROR: confirm=true is required to restore snapshot. Preview:\n${JSON.stringify(preview, null, 2)}`, error: true };
+          for (const file of files) {
+            const rel = String(file.path || '');
+            const dest = resolveAllowedWorkspacePath(rel).absPath;
+            const src = path.join(snapDir, 'files', rel);
+            if (!fs.existsSync(src)) continue;
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.copyFileSync(src, dest);
+          }
+          return { name, args, result: `Restored ${files.length} file(s) from ${snapshotId}.`, error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'scan_large_files': {
+        try {
+          const dir = args.path ? resolveAllowedWorkspacePath(String(args.path), { requireDirectory: true }).absPath : workspacePath;
+          const minBytes = Math.max(1, Number(args.min_bytes || 5_000_000));
+          const maxResults = Math.max(1, Math.min(1000, Number(args.max_results || 100)));
+          const files = walkFiles(dir, { maxFiles: 20000, maxBytes: Number.MAX_SAFE_INTEGER })
+            .filter(f => f.size >= minBytes)
+            .sort((a, b) => b.size - a.size)
+            .slice(0, maxResults);
+          return { name, args, result: JSON.stringify(files.map(f => ({ path: f.relPath, bytes: f.size })), null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'scan_secrets': {
+        try {
+          const target = args.path ? resolveAllowedWorkspacePath(String(args.path)) : resolveAllowedWorkspacePath('.', { requireDirectory: true, allowEmpty: true });
+          const stat = fs.existsSync(target.absPath) ? fs.statSync(target.absPath) : null;
+          const files = stat?.isFile()
+            ? [{ absPath: target.absPath, relPath: target.displayPath, size: stat.size }]
+            : walkFiles(target.absPath, { maxFiles: 10000, maxBytes: 80_000_000 });
+          const maxResults = Math.max(1, Math.min(1000, Number(args.max_results || 100)));
+          const patterns = [
+            { type: 'openai_key', re: /sk-[A-Za-z0-9_-]{20,}/g },
+            { type: 'github_token', re: /gh[pousr]_[A-Za-z0-9_]{20,}/g },
+            { type: 'aws_access_key', re: /AKIA[0-9A-Z]{16}/g },
+            { type: 'private_key', re: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g },
+            { type: 'env_secret_assignment', re: /\b[A-Z0-9_]*(?:SECRET|TOKEN|API_KEY|PASSWORD)[A-Z0-9_]*\s*=\s*['"]?[^'"\s]{12,}/g },
+          ];
+          const findings: any[] = [];
+          for (const file of files) {
+            if (findings.length >= maxResults || file.size > 2_000_000) continue;
+            let content = '';
+            try { content = fs.readFileSync(file.absPath, 'utf-8'); } catch { continue; }
+            const lines = content.split(/\r?\n/);
+            for (let i = 0; i < lines.length && findings.length < maxResults; i++) {
+              for (const pattern of patterns) {
+                pattern.re.lastIndex = 0;
+                if (pattern.re.test(lines[i])) {
+                  findings.push({ file: file.relPath, line: i + 1, type: pattern.type, preview: lines[i].replace(/=.*/, '= [REDACTED]').slice(0, 160) });
+                  break;
+                }
+              }
+            }
+          }
+          return { name, args, result: JSON.stringify({ findings, count: findings.length }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'operation_plan': {
+        const operations = Array.isArray(args.operations) ? args.operations : [];
+        const plans: any[] = [];
+        for (const op of operations) {
+          const type = String(op?.type || op?.operation || '').trim();
+          try {
+            const source = op?.source || op?.from || op?.path;
+            const destination = op?.destination || op?.to || op?.new_path;
+            const sourceInfo = source ? resolveAllowedWorkspacePath(String(source)) : null;
+            const destInfo = destination ? resolveAllowedWorkspacePath(String(destination)) : null;
+            plans.push({
+              type,
+              source: sourceInfo?.displayPath || null,
+              destination: destInfo?.displayPath || null,
+              source_exists: sourceInfo ? fs.existsSync(sourceInfo.absPath) : null,
+              destination_exists: destInfo ? fs.existsSync(destInfo.absPath) : null,
+              would_overwrite: destInfo ? fs.existsSync(destInfo.absPath) : false,
+            });
+          } catch (err: any) {
+            plans.push({ type, error: err?.message || String(err) });
+          }
+        }
+        return { name, args, result: JSON.stringify({ operations: plans, mutates: false }, null, 2), error: false };
+      }
+
+      case 'code_outline': {
+        try {
+          const requested = args.file || args.filename || args.path;
+          if (!requested) return { name, args, result: 'file is required', error: true };
+          const resolved = resolveAllowedWorkspacePath(String(requested), { requireFile: true });
+          const outline = await buildCodeOutlineForFile(resolved.absPath, Math.max(1, Math.min(1000, Number(args.max_symbols || 300))));
+          return { name, args, result: JSON.stringify(outline, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'get_symbols': {
+        try {
+          const dir = args.path ? resolveAllowedWorkspacePath(String(args.path), { requireDirectory: true }).absPath : workspacePath;
+          const symbols = await collectCodeSymbols(dir, String(args.query || ''), Math.max(1, Math.min(1000, Number(args.max_results || 100))));
+          return { name, args, result: JSON.stringify({ symbols, count: symbols.length }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'go_to_definition': {
+        try {
+          const symbol = String(args.symbol || '').trim();
+          if (!symbol) return { name, args, result: 'symbol is required', error: true };
+          const dir = args.path ? resolveAllowedWorkspacePath(String(args.path), { requireDirectory: true }).absPath : workspacePath;
+          const symbols = await collectCodeSymbols(dir, symbol, Math.max(1, Math.min(100, Number(args.max_results || 20))));
+          const exact = symbols.filter(s => String(s.name) === symbol);
+          return { name, args, result: JSON.stringify({ definitions: exact.length ? exact : symbols, count: (exact.length ? exact : symbols).length }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'find_references': {
+        try {
+          const symbol = String(args.symbol || '').trim();
+          if (!symbol) return { name, args, result: 'symbol is required', error: true };
+          const dir = args.path ? resolveAllowedWorkspacePath(String(args.path), { requireDirectory: true }).absPath : workspacePath;
+          const maxResults = Math.max(1, Math.min(2000, Number(args.max_results || 200)));
+          const word = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+          const refs: any[] = [];
+          for (const file of walkFiles(dir, { maxFiles: 5000, maxBytes: 100_000_000 }).filter(f => isCodeFile(f.relPath))) {
+            if (refs.length >= maxResults) break;
+            let content = '';
+            try { content = fs.readFileSync(file.absPath, 'utf-8'); } catch { continue; }
+            const lines = content.split(/\r?\n/);
+            for (let i = 0; i < lines.length && refs.length < maxResults; i++) {
+              if (word.test(lines[i])) refs.push({ file: file.relPath, line: i + 1, text: lines[i].trim().slice(0, 240) });
+            }
+          }
+          return { name, args, result: JSON.stringify({ references: refs, count: refs.length }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'start_process': {
+        const rawCmd = String(args.command || '').trim();
+        if (!rawCmd) return { name, args, result: 'command is required', error: true };
+        if (looksLikeNativeFileToolBypass(rawCmd)) {
+          return {
+            name,
+            args,
+            result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native file tools instead. Use start_process for dev servers, watchers, long builds, and interactive CLIs.',
+            error: true,
+          };
+        }
+        const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
+        const pathScopeBlock = validateRunCommandPathScope(normalizedCmd);
+        if (pathScopeBlock) return pathScopeBlock;
+        if (!deps.isAllowedShellCommand(normalizedCmd)) {
+          return { name, args, result: `Blocked: shell command is not allowed by policy: "${rawCmd}"`, error: true };
+        }
+        let commandCwd: { cwd: string; displayCwd: string };
+        try {
+          commandCwd = resolveRunCommandCwd(args.cwd);
+        } catch (err: any) {
+          return { name, args, result: `Invalid cwd for start_process: ${err.message || err}`, error: true };
+        }
+        try {
+          const run = await getProcessSupervisor().spawn({
+            command: normalizedCmd,
+            cwd: commandCwd.cwd,
+            mode: 'background',
+            title: args.title ? String(args.title) : undefined,
+            stdinMode: args.stdin === true ? 'pipe' : 'ignore',
+            noOutputTimeoutMs: args.noOutputTimeoutMs == null ? undefined : Number(args.noOutputTimeoutMs),
+            sessionId,
+          });
+          return {
+            name,
+            args,
+            result: `Started supervised process ${run.runId} cwd=${commandCwd.displayCwd}\n${normalizedCmd}`,
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `start_process failed: ${err.message || err}`, error: true };
+        }
+      }
+
+      case 'process_status': {
+        const runId = String(args.runId || args.run_id || '').trim();
+        const supervisor = getProcessSupervisor();
+        if (runId) {
+          const run = supervisor.get(runId);
+          return { name, args, result: run ? JSON.stringify(run, null, 2) : `No process found for ${runId}`, error: !run };
+        }
+        return { name, args, result: JSON.stringify({ runs: supervisor.list(Number(args.limit || 20)) }, null, 2), error: false };
+      }
+
+      case 'process_log': {
+        const runId = String(args.runId || args.run_id || '').trim();
+        if (!runId) return { name, args, result: 'runId is required', error: true };
+        const log = getProcessSupervisor().log(runId, Number(args.maxChars || args.max_chars || 120000));
+        return { name, args, result: log.combined || '(no output)', error: false };
+      }
+
+      case 'process_wait': {
+        const runId = String(args.runId || args.run_id || '').trim();
+        if (!runId) return { name, args, result: 'runId is required', error: true };
+        const exit = await getProcessSupervisor().wait(runId);
+        if (!exit) return { name, args, result: `No active process found for ${runId}`, error: true };
+        const output = [exit.stdout, exit.stderr].filter(Boolean).join('\n').trim();
+        return {
+          name,
+          args,
+          result: `${runId} [${exit.timedOut ? 'TIMED OUT' : `exit ${exit.exitCode ?? '?'}`}]\n${output.slice(0, 4000) || '(no output)'}`,
+          error: exit.exitCode !== 0,
+        };
+      }
+
+      case 'process_kill': {
+        const runId = String(args.runId || args.run_id || '').trim();
+        if (!runId) return { name, args, result: 'runId is required', error: true };
+        const killed = getProcessSupervisor().cancel(runId);
+        return { name, args, result: killed ? `Killed ${runId}` : `No active process found for ${runId}`, error: !killed };
+      }
+
+      case 'process_submit': {
+        const runId = String(args.runId || args.run_id || '').trim();
+        if (!runId) return { name, args, result: 'runId is required', error: true };
+        const ok = getProcessSupervisor().write(runId, String(args.data || ''), true);
+        return { name, args, result: ok ? `Submitted input to ${runId}` : `Could not write to ${runId}`, error: !ok };
+      }
+
 	      case 'run_command': {
         const rawCmd = (args.command || '').trim();
         if (!rawCmd) return { name, args, result: 'command is required', error: true };
@@ -5333,10 +7733,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
           };
         }
         // Check blocked patterns
-        for (const blocked of deps.BLOCKED_PATTERNS) {
-          if (cmd.includes(blocked.toLowerCase())) {
-            return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blocked}"`, error: true };
-          }
+        const blockedPattern = commandContainsBlockedPattern(cmd, deps.BLOCKED_PATTERNS);
+        if (blockedPattern) {
+          return { name, args, result: `Blocked: "${cmd}" contains unsafe pattern "${blockedPattern}"`, error: true };
         }
 
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
@@ -5553,14 +7952,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        }
 
 	        if (action === 'list') {
+	          const requestedSessionId = String(args.session_id || args.sessionId || '').trim();
+	          const allSessions = args.all_sessions === true || String(args.scope || '').trim().toLowerCase() === 'all';
 	          const timers = listMainChatTimers({
-	            sessionId,
+	            sessionId: allSessions ? undefined : (requestedSessionId || sessionId),
 	            includeDone: args.include_done === true,
 	          });
 	          return {
 	            name,
 	            args,
-	            result: JSON.stringify({ success: true, count: timers.length, timers }, null, 2),
+	            result: JSON.stringify({
+	              success: true,
+	              action: 'list',
+	              scope: allSessions ? 'all_sessions' : 'session',
+	              sessionId: allSessions ? null : (requestedSessionId || sessionId),
+	              count: timers.length,
+	              timers,
+	            }, null, 2),
 	            error: false,
 	          };
 	        }
@@ -5568,17 +7976,118 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        if (action === 'cancel') {
 	          const timerId = String(args.timer_id || args.timerId || '').trim();
 	          if (!timerId) return { name, args, result: 'timer(cancel) requires timer_id', error: true };
-	          const existing = listMainChatTimers({ sessionId, includeDone: true }).find((timer) => timer.id === timerId);
+	          const requestedSessionId = String(args.session_id || args.sessionId || '').trim();
+	          const allSessions = args.all_sessions === true || String(args.scope || '').trim().toLowerCase() === 'all';
+	          const existing = listMainChatTimers({
+	            sessionId: allSessions ? undefined : (requestedSessionId || sessionId),
+	            includeDone: true,
+	          }).find((timer) => timer.id === timerId);
 	          if (!existing) {
-	            return { name, args, result: `Timer not found in this chat: ${timerId}`, error: true };
+	            return {
+	              name,
+	              args,
+	              result: allSessions
+	                ? `Timer not found: ${timerId}`
+	                : `Timer not found in session ${(requestedSessionId || sessionId)}: ${timerId}`,
+	              error: true,
+	            };
 	          }
 	          const cancelled = cancelMainChatTimer(timerId);
 	          if (!cancelled) return { name, args, result: `Timer not found: ${timerId}`, error: true };
-	          deps.broadcastWS?.({ type: 'timer_cancelled', timer: cancelled, sessionId });
+	          deps.broadcastWS?.({ type: 'timer_cancelled', timer: cancelled, sessionId: cancelled.sessionId });
 	          return {
 	            name,
 	            args,
 	            result: JSON.stringify({ success: true, action: 'cancel', timer: cancelled }, null, 2),
+	            error: false,
+	          };
+	        }
+
+	        if (action === 'update' || action === 'modify' || action === 'reschedule') {
+	          const timerId = String(args.timer_id || args.timerId || '').trim();
+	          if (!timerId) return { name, args, result: `timer(${action}) requires timer_id`, error: true };
+	          const requestedSessionId = String(args.session_id || args.sessionId || '').trim();
+	          const allSessions = args.all_sessions === true || String(args.scope || '').trim().toLowerCase() === 'all';
+	          const existing = listMainChatTimers({
+	            sessionId: allSessions ? undefined : (requestedSessionId || sessionId),
+	            includeDone: true,
+	          }).find((timer) => timer.id === timerId);
+	          if (!existing) {
+	            return {
+	              name,
+	              args,
+	              result: allSessions
+	                ? `Timer not found: ${timerId}`
+	                : `Timer not found in session ${(requestedSessionId || sessionId)}: ${timerId}`,
+	              error: true,
+	            };
+	          }
+	          if (existing.status === 'running') {
+	            return { name, args, result: `Timer "${timerId}" is already running and cannot be modified.`, error: true };
+	          }
+	          if (existing.status === 'completed' || existing.status === 'cancelled') {
+	            return { name, args, result: `Timer "${timerId}" is ${existing.status} and cannot be modified. Create a new timer instead.`, error: true };
+	          }
+
+	          const patch: any = {};
+	          if (args.instruction !== undefined || args.prompt !== undefined) {
+	            const instruction = String(args.instruction ?? args.prompt ?? '').trim();
+	            if (!instruction) return { name, args, result: `timer(${action}) instruction/prompt cannot be empty`, error: true };
+	            patch.instruction = instruction;
+	            if (args.label === undefined && existing.label === existing.instruction.slice(0, 60)) {
+	              patch.label = instruction.slice(0, 60) || 'Timer';
+	            }
+	          }
+	          if (args.label !== undefined) {
+	            const label = String(args.label || '').trim();
+	            patch.label = label || (patch.instruction || existing.instruction).slice(0, 60) || 'Timer';
+	          }
+
+	          const hasDelay = args.delay_seconds !== undefined || args.delaySeconds !== undefined;
+	          const hasDueAt = args.due_at !== undefined || args.dueAt !== undefined;
+	          if (hasDelay || hasDueAt) {
+	            const now = Date.now();
+	            const delaySecondsRaw = Number(args.delay_seconds ?? args.delaySeconds);
+	            const dueAtRaw = String(args.due_at || args.dueAt || '').trim();
+	            let dueAt: Date | null = null;
+	            if (Number.isFinite(delaySecondsRaw) && delaySecondsRaw > 0) {
+	              dueAt = new Date(now + Math.max(5, Math.floor(delaySecondsRaw)) * 1000);
+	            } else if (dueAtRaw) {
+	              const parsed = new Date(dueAtRaw);
+	              if (Number.isFinite(parsed.getTime())) dueAt = parsed;
+	            }
+	            if (!dueAt || !Number.isFinite(dueAt.getTime())) {
+	              return { name, args, result: `timer(${action}) requires a positive delay_seconds or a valid due_at ISO timestamp when changing time`, error: true };
+	            }
+	            if (dueAt.getTime() < now + 5000) {
+	              dueAt = new Date(now + 5000);
+	            }
+	            const maxDueAt = now + 30 * 24 * 60 * 60 * 1000;
+	            if (dueAt.getTime() > maxDueAt) {
+	              return { name, args, result: 'Timers can be scheduled up to 30 days in the future.', error: true };
+	            }
+	            patch.dueAt = dueAt.toISOString();
+	            patch.status = 'pending';
+	            patch.firedAt = undefined;
+	            patch.completedAt = undefined;
+	            patch.error = undefined;
+	          }
+
+	          if (Object.keys(patch).length === 0) {
+	            return { name, args, result: `timer(${action}) needs at least one of instruction/prompt, label, delay_seconds, or due_at`, error: true };
+	          }
+	          const updated = updateMainChatTimer(timerId, patch);
+	          if (!updated) return { name, args, result: `Timer not found: ${timerId}`, error: true };
+	          deps.broadcastWS?.({ type: 'timer_updated', timer: updated, sessionId: updated.sessionId });
+	          return {
+	            name,
+	            args,
+	            result: JSON.stringify({
+	              success: true,
+	              action: 'update',
+	              timer: updated,
+	              message: `Timer updated for ${new Date(updated.dueAt).toLocaleString()}.`,
+	            }, null, 2),
 	            error: false,
 	          };
 	        }
@@ -5631,7 +8140,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        return {
 	          name,
 	          args,
-	          result: 'timer requires action: create, list, or cancel',
+	          result: 'timer requires action: create, list, update, modify, reschedule, or cancel',
 	          error: true,
 	        };
 	      }
@@ -5813,9 +8322,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const timezone = String(args.timezone || args.tz || '').trim() || undefined;
           const delivery = (args.delivery && typeof args.delivery === 'object') ? args.delivery : {};
           const channel = normalizeDeliveryChannel(delivery.channel || args.channel);
-          const sessionTarget = String(delivery.session_target || args.session_target || 'isolated').toLowerCase() === 'main'
-            ? 'main'
-            : 'isolated';
           const modelOverride = String(args.model_override || args.model || '').trim() || undefined;
           const nameValue = String(args.name || '').trim() || `Scheduled task ${new Date().toLocaleString()}`;
 
@@ -5838,19 +8344,52 @@ export async function executeTool(name: string, args: any, workspacePath: string
             return { name, args, result: 'schedule.kind=recurring requires schedule.cron', error: true };
           }
 
-          const subagentId = String(args.subagent_id || '').trim() || undefined;
+          const requestedTeamId = String(args.team_id || args.teamId || '').trim() || undefined;
+          if (requestedTeamId && !getManagedTeam(requestedTeamId)) {
+            return { name, args, result: `Team not found: ${requestedTeamId}`, error: true };
+          }
+          const requestedSubagentId = requestedTeamId ? undefined : (String(args.subagent_id || '').trim() || undefined);
 
-          const created = deps.cronScheduler.createJob({
+          let created = deps.cronScheduler.createJob({
             name: nameValue,
             prompt: instructionPrompt,
             type: kind,
             schedule: kind === 'recurring' ? cron : undefined,
             runAt: kind === 'one-shot' ? new Date(runAtRaw).toISOString() : undefined,
             tz: timezone,
-            sessionTarget,
+            sessionTarget: 'isolated',
             model: modelOverride,
-            subagent_id: subagentId,
+            subagent_id: requestedSubagentId,
+            team_id: requestedTeamId,
+            assignmentTarget: requestedTeamId ? 'team' : (requestedSubagentId ? 'subagent' : 'main'),
+            deliverToMainChannel: !requestedTeamId && !requestedSubagentId,
           } as any);
+          const owner = requestedTeamId
+            ? { agentId: '', created: false }
+            : requestedSubagentId
+            ? { agentId: requestedSubagentId, created: false }
+            : ensureScheduleOwnerAgent({
+                scheduleId: created.id,
+                scheduleName: created.name,
+                prompt: instructionPrompt,
+                model: modelOverride,
+              });
+          if (owner.agentId) {
+            ensureScheduleRuntimeForAgent(owner.agentId, {
+              scheduleId: created.id,
+              scheduleName: created.name,
+              prompt: instructionPrompt,
+              model: modelOverride,
+            });
+          }
+          if (!requestedTeamId && (created.subagent_id !== owner.agentId || created.sessionTarget !== 'isolated')) {
+            created = deps.cronScheduler.updateJob(created.id, {
+              subagent_id: owner.agentId,
+              sessionTarget: 'isolated',
+              assignmentTarget: requestedSubagentId ? 'subagent' : 'main',
+              deliverToMainChannel: !requestedSubagentId,
+            } as any) || created;
+          }
 
           return {
             name,
@@ -5859,7 +8398,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
               success: true,
               action: 'create',
               job: summarizeCronJob(created),
-              message: `Scheduled job "${created.name}" created.`,
+              assigned_team: requestedTeamId || undefined,
+              assigned_owner: owner.agentId ? {
+                subagent_id: owner.agentId,
+                created: owner.created,
+              } : undefined,
+              message: requestedTeamId
+                ? `Scheduled team job "${created.name}" created for team "${requestedTeamId}".`
+                : `Scheduled job "${created.name}" created and assigned to schedule owner "${owner.agentId}".`,
             }, null, 2),
             error: false,
           };
@@ -5933,7 +8479,33 @@ export async function executeTool(name: string, args: any, workspacePath: string
               };
             }
             const sessionTarget = String(delivery.session_target || args.session_target || '').toLowerCase();
-            if (sessionTarget === 'main' || sessionTarget === 'isolated') patch.sessionTarget = sessionTarget;
+            if (sessionTarget === 'main' || sessionTarget === 'isolated') patch.sessionTarget = 'isolated';
+            if (sessionTarget === 'main') {
+              patch.assignmentTarget = 'main';
+              patch.deliverToMainChannel = true;
+            }
+          }
+          if (args.subagent_id !== undefined) {
+            const subagentId = String(args.subagent_id || '').trim();
+            if (subagentId) {
+              patch.subagent_id = subagentId;
+              patch.team_id = undefined;
+              patch.assignmentTarget = 'subagent';
+              patch.deliverToMainChannel = false;
+            }
+          }
+          if (args.team_id !== undefined || args.teamId !== undefined) {
+            const teamId = String(args.team_id || args.teamId || '').trim();
+            if (teamId && !getManagedTeam(teamId)) {
+              return { name, args, result: `Team not found: ${teamId}`, error: true };
+            }
+            patch.team_id = teamId || undefined;
+            if (teamId) {
+              patch.subagent_id = undefined;
+              patch.assignmentTarget = 'team';
+              patch.deliverToMainChannel = false;
+              patch.sessionTarget = 'isolated';
+            }
           }
 
           const rawKind = String(schedule.kind || args.kind || '').trim().toLowerCase();
@@ -5960,8 +8532,44 @@ export async function executeTool(name: string, args: any, workspacePath: string
             patch.runAt = parsed.toISOString();
           }
 
-          const updated = deps.cronScheduler.updateJob(jobId, patch as any);
+          let updated = deps.cronScheduler.updateJob(jobId, patch as any);
           if (!updated) return { name, args, result: `Job not found: ${jobId}`, error: true };
+          if (String(updated.team_id || '').trim()) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: true,
+                action: 'update',
+                job: summarizeCronJob(updated),
+                assigned_team: updated.team_id,
+                message: `Scheduled team job "${updated.name}" updated for team "${updated.team_id}".`,
+              }, null, 2),
+              error: false,
+            };
+          }
+          const owner = String(updated.subagent_id || '').trim()
+            ? { agentId: String(updated.subagent_id || '').trim(), created: false }
+            : ensureScheduleOwnerAgent({
+                scheduleId: updated.id,
+                scheduleName: updated.name,
+                prompt: updated.prompt,
+                model: updated.model,
+              });
+          ensureScheduleRuntimeForAgent(owner.agentId, {
+            scheduleId: updated.id,
+            scheduleName: updated.name,
+            prompt: updated.prompt,
+            model: updated.model,
+          });
+          if (updated.subagent_id !== owner.agentId || updated.sessionTarget !== 'isolated') {
+            updated = deps.cronScheduler.updateJob(updated.id, {
+              subagent_id: owner.agentId,
+              sessionTarget: 'isolated',
+              assignmentTarget: owner.created ? 'main' : updated.assignmentTarget,
+              deliverToMainChannel: owner.created ? true : updated.deliverToMainChannel,
+            } as any) || updated;
+          }
           return {
             name,
             args,
@@ -5969,7 +8577,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
               success: true,
               action: 'update',
               job: summarizeCronJob(updated),
-              message: `Scheduled job "${updated.name}" updated.`,
+              assigned_owner: {
+                subagent_id: owner.agentId,
+                created: owner.created,
+              },
+              message: `Scheduled job "${updated.name}" updated and assigned to schedule owner "${owner.agentId}".`,
             }, null, 2),
             error: false,
           };
@@ -7063,6 +9675,114 @@ export async function executeTool(name: string, args: any, workspacePath: string
         await broadcastBrowserStatus('browser_intercept_network');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
+      case 'inspect_console': {
+        const maxEntries = Math.max(1, Math.min(500, Number(args.max_entries || 100)));
+        const action = String(args.action || 'read').toLowerCase();
+        const result = await browserRunJs(sessionId, `
+          const g = globalThis;
+          if (!g.__promConsoleLog) {
+            g.__promConsoleLog = [];
+            const push = (entry) => {
+              try {
+                g.__promConsoleLog.push({ ...entry, ts: Date.now(), url: location.href });
+                if (g.__promConsoleLog.length > 1000) g.__promConsoleLog.splice(0, g.__promConsoleLog.length - 1000);
+              } catch {}
+            };
+            for (const level of ['log', 'info', 'warn', 'error']) {
+              const original = console[level]?.bind(console);
+              console[level] = (...items) => {
+                push({ level, message: items.map(item => {
+                  try { return typeof item === 'string' ? item : JSON.stringify(item); } catch { return String(item); }
+                }).join(' ') });
+                return original?.(...items);
+              };
+            }
+            g.addEventListener('error', event => push({ level: 'error', message: event.message || 'window error', source: event.filename, line: event.lineno, column: event.colno }));
+            g.addEventListener('unhandledrejection', event => push({ level: 'error', message: 'unhandledrejection: ' + (event.reason?.message || event.reason || '') }));
+          }
+          if (${JSON.stringify(action)} === 'clear') {
+            g.__promConsoleLog = [];
+            return { cleared: true, url: location.href, title: document.title };
+          }
+          return {
+            url: location.href,
+            title: document.title,
+            count: g.__promConsoleLog.length,
+            entries: g.__promConsoleLog.slice(-${maxEntries})
+          };
+        `);
+        await broadcastBrowserStatus('inspect_console');
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'run_accessibility_check': {
+        const maxResults = Math.max(1, Math.min(500, Number(args.max_results || 100)));
+        const result = await browserRunJs(sessionId, `
+          const findings = [];
+          const add = (rule, message, selector, impact = 'moderate') => {
+            if (findings.length < ${maxResults}) findings.push({ rule, impact, message, selector });
+          };
+          const selectorFor = (el) => {
+            if (!el) return '';
+            if (el.id) return '#' + CSS.escape(el.id);
+            const tag = el.tagName ? el.tagName.toLowerCase() : 'element';
+            const label = el.getAttribute?.('aria-label') || el.getAttribute?.('name') || el.getAttribute?.('placeholder') || '';
+            return label ? tag + '[' + label.slice(0, 40) + ']' : tag;
+          };
+          if (!document.title || document.title.trim().length < 2) add('document-title', 'Page is missing a useful title.', 'head title', 'serious');
+          if (!document.documentElement.lang) add('html-lang', 'html element is missing lang.', 'html', 'serious');
+          document.querySelectorAll('img').forEach(img => {
+            if (!img.hasAttribute('alt')) add('image-alt', 'Image missing alt attribute.', selectorFor(img));
+          });
+          document.querySelectorAll('button,input,select,textarea,[role="button"],[role="textbox"],[role="combobox"]').forEach(el => {
+            const id = el.id;
+            const hasLabel = el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || (id && document.querySelector('label[for="' + CSS.escape(id) + '"]')) || el.closest('label');
+            if (!hasLabel) add('control-label', 'Interactive control may be unlabeled.', selectorFor(el), 'serious');
+          });
+          const ids = new Map();
+          document.querySelectorAll('[id]').forEach(el => {
+            const id = el.id;
+            if (ids.has(id)) add('duplicate-id', 'Duplicate id: ' + id, selectorFor(el));
+            ids.set(id, true);
+          });
+          document.querySelectorAll('a[href]').forEach(a => {
+            const href = a.getAttribute('href') || '';
+            if (href === '#' || href.toLowerCase().startsWith('javascript:')) add('link-target', 'Link has weak or JavaScript href.', selectorFor(a));
+            if (!a.textContent?.trim() && !a.getAttribute('aria-label')) add('link-name', 'Link has no accessible text.', selectorFor(a));
+          });
+          let previousLevel = 0;
+          document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(h => {
+            const level = Number(h.tagName.slice(1));
+            if (previousLevel && level > previousLevel + 1) add('heading-order', 'Heading level jumps from h' + previousLevel + ' to h' + level + '.', selectorFor(h));
+            previousLevel = level;
+          });
+          if (!document.querySelector('main,[role="main"]')) add('landmark-main', 'Page has no main landmark.', 'main');
+          return { url: location.href, title: document.title, finding_count: findings.length, findings };
+        `);
+        await broadcastBrowserStatus('run_accessibility_check');
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'browser_smoke_test': {
+        const url = String(args.url || '').trim();
+        if (!url) return { name, args, result: 'url is required', error: true };
+        const openResult = await browserOpen(sessionId, url, { observe: 'compact' });
+        await browserWait(sessionId, Math.max(250, Math.min(10000, Number(args.wait_ms || 1500))), { observe: 'none' });
+        const snapshot = await browserSnapshot(sessionId);
+        const consoleResult = await executeTool('inspect_console', { max_entries: args.max_console_entries || 50 }, workspacePath, deps, sessionId);
+        const a11yResult = await executeTool('run_accessibility_check', { max_results: args.max_a11y_results || 50 }, workspacePath, deps, sessionId);
+        await broadcastBrowserStatus('browser_smoke_test');
+        return {
+          name,
+          args,
+          result: JSON.stringify({
+            url,
+            open: openResult,
+            snapshot: snapshot.slice(0, 5000),
+            console: consoleResult.result,
+            accessibility: a11yResult.result,
+          }, null, 2),
+          error: openResult.startsWith('ERROR') || snapshot.startsWith('ERROR') || consoleResult.error || a11yResult.error,
+        };
+      }
       case 'browser_element_watch': {
         const waitFor = String(args.wait_for || 'appear') as 'appear' | 'disappear' | 'text_contains';
         const result = await browserElementWatch(
@@ -7269,6 +9989,32 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'desktop_diff_screenshot': {
         const result = await desktopDiffScreenshot(sessionId);
         return { name, args, result, error: false };
+      }
+      case 'desktop_background_status': {
+        const result = await desktopBackgroundStatus();
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_background_prepare_sandbox': {
+        const result = await desktopBackgroundPrepareSandbox({
+          launch: args.launch === true,
+          networking: args.networking,
+          vgpu: args.vgpu,
+          memory_mb: args.memory_mb == null ? undefined : Number(args.memory_mb),
+        });
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_background_command': {
+        const result = await desktopBackgroundCommand({
+          action: args.action,
+          x: args.x == null ? undefined : Number(args.x),
+          y: args.y == null ? undefined : Number(args.y),
+          text: args.text == null ? undefined : String(args.text),
+          key: args.key == null ? undefined : String(args.key),
+          command: args.command == null ? undefined : String(args.command),
+          ms: args.ms == null ? undefined : Number(args.ms),
+          timeout_ms: args.timeout_ms == null ? undefined : Number(args.timeout_ms),
+        } as any);
+        return { name, args, result, error: result.startsWith('ERROR') };
       }
 
       // Mouse wheel scroll
@@ -7745,7 +10491,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const slLines = all.map((s: any) => {
           const bits = [
-            `${s.emoji} ${s.id}`,
+            `${s.id}`,
             s.kind === 'bundle' ? `v${s.version} [bundle: ${(s.resources || []).length} resources]` : '[simple]',
             Array.isArray(s.requiredTools) && s.requiredTools.length ? `[tools: ${s.requiredTools.join(',')}]` : '',
             Array.isArray(s.triggers) && s.triggers.length ? `[triggers: ${s.triggers.join(',')}]` : '',
@@ -7770,8 +10516,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!skill) {
           return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
         }
+        activateSkillForSession(sessionId, skill.id);
         try {
-          const content = fs.readFileSync(skill.filePath, 'utf-8');
+          const content = fs.readFileSync(skill.filePath, 'utf-8').replace(/^\s*emoji\s*:.*\r?\n/gm, '');
           const resourceLines = Array.isArray(skill.resources) && skill.resources.length
             ? [
               '',
@@ -7782,7 +10529,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             ].join('\n')
             : '';
           const manifestLines = [
-            `${skill.emoji} ${skill.name} (${skill.id}) ${skill.kind === 'bundle' ? `v${skill.version} bundle` : 'simple skill'}`,
+            `${skill.name} (${skill.id}) ${skill.kind === 'bundle' ? `v${skill.version} bundle` : 'simple skill'}`,
             skill.description ? `Description: ${skill.description}` : '',
             Array.isArray(skill.requiredTools) && skill.requiredTools.length ? `Required tools: ${skill.requiredTools.join(', ')}` : '',
             skill.status && skill.status !== 'ready' ? `Status: ${skill.status}` : '',
@@ -7792,7 +10539,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `${manifestLines}\n\nInstructions:\n${content}`, error: false };
         } catch {
           // Fallback to stored instructions if file read fails
-          return { name, args, result: `${skill.emoji} ${skill.name} (${skillId})\n\n${skill.instructions}`, error: false };
+          return { name, args, result: `${skill.name} (${skillId})\n\n${skill.instructions}`, error: false };
         }
       }
 
@@ -7809,7 +10556,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }).join('\n');
         return {
           name, args,
-          result: `Resources for ${skill.emoji} ${skill.name} (${skill.id}):\n${lines}\n\nRead one with skill_resource_read({"id":"${skill.id}","path":"<resource path>"}).`,
+          result: `Resources for ${skill.name} (${skill.id}):\n${lines}\n\nRead one with skill_resource_read({"id":"${skill.id}","path":"<resource path>"}).`,
           error: false,
         };
       }
@@ -7822,6 +10569,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const maxChars = args.max_chars ? Number(args.max_chars) : undefined;
         const result = deps.skillsManager.readResource(skillId, resourcePath, Number.isFinite(maxChars) ? maxChars : undefined);
         if (!result.ok) return { name, args, result: `skill_resource_read failed: ${result.error}`, error: true };
+        const skill = deps.skillsManager.get(skillId);
+        activateSkillForSession(sessionId, skill?.id || skillId);
         return {
           name, args,
           result: `Resource ${skillId}/${result.path}${result.truncated ? ' (truncated)' : ''}:\n\n${result.content}`,
@@ -7838,7 +10587,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             overwrite: args.overwrite === true,
           });
           const lines = imported.map((skill: any) =>
-            `- ${skill.emoji} ${skill.id} (${skill.kind}, ${skill.resources.length} resources) - ${skill.description || skill.name}`
+            `- ${skill.id} (${skill.kind}, ${skill.resources.length} resources) - ${skill.description || skill.name}`
           ).join('\n');
           return {
             name, args,
@@ -7871,10 +10620,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: manifest must be an object or JSON object string.', error: true };
         }
         try {
-          const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest);
+          const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {
+            changeType: args.changeType || args.change_type ? String(args.changeType || args.change_type) : undefined,
+            evidence: Array.isArray(args.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args.evidence ? [String(args.evidence)] : undefined),
+            appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
+            reason: args.reason ? String(args.reason) : undefined,
+          });
           return {
             name, args,
-            result: `Wrote manifest overlay for ${updated.emoji} ${updated.name} (${updated.id}) at ${updated.overlayPath || '(overlay path unavailable)'}. Manifest source: ${updated.manifestSource}.`,
+            result: `Wrote manifest overlay for ${updated.name} (${updated.id}) at ${updated.overlayPath || '(overlay path unavailable)'}. Manifest source: ${updated.manifestSource}.`,
             error: false,
           };
         } catch (manifestErr: any) {
@@ -7898,7 +10652,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
             name: scName,
             description: args.description ? String(args.description).trim() : '',
             instructions: scInstructions,
-            emoji: args.emoji ? String(args.emoji) : undefined,
             version: args.version ? String(args.version) : undefined,
             triggers: splitCsv(args.triggers),
             categories: splitCsv(args.categories),
@@ -7928,6 +10681,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
             type: args.type ? String(args.type) : undefined,
             description: args.description ? String(args.description) : undefined,
             addToManifest: args.addToManifest !== false,
+            change: {
+              changeType: args.changeType || args.change_type ? String(args.changeType || args.change_type) : undefined,
+              evidence: Array.isArray(args.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args.evidence ? [String(args.evidence)] : undefined),
+              appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
+              reason: args.reason ? String(args.reason) : undefined,
+            },
           });
           return {
             name, args,
@@ -8001,7 +10760,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
             id: scId,
             name: scName,
             description: args.description ? String(args.description).trim() : '',
-            emoji: args.emoji ? String(args.emoji) : undefined,
             instructions: scInstructions,
           });
           return {
@@ -8213,29 +10971,22 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            };
 	          }
           // Gate: team subagents cannot propose directly — must use talk_to_manager.
-          // Only agents with can_propose: true in config.json bypass this.
-          const isTeamSession = String(sessionId || '').startsWith('team_dispatch_');
+          // The manager owns proposal submission so team artifacts, proposal caps, and approval state stay coherent.
+          const teamNoteForProposal = inferTeamNoteContext(sessionId);
+          const isTeamSession = String(sessionId || '').startsWith('team_dispatch_') || teamNoteForProposal?.authorType === 'subagent';
           if (isTeamSession) {
-            const sessionSuffix = String(sessionId).replace('team_dispatch_', '');
-            const agentIdFromSession = sessionSuffix.replace(/_\d+$/, '');
-            try {
-              const { agentCanPropose } = require('../teams/team-dispatch-runtime');
-              if (!agentCanPropose(agentIdFromSession)) {
-                return {
-                  name, args,
-                  result: 'BLOCKED: Subagents cannot submit proposals directly. Use talk_to_manager to send your complete plan to the manager. Include: title, summary, full details, affected files, diff preview, and executor_prompt. The manager will review and submit the proposal.',
-                  error: true,
-                };
-              }
-            } catch { /* fail-safe: allow through if check errors */ }
+            return {
+              name, args,
+              result: 'BLOCKED: Team subagents cannot submit proposals directly. Send the proposal-ready request to the manager instead. For task_trigger/action proposals, include: title, summary, the exact approved action, execution_steps, expected identifiers/artifacts, and any relevant resource paths. For src/code proposals only, include the full implementation plan, affected files, execution_steps, diff preview, executor_prompt, evidence/artifact paths, and risk notes. The manager will review and submit the proposal.',
+              error: true,
+            };
           }
 		          try {
 		            const { createProposal } = require('../proposals/proposal-store');
-                const teamManagerMatch = String(sessionId || '').match(/^team_coord_(.+)$/);
                 let teamExecution: any = undefined;
                 let sourceTeamId: string | undefined = undefined;
-                if (teamManagerMatch) {
-                  const teamId = String(teamManagerMatch[1] || '').trim();
+                if (teamNoteForProposal?.authorType === 'manager') {
+                  const teamId = String(teamNoteForProposal.teamId || '').trim();
                   const executorAgentId = String(args.executor_agent_id || '').trim();
                   if (!executorAgentId) {
                     return {
@@ -8327,6 +11078,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	              : undefined;
 	            const proposal = createProposal({
 	              type: args.type || 'general',
+                executionMode: ['code_change', 'action', 'review'].includes(String(args.execution_mode || args.executionMode || '').trim())
+                  ? String(args.execution_mode || args.executionMode).trim() as any
+                  : undefined,
 	              priority: args.priority || 'medium',
               title: String(args.title || '').slice(0, 120),
               summary: String(args.summary || '').slice(0, 500),
@@ -8336,6 +11090,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 sourceTeamId,
 		              sourcePipeline: args.source_pipeline || (allowRepairProposal ? 'proposal_build_failure_recovery' : undefined),
               affectedFiles: Array.isArray(args.affected_files) ? args.affected_files : [],
+              executionSteps: Array.isArray(args.execution_steps) ? args.execution_steps : undefined,
               diffPreview: args.diff_preview,
               estimatedImpact: args.estimated_impact,
               requiresBuild: args.requires_build === true,
@@ -8647,6 +11402,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const fromAgent = getAgentById(fromAgentId) as any;
             const fromName = String(fromAgent?.name || fromAgentId).trim();
             const { queueAgentMessage, queueManagerMessage } = require('../teams/managed-teams');
+            const targetMetadata = getTeamChatTargetMetadata(targetAgentId);
 
             if (targetAgentId === 'manager') {
               const ok = queueManagerMessage(noteContext.teamId, fromAgentId, message);
@@ -8676,16 +11432,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
               });
             }
 
-            appendTeamRoomMessage(noteContext.teamId, {
-              actorType: 'member',
-              actorName: fromName,
-              actorId: fromAgentId,
+            appendAndBroadcastTeamChat(deps, team, {
+              from: 'subagent',
+              fromName,
+              fromAgentId,
               content: message,
-              category: messageType,
-              target: targetAgentId,
               metadata: {
                 agentId: fromAgentId,
                 source: 'talk_to_teammate',
+                messageType,
+                ...targetMetadata,
               },
             });
             return { name, args, result: `Message sent to ${targetAgentId}: "${message.slice(0, 80)}"`, error: false };
@@ -8913,6 +11669,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const result = {
               global_primary: primaryModel,
               agent_model_defaults: defaults,
+              active_agent_model_default_template: cfg2.active_agent_model_default_template || null,
+              agent_model_default_templates: cfg2.agent_model_default_templates || [],
               individual_agent_overrides: agents,
             };
             return { name, args, result: JSON.stringify(result, null, 2), error: false };
@@ -8922,6 +11680,62 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         // ── gateway_restart: build + graceful restart ───────────────────────
+        if (
+          name === 'list_agent_model_templates' ||
+          name === 'save_agent_model_template' ||
+          name === 'apply_agent_model_template' ||
+          name === 'delete_agent_model_template'
+        ) {
+          const { getConfig: _gc3 } = require('../../config/config');
+          const _cfg3 = _gc3().getConfig() as any;
+          const gatewayPort = Number(_cfg3?.gateway?.port) || 18789;
+          const configuredHost = String(_cfg3?.gateway?.host || '127.0.0.1');
+          const gatewayHost = (configuredHost === '0.0.0.0' || configuredHost === '::') ? '127.0.0.1' : configuredHost;
+          const baseUrl = `http://${gatewayHost}:${gatewayPort}/api/settings/agent-model-default-templates`;
+
+          try {
+            if (name === 'list_agent_model_templates') {
+              const resp = await fetch(baseUrl);
+              const data = await resp.json() as any;
+              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to list templates'}`, error: true };
+              return { name, args, result: JSON.stringify(data, null, 2), error: false };
+            }
+
+            if (name === 'save_agent_model_template') {
+              const templateName = String(args?.name || '').trim();
+              if (!templateName) return { name, args, result: 'ERROR: name is required.', error: true };
+              const body: any = { name: templateName };
+              if (args?.id) body.id = String(args.id).trim();
+              if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
+              const resp = await fetch(baseUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              });
+              const data = await resp.json() as any;
+              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to save template'}`, error: true };
+              return { name, args, result: `Saved agent model template "${data.template?.name || templateName}" (${data.template?.id || 'new'}).`, error: false };
+            }
+
+            const id = String(args?.id || args?.name || '').trim();
+            if (!id) return { name, args, result: 'ERROR: id or name is required.', error: true };
+
+            if (name === 'apply_agent_model_template') {
+              const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}/apply`, { method: 'POST' });
+              const data = await resp.json() as any;
+              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to apply template'}`, error: true };
+              return { name, args, result: `Applied agent model template "${data.template?.name || id}". Current defaults: ${JSON.stringify(data.defaults || {}, null, 2)}`, error: false };
+            }
+
+            const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            const data = await resp.json() as any;
+            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to delete template'}`, error: true };
+            return { name, args, result: `Deleted agent model template "${data.removed?.name || id}".`, error: false };
+          } catch (err: any) {
+            return { name, args, result: `${name} error: ${err.message}`, error: true };
+          }
+        }
+
         if (name === 'gateway_restart') {
           const reason = String(args.reason || 'manual restart').trim();
           try {
@@ -8981,7 +11795,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
         // ── connector_* tools: dispatch to connector handlers ─────────────
         if (name.startsWith('connector_') && name !== 'connector_list') {
-          const connResult = await handleConnectorTool(name, args);
+          ensurePrometheusExtensionRuntimeLoaded();
+          const connResult = await getExtensionRuntimeRegistry().executeTool(name, args);
           return { name, args, ...connResult };
         }
 
