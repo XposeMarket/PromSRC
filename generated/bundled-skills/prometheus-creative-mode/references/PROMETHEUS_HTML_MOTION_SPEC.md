@@ -2,7 +2,9 @@
 
 This is the canonical engineering contract for Prometheus HTML Motion clips.
 
-Prometheus owns the editor, asset library, timeline UI, HTML Motion renderer, patch/revision system, QA flow, template/block library, style system, ASCII pipeline, and export pipeline. HyperFrames is useful reference material and an optional compatibility target, not the core runtime.
+Prometheus owns the editor, asset library, timeline UI, HTML Motion renderer, patch/revision system, QA flow, template/block library, style system, generative media pipeline, ASCII pipeline, audio/caption pipeline, and export pipeline. HyperFrames is the preferred deterministic composition model for new video authoring; HTML Motion is Prometheus' editable compatibility layer and renderer-friendly interchange format.
+
+Generated video/image assets are valid inputs to HTML Motion, but they should arrive through Creative-aware tools that register lineage, assets, prompts, providers, project ownership, QA, and selected takes.
 
 ## Valid Clip
 
@@ -177,6 +179,21 @@ Rules:
 - no Google Fonts unless imported as an asset
 - analyze important media before placing it
 - explicitly handle important source audio
+- register generated media with generation lineage before using it in a final composition
+- prefer extracted/selected continuity frames over arbitrary final frames when chaining AI video
+
+## Generated Media And Audio
+
+When a clip uses generated footage, captions, or audio, the composition manifest should make those sources inspectable:
+
+- generated image/video shots: registered with `creative_generate_image_shot` or `creative_generate_video_shot`
+- frame handoffs: extracted with `creative_extract_video_frame` / `creative_extract_video_frames`
+- continuity choice: recorded with `creative_pick_continuity_frame` when continuing a scene
+- overlays: created with `creative_generate_motion_graphics_layer` or an editable HyperFrames/HTML source
+- audio: imported, downloaded, extracted, generated, mixed, or added with Creative audio tools
+- captions: generated from transcript text/segments with `creative_sync_captions_to_audio`
+
+Do not silently flatten this history into a final MP4. The final export can be flat, but the Creative project should retain enough lineage to rerun, branch, replace, or repair scenes.
 
 ## Lint And Inspect
 
@@ -197,6 +214,9 @@ Lint/inspect should report:
 - clipped visible text
 - too many static frames/no motion delta
 - important audio not preserved or muxed
+- generated media missing generation/project lineage
+- audio layers present visually but not represented as renderable `audioTracks`
+- captions not synchronized to transcript/audio timing when sync was requested
 
 ## QA Gate
 
@@ -214,7 +234,7 @@ Every export/result should report:
 ```json
 {
   "renderer": "html-motion",
-  "audio": "visual-only",
+  "audio": "visual-only | included | extracted | generated-voiceover | mixed",
   "qa": {
     "lint": "passed",
     "textFit": "passed",
@@ -235,6 +255,9 @@ Allowed audio identities:
 - `included`
 - `visual-only`
 - `muxed`
+- `extracted`
+- `generated-voiceover`
+- `mixed`
 
 ## Standalone Compatibility Export
 

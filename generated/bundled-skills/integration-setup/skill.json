@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "integration-setup",
+  "name": "integration-setup",
+  "description": "You can connect Prometheus to any external service. There are hundreds of MCP servers and webhook-capable services. You do not have a pre-built list — you research and build the integration definition yourself when asked.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/connector-first-smoke-tests-2026-05-11.md",
+      "type": "doc",
+      "description": "Evidence-backed connector-first smoke-test guardrail: validate connected services via connector tools first and avoid CLI substitution when Raul is testing connectors."
+    }
+  ]
+}

@@ -10,6 +10,8 @@ import { getConfig } from '../config/config';
 import { getActivatedSkillIds, getActivatedToolCategories, isBusinessContextEnabled } from './session';
 import { searchMemoryIndex } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
+import { buildCisContextBlock } from './business/cis-context-builder';
+import { loadSoul } from '../config/soul-loader';
 
 // ─── Intraday notes processor ────────────────────────────────────────────────────
 // Parses raw intraday file content into capped-length entries for context injection.
@@ -38,7 +40,7 @@ export interface SkillWindow {
 }
 
 export interface BuildPersonalityContextOptions {
-  profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode';
+  profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent';
 }
 
 const BOOT_COMPACTION_EXCLUDE_SESSION_RE = /^(startup_connection_probe_|brain_|auto_boot_|auto_restart_|task_|cron_|background_|team_dispatch_|subagent_chat_)/i;
@@ -625,27 +627,29 @@ export function readMemorySnippets(workspacePath: string, categories: string[]):
 // These constants are consumed by buildPersonalityContext. Exported so
 // consumers can extend or inspect them without importing server-v2.
 export const TOOL_BLOCKS: Record<string, string> = {
-  web: `WEB: web_search_multi(query,max_results?)→all configured providers. web_search_single(query,provider?,max_results?)→one provider (default Settings preferred; provider=tinyfish|tavily|google|brave|ddg). web_search(query,max_results?,multi_engine?,provider?)→legacy combined tool. web_fetch(url)→full page text. Search first, then fetch.
+  web: `WEB: web_search_multi(query,max_results?)→all configured providers, including xAI X Search when connected. web_search_single(query,provider?,max_results?)→one provider (default Settings preferred; provider=tinyfish|tavily|google|brave|ddg|xai). web_search(query,max_results?,multi_engine?,provider?)→legacy combined tool. web_fetch(url)→full page text. Search first, then fetch.
 Strategy: for complex topics call web_search 2–3× with different query angles; scan snippets; web_fetch the 1–3 most relevant URLs.
-Use web_search_single with provider:"tavily" to test Tavily-only; use web_search_single with provider:"google" to test Google-only. Use web_search_multi for broad coverage.
+Use web_search_single with provider:"tavily" to test Tavily-only; use web_search_single with provider:"google" to test Google-only; use provider:"xai" for X-backed social search. Use web_search_multi for broad coverage.
 Site search: web_search("site:reddit.com keyword"). Fallback: web_fetch a direct URL (reuters.com, apnews.com, bbc.com).
 Fetch routing: web_fetch for static pages; browser_get_page_text for JS-heavy or login-gated pages.`,
 
-  browser: `BROWSER: browser_open(url)→compact ack unless observe="snapshot". browser_snapshot()→refresh DOM refs. browser_vision_screenshot()→viewport image. browser_click(@ref|element). browser_fill(@ref|element,text). browser_drag(from_ref|coords→to_ref|coords). browser_upload_file(ref?|selector,file_path|file_paths). browser_press_key(key). browser_wait(ms). browser_click_and_download(@ref). browser_get_page_text(element?)→full text incl. iframes or saved element details (use when <12 elements or when reading a named element). download_url(url,filename?). download_media(url,audio_only?). generate_image(prompt, aspect_ratio?, provider?, model?). generate_video(prompt, image?, video?, mode?, duration?, resolution?). browser_close(). Chrome persistent profile (pre-logged-in).
-RULES: visual-first workflow. Vision screenshots are highest-confidence on dynamic/SPA UIs. If DOM refs or JS-derived assumptions are uncertain, stale, or contradictory, take a fresh browser_vision_screenshot and trust that evidence first. After browser actions, prefer a fresh browser_snapshot (or browser_vision_screenshot when UI is ambiguous) before the next decision only when state likely changed or you need updated state; use observe="none" on cheap deterministic actions when a tiny ack is sufficient. Treat browser_run_js as fallback for cases where snapshot/vision still cannot identify the target. Composer fills show "COMPOSER SUBMIT BUTTON: @N" — click it immediately, nothing else. j/k nav: call browser_get_focused_item only when focus is unclear or you need to confirm position after navigation. Use ⌨️ SITE SHORTCUTS when shown; save new ones with save_site_shortcut().
+  browser: `BROWSER: browser_doctor() diagnoses browser automation health. browser_open(url) defaults to observe="screenshot" after navigation. browser_snapshot() refreshes DOM refs. browser_vision_screenshot() captures viewport image. browser_click(@ref|element), browser_fill(@ref|element,text), browser_drag(from_ref|coords->to_ref|coords), browser_upload_file(ref?|selector,file_path|file_paths), browser_press_key(key), browser_type(text), browser_wait(ms), browser_click_and_download(@ref), browser_get_page_text(element?). download_url(url,filename?). download_media(url,audio_only?). generate_image(prompt, aspect_ratio?, provider?, model?). generate_video(prompt, image?, video?, mode?, duration?, resolution?). browser_close(). Chrome persistent profile (pre-logged-in).
+OBSERVE MODES: observe="none" tiny ack and lowest latency; "compact" small URL/title/focus/DOM-count summary; "delta" changed DOM refs after the action; "snapshot" full fresh DOM refs in the result; "screenshot" fresh visual observation. Defaults: browser_open/browser_upload_file/browser_vision_click/browser_run_js screenshot; browser_click/browser_fill/browser_drag/browser_click_and_download/browser_scroll_collect/browser_vision_type delta; browser_type/browser_snapshot snapshot; browser_wait/browser_scroll/browser_press_key/browser_get_page_text/browser_get_focused_item/browser_send_to_telegram none. Use capture_after=true on click/fill/type/scroll/drag as shorthand for observe="snapshot" when you need fresh refs immediately.
+RULES: visual-first workflow. Vision screenshots are highest-confidence on dynamic/SPA UIs. If DOM refs or JS-derived assumptions are uncertain, stale, or contradictory, take a fresh browser_vision_screenshot and trust that evidence first. After browser actions, rely on the default observation unless state likely changed in a way you must inspect; override with observe="none" on cheap deterministic actions when speed matters, observe="snapshot" for new refs, or observe="screenshot" for visual confirmation. Treat browser_run_js as fallback for cases where snapshot/vision still cannot identify the target. For high-impact final submits/posts/sends/purchases/deletes, prepare the browser UI, call request_final_action_approval, then pass final_action_approval_id to the exact final browser_click/browser_press_key. Composer fills show "COMPOSER SUBMIT BUTTON: @N" — click it immediately unless it is a high-impact final action requiring request_final_action_approval first. j/k nav: call browser_get_focused_item only when focus is unclear or you need to confirm position after navigation. Use ⌨️ SITE SHORTCUTS when shown; save new ones with save_site_shortcut().
 MEDIA SELECTION: when choosing an image/video on X, Google Images, or similar pages, first enumerate candidates via browser_snapshot/browser_extract_structured using nearby text, alt text, username, timestamp, href, or src. Rank candidates by text match to the request, then take browser_vision_screenshot to visually confirm the intended item before downloading. Prefer download_url for direct asset URLs and browser_click_and_download for browser-triggered downloads.`,
 
-  desktop: `DESKTOP: desktop_get_monitors()→monitor indices+bounds. desktop_screenshot()→screen+monitors+screenshot_id (capture=all|primary|monitor_index=N). desktop_window_screenshot(name|handle|active)→single app window crop+screenshot_id. desktop_click(x,y, coordinate_space?, screenshot_id?, verify?) is an actual mouse click at those coordinates; never call it without numeric x and y. If the target point is not known yet, take a screenshot first, then click with coordinates from that image. desktop_scroll/drag use the same targeting model and optional verification. desktop_type/press_key. desktop_find_window/focus_window. Clipboard get/set. desktop_list_installed_apps(filter?) and desktop_find_installed_app(query) return stable app_id values; prefer desktop_launch_app(app_id=...) over guessing raw app names. Screenshot/get_monitors first; prefer coordinate_space="capture" with screenshot_id when clicking from screenshot pixels, or coordinate_space="window" for app-local coords. Leave verify on auto unless speed matters. Focus before click/type. After desktop actions, prefer another screenshot before choosing the next action when the UI likely changed or the outcome is ambiguous. Non-interrupting background desktop work requires an isolated worker target: use desktop_background_status, desktop_background_prepare_sandbox, then desktop_background_command instead of host desktop clicks/keys.`,
+  desktop: `DESKTOP: desktop_doctor() diagnoses tool health. desktop_get_monitors()→monitor indices+bounds. desktop_screenshot()→screen+monitors+screenshot_id (capture=all|primary|monitor_index=N; mode="som" overlays numbered UI elements). desktop_window_screenshot(name|handle|active, mode?)→single app window crop+screenshot_id. desktop_click(x,y, coordinate_space?, screenshot_id?, verify?) or desktop_click(element:N, screenshot_id) is an actual mouse click; use element only from a SOM screenshot. If the target point is not known yet, take a screenshot first, then click with coordinates from that image or a SOM element. desktop_scroll/drag use the same targeting model and optional verification. desktop_type/press_key. Clipboard get/set. desktop_list_installed_apps(filter?) and desktop_find_installed_app(query) return stable app_id values; prefer desktop_launch_app(app_id=...) over guessing raw app names. Screenshot/get_monitors first; prefer coordinate_space="capture" with screenshot_id when clicking from screenshot pixels, or coordinate_space="window" for app-local coords. capture_after=true can return a post-action screenshot. Leave verify on auto unless speed matters. Focus before click/type. Routine desktop interaction is approval-free; for high-impact final submits/posts/sends/purchases/deletes, prepare the UI, call request_final_action_approval, then pass final_action_approval_id to the exact final desktop_click/desktop_press_key. Non-interrupting background desktop work requires an isolated worker target: use desktop_background_status, desktop_background_prepare_sandbox, then desktop_background_command instead of host desktop clicks/keys.`,
 
   files: isPublicDistributionBuild()
     ? `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
 MANDATORY EDIT ROUTE: For workspace file edits, native file tools are the default and expected path: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts to edit files unless the user explicitly asks for shell editing or the native tools cannot perform the transformation.
 WORKSPACE ONLY: In the public app, file tools operate on the user workspace and generated app data only. Always read before editing.`
     : `FILES: file_stats(path)→line count+size+modified (check this first on unknown files). read_file(path, start_line?, num_lines?)→windowed contents+line nums (e.g. start_line:200,num_lines:100 reads lines 200–300). grep_file(path, pattern, context_lines?)→matching lines in one file. search_files(directory?, pattern, file_glob?)→multi-file matches across workspace. find_replace/replace_lines/insert_after/delete_lines→edit. create_file/delete_file/mkdir/list_directory.
-	SRC SURFACES (read-only for all): source_stats|src_stats (src/ file metadata), read_source|list_source|grep_source (src/). webui_source_stats|webui_stats (web-ui/ file metadata), read_webui_source|list_webui_source|grep_webui_source (web-ui/). PROM-ROOT SURFACE (dev-only): list_prom, prom_file_stats, read_prom_file, grep_prom inspect allowlisted Prometheus project-root files/directories such as SELF.md, AGENTS.md, scripts/, electron/, build/, dist/, src/, web-ui/, and .prometheus/ without changing workspace tool semantics.
-	Write (proposal/code_exec only): find_replace_source|replace_lines_source|insert_after_source|delete_lines_source|write_source|delete_source for src/; *_webui_source plus delete_webui_source for web-ui/; find_replace_prom|replace_lines_prom|insert_after_prom|delete_lines_prom|write_prom_file|delete_prom_file for allowlisted prom-root files.
+	SOURCE CODE REFERENCE FILES: self/index.md is the canonical Prometheus architecture/debug map. Read it with read_file('self/index.md'), not read_source. Use the split self/* files it points to when you only need one subsystem.
+	SRC SURFACES (read-only by default): source_stats|src_stats(file), read_source(file,start_line?,num_lines?), list_source(directory?), and grep_source(pattern, directory?, file_glob?) inspect src/. WEB-UI SURFACES (read-only by default): webui_source_stats|webui_stats(file), read_webui_source(file,start_line?,num_lines?), list_webui_source(directory?), and grep_webui_source(pattern, directory?, file_glob?) inspect web-ui/. PROM-ROOT SURFACE (dev/proposal only): list_prom, prom_file_stats, read_prom_file, and grep_prom inspect allowlisted Prometheus project-root files/directories such as scripts/, electron/, build/, dist/, src/, web-ui/, and .prometheus/.
+	Write (approved dev source sessions only): use request_dev_source_edit for fast user approval in the current dev chat, or write_proposal execution_mode="code_change" for the full proposal lane. request_dev_source_edit must include a grounded plan: user_request, reasoning, evidence with file/line findings, current_state, fix, steps, expected_workflow, verification, and completion_note_tag (default dev_edit_complete). expected_workflow should explain exactly what happens after approval and after edits apply live: scoped tool unlock, verification/preflight, restart/reload/checkpoint behavior, completion note, and final response shape. After approval, follow that declared plan and use only the source-write tools for approved files: src/: find_replace_source, replace_lines_source, insert_after_source, delete_lines_source, write_source, delete_source; web-ui/: find_replace_webui_source, replace_lines_webui_source, insert_after_webui_source, delete_lines_webui_source, write_webui_source, delete_webui_source; allowlisted prom-root proposal scope only: find_replace_prom, replace_lines_prom, insert_after_prom, delete_lines_prom, write_prom_file, delete_prom_file. Prometheus Mobile is part of the web UI source tree: edit mobile app source under web-ui/src/mobile/*, never hand-edit generated/public-web-ui/static/mobile/* except for emergency verification, and finalize quick live mobile edits with prom_apply_dev_changes changed_surfaces:["mobile"]. For quick live dev edits, finalize with prom_apply_dev_changes rather than raw npm run build; use mode="verify_only" for a no-restart preflight or mode="apply_live" to sync/build/restart/reload. After apply_live/restart/reload succeeds, call write_note with the approved completion_note_tag and dev_edit_id so the dev-edit plan can close before the final user summary. Proposal/code_exec lanes are isolated sandboxes: verify them with the canonical run_command build inside the sandbox, and do not call prom_apply_dev_changes there.
 	MANDATORY EDIT ROUTE: For workspace file edits, native file tools are the default and expected path: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts to edit files unless the user explicitly asks for shell editing or the native tools cannot perform the transformation.
-	EDIT PRIORITY: 1.find_replace_source (targeted, default) 2.replace_lines_source (non-unique text) 3.insert_after_source (add block) 4.delete_lines_source (remove) 5.write_source (new file/full rewrite). Always read before editing.`,
+	EDIT PRIORITY: Always inspect before editing. For source-controlled Prometheus code, prefer exact-text tools first: 1.find_replace_source/find_replace_webui_source/find_replace_prom for targeted unique edits 2.replace_lines_* only when exact text is not practical, after rereading current line numbers 3.insert_after_* or delete_lines_* for structural additions/removals 4.write_source/write_webui_source/write_prom_file for new files or intentional full-file rewrites 5.delete_source/delete_webui_source/delete_prom_file only after listing/reading the exact target. For normal workspace files, use file_stats/search_files/grep_file/read_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file/delete_file as appropriate.`,
 
   task: `TASK: task_control(action,...) — list/get/resume/rerun/pause/delete. task_control(list) returns active tasks AND cron jobs in one call. Do NOT use read_file for task state.`,
 
@@ -655,7 +659,7 @@ instruction_prompt must be FULLY SELF-CONTAINED — write as if briefing a fresh
 
   browser_vision: `VISION MODE: Few DOM elements — canvas/WebGL/SPA. browser_vision_screenshot()→viewport PNG. browser_vision_click(x,y)→pixel coords from image. browser_vision_type(x,y,text)→focus+type. Vision screenshot is the primary source of truth in this mode. Workflow: screenshot → pick coords → click/type. Switch back to browser_click(@ref) when element count exceeds 10.`,
 
-  shell: `SHELL: run_command(command)→stdout/stderr/exit. For terminal tasks (git/npm/python/curl). Use browser_* for websites, desktop_* for UI interaction.`,
+  shell: `SHELL/RUN COMMANDS: activate workspace_write before using run_command, start_process, or process_* tools. Use run_command(command)→stdout/stderr/exit for bounded terminal tasks (git/npm/python/curl). Use start_process plus process_status/process_log/process_wait/process_kill/process_submit for dev servers, watchers, long builds, renders, and interactive CLIs. Use browser_* for websites, desktop_* for UI interaction.`,
 
   memory: `MEMORY: memory_browse(file)→categories. memory_write(file,category,content)→add/update fact. memory_read(file)→full contents. file="user"|"soul"|"memory". Use user for user profile facts, soul for operating rules, memory for durable long-term context and decisions.
 LONG-TERM RETRIEVAL: memory_search(query, mode?, ...filters)→SQLite/FTS/vector-ranked hits with operational/evidence layers, citations, authority, status, and source spans when available. memory_read_record(record_id)→full source record. memory_search_project(project_id, query) and memory_search_timeline(query, date_from?, date_to?) for scoped retrieval. memory_get_related(record_id) expands to connected context.
@@ -670,9 +674,9 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   media_quality: `MEDIA QUALITY: image_check_contrast, image_check_text_overflow, image_detect_empty_regions, image_get_bounds_summary, image_get_element_at_point, image_get_overlaps, video_render_frame, video_render_contact_sheet, video_check_audio_sync, and video_check_caption_timing validate visual/video output. Activate when checking layout polish, frame rendering, captions, or audio timing.`,
 
-  automations: `AUTOMATIONS: schedule_job(action,...) creates/updates/lists/pauses/resumes/deletes recurring or one-off jobs. Pass team_id for manager-led team schedules; the manager wakes first and dispatches agents from team goal/memory. Other new and updated schedules are schedule-owner-subagent backed; omitted subagent_id is auto-assigned. schedule_job_detail/history/log_search/outputs/patch/stuck_control inspect and repair scheduled runs. Confirm before mutating existing jobs. Prompts must be self-contained for a fresh future agent.`,
+  automations: `AUTOMATIONS: schedule_job is core for normal list/create/update/pause/resume/delete/run_now. Activate automations for deeper operator tools: schedule_job_detail/history/log_search/outputs/patch/stuck_control inspect and repair scheduled runs; automation_dashboard returns a unified operator snapshot. Confirm before mutating existing jobs. Prompts must be self-contained for a fresh future agent.`,
 
-  external_apps: `EXTERNAL APPS: connector_list is core for discovery. Activate external_apps for connected Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, and Obsidian tools. Check connector_list first when connection status matters.`,
+  external_apps: `EXTERNAL APPS: connector_list is core for discovery. Activating external_apps loads only tools for connectors currently connected in the Connections panel, such as Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian, X/Twitter, or xAI/Grok. Check connector_list first when connection status matters.`,
 
   social_intelligence: `SOCIAL INTELLIGENCE: social_intel(platform, handle, mode?) analyzes social profiles and persists structured findings under entities/social. Use for profile metrics, engagement analysis, growth trajectory, and content recommendations.`,
 
@@ -683,8 +687,8 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
   creative_mode: `CREATIVE TOOLS: normal main-chat creative editor tools. Use creative_* and hyperframes_* directly for editable image/video/canvas/studio work, and use Creative/HyperFrames skills for workflow guidance. Workspace selection is editor state, not an assistant runtime mode. Use generate_image/generate_video for one-shot AI media without opening an editable workspace.`,
 
   debug: isPublicDistributionBuild()
-    ? `DEBUG: Use workspace files, logs, and visible runtime state to diagnose issues in the public app build.`
-    : `DEBUG: read_source(file) for src/ errors, read_webui_source(file) for web-ui/. SELF.md has architecture overview. Read before diagnosing.`,
+    ? `DEBUG: Use workspace files, logs, audit records, generated artifacts, and visible runtime state to diagnose issues in the public app build. Do not assume Prometheus source or dev-only self reference files are available.`
+    : `DEBUG: For Prometheus internal/runtime errors, inspect self/index.md first, then use workspace logs/audit when relevant: list_directory('audit'), search_files(directory:'audit', pattern:...), and read_file(...) on specific transcripts, task records, or compaction summaries. For Prometheus source errors in dev/private builds, use read_source/grep_source for src/ errors or read_webui_source/grep_webui_source for web-ui errors. For running compiled-backend mismatches, compare src/ with dist/ through prom-root read tools when available.`,
 
   agents: `AGENTS: agent_list()→all agents. agent_info(id)→details. spawn_subagent(id, task_prompt, create_if_missing?, run_now?)→run or create a standalone agent. message_subagent(agent_id,message,context?)→send a background message to a standalone non-team subagent and return a task id. delete_agent(id, confirm:true)→remove.
 RULES: Always agent_list() first. Never spawn to list/inspect — use agent_list(). spawn_subagent creates/starts standalone one-off agents. message_subagent is for plain agent-to-agent handoff with an existing standalone subagent; its work/results stay in the subagent task panel so main chat can continue.`,
@@ -695,7 +699,7 @@ WHEN TO USE EACH:
   → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles (planner+builder+verifier etc.)
 TEAM OPS: Do NOT call team_manage directly from main chat — ask_team_coordinator handles it. reply_to_team(team_id, msg) is the only direct team call — use it when a coordinator is waiting on your reply.`,
 
-  skills: `SKILLS: Before browser/desktop actions, file edits, or multi-step execution, call skill_list() first. If relevant, call skill_read(id) and follow it. Treat skills as living workflow playbooks: while working, notice missing triggers, clearer steps, better tool order, reusable examples, templates, guardrails, and resources that would make the skill more useful next time. When a completed workflow is clearly reusable but no skill fit, briefly offer to turn it into a skill or add it to an existing skill as a resource/template. For bundled skills, use skill_resource_list(id) and skill_resource_read(id,path) to load references/templates/examples only as needed. Use skill_inspect(id) for normalized metadata/provenance. Use skill_manifest_write(id,manifest), skill_resource_write(id,path,content), skill_resource_delete(id,path), skill_import_bundle(source), skill_export_bundle(id), skill_update_from_source(id), and skill_create_bundle(...) when managing reusable bundle skills. For conversational replies, respond directly and do not force skill maintenance chatter. Skill tools are core tools (always available).`,
+  skills: `SKILLS: Before browser/desktop actions, file edits, or multi-step execution, call skill_list() first. If relevant, call skill_read(id) and follow it. Treat skills as living workflow playbooks: while working, notice missing triggers, clearer steps, better tool order, reusable examples, templates, guardrails, and resources that would make the skill more useful next time. After a complex task (roughly 5+ tool calls), a tricky error fix, or a non-trivial workflow discovery, maintain the skill system while the evidence is fresh: if an existing skill was outdated, incomplete, wrong, or missing an example/template/reference, update it in the same turn with skill_resource_write/delete and skill_manifest_write; if no skill fits and the workflow is reusable, create a durable playbook with skill_create_bundle when resources/examples/templates/schemas would help, or skill_create for a simple one-file skill. For bundled skills, use skill_resource_list(id) and skill_resource_read(id,path) to load references/templates/examples only as needed, and add focused resources such as examples/, templates/, schemas/, prompts/, or references/ rather than bloating SKILL.md. Use skill_inspect(id) for normalized metadata/provenance. Use skill_manifest_write(id,manifest), skill_resource_write(id,path,content), skill_resource_delete(id,path), skill_import_bundle(source), skill_export_bundle(id), skill_update_from_source(id), and skill_create_bundle(...) when managing reusable bundle skills. For conversational replies, respond directly and do not force skill maintenance chatter. Skills that are not maintained become liabilities. Skill tools are core tools (always available).`,
 
   agent_builder: `AGENT BUILDER (localhost:3005): search_workflow_templates(query) first → architect_workflow() only if no match → verify_workflow_credentials → deploy_workflow → create_node_subagent if needed.
 STOP if credentials missing — tell user exactly what's needed with add_credential_url links. Workflows run inside Agent Builder — use execute_workflow_template(), NOT browser_* tools.`,
@@ -724,8 +728,10 @@ export const CATEGORY_POLICIES: Record<string, string> = {
   team_ops: `${TOOL_BLOCKS.agents}\n\n${TOOL_BLOCKS.teams}`,
   automations: TOOL_BLOCKS.automations,
   scheduling: TOOL_BLOCKS.automations,
-  workspace_write: TOOL_BLOCKS.files,
-  file_ops: TOOL_BLOCKS.files,
+  workspace_write: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
+  file_ops: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
+  shell: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
+  commands: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
   prometheus_source_read: TOOL_BLOCKS.debug,
   ...(isPublicDistributionBuild() ? {} : {
     prometheus_source_write: `${TOOL_BLOCKS.files}`,
@@ -781,16 +787,16 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     ['browser_automation', 'browser_automation (web UI control, forms, DOM/screenshot, shortcuts)'],
     ['desktop_automation', 'desktop_automation (OS windows, apps, clipboard, screenshots, mouse/keyboard)'],
     ['agents_and_teams', 'agents_and_teams (standalone subagents, managed teams, team chat, dispatches)'],
-    ['workspace_write', 'workspace_write (workspace file mutations: find_replace/replace_lines/write_file/create_file)'],
+    ['workspace_write', 'workspace_write (workspace file mutations plus run_command/start_process/process_* tools)'],
     ['prometheus_source_read', 'prometheus_source_read (inspect Prometheus src/, web-ui/, and allowlisted root files)'],
     ['prometheus_source_write', 'prometheus_source_write (edit Prometheus app/source files for approved dev tasks)'],
     ['advanced_memory', 'advanced_memory (memory graph, timeline, related records, project search, index refresh)'],
     ['media_assets', 'media_assets (download/analyze images, video, audio, remote assets)'],
     ['media_quality', 'media_quality (layout/video QA: contrast, overflow, frame renders, caption/audio timing)'],
-    ['automations', 'automations (schedule_job plus schedule detail/history/outputs/patch/stuck control)'],
+    ['automations', 'automations (schedule detail/history/outputs/patch/stuck control/dashboard)'],
     ['integration_admin', 'integration_admin (MCP server setup, webhooks, integration quick setup)'],
     ['external_apps', 'external_apps (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian)'],
-    ['connectors', 'connectors (external app tools including Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian — use connector_list to see what\'s connected)'],
+    ['connectors', 'connectors (alias for external_apps; loads only connected app tools — use connector_list to see what\'s connected)'],
     ['social_intelligence', 'social_intelligence (social profile analysis and recommendations)'],
     ['proposal_admin', 'proposal_admin (edit pending proposals before approval)'],
     ['mcp_server_tools', 'mcp_server_tools (dynamic mcp__server__tool functions from connected servers)'],
@@ -821,15 +827,17 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     .map(([, label]) => label)
     .join(' | ');
 
-  const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, shell, skill tools including skill_list/skill_read/skill_resource_*/skill_inspect/skill_manifest_write/skill_import_bundle/skill_create_bundle, tasks, switch_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
+  const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill tools including skill_list/skill_read/skill_resource_*/skill_inspect/skill_manifest_write/skill_import_bundle/skill_create_bundle, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
   Use: request_tool_category({"category":"browser"}) — stays active for the whole session. Full reference: read_file('TOOLS.md')
 
 [FILE EDIT ROUTING] For workspace edits, activate/use file_ops and follow: file_stats/read_file or grep_file first, then find_replace/replace_lines/insert_after/delete_lines/write_file/create_file. Do not use run_command, Python, PowerShell, sed, or node scripts as the default file editor.
 
+[RUN COMMAND ROUTING] For shell/dev-server/process work, activate workspace_write. Use run_command for bounded commands; use start_process plus process_status/process_log/process_wait/process_kill/process_submit for long-running or interactive commands.
+
 [PROPOSAL LANES] When using write_proposal, set execution_mode explicitly:
-- code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings.
+- code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings. Do not use code_change for prom-root/config/build scripts unless the proposal lane explicitly supports that scope.
 - action: approve and perform/trigger/create something exactly once. Use for team starts, scheduled runs, artifacts, and bounded workflows. Include 3-7 execution_steps and requires_build=false.
 - review: read-mostly verification/audit/report. Do not mutate unless the proposal explicitly approves that exact mutation. Include evidence/resource refs and 3-7 execution_steps.
 
@@ -838,7 +846,7 @@ WHEN: freshness (today/latest/current/price), high-stakes facts, named entity lo
 HOW: complex topics → call web_search 2–3× with different angles (not the same query twice). Scan snippets → web_fetch the 1–3 most relevant URLs. Add site:domain.com to target a source.
 FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
 ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.
-For broad coverage use web_search_multi(query,max_results?) or web_search(..., provider:"multi"). For provider checks use web_search_single(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
+For broad coverage use web_search_multi(query,max_results?) or web_search(..., provider:"multi"). For provider checks use web_search_single(query, provider:"tinyfish"|"tavily"|"google"|"brave"|"ddg"|"xai") and inspect provider metadata/banner; do not use site:google-owned domains as provider proof.
 
 [WRITE NOTE] write_note(content, tag?) is always available — use it to preserve context between sessions.
 WHEN TO WRITE: something was discussed, decided, or discovered that future sessions should know about; a file/task/plan step completed; data gathered from browser/desktop/API mid-task.
@@ -848,7 +856,7 @@ DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered 
 
 [MEMORY CONTINUITY] Memory search is Prometheus' long-term recall. Use memory_search before answering from memory when the user asks about previous discussions, decisions, recurring preferences, project history, older tasks, "what did we decide", "what happened before", or any answer that depends on continuity. Use memory_read_record for important hits and memory_get_related to expand useful context. Use memory_search_timeline when chronology matters.
 
-[BUSINESS CONTEXT] BUSINESS.md is available but not auto-injected by default. Use business_context_mode({"action":"enable"}) when ongoing work needs persistent business/company context across this session. Use "status" to check the mode and "disable" to turn it back off. Enabling returns the current BUSINESS.md snapshot immediately so you can use it in the same turn.
+[BUSINESS CONTEXT] BUSINESS.md is available but not auto-injected by default. Use business_context_mode({"action":"enable"}) when ongoing work needs persistent business/company context across this session. Use "status" to check the mode and "disable" to turn it back off. Enabling returns the current BUSINESS.md snapshot immediately so you can use it in the same turn. Business entity tools are core: list_entities(type?), read_entity(type,id), write_entity(type,id,content), append_entity_event(type,id,event,display_name?,source?,confidence?). Use entities for clients, contacts, projects, vendors, and social accounts; use BUSINESS.md for company-level profile, offers, policies, and priorities.
 
 [TEAMS & AGENTS] Two delegation paths — pick the right one:
   → spawn_subagent('id', task, ...) — create/run one standalone non-team agent. message_subagent(id,message) — send a background message to an existing standalone agent; returns task_id and keeps the conversation/result in the subagent task panel. Requires team_ops category.
@@ -856,6 +864,7 @@ DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered 
 Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct team call — use only when a coordinator is waiting on your reply.
 
 [MODEL ROUTING] Default: primary model (powerful, for complex work). Call switch_model(tier, reason) EARLY when the task is clearly lighter.
+  → If the user asks to change the AI's current/live primary model, call set_current_model("provider/model"). Do not use set_agent_model for that; set_agent_model is only for future-agent defaults/routes.
   → 'low' (speed): single command, file read/summary, write_note only, quick lookups.
   → 'medium' (careful): multi-step analysis or structured work that doesn't need full primary model power.
   → Stay on primary: ${isPublicDistributionBuild() ? 'proposal work, deep reasoning, auth/security/build, anything expensive if wrong.' : 'src/ edits, proposals, deep reasoning, auth/security/build, anything expensive if wrong.'}
@@ -1001,13 +1010,73 @@ export async function buildPersonalityContext(
   const retrievedMemoryCtx = allowLongTermSearch
     ? buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
     : '';
+  const cisContext = buildCisContextBlock(workspacePath, messageText, { force: isBusinessContextEnabled(sessionId) });
+  const configSoul = loadSoul();
+
+  if (profile === 'voice_agent') {
+    const user = loadFullMemoryProfile(workspacePath, 'USER.md');
+    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
+    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
+    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
+    const today = new Date().toISOString().split('T')[0];
+    const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
+    const intradayNotes = fs.existsSync(intradayPath) ? processIntradayNotes(fs.readFileSync(intradayPath, 'utf-8')) : '';
+    const readCapped = (relativePath: string, maxChars: number): string => {
+      try {
+        const filePath = path.join(workspacePath, relativePath);
+        if (!fs.existsSync(filePath)) return '';
+        const raw = fs.readFileSync(filePath, 'utf-8').trim();
+        return raw.length > maxChars ? `${raw.slice(0, maxChars)}\n...[truncated]` : raw;
+      } catch {
+        return '';
+      }
+    };
+    const selfIndex = isPublicDistributionBuild() ? '' : readCapped(path.join('self', 'index.md'), 3000);
+    const voiceSelf = isPublicDistributionBuild() ? '' : readCapped(path.join('self', '06-image-voice.md'), 7000);
+    const boot = readCapped('BOOT.md', 3000);
+    let projectContextBlock = '';
+    try {
+      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
+      if (findProjectBySessionId(sessionId)) {
+        projectContextBlock = buildProjectContextBlock(sessionId) || '';
+      }
+    } catch {}
+    const referenceHint = isPublicDistributionBuild()
+      ? ''
+      : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map. The Voice Agent has direct voice-system notes below and should dispatch to the worker if it needs to read more files.`;
+    const parts = [
+      configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
+      user ? `[USER]\n${user}` : '',
+      soul ? `[SOUL]\n${soul}` : '',
+      business ? `[BUSINESS]\n${business}` : '',
+      cisContext,
+      memory ? `[MEMORY]\n${memory}` : '',
+      retrievedMemoryCtx,
+      projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
+      intradayNotes ? `[TODAY_NOTES - read-only working context]\n${intradayNotes}` : '',
+      boot ? `[BOOT_MD - operational startup/workspace guidance, read-only]\n${boot}` : '',
+      selfIndex ? `[SELF_INDEX]\n${selfIndex}` : '',
+      voiceSelf ? `[SELF_VOICE_SECTION]\n${voiceSelf}` : '',
+      referenceHint,
+    ].filter(Boolean);
+    const skillCtx = skillsManager.buildTurnContext(messageText);
+    if (skillCtx) parts.push(skillCtx);
+    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    if (activeSkillCtx) parts.push(activeSkillCtx);
+    setCurrentTurn(sessionId, historyLength);
+    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+  }
 
   if (profile === 'switch_model') {
     const user = loadFullMemoryProfile(workspacePath, 'USER.md');
     const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
     const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
-    const activatedCatsSwitch = getActivatedToolCategories(sessionId);
+    // switch_model starts a fresh generation context. Do not inherit the
+    // interactive session's expanded tool categories, otherwise a lightweight
+    // switch can receive the full schema payload from prior category opens.
+    const activatedCatsSwitch = new Set<string>();
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsSwitch.add('browser');
@@ -1015,9 +1084,11 @@ export async function buildPersonalityContext(
       }
     }
     const parts = [
+      configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
       user ? `[USER]\n${user}` : '',
       soul ? `[SOUL]\n${soul}` : '',
       business ? `[BUSINESS]\n${business}` : '',
+      cisContext,
       memory ? `[MEMORY]\n${memory}` : '',
       retrievedMemoryCtx,
       buildToolsContext(activatedCatsSwitch),
@@ -1053,6 +1124,7 @@ export async function buildPersonalityContext(
       soul ? `[SOUL]\n${soul}` : '',
       memory ? `[MEMORY]\n${memory}` : '',
       business ? `[BUSINESS]\n${business}` : '',
+      cisContext,
       buildToolsContext(activatedCatsTeam),
     ].filter(Boolean);
     const skillCtx = skillsManager.buildTurnContext(messageText);
@@ -1069,7 +1141,10 @@ export async function buildPersonalityContext(
     const isProposalExecution = executionMode === 'proposal_execution';
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
     const soul = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'SOUL.md');
-    const memory = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
+    // Proposal execution still needs durable operational runbooks, especially
+    // source/mobile build-sync rules. Keep the cap modest so execution stays
+    // focused on the approved proposal instead of broad continuity.
+    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', isProposalExecution ? 12000 : 8000);
     // USER.md intentionally excluded from background tasks — user preferences are
     // not relevant to focused task execution and waste token budget.
     // AGENTS.md intentionally excluded from autonomous path — background tasks,
@@ -1103,6 +1178,7 @@ export async function buildPersonalityContext(
     const toolsBlockAuto = buildToolsContext(activatedCatsAuto);
     const parts = [
       business ? `[BUSINESS]\n${business}` : '',
+      cisContext,
       soul ? `[SOUL]\n${soul}` : '',
       memory ? `[MEMORY]\n${memory}` : '',
       projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
@@ -1147,9 +1223,11 @@ export async function buildPersonalityContext(
       }
     }
     const parts = [
+      configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
       user ? `[USER]\n${user}` : '',
       soulT1 ? `[SOUL]\n${soulT1}` : '',
       business ? `[BUSINESS]\n${business}` : '',
+      cisContext,
       memory ? `[MEMORY]\n${memory}` : '',
       retrievedMemoryCtx,
       projectContextBlockT1 ? `[PROJECT_CONTEXT]\n${projectContextBlockT1}` : '',
@@ -1192,13 +1270,15 @@ export async function buildPersonalityContext(
   // Reference hints — Prom reads these files when actually needed rather than
   // injecting partial snippets based on keyword guesses.
   const referenceHint = isPublicDistributionBuild()
-    ? `[REFERENCE_FILES] Agent workspace context: read_file('AGENTS.md').`
-    : `[REFERENCE_FILES] Architecture/debug context: read_source('SELF.md') or read_prom_file('SELF.md'). Agent workspace context: read_source('AGENTS.md') or read_prom_file('AGENTS.md').`;
+    ? ''
+    : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use read_file('self/index.md'). Follow its links to focused self/* subsystem files as needed.`;
 
   const parts = [
+    configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
     user ? `[USER]\n${user}` : '',
     soul ? `[SOUL]\n${soul}` : '',
     business ? `[BUSINESS]\n${business}` : '',
+    cisContext,
     memory ? `[MEMORY]\n${memory}` : '',
     retrievedMemoryCtx,
     projectContextBlockT2 ? `[PROJECT_CONTEXT]\n${projectContextBlockT2}` : '',

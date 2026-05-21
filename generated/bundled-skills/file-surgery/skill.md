@@ -1,15 +1,43 @@
 ---
 name: File Surgery
 description: >
-  Safe, exact file-editing and cautious coding playbook for workspace files, markdown, configs, skills, docs, scripts, and source-adjacent assets. Use this before any file mutation when the user asks to update a file, edit a skill, patch markdown, rewrite config, add a section, fix formatting, remove duplicated text, inspect code before editing, make a careful code change, or verify a file edit. This skill emphasizes native file tools, line-numbered reads, risk checks, small patches, user-change preservation, bottom-to-top edits, and immediate verification; it explicitly avoids shell scripts for file inspection/editing when Prometheus file tools exist.
+  Codex-style file editing and cautious engineering playbook for workspace files, markdown, configs, skills, docs, scripts, UI files, and source-adjacent assets. Use this before any file mutation when the user asks to edit this file, fix this bug, implement a feature, refactor, update UI, patch the repo, change Prometheus source code, self-edit Prometheus, run tests, make this work, update a skill, rewrite config, add/remove sections, inspect code before editing, or verify a file edit. This skill forces repo-grounded inspection, short planning, smallest correct patches, verification, repair loops, git hygiene, and honest reporting.
 emoji: "🧩"
-version: 2.1.0
-triggers: update file, edit file, patch file, file edit, file surgery, edit markdown, update skill, patch skill, replace lines, add section, remove section, fix config, rewrite document, verify file edit, clean up file, careful code edit, inspect before editing, verify build
+version: 3.0.0
+triggers: update file, edit file, patch file, file edit, file surgery, edit markdown, update skill, patch skill, replace lines, add section, remove section, fix config, rewrite document, verify file edit, clean up file, careful code edit, inspect before editing, verify build, edit this file, fix this bug, implement this feature, refactor this, update the UI, patch the repo, change Prometheus source code, self-edit Prometheus, run tests, make this work, src, web-ui, generated, package.json, tsconfig, server files, routes, tools, agents, skills, connectors, Prometheus internal code
 ---
 
 # File Surgery Playbook
 
 Use this when Prometheus needs to inspect, modify, or verify workspace files safely.
+
+When the request is about code, UI, repo behavior, tests, builds, Prometheus internals, or anything under `src/`, `web-ui/`, `generated/`, `package.json`, `tsconfig*`, routes, tools, agents, skills, or connectors, treat it as an engineering task, not a chat task.
+
+## Codex-Style Engineering Mode
+
+You are in Codex-style engineering mode.
+
+Your job is not to describe how to change the code. Your job is to inspect the repo, make the smallest correct patch, verify it, repair failures, and report exactly what changed. Do not guess the codebase structure. Read files first. Do not introduce new frameworks, build steps, dependencies, or architecture unless explicitly requested. Preserve existing behavior unless the user asked to change it.
+
+Non-negotiables:
+
+- Read before editing.
+- Trust repo files over memory, user descriptions, and previous plans.
+- Never invent paths, scripts, APIs, or architecture.
+- Make minimal patches and preserve unrelated behavior.
+- Do not reformat unrelated files.
+- Run relevant verification after meaningful edits.
+- Repair patch-caused failures.
+- Never claim success without evidence.
+- Never commit or push unless the user explicitly asks.
+
+Source of truth rule:
+
+- The current repo/files are the source of truth.
+- User descriptions are intent, not implementation truth.
+- If memory conflicts with files, trust files.
+- If a previous plan conflicts with files, trust files.
+- In EDIT mode, base changes strictly on the latest provided project files and keep everything else 1:1 identical.
 
 Core loop:
 
@@ -31,6 +59,9 @@ Use shell only for actual process execution, builds, tests, git operations, or a
 
 When the file change affects code, scripts, routes, prompts, generated artifacts, or behavior-bearing config, add these constraints to the core loop:
 
+- Before editing, inspect the smallest sufficient set of files to understand the existing pattern. Prefer reading nearby files over inventing structure. If the target file is large, locate relevant functions/classes first, then read focused ranges.
+- Inspect relevant imports/exports, callers/callees, package scripts, neighboring modules/components, current git status/diff when available, and existing tests/smoke scripts.
+- Produce a short plan before patching: files likely to change, why those files, verification commands, and risky/rollback areas. Keep it to 3-5 bullets for small tasks.
 - Understand the current flow before changing it. Read the caller, callee, nearby types/contracts, and at least one representative use site.
 - Preserve user work. Check current file state and, when available, git status/diff before touching files that may already be modified.
 - Prefer the smallest behaviorally complete patch. Avoid drive-by refactors, formatting churn, dependency swaps, and broad rewrites unless they are necessary to solve the requested problem.
@@ -40,6 +71,41 @@ When the file change affects code, scripts, routes, prompts, generated artifacts
 - Report any verification you could not run and why. Do not imply safety that was not actually checked.
 
 Escalate or pause before editing when the requested change is ambiguous, touches secrets/auth/payment/destructive data paths, requires deleting user work, or would change broad architecture without an explicit request.
+
+### Prometheus Repo Facts to Preserve
+
+- Prometheus web UI is currently a static vanilla JS app, not React.
+- Do not introduce React, JSX, Tailwind, Next routing, or a new build step unless Raul explicitly requests it.
+- Prefer vanilla JS ES modules for current `web-ui` work.
+- Desktop page switching uses `setMode()` in `web-ui/src/app.js`.
+- Static assets are served through Express routes in `src/gateway/core/app.ts`.
+- For `web-ui/src/**` or mobile edits, edit source first and run `npm run sync:web-ui`; do not hand-edit `generated/public-web-ui/**` except for emergency verification.
+- For backend/gateway `src/**`, run `npm run build:backend` or `npm run build` before expecting the running gateway to see changes.
+- In dev/server mode after source, web UI, or mobile edits, prefer `prom_apply_dev_changes` with accurate `changed_surfaces` when that tool is available; it handles sync/build/restart/reload consistently.
+
+### Dependency and Architecture Discipline
+
+- Do not add dependencies unless required.
+- Before adding a dependency, check whether an existing dependency already solves it, explain why it is needed, update package files consistently, and verify install/build impact.
+- No new frontend framework, React/Tailwind/JSX, build pipeline, or CDN dependency unless explicitly approved.
+- Do not migrate architecture unless the task is explicitly a migration.
+- Do not replace the existing app shell, routing, state model, or styling system.
+- Fit the requested feature into the existing architecture.
+
+### Risk Routing
+
+- Small edit: <=80 changed lines, <=2 files, non-critical UI/text behavior. Patch directly, then verify.
+- Medium edit: 3-6 files or an architectural touchpoint. Patch, verify, and ask for or run secondary review before final when available.
+- Large/risky edit: core runtime, tool execution, scheduler, memory, auth, filesystem, shell commands, browser/desktop control, credentials, or self-modifying Prometheus internals. Create a plan first, inspect related tests/logging/audit paths, get secondary critique when available, patch, verify, then final review.
+
+When editing Prometheus itself:
+
+- Do not modify safety, approval, filesystem, shell, browser, or credential-handling code without explicit user intent.
+- Never weaken approval gates.
+- Never broaden filesystem access silently.
+- Never store secrets in source files.
+- Never log credentials, tokens, cookies, OAuth codes, or API keys.
+- Never remove audit logging unless explicitly requested and reviewed.
 
 ---
 
@@ -109,6 +175,8 @@ Before planning the mutation, classify the edit:
 
 For medium/high-risk changes, inspect related files and decide the minimum viable verification before editing. If the edit is high-risk and the user request is vague, ask one concise clarifying question or state the conservative assumption before proceeding.
 
+If the patch touches more than 3 files, more than 150 lines, core agent/tool execution code, auth/security/payment/connectors, shell/filesystem/browser/desktop permissions, memory/scheduler, or self-modifying Prometheus internals, trigger secondary review before finalizing when available.
+
 ### Step 4: PLAN the edit
 
 Before mutating anything, know:
@@ -122,6 +190,13 @@ Before mutating anything, know:
 - Verification command or manual check to run afterward
 - Whether multiple edits must be ordered bottom-to-top
 - Whether a full rewrite is safer than line surgery
+
+For code tasks, share a concise implementation plan before editing:
+
+- Files likely to change
+- Why those files
+- Verification command(s)
+- Rollback/risky areas
 
 If editing multiple non-adjacent line ranges in one file, plan all ranges before executing any and work from the highest line number down.
 
@@ -210,11 +285,47 @@ Confirm:
 - Version/changelog/metadata were updated if this is a skill or doc upgrade
 - Behavior-bearing edits passed the smallest relevant automated or manual check available
 
+For code changes, inspect `package.json` scripts before choosing verification. Select checks by changed files:
+
+- TypeScript/source runtime change: run typecheck/build, usually `npm run build:backend` or `npm run build`.
+- Frontend module change: run syntax/import sanity checks, `npm run sync:web-ui` when relevant, and a browser smoke test when possible.
+- Package/dependency change: verify install/build impact.
+- CSS-only change: browser smoke and visual check.
+- Tool/scheduler/memory/security change: targeted unit/integration tests if available plus build.
+- Docs-only change: no build required unless docs generation exists.
+
+For Prometheus UI changes, prefer:
+
+1. Start or use the local dev server/gateway when available.
+2. Open the affected page.
+3. Check visible rendering.
+4. Check browser console errors.
+5. Exercise the changed interaction.
+6. Screenshot when useful.
+
 If verification fails, stop and fix the real current file state. Do not continue stacking edits on broken assumptions.
+
+Repair loop:
+
+1. Read the full relevant error.
+2. Identify whether the failure is patch-caused or pre-existing.
+3. Fix patch-caused failures.
+4. Rerun verification.
+5. Repeat up to 3 automatic repair cycles.
+
+After 3 failed repair attempts, stop and report the command, failing error, suspected cause, files changed, and next recommended patch.
 
 ### Step 7: REPORT
 
-Summarize what changed, where it changed, and what verification was performed. If tests/builds were skipped, say exactly why. If there are many unrelated existing git changes, mention only that the workspace was already dirty and your edit was scoped to the requested file(s).
+Final response must include:
+
+- What changed
+- Files modified
+- Verification run
+- Any remaining issues
+- Follow-up recommendation, if relevant
+
+If tests/builds were skipped, say exactly why. If there are many unrelated existing git changes, mention only that the workspace was already dirty and your edit was scoped to the requested file(s). Say "implemented, not verified" or "partially implemented" when that is the truth.
 
 ---
 
@@ -301,6 +412,10 @@ If a file contains secrets, tokens, API keys, credentials, or auth material, loa
 
 For ordinary workspace scripts, use this skill plus extra verification:
 
+- Never claim a file exists unless you have listed or read it.
+- Never edit a path from memory without checking it exists first.
+- If the user mentions a file name that does not exist, search the repo before creating a new one.
+- Prefer following existing naming/location conventions.
 - Read related imports, exported types, call sites, and existing tests before editing.
 - Check imports after edits and remove unused imports only when they are yours or clearly made obsolete by the patch.
 - Visually balance `{}`, `()`, `[]`, template strings, and JSX tags.
@@ -308,7 +423,22 @@ For ordinary workspace scripts, use this skill plus extra verification:
 - If behavior changed, run the relevant test/build with `run_command` only after file edits are done.
 - If no targeted test exists, run the narrowest available static check or explain the manual verification performed.
 
-For Prometheus product source under `src/` or `web-ui/`, do not directly edit from main chat. Use source inspection, proposal rigor, and approved source-write execution.
+For Prometheus product source under `src/` or `web-ui/`, use source inspection, src-edit proposal rigor, and either approved proposal execution or the dev-only `request_dev_source_edit` fast approval flow. Approval unlocks only scoped source-write tools for the approved chat/session; it does not remove the requirement to inspect, patch minimally, sync/build, verify, and report.
+
+If creating a new module:
+
+- Keep it focused.
+- Export clear functions.
+- Follow existing style.
+- Avoid global side effects.
+- Add cleanup/destroy methods if it mounts UI or listeners.
+
+For Creative Editor work:
+
+- Modules should expose `createX`/`destroyX` patterns.
+- Mounts should be reversible.
+- Event listeners should be cleaned up.
+- State should mutate through approved `sceneGraph` operations only; use `applySceneGraphOps` when repo inspection confirms it is the current pathway.
 
 ---
 
@@ -329,6 +459,9 @@ For Prometheus product source under `src/` or `web-ui/`, do not directly edit fr
 | Refactoring while fixing a bug | Enlarges blast radius and hides the real change | Make the requested fix, then suggest follow-up refactor separately |
 | Updating one copy of a mirrored skill or asset | Runtime uses the stale copy | Inspect sync/build conventions and update expected mirrors together |
 | Claiming tests passed when they were not run | Gives false confidence | State exactly what ran and what did not |
+| Adding React/Tailwind/Next to current Prometheus web UI | Architecture drift | Use vanilla JS ES modules unless explicitly requested |
+| Hand-editing generated web/mobile files as the source of truth | Changes are overwritten by sync | Edit `web-ui/src/**`, then run `npm run sync:web-ui` |
+| Continuing after 3 failed repairs | Infinite churn hides the blocker | Stop and report command/error/cause/changed files/next patch |
 
 ---
 

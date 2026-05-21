@@ -88,7 +88,9 @@ function bundleSkills() {
 
     const srcSkillDir = path.join(srcSkills, entry.name);
     const srcMd = path.join(srcSkillDir, 'SKILL.md');
-    if (!fs.existsSync(srcMd)) continue;
+    const srcMdLower = path.join(srcSkillDir, 'skill.md');
+    const srcManifest = path.join(srcSkillDir, 'skill.json');
+    if (!fs.existsSync(srcMd) && !fs.existsSync(srcMdLower) && !fs.existsSync(srcManifest)) continue;
 
     const destSkillDir = path.join(destSkills, entry.name);
     copyRecursive(srcSkillDir, destSkillDir, { normalizeText: true });
@@ -123,6 +125,17 @@ function buildPublicWebUi() {
 
   fs.writeFileSync(path.join(OUT_ROOT, 'index.html'), html, 'utf-8');
   copyRecursive(path.join(SRC_WEB_UI, 'src'), OUT_STATIC);
+
+  // Root-level web-ui files that must be served at the site root (PWA contract).
+  // The service worker must be at "/" to claim scope "/"; the manifest must be
+  // at a stable path that <link rel="manifest"> can resolve.
+  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'service-worker.js'];
+  for (const name of ROOT_LEVEL_FILES) {
+    const srcFile = path.join(SRC_WEB_UI, name);
+    if (fs.existsSync(srcFile)) {
+      copyFileForPublicBuild(srcFile, path.join(OUT_ROOT, name), { normalizeText: true });
+    }
+  }
 }
 
 if (!SKILLS_ONLY) {

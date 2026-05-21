@@ -11,15 +11,19 @@ This is the authority layer for Prometheus. It decides how to apply HyperFrames 
 
 For structural rules, timing units, root metadata, asset placeholders, deterministic animation adapters, text-fit expectations, ASCII routing, lint/inspect gates, and compatibility export rules, use `prometheus-html-motion-spec` as the canonical spec.
 
+For generated image/video, scene continuation, layer extraction, project state, audio/captions, music/SFX, rough cuts, and full production workflows, use the Creative Generative Pipeline reference in `prometheus-creative-mode/references/CREATIVE_GENERATIVE_PIPELINE.md`.
+
 ## Core Rule
 
 Inside Prometheus, prefer the Prometheus Creative HTML Motion tools first:
 
 1. `switch_creative_mode({ "mode": "video" })`
-2. `creative_list_html_motion_templates` or `creative_create_html_motion_clip`
-3. `creative_render_html_motion_snapshot`
-4. `creative_patch_html_motion_clip` for revisions
-5. `creative_export_html_motion_clip` or `creative_export` when QA passes
+2. If the task needs generated footage or full video production, create a project/storyboard and use Creative pipeline tools before overlay/composite.
+3. For deterministic graphics, use `creative_list_html_motion_templates`, `creative_create_html_motion_clip`, or `creative_generate_motion_graphics_layer`.
+4. For generated-footage polish, use `creative_overlay_hyperframes_on_video` or `creative_composite_video_layers`.
+5. Use `creative_render_html_motion_snapshot`, `creative_preflight_overlay`, or `creative_sample_composite_frames` for QA.
+6. Use `creative_patch_html_motion_clip` for revisions.
+7. Export only when QA passes.
 
 Use imported HyperFrames resources for design, motion, timing, transitions, GSAP technique, and conversion guidance. Do not assume the external HyperFrames CLI is installed unless the user explicitly asks to create or operate a standalone HyperFrames project.
 
@@ -122,6 +126,21 @@ For long-video clipping workflows, use Prometheus as a staged editor:
 - Review: render contact sheets or representative frames for every selected segment, then run final early/mid/end QA.
 
 If the request requires preserving or remixing source audio, call that out and use the dedicated audio/video path. HTML motion export is strongest for visual composition and can be extended with audio muxing, but should not silently discard important speech or music.
+
+## Audio And Caption Routing
+
+Prometheus now has first-class Creative audio tools. Prefer them over ad hoc FFmpeg when the audio belongs to a Creative project:
+
+- upload/local audio: `creative_import_audio`
+- YouTube/media-page audio: `creative_download_audio`
+- source-video audio: `creative_extract_audio_from_video`
+- provider voiceover: `creative_generate_voiceover`
+- transcript/captions: `creative_transcribe_audio` then `creative_sync_captions_to_audio`
+- timeline audio: `creative_add_audio_track`
+- music/SFX: `creative_add_music_bed`, `creative_add_sound_effects`
+- master mix: `creative_mix_audio_tracks`
+
+Then composite with `creative_composite_video_layers` so renderable audio tracks reach the final MP4/WebM.
 
 ## When To Use External HyperFrames CLI
 

@@ -9,23 +9,25 @@ metadata:
 
 ## Mission
 
-When a Creative HTML Motion clip works well, preserve it as a reusable Prometheus preset instead of letting it live only as a one-off export. The reliable path today is a bundled skill with template resources; if native Creative library preset tooling is available later, use that as the registry layer too.
+When a Creative HTML Motion clip, generated motion graphics layer, overlay treatment, or full composite pattern works well, preserve it as a reusable Prometheus preset instead of letting it live only as a one-off export. The reliable path today is a bundled skill with template resources; if native Creative library preset tooling is available later, use that as the registry layer too.
 
 ## Current Reality
 
-Prometheus can list/apply/create/read/patch/lint/snapshot/export HTML motion clips. It can also create bundle skills and write skill resources. There is not yet a dedicated core tool named like `creative_save_html_motion_preset`, so do not claim a clip was saved as a native Creative template unless that tool exists.
+Prometheus can list/apply/create/read/patch/lint/snapshot/export HTML motion clips, generate editable motion graphics layers, overlay them on video, and composite layered video/audio outputs. It can also create bundle skills and write skill resources. There is not yet a dedicated core tool named like `creative_save_html_motion_preset`, so do not claim a clip was saved as a native Creative template unless that tool exists.
 
 Use this workflow:
 
 1. Read the active clip with `creative_read_html_motion_clip({ "includeHtml": true })`.
-2. Confirm lint is clean from the read result or run `creative_lint_html_motion_clip`.
-3. Render QA frames with `creative_render_html_motion_snapshot`.
-4. Extract the reusable HTML into a template resource.
-5. Replace one-off copy/assets with clear placeholders and CSS variables where useful.
-6. Create a bundle skill with `skill_create_bundle`.
-7. Add the HTML template with `skill_resource_write`.
-8. Add an example brief or usage note only if it materially helps reuse.
-9. Confirm the new skill appears in `skill_list` or the workspace skill registry.
+2. For generated overlay layers, capture the `htmlPath`, `layer`, editable slots, and preflight/sample report returned by `creative_generate_motion_graphics_layer`.
+3. For composites, capture the composition manifest returned by `creative_overlay_hyperframes_on_video` or `creative_composite_video_layers`.
+4. Confirm lint/preflight is clean from the read result or run the appropriate lint/preflight/sample tool.
+5. Render QA frames with `creative_render_html_motion_snapshot` or `creative_sample_composite_frames`.
+6. Extract the reusable HTML/layer/composition pattern into a template resource.
+7. Replace one-off copy/assets with clear placeholders and CSS variables where useful.
+8. Create a bundle skill with `skill_create_bundle`.
+9. Add the HTML/template/manifest resource with `skill_resource_write`.
+10. Add an example brief or usage note only if it materially helps reuse.
+11. Confirm the new skill appears in `skill_list` or the workspace skill registry.
 
 ## Preset Skill Shape
 
@@ -45,6 +47,8 @@ The skill should contain:
 
 - `SKILL.md`: brief trigger/use instructions, default dimensions, pacing, QA rules, customization knobs.
 - `templates/<preset-name>.html`: complete self-contained HTML motion template.
+- `templates/<preset-name>.layer.json`: optional normalized layer spec for overlays/composites.
+- `templates/<preset-name>.composition.json`: optional reusable composite manifest when the preset is a stack of footage, overlays, captions, and audio.
 - Optional `examples/<preset-name>-brief.md`: one short prompt showing how to reuse it.
 
 ## What To Preserve
@@ -59,6 +63,8 @@ Keep the parts that made the clip good:
 - visual treatment,
 - performance lessons,
 - export settings that worked.
+- layer/composite preflight constraints that prevented broken renders.
+- caption/audio assumptions when the preset includes timed text or sound.
 
 Strip or parameterize:
 

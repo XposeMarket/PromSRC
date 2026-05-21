@@ -40,10 +40,12 @@ const PUBLIC_BUILD_DISABLED_TOOL_NAMES = new Set([
 	  'delete_prom_file',
 	  'gateway_restart',
   'self_update',
-  'propose_repair',
+  'request_dev_source_edit',
 ]);
 
 const PUBLIC_BUILD_DISABLED_TOOL_CATEGORIES = new Set([
+  'source_read',
+  'prometheus_source_read',
   'source_write',
   'prometheus_source_write',
 ]);

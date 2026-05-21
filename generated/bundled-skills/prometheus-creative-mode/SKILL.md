@@ -9,9 +9,11 @@ metadata:
 
 This is the single active entry point for Creative Mode video work in Prometheus.
 
-The goal is HyperFrames-first authoring with Prometheus-grade editability. HyperFrames is the main composition model: HTML is the source of truth, `data-*` attributes define timeline structure, media is declarative, GSAP/runtime adapters provide deterministic motion, and nested compositions make blocks reusable. Prometheus wraps that model with editable layers, asset placeholders, patch operations, timeline UI, snapshots, QA, and export.
+The goal is HyperFrames-first authoring with Prometheus-grade editability plus a Creative Generative Pipeline for AI footage, continuity, project state, layers, rough cuts, captions, voiceover, music, SFX, and final compositing. HyperFrames is the main deterministic composition model: HTML is the source of truth, `data-*` attributes define timeline structure, media is declarative, GSAP/runtime adapters provide deterministic motion, and nested compositions make blocks reusable. Prometheus wraps that model with editable layers, generated media lineage, asset placeholders, patch operations, timeline UI, snapshots, QA, audio muxing, and export.
 
 HTML Motion is not a rival runtime. Treat it as Prometheus' editable compatibility layer around HyperFrames: the same HTML remains inspectable, patchable, selectable, asset-safe, and exportable inside Prometheus.
+
+Generative video is not a rival runtime either. Treat generated clips as production footage that should be registered, analyzed, chained, refined, assembled, overlaid, captioned, mixed, and exported through Creative Mode.
 
 ## Default Route
 
@@ -27,6 +29,26 @@ For video work, author real HyperFrames-compatible compositions and keep them ed
 8. Lint with HyperFrames core plus Prometheus asset/text/QA checks.
 9. Sample early, middle, and near-end frames.
 10. Export through the best available Prometheus/HyperFrames-compatible path.
+
+## Generative Pipeline Route
+
+When the user asks for AI image/video generation, scene chaining, avatar videos, game promos, product promos, layer extraction, captions, voiceover, music, SFX, or “make the whole video,” use the Creative Generative Pipeline before or alongside raw HyperFrames authoring.
+
+Recommended spine:
+
+1. Create a durable project with `creative_create_project` when work spans more than one shot/asset.
+2. Create or load a storyboard with `creative_create_storyboard`.
+3. Use `creative_generate_image_shot` for opening frames, keyframes, clean avatars, assets, and background plates.
+4. Use `creative_generate_video_shot` for generated footage.
+5. Use `creative_extract_video_frames` and `creative_pick_continuity_frame` before continuing scenes.
+6. Use `creative_chain_scene` for image/video -> frame -> next video continuation.
+7. Use `creative_extract_layers_for_generation` when generated images/videos should become reusable people, products, props, backgrounds, or plates.
+8. Use `creative_analyze_generated_video`, `creative_refine_video_shot`, `creative_retry_shot_until_pass`, and `creative_select_best_take` to avoid accepting weak first attempts.
+9. Use `creative_auto_assemble_rough_cut`, `creative_generate_motion_graphics_layer`, `creative_overlay_hyperframes_on_video`, and `creative_composite_video_layers` for editorial assembly and polish.
+10. Use `creative_import_audio`, `creative_download_audio`, `creative_extract_audio_from_video`, `creative_generate_voiceover`, `creative_transcribe_audio`, `creative_sync_captions_to_audio`, `creative_add_music_bed`, `creative_add_sound_effects`, and `creative_mix_audio_tracks` for audio/caption finishing.
+11. Preflight and sample with `creative_preflight_overlay`, `creative_validate_composition_layers`, and `creative_sample_composite_frames`.
+
+Load `references/CREATIVE_GENERATIVE_PIPELINE.md` for the full current tool map, routing rules, failure modes, and limitations.
 
 ## HyperFrames Contract
 
@@ -130,5 +152,9 @@ Before export, verify:
 - Nested compositions and variable overrides resolve.
 - Important media segments are visible and audio preservation/muxing is handled.
 - Advanced blocks expose slots/variables when they are supposed to be editable.
+- Generated media has lineage: prompt/provider/model/source asset/parent generation/shot ID are registered when available.
+- Continuation shots use a reviewed continuity frame, not blindly the final frame.
+- Audio identity is explicit: visual-only, source-audio preserved, extracted, mixed, generated voiceover, downloaded music, or SFX.
+- Caption layers are timed from transcript segments or intentionally approximate transcript chunks.
 
 If QA fails, patch and sample again before export.

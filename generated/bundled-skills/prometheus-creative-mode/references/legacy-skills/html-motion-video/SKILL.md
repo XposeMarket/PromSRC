@@ -9,9 +9,11 @@ metadata:
 
 ## Mission
 
-Use HTML/CSS as the high-quality motion design surface inside Prometheus Video mode. This is the preferred path for short polished clips. Primitive canvas layers are NOT acceptable for promo/ad/social videos unless the user explicitly asks for editable canvas layers.
+Use HTML/CSS as the high-quality motion design and editorial surface inside Prometheus Video mode. HTML Motion is the preferred path for polished overlays, captions, callouts, title cards, HUDs, CTA cards, app annotations, and deterministic motion graphics around generated or uploaded footage. Primitive canvas layers are NOT acceptable for promo/ad/social videos unless the user explicitly asks for editable canvas layers.
 
 Use `prometheus-html-motion-spec` as the canonical contract for root metadata, timing units, asset placeholders, deterministic animation behavior, text-fit gates, ASCII routing, lint/inspect rules, and export compatibility.
+
+When the request involves generated images/videos, scene continuation, extracted layers, voiceover, music, SFX, or full multi-shot production, first route through the Creative Generative Pipeline. HTML Motion is then the polish/composition layer, not the whole production memory.
 
 ## Path Selection — Read This First
 
@@ -40,11 +42,14 @@ If quality and editability conflict, prefer Python for the ASCII raster pass and
 ## Workflow
 
 1. Switch to video creative mode with `switch_creative_mode({ mode: "video" })`.
-2. Call `creative_list_html_motion_templates`. Pick the closest template.
-3. Apply it with `creative_apply_html_motion_template` (templateId + inputs). Only fall back to authoring raw HTML via `creative_create_html_motion_clip` if no template fits the brief.
-4. Preview frames with `creative_render_html_motion_snapshot` (start, mid, end at minimum).
-5. If anything fails the QA gate below, revise the inputs (or the HTML if you are hand-authoring) and rerun frame QA.
-6. Export only after QA passes, using `creative_export_html_motion_clip` or `creative_export` with `format: "mp4"`.
+2. If footage/assets must be generated, use `creative_create_project`, `creative_generate_image_shot`, `creative_generate_video_shot`, `creative_chain_scene`, and generation history tools first.
+3. For overlays and motion graphics, prefer `creative_generate_motion_graphics_layer` for captions/lower thirds/callouts/HUDs/data cards/title/CTA layers, or use templates/custom HTML when a richer composition is needed.
+4. For base-video polish, use `creative_overlay_hyperframes_on_video` or `creative_composite_video_layers` so the generated video, overlays, captions, images, and audio tracks render together.
+5. For template-first clips, call `creative_list_html_motion_templates`. Pick the closest template.
+6. Apply it with `creative_apply_html_motion_template` (templateId + inputs). Only fall back to authoring raw HTML via `creative_create_html_motion_clip` if no template fits the brief.
+7. Preview frames with `creative_render_html_motion_snapshot` or sample composites with `creative_sample_composite_frames` (start, mid, end at minimum).
+8. If anything fails the QA gate below, revise the inputs/HTML/layers and rerun frame QA.
+9. Export only after QA passes, using the relevant Creative export/composite tool.
 
 Do not use `write_file` plus `run_command` for HTML motion videos. Do not use the primitive canvas layer tools to assemble a promo. The Creative HTML motion tools handle workspace storage, canvas preview, frame QA, and MP4 export.
 
@@ -153,7 +158,7 @@ Timing rules:
 - Use CSS/JS or `playbackRate` only when the creative intent requires speed ramping. Otherwise preserve natural motion.
 - Add labels in comments near footage regions so future patches can change the selected moments safely.
 
-If the source video has important audio, note that HTML motion export is primarily a visual frame-sequence path. Use the broader video/audio tools or a later muxing step when final audio must be preserved, mixed, ducked, or synchronized.
+If the source video has important audio, do not silently discard it. Use `creative_extract_audio_from_video`, `creative_add_audio_track`, and `creative_mix_audio_tracks` when final audio must be preserved, mixed, ducked, or synchronized.
 
 ## Long-Video To Clip Workflow
 

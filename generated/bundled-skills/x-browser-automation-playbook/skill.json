@@ -41,5 +41,26 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [
+    {
+      "path": "examples/daily-x-signal-radar-readonly-collector.md",
+      "type": "example",
+      "description": "Troubleshooting and successful-run example for the read-only Daily X Signal Radar collector, including the 2026-05-17 text-first success after no-activity failures."
+    },
+    {
+      "path": "examples/on-demand-x-vibe-check.md",
+      "type": "example",
+      "description": "Read-only on-demand X home-feed/vibe-check example for loose “go on X and tell me what’s happening” requests."
+    },
+    {
+      "path": "examples/competitor-feature-scan-on-x.md",
+      "type": "example",
+      "description": "Read-only competitor feature scan workflow for X: collect latest competitor feature posts and translate them into Prometheus product implications, with snapshot-error fallback."
+    },
+    {
+      "path": "examples/chrome-debug-port-retry-blocker.md",
+      "type": "example",
+      "description": "Troubleshooting example for X browser automation when Chrome debug profile/port 9222 blocks first open attempts but a later explicit retry may succeed."
+    }
+  ]
 }

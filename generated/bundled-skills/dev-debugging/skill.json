@@ -29,5 +29,26 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [
+    {
+      "path": "templates/stuck-approved-proposal-handoff-2026-05-09.md",
+      "type": "template",
+      "description": "Template for Codex handoff when an approved proposal is stuck/not executed or not findable in the UI/task panel."
+    },
+    {
+      "path": "notes/existing-chat-fetch-failure-recovery-2026-05-12.md",
+      "type": "doc",
+      "description": "Recovery note for explicit existing-chat Codex handoffs and bare fetch-failure handling observed on 2026-05-12."
+    },
+    {
+      "path": "notes/powershell-typing-failure-recovery-2026-05-16.md",
+      "type": "doc",
+      "description": "Recovery guardrail for Codex desktop handoffs when long quoted prompts cause PowerShell/SendKeys/clipboard failures."
+    },
+    {
+      "path": "notes/current-chat-creative-export-handoff-2026-05-20.md",
+      "type": "doc",
+      "description": "Guardrail for explicit current-chat Codex handoffs involving Creative/video export failures, native media diagnostics, and screenshot-proof delivery recovery."
+    }
+  ]
 }

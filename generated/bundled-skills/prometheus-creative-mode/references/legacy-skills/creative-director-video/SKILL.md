@@ -15,19 +15,40 @@ Act like a video creative director before acting like a canvas operator. Build c
 ## Default Workflow
 
 1. Identify the format first: Reel/TikTok/Short/Story/Square/Feed/YouTube.
-2. Pick a high-level system before low-level layers:
+2. Decide whether this is generated production, deterministic motion design, or both:
+   - Generated footage / avatar / product scene / game promo / multi-shot film: create a project, storyboard, generate shots, QA/retry, select takes, then assemble and polish.
+   - Deterministic explainer / title card / UI overlay / caption reel / HUD / lower third: author or generate HTML Motion/HyperFrames layers.
+   - Full finished video: combine generated footage, overlays, captions, voiceover/music/SFX, and final composite/export.
+3. Pick a high-level system before low-level layers:
    - Caption/subtitle reel: use Remotion `caption-reel-v2` first.
    - Product or feature announcement: use Product Promo once available; otherwise use a structured scene with media, callouts, and CTA.
    - Audio clip, podcast, waveform, or music visual: use Audio Visualizer once available; otherwise build a waveform/progress layout.
-3. Choose a style preset before placing elements: TikTok Bold, Startup Launch, Editorial, Tech Product, Luxury, Meme/News, or Calm Professional.
-4. Search libraries deliberately:
+4. Choose a style preset before placing elements: TikTok Bold, Startup Launch, Editorial, Tech Product, Luxury, Meme/News, or Calm Professional.
+5. Search libraries deliberately:
    - Use icon search for meaningful symbols, marks, platform icons, tech icons, arrows, badges, or metaphors.
    - Use animation search for entrances, exits, text beats, pulses, wipes, parallax, blur, or emphasis.
-5. Build in passes:
+6. Build in passes:
    - Pass 1: canvas, template, rough structure, timing.
    - Pass 2: typography, spacing, safe areas, layers.
    - Pass 3: motion rhythm, accents, CTA/outro.
    - Pass 4: visual QA, fixes, export.
+
+## Generative Production Direction
+
+For AI-generated video workflows, use the current Creative pipeline instead of loose `generate_image` / `generate_video` / shell FFmpeg steps.
+
+Recommended tools by role:
+
+- Project memory: `creative_create_project`, `creative_register_generation`, `creative_generation_history`.
+- Story: `creative_create_storyboard`, `creative_write_shot_prompt`.
+- Shots: `creative_generate_image_shot`, `creative_generate_video_shot`, `creative_refine_video_shot`, `creative_retry_shot_until_pass`.
+- Continuity: `creative_extract_video_frames`, `creative_pick_continuity_frame`, `creative_chain_scene`.
+- Assets/layers: `creative_extract_layers_for_generation`.
+- Takes/edit: `creative_select_best_take`, `creative_auto_assemble_rough_cut`, `creative_stitch_clips`.
+- Graphics: `creative_generate_motion_graphics_layer`, `creative_overlay_hyperframes_on_video`, `creative_composite_video_layers`.
+- Audio: `creative_import_audio`, `creative_download_audio`, `creative_extract_audio_from_video`, `creative_generate_voiceover`, `creative_transcribe_audio`, `creative_sync_captions_to_audio`, `creative_add_music_bed`, `creative_add_sound_effects`, `creative_mix_audio_tracks`.
+
+Do not accept the first generated clip as final unless QA supports it. Check action compliance, identity/style continuity, blur/warping, start/end usability, and whether the clip needs overlays, captions, or audio finishing.
 
 ## Media Intake Direction
 
@@ -90,6 +111,7 @@ For long-video clipping, require an edit decision list before final assembly: so
 - In HTML motion clips, use asset placeholders plus `data-start`, `data-duration`, and `data-trim-start` to place source video moments in the composition.
 - Speed changes must have a reason: compress waiting, emphasize action, match music, or create a deliberate ramp. Do not speed up speech unless captions/audio remain intelligible.
 - For clips with important source audio, verify audio sync and note whether the chosen export path preserves or requires muxing audio.
+- For generated or downloaded audio, register it as a Creative audio asset and make the final audio identity explicit: imported, downloaded, extracted, generated voiceover, music bed, SFX, or mixed master.
 
 ## Pre-Export QA Gate
 
