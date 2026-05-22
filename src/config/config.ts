@@ -373,6 +373,10 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     enabled: false,
     url: 'http://localhost:3005',
   },
+
+  creative_editor: {
+    enabled: true,
+  },
 };
 
 // Detect Windows-style absolute paths (e.g. D:\Prometheus\workspace) on non-Windows OS.

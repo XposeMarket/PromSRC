@@ -636,6 +636,9 @@ export interface PrometheusConfig {
     /** Agent Builder URL. Default: http://localhost:3005 */
     url?: string;
   };
+  creative_editor?: {
+    enabled?: boolean;
+  };
 }
 
 export type LocalClawConfig = PrometheusConfig;
