@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#070707; }
+  body { font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+  #stage { position:relative; width:1080px; height:1920px; overflow:hidden; background:#070707; color:#f7f7f2; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; }
+  .grain { position:absolute; inset:-20%; opacity:.12; background-image:radial-gradient(circle at 20% 30%, #fff 0 1px, transparent 1px); background-size:18px 18px; filter:blur(.2px); }
+  .eyebrow { position:absolute; left:72px; top:92px; z-index:5; font:800 25px/1 Inter, system-ui, sans-serif; letter-spacing:.16em; text-transform:uppercase; color:#bef264; }
+  .hero { position:absolute; left:72px; right:72px; top:136px; z-index:5; font:850 96px/.93 Inter, system-ui, sans-serif; letter-spacing:-.07em; color:#f7f7f2; }
+  .hero .accent { color:#bef264; }
+  .rule { position:absolute; left:72px; top:332px; width:0; height:6px; background:#bef264; border-radius:999px; animation:rule 1100ms cubic-bezier(.2,.8,.2,1) forwards; }
+  .cta { position:absolute; left:72px; right:72px; bottom:112px; z-index:6; font:800 48px/1.05 Inter, system-ui, sans-serif; color:#070707; background:#bef264; border-radius:30px; padding:30px 34px; box-shadow:0 0 60px rgba(190,242,100,.24); transform-origin:left center; animation:cta 900ms ease-in-out infinite alternate; }
+  @keyframes rule { to { width:420px; } }
+  @keyframes cta { from { transform:scale(1); } to { transform:scale(1.025); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="textCanvas"></canvas>
+  <div class="grain"></div>
+  <div class="eyebrow">Pretext × Prometheus</div>
+  <div class="hero">Text can <span class="accent">move around meaning.</span></div>
+  <div class="rule"></div>
+  <div class="cta">Rendered, inspected, and exported in Creative Video</div>
+</div>
+<script type="module">
+import { prepareWithSegments, layoutNextLineRange, materializeLineRange } from "https://esm.sh/@chenglou/pretext@0.0.6";
+const W = 1080, H = 1920, DURATION = 9000;
+const canvas = document.getElementById("textCanvas");
+const ctx = canvas.getContext("2d");
+const DPR = Math.min(devicePixelRatio || 1, 2);
+canvas.width = W * DPR; canvas.height = H * DPR; ctx.setTransform(DPR,0,0,DPR,0,0);
+const FONT = "500 30px Inter, ui-sans-serif, system-ui, sans-serif";
+const LINE_H = 42;
+const TEXT = `Prometheus turns tools, context, memory, files, browsers, teams, and creative work into one operating layer. The canvas is not a toy. It is where an agent can plan, render, inspect, repair, and ship real motion. `.repeat(22);
+const prepared = prepareWithSegments(TEXT, FONT);
+function frame(now = 0) {
+  const t = (now % DURATION) / DURATION;
+  ctx.clearRect(0,0,W,H);
+  const orb = { x: 540 + Math.sin(t * Math.PI * 2) * 215, y: 980 + Math.cos(t * Math.PI * 2) * 285, r: 188 + Math.sin(t * Math.PI * 4) * 24 };
+  const g = ctx.createRadialGradient(orb.x, orb.y, 0, orb.x, orb.y, orb.r * 2.1);
+  g.addColorStop(0, "rgba(190,242,100,0.42)");
+  g.addColorStop(.46, "rgba(190,242,100,0.16)");
+  g.addColorStop(1, "rgba(190,242,100,0)");
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  ctx.font = FONT; ctx.textBaseline = "alphabetic"; ctx.fillStyle = "rgba(247,247,242,0.64)";
+  let cursor = { segmentIndex:0, graphemeIndex:0 };
+  for (let y = 382; y < 1580; y += LINE_H) {
+    let x = 72, w = W - 144;
+    const dy = y - orb.y;
+    if (Math.abs(dy) < orb.r) {
+      const half = Math.sqrt(orb.r * orb.r - dy * dy);
+      const leftW = Math.max(0, orb.x - half - 72);
+      const rightW = Math.max(0, W - 72 - (orb.x + half));
+      if (leftW >= rightW) { x = 72; w = leftW - 22; } else { x = orb.x + half + 22; w = rightW - 22; }
+      if (w < 110) continue;
+    }
+    const range = layoutNextLineRange(prepared, cursor, w); if (!range) break;
+    const line = materializeLineRange(prepared, range);
+    ctx.fillText(line.text, x, y); cursor = range.end;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

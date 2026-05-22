@@ -1,0 +1,12 @@
+{
+  "skillId": "secret-and-token-ops",
+  "reason": "resource-write",
+  "createdAt": "2026-05-17T07:08:27.262Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\secret-and-token-ops",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "669d95434d305d2e"
+}

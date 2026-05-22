@@ -1,15 +1,7 @@
 ---
 name: Cold Outreach Writer
-description: >
-  Write cold email and DM sequences that get responses — multi-touch, personalized,
-  objection-aware, channel-appropriate. Use whenever the user needs to reach out to
-  prospects, build a sales sequence, write cold emails, draft LinkedIn DMs, create
-  outreach templates, or wants to improve reply rates. Triggers on: "cold email",
-  "cold outreach", "sales email", "outreach sequence", "LinkedIn DM", "email sequence",
-  "prospecting", "write an intro email", "reach out to leads", "outreach template",
-  "follow-up email", "sales sequence", "multi-touch", "email campaign", "improve reply rate",
-  "write to prospects", "outbound", "cold message", "drip sequence".
-emoji: 📨
+description: Cold Outreach Writer
+emoji: "🧩"
 version: 1.0.0
 triggers: cold email, cold outreach, sales email, outreach sequence, linkedin dm, prospecting, email sequence, intro email, reach out to leads, outreach template, follow-up email, sales sequence, multi-touch, email campaign, reply rate, outbound, cold message, drip sequence
 ---

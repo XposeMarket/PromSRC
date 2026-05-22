@@ -1,9 +1,8 @@
 ---
-name: Subagent System Prompt Design
-description: How to write high-quality system prompts and HEARTBEAT.md files for Prometheus subagents. Use when creating a new subagent, rewriting a failing agent's prompt, diagnosing an agent that produces inconsistent output, or designing a team pipeline. Pairs with the Prometheus Team Design skill. Triggers on: write system prompt, agent prompt, subagent instructions, heartbeat instructions, agent keeps failing, agent not doing the right thing, rewrite agent prompt, new subagent, agent design.
-emoji: "✍️"
+name: subagent-system-prompt-design
+description: # Subagent System Prompt Design Guide
+emoji: "🧩"
 version: 1.0.0
-triggers: write system prompt, agent prompt, subagent instructions, heartbeat instructions, agent keeps failing, agent not doing right thing, rewrite agent prompt, new subagent, agent design, spawn subagent, create agent
 ---
 
 # Subagent System Prompt Design Guide

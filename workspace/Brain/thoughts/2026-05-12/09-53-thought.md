@@ -1,0 +1,86 @@
+---
+# Thought 3 - 2026-05-12 | Window: 2026-05-12 13:53 UTC-2026-05-13 01:43 UTC
+_Generated: 2026-05-12 21:43 local_
+
+## Summary
+This window had three real signals: Raul is still pushing hard on non-disruptive desktop control, he wants Prometheus off Telegram and into its own mobile command app, and scheduled/background reliability is still uneven. The clearest product momentum is “Prometheus Remote”: a phone app that is not just chat, but chat + approvals + agents/tasks + creative + desktop bridge + notifications.
+
+The roughest friction was availability/reliability. Telegram repeatedly returned model connection errors, a user had to send “??” during a slow image-generation turn, and an X-link safety/security check was interrupted after partial fetches. The desktop sandbox test was useful but blocked by environment reality: the bridge files exist, but no Windows Sandbox/Hyper-V/external worker target is available, so host desktop tools remain foreground-only.
+
+I wonder if tomorrow’s highest-leverage Dream pass should treat “Prometheus Remote” and “isolated desktop worker” as one product story: phone notifications/approvals are much more valuable if long-running desktop/browser work can happen without stealing Raul’s machine. I also wonder if the repeated “Not connected to OpenAI / No Anthropic credentials” Telegram failures need a user-facing health fallback before any mobile app replaces Telegram.
+
+## A. Activity Summary
+- **User asked to inspect X links for possible computer compromise/security concern**, then interrupted/resumed; Prometheus only completed partial `web_fetch` attempts and stopped after 3 steps. Evidence: `audit/chats/transcripts/9cb6b455-76d2-44f2-98dc-cc7f39d77a85.md:1-22`; workflow episode `Brain/skill-gardener/2026-05-12/workflow-episodes.jsonl:3`.
+- **User asked to test the desktop sandbox/background desktop concept** so Prometheus and Raul can use the same computer without interrupting each other. Prometheus verified the desktop tools/bridge exist, but sandbox worker could not launch/respond because Windows Sandbox/Hyper-V/VMMS/external worker were unavailable. Evidence: `audit/chats/transcripts/2fea98cc-1540-4391-b0bd-a3bc3cfaa389.md:1-49`; `memory/2026-05-12-intraday-notes.md:13-14`; skill episode `Brain/skill-episodes/2026-05-12/episodes.jsonl:2`.
+- **Telegram/main chat availability degraded for hours.** Several user pings received provider errors instead of normal replies: OpenAI not connected and Anthropic credentials missing. Evidence: `audit/chats/transcripts/telegram_1799053599_1778616335778.md:4-39`.
+- **User asked for a full Prometheus app to replace Telegram**, specifically ChatGPT-style iPhone mockups generated with image generation first. Prometheus generated three iPhone mockups and framed the product as “Prometheus Remote,” a mobile command center rather than just a chat clone. Evidence: `audit/chats/transcripts/telegram_1799053599_1778635569373.md:10-59`; skill episode `Brain/skill-episodes/2026-05-12/episodes.jsonl:3`.
+- **A Daily X Signal Radar collector scheduled run was active at the end of the window.** Task state shows it running, with only file stats/path-exists steps done by the snapshot. Evidence: `audit/tasks/state/_index.json:14785-14828`.
+- **No team activity inside the requested window was found.** The managed team state update was earlier at `1778563954098`, outside this window, and the X Bookmark team nightly run returned a natural-stop “Hey! How can I help?” before the window. Evidence: `audit/teams/state/managed-teams.json:71802`; `audit/cron/runs/job_1778021273904_3ehgf.jsonl:6`.
+- **No proposal creation by Prometheus in this window was observed.** Proposal index was regenerated near the end with 167 total proposals, 33 pending, but no window-specific proposal transcript/workflow showed a new write. Evidence: `audit/proposals/INDEX.md:1-9`.
+
+## B. Behavior Quality
+**Went well:**
+- Desktop sandbox test gave Raul a concrete, honest answer: background architecture exists structurally, but current machine lacks a usable isolated desktop target. | evidence: `audit/chats/transcripts/2fea98cc-1540-4391-b0bd-a3bc3cfaa389.md:6-23`, `:43-49`
+- Prometheus correctly framed the requested mobile app as more than a Telegram replacement: “Prometheus Remote” with chat, voice, tasks, creative, desktop, memory/files, settings, pairing, and approvals. | evidence: `audit/chats/transcripts/telegram_1799053599_1778635569373.md:43-59`
+- Desktop testing used the expected desktop automation skill and wrote a continuity note after the blocked workflow. | evidence: `Brain/skill-episodes/2026-05-12/episodes.jsonl:2`; `memory/2026-05-12-intraday-notes.md:13-14`
+
+**Stalled or struggled:**
+- X-link/security check did not complete; it was interrupted and one X fetch failed because the browser/page context closed. | evidence: `audit/chats/transcripts/9cb6b455-76d2-44f2-98dc-cc7f39d77a85.md:11-22`; `Brain/skill-gardener/2026-05-12/workflow-episodes.jsonl:3`
+- Desktop sandbox test repeated the same known environmental blocker from earlier in the day and still attempted a policy-blocked PowerShell command. | evidence: `Brain/skill-episodes/2026-05-12/episodes.jsonl:2`; `memory/2026-05-12-intraday-notes.md:10-14`
+- Telegram availability was bad: multiple user pings got raw provider/auth errors instead of a graceful status/fallback response. | evidence: `audit/chats/transcripts/telegram_1799053599_1778616335778.md:7-39`
+- Mobile app mockup turn was slow enough that Raul sent “??” before receiving results. | evidence: `audit/chats/transcripts/telegram_1799053599_1778635569373.md:10-18`
+
+**Tool usage patterns:**
+- Desktop workflow relied on skill-first execution and direct desktop/background tools, which was correct, but the playbook/tooling still references unavailable tools or paths (`desktop_background_command` timeout, policy-blocked shell check). Evidence: `Brain/skill-episodes/2026-05-12/episodes.jsonl:2`.
+- Image generation was used effectively for a product concept seed, but there was no visual QA or follow-up spec artifact yet; output remained at mockup/concept level. Evidence: `Brain/skill-episodes/2026-05-12/episodes.jsonl:3`.
+- Scheduled job state at the end was mid-run, not complete, so the Dream should verify final status/output later rather than assume success. Evidence: `audit/tasks/state/_index.json:14785-14828`.
+
+**User corrections:**
+- “Continue my bad” after the X-link/security task suggests interruption/recovery, not necessarily Prometheus error. Evidence: `audit/chats/transcripts/9cb6b455-76d2-44f2-98dc-cc7f39d77a85.md:8-22`.
+- “??” during the mobile app mockup turn is a lag/friction signal. Evidence: `audit/chats/transcripts/telegram_1799053599_1778635569373.md:10-18`.
+- “Shut the fuck up” appeared in a notification-related conversational fragment; the assistant responded with a clarification instead of overexplaining, but the actual notification target stayed unspecified. Evidence: `audit/chats/transcripts/auto_restart_manual_1778616439633.md:24-29`.
+
+## C. Skill And Workflow Signals
+| Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
+|----------------|--------|-----------------|-----------|---------|
+| desktop-automation-playbook | Used for sandbox/background desktop testing; workflow ended blocked by unavailable Windows Sandbox/Hyper-V/external worker, plus timeout and policy-blocked shell diagnostic. | update existing skill with a “background desktop sandbox preflight” guardrail: check `desktop_background_status` first, do not attempt worker screenshot if no sandbox/VM/external worker is available, and avoid policy-blocked shell checks. | high | `Brain/skill-episodes/2026-05-12/episodes.jsonl:2`; `Brain/skill-gardener/2026-05-12/live-candidates.jsonl:4`; `audit/chats/transcripts/2fea98cc-1540-4391-b0bd-a3bc3cfaa389.md:15-23` |
+| X/social link safety triage | User pasted X links and asked to confirm his computer was not affected; workflow used `web_fetch` only and was interrupted after a failed fetch. | propose new lightweight workflow/skill for “suspicious social links / compromise check”: fetch/read links safely, identify claims/files/scripts, check local exposure indicators if tools available, then report risk and next steps. | medium | `audit/chats/transcripts/9cb6b455-76d2-44f2-98dc-cc7f39d77a85.md:1-22`; `Brain/skill-gardener/2026-05-12/workflow-episodes.jsonl:3` |
+| Prometheus mobile app mockup / product design workflow | User requested image-generation-first iPhone mockups for a full Prometheus app; Prometheus used `web-design-skill` + three `generate_image` calls and produced a product direction. | no immediate skill update, but Dream should scout a repeatable “mockup → spec → PWA/Expo implementation plan” workflow for product UI ideation. | high | `Brain/skill-episodes/2026-05-12/episodes.jsonl:3`; `audit/chats/transcripts/telegram_1799053599_1778635569373.md:10-59` |
+| Scheduled job health/final-output verification | Daily X collector was still running at window close; prior job history includes false-success patterns and model/provider failures, and current task had only preflight steps done. | propose/verify scheduled-run completion monitor that checks final artifacts and flags “running too long / preflight-only” states. | medium | `audit/tasks/state/_index.json:14785-14828`; `audit/cron/runs/job_1777858649056_grcnr.jsonl:13-19` |
+| Provider/auth health fallback for Telegram | Telegram chat repeatedly emitted raw model credential/connectivity errors. | propose a user-facing connection health fallback: explain provider status, active model/provider, and likely fix instead of raw error loops; mobile app should include this as a status panel. | high | `audit/chats/transcripts/telegram_1799053599_1778616335778.md:7-39` |
+| Memory tools smoke-test workflow | Earlier same-day gardener captured a memory tools test with provider status, embedding status, search, timeline, graph snapshot; no skill existed. | keep as raw evidence unless repeated; possible future “memory diagnostics smoke test” workflow if Raul keeps testing memory tooling. | low | `Brain/skill-gardener/2026-05-12/live-candidates.jsonl:1`; `Brain/skill-gardener/2026-05-12/workflow-episodes.jsonl:1` |
+
+## D. Memory Candidates
+| Item | Target | Confidence | Evidence |
+|------|--------|-----------|---------|
+| Raul wants a dedicated Prometheus mobile app so he can stop using Telegram; desired direction is ChatGPT-style iPhone app / “Prometheus Remote” with chat, voice, tasks/agents, creative, desktop bridge, memory/files, settings, secure pairing, push notifications, and approvals. | MEMORY.md | high | `audit/chats/transcripts/telegram_1799053599_1778635569373.md:10-59` |
+| Raul’s desired desktop-control goal is explicitly two-user/non-disruptive operation on one computer, analogous to browser tools running on a separate port/surface. | MEMORY.md | medium | `audit/chats/transcripts/2fea98cc-1540-4391-b0bd-a3bc3cfaa389.md:1-3`, `:25-41` |
+| Current machine/environment cannot provide isolated background desktop via Windows Sandbox/Hyper-V/VMMS/external worker as of this test; bridge files exist but worker does not respond. | MEMORY.md | medium | `memory/2026-05-12-intraday-notes.md:13-14`; `audit/chats/transcripts/2fea98cc-1540-4391-b0bd-a3bc3cfaa389.md:10-23` |
+
+## E. Opportunity Seeds
+| Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
+|------|----------------|----------------------------|-----------|---------|
+| Prometheus Remote mobile app MVP | This is a direct user request and could replace Telegram with a controlled product surface: push notifications, approvals, image/file upload, agent/task status, creative previews, desktop commands, and local pairing. | `web-ui/`, `src/gateway/`, mobile/PWA architecture, notification/pairing/auth surfaces, generated images under `generated/images/prometheus-mobile-app/` | high | `audit/chats/transcripts/telegram_1799053599_1778635569373.md:10-59`; `Brain/skill-episodes/2026-05-12/episodes.jsonl:3` |
+| Mobile notification + approval system | Raul explicitly wants notifications working, and the mobile app concept depends on replacing Telegram with reliable prompts/approvals/status. | notification subsystem, scheduler outputs, Telegram replacement routes, desktop/mobile push bridge | high | `audit/chats/transcripts/auto_restart_manual_1778616439633.md:24-29`; `audit/chats/transcripts/telegram_1799053599_1778635569373.md:47-59` |
+| Non-disruptive desktop worker implementation | Raul cares about working in parallel with Prometheus on one machine; current desktop tools are foreground-only, which limits usefulness and trust. | desktop background bridge at `C:\Users\rafel\.prometheus\desktop-background\bridge`, desktop tool implementation, Windows Sandbox/Hyper-V/external worker options | high | `audit/chats/transcripts/2fea98cc-1540-4391-b0bd-a3bc3cfaa389.md:1-23`; `memory/2026-05-12-intraday-notes.md:13-14` |
+| Telegram/provider health preflight and graceful degradation | Raw provider errors make Prometheus feel absent exactly when Raul pings it; this is a blocker for “24/7” trust and for any future mobile replacement. | model routing/provider health, Telegram channel error handling, UI/notification status | high | `audit/chats/transcripts/telegram_1799053599_1778616335778.md:7-39` |
+| Suspicious X link / computer compromise triage workflow | Raul asked for help confirming his computer was not affected; this is a reusable safety workflow that should be fast, calm, and bounded. | browser/web fetch tools, local file/process/network inspection surfaces, security checklist artifact | medium | `audit/chats/transcripts/9cb6b455-76d2-44f2-98dc-cc7f39d77a85.md:1-22` |
+| Daily X Signal Radar end-of-run verification | Collector was running at window close after only file/path preflight in task state; Dream should verify whether it finished and wrote expected files, not rely on task status alone. | `audit/tasks/state/_index.json`, `audit/cron/runs/job_1777858649056_grcnr.jsonl`, `signal-radar/x/latest-daily-x-signal.md` | medium | `audit/tasks/state/_index.json:14785-14828` |
+| X Bookmark nightly team scheduled-run prompt bug | The X Bookmark team run earlier in the day natural-stopped with “Hey! How can I help?” instead of executing, which suggests scheduled managed-team invocation can fail open as a fake success. | managed-team scheduler prompt/routing, team `team_most3l4i_e5455c`, `audit/cron/runs/job_1778021273904_3ehgf.jsonl` | medium | `audit/cron/runs/job_1778021273904_3ehgf.jsonl:6`; `audit/tasks/state/_index.json:14657-14692` |
+
+## F. Improvement Candidates
+| Issue | Proposal Type | Confidence | Evidence |
+|-------|--------------|-----------|---------|
+| Build Prometheus Remote MVP spec/implementation path: start with PWA or Expo, secure pairing to local gateway, push notifications, approvals, task status, media uploads, and desktop bridge controls. | feature_addition | high | `audit/chats/transcripts/telegram_1799053599_1778635569373.md:43-59` |
+| Desktop background sandbox workflow should fail fast with actionable preflight if Windows Sandbox/Hyper-V/external worker is unavailable; do not queue screenshot commands that cannot be serviced. | src_edit | high | `Brain/skill-episodes/2026-05-12/episodes.jsonl:2`; `audit/chats/transcripts/2fea98cc-1540-4391-b0bd-a3bc3cfaa389.md:15-23` |
+| Update desktop automation skill with background desktop troubleshooting/guardrails and unavailable-tool notes. | skill_evolution | high | `Brain/skill-gardener/2026-05-12/live-candidates.jsonl:2`, `:4` |
+| Raw provider credential errors in Telegram should be transformed into a graceful health/status response or fallback model routing attempt. | src_edit | high | `audit/chats/transcripts/telegram_1799053599_1778616335778.md:7-39` |
+| Scheduled managed-team runs can complete as “success” after a natural-stop greeting without doing work. Add failure detection for “Hey! How can I help?”/no artifact progress in scheduled team jobs. | src_edit | medium | `audit/cron/runs/job_1778021273904_3ehgf.jsonl:6`; `audit/tasks/state/_index.json:14657-14692` |
+| Add/teach a suspicious-social-link security triage workflow with safe fetch/read, claim extraction, and optional local checks. | skill_evolution | medium | `audit/chats/transcripts/9cb6b455-76d2-44f2-98dc-cc7f39d77a85.md:1-22` |
+| Mobile app mockup workflow should include visual QA/snapshot review and produce a concrete spec artifact after image generation, not stop at generated images and direction. | general | medium | `audit/chats/transcripts/telegram_1799053599_1778635569373.md:18-59`; `Brain/skill-episodes/2026-05-12/episodes.jsonl:3` |
+
+## G. Window Verdict
+**Active:** yes
+**Signal quality:** high
+**Summary:** The window was product-heavy despite reliability friction: Raul tested the non-disruptive desktop vision, hit provider/connectivity rough edges, and then asked for the first real Prometheus mobile replacement for Telegram. The best seeds are Prometheus Remote, isolated desktop worker hardening, provider-health fallback, and a reusable suspicious-link safety triage workflow.
+---

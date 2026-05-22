@@ -1,0 +1,12 @@
+{
+  "skillId": "ai-surface-smoke-research",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-19T20:30:01.703Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\ai-surface-smoke-research",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "ee2c266571fc609b"
+}

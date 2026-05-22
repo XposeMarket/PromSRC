@@ -1,0 +1,12 @@
+{
+  "skillId": "scheduler-operations-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-05-20T10:31:38.135Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\scheduler-operations-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "7792317199246e91"
+}

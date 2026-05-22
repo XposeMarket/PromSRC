@@ -1,0 +1,12 @@
+{
+  "skillId": "scheduler-operations-playbook",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-17T18:17:25.932Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\scheduler-operations-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "cc8037101d995c6d"
+}

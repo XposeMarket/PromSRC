@@ -1,18 +1,9 @@
 ---
 name: Market Research
-description: >
-  TAM/SAM/SOM modeling, ICP validation, interview guide creation, customer segment
-  analysis, and insight synthesis. Use whenever the user needs to size a market,
-  validate a hypothesis about customers, understand who to target, design customer
-  research, analyze survey results, or turn raw research into actionable insights.
-  Triggers on: "market research", "market size", "TAM SAM SOM", "ICP", "ideal customer",
-  "customer research", "user research", "validate our hypothesis", "who should we target",
-  "customer interviews", "survey design", "market sizing", "go-to-market research",
-  "understand our market", "market opportunity", "total addressable market",
-  "customer persona", "customer segment", "research synthesis", "interview guide".
-emoji: 📋
+description: Structured process for sizing markets, defining who to target, collecting customer intelligence, and synthesizing raw research into decisions.
+emoji: "🧩"
 version: 1.0.0
-triggers: market research, market size, TAM SAM SOM, ICP, ideal customer profile, customer research, user research, validate hypothesis, customer interviews, survey design, market sizing, market opportunity, addressable market, customer persona, customer segment, research synthesis, interview guide
+triggers: market research, market size, tam sam som, icp, ideal customer profile, customer research, user research, validate hypothesis, customer interviews, survey design, market sizing, market opportunity, addressable market, customer persona, customer segment, research synthesis, interview guide
 ---
 
 # Market Research

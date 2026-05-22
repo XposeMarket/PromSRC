@@ -1,16 +1,20 @@
-# BOOT.md - Prometheus Startup Checklist
+# BOOT.md - Prometheus Daily Startup
 
-Run these steps in order:
+This file opts the workspace into the once-per-day startup summary.
 
-**Step 1:** Call `task_control` to list all tasks:
-`task_control({"action":"list","status":"","include_all_sessions":true,"limit":20})`
+Current startup behavior:
 
-**Step 2:** Call `list_files` to find today's memory file, then read the most recent one in the `memory/` folder.
+1. Look at yesterday's intraday notes only.
+2. Look at recent chat compaction summaries from the later of:
+   - the last boot summary timestamp
+   - 24 hours ago
+3. Look at recent Brain thought/dream activity in that same recent window, including failed overnight attempts if any.
+4. Send a short startup message about what may be worth resuming.
 
-**Step 3:** Read `.prometheus/integrations-state.json` — if any integrations show `"status": "broken"` or if the file is empty with no integrations configured, note it briefly in your reply.
+Hot restarts are separate from the daily startup:
 
-**Step 3b:** Call `agent_list` to see what sub-agents are configured. Note the count in your reply (e.g. "3 agents configured" or "single-agent mode").
+1. A manual/proposal/update restart should resume from the previous chat session.
+2. The restart follow-up should confirm the restart succeeded.
+3. It should ask whether to continue the in-flight work from that conversation.
 
-**Step 4:** Reply in 2-3 sentences: any tasks needing attention, integration issues if any, and one line on where things left off. Done.
-
----
+Keep both flows short, useful, and continuation-oriented.

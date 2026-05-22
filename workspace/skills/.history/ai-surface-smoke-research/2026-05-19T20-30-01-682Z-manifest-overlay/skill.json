@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "ai-surface-smoke-research",
+  "name": "AI Surface Smoke Research",
+  "description": "Run Raul's browser/desktop test workflow: focus Codex and Claude, open Chrome/browser, search Reddit and/or X for AI topics like Claude, OpenClaw, Hermes, summarize signals, and report only after tool-backed execution completes.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "run ai smoke research",
+    "ai surface test",
+    "codex claude reddit x test",
+    "search reddit and x for ai",
+    "focus codex and claude then search x",
+    "test browser desktop research",
+    "quick ai research workflow",
+    "claude openclaw hermes search",
+    "summarize ai chatter",
+    "browser desktop ai test"
+  ],
+  "categories": [
+    "browser",
+    "desktop",
+    "research",
+    "testing"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "desktop_automation",
+    "skills"
+  ],
+  "permissions": {
+    "browser": true,
+    "desktop": true,
+    "externalSideEffects": false,
+    "workspaceWrite": false
+  },
+  "resources": []
+}

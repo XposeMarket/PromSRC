@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "website-to-hyperframes",
+  "name": "website-to-hyperframes",
+  "description": "|",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "website-to-hyperframes"
+  ],
+  "categories": [
+    "codex",
+    "imported"
+  ],
+  "requiredTools": [],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": [
+      "workspaceRead",
+      "shell",
+      "browser",
+      "desktop"
+    ]
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
+  "toolBinding": {
+    "requiredTools": [],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": true,
+    "desktop": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/step-1-capture.md",
+      "type": "doc",
+      "sizeBytes": 4878
+    },
+    {
+      "path": "references/step-2-design.md",
+      "type": "doc",
+      "sizeBytes": 8888
+    },
+    {
+      "path": "references/step-3-script.md",
+      "type": "doc",
+      "sizeBytes": 638
+    },
+    {
+      "path": "references/step-4-storyboard.md",
+      "type": "doc",
+      "sizeBytes": 9742
+    },
+    {
+      "path": "references/step-5-vo.md",
+      "type": "doc",
+      "sizeBytes": 2498
+    },
+    {
+      "path": "references/step-6-build.md",
+      "type": "doc",
+      "sizeBytes": 15610
+    },
+    {
+      "path": "references/step-7-validate.md",
+      "type": "doc",
+      "sizeBytes": 5543
+    }
+  ],
+  "status": "ready",
+  "lifecycle": "experimental",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
+  "riskLevel": "medium"
+}

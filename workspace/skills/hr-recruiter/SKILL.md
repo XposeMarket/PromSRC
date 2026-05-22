@@ -1,13 +1,8 @@
 ---
 name: hr-recruiter
-description: >
-  Expert HR and recruiting skill. Use this whenever someone needs help with: writing job descriptions,
-  building hiring processes, creating interview kits, screening resumes, designing compensation structures,
-  writing offer letters, building onboarding plans, creating performance review frameworks, writing PIPs
-  (performance improvement plans), handling employee issues, building culture documents, or any HR/people
-  operations task. Triggers on: "help me hire", "write a job description", "how do I interview for X",
-  "build an onboarding plan", "create a PIP", "how do I structure comp", "screen these resumes",
-  or any people/talent/HR request. Replaces an HR generalist and recruiter for most tasks.
+description: # HR & Recruiter Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # HR & Recruiter Skill

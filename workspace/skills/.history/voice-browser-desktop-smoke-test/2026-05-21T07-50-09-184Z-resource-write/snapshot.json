@@ -1,0 +1,11 @@
+{
+  "skillId": "voice-browser-desktop-smoke-test",
+  "reason": "resource-write",
+  "createdAt": "2026-05-21T07:50:09.187Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\voice-browser-desktop-smoke-test",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "a186473522d0a8c6"
+}

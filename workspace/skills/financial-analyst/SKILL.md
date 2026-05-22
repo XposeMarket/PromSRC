@@ -1,14 +1,8 @@
 ---
 name: financial-analyst
-description: >
-  Expert financial analysis, modeling, and CFO-lite advisory skill. Use this whenever someone needs:
-  P&L analysis, cash flow forecasting, runway calculations, burn rate analysis, budget planning,
-  financial modeling, scenario analysis, investor reporting, board deck financials, KPI trees,
-  unit economics, break-even analysis, fundraising prep, financial narrative writing, or interpreting
-  any financial data. Triggers on: "analyze our financials", "how much runway do we have", "build
-  a forecast", "what should I show investors", "explain our P&L", "model this out", "what's our burn",
-  or any request involving money, budgets, or financial decisions. Replaces a junior-to-mid financial
-  analyst or fractional CFO for most analytical tasks.
+description: Financial Analyst Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Financial Analyst Skill

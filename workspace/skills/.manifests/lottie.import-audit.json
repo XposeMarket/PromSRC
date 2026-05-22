@@ -1,0 +1,146 @@
+{
+  "schemaVersion": "prometheus-skill-import-audit-v1",
+  "auditedAt": "2026-05-18T00:43:55.550Z",
+  "source": "https://github.com/heygen-com/hyperframes/tree/main/skills",
+  "sourceKind": "generic",
+  "status": "needs_changes",
+  "skillId": "lottie",
+  "rootName": "lottie",
+  "summary": "Skill can be imported with Prometheus compatibility metadata, but some guidance should be reviewed.",
+  "safety": {
+    "verdict": "safe",
+    "findings": [],
+    "scannedAt": "2026-05-18T00:43:55.550Z",
+    "contentHash": "8d27a0e1af62a839"
+  },
+  "findings": [
+    {
+      "severity": "warn",
+      "code": "missing-triggers",
+      "message": "Skill has no trigger phrases, which can make automatic discovery unreliable.",
+      "suggestedChange": "Add concise task phrases to triggers."
+    }
+  ],
+  "proposedPatches": [
+    {
+      "kind": "manifest_overlay",
+      "description": "Add a Prometheus compatibility overlay with normalized metadata, permissions, requirements, lifecycle, and resources.",
+      "safeToApply": true,
+      "manifest": {
+        "schemaVersion": "prometheus-skill-bundle-v1",
+        "id": "lottie",
+        "name": "lottie",
+        "description": "Lottie and dotLottie adapter patterns for HyperFrames. Use when embedding lottie-web JSON animations, .lottie files, @lottiefiles/dotlottie-web players, registering instances on window.__hfLottie, or making After Effects exports deterministic in HyperFrames.",
+        "version": "1.0.0",
+        "entrypoint": "SKILL.md",
+        "triggers": [
+          "lottie"
+        ],
+        "categories": [
+          "generic",
+          "imported"
+        ],
+        "requiredTools": [],
+        "requires": {
+          "tools": [],
+          "toolCategories": [],
+          "connectors": [],
+          "env": [],
+          "bins": [],
+          "platforms": [],
+          "permissions": [
+            "workspaceRead",
+            "shell",
+            "browser",
+            "desktop",
+            "externalSideEffects"
+          ]
+        },
+        "assignment": {
+          "assignedAgents": [],
+          "assignedTeams": []
+        },
+        "toolBinding": {
+          "requiredTools": [],
+          "recommendedToolCategories": [],
+          "defaultWorkflow": [],
+          "canSpawnSubagents": false
+        },
+        "permissions": {
+          "workspaceRead": true,
+          "workspaceWrite": false,
+          "shell": true,
+          "browser": true,
+          "desktop": true,
+          "externalSideEffects": true
+        },
+        "resources": [],
+        "status": "ready",
+        "lifecycle": "experimental",
+        "ownership": "prometheus-owned-overlay",
+        "executionEnabled": true,
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "kind": "manual_review",
+      "description": "missing-triggers: Add concise task phrases to triggers.",
+      "safeToApply": false
+    }
+  ],
+  "manifestOverlay": {
+    "schemaVersion": "prometheus-skill-bundle-v1",
+    "id": "lottie",
+    "name": "lottie",
+    "description": "Lottie and dotLottie adapter patterns for HyperFrames. Use when embedding lottie-web JSON animations, .lottie files, @lottiefiles/dotlottie-web players, registering instances on window.__hfLottie, or making After Effects exports deterministic in HyperFrames.",
+    "version": "1.0.0",
+    "entrypoint": "SKILL.md",
+    "triggers": [
+      "lottie"
+    ],
+    "categories": [
+      "generic",
+      "imported"
+    ],
+    "requiredTools": [],
+    "requires": {
+      "tools": [],
+      "toolCategories": [],
+      "connectors": [],
+      "env": [],
+      "bins": [],
+      "platforms": [],
+      "permissions": [
+        "workspaceRead",
+        "shell",
+        "browser",
+        "desktop",
+        "externalSideEffects"
+      ]
+    },
+    "assignment": {
+      "assignedAgents": [],
+      "assignedTeams": []
+    },
+    "toolBinding": {
+      "requiredTools": [],
+      "recommendedToolCategories": [],
+      "defaultWorkflow": [],
+      "canSpawnSubagents": false
+    },
+    "permissions": {
+      "workspaceRead": true,
+      "workspaceWrite": false,
+      "shell": true,
+      "browser": true,
+      "desktop": true,
+      "externalSideEffects": true
+    },
+    "resources": [],
+    "status": "ready",
+    "lifecycle": "experimental",
+    "ownership": "prometheus-owned-overlay",
+    "executionEnabled": true,
+    "riskLevel": "medium"
+  }
+}

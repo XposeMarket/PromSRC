@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "pretext-html-motion",
+  "name": "Pretext HTML Motion",
+  "description": "Build deterministic Pretext-powered kinetic typography, text-flow, glyph-particle, ASCII/text-geometry clips inside Prometheus Creative Video mode using HTML Motion rather than standalone browser demos.",
+  "emoji": "🌀",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "pretext",
+    "pretext demo",
+    "text flow",
+    "text flowing around shape",
+    "kinetic typography",
+    "glyph particles",
+    "text particles",
+    "shatter text",
+    "typographic motion",
+    "ascii typography",
+    "text as geometry",
+    "creative text layout",
+    "HTML motion typography",
+    "canvas text animation"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "typography",
+    "kinetic-typography",
+    "pretext",
+    "canvas",
+    "generative-art"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "skills",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/pretext-fallback-layout.md",
+      "type": "doc",
+      "description": "Fallback Pretext-like layout shim for HTML Motion clips when remote ESM imports are blocked or when a deterministic local prototype is enough."
+    },
+    {
+      "path": "templates/pretext-orb-reflow-vertical.html",
+      "type": "template",
+      "description": "Starter HTML Motion document for a vertical 1080x1920 Pretext-style orb reflow clip using the fallback layout shim pattern."
+    }
+  ]
+}

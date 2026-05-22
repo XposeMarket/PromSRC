@@ -1,9 +1,8 @@
 ---
-name: PDF Reader
-description: 📌 CANONICAL PDF workflow. Extract text and data from any PDF file. Handles digital PDFs (text-based) using pdf-parse, and scanned/image PDFs using tesseract.js OCR (already installed). Use when a user uploads a PDF and wants to read, summarize, or extract specific content from it. DEPENDENCY CHECK: pdf-parse may need installing — run node -e "require('pdf-parse')" from D:\Prometheus. tesseract.js is already installed. If pdf-parse is missing run workspace/doc-skills-setup.js. Triggers on: read this PDF, summarize PDF, extract from PDF, what does this PDF say, find in PDF, PDF contract, PDF invoice, PDF report, scanned document.
-emoji: "📋"
-version: 2.0.0
-triggers: read PDF, summarize PDF, extract from PDF, what does PDF say, find in PDF, PDF contract, PDF invoice, PDF report, scanned document, read this file, analyze PDF, PDF uploaded, extract text PDF, parse PDF, pdf to text, convert pdf
+name: pdf-reader
+description: Extract text and data from any PDF file using `pdf-parse` (digital PDFs) and `tesseract.js` (scanned/image PDFs). Both are available in Prometheus.
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # PDF Reader — Canonical PDF Workflow

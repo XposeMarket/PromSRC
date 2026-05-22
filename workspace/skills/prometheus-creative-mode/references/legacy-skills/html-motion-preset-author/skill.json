@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "html-motion-preset-author",
+  "name": "HTML Motion Preset Author",
+  "description": "Workflow for saving successful Prometheus Creative HTML Motion / HyperFrames clips as reusable preset skills with template resources and QA rules.",
+  "emoji": "🎞️",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "save this as a preset",
+    "save as preset",
+    "make this reusable",
+    "turn this into a template",
+    "capture this html motion",
+    "hyperframes preset",
+    "html motion preset",
+    "reusable motion template",
+    "creative preset"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "hyperframes",
+    "preset-authoring"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "skills",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": []
+}

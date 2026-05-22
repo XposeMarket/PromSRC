@@ -1,0 +1,12 @@
+{
+  "skillId": "hyperframes-catalog-assets",
+  "reason": "resource-write",
+  "createdAt": "2026-05-10T03:59:24.711Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\hyperframes-catalog-assets",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "862b45c253bc2439"
+}

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "gsap",
+  "name": "gsap",
+  "description": "GSAP animation reference for HyperFrames. Covers gsap.to(), from(), fromTo(), easing, stagger, defaults, timelines (gsap.timeline(), position parameter, labels, nesting, playback), and performance (transforms, will-change, quickTo). Use when writing GSAP animations in HyperFrames compositions.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "gsap"
+  ],
+  "categories": [
+    "generic",
+    "imported"
+  ],
+  "requiredTools": [],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": [
+      "workspaceRead",
+      "shell",
+      "desktop"
+    ]
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
+  "toolBinding": {
+    "requiredTools": [],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": false,
+    "desktop": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/effects.md",
+      "type": "doc",
+      "sizeBytes": 8761
+    },
+    {
+      "path": "scripts/extract-audio-data.py",
+      "type": "doc",
+      "sizeBytes": 6463
+    }
+  ],
+  "status": "ready",
+  "lifecycle": "experimental",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
+  "riskLevel": "medium"
+}

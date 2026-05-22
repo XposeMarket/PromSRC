@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "secret-and-token-ops",
+  "name": "secret-and-token-ops",
+  "description": "Use this skill whenever a task touches secrets, tokens, API keys, credentials, or authentication material.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/subscription-gated-oauth-api-access-2026-05-15.md",
+      "type": "doc",
+      "description": "Guardrail for subscription-gated OAuth/API feature investigations, with redaction and entitlement-classification steps."
+    },
+    {
+      "path": "notes/github-token-cli-auth-safety-2026-05-16.md",
+      "type": "doc",
+      "description": "GitHub PAT and CLI auth safety guardrail for repo-access setup workflows."
+    }
+  ]
+}

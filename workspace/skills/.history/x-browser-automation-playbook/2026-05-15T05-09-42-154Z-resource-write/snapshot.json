@@ -1,0 +1,12 @@
+{
+  "skillId": "x-browser-automation-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-05-15T05:09:42.370Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\x-browser-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "081e278936f13484"
+}

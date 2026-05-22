@@ -1,0 +1,12 @@
+{
+  "skillId": "src-edit-proposal-rigor",
+  "reason": "resource-write",
+  "createdAt": "2026-05-18T18:02:59.809Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\src-edit-proposal-rigor",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "060b8d4197a8aae9"
+}

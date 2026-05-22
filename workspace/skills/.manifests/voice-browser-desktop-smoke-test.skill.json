@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "name": "Voice Browser Desktop Smoke Test",
+  "description": "Repeat Raul's quick voice-driven Prometheus smoke test: open/search X for an AI-related topic, scroll it, focus Codex, then focus Claude, and only report after the tool-backed sequence completes.",
+  "version": "1.0.1",
+  "triggers": [
+    "do the test again",
+    "voice test again",
+    "run that test again",
+    "browser test",
+    "go look for things about AI then focus Codex and Claude",
+    "open X search and focus Codex",
+    "open X search then focus Claude",
+    "test browser and desktop focus",
+    "X search AI scroll Codex Claude",
+    "Prometheus voice tool test",
+    "browser desktop smoke test",
+    "test X Codex Claude",
+    "repeat the X search test",
+    "interrupt me during the browser desktop test"
+  ],
+  "categories": [
+    "browser_automation",
+    "desktop_automation",
+    "voice_testing"
+  ],
+  "requires": {
+    "toolCategories": [
+      "browser_automation",
+      "desktop_automation"
+    ]
+  },
+  "toolBinding": {
+    "recommendedToolCategories": [
+      "browser_automation",
+      "desktop_automation"
+    ],
+    "defaultWorkflow": [
+      "Read x-browser-automation-playbook and desktop-automation-playbook if not already loaded.",
+      "Open X/search or a browser search for the requested AI-related topic.",
+      "Scroll once or inspect the visible results only enough to prove the browser step ran.",
+      "Focus Codex, then focus Claude.",
+      "Reply briefly only after the tool sequence completes."
+    ]
+  },
+  "id": "voice-browser-desktop-smoke-test"
+}

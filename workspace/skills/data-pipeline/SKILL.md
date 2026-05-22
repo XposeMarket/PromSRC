@@ -1,9 +1,8 @@
 ---
-name: Data Pipeline
-description: Read, transform, and write data files reliably. Use for CSV processing, JSON transformation, data cleaning, bulk file operations, chunked large-file handling, deduplication, filtering, aggregation, and writing output reports. Triggers on: CSV, data file, spreadsheet, transform data, process rows, clean data, pipeline, large file, chunk, parse data, ETL, export data, aggregate, filter records, deduplicate.
-emoji: 🔄
+name: data-pipeline
+description: Read, transform, and write data correctly. Use this before writing any data processing code.
+emoji: "🧩"
 version: 1.0.0
-triggers: CSV, data file, spreadsheet, transform, process rows, clean data, pipeline, large file, chunk, parse data, ETL, export, aggregate, filter records, deduplicate, tsv, json data, batch process
 ---
 
 # Data Pipeline

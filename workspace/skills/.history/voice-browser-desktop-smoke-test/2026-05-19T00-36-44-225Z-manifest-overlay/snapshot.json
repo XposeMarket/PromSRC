@@ -1,0 +1,11 @@
+{
+  "skillId": "voice-browser-desktop-smoke-test",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-19T00:36:44.253Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\voice-browser-desktop-smoke-test",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "a186473522d0a8c6"
+}

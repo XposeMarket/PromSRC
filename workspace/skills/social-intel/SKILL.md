@@ -1,9 +1,8 @@
 ---
-name: Social Media Intelligence
-description: Analyze social media accounts, pull performance data, and deliver growth coaching reports. Use for any request involving social media analytics, post performance, follower counts, engagement rates, competitor analysis, or content strategy. Triggers on: social, instagram, tiktok, twitter, x, linkedin, followers, engagement, posts, analytics, social coach, social analysis, grow account, content performance, hashtag, reach, impressions.
-emoji: 📊
+name: social-intel
+description: Full playbook for running social analysis and delivering actionable growth coaching.
+emoji: "🧩"
 version: 1.0.0
-triggers: social, instagram, tiktok, twitter, x account, linkedin, followers, engagement, posts, analytics, social coach, social analysis, grow my account, content performance, hashtag, reach, impressions, social media, competitor analysis
 ---
 
 # Social Media Intelligence

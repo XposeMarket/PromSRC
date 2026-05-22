@@ -1,0 +1,157 @@
+{
+  "schemaVersion": "prometheus-skill-import-audit-v1",
+  "auditedAt": "2026-05-18T00:43:59.073Z",
+  "source": "https://github.com/heygen-com/hyperframes/tree/main/skills",
+  "sourceKind": "codex",
+  "status": "needs_changes",
+  "skillId": "hyperframes-cli",
+  "rootName": "hyperframes-cli",
+  "summary": "Skill can be imported with Prometheus compatibility metadata, but some guidance should be reviewed.",
+  "safety": {
+    "verdict": "safe",
+    "findings": [],
+    "scannedAt": "2026-05-18T00:43:59.067Z",
+    "contentHash": "97281c338ec0a0c2"
+  },
+  "findings": [
+    {
+      "severity": "warn",
+      "code": "missing-triggers",
+      "message": "Skill has no trigger phrases, which can make automatic discovery unreliable.",
+      "suggestedChange": "Add concise task phrases to triggers."
+    },
+    {
+      "severity": "warn",
+      "code": "external-codex-tool-reference",
+      "message": "Skill references codex conventions that may not map directly to Prometheus.",
+      "path": "SKILL.md",
+      "suggestedChange": "Keep useful Codex workflow guidance, but make tool names and channel assumptions explicit for Prometheus."
+    }
+  ],
+  "proposedPatches": [
+    {
+      "kind": "manifest_overlay",
+      "description": "Add a Prometheus compatibility overlay with normalized metadata, permissions, requirements, lifecycle, and resources.",
+      "safeToApply": true,
+      "manifest": {
+        "schemaVersion": "prometheus-skill-bundle-v1",
+        "id": "hyperframes-cli",
+        "name": "hyperframes-cli",
+        "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding (init), validation (lint, inspect), preview, render, and environment troubleshooting (doctor, browser, info, upgrade). Use when running any of these commands or troubleshooting the HyperFrames build/render environment. For asset preprocessing commands (`tts`, `transcribe`, `remove-background`), invoke the `hyperframes-media` skill instead.",
+        "version": "1.0.0",
+        "entrypoint": "SKILL.md",
+        "triggers": [
+          "hyperframes-cli"
+        ],
+        "categories": [
+          "codex",
+          "imported"
+        ],
+        "requiredTools": [],
+        "requires": {
+          "tools": [],
+          "toolCategories": [],
+          "connectors": [],
+          "env": [],
+          "bins": [],
+          "platforms": [],
+          "permissions": [
+            "workspaceRead",
+            "shell",
+            "browser",
+            "desktop"
+          ]
+        },
+        "assignment": {
+          "assignedAgents": [],
+          "assignedTeams": []
+        },
+        "toolBinding": {
+          "requiredTools": [],
+          "recommendedToolCategories": [],
+          "defaultWorkflow": [],
+          "canSpawnSubagents": false
+        },
+        "permissions": {
+          "workspaceRead": true,
+          "workspaceWrite": false,
+          "shell": true,
+          "browser": true,
+          "desktop": true,
+          "externalSideEffects": false
+        },
+        "resources": [],
+        "status": "ready",
+        "lifecycle": "experimental",
+        "ownership": "prometheus-owned-overlay",
+        "executionEnabled": true,
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "kind": "manual_review",
+      "description": "missing-triggers: Add concise task phrases to triggers.",
+      "safeToApply": false
+    },
+    {
+      "kind": "manual_review",
+      "path": "SKILL.md",
+      "description": "external-codex-tool-reference: Keep useful Codex workflow guidance, but make tool names and channel assumptions explicit for Prometheus.",
+      "safeToApply": false
+    }
+  ],
+  "manifestOverlay": {
+    "schemaVersion": "prometheus-skill-bundle-v1",
+    "id": "hyperframes-cli",
+    "name": "hyperframes-cli",
+    "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding (init), validation (lint, inspect), preview, render, and environment troubleshooting (doctor, browser, info, upgrade). Use when running any of these commands or troubleshooting the HyperFrames build/render environment. For asset preprocessing commands (`tts`, `transcribe`, `remove-background`), invoke the `hyperframes-media` skill instead.",
+    "version": "1.0.0",
+    "entrypoint": "SKILL.md",
+    "triggers": [
+      "hyperframes-cli"
+    ],
+    "categories": [
+      "codex",
+      "imported"
+    ],
+    "requiredTools": [],
+    "requires": {
+      "tools": [],
+      "toolCategories": [],
+      "connectors": [],
+      "env": [],
+      "bins": [],
+      "platforms": [],
+      "permissions": [
+        "workspaceRead",
+        "shell",
+        "browser",
+        "desktop"
+      ]
+    },
+    "assignment": {
+      "assignedAgents": [],
+      "assignedTeams": []
+    },
+    "toolBinding": {
+      "requiredTools": [],
+      "recommendedToolCategories": [],
+      "defaultWorkflow": [],
+      "canSpawnSubagents": false
+    },
+    "permissions": {
+      "workspaceRead": true,
+      "workspaceWrite": false,
+      "shell": true,
+      "browser": true,
+      "desktop": true,
+      "externalSideEffects": false
+    },
+    "resources": [],
+    "status": "ready",
+    "lifecycle": "experimental",
+    "ownership": "prometheus-owned-overlay",
+    "executionEnabled": true,
+    "riskLevel": "medium"
+  }
+}

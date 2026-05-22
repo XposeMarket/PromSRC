@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "desktop-automation-playbook",
+  "name": "Desktop Automation Playbook",
+  "description": "Current operating guide for Prometheus desktop automation on Windows. Covers screenshot-first execution, window targeting, UI Automation, precise clicking, scrolling, typing, verification, macros, and when to use desktop tools versus browser or shell tools.",
+  "version": "4.3.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "desktop",
+    "desktop_screenshot",
+    "desktop_window_screenshot",
+    "desktop_window_control",
+    "desktop_click",
+    "desktop_drag",
+    "desktop_scroll",
+    "desktop_type",
+    "desktop_type_raw",
+    "desktop_press_key",
+    "desktop_find_window",
+    "desktop_focus_window",
+    "desktop_get_accessibility_tree",
+    "desktop_get_window_text",
+    "desktop_get_monitors",
+    "desktop_find_installed_app",
+    "desktop_list_installed_apps",
+    "desktop_launch_app",
+    "desktop_send_to_telegram",
+    "desktop_wait_for_change",
+    "desktop_pixel_watch",
+    "desktop_record_macro",
+    "desktop_replay_macro",
+    "click screen",
+    "type into app",
+    "open app",
+    "find installed app",
+    "launch app by app_id",
+    "automate desktop",
+    "gui automation",
+    "windows automation",
+    "mouse click",
+    "screenshot anchored click",
+    "coordinate_space",
+    "maximize window",
+    "restore window",
+    "minimize window"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/background-desktop-sandbox-preflight-2026-05-12.md",
+      "type": "doc",
+      "description": "Observed 2026-05-12 guardrail for non-disruptive/background desktop sandbox preflight and runtime-dependent desktop tools."
+    },
+    {
+      "path": "notes/use-existing-user-chrome-for-auth-flows-2026-05-16.md",
+      "type": "doc",
+      "description": "Guardrail for desktop-auth workflows where Raul explicitly needs his existing Chrome profile/window rather than browser automation's isolated profile."
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "skillId": "day-trading-mnq-mgc",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-14T06:05:01.301Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\day-trading-mnq-mgc",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "00a08db1e1f2bed7"
+}

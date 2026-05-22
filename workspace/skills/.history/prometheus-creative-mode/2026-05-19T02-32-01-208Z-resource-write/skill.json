@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-creative-mode",
+  "name": "Prometheus Creative Mode",
+  "description": "HyperFrames-first Prometheus Creative Mode front door for editable video canvas work, HTML-in-motion editing, HyperFrames compositions, catalog blocks, media analysis, Pretext text flow, deterministic animation adapters, QA, and export.",
+  "emoji": "creative",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "creative mode",
+    "video canvas",
+    "Prometheus video",
+    "HTML Motion",
+    "HyperFrames",
+    "HyperFrames catalog",
+    "HyperFrames composition",
+    "HyperFrames block",
+    "HTML-in-motion",
+    "Remotion port",
+    "Remotion migration",
+    "Pretext typography",
+    "ASCII video",
+    "kinetic typography",
+    "website to video",
+    "motion template",
+    "creative export",
+    "video QA",
+    "html motion spec"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "hyperframes",
+    "remotion",
+    "pretext",
+    "ascii",
+    "animation",
+    "experimental",
+    "rendering"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "skills",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/creative-skill-map.md",
+      "type": "doc",
+      "description": "Consolidation map from older creative skills into this unified bundle."
+    },
+    {
+      "path": "references/PROMETHEUS_HTML_MOTION_SPEC.md",
+      "type": "doc",
+      "description": "Canonical Prometheus HTML Motion engineering spec for valid clips, timing units, runtime clock, lint/inspect, QA, audio, renderer identity, and standalone compatibility export."
+    },
+    {
+      "path": "references/known-issues/hyperframes-export-smoke-test-2026-05-09.md",
+      "type": "doc",
+      "description": "May 9 HyperFrames export smoke-test troubleshooting decision tree with exact failure signatures and pass/fail checkpoints."
+    },
+    {
+      "path": "references/known-issues/hyperframes-export-failed-fetch-file-exists-2026-05-15.md",
+      "type": "doc",
+      "description": "Troubleshooting note for HyperFrames/HTML Motion exports that return Failed to fetch/timeouts even when an MP4 artifact exists."
+    },
+    {
+      "path": "references/known-issues/html-motion-seek-event-time-fields-2026-05-15.md",
+      "type": "doc",
+      "description": "Known issue and guardrail for frozen-frame HTML Motion/HyperFrames exports caused by outdated seek event field names."
+    }
+  ]
+}

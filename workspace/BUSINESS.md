@@ -1,5 +1,5 @@
 # BUSINESS.md — Canonical Business Context
-# Auto-loaded into every Prometheus session. Keep this accurate and current.
+# Available for Prometheus session injection when business context mode is enabled. Keep this accurate and current.
 # Written by: manual input, context ingestion engine, conversation learning.
 # Format: structured sections. Add new sections as your business grows.
 

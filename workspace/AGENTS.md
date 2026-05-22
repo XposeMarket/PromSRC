@@ -62,8 +62,8 @@ Give them all necessary context in the `task` or `context` fields.
 ## Skills
 
 Skills are loadable modules that extend your capabilities.
-Toggle them on/off from the UI. Active skills are injected into your system prompt.
-Use `skill_list` to see what's installed. Use `skill_search` to find new ones.
+Use `skill_list` to see what's installed and `skill_read` to load the relevant playbook.
+After `skill_read`, that skill remains active in the session and is injected on later turns.
 
 ## Setting Up Integrations
 

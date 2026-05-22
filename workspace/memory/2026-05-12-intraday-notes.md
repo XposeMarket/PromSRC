@@ -1,0 +1,14 @@
+
+### [LAST_RUN_INSIGHT] 2026-05-12T02:17:21.544Z
+Run completed successfully for 2026-05-12 with 146 candidate posts collected read-only (home feed + 6 bounded search buckets), no social-action blockers, and both report files updated. It was mostly straightforward except loop-detector sensitivity showed repeated identical scroll-collect patterns need to be varied to avoid guardrail hits in future runs.
+_Related task: c4a8c3b4-dbc7-43b6-997c-1ce863934abd_
+
+### [DEBUG] 2026-05-12T03:30:12.714Z
+Fixed Daily X Signal Radar collector model-routing issue: job `job_1777858649056_grcnr` was running on `openai_codex/gpt-5.3-codex-spark`, which caused repeated API 400 failures because Spark does not support image inputs used by browser snapshots/vision. Patched the scheduled job model override to `openai_codex/gpt-5.5` and verified job detail now reports model `openai_codex/gpt-5.5`; next run remains scheduled for 2026-05-13 01:30 UTC / 2026-05-12 21:30 America/New_York.
+_Related task: job_1777858649056_grcnr_
+
+### [DEBUG] 2026-05-12T05:27:22.384Z
+Desktop tools smoke test 2026-05-12: foreground host desktop tools work (monitors, process/window listing, full screenshot, window screenshot, native window_control restore/minimize). `desktop_background_status` shows host tools are still foreground-only; Windows Sandbox feature unavailable (`Containers-DisposableClientVM` command failed/not available), Hyper-V not found, RDP stopped, external desktop worker not configured. Bridge exists at `C:\Users\rafel\.prometheus\desktop-background\bridge`; `desktop_background_prepare_sandbox({launch:false})` created `.wsb` and worker, but `desktop_background_command({action:'screenshot'})` timed out because no sandbox/VM worker is running. Some advertised desktop tools returned Unknown tool in this session: `desktop_get_window_text`, `desktop_get_accessibility_tree`, `desktop_list_macros`. Also, minimizing/restoring Codex did affect foreground desktop, confirming current host desktop tools are not sandboxed/non-disruptive yet.
+
+### [DEBUG] 2026-05-12T17:35:28.955Z
+Tested desktop background/sandbox workflow for Raul on 2026-05-12. `desktop_background_status` reports host desktop tools are foreground-only and can interrupt the user; isolated background desktop requires Windows Sandbox/Hyper-V/remote worker. The bridge exists at `C:\Users\rafel\.prometheus\desktop-background\bridge`; `desktop_background_prepare_sandbox` generated `prometheus-background-desktop.wsb` and `bridge\worker.ps1`, but launch did not produce a Sandbox window/worker response because Windows Sandbox feature `Containers-DisposableClientVM` is unavailable/not_found, Hyper-V/vmms are not_found, RDP stopped, and no external worker URL is configured. A queued screenshot command timed out waiting for worker response.

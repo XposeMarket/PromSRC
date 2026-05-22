@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "css-animations",
+  "name": "css-animations",
+  "description": "CSS animation adapter patterns for HyperFrames. Use when authoring CSS keyframes, animation-delay based timing, animation-fill-mode, animation-play-state, or CSS-only motion that HyperFrames must seek deterministically during preview and rendering.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "css-animations"
+  ],
+  "categories": [
+    "generic",
+    "imported"
+  ],
+  "requiredTools": [],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": [
+      "workspaceRead",
+      "shell",
+      "browser"
+    ]
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
+  "toolBinding": {
+    "requiredTools": [],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": true,
+    "desktop": false,
+    "externalSideEffects": false
+  },
+  "resources": [],
+  "status": "ready",
+  "lifecycle": "experimental",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
+  "riskLevel": "medium"
+}

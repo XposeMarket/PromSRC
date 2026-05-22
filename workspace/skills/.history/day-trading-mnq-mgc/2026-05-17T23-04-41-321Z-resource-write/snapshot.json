@@ -1,0 +1,12 @@
+{
+  "skillId": "day-trading-mnq-mgc",
+  "reason": "resource-write",
+  "createdAt": "2026-05-17T23:04:41.347Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\day-trading-mnq-mgc",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "00a08db1e1f2bed7"
+}

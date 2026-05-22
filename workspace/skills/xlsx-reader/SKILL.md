@@ -1,9 +1,8 @@
 ---
-name: XLSX Reader
-description: Read, analyze, and query Excel spreadsheets (.xlsx, .xls, .csv files). Extract data from sheets, summarize contents, calculate totals, find specific rows, and answer questions about spreadsheet data. Uses the xlsx (SheetJS) npm package — pure Node, no Python. DEPENDENCY CHECK: run node -e "require('xlsx')" from D:\Prometheus. If missing run workspace/doc-skills-setup.js. Triggers on: read this spreadsheet, analyze Excel file, what's in this xlsx, summarize the data, find rows where, calculate total, extract columns, csv file, spreadsheet uploaded.
-emoji: "📊"
+name: xlsx-reader
+description: Read and analyze Excel spreadsheets using the `xlsx` (SheetJS) npm package. Pure Node — works on Windows with no Python.
+emoji: "🧩"
 version: 1.0.0
-triggers: read spreadsheet, analyze excel, xlsx file, xls file, csv file, what is in spreadsheet, summarize data, find rows, calculate total, extract columns, spreadsheet uploaded, financial spreadsheet, data file, tabular data
 ---
 
 # XLSX Reader

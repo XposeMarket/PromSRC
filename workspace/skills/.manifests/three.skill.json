@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "three",
+  "name": "three",
+  "description": "Three.js and WebGL adapter patterns for HyperFrames. Use when creating deterministic Three.js scenes, WebGL canvas layers, AnimationMixer timelines, camera motion, shader-driven visuals, or canvas renders that respond to HyperFrames hf-seek events.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "three"
+  ],
+  "categories": [
+    "generic",
+    "imported"
+  ],
+  "requiredTools": [],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": [
+      "workspaceRead",
+      "shell",
+      "desktop"
+    ]
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
+  "toolBinding": {
+    "requiredTools": [],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": false,
+    "desktop": true,
+    "externalSideEffects": false
+  },
+  "resources": [],
+  "status": "ready",
+  "lifecycle": "experimental",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
+  "riskLevel": "medium"
+}

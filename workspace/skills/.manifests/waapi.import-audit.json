@@ -1,0 +1,142 @@
+{
+  "schemaVersion": "prometheus-skill-import-audit-v1",
+  "auditedAt": "2026-05-18T00:43:55.252Z",
+  "source": "https://github.com/heygen-com/hyperframes/tree/main/skills",
+  "sourceKind": "generic",
+  "status": "needs_changes",
+  "skillId": "waapi",
+  "rootName": "waapi",
+  "summary": "Skill can be imported with Prometheus compatibility metadata, but some guidance should be reviewed.",
+  "safety": {
+    "verdict": "safe",
+    "findings": [],
+    "scannedAt": "2026-05-18T00:43:55.251Z",
+    "contentHash": "0a71f6d97fb9eb83"
+  },
+  "findings": [
+    {
+      "severity": "warn",
+      "code": "missing-triggers",
+      "message": "Skill has no trigger phrases, which can make automatic discovery unreliable.",
+      "suggestedChange": "Add concise task phrases to triggers."
+    }
+  ],
+  "proposedPatches": [
+    {
+      "kind": "manifest_overlay",
+      "description": "Add a Prometheus compatibility overlay with normalized metadata, permissions, requirements, lifecycle, and resources.",
+      "safeToApply": true,
+      "manifest": {
+        "schemaVersion": "prometheus-skill-bundle-v1",
+        "id": "waapi",
+        "name": "waapi",
+        "description": "Web Animations API adapter patterns for HyperFrames. Use when authoring element.animate() motion, Animation currentTime seeking, document.getAnimations(), KeyframeEffect timing, fill modes, or native browser animations that must render deterministically in HyperFrames.",
+        "version": "1.0.0",
+        "entrypoint": "SKILL.md",
+        "triggers": [
+          "waapi"
+        ],
+        "categories": [
+          "generic",
+          "imported"
+        ],
+        "requiredTools": [],
+        "requires": {
+          "tools": [],
+          "toolCategories": [],
+          "connectors": [],
+          "env": [],
+          "bins": [],
+          "platforms": [],
+          "permissions": [
+            "workspaceRead",
+            "shell",
+            "browser"
+          ]
+        },
+        "assignment": {
+          "assignedAgents": [],
+          "assignedTeams": []
+        },
+        "toolBinding": {
+          "requiredTools": [],
+          "recommendedToolCategories": [],
+          "defaultWorkflow": [],
+          "canSpawnSubagents": false
+        },
+        "permissions": {
+          "workspaceRead": true,
+          "workspaceWrite": false,
+          "shell": true,
+          "browser": true,
+          "desktop": false,
+          "externalSideEffects": false
+        },
+        "resources": [],
+        "status": "ready",
+        "lifecycle": "experimental",
+        "ownership": "prometheus-owned-overlay",
+        "executionEnabled": true,
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "kind": "manual_review",
+      "description": "missing-triggers: Add concise task phrases to triggers.",
+      "safeToApply": false
+    }
+  ],
+  "manifestOverlay": {
+    "schemaVersion": "prometheus-skill-bundle-v1",
+    "id": "waapi",
+    "name": "waapi",
+    "description": "Web Animations API adapter patterns for HyperFrames. Use when authoring element.animate() motion, Animation currentTime seeking, document.getAnimations(), KeyframeEffect timing, fill modes, or native browser animations that must render deterministically in HyperFrames.",
+    "version": "1.0.0",
+    "entrypoint": "SKILL.md",
+    "triggers": [
+      "waapi"
+    ],
+    "categories": [
+      "generic",
+      "imported"
+    ],
+    "requiredTools": [],
+    "requires": {
+      "tools": [],
+      "toolCategories": [],
+      "connectors": [],
+      "env": [],
+      "bins": [],
+      "platforms": [],
+      "permissions": [
+        "workspaceRead",
+        "shell",
+        "browser"
+      ]
+    },
+    "assignment": {
+      "assignedAgents": [],
+      "assignedTeams": []
+    },
+    "toolBinding": {
+      "requiredTools": [],
+      "recommendedToolCategories": [],
+      "defaultWorkflow": [],
+      "canSpawnSubagents": false
+    },
+    "permissions": {
+      "workspaceRead": true,
+      "workspaceWrite": false,
+      "shell": true,
+      "browser": true,
+      "desktop": false,
+      "externalSideEffects": false
+    },
+    "resources": [],
+    "status": "ready",
+    "lifecycle": "experimental",
+    "ownership": "prometheus-owned-overlay",
+    "executionEnabled": true,
+    "riskLevel": "medium"
+  }
+}

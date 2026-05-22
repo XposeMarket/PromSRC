@@ -1,0 +1,11 @@
+{
+  "skillId": "desktop-automation-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-05-13T03:46:16.337Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\desktop-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "6a09016cbe82b8c6"
+}

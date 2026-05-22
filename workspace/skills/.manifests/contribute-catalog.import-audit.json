@@ -1,0 +1,146 @@
+{
+  "schemaVersion": "prometheus-skill-import-audit-v1",
+  "auditedAt": "2026-05-18T00:44:00.538Z",
+  "source": "https://github.com/heygen-com/hyperframes/tree/main/skills",
+  "sourceKind": "generic",
+  "status": "needs_changes",
+  "skillId": "contribute-catalog",
+  "rootName": "contribute-catalog",
+  "summary": "Skill can be imported with Prometheus compatibility metadata, but some guidance should be reviewed.",
+  "safety": {
+    "verdict": "safe",
+    "findings": [],
+    "scannedAt": "2026-05-18T00:44:00.533Z",
+    "contentHash": "51db454fa9522c05"
+  },
+  "findings": [
+    {
+      "severity": "warn",
+      "code": "missing-triggers",
+      "message": "Skill has no trigger phrases, which can make automatic discovery unreliable.",
+      "suggestedChange": "Add concise task phrases to triggers."
+    }
+  ],
+  "proposedPatches": [
+    {
+      "kind": "manifest_overlay",
+      "description": "Add a Prometheus compatibility overlay with normalized metadata, permissions, requirements, lifecycle, and resources.",
+      "safeToApply": true,
+      "manifest": {
+        "schemaVersion": "prometheus-skill-bundle-v1",
+        "id": "contribute-catalog",
+        "name": "contribute-catalog",
+        "description": "Author a new HyperFrames registry block (caption style, VFX block, transition, lower third) or component (text effect, overlay, snippet) and ship it as an upstream PR to the hyperframes repo. Use ONLY when the user wants to CONTRIBUTE to the public catalog — for in-project caption/transition authoring use the `hyperframes` skill, for installing existing registry items use the `hyperframes-registry` skill.",
+        "version": "1.0.0",
+        "entrypoint": "SKILL.md",
+        "triggers": [
+          "contribute-catalog"
+        ],
+        "categories": [
+          "generic",
+          "imported"
+        ],
+        "requiredTools": [],
+        "requires": {
+          "tools": [],
+          "toolCategories": [],
+          "connectors": [],
+          "env": [],
+          "bins": [],
+          "platforms": [],
+          "permissions": [
+            "workspaceRead",
+            "shell",
+            "browser",
+            "desktop",
+            "externalSideEffects"
+          ]
+        },
+        "assignment": {
+          "assignedAgents": [],
+          "assignedTeams": []
+        },
+        "toolBinding": {
+          "requiredTools": [],
+          "recommendedToolCategories": [],
+          "defaultWorkflow": [],
+          "canSpawnSubagents": false
+        },
+        "permissions": {
+          "workspaceRead": true,
+          "workspaceWrite": false,
+          "shell": true,
+          "browser": true,
+          "desktop": true,
+          "externalSideEffects": true
+        },
+        "resources": [],
+        "status": "ready",
+        "lifecycle": "experimental",
+        "ownership": "prometheus-owned-overlay",
+        "executionEnabled": true,
+        "riskLevel": "medium"
+      }
+    },
+    {
+      "kind": "manual_review",
+      "description": "missing-triggers: Add concise task phrases to triggers.",
+      "safeToApply": false
+    }
+  ],
+  "manifestOverlay": {
+    "schemaVersion": "prometheus-skill-bundle-v1",
+    "id": "contribute-catalog",
+    "name": "contribute-catalog",
+    "description": "Author a new HyperFrames registry block (caption style, VFX block, transition, lower third) or component (text effect, overlay, snippet) and ship it as an upstream PR to the hyperframes repo. Use ONLY when the user wants to CONTRIBUTE to the public catalog — for in-project caption/transition authoring use the `hyperframes` skill, for installing existing registry items use the `hyperframes-registry` skill.",
+    "version": "1.0.0",
+    "entrypoint": "SKILL.md",
+    "triggers": [
+      "contribute-catalog"
+    ],
+    "categories": [
+      "generic",
+      "imported"
+    ],
+    "requiredTools": [],
+    "requires": {
+      "tools": [],
+      "toolCategories": [],
+      "connectors": [],
+      "env": [],
+      "bins": [],
+      "platforms": [],
+      "permissions": [
+        "workspaceRead",
+        "shell",
+        "browser",
+        "desktop",
+        "externalSideEffects"
+      ]
+    },
+    "assignment": {
+      "assignedAgents": [],
+      "assignedTeams": []
+    },
+    "toolBinding": {
+      "requiredTools": [],
+      "recommendedToolCategories": [],
+      "defaultWorkflow": [],
+      "canSpawnSubagents": false
+    },
+    "permissions": {
+      "workspaceRead": true,
+      "workspaceWrite": false,
+      "shell": true,
+      "browser": true,
+      "desktop": true,
+      "externalSideEffects": true
+    },
+    "resources": [],
+    "status": "ready",
+    "lifecycle": "experimental",
+    "ownership": "prometheus-owned-overlay",
+    "executionEnabled": true,
+    "riskLevel": "medium"
+  }
+}

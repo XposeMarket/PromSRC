@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-hyperframes-bridge",
+  "name": "Prometheus HyperFrames Bridge",
+  "emoji": "🎞️",
+  "version": "1.0.0",
+  "description": "Primary Prometheus routing skill for polished Creative Video, HTML motion, HyperFrames-style composition, GSAP-guided animation, website-to-video, Remotion-to-HTML conversion, promo videos, ads, product demos, and MP4 export inside Prometheus.",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "creative video",
+    "html motion",
+    "html video",
+    "motion video",
+    "video mode",
+    "promo video",
+    "product demo",
+    "product launch",
+    "animated ad",
+    "social ad",
+    "social video",
+    "website",
+    "site",
+    "url",
+    "http",
+    "capture website",
+    "capture site",
+    "landing page",
+    "product tour",
+    "mp4 export",
+    "hyperframes in prometheus",
+    "gsap",
+    "animated promo",
+    "website video",
+    "website to video",
+    "website into a video",
+    "site to video",
+    "motion clip",
+    "remotion to html"
+  ],
+  "categories": ["creative", "video", "html-motion", "hyperframes"],
+  "requiredTools": ["creative_runtime", "browser", "file_ops"],
+  "permissions": {
+    "browser": true,
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/hyperframes-resource-map.md",
+      "type": "doc",
+      "description": "Which imported HyperFrames skill resources to load for common Prometheus Creative Video tasks."
+    }
+  ]
+}

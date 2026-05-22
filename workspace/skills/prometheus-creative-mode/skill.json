@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-creative-mode",
+  "name": "Prometheus Creative Mode",
+  "description": "HyperFrames-first Prometheus Creative Mode front door plus Creative Generative Pipeline for AI image/video shots, continuity, layers, rough cuts, overlays, captions, voiceover, audio, QA, and export.",
+  "emoji": "creative",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "creative mode",
+    "video canvas",
+    "Prometheus video",
+    "HTML Motion",
+    "HyperFrames",
+    "HyperFrames catalog",
+    "HyperFrames composition",
+    "HyperFrames block",
+    "HTML-in-motion",
+    "Remotion port",
+    "Remotion migration",
+    "Pretext typography",
+    "ASCII video",
+    "kinetic typography",
+    "website to video",
+    "motion template",
+    "creative export",
+    "creative generative pipeline",
+    "generate video shot",
+    "scene chaining",
+    "extract video frame",
+    "voiceover",
+    "music bed",
+    "sound effects",
+    "caption sync",
+    "video QA",
+    "html motion spec"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "hyperframes",
+    "remotion",
+    "pretext",
+    "ascii",
+    "animation",
+    "experimental",
+    "rendering"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "skills",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/creative-skill-map.md",
+      "type": "doc",
+      "description": "Consolidation map from older creative skills into this unified bundle."
+    },
+    {
+      "path": "references/PROMETHEUS_HTML_MOTION_SPEC.md",
+      "type": "doc",
+      "description": "Canonical Prometheus HTML Motion engineering spec for valid clips, timing units, runtime clock, lint/inspect, QA, audio, renderer identity, and standalone compatibility export."
+    },
+    {
+      "path": "references/CREATIVE_GENERATIVE_PIPELINE.md",
+      "type": "doc",
+      "description": "Current Prometheus Creative Generative Pipeline tool map for projects, storyboards, image/video shots, continuity, layer extraction, rough cuts, overlays, captions, voiceover, audio, music, SFX, compositing, and QA."
+    },
+    {
+      "path": "references/known-issues/creative-stitch-rough-cut-truncation-2026-05-20.md",
+      "type": "doc",
+      "description": "Known issue and recovery pattern for Creative stitch/rough-cut outputs truncating multi-clip generated sequences; observed during Prometheus/PulseFit promo on 2026-05-20."
+    }
+  ]
+}

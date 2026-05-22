@@ -1,0 +1,12 @@
+{
+  "skillId": "prometheus-creative-mode",
+  "reason": "resource-write",
+  "createdAt": "2026-05-16T00:44:28.864Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\prometheus-creative-mode",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "6442bbee858dc45a"
+}

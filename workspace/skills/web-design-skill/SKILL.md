@@ -1,6 +1,6 @@
 ---
-name: Web Design Skill
-description: Use when creating web pages of any sort
+name: web-design-skill
+description: Front End UI Design Skill
 emoji: "🧩"
 version: 1.0.0
 ---

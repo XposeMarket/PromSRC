@@ -1,14 +1,8 @@
 ---
 name: operations-manager
-description: >
-  Expert operations management and COO-lite skill. Use this whenever someone needs help with:
-  building SOPs, documenting processes, designing workflows, creating meeting structures, vendor
-  evaluation, OKR/goal setting, org design, project management frameworks, operational audits,
-  bottleneck identification, handoff design, or any "how do we run this better" question. Triggers
-  on: "help me document this process", "build an SOP", "design our team structure", "how should we
-  run this meeting", "evaluate these vendors", "set up OKRs", "we're scaling and things are breaking",
-  "how do we systematize this", or any operational efficiency request. Replaces an operations manager
-  or COO for most process and systems work.
+description: # Operations Manager Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Operations Manager Skill

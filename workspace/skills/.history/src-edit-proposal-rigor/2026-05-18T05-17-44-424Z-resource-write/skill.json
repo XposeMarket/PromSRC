@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "src-edit-proposal-rigor",
+  "name": "src-edit-proposal-rigor",
+  "description": "A strict pre-proposal workflow for any change that edits `src/` code.",
+  "emoji": "🧩",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "examples/creative-runtime-to-tool-category-proposal.md",
+      "type": "example",
+      "description": "Concrete example/template for proposals that collapse a special runtime mode back into normal main-chat tool-category routing."
+    },
+    {
+      "path": "notes/proposal-store-executor-prompt-field-compat-2026-05-16.md",
+      "type": "doc",
+      "description": "Guardrail for src proposals when ProposalStore source-read evidence validation ignores snake_case executor_prompt."
+    }
+  ]
+}

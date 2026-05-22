@@ -1,9 +1,8 @@
 ---
-name: Email Composer
-description: Write professional, cold, follow-up, sales, onboarding, and transactional emails. Calibrates tone, nails subject lines, writes compelling CTAs, and follows email best practices. Triggers on any request to write, draft, or improve an email.
-emoji: ✉️
+name: email-composer
+description: Use this skill for any email-writing task — from a single cold outreach to a full nurture sequence.
+emoji: "🧩"
 version: 1.0.0
-triggers: write email, draft email, cold email, follow up email, reply to email, email template, outreach email, sales email, email subject, improve this email, email sequence, newsletter, onboarding email
 ---
 
 # Email Composer

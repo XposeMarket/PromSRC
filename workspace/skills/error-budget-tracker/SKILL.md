@@ -1,9 +1,8 @@
 ---
-name: Error Budget Tracker
-description: Log failures, track retry counts, and surface patterns over time. Use whenever a tool fails, an agent errors out, a retry loop runs, or anything goes wrong in a workflow. Also use proactively after any multi-step task to log outcomes. Triggers on: error, failed, retry, exception, broke, timeout, rate limit hit, something went wrong, log failure, track errors, failure pattern.
-emoji: 📊
+name: error-budget-tracker
+description: Log failures consistently. Surface patterns. Know when things are getting worse before the user does.
+emoji: "🧩"
 version: 1.0.0
-triggers: error, failed, retry, exception, broke, timeout, rate limit, something went wrong, log failure, track errors, failure pattern, budget, reliability, incidents
 ---
 
 # Error Budget Tracker

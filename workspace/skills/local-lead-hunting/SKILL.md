@@ -1,9 +1,8 @@
 ---
 name: Local Lead Hunting
-description: >
-  Run a browser-driven local lead discovery and qualification workflow for agency prospecting by scanning live business listings, especially Google Maps, opening real business websites, capturing persistent evidence, and deciding whether each business is a viable lead. Triggers on requests like find local leads, scan businesses in [city], prospect Frederick businesses, go through Google Maps for leads, audit local business websites, qualify local companies, check businesses for website problems, build a local lead list, save evidence while researching, and figure out whether these businesses are worth outreach. Use this when the user wants a repeatable map-first lead-finding process with saved workspace artifacts, quick qualification, and optional deeper site analysis for the strongest candidates.
-emoji: 🎯
-version: 2.0.0
+description: Run a repeatable, browser-first local prospecting workflow that finds real businesses, checks their websites, saves evidence, and separates strong leads from weak ones.
+emoji: "🧩"
+version: 2.2.0
 triggers: find local leads, local lead hunting, google maps leads, go through google maps for leads, scan businesses in, scan local businesses, prospect frederick businesses, prospect local companies, audit local business websites, check businesses for website problems, qualify local companies, build a local lead list, save evidence while researching, local seo opportunity, website lead qualification
 ---
 
@@ -160,6 +159,8 @@ Use when:
 3. Visually scan actual business listings.
 4. Capture raw candidates quickly.
 5. Skip obvious non-fits early.
+6. Before manual scrolling loops on listing pages, make one real page interaction first when practical (for example clicking into the listings/results pane or selecting a business card). This avoids automation-layer blind-scroll guards that can block repeated `browser_scroll(...)` calls on some sites.
+7. If the goal is broad candidate harvesting rather than tight UI steering, prefer bulk collection/extraction patterns over repeated single-scroll retries.
 
 ### Phase 2 — Quick qualification
 For each candidate:
@@ -213,6 +214,78 @@ Recommended operating pattern:
 ```
 
 This keeps discovery moving while deeper analysis strengthens the best leads.
+
+---
+
+## Xpose Market Workflow
+
+For **Xpose Market revenue prospecting** (or similar systematic agency lead-hunting), follow this specialized workflow:
+
+### Discovery and Screening
+
+1. **Read existing workspace artifacts first**
+   - Check `Xpose Market/*.md` run logs and prospect files.
+   - Use the same format and directory structure to ensure findings persist across sessions.
+   - If a prospect has already been screened, update the existing record instead of re-screening.
+
+2. **Live Google Maps discovery**
+   - Start from Google Maps listings for target geographies and service categories.
+   - Capture candidate URLs, review counts, and listing evidence into the run log as you discover them.
+
+3. **Parallel candidate screening with background_spawn**
+   - Use `background_spawn` to run independent website-screening agents **in parallel** with Prom's main Maps discovery.
+   - Each `background_spawn` agent must:
+     - Open its own **separate browser session** or tab (not share Prom's Maps session).
+     - Open the candidate website in that independent browser.
+     - Take `browser_snapshot()` and `browser_vision_screenshot()` for visual assessment (not just text fetch).
+     - Scroll/inspect the site to collect evidence (CTA clarity, design quality, contact info, service clarity, trust signals).
+     - Return a structured summary or patch back to the workspace artifact with visual findings, score, and outreach angle.
+   - Do **not** create durable subagent tasks or use `deploy_analysis_team` for screening unless the user explicitly asks for deeper analysis.
+   - Each background agent should be independent: one agent per candidate batch, separate browser tab, concurrent execution.
+
+4. **Main Prom focus**
+   - Keep Prom's main browser focused on **discovery** (Google Maps, listing accumulation, quick qualification notes).
+   - While background agents screen candidates, continue scanning more maps listings.
+   - This parallelism keeps discovery moving without bottlenecking on website assessment.
+
+### Failure Handling
+
+**If `background_spawn` hits rate limits (Anthropic 429, timeout, etc.):**
+1. Note in the run log which candidates were blocked by the provider error.
+2. Continue manual screening in Prom's main browser if time permits.
+3. Mark those candidates as "awaiting background retry" or "text-screened only, visual pending."
+4. Optionally retry later with a different model/provider.
+5. **Do not silently skip them or treat them as unscreened.**
+
+**If browser visual inspection is unavailable** (e.g., Playwright Chromium missing in runtime, headless shell not installed):
+1. Fall back to text-only screening (web_fetch, web_search snippets, official site text extraction).
+2. **Explicitly mark the candidate as "text-screened only"** in the evidence note.
+3. Add a flag: `visual_inspection: blocked` or similar in the record.
+4. Document the blocker reason.
+5. **Require a later visual follow-up pass before creating mockups or final pitches.**
+6. Do not treat text-only evidence as equivalent to visual screenshots when judging design quality or CTA clarity.
+
+### Lead Hunt → Pitch Package Follow-Through
+
+After ranking all candidates and identifying **A-tier leads**:
+
+1. **Choose the top A-tier lead** for the first pitch package (usually the highest-review, weakest-website candidate).
+   - Example from Xpose runs: Castillo Landscaping Services (4.9 / 220 reviews, very weak visual site).
+
+2. **Create a dedicated pitch-package artifact** in the workspace with:
+   - **Critique section:** Current site weaknesses (design, CTAs, trust signals, mobile feel, conversion flow).
+   - **Mockup direction:** What the redesigned site should include (hero headline, service cards, gallery, estimate CTA, trust badges, review proof).
+   - **Outreach copy:** The pitch angle and value proposition (e.g., "Your reviews are doing the hard part — the site just needs to turn that trust into estimates").
+   - **Call script:** Key talking points and differentiators for the initial outreach call.
+   - **Next actions:** Research contact info, verify business ownership, send pitch, schedule discovery call, build mockup.
+
+3. **Link the pitch package from the run log**
+   - Add a line like: "**Pitch Package Created:** [Castillo Landscaping Services](./pitch-packages/castillo-landscaping-2026-04-27.md)"
+   - This keeps the discovery work tied to outreach execution.
+
+4. **Save time on future runs**
+   - Once a pitch package exists, do not re-screen that candidate unless there is new evidence.
+   - Link back to the package in the prospect CSV record.
 
 ---
 
@@ -275,6 +348,7 @@ Use these as fast judgment cues during scanning:
 ---
 
 ## Anti-Patterns
+- fall into blind manual scroll loops on listing pages; if scrolling is blocked, re-anchor with a real interaction or switch to bulk collection/extraction tools instead of retrying `browser_scroll(...)` repeatedly
 
 Do **not**:
 - rely only on generic web_search summaries when the user wants map-first lead hunting
@@ -310,3 +384,12 @@ A lead-hunting run is complete when:
 - strong candidates were separated from weak ones with clear reasoning
 - promising leads include enough evidence to support future outreach
 - deeper reports, if created, are linked back into the saved research artifacts
+
+---
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-04-29 | v2.2.0: Added Xpose Market workflow section with `background_spawn` parallel-screening guidance, independent browser-session requirements for candidate evaluation, 429/timeout fallback handling, text-screened-vs-visual-screened status tracking, and lead-hunt-to-pitch-package follow-through for A-tier leads. Preserved general map-first local-lead guidance for non-Xpose work. |
+| 2026-04-23 | v2.1.0: Added browser scroll-guard guidance for live listing workflows. Documented that repeated blind `browser_scroll(...)` retries can be blocked by the automation layer, so the workflow should re-anchor with a real interaction or switch to bulk collection/extraction patterns instead. |

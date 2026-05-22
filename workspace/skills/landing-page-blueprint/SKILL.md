@@ -1,8 +1,8 @@
 ---
-name: Landing Page Blueprint
-description: Design and build polished, conversion-focused, comprehensive landing pages with strong structure, copy hierarchy, and modern responsive styling.
-emoji: "🚀"
-version: 1.1.0
+name: landing-page-blueprint
+description: Use this skill whenever creating or editing a landing page (single-page marketing site, product splash page, waitlist page, lead-gen page, SaaS homepage).
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Landing Page Blueprint

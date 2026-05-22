@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "version": "1.0.1",
+  "triggers": [
+    "run ai smoke research",
+    "ai surface test",
+    "codex claude reddit x test",
+    "search reddit and x for ai",
+    "focus codex and claude then search x",
+    "test browser desktop research",
+    "quick ai research workflow",
+    "claude openclaw hermes search",
+    "summarize ai chatter",
+    "browser desktop ai test",
+    "run that test again",
+    "do that test again",
+    "focus codex and claude then search reddit",
+    "search reddit and x for claude openclaw hermes",
+    "ai browser desktop smoke test"
+  ],
+  "categories": [
+    "browser",
+    "desktop",
+    "research",
+    "testing"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "desktop_automation",
+    "skills"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "browser_automation",
+      "desktop_automation",
+      "skills"
+    ],
+    "recommendedToolCategories": [
+      "browser_automation",
+      "desktop_automation"
+    ],
+    "defaultWorkflow": [
+      "Read this skill and supporting desktop/browser/X playbooks.",
+      "Find and focus Codex, then find Claude and prefer exact handles when names collide.",
+      "Open Reddit and/or X with the requested AI query and collect 3-5 scroll passes.",
+      "Summarize only after tool-backed collection completes."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "browser": true,
+    "desktop": true,
+    "externalSideEffects": false,
+    "workspaceWrite": false
+  },
+  "id": "ai-surface-smoke-research"
+}

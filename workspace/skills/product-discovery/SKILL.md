@@ -1,18 +1,9 @@
 ---
 name: Product Discovery
-description: >
-  User research synthesis, opportunity sizing, feature prioritization, and product
-  roadmap decisions. Use whenever the user needs to decide what to build next, validate
-  a product idea, prioritize a feature backlog, run a discovery sprint, synthesize
-  customer feedback, or create a PRD. Triggers on: "product discovery", "what should
-  we build", "feature prioritization", "RICE scoring", "ICE scoring", "product roadmap",
-  "prioritize the backlog", "validate this feature", "customer feedback synthesis",
-  "opportunity sizing", "user story", "PRD", "product requirements", "Jobs to be Done",
-  "JTBD", "discovery sprint", "product hypothesis", "feature request", "should we build X",
-  "is X worth building", "product strategy", "roadmap planning".
-emoji: 🗺️
+description: Structured process for deciding what to build, validating it's worth building, and scoping it so the team can execute.
+emoji: "🧩"
 version: 1.0.0
-triggers: product discovery, feature prioritization, RICE scoring, ICE scoring, product roadmap, prioritize backlog, validate feature, opportunity sizing, user story, PRD, product requirements, JTBD, jobs to be done, discovery sprint, product hypothesis, feature request, should we build, product strategy, roadmap planning, what to build next
+triggers: product discovery, feature prioritization, rice scoring, ice scoring, product roadmap, prioritize backlog, validate feature, opportunity sizing, user story, prd, product requirements, jtbd, jobs to be done, discovery sprint, product hypothesis, feature request, should we build, product strategy, roadmap planning, what to build next
 ---
 
 # Product Discovery

@@ -1,9 +1,8 @@
 ---
-name: SVG Diagrams
-description: Render architecture diagrams, system maps, flowcharts, and technical illustrations as raw SVG directly in chat. Use for any visual where the structure, layout, or spatial relationships between components matters — not data charts (use chart-visualizer) and not flowcharts-as-text (use mermaid-diagrams). Outputs a fenced ```svg block. Triggers on: architecture diagram, system diagram, draw this, component diagram, network diagram, infrastructure diagram, diagram the flow, show the structure, illustrate, box and arrow, data flow diagram, pipeline diagram, relationship diagram, technical diagram.
-emoji: "🔷"
+name: svg-diagrams
+description: Render architecture diagrams, system maps, and technical illustrations as live SVG directly in chat using a fenced `svg` block.
+emoji: "🧩"
 version: 1.0.0
-triggers: architecture diagram, system diagram, draw this, component diagram, network diagram, infrastructure diagram, diagram the flow, show the structure, illustrate, box and arrow, data flow, pipeline diagram, relationship diagram, technical diagram, service map, entity diagram, class diagram, deployment diagram, aws diagram, cloud architecture
 ---
 
 # SVG Diagrams

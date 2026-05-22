@@ -1,0 +1,12 @@
+{
+  "skillId": "dev-debugging",
+  "reason": "resource-write",
+  "createdAt": "2026-05-13T03:46:45.795Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\dev-debugging",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c4f55f05f9175350"
+}

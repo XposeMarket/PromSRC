@@ -1,0 +1,112 @@
+## 29) Data Paths Worth Remembering
+
+- Config: `.prometheus/config.json`
+- Sessions: `.prometheus/sessions/*.json`
+- Browser session registry: `<configDir>/browser-sessions.json`
+- Encrypted account session vault entry: `account.supabase.session`
+- Paired mobile devices: `.prometheus/paired-devices.json`
+- Local mobile HTTPS certificate files when enabled: `.prometheus/certs/gateway-mobile.pfx` and `.prometheus/certs/gateway-mobile.cer`
+- Audit log stream: `.prometheus/audit-log.jsonl`
+- Tasks: `.prometheus/tasks/`
+- Managed process records/logs: `<configDir>/processes/`
+- MCP config: `.prometheus/mcp-servers.json`
+- Onboarding state: `PROMETHEUS_DATA_DIR/onboarding.json` or `~/.prometheus/onboarding.json`, managed by `src/gateway/onboarding/onboarding-store.ts`
+- Migration reports: `<configDir>/migrations/<sourceKind>/<runStamp>/report.json`
+- Workspace proposals: `workspace/proposals/`
+- Proposal sandboxes: `.prometheus/proposal-workspaces/<proposalId>/repo`
+- Audit transcripts: `workspace/audit/chats/transcripts/`
+- Audit compactions: `workspace/audit/chats/compactions/`
+- Memory index: `workspace/audit/_index/memory/`
+- Obsidian bridge config: `<configDir>/obsidian-bridge.json`
+- Obsidian sync manifest: `<configDir>/obsidian-bridge-manifest.json`
+- Obsidian indexed note mirrors: `workspace/audit/obsidian/vaults/<vaultId>/notes/`
+- Daily memory notes: `workspace/memory/`
+- Brain state/thought/dream artifacts: `workspace/Brain/`
+- Brain skill episodes: `workspace/Brain/skill-episodes/<date>/episodes.jsonl`
+- Brain skill gardener candidates/workflows: `workspace/Brain/skill-gardener/<date>/`
+- Brain skill curator queue: `workspace/Brain/skill-curator/suggestions.json`
+- Brain skill curator reports: `workspace/Brain/skill-curator/reports/`
+- Prompt mutation state: `<configDir>/prompt-mutations/*.json`
+- Connections activity log: `<configDir>/connections-activity.jsonl`
+- User uploads: `workspace/uploads/`
+- Generated images: `workspace/generated/images/`
+- Generated videos: `workspace/generated/videos/`
+- Creative project roots: `workspace/creative-projects/<sessionId>/`
+- Creative scene snapshots: `workspace/creative-projects/<sessionId>/prometheus-creative/scenes/`
+- Creative exports: `workspace/creative-projects/<sessionId>/prometheus-creative/exports/`
+- Creative generated/imported audio: `workspace/creative-projects/<sessionId>/prometheus-creative/audio/`
+- Creative generated-shot assets: `workspace/creative-projects/<sessionId>/prometheus-creative/assets/library/`
+- Creative composite manifests: `workspace/creative-projects/<sessionId>/prometheus-creative/composites/manifests/`
+- Creative composite preflight HTML: `workspace/creative-projects/<sessionId>/prometheus-creative/composites/preflight/`
+- Creative composite sample/contact-sheet frames: `workspace/creative-projects/<sessionId>/prometheus-creative/composites/samples/`
+- Creative generated-video QA frames/audio: `workspace/creative-projects/<sessionId>/prometheus-creative/qa/`
+- Creative motion graphics layers: `workspace/creative-projects/<sessionId>/prometheus-creative/motion-graphics/`
+- Creative HTML Motion clips: `workspace/creative-projects/<sessionId>/prometheus-creative/html-motion/`
+- Creative HTML Motion revisions: `workspace/creative-projects/<sessionId>/prometheus-creative/html-motion/revisions/`
+- Creative HTML Motion frame-export temp dirs: `workspace/creative-projects/<sessionId>/prometheus-creative/html-motion/exports/`
+- Source-backed HyperFrames materialized clips: `workspace/.prometheus/creative/hyperframes-clips/`
+- Source-backed HyperFrames active projects: `<creative-storage-root>/.prometheus/creative/hyperframes-projects/<composition-id>/index.html`
+- HyperFrames producer temp/project outputs: `workspace/.prometheus/creative/hyperframes-producer/`
+- Creative asset library/index: under the current creative storage root, managed by `src/gateway/creative/assets.ts`
+- Creative render jobs: managed by the canvas router and creative render-job store under the creative project/storage area
+- Bundled/user skills: `workspace/skills/`
+- Generated bundled-skill mirror: `generated/bundled-skills/`
+- Skill overlays/provenance: `workspace/skills/.manifests/`
+- Skill snapshots/history: `workspace/skills/.history/<skillId>/`
+- Skill change ledger: `workspace/skills/.history/skill-change-ledger.jsonl`
+- Public runtime release runbook: `workspace/self/public-runtime-release/`
+- Public runtime dependency manifest: `runtime-dependencies.public.json`
+- Public web UI generated bundle: `generated/public-web-ui/`
+- Public web UI vendor assets: `generated/public-web-ui/vendor/`
+- Public Playwright browser resource in packaged app: `release-public/win-unpacked/resources/playwright-browsers/`
+- Public release verifier: `scripts/verify-public-release.js`
+- Public installer artifact: `release-public/Prometheus-Setup-<version>.exe`
+
+## 30) Current Sharp Edges / Truths To Preserve
+
+- `copilot` is real, but it is a browser interaction mode, not a chat execution mode
+- `teach_mode` prompt behavior is caller-context driven, not a top-level execution mode
+- legacy browser `review` values normalize to `agent`; `review` is no longer a backend browser mode
+- most app routes now require both gateway auth and account entitlement
+- mobile pairing is the major exception: `pairingRouter` is intentionally mounted before gateway auth, while claim still requires a logged-in/subscribed/admin account and desktop approval
+- a QR/manual pair code is only a challenge handle, not a credential; do not remove the desktop approval step
+- iOS Home Screen PWA storage can be separate from Safari storage, and Camera QR scans open Safari rather than the installed PWA; preserve manual pair-code entry inside the mobile pair page
+- if `Unauthorized: configure gateway.auth.token to enable remote access` appears during phone pairing, first check router mount order and whether pairing was accidentally placed behind `requireGatewayAuth`
+- if remote access is through Tailscale Funnel or another HTTPS-terminating proxy, preserve the `x-forwarded-proto: https` redirect bypass so the gateway does not redirect public HTTPS traffic to an unreachable local HTTPS port
+- automatic proposal execution for internal code is stricter than the broad source-edit tool surface suggests
+- proposal sandboxing is now two-layered: isolated `dev_src_self_edit` workspace plus session-level mutation-scope enforcement
+- sandboxed proposal promotion is build-gated and baseline-checked before live repo writes are allowed
+- dev-src proposal repair is a first-class mode and pauses originals with `blocked_on_repair`
+- Hub is implemented as a usage/skill surface, but achievements remain stubbed
+- the old self-improvement API/engine files are gone; use Brain runner plus prompt mutation as the current mental model
+- skill-guided failures should be recovered through an alternate route first; only after the alternate route works should Prometheus offer a skill update
+- existing skill evolution is automatic only for low-risk, evidence-backed, scoped changes and is snapshotted plus ledgered; Thought and Dream can both apply it
+- the dedicated Skill Curator is lesson-first and auto-safe; it should not preserve raw tool lists or workflow transcripts unless they become a concrete future behavior rule
+- the curator should auto-apply only typed low-risk lessons and auto-reject weak legacy workflow/troubleshooting dumps
+- Dream cleanup is the model-backed Skill Curator Critic and may revert/refine bad auto-applied curator resources while preserving high-risk work for review
+- public builds must resolve required runtime dependencies from bundled paths first; do not rely on user `PATH`, global `npx`, system Chrome, CDN scripts, or manually installed ffmpeg/ffprobe for required public features
+- Playwright Chromium is intentionally packaged as `extraResources/playwright-browsers`, not inside `app.asar`; installer compression can be slow and may outlive Codex tool timeouts
+- Fabric is browser-vendored at `web-ui/vendor/fabric/fabric.min.js`; do not re-add npm `fabric` as a production dependency unless native `canvas` packaging is intentionally handled
+- Thought-applied skill updates are provisional until Dream audits them for usefulness, scope, duplication, and skill-bloat risk
+- new skill creation remains Dream-only and proposal-gated; Brain Dream should automatically file `skill_evolution` proposals when warranted, not directly create new skills
+- procedural workflow/tool-order rules should become skill updates, skill resources, or skill proposals rather than memory pollution
+- imported and upstream-managed skills need extra care; prefer overlays or additive Prometheus-owned resources for routine evolution
+- Telegram help text is partially stale relative to implemented handlers
+- connector descriptions in some tool copy lag the broader bundled connector roster
+- Obsidian is a local bridge connector, not an OAuth connector
+- HyperFrames now has first-class source-backed tools and a native `hyperframes` composition lane; older `creative_*_hyperframes_component` tools are compatibility imports into HTML Motion templates/blocks
+- HyperFrames source-backed Creative elements may store source as `meta.html` or as `meta.projectPath + meta.entryFile`; self-edits must preserve both paths and never treat missing inline HTML as proof that the clip is empty
+- HyperFrames producer export is external output only; it should not clear or replace the active Creative scene
+- A same-session empty Video scene with `0` elements and `12000ms` duration after HyperFrames export is usually stale UI/session rehydrate, not a user-authored reset
+- Creative Video has both a scene-graph timeline and a separate multi-clip composition timeline; do not conflate their clip/track models
+- Creative Generative Pipeline media work has a third timing model: generated footage rough cuts/composites in `generative-pipeline.ts`; keep it distinct from both scene-graph clips and HTML Motion timing
+- If generated-video overlay/composite export freezes on one scene, treat it as a compositor bug and preserve the verified stitched cut; do not ship a frozen base video merely because overlays/audio rendered
+- Audio-only finishing for a verified MP4 should stream-copy video and mux audio inside Creative tools; shell FFmpeg is an emergency diagnostic path, not the product workflow
+- managed processes are persisted and WebSocket-broadcast, so command UI state should be debugged through `src/gateway/process/` as well as shell tools
+- onboarding reset/redo paths are account-scoped and guarded; memory seeding should use dry-run plus approved paths when the user needs review
+- `deploy_analysis_team` and `present_file` descriptions are not fully aligned yet
+
+## 31) Maintenance Rule
+
+If Prometheus gains or loses modes, tools, providers, connectors, account gates, proposal repair behavior, approval behavior, or memory/index layers, update this file only after reading the exact source files that implement the change.
+Do not refresh this file from memory, from UI copy alone, or from older workspace notes.

@@ -1,0 +1,18 @@
+
+### [DEBUG] 2026-04-21T04:55:07.400Z
+Retested browser download tools on 2026-04-21. browser_click_and_download succeeded on OVH proof files, saving downloads/browser/click-and-download-test.bin (1,048,576 bytes). browser_wait_for_download failed twice with 20s timeout after separate browser_click flows: once on file-examples PDF redirect page and once on OVH proof files 10 Mio link; both times no Playwright download event was captured, suggesting the click-triggered download occurs too quickly/outside the event listener timing or opens inline instead of emitting a download event in current implementation.
+
+### [DEBUG] 2026-04-21T13:08:35.469Z
+Diagnosed local video analysis pipeline. Python 3.13.5 and OpenCV 4.13.0 are installed and can open/read the downloaded X MP4 at workspace/downloads/media/MACBETH_-_morning_Touch+Hermes_experiment [2046303741725569024].mp4. Root issue was not missing OpenCV: previous failure came from broken shell quoting/path handling (filename with spaces/brackets got truncated). ffmpeg/ffprobe are still absent from PATH; shutil.which returned null and ffprobe subprocess raised FileNotFoundError. Extracted a real first frame successfully to downloads/video_analysis/diag_first_frame.jpg.
+
+### [DEBUG] 2026-04-21T13:11:46.040Z
+Attempted ffmpeg setup to fix local video analysis pipeline. `winget install --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements` returned exit 0 (no install error shown). Immediate verification still failed: `where ffmpeg` returned not found, and direct PowerShell verification commands were blocked by shell policy. Current state: install command appeared to succeed, but ffmpeg is not yet available on PATH in this session; likely requires PATH refresh/new shell or manual PATH check.
+
+### [DEBUG] 2026-04-21T13:34:16.372Z
+Verified the repaired local video-analysis pipeline surfaces exist in workspace/downloads/video_analysis (audio.wav plus five sampled frames). Initial PowerShell invocation for video_analyze.py hit Windows quoting/parser issues, so next step is direct desktop playback/inspection of the MP4 to confirm the fix from the user side.
+
+### [DEBUG] 2026-04-21T20:53:27.086Z
+Retried the video-analysis pipeline on the workspace MP4 after the user said the FFmpeg/OpenCV fix should now be in place. Direct invocation of `python workspace\video_analyze.py "workspace\downloads\media\MACBETH_-_morning_Touch+Hermes_experiment [2046303741725569024].mp4" --extract-audio` still fails in cmd because the bracketed filename is being split and the script receives a truncated argument (`unrecognized arguments: [2046303741725569024].mp4`). However, `python workspace\video_diag.py` now succeeds and verifies the pipeline is functional: ffmpeg/ffprobe resolve from the Winget install path, OpenCV opens the video, ffprobe returns duration 20.842667s, and extracted artifacts already exist in `workspace/downloads/video_analysis/` including `audio.wav` and sampled frames.
+
+### [TASK] 2026-04-21T23:59:00.638Z
+Downloaded and analyzed X video from https://x.com/angaisb_/status/2046672761569849816 via yt-dlp. Saved MP4 to downloads/media/Angel_-_GPT_Image_2_+_Codex_is_such_a_strong_combo [2046672653184819200].mp4 (1,256,369 bytes). Browser playback verified on-page; JS confirmed HTML5 video element playing with duration 15.55s. analyze_video succeeded with 7 sampled frames; content is a short side-scrolling robot platformer animation collecting 5/5 orbs and ending on a 'You won!' screen. ffmpeg probe confirms the file has video only and no audio stream, so no transcript/audio was available.

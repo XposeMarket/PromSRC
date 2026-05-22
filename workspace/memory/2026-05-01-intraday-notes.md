@@ -1,0 +1,9 @@
+
+### [TASK] 2026-05-01T02:48:05.967Z
+Created and exported a Prometheus promo video in Creative Video mode. Built HTML motion composition covering Creative Mode, browser/desktop automation, code/files, research, memory, skills, and background tasks. Initial 1920x1080 24s render timed out, so created lightweight 1280x720 12s version and exported successfully to creative-projects/595e8047-9159-42b6-a0a8-b8a747297ae8/prometheus-creative/exports/prometheus-promo-lightweight.mp4. Frame QA sampled 500/4000/7500/11000ms and textFit passed; lint only warned no timed nodes.
+
+### [TASK] 2026-05-01T18:23:36.304Z
+Set up Weekly Opportunity Radar scheduled workflow. Job job_1777659794081_8f76x runs Sundays 8:00 PM America/New_York in isolated web session to synthesize the last 7 days of Brain Thoughts/Dreams, notes, memory additions, proposals, and task states into workspace/opportunity-radar/weekly-opportunity-brief-YYYY-Www.md plus latest-weekly-opportunity-brief.md. Job job_1777659805838_ykrkn runs Mondays 8:30 AM America/New_York in main web session to read the latest brief and present a phone-friendly decision menu. Scheduler Telegram delivery was unavailable, so briefing uses web/main for now.
+
+### [DISCOVERY] 2026-05-01T18:57:34.631Z
+Fetched X thread https://x.com/yuddidit/status/2049888877129707759?s=46. web_fetch captured 29 tweets, 3 media tweets, 5 downloaded media files. Main video is Editframe launch/demo: HTML+CSS video design, browser render preview, managed render cloud, promptable GUI, coding-agent badges. Cross-examined against SELF.md Creative Video/HTML Motion/HyperFrames sections: Prometheus already has first-class video mode, HTML Motion clips, deterministic frame-sequence MP4 export, Remotion templates, frame/contact-sheet QA, asset handling, timing attributes, HyperFrames resource bridge, and product-demo film template/blocks.

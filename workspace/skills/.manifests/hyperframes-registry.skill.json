@@ -1,0 +1,89 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "hyperframes-registry",
+  "name": "hyperframes-registry",
+  "description": "Install and wire registry blocks and components into HyperFrames compositions. Use when running hyperframes add, installing a block or component, wiring an installed item into index.html, or working with hyperframes.json. Covers the add command, install locations, block sub-composition wiring, component snippet merging, and registry discovery.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "hyperframes-registry"
+  ],
+  "categories": [
+    "generic",
+    "imported"
+  ],
+  "requiredTools": [],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": [
+      "workspaceRead",
+      "shell",
+      "desktop"
+    ]
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
+  "toolBinding": {
+    "requiredTools": [],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": false,
+    "desktop": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "examples/add-block.md",
+      "type": "example",
+      "sizeBytes": 1232
+    },
+    {
+      "path": "examples/add-component.md",
+      "type": "example",
+      "sizeBytes": 1473
+    },
+    {
+      "path": "references/demo-html-pattern.md",
+      "type": "doc",
+      "sizeBytes": 1884
+    },
+    {
+      "path": "references/discovery.md",
+      "type": "doc",
+      "sizeBytes": 2704
+    },
+    {
+      "path": "references/install-locations.md",
+      "type": "doc",
+      "sizeBytes": 1519
+    },
+    {
+      "path": "references/wiring-blocks.md",
+      "type": "doc",
+      "sizeBytes": 3127
+    },
+    {
+      "path": "references/wiring-components.md",
+      "type": "doc",
+      "sizeBytes": 2402
+    }
+  ],
+  "status": "ready",
+  "lifecycle": "experimental",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
+  "riskLevel": "medium"
+}

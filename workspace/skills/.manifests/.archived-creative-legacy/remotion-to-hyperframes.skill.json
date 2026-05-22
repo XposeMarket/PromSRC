@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "remotion-to-hyperframes",
+  "name": "Remotion To HyperFrames",
+  "emoji": "🔁",
+  "version": "upstream-main",
+  "description": "Translate Remotion React video compositions into HyperFrames-style HTML/CSS/GSAP compositions, with limits and escape hatches called out.",
+  "entrypoint": "SKILL.md",
+  "triggers": ["remotion", "convert remotion", "remotion tsx", "remotion react", "remotion hyperframes"],
+  "categories": ["creative", "video", "code-conversion", "remotion", "html-motion"],
+  "requiredTools": ["source_read", "file_ops"],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/api-map.md",
+      "type": "doc",
+      "description": "Mapping between Remotion APIs and HyperFrames equivalents."
+    },
+    {
+      "path": "references/limitations.md",
+      "type": "doc",
+      "description": "Known conversion limits and unsupported Remotion patterns."
+    },
+    {
+      "path": "references/sequencing.md",
+      "type": "doc",
+      "description": "Sequence and timing translation guidance."
+    },
+    {
+      "path": "references/transitions.md",
+      "type": "doc",
+      "description": "Transition translation guidance."
+    },
+    {
+      "path": "references/escape-hatch.md",
+      "type": "doc",
+      "description": "When to use runtime interop rather than lossy conversion."
+    }
+  ]
+}

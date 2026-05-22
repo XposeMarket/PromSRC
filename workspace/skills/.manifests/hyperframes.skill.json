@@ -1,0 +1,261 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "hyperframes",
+  "name": "hyperframes",
+  "description": "Create video compositions, animations, title cards, overlays, captions, voiceovers, audio-reactive visuals, and scene transitions in HyperFrames HTML. Use when asked to build any HTML-based video content, add captions or subtitles synced to audio, generate text-to-speech narration, create audio-reactive animation (beat sync, glow, pulse driven by music), add animated text highlighting (marker sweeps, hand-drawn circles, burst lines, scribble, sketchout), or add transitions between scenes (crossfades, wipes, reveals, shader transitions). Covers composition authoring, timing, media, and the full video production workflow. For dev-loop CLI commands (init, lint, inspect, preview, render) see the hyperframes-cli skill; for asset preprocessing commands (tts, transcribe, remove-background) see the hyperframes-media skill.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "hyperframes"
+  ],
+  "categories": [
+    "codex",
+    "imported"
+  ],
+  "requiredTools": [],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": [
+      "workspaceRead",
+      "shell",
+      "browser",
+      "desktop",
+      "externalSideEffects"
+    ]
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
+  "toolBinding": {
+    "requiredTools": [],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": false,
+    "shell": true,
+    "browser": true,
+    "desktop": true,
+    "externalSideEffects": true
+  },
+  "resources": [
+    {
+      "path": "palettes/bold-energetic.md",
+      "type": "doc",
+      "sizeBytes": 417
+    },
+    {
+      "path": "palettes/clean-corporate.md",
+      "type": "doc",
+      "sizeBytes": 410
+    },
+    {
+      "path": "palettes/dark-premium.md",
+      "type": "doc",
+      "sizeBytes": 389
+    },
+    {
+      "path": "palettes/jewel-rich.md",
+      "type": "doc",
+      "sizeBytes": 394
+    },
+    {
+      "path": "palettes/monochrome.md",
+      "type": "doc",
+      "sizeBytes": 454
+    },
+    {
+      "path": "palettes/nature-earth.md",
+      "type": "doc",
+      "sizeBytes": 399
+    },
+    {
+      "path": "palettes/neon-electric.md",
+      "type": "doc",
+      "sizeBytes": 380
+    },
+    {
+      "path": "palettes/pastel-soft.md",
+      "type": "doc",
+      "sizeBytes": 392
+    },
+    {
+      "path": "palettes/warm-editorial.md",
+      "type": "doc",
+      "sizeBytes": 411
+    },
+    {
+      "path": "references/audio-reactive.md",
+      "type": "doc",
+      "sizeBytes": 3064
+    },
+    {
+      "path": "references/beat-direction.md",
+      "type": "doc",
+      "sizeBytes": 6139
+    },
+    {
+      "path": "references/captions.md",
+      "type": "doc",
+      "sizeBytes": 5515
+    },
+    {
+      "path": "references/css-patterns.md",
+      "type": "doc",
+      "sizeBytes": 8312
+    },
+    {
+      "path": "references/design-picker.md",
+      "type": "doc",
+      "sizeBytes": 12209
+    },
+    {
+      "path": "references/dynamic-techniques.md",
+      "type": "doc",
+      "sizeBytes": 6886
+    },
+    {
+      "path": "references/motion-principles.md",
+      "type": "doc",
+      "sizeBytes": 8790
+    },
+    {
+      "path": "references/narration.md",
+      "type": "doc",
+      "sizeBytes": 3482
+    },
+    {
+      "path": "references/prompt-expansion.md",
+      "type": "doc",
+      "sizeBytes": 5554
+    },
+    {
+      "path": "references/techniques.md",
+      "type": "doc",
+      "sizeBytes": 11127
+    },
+    {
+      "path": "references/transcript-guide.md",
+      "type": "doc",
+      "sizeBytes": 5864
+    },
+    {
+      "path": "references/transitions.md",
+      "type": "doc",
+      "sizeBytes": 11709
+    },
+    {
+      "path": "references/transitions/catalog.md",
+      "type": "doc",
+      "sizeBytes": 6290
+    },
+    {
+      "path": "references/transitions/css-3d.md",
+      "type": "doc",
+      "sizeBytes": 421
+    },
+    {
+      "path": "references/transitions/css-blur.md",
+      "type": "doc",
+      "sizeBytes": 1787
+    },
+    {
+      "path": "references/transitions/css-cover.md",
+      "type": "doc",
+      "sizeBytes": 1448
+    },
+    {
+      "path": "references/transitions/css-destruction.md",
+      "type": "doc",
+      "sizeBytes": 4484
+    },
+    {
+      "path": "references/transitions/css-dissolve.md",
+      "type": "doc",
+      "sizeBytes": 2462
+    },
+    {
+      "path": "references/transitions/css-distortion.md",
+      "type": "doc",
+      "sizeBytes": 1803
+    },
+    {
+      "path": "references/transitions/css-grid.md",
+      "type": "doc",
+      "sizeBytes": 370
+    },
+    {
+      "path": "references/transitions/css-light.md",
+      "type": "doc",
+      "sizeBytes": 2376
+    },
+    {
+      "path": "references/transitions/css-mechanical.md",
+      "type": "doc",
+      "sizeBytes": 1613
+    },
+    {
+      "path": "references/transitions/css-other.md",
+      "type": "doc",
+      "sizeBytes": 838
+    },
+    {
+      "path": "references/transitions/css-push.md",
+      "type": "doc",
+      "sizeBytes": 1195
+    },
+    {
+      "path": "references/transitions/css-radial.md",
+      "type": "doc",
+      "sizeBytes": 1060
+    },
+    {
+      "path": "references/transitions/css-scale.md",
+      "type": "doc",
+      "sizeBytes": 715
+    },
+    {
+      "path": "references/typography.md",
+      "type": "doc",
+      "sizeBytes": 9326
+    },
+    {
+      "path": "references/video-composition.md",
+      "type": "doc",
+      "sizeBytes": 3663
+    },
+    {
+      "path": "scripts/animation-map.mjs",
+      "type": "doc",
+      "sizeBytes": 19405
+    },
+    {
+      "path": "scripts/contrast-report.mjs",
+      "type": "doc",
+      "sizeBytes": 12574
+    },
+    {
+      "path": "scripts/package-loader.mjs",
+      "type": "doc",
+      "sizeBytes": 8328
+    },
+    {
+      "path": "templates/design-picker.html",
+      "type": "template",
+      "sizeBytes": 44098
+    }
+  ],
+  "status": "ready",
+  "lifecycle": "experimental",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
+  "riskLevel": "medium"
+}

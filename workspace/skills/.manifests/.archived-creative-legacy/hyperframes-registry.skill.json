@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "hyperframes-registry",
+  "name": "HyperFrames Registry Blocks",
+  "emoji": "🧱",
+  "version": "upstream-main",
+  "description": "Install and wire HyperFrames registry blocks/components into compositions, including discovery, install locations, and HTML integration patterns.",
+  "entrypoint": "SKILL.md",
+  "triggers": ["hyperframes registry", "hyperframes add", "hyperframes blocks", "hyperframes components"],
+  "categories": ["creative", "video", "registry", "components"],
+  "requiredTools": ["file_ops"],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/install-locations.md",
+      "type": "doc",
+      "description": "Where registry blocks/components install inside a project."
+    },
+    {
+      "path": "references/wiring-blocks.md",
+      "type": "doc",
+      "description": "How to wire installed blocks into composition HTML."
+    },
+    {
+      "path": "references/wiring-components.md",
+      "type": "doc",
+      "description": "How to wire installed components into composition HTML."
+    },
+    {
+      "path": "references/demo-html-pattern.md",
+      "type": "example",
+      "description": "Demo HTML pattern for registry integration."
+    }
+  ]
+}

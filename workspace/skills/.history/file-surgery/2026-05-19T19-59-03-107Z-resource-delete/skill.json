@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "file-surgery",
+  "name": "File Surgery",
+  "description": ">",
+  "version": "2.1.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "update file",
+    "edit file",
+    "patch file",
+    "file edit",
+    "file surgery",
+    "edit markdown",
+    "update skill",
+    "patch skill",
+    "replace lines",
+    "add section",
+    "remove section",
+    "fix config",
+    "rewrite document",
+    "verify file edit",
+    "clean up file",
+    "careful code edit",
+    "inspect before editing",
+    "verify build"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/recovery/recovery-note-find-replace-source-failed-text-not-found-in-src-gateway-s-2026-05-18.md",
+      "type": "doc",
+      "description": "Add recovery to file-surgery"
+    }
+  ]
+}

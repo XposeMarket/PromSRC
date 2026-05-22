@@ -1,0 +1,11 @@
+{
+  "skillId": "file-surgery",
+  "reason": "resource-write",
+  "createdAt": "2026-05-19T02:32:02.175Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\file-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "6431e6412a4363dd"
+}

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "task-lifecycle",
+  "name": "Task Lifecycle",
+  "description": "Current guide for choosing between inline execution, interactive plans, ephemeral background agents, durable task runs, delegated subagents, and team coordination. Covers task_control, run_task_now, background_spawn, and modern task-selection rules.",
+  "emoji": "📋",
+  "version": "3.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "create task",
+    "background task",
+    "multi-step",
+    "long running",
+    "check tasks",
+    "task status",
+    "stalled",
+    "resume task",
+    "complete task",
+    "task list",
+    "existing task",
+    "task control",
+    "declare plan",
+    "background_spawn",
+    "run_task_now",
+    "subagent",
+    "team"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "notes/tool-cluster-caveats-2026-05-09.md",
+      "type": "doc",
+      "description": "May 9 automation/agent smoke-test caveats for background_join, schedule_job_patch, schedule_job_stuck_control, agent_update, and get_agent_result."
+    }
+  ]
+}

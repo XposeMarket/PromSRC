@@ -1,0 +1,12 @@
+{
+  "skillId": "ai-surface-smoke-research",
+  "reason": "resource-write",
+  "createdAt": "2026-05-21T07:05:47.539Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\ai-surface-smoke-research",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "ee2c266571fc609b"
+}

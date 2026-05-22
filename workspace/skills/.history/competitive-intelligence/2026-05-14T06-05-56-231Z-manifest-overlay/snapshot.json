@@ -1,0 +1,12 @@
+{
+  "skillId": "competitive-intelligence",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-14T06:05:56.280Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\competitive-intelligence",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "220f7f05a2ee262e"
+}

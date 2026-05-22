@@ -9,10 +9,11 @@
 - Platform: Windows 11
 - Stack: TypeScript / Node.js
 - Version control: Git
-- System rebranded from SmallClaw to Prometheus (March 2026)
+- Current system/product name: Prometheus. Former [redacted to not corrupt - just ignore]-era references should be treated as obsolete legacy context and not used in current branding, scheduling, reports, or outbound copy. [2026-05-04]
 
+- Raul is the developer/creator of Prometheus and may run sessions on a privileged dev-server build with broader capabilities than the intended Electron/public app runtime; treat dev-server access as internal-only context when reasoning about feasibility and UX. [2026-04-22]
 ## accounts
-- Google account: Small Claw (Smallclaw.ai@gmail.com), created 2026-03-06
+- Prometheus does not yet have a dedicated email account. Do not assume or use any old [redacted to not corrupt - just ignore]/[redacted to not corrupt - just ignore].ai address for Prometheus unless Raul explicitly says to. [2026-05-04]
 
 ## communication_style
 - Friendly - Proactive. Likes when Prometheus looks for things to do proactively and offers help
@@ -25,6 +26,15 @@
 - On Xpose Market website work, user wants implementation to begin directly once alignment is clear, with brief confirmations before action when requested (e.g. tool availability checks). [2026-04-10]
 - When repo/file state is in question, Raul prefers direct verification and continuation over speculative back-and-forth; verify the real state, then either continue the work or attach the directory to the repo. [2026-04-10]
 - For lead-searching workflows, user wants a full browser-driven process using live business listings (e.g. Google Maps), website/SEO analysis, and deterministic qualification — not generic web-search-only research. User also wants all collected evidence/data saved to workspace files during execution so nothing is lost, and wants this captured as a reusable skill. [2026-04-11]
+- For desktop automation, Raul explicitly wants normal coordinate-based mouse clicks grounded in fresh screenshots, and does not want modifier-based clicking unless a modifier is truly required by the UI/task. This applies when resuming desktop tasks like navigating the Codex app sidebar. [2026-04-24]
+- When context is getting long, Raul may ask for a compact continuity note with goals, constraints, decisions, and open items in <=180 words before continuing. Keep these handoffs tight and immediately usable. [2026-04-25]
+- Desktop/Codex workflow note [2026-04-25]: Raul identified the Codex new-chat control coordinates as (75,75). When operating the Codex app via desktop automation, use fresh screenshots and coordinate-based clicks; for starting a new Codex chat, click around x=75,y=75 when the Codex window/screenshot coordinate space matches the visible app. [2026-04-25]
+- For Xpose Market lead-hunt workflow, Raul's required flow is: first read the existing `workspace/Xpose Market` markdown file to match its format; then use browser automation to open Google Maps in Frederick, MD and find potential business candidates; then use `background_spawn` (not durable subagents/tasks) to analyze each candidate's business and website. Each background agent must get page text, open the website themselves, visually inspect with screenshots/scrolling, extract concrete data/evidence, and update the Xpose Market markdown file in workspace accordingly. [2026-04-27]
+- For Xpose Market lead-hunt background_spawn website-screening agents, each background agent must open and operate its own browser session/tab for visual inspection, screenshots, scrolling, and page text. They must not rely on or manipulate Prom's active/main browser session while Prom continues using Google Maps to find more candidates. [2026-04-27]
+- Codex desktop app shortcut note [2026-04-27]: Ctrl+N opens a new chat in the Codex desktop app. When operating Codex via desktop automation, prefer this shortcut for starting a new chat unless the UI/state makes a coordinate click safer. [2026-04-27]
+- For simple desktop navigation requests like “scroll up in my Codex chat,” Raul expects immediate desktop execution, not discussion. Use the active desktop/Codex context and keep the response silent/brief after acting unless verification matters. [2026-05-10]
+- During real-time voice testing, Raul prefers very short, natural, interruption-tolerant replies; treat obvious repeated words/typos as transcription noise unless they change meaning. Evidence: 2026-05-15 voice shakedown transcripts `a0489bd8-06a4-4204-b491-28b7fb447ac2.md:9-22`. [2026-05-16]
+- For future voice-driven browser/desktop smoke-test style runs, Raul wants screenshots sent to his mobile/origin surface whenever Prometheus performs visible desktop actions such as focusing Codex, Claude, or other apps, unless he explicitly says not to. Capture a fresh screenshot after meaningful focus/action steps and send it so he can see what happened. [2026-05-21]
 ## projects
 - Created a company called Xpose Market, a marketing/website creation agency intended to sell programs, websites, and related services. Wants to start actually generating exposure and leads for it. [2026-04-10]
 - Is also a day trader and wants help developing that side as well, especially around emotional pressure during trading. [2026-04-10]
@@ -33,3 +43,4 @@
 - Lives in Frederick, Maryland and wants to start Xpose Market lead generation by targeting local small businesses there first. [2026-04-10]
 - Current business priority: rebuild Xpose Market into a client-converting agency website and start generating leads soon. [2026-04-10]
 - As of 2026-04-11, user wants to rebuild the entire team system from scratch and establish three standing teams: Xpose Website Rebuild, Xpose Lead Generation, and a nightly code bug-hunter team. [2026-04-11]
+- Prometheus voice preference as of 2026-05-15: Raul selected Cedar as the current voice because it sounded most normal, but he prefers a deeper, Greek-mythology/Prometheus-like voice if available. Evidence: `audit/chats/transcripts/a0489bd8-06a4-4204-b491-28b7fb447ac2.md:47-55`. [2026-05-16]

@@ -1,9 +1,8 @@
 ---
-name: Meeting Notes
-description: Turn raw meeting transcripts, voice note summaries, bullet dumps, or informal notes into clean structured meeting records with decisions, action items, and follow-ups. Triggers on any request to process meeting notes, transcripts, or call summaries.
-emoji: 📋
+name: meeting-notes
+description: Turn messy meeting input into clean, structured, actionable output.
+emoji: "🧩"
 version: 1.0.0
-triggers: meeting notes, transcript, call notes, action items, decisions, follow up, meeting summary, process transcript, voice note, call recording, standup notes, retrospective, interview notes, 1on1 notes
 ---
 
 # Meeting Notes

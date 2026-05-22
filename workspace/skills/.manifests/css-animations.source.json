@@ -1,0 +1,12 @@
+{
+  "sourceType": "github-tree",
+  "source": "https://github.com/heygen-com/hyperframes/tree/main/skills",
+  "importedAt": "2026-05-18T00:43:58.516Z",
+  "upstreamFolder": "css-animations",
+  "prometheusImportedVersion": 1,
+  "compatibilityAudit": {
+    "status": "needs_changes",
+    "sourceKind": "generic",
+    "findings": 1
+  }
+}

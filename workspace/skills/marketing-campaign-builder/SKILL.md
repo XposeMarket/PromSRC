@@ -1,14 +1,8 @@
 ---
 name: marketing-campaign-builder
-description: >
-  Full-stack marketing campaign skill — from strategy to execution. Use this whenever someone needs
-  help with: campaign planning, ICP definition, messaging strategy, email sequences, ad copy, landing
-  page copy, content calendars, social media strategy, A/B testing frameworks, funnel design, lead
-  generation, demand generation, or marketing performance analysis. Triggers on: "run a campaign",
-  "write marketing copy", "build an email sequence", "launch a product", "get more leads", "grow
-  our audience", "write ads", "create a content plan", or any marketing-related request. Replaces
-  a marketing manager + copywriter + strategist. Always use proactively when any go-to-market,
-  launch, or marketing topic is mentioned.
+description: # Marketing Campaign Builder Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # Marketing Campaign Builder Skill

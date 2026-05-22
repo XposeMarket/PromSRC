@@ -1,9 +1,8 @@
 ---
-name: Self-Repair Protocol
-description: Prometheus's dedicated playbook for diagnosing and fixing itself. Use whenever something is broken, a tool is failing, a subagent is misbehaving, the workspace is corrupted, or any workflow fails unexpectedly. Triggers on: broken, not working, fix yourself, repair, debug system, agent failing, tool error, something went wrong, self-repair, diagnose, error loop, stuck. Always read this fully before attempting any self-modification.
-emoji: 🔧
+name: self-repair-protocol
+description: Read this fully before making any changes. Don't patch blindly.
+emoji: "🧩"
 version: 1.0.0
-triggers: broken, not working, fix yourself, repair, debug, agent failing, tool error, something went wrong, self-repair, diagnose, error loop, stuck, crashing, corrupt, investigate failure
 ---
 
 # Self-Repair Protocol

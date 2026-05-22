@@ -1,9 +1,8 @@
 ---
-name: API Integration
-description: Correctly call REST APIs and web services. Use for any HTTP requests, authentication (Bearer token, API key, OAuth), JSON parsing, rate limit handling (429 errors), pagination, webhooks, or building any API client. Triggers on: API, REST, HTTP, endpoint, Bearer token, API key, OAuth, rate limit, pagination, JSON response, webhook, connect to service, call API, fetch data from.
-emoji: 🔌
+name: api-integration
+description: A practical reference for calling REST APIs reliably. Don't write API code from memory — use this.
+emoji: "🧩"
 version: 1.0.0
-triggers: API, REST, HTTP, endpoint, Bearer, API key, OAuth, rate limit, 429, pagination, JSON, webhook, connect to, call endpoint, fetch data, integrate with, POST request, GET request, auth header
 ---
 
 # API Integration

@@ -1,0 +1,11 @@
+{
+  "skillId": "git-workflow",
+  "reason": "resource-write",
+  "createdAt": "2026-05-17T07:08:25.583Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\git-workflow",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "3f38ea02b08558a0"
+}

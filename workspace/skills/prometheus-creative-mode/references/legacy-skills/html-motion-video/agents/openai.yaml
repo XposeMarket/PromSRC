@@ -1,0 +1,4 @@
+interface:
+  display_name: "HTML Motion Video"
+  short_description: "Build polished HTML/CSS motion clips for Prometheus video mode."
+  default_prompt: "Create or surgically patch a self-contained HTML/CSS motion clip, render frame QA, fix layout issues, then export MP4."

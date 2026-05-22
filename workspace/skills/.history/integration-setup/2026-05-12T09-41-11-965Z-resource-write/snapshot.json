@@ -1,0 +1,11 @@
+{
+  "skillId": "integration-setup",
+  "reason": "resource-write",
+  "createdAt": "2026-05-12T09:41:12.059Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\integration-setup",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "3182064bc6d848c7"
+}

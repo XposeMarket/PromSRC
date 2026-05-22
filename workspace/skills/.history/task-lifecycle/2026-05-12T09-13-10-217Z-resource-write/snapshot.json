@@ -1,0 +1,12 @@
+{
+  "skillId": "task-lifecycle",
+  "reason": "resource-write",
+  "createdAt": "2026-05-12T09:13:10.458Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\task-lifecycle",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "6d48b71014cb64c9"
+}

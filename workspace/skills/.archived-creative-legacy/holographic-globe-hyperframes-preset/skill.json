@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "holographic-globe-hyperframes-preset",
+  "name": "Holographic Globe HyperFrames Preset",
+  "description": "Reusable HTML motion preset for creating export-friendly holographic rotating globe clips in Prometheus Creative Video mode.",
+  "emoji": "🌐",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "holographic globe",
+    "rotating globe",
+    "neon globe",
+    "wireframe globe",
+    "html motion globe",
+    "hyperframes globe",
+    "globe preset",
+    "orbital scan",
+    "hologram render"
+  ],
+  "categories": [
+    "creative",
+    "video",
+    "html-motion",
+    "hyperframes",
+    "preset"
+  ],
+  "requiredTools": [
+    "creative_runtime",
+    "file_ops"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "templates/holographic-rotating-globe-light.html",
+      "type": "template",
+      "description": "Export-friendly 1920x1080 HTML/CSS-only holographic rotating globe clip, optimized for 30fps MP4 export."
+    },
+    {
+      "path": "examples/holographic-globe-brief.md",
+      "type": "example",
+      "description": "Example brief and recommended Creative HTML motion settings for this preset."
+    }
+  ]
+}

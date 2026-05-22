@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "hyperframes",
+  "name": "HyperFrames Video Composer",
+  "emoji": "🎬",
+  "version": "upstream-main",
+  "description": "Upstream HyperFrames reference for standalone HyperFrames projects and detailed HTML/CSS/GSAP composition guidance. Inside Prometheus Creative Video mode, read prometheus-hyperframes-bridge first and use this skill as a selective reference.",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "hyperframes",
+    "standalone hyperframes",
+    "hyperframes project",
+    "hyperframes composition",
+    "gsap animation",
+    "scene transitions",
+    "audio reactive"
+  ],
+  "categories": ["creative", "video", "html-motion", "animation"],
+  "requiredTools": ["creative_runtime", "browser", "file_ops"],
+  "permissions": {
+    "browser": true,
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "house-style.md",
+      "type": "doc",
+      "description": "House rules for HyperFrames layout, motion, and composition taste."
+    },
+    {
+      "path": "visual-styles.md",
+      "type": "doc",
+      "description": "Named visual style presets for video identity decisions."
+    },
+    {
+      "path": "patterns.md",
+      "type": "doc",
+      "description": "Reusable composition and motion patterns."
+    },
+    {
+      "path": "data-in-motion.md",
+      "type": "doc",
+      "description": "Guidance for animating charts, stats, and data-driven scenes."
+    },
+    {
+      "path": "references/motion-principles.md",
+      "type": "doc",
+      "description": "Motion timing, easing, pacing, and animation taste rules."
+    },
+    {
+      "path": "references/css-patterns.md",
+      "type": "doc",
+      "description": "CSS patterns for polished HyperFrames compositions."
+    },
+    {
+      "path": "references/transitions/catalog.md",
+      "type": "doc",
+      "description": "Transition catalog for scene changes and visual energy."
+    }
+  ]
+}

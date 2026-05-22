@@ -1,19 +1,13 @@
 ---
-name: Memory Governance Playbook
-description: >
-  Route and persist facts safely using typed memory targets (USER.md, SOUL.md, daily notes).
-  Use when updating long-term context, deciding where to write facts, handling scope/TTL,
-  or ensuring memory consistency. Triggers on: memory routing, where to store, memory governance,
-  update profile, save context, add fact, typed memory, memory safety, audit memory,
-  memory consistency, memory policy, remember this.
-emoji: 📋
+name: memory-governance-playbook
+description:
+emoji: "🧩"
 version: 1.0.0
-triggers: memory routing, where to store, memory governance, update profile, save context, add fact, typed memory, memory safety, audit memory, memory consistency, memory policy, remember this, memory target, fact persistence, knowledge retention
 ---
 
 # Memory Governance Playbook
 
-Route facts safely to the right memory target (USER.md, SOUL.md, daily notes, or skip) with clear scope, TTL, and audit-safe patterns.
+Route facts safely to the right memory target (USER.md, SOUL.md, Memory.MD daily notes, or skip) with clear scope, TTL, and audit-safe patterns.
 
 ---
 

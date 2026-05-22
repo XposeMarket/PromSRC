@@ -1,0 +1,12 @@
+{
+  "skillId": "web-researcher",
+  "reason": "resource-write",
+  "createdAt": "2026-05-12T09:13:03.313Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\web-researcher",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "91b41be2ded84beb"
+}

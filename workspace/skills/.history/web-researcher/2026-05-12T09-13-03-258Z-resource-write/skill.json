@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "web-researcher",
+  "name": "Web Researcher",
+  "description": "Current Prometheus playbook for web_search/web_fetch research, multi-engine search, source fetching, X/Twitter URL fetching, and escalation to browser/scraper tools when needed.",
+  "emoji": "🔎",
+  "version": "1.0.1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "web research",
+    "web search",
+    "search the web",
+    "current information",
+    "latest news",
+    "research this",
+    "find sources",
+    "source this",
+    "web_fetch",
+    "fetch url",
+    "fetch this page",
+    "read this article",
+    "x url fetch",
+    "twitter url fetch",
+    "multi engine search",
+    "tavily",
+    "brave",
+    "duckduckgo",
+    "google search"
+  ],
+  "categories": [
+    "research",
+    "web",
+    "search"
+  ],
+  "requiredTools": [
+    "web",
+    "skills"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "notes/provider-selection-2026-05-08.md",
+      "type": "doc",
+      "description": "Provider selection follow-up note: corrects Google site: testing, documents provider-selectable web_search tools, and explains Google 403 interpretation."
+    },
+    {
+      "path": "notes/tinyfish-websearch-test-2026-05-08.md",
+      "type": "doc",
+      "description": "Live TinyFish web_search test notes and comparison against earlier Tavily/Brave behavior plus Google-provider caveats."
+    }
+  ]
+}

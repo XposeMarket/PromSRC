@@ -1,14 +1,8 @@
 ---
 name: sdr-sales
-description: >
-  Expert sales development and outbound sales skill. Use this whenever someone needs help with:
-  prospect research, lead list building, cold outreach (email, LinkedIn, phone), sales sequences,
-  objection handling, discovery call preparation, pipeline management, CRM hygiene, deal qualification,
-  closing techniques, follow-up strategies, or sales playbook creation. Triggers on: "find leads",
-  "write cold emails", "build a sales sequence", "handle this objection", "prep for a sales call",
-  "how do I close this deal", "build my pipeline", or any outbound/inbound sales topic. Replaces
-  an SDR and partially replaces an Account Executive. Use proactively whenever sales or prospecting
-  is mentioned.
+description: # SDR Sales Skill
+emoji: "🧩"
+version: 1.0.0
 ---
 
 # SDR Sales Skill

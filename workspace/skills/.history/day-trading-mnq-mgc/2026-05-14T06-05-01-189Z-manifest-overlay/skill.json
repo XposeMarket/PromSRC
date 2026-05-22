@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "day-trading-mnq-mgc",
+  "name": "day-trading-mnq-mgc",
+  "description": "",
+  "version": "0.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "examples/ny-open-5-minute-prep.md",
+      "type": "example",
+      "description": "Five-minute NY open prep workflow for urgent MNQ/MGC chart + news + levels requests."
+    }
+  ]
+}

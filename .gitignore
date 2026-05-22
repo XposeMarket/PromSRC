@@ -30,40 +30,6 @@
 .localclaw/task-heartbeat.json
 .localclaw/cron/runs/
 
-# --- WORKSPACE RUNTIME FILES ---
-# Existing tracked workspace templates are handled explicitly when staging.
-# New workspace content is local runtime/private state and must not enter source.
-workspace/
-workspace/memory/
-workspace/.prometheus/
-workspace/audit/
-workspace/downloads/
-workspace/uploads/
-workspace/Brain/
-workspace/entities/
-workspace/events/
-workspace/integrations/
-workspace/projects/
-workspace/proposals/
-workspace/tasks/
-workspace/teams/
-workspace/lead-research
-workspace/lead-research/
-workspace/Prometheus Website/
-workspace/oss-agents/
-workspace/tool_audit.log
-workspace/HEARTBEAT.md
-workspace/note.txt
-workspace/*.html
-workspace/*.js
-workspace/*.css
-workspace/*.py
-workspace/*.sh
-workspace/*.bat
-workspace/*.txt
-workspace/xposemarket-site/
-teams/team_mn74d1g9_0f4d45/workspace/_github_prometheus_upload
-
 # --- DASHBOARD RUNTIME STATE ---
 ai-dashboard/dashboard-state.json
 ai-dashboard/dashboard-requests.json
@@ -132,7 +98,6 @@ fix_log_line.py
 src/**/*.log
 src/**/*.md.bak
 src/**/memory/*.md
-workspace/memory/
 
 # --- NODE ---
 node_modules/
@@ -154,3 +119,103 @@ desktop.ini
 /release-public/
 /output/
 /tmp/
+
+# --- PERSONAL WORKSPACE SYNC ---
+# Workspace contents are intentionally Git-visible for Raul's own sync.
+# The public Electron package excludes workspace via electron-builder-public.yml.
+!workspace/
+!workspace/**
+!workspace/**/
+
+# Bulky workspace projects/runtime folders are kept local and rebuilt/redone as needed.
+workspace/oss-agents/
+workspace/Prometheus Website/
+workspace/xposemarket-site/
+workspace/xpose-market/
+workspace/teams/
+workspace/.prometheus/**
+workspace/.prometheus/subagents/
+workspace/hyperframes/
+workspace/hyperframes-promo-test/
+workspace/fitpulse-real-hyperframes/
+workspace/assets/
+workspace/video-debug/
+workspace/opportunity-radar/
+workspace/signal-radar/
+workspace/Brain/
+workspace/Brain/**
+workspace/audit/**
+workspace/downloads/**
+workspace/uploads/**
+workspace/entities/**
+workspace/events/**
+workspace/integrations/**
+workspace/projects/**
+workspace/proposals/**
+workspace/tasks/**
+workspace/node_modules/
+workspace/logs/
+workspace/tmp/
+workspace/creative-projects/
+workspace/generated/**
+
+# Raul's self docs are intentionally tracked in full.
+!workspace/self/
+!workspace/self/**
+
+# Keep skeleton folders in clones while excluding their bulky contents.
+!workspace/.prometheus/
+!workspace/.prometheus/**/
+!workspace/.prometheus/**/.gitkeep
+!workspace/oss-agents/.gitkeep
+!workspace/Prometheus Website/.gitkeep
+!workspace/xposemarket-site/.gitkeep
+!workspace/xpose-market/.gitkeep
+!workspace/teams/.gitkeep
+!workspace/.prometheus/subagents/.gitkeep
+!workspace/hyperframes/.gitkeep
+!workspace/hyperframes-promo-test/.gitkeep
+!workspace/fitpulse-real-hyperframes/.gitkeep
+!workspace/assets/.gitkeep
+!workspace/video-debug/.gitkeep
+!workspace/opportunity-radar/.gitkeep
+!workspace/signal-radar/.gitkeep
+!workspace/Brain/
+!workspace/Brain/**/
+!workspace/Brain/**/.gitkeep
+!workspace/Brain/thoughts/**
+!workspace/Brain/dreams/**
+!workspace/audit/
+!workspace/audit/**/
+!workspace/audit/**/.gitkeep
+!workspace/downloads/
+!workspace/downloads/**/
+!workspace/downloads/**/.gitkeep
+!workspace/uploads/
+!workspace/uploads/**/
+!workspace/uploads/**/.gitkeep
+!workspace/entities/
+!workspace/entities/**/
+!workspace/entities/**/.gitkeep
+!workspace/events/
+!workspace/events/**/
+!workspace/events/**/.gitkeep
+!workspace/integrations/
+!workspace/integrations/**/
+!workspace/integrations/**/.gitkeep
+!workspace/projects/
+!workspace/projects/**/
+!workspace/projects/**/.gitkeep
+!workspace/proposals/
+!workspace/proposals/**/
+!workspace/proposals/**/.gitkeep
+!workspace/tasks/
+!workspace/tasks/**/
+!workspace/tasks/**/.gitkeep
+!workspace/node_modules/.gitkeep
+!workspace/logs/.gitkeep
+!workspace/tmp/.gitkeep
+!workspace/creative-projects/.gitkeep
+!workspace/generated/
+!workspace/generated/**/
+!workspace/generated/.gitkeep

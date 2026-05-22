@@ -1,0 +1,13 @@
+{
+  "skillId": "file-surgery",
+  "reason": "resource-delete",
+  "createdAt": "2026-05-19T02:34:32.826Z",
+  "rootDir": "D:\\Prometheus\\workspace\\skills\\file-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/recovery/recovery-note-find-replace-failed-error-file-web-ui-src-styles-mobile-cs-2026-05-18.md"
+  ],
+  "hash": "e205bfda64ca088b"
+}

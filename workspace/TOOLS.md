@@ -1,19 +1,18 @@
 # TOOLS.md — Available Tools & Usage Guide
 
-Last updated: 2026-03-27
+Last updated: 2026-05-20
 
 ## Session Sync (2026-03-27)
 
 Aligned to current runtime after this session's cleanup:
 
 - Removed legacy memory stack registration (`memory_search` + old markdown-backed memory tools in `src/tools`).
-- Canonical memory tools are now the USER/SOUL category tools executed in `subagent-executor`:
+- Canonical memory tools are now the USER/SOUL/MEMORY category tools executed in `subagent-executor`:
   - `memory_browse(file)`
   - `memory_read(file)`
   - `memory_write(file, category, content)`
 - Removed stale file assumptions from docs/runtime:
   - No `IDENTITY.md`
-  - No `MEMORY.md`
   - No `ROUTING.md`
   - No `facts.md` markdown fallback
 - Background/task and main runtime now document the same category-driven tool model in this file.
@@ -30,23 +29,65 @@ Aligned to current runtime after this session's cleanup:
 
 ## Tool Category System
 
-Tools are split into **core** (always available) and **6 on-demand categories**.
-Activate a category once per session — it stays active for the whole session.
+Tools are split into **core** tools that are always available and **17 on-demand runtime categories**.
+Activate a category once per session with `request_tool_category` and it stays active for that session.
 
-```
-request_tool_category('browser')     — 20 web automation tools
-request_tool_category('desktop')     — 26 OS/desktop automation tools
-request_tool_category('team_ops')    — 19 agent/team coordination tools
-request_tool_category('scheduling')  — 2 cron job tools (schedule_job, parse_schedule_pattern)
-request_tool_category('source_write')— 10 code editing tools (src/ and web-ui/)
-request_tool_category('integrations')— 5 MCP/webhook/CIS tools
-```
+| Category | What it unlocks |
+|---|---|
+| `browser_automation` | Browser UI control, DOM extraction, screenshots, network hooks, site shortcuts |
+| `desktop_automation` | OS/window automation, app launch/focus, clipboard, screenshots, macro tools |
+| `agents_and_teams` | Standalone subagents, managed teams, team chat, dispatches, agent updates |
+| `prometheus_source_read` | Prometheus `src/`, `web-ui/`, and allowlisted root source inspection |
+| `prometheus_source_write` | Prometheus source editing tools for approved dev proposal tasks |
+| `workspace_write` | Workspace file mutation, git/test/lint helpers, command/process tools |
+| `advanced_memory` | Memory graph, timeline, project search, related records, index maintenance |
+| `media_assets` | Download and analyze images, video, audio, and remote media assets |
+| `media_quality` | Image/video QA: contrast, text overflow, frame renders, caption/audio timing |
+| `automations` | Schedule detail/history/outputs/patch/stuck-control/dashboard tools |
+| `external_apps` | Connected connector tools such as Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian, X/Twitter, xAI/Grok |
+| `integration_admin` | MCP server setup, webhooks, and integration quick setup/admin |
+| `social_intelligence` | Social profile intelligence and reporting |
+| `proposal_admin` | Pending proposal inspection/editing |
+| `mcp_server_tools` | Dynamic `mcp__<serverId>__<toolName>` tools from connected MCP servers |
+| `composite_tools` | Saved multi-step composite tools plus composite management |
+| `creative_mode` | Creative editor, HTML Motion, HyperFrames, composition, and creative QA tools |
 
-**Core tools (always available without activation):** file ops, source read, web, memory, shell, skills, tasks, write_proposal, self_improve, gateway_restart, declare_plan, complete_plan_step, step_complete, send_telegram, **background_spawn, background_status, background_progress, background_join**.
+Common aliases still normalize to those category IDs:
+`browser`, `desktop`, `team_ops`, `teams`, `agents`, `source_read`, `source_write`, `file_ops`, `files`, `shell`, `commands`, `run_commands`, `memory`, `media`, `schedule`, `scheduling`, `connectors`, `integrations`, `mcp`, and `composites`.
+
+**Core tools (always available without activation):** file read/search, web search/fetch, basic memory, skills, tasks, `schedule_job`, `write_proposal`, model switching, plan/progress tools, `send_telegram`, delivery tools, `connector_list`, `ask_team_coordinator`, `deploy_analysis_team`, `get_creative_mode`, `switch_creative_mode`, `generate_image`, `generate_video`, `background_spawn`, `background_status`, `background_progress`, `background_wait`, and `background_join`.
+
+**Important routing note:** `run_command`, `terminal`, `start_process`, and `process_*` are under `workspace_write` in the current Prometheus gateway runtime. They are not core in the category-gated builder.
+
+### Current Category Inventory
+
+The current live builder maps tools roughly like this:
+
+| Category | Current tools |
+|---|---|
+| `advanced_memory` | `memory_accept_claim`, `memory_consolidate`, `memory_debug_search`, `memory_embedding_backfill`, `memory_embedding_status`, `memory_get_related`, `memory_graph_snapshot`, `memory_index_refresh`, `memory_provider_status`, `memory_read_record`, `memory_reject_claim`, `memory_review_claims`, `memory_search_project`, `memory_search_timeline`, `memory_supersede_record` |
+| `agents_and_teams` | `agent_info`, `agent_list`, `agent_update`, `delete_agent`, `dispatch_team_agent`, `dispatch_to_agent`, `get_agent_result`, `manage_team_context_ref`, `manage_team_goal`, `message_main_agent`, `message_subagent`, `post_to_team_chat`, `reply_to_team`, `request_context`, `request_manager_help`, `request_team_member_turn`, `share_artifact`, `spawn_subagent`, `talk_to_manager`, `talk_to_subagent`, `talk_to_teammate`, `team_manage`, `update_my_status`, `update_team_goal` |
+| `automations` | `automation_dashboard`, `schedule_job_detail`, `schedule_job_history`, `schedule_job_log_search`, `schedule_job_outputs`, `schedule_job_patch`, `schedule_job_stuck_control` |
+| `browser_automation` | All `browser_*` tools plus `inspect_console`, `run_accessibility_check`, and `save_site_shortcut` |
+| `desktop_automation` | All `desktop_*` tools |
+| `media_assets` | `analyze_image`, `analyze_video`, `download_media`, `download_url` |
+| `media_quality` | `image_check_contrast`, `image_check_text_overflow`, `image_detect_empty_regions`, `image_get_bounds_summary`, `image_get_element_at_point`, `image_get_overlaps`, `video_check_audio_sync`, `video_check_caption_timing`, `video_render_contact_sheet`, `video_render_frame` |
+| `prometheus_source_read` | `grep_prom`, `grep_source`, `grep_webui_source`, `list_prom`, `list_source`, `list_webui_source`, `prom_file_stats`, `read_prom_file`, `read_source`, `read_webui_source`, `source_stats`, `src_stats`, `webui_source_stats`, `webui_stats` |
+| `prometheus_source_write` | `delete_lines_prom`, `delete_lines_source`, `delete_lines_webui_source`, `delete_prom_file`, `delete_source`, `delete_webui_source`, `find_replace_prom`, `find_replace_source`, `find_replace_webui_source`, `insert_after_prom`, `insert_after_source`, `insert_after_webui_source`, `replace_lines_prom`, `replace_lines_source`, `replace_lines_webui_source`, `write_prom_file`, `write_source`, `write_webui_source` |
+| `workspace_write` | Workspace mutation tools, git/test/lint/format helpers, `terminal`, `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, `process_submit` |
+| `integration_admin` | `integration_quick_setup`, `mcp_server_manage`, `webhook_manage` |
+| `social_intelligence` | `social_intel` |
+| `proposal_admin` | `edit_proposal` |
+| `composite_tools` | `create_composite`, `get_composite`, `edit_composite`, `delete_composite`, `list_composites`, plus saved composite definitions from `.prometheus/composites/` |
+| `creative_mode` | `creative_*`, `hyperframes_*`, and creative video QA tools such as `video_analyze_frame`, `video_analyze_timeline`, `video_check_keyframes`, `video_extract_clip_frames`, `video_analyze_imported_video` |
+| `external_apps` | Connected extension/connector tools, including `connector_*` and `x_api_*` tools |
+| `mcp_server_tools` | Dynamic `mcp__server__tool` functions from connected MCP servers |
 
 ---
 
 ## File Tools
+
+Read/list/search tools are core. Mutation tools such as `create_file`, `replace_lines`, `insert_after`, `delete_lines`, `find_replace`, and `delete_file` require `workspace_write`.
 
 | Tool | What it does |
 |------|-------------|
@@ -92,11 +133,17 @@ request_tool_category('integrations')— 5 MCP/webhook/CIS tools
 
 **Decision guide:** prefer `find_replace_*` for targeted changes → `replace_lines_*` when find can't match uniquely → `insert_after_*` / `delete_lines_*` for structural additions/removals → `write_*` only for new files or full rewrites.
 
-## Shell
+## Terminal / Shell
+
+In Prometheus gateway sessions, command/process tools require `workspace_write`. In current Codex desktop sessions, use `shell_command` from the desktop tool layer.
 
 | Tool | What it does |
 |------|-------------|
-| `run_command` | Execute shell/cmd commands. Use `shell:true` or `capture:true` to capture output (required for builds, scripts, anything needing result). Default opens a visible terminal window. |
+| `shell_command` | Execute a PowerShell command and return captured output inline. Use for builds, tests, git/status, diagnostics, short scripts, and local inspection. Set `workdir` explicitly when context matters. |
+| `read_thread_terminal` | Read the current app terminal output for this desktop thread. Use when a visible/app terminal is already running and you need its latest prompt or output before deciding the next step. |
+| `load_workspace_dependencies` | Locate bundled workspace runtime paths for Node.js, Python, and document/PDF helpers. Use when scripts need the managed runtime rather than assuming global binaries. |
+
+Legacy Prometheus runtimes may expose `run_command`; current Codex desktop sessions expose `shell_command` instead.
 
 ## Web Tools
 
@@ -116,19 +163,17 @@ request_tool_category('integrations')— 5 MCP/webhook/CIS tools
 
 | Tool | What it does |
 |------|-------------|
-| `memory_browse` | List categories in `USER.md` or `SOUL.md` |
-| `memory_write` | Write a memory entry to `USER.md` or `SOUL.md` under a category (`file`, `category`, `content`) |
-| `memory_read` | Read full contents of `USER.md` or `SOUL.md` |
+| `memory_browse` | List categories in `USER.md`, `SOUL.md`, or `MEMORY.md` |
+| `memory_write` | Write a memory entry to `USER.md`, `SOUL.md`, or `MEMORY.md` under a category (`file`, `category`, `content`) |
+| `memory_read` | Read full contents of `USER.md`, `SOUL.md`, or `MEMORY.md` |
 | `write_note` | Write timestamped note to today's intraday notes file. Only use during tasks or when something genuinely worth remembering happened. |
 
 ## Task & Scheduling Tools
 
 | Tool | What it does |
 |------|-------------|
-| `start_task` | Create and start a background task |
 | `task_control` | List, update, pause, resume, complete tasks |
 | `schedule_job` | Create, update, delete, list, run cron jobs |
-| `parse_schedule_pattern` | Convert natural language to cron expression |
 | `declare_plan` | Declare a multi-step plan (shown in UI progress tracker) |
 
 ## Background Agent Tools *(core — always available)*
@@ -220,14 +265,6 @@ Gate: merges both outcomes into one reply
 | `update_my_status` | Legacy round-based: update status on the team board. |
 | `update_team_goal` | Legacy round-based: propose or update a team goal. |
 
-## Delegation Tools
-
-| Tool | What it does |
-|------|-------------|
-| `request_secondary_assist` | Request help from a secondary/advisor model |
-| `subagent_spawn` | Spawn a specialist subagent for a focused task |
-| `delegate_to_specialist` | Delegate work to a specialist agent |
-
 ## Browser Tools
 
 | Tool | What it does |
@@ -277,7 +314,6 @@ Gate: merges both outcomes into one reply
 | `desktop_wait_for_change` | Poll until screen content changes |
 | `desktop_diff_screenshot` | Compare last two screenshots for differences |
 | `desktop_get_window_text` | Extract readable text from a window via UI Automation (more reliable than OCR) |
-| `desktop_vision_act` | Refresh screenshot and echo goal for vision-mode reasoning |
 | `desktop_send_to_telegram` | Send desktop screenshot to Telegram |
 | **`desktop_get_accessibility_tree`** | **Full Windows UI Automation tree** — roles, names, enabled/focused states, bounding boxes for every control. Far richer than `desktop_get_window_text`. Use to find controls by role/name or check disabled states. `max_depth` and `max_nodes` control output size. |
 | **`desktop_pixel_watch`** | **Wait for a pixel color to change** at virtual-screen (x,y). Uses 1×1 pixel sampling — 100× cheaper than full screenshots. Optionally specify a `target_color` hex to wait FOR; otherwise waits for ANY change. |
@@ -293,8 +329,6 @@ Gate: merges both outcomes into one reply
 | `skill_list` | List installed skills (34+ available) |
 | `skill_read` | Read a skill's playbook content |
 | `skill_create` | Create a new skill |
-| `skill_enable` | Enable a skill for the current session |
-| `skill_disable` | Disable a skill |
 
 ## CIS Intelligence Tools
 
@@ -330,7 +364,6 @@ These tools let agents read and write structured business knowledge during a ses
 | Tool | What it does |
 |------|-------------|
 | `write_proposal` | Submit a code change proposal for human approval |
-| `self_improve` | Trigger self-improvement analysis |
 | `gateway_restart` | Build TypeScript + gracefully restart the gateway. Use after applying src changes. Writes restart context so the next boot knows what changed. |
 
 ---
@@ -342,18 +375,18 @@ These tools let agents read and write structured business knowledge during a ses
 | Read a website, GitHub, Reddit, docs | `web_search` + `web_fetch` |
 | Log into a site or interact with a web form | `browser_open` + `browser_click/fill` (vision mode: `browser_vision_screenshot` + `browser_vision_click` / `browser_vision_type` — primary model drives all steps) |
 | Read or create local files | `read_file` / `create_file` / `find_replace` / `replace_lines` |
-| Run a command or script | `run_command` |
-| Interact with a desktop app | `desktop_screenshot` + `desktop_click/type` (optional `desktop_vision_act` to refresh + remind goal — you still pick the next tools) |
+| Run a command or script | `request_tool_category("workspace_write")`, then `terminal` or `run_command`; in Codex desktop use `shell_command` |
+| Interact with a desktop app | `request_tool_category("desktop_automation")`, then `desktop_screenshot` + `desktop_click/type` |
 | Remember something permanently | `memory_write` |
 | Update persona/user model | `memory_write` or edit USER.md/SOUL.md directly |
 | Search what you already know | `memory_browse` or read the persona files |
 | Temporary note during a task | `write_note` |
 | Send user a message on Telegram | `send_telegram` (also bridges session) |
 | Send user a screenshot on Telegram | `desktop_screenshot` then `send_telegram({ screenshot: true })` |
-| Create a background task | `start_task` |
+| Create or manage a task | `task_control` |
 | Run side work in parallel with main response | `background_spawn` → do primary work → finalization gate merges automatically |
 | Schedule a recurring job | `schedule_job` |
-| Create a new agent | `spawn_subagent({ create_if_missing: {...} })` |
+| Create or message a standalone subagent | `request_tool_category("agents_and_teams")`, then `spawn_subagent` / `message_subagent` |
 | Create a team | `team_manage({ action: "create" })` (agents must exist first) |
 | Run a collaborative round | `team_manage({ action: "run_round", team_id, objective })` |
 | Run a full collaborative session | `team_manage({ action: "run_session", team_id, objective, max_rounds })` |
@@ -369,7 +402,7 @@ These tools let agents read and write structured business knowledge during a ses
 | Analyze a social media profile | `social_intel({ platform, handle })` |
 | Read a client/project/vendor record | `read_entity(type, id)` *(Block B — use `read_file` for now)* |
 | Update a client/project/vendor record | `write_entity(type, id, content)` *(Block B — use `create_file` for now)* |
-| Check business context | `read_file("BUSINESS.md")` or it's auto-loaded in every session |
+| Check business context | `read_file("BUSINESS.md")` for a one-off read, or `business_context_mode({ action: "enable" })` to auto-inject it for the rest of the session |
 
 ---
 
@@ -383,7 +416,7 @@ These tools let agents read and write structured business knowledge during a ses
 
 **Telegram bridge:** When you call `send_telegram`, the session bridge is automatically updated. The user's Telegram replies will route through your current session and see the full conversation history.
 
-**run_command is captured by default.** Dev CLI commands (git, npm, node, etc.) return output inline without opening a new window. Pass `visible: true` only if the user needs to see a terminal window.
+**Terminal commands are captured by default.** In current Codex desktop sessions, use `shell_command`; output returns inline and no visible window opens unless you deliberately start a background/visible process. In older Prometheus runtimes, the equivalent guidance is `run_command` with captured output by default and `visible: true` only when the user needs to see the terminal.
 
 **gateway_restart is the LAST thing you call.** It kills the current process. Apply all code changes first, then call `gateway_restart` as your final action.
 
@@ -402,4 +435,4 @@ Otherwise, you should know your tools without being reminded.
 
 ---
 
-*Last updated: 2026-03-26*
+*Last updated: 2026-05-20*

@@ -1,9 +1,8 @@
 ---
-name: Chart Visualizer
-description: Render live Chart.js data visualizations directly in chat. Use for any numeric data, comparisons, trends, distributions, or time-series. Outputs a fenced ```chart block that the frontend renders as a live interactive canvas. Use this skill — not svg-diagrams, not html-interactive — whenever the core deliverable is a data chart. Triggers on: chart, graph, plot, bar chart, line chart, pie chart, doughnut, scatter plot, radar chart, visualize this data, show me a graph, chart these numbers, revenue chart, trend line, comparison chart, over time, percentage breakdown.
-emoji: "📊"
+name: chart-visualizer
+description: Render live Chart.js charts directly in chat
+emoji: "🧩"
 version: 1.0.0
-triggers: chart, graph, plot, bar chart, line chart, pie chart, doughnut chart, scatter plot, radar chart, bubble chart, visualize data, show me a graph, chart these numbers, revenue chart, trend, comparison chart, over time, percentage breakdown, data visualization, analytics chart, metrics chart
 ---
 
 # Chart Visualizer
