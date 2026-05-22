@@ -5,12 +5,13 @@ import path from 'path';
 import { fetchXThread } from '../gateway/browser-tools.js';
 import { executeDownloadMedia, executeDownloadUrl } from './download-tools.js';
 import { executeAnalyzeImage, executeAnalyzeVideo } from './media-analysis.js';
+import { executeXSearch, xaiHasCredentials } from '../gateway/tools/handlers/xai-handlers.js';
 
 type SearchResultItem = { title: string; url: string; snippet: string };
 type StructuredSource = { id: number; tier: 'A' | 'B' | 'C'; title: string; url: string; snippet: string; score: number };
 type StructuredEvidence = { id: number; source_id: number; excerpt: string; score: number };
 type StructuredFact = { id: number; claim: string; evidence_ids: number[]; source_ids: number[]; confidence: number };
-type SearchProvider = 'multi' | 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'ddg_html';
+type SearchProvider = 'multi' | 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'ddg_html' | 'xai';
 type SearchProviderAttempt = {
   provider: SearchProvider;
   status: 'success' | 'failed' | 'skipped';
@@ -21,11 +22,11 @@ type SearchProviderAttempt = {
 type SearchDiagnostics = {
   query: string;
   preferred_provider: 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg';
-  provider_order: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg'>;
+  provider_order: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai'>;
   attempted: SearchProviderAttempt[];
   selected_provider?: SearchProvider;
 };
-type SearchProviderOption = 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'multi';
+type SearchProviderOption = 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai' | 'multi';
 type XMediaDescriptor = {
   type: 'image' | 'video';
   url?: string;
@@ -553,11 +554,13 @@ export function getSearchProvidersSummary(): string {
     const googleKey = cfg.resolveSecret(searchCfg.google_api_key);
     const googleCx = cfg.resolveSecret(searchCfg.google_cx);
     const braveKey = cfg.resolveSecret(searchCfg.brave_api_key);
+    const xaiAvailable = xaiHasCredentials();
     const providers: { key: string; label: string; available: boolean }[] = [
       { key: 'tinyfish', label: 'TinyFish', available: !!tinyfishKey },
       { key: 'tavily', label: 'Tavily', available: !!tavilyKey },
       { key: 'google', label: 'Google', available: !!(googleKey && googleCx) },
       { key: 'brave',  label: 'Brave',  available: !!braveKey },
+      { key: 'xai',    label: 'xAI X Search', available: xaiAvailable },
       { key: 'ddg',    label: 'DuckDuckGo', available: true },
     ];
     return providers
@@ -644,6 +647,42 @@ async function searchTinyFish(query: string, limit: number, apiKey: string): Pro
     stdout: (answer ? `${answer}\n\n` : '') + ranked.map((r: any, i: number) =>
       `[${i + 1}] ${r.title}\n    ${r.url}\n    ${r.snippet.slice(0, 400)}`
     ).join('\n\n'),
+  };
+}
+
+async function searchXAI(query: string, limit: number): Promise<ToolResult> {
+  const result = await executeXSearch({
+    query,
+  });
+  if (!result.success) {
+    throw new Error(result.error || 'xAI X Search failed');
+  }
+
+  const answer = String(result.answer || '').trim();
+  const inlineCitations = Array.isArray(result.inline_citations) ? result.inline_citations.filter(c => c?.url) : [];
+  const topLevelCitations = Array.isArray(result.citations) ? result.citations.filter(Boolean) : [];
+  const citations = inlineCitations.length > 0
+    ? inlineCitations
+    : topLevelCitations.map((url) => ({ title: '', url: String(url) }));
+  const results: SearchResultItem[] = citations.slice(0, limit).map((citation, i) => ({
+    title: citation.title || `xAI X Search citation ${i + 1}`,
+    url: String(citation.url),
+    snippet: answer || `X result for ${query}`,
+  }));
+
+  if (results.length === 0 && answer) {
+    results.push({
+      title: 'xAI X Search answer',
+      url: `https://x.com/search?q=${encodeURIComponent(query)}`,
+      snippet: answer,
+    });
+  }
+
+  return {
+    success: results.length > 0,
+    error: results.length > 0 ? undefined : 'xAI X Search returned no citations',
+    data: { query, results, answer, provider: 'xai', citations },
+    stdout: (answer ? `${answer}\n\n` : '') + results.map((r, i) => `[${i + 1}] ${r.title}\n    ${r.url}\n    ${r.snippet}`).join('\n\n'),
   };
 }
 
@@ -893,11 +932,11 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
 
   const cfg = getSearchConfig();
   const providerRaw = String(args.provider || '').trim().toLowerCase();
-  const providerOverride = (['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'multi'].includes(providerRaw) ? providerRaw : '') as SearchProviderOption | '';
+  const providerOverride = (['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'multi'].includes(providerRaw) ? providerRaw : '') as SearchProviderOption | '';
   const candidates: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg'> = ['tinyfish', 'tavily', 'google', 'brave', 'ddg'];
   const useMultiEngine = providerOverride === 'multi' || (providerOverride === '' && args.multi_engine !== false);
   const providerOrder = providerOverride && providerOverride !== 'multi'
-    ? [providerOverride as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg']
+    ? [providerOverride as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai']
     : !useMultiEngine
       ? [cfg.preferred]
       : [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred)];
@@ -910,11 +949,12 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
     if (cfg.tavilyKey) tasks.push({ provider: 'tavily', promise: searchTavily(args.query, limit, cfg.tavilyKey as string) });
     if (cfg.googleKey && cfg.googleCx) tasks.push({ provider: 'google', promise: searchGoogle(args.query, limit, cfg.googleKey as string, cfg.googleCx as string) });
     if (cfg.braveKey)  tasks.push({ provider: 'brave',  promise: searchBrave(args.query, limit, cfg.braveKey as string) });
+    if (xaiHasCredentials()) tasks.push({ provider: 'xai', promise: searchXAI(args.query, limit) });
     if (tasks.length >= 1) {
       const diagnostics: SearchDiagnostics = {
         query: args.query,
         preferred_provider: cfg.preferred,
-        provider_order: tasks.map(t => t.provider).filter((p): p is 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' => p !== 'ddg_html'),
+        provider_order: tasks.map(t => t.provider).filter((p): p is 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai' => p !== 'ddg_html' && p !== 'multi'),
         attempted: [],
         selected_provider: 'multi' as SearchProvider,
       };
@@ -1000,6 +1040,10 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
       diagnostics.attempted.push({ provider, status: 'skipped', reason: 'missing_brave_api_key' });
       continue;
     }
+    if (provider === 'xai' && !xaiHasCredentials()) {
+      diagnostics.attempted.push({ provider, status: 'skipped', reason: 'missing_xai_credentials' });
+      continue;
+    }
 
     const started = Date.now();
     try {
@@ -1057,6 +1101,19 @@ export async function executeWebSearch(args: { query: string; max_results?: numb
         });
         diagnostics.selected_provider = 'brave';
         res.data = { ...(res.data || {}), provider: 'brave', search_diagnostics: diagnostics };
+        return res;
+      }
+      if (provider === 'xai') {
+        const res = await searchXAI(args.query, limit);
+        const resultCount = Array.isArray(res.data?.results) ? res.data.results.length : 0;
+        diagnostics.attempted.push({
+          provider,
+          status: 'success',
+          duration_ms: Date.now() - started,
+          result_count: resultCount,
+        });
+        diagnostics.selected_provider = 'xai';
+        res.data = { ...(res.data || {}), provider: 'xai', search_diagnostics: diagnostics };
         return res;
       }
       if (provider === 'ddg') {
@@ -1710,14 +1767,14 @@ export async function executeWebFetch(
 export const webSearchTool = {
   name: 'web_search',
   get description() {
-    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. Defaults to multi-engine mode across every configured credentialed provider and merges deduplicated results. Pass provider to force one engine, or provider:"multi" to force all configured engines. For complex research, call with different query angles and web_fetch the most relevant URLs.`;
+    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. Defaults to multi-engine mode across every configured credentialed provider, including xAI X Search when xAI credentials are present, and merges deduplicated results. Pass provider to force one engine, or provider:"multi" to force all configured engines. For complex research, call with different query angles and web_fetch the most relevant URLs.`;
   },
   execute: executeWebSearch,
   schema: {
     query: 'string (required) - Search query',
     max_results: 'number (optional, default 5) - Max results to return',
     multi_engine: 'boolean (optional, default true) - Pass false to use only the preferred search provider from Settings',
-    provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, multi. Use a provider name for single-provider search; use multi for all configured engines',
+    provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, xai, multi. Use a provider name for single-provider search; use multi for all configured engines',
   },
   jsonSchema: {
     type: 'object',
@@ -1728,7 +1785,7 @@ export const webSearchTool = {
       multi_engine: { type: 'boolean', description: 'Default true. Set false to use only the preferred search provider from Settings.' },
       provider: {
         type: 'string',
-        enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg'],
+        enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'],
         description: 'Optional provider selector. Use multi for every configured provider, or a provider name for one provider.',
       },
     },
@@ -1746,7 +1803,7 @@ export const webSearchSingleTool = {
   schema: {
     query: 'string (required) - Search query',
     max_results: 'number (optional, default 5) - Max results to return',
-    provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg. Omit to use Settings preferred provider',
+    provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, xai. Omit to use Settings preferred provider',
   },
   jsonSchema: {
     type: 'object',
@@ -1756,7 +1813,7 @@ export const webSearchSingleTool = {
       max_results: { type: 'number', description: 'Maximum results to return. Default 5, max 10.' },
       provider: {
         type: 'string',
-        enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg'],
+        enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'],
         description: 'Optional provider override. Omit to use Settings preferred provider.',
       },
     },
@@ -1767,7 +1824,7 @@ export const webSearchSingleTool = {
 export const webSearchMultiTool = {
   name: 'web_search_multi',
   get description() {
-    return `Search using every configured credentialed provider in parallel, then merge deduplicated results. Configured providers: ${getSearchProvidersSummary()}.`;
+    return `Search using every configured credentialed provider in parallel, including xAI X Search when connected, then merge deduplicated results. Configured providers: ${getSearchProvidersSummary()}.`;
   },
   execute: (args: { query: string; max_results?: number }) =>
     executeWebSearch({ ...args, provider: 'multi' }),

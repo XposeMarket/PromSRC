@@ -1,0 +1,356 @@
+import { appendAuditEntry } from './audit-log';
+import { activateToolCategory, getSessionMutationScope, setSessionMutationScope } from './session';
+import { isPublicDistributionBuild } from '../runtime/distribution.js';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+
+export interface DevSourceEditEvidence {
+  file: string;
+  lines?: string;
+  finding: string;
+}
+
+export interface DevSourceEditPlan {
+  userRequest?: string;
+  reasoning?: string;
+  evidence: DevSourceEditEvidence[];
+  currentState?: string;
+  fix?: string;
+  steps: string[];
+  verification: string[];
+  expectedWorkflow: string[];
+  completionNoteTag: string;
+}
+
+export interface DevSourceEditScope {
+  devEditId: string;
+  allowedFiles: string[];
+  verificationCommand?: string;
+  verificationProfile?: DevSourceVerificationProfile;
+  reason?: string;
+  plan?: DevSourceEditPlan;
+  planHash?: string;
+  expiresAt: number;
+  approvalId?: string;
+}
+
+export interface DevSourceEditContinuation {
+  id: string;
+  sessionId: string;
+  approvalId?: string;
+  planHash?: string;
+  status: 'approved' | 'applying_live' | 'complete';
+  completionNoteTag: string;
+  plan?: DevSourceEditPlan;
+  allowedFiles: string[];
+  affectedFiles?: string[];
+  changedSurfaces?: string[];
+  summary?: string;
+  verification?: string[];
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  completionNote?: string;
+}
+
+const grants = new Map<string, DevSourceEditScope>();
+const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
+export type DevSourceVerificationProfile = 'backend_build' | 'webui_sync_check' | 'full_build' | 'none';
+
+function normalizePath(input: unknown): string {
+  return String(input || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/$/, '');
+}
+
+function normalizeAllowedFiles(files: unknown): string[] {
+  const rawFiles = Array.isArray(files) ? files : [];
+  return Array.from(new Set(
+    rawFiles
+      .map(normalizePath)
+      .filter((file) => file.startsWith('src/') || file.startsWith('web-ui/')),
+  ));
+}
+
+function normalizeTextArray(value: unknown, fallback: string[] = []): string[] {
+  const raw = Array.isArray(value) ? value : fallback;
+  return raw.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 12);
+}
+
+function normalizeEvidence(value: unknown): DevSourceEditEvidence[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item: any) => ({
+    file: normalizePath(item?.file || item?.path),
+    lines: String(item?.lines || item?.line || '').trim() || undefined,
+    finding: String(item?.finding || item?.reason || item?.summary || '').trim(),
+  })).filter((item) => item.file && item.finding).slice(0, 12);
+}
+
+function stableHash(value: unknown): string {
+  return crypto.createHash('sha256').update(JSON.stringify(value || {})).digest('hex').slice(0, 16);
+}
+
+export function normalizeDevSourceEditPlan(input: {
+  plan?: unknown;
+  userRequest?: unknown;
+  reasoning?: unknown;
+  evidence?: unknown;
+  currentState?: unknown;
+  fix?: unknown;
+  steps?: unknown;
+  verification?: unknown;
+  expectedWorkflow?: unknown;
+  completionNoteTag?: unknown;
+  allowedFiles: string[];
+  reason?: string;
+  verificationCommand?: string;
+  verificationProfile?: DevSourceVerificationProfile;
+}): DevSourceEditPlan {
+  const raw = input.plan && typeof input.plan === 'object' ? input.plan as any : {};
+  const userRequest = String(raw.user_request || raw.userRequest || input.userRequest || '').trim();
+  const reasoning = String(raw.reasoning || raw.reason || input.reasoning || input.reason || '').trim();
+  const evidence = normalizeEvidence(raw.evidence || input.evidence);
+  const currentState = String(raw.current_state || raw.currentState || input.currentState || '').trim();
+  const fix = String(raw.fix || input.fix || '').trim();
+  const verificationFallback = [
+    input.verificationCommand,
+    input.verificationProfile ? `verification_profile:${input.verificationProfile}` : '',
+  ].filter(Boolean).map(String);
+  const steps = normalizeTextArray(raw.steps || raw.plan_steps || input.steps, [
+    'Inspect the approved source files and confirm the existing behavior.',
+    'Apply the smallest scoped patch that satisfies the request.',
+    'Run the selected verification.',
+    'Apply live dev changes with prom_apply_dev_changes.',
+    'Write the dev_edit_complete note and summarize the result.',
+  ]);
+  const verification = normalizeTextArray(raw.verification || raw.verify || input.verification, verificationFallback);
+  const expectedWorkflow = normalizeTextArray(raw.expected_workflow || raw.expectedWorkflow || raw.after_edit_workflow || raw.afterEditWorkflow || input.expectedWorkflow, [
+    'After approval, Prometheus unlocks source-write tools only for the approved files in this chat/session.',
+    'Prometheus applies the scoped patch, rereads the changed areas when useful, and runs the approved verification or verify_only preflight.',
+    'When verification is clean, prom_apply_dev_changes apply_live syncs/builds and restarts or reloads the affected Prometheus surfaces.',
+    'After restart/reload, Prometheus writes the approved completion note, closes the declared dev-edit plan, and replies with what changed plus live status.',
+  ]);
+  const completionNoteTag = String(raw.completion_note_tag || raw.completionNoteTag || input.completionNoteTag || 'dev_edit_complete')
+    .trim()
+    .replace(/\s+/g, '_')
+    .toLowerCase() || 'dev_edit_complete';
+
+  return {
+    userRequest: userRequest || undefined,
+    reasoning: reasoning || input.reason || undefined,
+    evidence,
+    currentState: currentState || undefined,
+    fix: fix || undefined,
+    steps,
+    verification,
+    expectedWorkflow,
+    completionNoteTag,
+  };
+}
+
+function getLifecycleStateRoot(): string {
+  if (process.env.PROMETHEUS_DATA_DIR) return process.env.PROMETHEUS_DATA_DIR;
+  if (process.env.PROMETHEUS_APP_ROOT) return process.env.PROMETHEUS_APP_ROOT;
+  return path.resolve(__dirname, '..', '..');
+}
+
+function getContinuationStorePath(): string {
+  const dir = path.join(getLifecycleStateRoot(), '.prometheus');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'dev-edit-continuations.json');
+}
+
+function readContinuationStore(): { continuations: DevSourceEditContinuation[] } {
+  const p = getContinuationStorePath();
+  if (!fs.existsSync(p)) return { continuations: [] };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return { continuations: Array.isArray(parsed?.continuations) ? parsed.continuations : [] };
+  } catch {
+    return { continuations: [] };
+  }
+}
+
+function writeContinuationStore(store: { continuations: DevSourceEditContinuation[] }): void {
+  const p = getContinuationStorePath();
+  const tmp = `${p}.tmp-${Date.now()}`;
+  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
+  fs.renameSync(tmp, p);
+}
+
+export function upsertDevSourceEditContinuation(record: DevSourceEditContinuation): DevSourceEditContinuation {
+  const store = readContinuationStore();
+  const idx = store.continuations.findIndex((item) => item.id === record.id);
+  const next = { ...record, updatedAt: Date.now() };
+  if (idx >= 0) store.continuations[idx] = { ...store.continuations[idx], ...next };
+  else store.continuations.push(next);
+  store.continuations = store.continuations.slice(-100);
+  writeContinuationStore(store);
+  return next;
+}
+
+export function getLatestPendingDevSourceEditContinuation(sessionId?: string): DevSourceEditContinuation | null {
+  const sid = String(sessionId || '').trim();
+  const items = readContinuationStore().continuations
+    .filter((item) => item && item.status !== 'complete')
+    .filter((item) => !sid || item.sessionId === sid)
+    .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
+  return items[0] || null;
+}
+
+export function getDevSourceEditContinuation(id?: string): DevSourceEditContinuation | null {
+  const clean = String(id || '').trim();
+  if (!clean) return null;
+  return readContinuationStore().continuations.find((item) => item.id === clean) || null;
+}
+
+export function markDevSourceEditContinuationComplete(input: {
+  id?: string;
+  sessionId?: string;
+  tag?: string;
+  note?: string;
+}): DevSourceEditContinuation | null {
+  const tag = String(input.tag || '').trim().replace(/\s+/g, '_').toLowerCase();
+  const direct = getDevSourceEditContinuation(input.id);
+  const pending = direct || getLatestPendingDevSourceEditContinuation(input.sessionId);
+  if (!pending) return null;
+  if (tag && tag !== String(pending.completionNoteTag || '').trim().toLowerCase()) return null;
+  return upsertDevSourceEditContinuation({
+    ...pending,
+    status: 'complete',
+    completedAt: Date.now(),
+    completionNote: String(input.note || '').trim() || undefined,
+  });
+}
+
+export function createDevSourceEditApprovalScope(input: {
+  sessionId: string;
+  files: unknown;
+  verificationCommand?: unknown;
+  verificationProfile?: unknown;
+  reason?: unknown;
+  plan?: unknown;
+  userRequest?: unknown;
+  reasoning?: unknown;
+  evidence?: unknown;
+  currentState?: unknown;
+  fix?: unknown;
+  steps?: unknown;
+  verification?: unknown;
+  expectedWorkflow?: unknown;
+  completionNoteTag?: unknown;
+  approvalId?: string;
+  ttlMs?: number;
+}): DevSourceEditScope {
+  if (isPublicDistributionBuild()) {
+    throw new Error('Dev source edit approvals are disabled in the public distribution build.');
+  }
+  const sessionId = String(input.sessionId || '').trim();
+  if (!sessionId) throw new Error('sessionId is required');
+  const allowedFiles = normalizeAllowedFiles(input.files);
+  if (allowedFiles.length === 0) {
+    throw new Error('At least one src/ or web-ui/ file is required.');
+  }
+  const requestedProfile = String(input.verificationProfile || '').trim().toLowerCase();
+  const verificationProfile = ['backend_build', 'webui_sync_check', 'full_build', 'none'].includes(requestedProfile)
+    ? requestedProfile as DevSourceVerificationProfile
+    : undefined;
+  const verificationCommand = String(input.verificationCommand || '').trim() || undefined;
+  const reason = String(input.reason || '').trim() || undefined;
+  const plan = normalizeDevSourceEditPlan({
+    plan: input.plan,
+    userRequest: input.userRequest,
+    reasoning: input.reasoning,
+    evidence: input.evidence,
+    currentState: input.currentState,
+    fix: input.fix,
+    steps: input.steps,
+    verification: input.verification,
+    expectedWorkflow: input.expectedWorkflow,
+    completionNoteTag: input.completionNoteTag,
+    allowedFiles,
+    reason,
+    verificationCommand,
+    verificationProfile,
+  });
+  const planHash = stableHash(plan);
+  return {
+    devEditId: `dev_edit_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
+    allowedFiles,
+    verificationCommand,
+    verificationProfile,
+    reason,
+    plan,
+    planHash,
+    approvalId: input.approvalId,
+    expiresAt: Date.now() + Math.max(60_000, Number(input.ttlMs || DEFAULT_TTL_MS) || DEFAULT_TTL_MS),
+  };
+}
+
+export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEditScope, approvedBy = 'user'): DevSourceEditScope {
+  if (isPublicDistributionBuild()) {
+    throw new Error('Dev source edit approvals are disabled in the public distribution build.');
+  }
+  const sid = String(sessionId || '').trim();
+  if (!sid) throw new Error('sessionId is required');
+  const currentScope = getSessionMutationScope(sid);
+  const mergedFiles = Array.from(new Set([
+    ...(currentScope?.allowedFiles || []),
+    ...scope.allowedFiles,
+  ]));
+  setSessionMutationScope(sid, { allowedFiles: mergedFiles, allowedDirs: currentScope?.allowedDirs || [] });
+  activateToolCategory(sid, 'prometheus_source_read');
+  activateToolCategory(sid, 'prometheus_source_write');
+  const grant = { ...scope, allowedFiles: mergedFiles };
+  grants.set(sid, grant);
+  upsertDevSourceEditContinuation({
+    id: grant.devEditId,
+    sessionId: sid,
+    approvalId: grant.approvalId,
+    planHash: grant.planHash,
+    status: 'approved',
+    completionNoteTag: grant.plan?.completionNoteTag || 'dev_edit_complete',
+    plan: grant.plan,
+    allowedFiles: grant.allowedFiles,
+    verification: grant.plan?.verification,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  appendAuditEntry({
+    sessionId: sid,
+    actionType: 'approval_resolved',
+    toolName: 'request_dev_source_edit',
+    toolArgs: {
+      allowedFiles: scope.allowedFiles,
+      verificationCommand: scope.verificationCommand,
+      verificationProfile: scope.verificationProfile,
+      devEditId: scope.devEditId,
+      planHash: scope.planHash,
+      approvedBy,
+    },
+    policyTier: 'commit',
+    approvalStatus: 'approved',
+    resultSummary: `Granted dev source edit scope for ${scope.allowedFiles.length} file(s).`,
+  });
+  return grant;
+}
+
+export function getDevSourceEditGrant(sessionId: string): DevSourceEditScope | null {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const grant = grants.get(sid);
+  if (!grant) return null;
+  if (grant.expiresAt <= Date.now()) {
+    grants.delete(sid);
+    return null;
+  }
+  return grant;
+}
+
+export function hasDevSourceEditGrant(sessionId: string): boolean {
+  return !!getDevSourceEditGrant(sessionId);
+}

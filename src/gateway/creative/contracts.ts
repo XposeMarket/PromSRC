@@ -642,7 +642,7 @@ export function summarizeCreativeSceneDoc(doc: any): CreativeSceneSummary {
 
 // ── Composition (multi-clip timeline) ────────────────────────────────────────
 
-export type CreativeClipLane = 'html-motion' | 'remotion';
+export type CreativeClipLane = 'html-motion' | 'remotion' | 'hyperframes';
 
 export type CreativeTransitionKind =
   | 'cut'
@@ -673,7 +673,15 @@ export type CreativeTrack = {
 
 export type CreativeClipSource =
   | { kind: 'html-motion'; clipPath: string; compositionId?: string | null }
-  | { kind: 'remotion'; templateId: string; presetId?: string | null; input: any };
+  | { kind: 'remotion'; templateId: string; presetId?: string | null; input: any }
+  | {
+      kind: 'hyperframes';
+      html?: string;
+      projectPath?: string | null;
+      entryFile?: string | null;
+      compositionId?: string | null;
+      variables?: Record<string, any>;
+    };
 
 export type CreativeClip = {
   id: string;
@@ -772,6 +780,16 @@ function normalizeClipSource(input: any): CreativeClipSource {
       input: cloneData(safe.input ?? {}),
     };
   }
+  if (kindRaw === 'hyperframes') {
+    return {
+      kind: 'hyperframes',
+      html: typeof safe.html === 'string' ? safe.html : '',
+      projectPath: typeof safe.projectPath === 'string' ? safe.projectPath : null,
+      entryFile: typeof safe.entryFile === 'string' ? safe.entryFile : null,
+      compositionId: typeof safe.compositionId === 'string' ? safe.compositionId : null,
+      variables: isPlainObject(safe.variables) ? cloneData(safe.variables) : {},
+    };
+  }
   return {
     kind: 'html-motion',
     clipPath: '',
@@ -785,7 +803,7 @@ export function normalizeCreativeClip(input: any, fallback: { fps?: number } = {
   let outMs = Math.max(inMs, Number(safe.outMs) || 0);
   if (outMs <= inMs) outMs = inMs + Math.max(1, Number(safe.durationMs) || 4000);
   const laneRaw = String(safe.lane || safe.source?.kind || '').trim().toLowerCase();
-  const lane = (['html-motion', 'remotion'].includes(laneRaw) ? laneRaw : 'html-motion') as CreativeClipLane;
+  const lane = (['html-motion', 'remotion', 'hyperframes'].includes(laneRaw) ? laneRaw : 'html-motion') as CreativeClipLane;
   return {
     id: normalizeString(safe.id, '') || compositionId('clip'),
     trackId: normalizeString(safe.trackId, ''),

@@ -21,14 +21,21 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { getConfig } from '../../config/config';
+import { getVault } from '../../security/vault';
+import {
+  getProviderStaticModels,
+  listProviderDescriptors,
+  listProviderSecretFieldPaths,
+} from '../../providers/provider-registry.js';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { resolveGatewayAuthToken } from '../gateway-auth';
-import { getLinkedSession, unlinkTelegramSession, getLastMainSessionId, linkTelegramSession, setSessionChannelHint, getSessionChannelHint } from './broadcaster';
+import { getLinkedSession, unlinkTelegramSession, getLastMainSessionId, linkTelegramSession, setModelBusy, setSessionChannelHint, getSessionChannelHint } from './broadcaster';
 import { getCreativeMode, getSession, sessionExists, type Session } from '../session';
 import { getProject, listProjects, type Project } from '../projects/project-store.js';
 import {
   registerLiveRuntime,
   finishLiveRuntime,
+  updateLiveRuntimeCheckpoint,
   listLiveRuntimes,
   getLiveRuntime,
   abortLiveRuntime,
@@ -42,6 +49,9 @@ import {
 	  formatTelegramToolResult,
 	} from './telegram-tool-log';
 import { sanitizeFinalReply, stripInternalToolNotes } from './reply-processor';
+import { createMessageCoalescer, type MessageCoalescer } from './message-coalescer';
+import { createTelegramStreamingMessage } from './telegram-streaming-message';
+import { getHumanDelayMs, sleep, type HumanDelayConfig } from './human-delay';
 
 const CREATIVE_TELEGRAM_PROGRESS_INTERVAL = 10;
 const CREATIVE_TELEGRAM_PROGRESS_MIN_INTERVAL_MS = 1500;
@@ -318,6 +328,9 @@ interface TelegramDeps {
     executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
     toolFilter?: string[],
     attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+    reasoningOptions?: any,
+    providerOverride?: string,
+    callerOnToken?: (token: string) => void,
   ) => Promise<{ type: string; text: string; thinking?: string }>;
   runInteractiveTurn?: (
     message: string,
@@ -328,7 +341,12 @@ interface TelegramDeps {
     callerContext?: string,
     reasoningOptions?: any,
     attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+    attachmentPreviews?: any[],
     modelOverride?: string,
+    flags?: any,
+    turnOrigin?: any,
+    requestMeta?: { clientRequestId?: string },
+    callerOnToken?: (token: string) => void,
   ) => Promise<{ type: string; text: string; thinking?: string; toolResults?: any[] }>;
   addMessage: (
     sessionId: string,
@@ -400,6 +418,31 @@ const BROWSER_MAX_BUTTONS_TOTAL = 40;
 const BROWSER_MAX_TEXT_PREVIEW = 2500; // bytes per page
 const TELEGRAM_ALLOWED_UPDATES = ['message', 'callback_query'];
 
+const TELEGRAM_LOCAL_MODEL_PROVIDERS = new Set(['ollama', 'llama_cpp', 'lm_studio']);
+const TELEGRAM_PROVIDER_OAUTH_VAULT_KEYS: Record<string, string[]> = {
+  openai_codex: ['openai.oauth_tokens'],
+  anthropic: ['anthropic.oauth_tokens'],
+  xai: ['xai.oauth_tokens'],
+};
+const TELEGRAM_PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Anthropic Claude',
+  openai: 'OpenAI API',
+  openai_codex: 'OpenAI Codex',
+  xai: 'xAI Grok',
+  ollama: 'Ollama',
+  llama_cpp: 'llama.cpp',
+  lm_studio: 'LM Studio',
+};
+const TELEGRAM_PROVIDER_ICONS: Record<string, string> = {
+  anthropic: '🤖',
+  openai: '🔴',
+  openai_codex: '💬',
+  xai: '✕',
+  ollama: '🦙',
+  llama_cpp: '📚',
+  lm_studio: '🎨',
+};
+
 // callback_data prefix scheme (all path keys are 8-char hashes stored in _pathKeyMap):
 //   fb:dir:<pathKey>       — navigate into a directory
 //   fb:file:<pathKey>      — open/preview a file (page 0)
@@ -426,6 +469,87 @@ export class TelegramChannel {
   private creativeProgressStarted = new Set<string>();
   private creativeProgressLastSentAt = new Map<string, number>();
   private screenshotBrowserSelections = new Map<string, { sessionId: string; createdAt: number }>();
+  private processedTelegramUpdateIds = new Set<number>();
+  private processedTelegramMessageKeys = new Map<string, number>();
+
+  // ── Human-feel messaging (inbound debounce + outbound block streaming + humanDelay + abort) ──
+  /** Tunables. Can be hot-overridden from config later; sensible defaults below. */
+  private humanFeelConfig: {
+    inboundDebounceMs: number;
+    humanDelay: HumanDelayConfig;
+    blockChunking: { minChars: number; maxChars: number; idleMs: number };
+    abortTriggers: ReadonlySet<string>;
+  } = {
+    inboundDebounceMs: 1500,
+    humanDelay: { mode: 'natural' as const, minMs: 800, maxMs: 2500 },
+    blockChunking: { minChars: 800, maxChars: 1200, idleMs: 1000 },
+    abortTriggers: new Set<string>([
+      'stop', 'wait', 'abort', 'cancel', 'pause', 'halt',
+      'nevermind', 'never mind', 'nvm',
+      'stop please', 'please stop',
+      'stop prom', 'prom stop', 'stop prometheus', 'prometheus stop',
+    ]),
+  };
+
+  /** Per-conversation inbound debounce buffer. Key: `${userId}:${chatId}`. */
+  private inboundCoalescer: MessageCoalescer = createMessageCoalescer({
+    debounceMs: this.humanFeelConfig.inboundDebounceMs,
+    onFlush: async (key, messages) => {
+      await this.flushCoalescedMessages(key, messages);
+    },
+    onError: (err, key, messages) => {
+      console.error(`[Telegram] inbound coalescer flush failed for ${key}:`, err, '— messages:', messages.length);
+    },
+  });
+
+  /**
+   * In-flight AI runs that can be aborted by a stop trigger. Key: `${userId}:${chatId}`.
+   * Stores a mutable abort sentinel — the run polls `.aborted` to bail out cooperatively.
+   * Calling `.abort()` flips the flag; the run cleans up in its existing finally block.
+   */
+  private activeRuns = new Map<string, { aborted: boolean; abort: () => void }>();
+
+  /** Build the debounce/abort key from userId + chatId. */
+  private humanFeelKey(userId: number, chatId: number): string {
+    return `${userId}:${chatId}`;
+  }
+
+  /** Returns true if `text` is a recognized stop/abort phrase. Whitespace + punctuation tolerant. */
+  private isAbortMessage(text: string): boolean {
+    const normalized = String(text || '')
+      .toLowerCase()
+      .replace(/[.!?…,;:'"`’”)\]}]+$/u, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return false;
+    return this.humanFeelConfig.abortTriggers.has(normalized);
+  }
+
+  /**
+   * Called when the inbound debounce window expires for a session — joins
+   * all buffered user messages into a single turn and routes them to the
+   * normal chat handler (placeholder; the concrete routing is filled in
+   * where the AI dispatch happens further down in handleIncomingMessage).
+   *
+   * Stored on `this.pendingCoalesceDispatch` so the message handler can
+   * register a one-shot continuation tied to a specific message context
+   * (chatId, user, etc.) without re-deriving it from the key.
+   */
+  private pendingCoalesceDispatch = new Map<string, (combined: string) => Promise<void>>();
+  private async flushCoalescedMessages(key: string, messages: string[]): Promise<void> {
+    const dispatch = this.pendingCoalesceDispatch.get(key);
+    if (!dispatch) {
+      console.warn(`[Telegram] coalescer fired for ${key} but no dispatcher registered — dropping ${messages.length} message(s)`);
+      return;
+    }
+    this.pendingCoalesceDispatch.delete(key);
+    const combined = messages.length === 1 ? messages[0] : messages.join('\n');
+    try {
+      await dispatch(combined);
+    } catch (err) {
+      console.error(`[Telegram] coalesced dispatch failed for ${key}:`, err);
+    }
+  }
 
   private getTelegramSessionId(userId: number, chatId?: number): string {
     const linked = getLinkedSession(userId);
@@ -468,6 +592,122 @@ export class TelegramChannel {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  private hasSavedProviderSecretConfig(providerConfig: any, field: string): boolean {
+    const value = providerConfig?.[field];
+    if (typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    return !!trimmed && (trimmed.startsWith('vault:') || trimmed.startsWith('env:') || trimmed.length > 0);
+  }
+
+  private listCredentialedModelProviderIds(): Set<string> {
+    const cfg = getConfig().getConfig() as any;
+    const configuredProviders = cfg?.llm?.providers && typeof cfg.llm.providers === 'object'
+      ? cfg.llm.providers
+      : {};
+    const keys = new Set(getVault(getConfig().getConfigDir()).keys());
+    const ids = new Set<string>();
+
+    for (const [providerId, field] of listProviderSecretFieldPaths()) {
+      if (keys.has(`llm.${providerId}.${field}`)) ids.add(providerId);
+      if (this.hasSavedProviderSecretConfig(configuredProviders?.[providerId], field)) ids.add(providerId);
+    }
+    for (const [providerId, vaultKeys] of Object.entries(TELEGRAM_PROVIDER_OAUTH_VAULT_KEYS)) {
+      if (vaultKeys.some((key) => keys.has(key))) ids.add(providerId);
+    }
+    return ids;
+  }
+
+  private getProviderLabel(providerId: string): string {
+    const descriptor = listProviderDescriptors().find((p: any) => p.id === providerId || p.ownership?.providerIds?.includes(providerId));
+    return TELEGRAM_PROVIDER_LABELS[providerId] || descriptor?.name || providerId;
+  }
+
+  private getProviderIcon(providerId: string): string {
+    return TELEGRAM_PROVIDER_ICONS[providerId] || '🧠';
+  }
+
+  private normalizeProviderEndpoint(raw: unknown, suffix: string): string {
+    const base = String(raw || '').trim().replace(/\/+$/, '');
+    if (!base) return suffix;
+    return base.endsWith(suffix) ? base : `${base}${suffix}`;
+  }
+
+  private async listLocalProviderModels(providerId: string, cfg: any): Promise<string[]> {
+    try {
+      if (providerId === 'ollama') {
+        const endpoint = cfg.llm?.providers?.ollama?.endpoint || cfg.ollama?.endpoint || 'http://localhost:11434';
+        const resp = await fetch(`${String(endpoint).replace(/\/+$/, '')}/api/tags`);
+        if (!resp.ok) return [];
+        const d: any = await resp.json();
+        return (d.models || []).map((m: any) => String(m?.name || '')).filter(Boolean);
+      }
+      if (providerId === 'llama_cpp') {
+        const endpoint = this.normalizeProviderEndpoint(cfg.llm?.providers?.llama_cpp?.endpoint || 'http://localhost:8080', '/v1');
+        const resp = await fetch(`${endpoint}/models`);
+        if (!resp.ok) return [];
+        const d: any = await resp.json();
+        return (d.data || []).map((m: any) => String(m?.id || '')).filter(Boolean);
+      }
+      if (providerId === 'lm_studio') {
+        const endpoint = this.normalizeProviderEndpoint(cfg.llm?.providers?.lm_studio?.endpoint || 'http://localhost:1234', '/v1');
+        const resp = await fetch(`${endpoint}/models`);
+        if (!resp.ok) return [];
+        const d: any = await resp.json();
+        return (d.data || []).map((m: any) => String(m?.id || '')).filter(Boolean);
+      }
+    } catch {}
+    return [];
+  }
+
+  private async listTelegramProviderModels(providerId: string): Promise<string[]> {
+    const cfg = getConfig().getConfig() as any;
+    if (TELEGRAM_LOCAL_MODEL_PROVIDERS.has(providerId)) {
+      return this.listLocalProviderModels(providerId, cfg);
+    }
+    if (!this.listCredentialedModelProviderIds().has(providerId)) return [];
+    try {
+      const { buildProviderById } = require('../../providers/factory.js');
+      const provider = buildProviderById(providerId);
+      const live = (await provider.listModels())
+        .map((m: any) => String(m?.name || m?.id || ''))
+        .filter(Boolean);
+      if (live.length) return live;
+    } catch {}
+    return getProviderStaticModels(providerId);
+  }
+
+  private async buildTelegramModelProviderMenu(): Promise<Array<{ id: string; name: string; connected: boolean }>> {
+    const cfg = getConfig().getConfig() as any;
+    const credentialed = this.listCredentialedModelProviderIds();
+    const providerIds = new Set<string>(credentialed);
+    const descriptors = listProviderDescriptors();
+    for (const descriptor of descriptors) {
+      for (const providerId of descriptor.ownership?.providerIds || []) {
+        if (credentialed.has(providerId)) providerIds.add(providerId);
+      }
+    }
+
+    const localModelEntries = await Promise.all([...TELEGRAM_LOCAL_MODEL_PROVIDERS].map(async (providerId) => ({
+      providerId,
+      models: await this.listLocalProviderModels(providerId, cfg),
+    })));
+    for (const entry of localModelEntries) {
+      if (entry.models.length) providerIds.add(entry.providerId);
+    }
+
+    const catalogOrder = new Map<string, number>();
+    descriptors.forEach((descriptor: any, index: number) => {
+      catalogOrder.set(descriptor.id, index);
+      for (const ownedId of descriptor.ownership?.providerIds || []) {
+        if (!catalogOrder.has(ownedId)) catalogOrder.set(ownedId, index);
+      }
+    });
+
+    return [...providerIds]
+      .sort((a, b) => (catalogOrder.get(a) ?? 9999) - (catalogOrder.get(b) ?? 9999) || a.localeCompare(b))
+      .map((id) => ({ id, name: `${this.getProviderIcon(id)} ${this.getProviderLabel(id)}`, connected: true }));
   }
 
   private compactTelegramButtonText(value: string, max = 54): string {
@@ -1223,8 +1463,16 @@ export class TelegramChannel {
     sendSSE: (event: string, data: any) => void;
     callerContext?: string;
     attachments?: Array<{ base64: string; mimeType: string; name: string }>;
+    /** Optional sink for live-stream tokens (used for outbound block chunking). */
+    callerOnToken?: (token: string) => void;
+    /**
+     * Optional externally-owned abort signal. When provided, the caller can flip
+     * `.aborted = true` (or via abortLiveRuntime) to interrupt the run mid-stream.
+     * If omitted, a fresh signal is created internally.
+     */
+    externalAbortSignal?: { aborted: boolean };
   }): Promise<{ aborted: boolean; result: { type: string; text: string; thinking?: string; toolResults?: any[] } }> {
-    const abortSignal = { aborted: false };
+    const abortSignal = params.externalAbortSignal ?? { aborted: false };
     const runtimeId = registerLiveRuntime({
       kind: 'main_chat',
       label: 'Main chat',
@@ -1233,34 +1481,290 @@ export class TelegramChannel {
       chatId: params.chatId,
       detail: String(params.message || '').slice(0, 160),
       abortSignal,
+      recoveryPolicy: 'mark_interrupted',
+      recoveryData: {
+        message: String(params.message || ''),
+        chatId: params.chatId,
+      },
     });
+    setModelBusy(true);
+    const rawSendSSE = params.sendSSE;
+    // Intercept sendSSE('token') events — same pattern as OpenClaw's onPartialReply hook.
+    // This is the reliable path: tokens are already proven to flow through sendSSE even
+    // when callerOnToken positional-arg alignment is fragile across the dep-injected chain.
+    const checkpointingSendSSE = (event: string, data: any) => {
+      const checkpoint: Record<string, any> = { event, at: Date.now() };
+      if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
+      if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
+      if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+      updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
+      rawSendSSE(event, data);
+      // Feed token events directly to the caller's streaming sink (onPartialReply equivalent).
+      if (event === 'token' && params.callerOnToken && data?.text) {
+        try { params.callerOnToken(String(data.text)); } catch { /* never let stream errors break the turn */ }
+      }
+    };
     try {
       const result = this.deps.runInteractiveTurn
         ? await this.deps.runInteractiveTurn(
-            params.message,
-            params.sessionId,
-            params.sendSSE,
-            undefined,
-            abortSignal,
-            params.callerContext,
-            undefined,
-            params.attachments,
+            params.message,              // 1. message
+            params.sessionId,            // 2. sessionId
+            checkpointingSendSSE,        // 3. sendSSE
+            undefined,                   // 4. pinnedMessages
+            abortSignal,                 // 5. abortSignal
+            params.callerContext,        // 6. callerContext
+            undefined,                   // 7. reasoningOptions
+            params.attachments,          // 8. attachments
+            undefined,                   // 9. attachmentPreviews
+            undefined,                   // 10. modelOverride
+            undefined,                   // 11. flags
+            {                            // 12. turnOrigin
+              channel: 'telegram',
+              surface: 'bot',
+              device: 'phone',
+              chatId: String(params.chatId),
+              label: 'Telegram',
+              source: 'telegram_bot',
+            },
+            undefined,                   // 13. requestMeta
+            params.callerOnToken,        // 14. callerOnToken ✓
           )
         : await this.deps.handleChat(
-            params.message,
-            params.sessionId,
-            params.sendSSE,
-            undefined,
-            abortSignal,
-            params.callerContext,
-            undefined,
-            undefined,
-            undefined,
-            params.attachments,
+            params.message,              // 1. message
+            params.sessionId,            // 2. sessionId
+            checkpointingSendSSE,        // 3. sendSSE
+            undefined,                   // 4. pinnedMessages
+            abortSignal,                 // 5. abortSignal
+            params.callerContext,        // 6. callerContext
+            undefined,                   // 7. modelOverride
+            undefined,                   // 8. executionMode
+            undefined,                   // 9. toolFilter
+            params.attachments,          // 10. attachments
+            undefined,                   // 11. reasoningOptions
+            undefined,                   // 12. providerOverride
+            params.callerOnToken,        // 13. callerOnToken
           );
       return { aborted: abortSignal.aborted, result };
     } finally {
+      setModelBusy(false);
       finishLiveRuntime(runtimeId);
+    }
+  }
+
+  /**
+   * Unified AI dispatch path used by both the synchronous (attachment) flow
+   * and the debounced (text-only) flow in `handleIncomingMessage`.
+   *
+   * Wraps the model turn in:
+   *   - a per-conversation abort signal registered in `this.activeRuns` so a
+   *     fast-abort message can interrupt it
+   *   - a BlockChunker that turns the live token stream into paragraph-sized
+   *     message bubbles
+   *   - humanDelay between bubbles so they arrive in natural conversational
+   *     rhythm instead of all at once
+   *
+   * If the chunker emits at least one block before the run completes, the
+   * fallback `sendAiMessage(finalText)` is skipped (the user already saw the
+   * reply as it streamed). If the response was too short to cross the chunker's
+   * minChars threshold, no blocks are emitted and we fall back to the final
+   * single-message send so the reply still lands.
+   *
+   * All artifact-delivery (generated images/videos, presented files) and the
+   * cross-channel broadcast happen after the chunker is drained, matching
+   * the original ordering.
+   */
+  private async runDebouncedAiDispatch(args: {
+    userId: number;
+    chatId: number;
+    userName: string;
+    text: string;
+    effectiveText: string;
+    videoAttachment: { absPath: string; relPath: string; mimeType: string; sizeBytes: number } | null;
+    imageAttachment: { base64: string; mimeType: string; name: string } | null;
+    savedImageAttachment: { absPath: string; relPath: string; mimeType: string; sizeBytes: number } | null;
+    presentedFiles: Array<{ path: string; trigger: string }>;
+    generatedImages: any[];
+    generatedImageKeys: Set<string>;
+    generatedVideos: any[];
+    generatedVideoKeys: Set<string>;
+    sessionId: string;
+    sendSSE: (type: string, data: any) => void;
+  }): Promise<void> {
+    const {
+      userId, chatId, userName, text,
+      effectiveText,
+      videoAttachment, imageAttachment, savedImageAttachment,
+      presentedFiles, generatedImages, generatedVideos,
+      sessionId, sendSSE,
+    } = args;
+
+    const messageForModel = effectiveText;
+    const abortKey = this.humanFeelKey(userId, chatId);
+
+    // Register an abort signal so a stop trigger from this conversation can
+    // interrupt the model loop mid-stream.
+    const abortSignal: { aborted: boolean; abort: () => void } = {
+      aborted: false,
+      abort() { this.aborted = true; },
+    };
+    this.activeRuns.set(abortKey, abortSignal);
+
+    // Outbound live-streaming message editor — mirrors OpenClaw's draft-stream
+    // pattern. As tokens arrive we accumulate the full reply text and call
+    // `stream.update(fullText)`. Internally the stream throttles API calls to
+    // ~1 per second: the first commit is sendMessage (captures message_id);
+    // every subsequent commit is editMessageText against that same id, so the
+    // user sees ONE bubble that grows in place — like watching someone type
+    // into a Telegram message live. When the reply crosses ~4000 chars the
+    // stream rotates onto a new bubble (Telegram's per-message limit is 4096).
+    //
+    // The humanDelay only fires between bubbles (on rotation), not between
+    // edits to the same bubble — within-bubble pacing is governed entirely by
+    // the model's actual token generation rate.
+    let accumulatedReply = '';
+    const stream = createTelegramStreamingMessage({
+      apiCall: (method, body) => this.apiCall(method, body),
+      chatId,
+      maxChars: 4000,
+      throttleMs: 150,
+      renderText: (raw) => {
+        const sanitized = sanitizeFinalReply(raw || '').trim();
+        if (!sanitized) return { text: '' };
+        try {
+          const html = formatTelegramAiTextFromMarkdown(sanitized);
+          return html ? { text: html, parseMode: 'HTML' } : { text: sanitized };
+        } catch {
+          return { text: sanitized };
+        }
+      },
+      onMessageRotated: async () => {
+        // Bubble overflow → rotate to a new one with a humanDelay-style pause
+        // so the second bubble feels like a deliberate continuation rather
+        // than an instant follow-up.
+        const delayMs = getHumanDelayMs(this.humanFeelConfig.humanDelay);
+        if (delayMs > 0) {
+          await this.apiCall('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+          await sleep(delayMs);
+        }
+      },
+      warn: (msg) => { console.warn(`[Telegram] stream: ${msg}`); },
+    });
+
+	    try {
+	      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_close, desktop_screenshot, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
+      const isDesktopStatusCheck =
+	        /\b(vs code|vscode|codex)\b/i.test(text)
+	        && /\b(done|finished|complete|completed|responded)\b/i.test(text);
+	      const statusContext = isDesktopStatusCheck
+	        ? 'CONTEXT: This Telegram request is a desktop status check. First action should be desktop_screenshot (then desktop advisor flow), not browser tools.'
+	        : '';
+      const videoContext = videoAttachment
+	        ? `CONTEXT: A Telegram video attachment for this turn has already been downloaded into the workspace.\nLocal video path: ${videoAttachment.relPath}\nAbsolute path: ${videoAttachment.absPath}\nMime type: ${videoAttachment.mimeType}\nIf the user wants the clip analyzed, call analyze_video on this path before answering. Do not claim to have watched the video unless you actually ran analyze_video.`
+	        : '';
+      const imageContext = savedImageAttachment
+        ? `CONTEXT: A Telegram image attachment for this turn has already been saved into the workspace.\nLocal image path: ${savedImageAttachment.relPath}\nAbsolute path: ${savedImageAttachment.absPath}\nMime type: ${savedImageAttachment.mimeType}\nThe image is also attached as a vision payload, so you can inspect it visually and use this path for file/tool operations.`
+        : '';
+	      const callerContext = [telegramContext, statusContext || '', videoContext || '', imageContext || ''].filter(Boolean).join('\n');
+	      const turn = await this.runTelegramMainChatTurn({
+		        chatId,
+		        sessionId,
+		        message: messageForModel,
+		        sendSSE,
+		        callerContext,
+		        attachments: imageAttachment ? [imageAttachment] : undefined,
+		        callerOnToken: (token) => {
+		          accumulatedReply += token;
+		          stream.update(accumulatedReply);
+		        },
+		        externalAbortSignal: abortSignal,
+		      });
+		      // Final flush so the live bubble shows the complete reply even if
+		      // the last delta arrived inside the throttle window. If the model
+		      // produced text the stream hasn't committed yet, push it now.
+		      try {
+		        const finalText = sanitizeFinalReply(turn.result?.text || '').trim();
+		        if (finalText && finalText !== sanitizeFinalReply(accumulatedReply || '').trim()) {
+		          stream.update(finalText);
+		        }
+		      } catch { /* fall through to flush */ }
+		      await stream.end();
+		      if (turn.aborted) return;
+	      const result = turn.result;
+	      const responseText = sanitizeFinalReply(result.text || '') || 'No response generated.';
+      const now = Date.now();
+
+	      const userContent = videoAttachment
+	        ? `${text ? `${text} ` : ''}[Video attached via Telegram: ${videoAttachment.relPath}]`
+	        : savedImageAttachment
+	          ? `${text ? text + ' ' : ''}[Image attached via Telegram: ${savedImageAttachment.relPath}]`
+	        : imageAttachment
+	          ? `${text ? text + ' ' : ''}[Image attached via Telegram]`
+	          : effectiveText;
+
+	      // Fallback: if the live stream never managed to commit anything (e.g.
+	      // no streaming tokens fired, or every send call errored), fall back to
+	      // a single sendMessage so the user still sees the reply.
+	      if (!stream.hasCommitted() && responseText) {
+	        await this.sendAiMessage(chatId, responseText);
+	      }
+	      if (generatedImages.length) {
+	        try {
+	          await this.sendGeneratedImagesToChat(chatId, generatedImages);
+	        } catch (err: any) {
+	          console.warn(`[Telegram] Generated image delivery failed: ${err?.message}`);
+	        }
+	      }
+	      if (generatedVideos.length) {
+	        try {
+	          await this.sendGeneratedVideosToChat(chatId, generatedVideos);
+	        } catch (err: any) {
+	          console.warn(`[Telegram] Generated video delivery failed: ${err?.message}`);
+	        }
+	      }
+
+	      // ── Present any files the AI created or edited ──────────────────────────
+      // Reset per-turn dedup set, then send each unique file
+      this.filePresented.clear();
+      for (const { path: filePath, trigger } of presentedFiles) {
+        try {
+          await this.sendFilePresentation(chatId, filePath, trigger);
+        } catch (err: any) {
+          console.warn(`[Telegram] File presentation failed for ${filePath}: ${err?.message}`);
+        }
+      }
+
+      // Broadcast to web UI that a Telegram message was processed
+	      this.deps.broadcast({
+	        type: 'telegram_message',
+	        sessionId,
+	        from: userName,
+	        userId,
+	        message: { role: 'user', content: userContent, timestamp: now },
+	        responseMessage: {
+	          role: 'assistant',
+	          content: responseText,
+	          timestamp: now,
+	        generatedImages: generatedImages.length ? generatedImages : undefined,
+	        generatedVideos: generatedVideos.length ? generatedVideos : undefined,
+	        },
+      });
+
+      this.creativeProgressCounters.delete(sessionId);
+      this.creativeProgressStarted.delete(sessionId);
+      this.creativeProgressLastSentAt.delete(sessionId);
+      console.log(`[Telegram] Replied to ${userName}: ${responseText.slice(0, 80)}`);
+    } catch (err: any) {
+      this.creativeProgressCounters.delete(sessionId);
+      this.creativeProgressStarted.delete(sessionId);
+      this.creativeProgressLastSentAt.delete(sessionId);
+      console.error(`[Telegram] handleChat error:`, err.message);
+      try { stream.abort(); } catch { /* ignore */ }
+      await this.sendMessage(chatId, `🔥 Error: ${err.message}`);
+    } finally {
+      // Clean up the abort registration once the turn is fully resolved.
+      if (this.activeRuns.get(abortKey) === abortSignal) {
+        this.activeRuns.delete(abortKey);
+      }
     }
   }
 
@@ -2109,6 +2613,11 @@ export class TelegramChannel {
       console.warn(`[Telegram] setMyCommands failed (non-fatal): ${err.message}`);
     }
 
+    if (this.polling) {
+      console.log('[Telegram] Polling already running — start() ignored');
+      return;
+    }
+
     this.polling = true;
     this.pollLoop();
   }
@@ -2139,6 +2648,38 @@ export class TelegramChannel {
       this.botInfo = null;
       this.start();
     }
+  }
+
+
+  private rememberProcessedTelegramUpdate(updateId: number): boolean {
+    if (!Number.isFinite(updateId)) return true;
+    if (this.processedTelegramUpdateIds.has(updateId)) return false;
+    this.processedTelegramUpdateIds.add(updateId);
+    if (this.processedTelegramUpdateIds.size > 1000) {
+      const overflow = this.processedTelegramUpdateIds.size - 1000;
+      let removed = 0;
+      for (const id of this.processedTelegramUpdateIds) {
+        this.processedTelegramUpdateIds.delete(id);
+        removed += 1;
+        if (removed >= overflow) break;
+      }
+    }
+    return true;
+  }
+
+  private rememberProcessedTelegramMessage(msg: TelegramUpdate['message']): boolean {
+    if (!msg) return true;
+    const chatId = Number(msg.chat?.id || 0);
+    const messageId = Number(msg.message_id || 0);
+    if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) return true;
+    const key = `${chatId}:${messageId}`;
+    const now = Date.now();
+    for (const [existingKey, seenAt] of this.processedTelegramMessageKeys) {
+      if (now - seenAt > 10 * 60_000) this.processedTelegramMessageKeys.delete(existingKey);
+    }
+    if (this.processedTelegramMessageKeys.has(key)) return false;
+    this.processedTelegramMessageKeys.set(key, now);
+    return true;
   }
 
   getStatus(): { connected: boolean; username: string | null; polling: boolean } {
@@ -2376,14 +2917,43 @@ export class TelegramChannel {
 	    originType?: string;
 	    affectedSystems?: string[];
 	    status?: string;
+      approvalKind?: string;
+      devSourceEdit?: {
+        allowedFiles?: string[];
+        verificationCommand?: string;
+        verificationProfile?: string;
+        plan?: {
+          reasoning?: string;
+          evidence?: Array<{ file?: string; lines?: string; finding?: string }>;
+          currentState?: string;
+          fix?: string;
+          steps?: string[];
+          verification?: string[];
+          expectedWorkflow?: string[];
+          completionNoteTag?: string;
+        };
+      };
+      finalAction?: {
+        actionKind?: string;
+        targetLabel?: string;
+        summary?: string;
+        surface?: string;
+      };
 	  }): Promise<void> {
 	    if (!this.config.enabled || !this.config.botToken) return;
+      const isDevSource = record.approvalKind === 'dev_source_edit' || record.toolName === 'request_dev_source_edit';
+      const isFinalAction = record.approvalKind === 'final_action' || record.toolName === 'request_final_action_approval';
 	    const command = String(record.toolArgs?.command || '');
 	    const systems = Array.isArray(record.affectedSystems) && record.affectedSystems.length
 	      ? record.affectedSystems.join(', ')
 	      : 'shell';
+    const devFiles = Array.isArray(record.devSourceEdit?.allowedFiles) ? record.devSourceEdit.allowedFiles : [];
+    const devPlan = record.devSourceEdit?.plan;
+    const devEvidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
+    const devSteps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
+    const devExpectedWorkflow = Array.isArray(devPlan?.expectedWorkflow) ? devPlan.expectedWorkflow : [];
     const body = [
-      `⏳ <b>Command Approval Required</b>`,
+      isDevSource ? `⏳ <b>Dev Source Edit Approval Required</b>` : (isFinalAction ? `⏳ <b>Final Action Approval Required</b>` : `⏳ <b>Command Approval Required</b>`),
       ``,
 	      `<b>ID:</b> <code>${this.tgEscape(record.id)}</code>`,
 	      `<b>Status:</b> ${this.tgEscape(record.status || 'pending')}`,
@@ -2393,19 +2963,39 @@ export class TelegramChannel {
 	      `<b>Systems:</b> ${this.tgEscape(systems)}`,
 	      ``,
 	      `<b>Reason:</b> ${this.tgEscape(record.reason || record.action || 'User approval required.')}`,
-	      `<b>Command:</b>`,
-	      `<code>${this.tgEscape(command.slice(0, 700))}</code>`,
+      isDevSource && devPlan?.reasoning ? `<b>Plan reason:</b> ${this.tgEscape(devPlan.reasoning).slice(0, 700)}` : '',
+      isDevSource && (devPlan?.currentState || devPlan?.fix) ? `<b>Fix:</b>\n${this.tgEscape([
+        devPlan.currentState ? `Current: ${devPlan.currentState}` : '',
+        devPlan.fix ? `Fix: ${devPlan.fix}` : '',
+      ].filter(Boolean).join('\n')).slice(0, 900)}` : '',
+      isDevSource && devEvidence.length ? `<b>Evidence:</b>\n${devEvidence.slice(0, 4).map((item) => `• <code>${this.tgEscape(item.file || 'file')}${item.lines ? `:${this.tgEscape(item.lines)}` : ''}</code> ${this.tgEscape(item.finding || '').slice(0, 240)}`).join('\n')}` : '',
+      isDevSource && devSteps.length ? `<b>Plan:</b>\n${devSteps.slice(0, 6).map((step, idx) => `${idx + 1}. ${this.tgEscape(step).slice(0, 260)}`).join('\n')}` : '',
+      isDevSource && devExpectedWorkflow.length ? `<b>Expected after edits:</b>\n${devExpectedWorkflow.slice(0, 5).map((step, idx) => `${idx + 1}. ${this.tgEscape(step).slice(0, 260)}`).join('\n')}` : '',
+      isDevSource && devFiles.length ? `<b>Files:</b>\n${devFiles.map((file) => `• <code>${this.tgEscape(file)}</code>`).join('\n')}` : '',
+      isDevSource && record.devSourceEdit?.verificationProfile ? `<b>Verify profile:</b> <code>${this.tgEscape(record.devSourceEdit.verificationProfile)}</code>` : '',
+      isDevSource && record.devSourceEdit?.verificationCommand ? `<b>Verify:</b> <code>${this.tgEscape(record.devSourceEdit.verificationCommand)}</code>` : '',
+      isFinalAction && record.finalAction?.targetLabel ? `<b>Target:</b> ${this.tgEscape(record.finalAction.targetLabel)}` : '',
+      isFinalAction && record.finalAction?.surface ? `<b>Surface:</b> ${this.tgEscape(record.finalAction.surface)}` : '',
+	      !isDevSource && !isFinalAction ? `<b>Command:</b>` : '',
+	      !isDevSource && !isFinalAction ? `<code>${this.tgEscape(command.slice(0, 700))}</code>` : '',
 	    ].join('\n');
     const replyMarkup = {
-      inline_keyboard: [[
-        { text: '✅ Approve Once', callback_data: `ca:ap:${record.id}` },
-        { text: '❌ Reject', callback_data: `ca:rj:${record.id}` },
-      ], [
-        { text: 'This Session', callback_data: `ca:session:${record.id}` },
-        { text: 'Always Allow', callback_data: `ca:always:${record.id}` },
-      ], [
-        { text: '📋 Pending', callback_data: 'ca:list:pending' },
-      ]],
+      inline_keyboard: (isDevSource || isFinalAction)
+        ? [[
+          { text: '✅ Approve', callback_data: `ca:ap:${record.id}` },
+          { text: '❌ Reject', callback_data: `ca:rj:${record.id}` },
+        ], [
+          { text: '📋 Pending', callback_data: 'ca:list:pending' },
+        ]]
+        : [[
+          { text: '✅ Approve Once', callback_data: `ca:ap:${record.id}` },
+          { text: '❌ Reject', callback_data: `ca:rj:${record.id}` },
+        ], [
+          { text: 'This Session', callback_data: `ca:session:${record.id}` },
+          { text: 'Always Allow', callback_data: `ca:always:${record.id}` },
+        ], [
+          { text: '📋 Pending', callback_data: 'ca:list:pending' },
+        ]],
     };
     for (const userId of this.config.allowedUserIds) {
       await this.apiCall('sendMessage', {
@@ -2471,7 +3061,7 @@ export class TelegramChannel {
 
   /**
    * Send a repair/feature proposal with inline ✅ Approve / ❌ Reject buttons.
-   * Called from server-v2 after propose_repair tool completes.
+   * Called from server-v2 after a pending repair is created.
    */
   async sendRepairWithButtons(chatId: number, repairId: string): Promise<void> {
     const repair = loadPendingRepairSafe(repairId);
@@ -2537,6 +3127,10 @@ export class TelegramChannel {
 
         for (const update of data.result as TelegramUpdate[]) {
           this.lastUpdateId = Math.max(this.lastUpdateId, update.update_id);
+          if (!this.rememberProcessedTelegramUpdate(update.update_id)) {
+            console.warn(`[Telegram] Duplicate update ${update.update_id} ignored`);
+            continue;
+          }
           if (update.callback_query) {
             this.handleCallbackQuery(update.callback_query).catch(err =>
               console.error('[Telegram] Callback query error:', err.message)
@@ -2550,6 +3144,10 @@ export class TelegramChannel {
             || update.message?.animation
             || update.message?.video_note
           ) {
+            if (!this.rememberProcessedTelegramMessage(update.message)) {
+              console.warn(`[Telegram] Duplicate message ${update.message.chat.id}:${update.message.message_id} ignored`);
+              continue;
+            }
             this.handleIncomingMessage(update.message).catch(err =>
               console.error('[Telegram] Message handling error:', err.message)
             );
@@ -2979,8 +3577,11 @@ export class TelegramChannel {
 	          return;
 	        }
 		        const statusEmoji: Record<string, string> = { pending: '⏳', approved: '✅', rejected: '❌' };
+            const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
+            const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
+            const devFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
 		        const detail = [
-		          `${statusEmoji[approval.status] || '❓'} <b>Command Approval</b>`,
+		          `${statusEmoji[approval.status] || '❓'} <b>${isDevSource ? 'Dev Source Edit Approval' : (isFinalAction ? 'Final Action Approval' : 'Command Approval')}</b>`,
 		          ``,
 		          `<b>ID:</b> <code>${this.tgEscape(approval.id)}</code>`,
 		          `<b>Status:</b> ${this.tgEscape(approval.status)}`,
@@ -2989,13 +3590,20 @@ export class TelegramChannel {
 		          `<b>Session:</b> <code>${this.tgEscape(approval.sessionId || 'unknown')}</code>`,
 		          `<b>Reason:</b> ${this.tgEscape(approval.reason || approval.action || '')}`,
 		          ``,
-		          `<b>Command:</b>`,
-		          `<code>${this.tgEscape(String(approval.toolArgs?.command || '').slice(0, 1200))}</code>`,
+              isDevSource && devFiles.length ? `<b>Files:</b>\n${devFiles.map((file: string) => `• <code>${this.tgEscape(file)}</code>`).join('\n')}` : '',
+              isDevSource && approval.devSourceEdit?.verificationProfile ? `<b>Verify profile:</b> <code>${this.tgEscape(approval.devSourceEdit.verificationProfile)}</code>` : '',
+              isDevSource && approval.devSourceEdit?.verificationCommand ? `<b>Verify:</b> <code>${this.tgEscape(approval.devSourceEdit.verificationCommand)}</code>` : '',
+              isFinalAction && approval.finalAction?.targetLabel ? `<b>Target:</b> ${this.tgEscape(approval.finalAction.targetLabel)}` : '',
+              isFinalAction && approval.finalAction?.surface ? `<b>Surface:</b> ${this.tgEscape(approval.finalAction.surface)}` : '',
+		          !isDevSource && !isFinalAction ? `<b>Command:</b>` : '',
+		          !isDevSource && !isFinalAction ? `<code>${this.tgEscape(String(approval.toolArgs?.command || '').slice(0, 1200))}</code>` : '',
 		        ].filter(Boolean).join('\n');
 	        const kb: any[][] = [];
 	        if (approval.status === 'pending') {
-	          kb.push([{ text: '✅ Approve Once', callback_data: `ca:ap:${approval.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${approval.id}` }]);
-	          kb.push([{ text: 'This Session', callback_data: `ca:session:${approval.id}` }, { text: 'Always Allow', callback_data: `ca:always:${approval.id}` }]);
+	          kb.push([{ text: isDevSource || isFinalAction ? '✅ Approve' : '✅ Approve Once', callback_data: `ca:ap:${approval.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${approval.id}` }]);
+            if (!isDevSource && !isFinalAction) {
+	            kb.push([{ text: 'This Session', callback_data: `ca:session:${approval.id}` }, { text: 'Always Allow', callback_data: `ca:always:${approval.id}` }]);
+            }
 	        }
 	        kb.push([{ text: '📋 Back to list', callback_data: 'ca:list:pending' }]);
 	        await this.apiCall('editMessageText', {
@@ -3025,6 +3633,12 @@ export class TelegramChannel {
 		          await this.sendMessage(chatId, `❌ Command approval <code>#${approvalId}</code> not found.`);
 		          return;
 	        }
+            const isDevSource = existing.approvalKind === 'dev_source_edit' || existing.toolName === 'request_dev_source_edit';
+            const isFinalAction = existing.approvalKind === 'final_action' || existing.toolName === 'request_final_action_approval';
+            if ((isDevSource || isFinalAction) && (action === 'session' || action === 'always')) {
+              await this.sendMessage(chatId, `❌ One-shot approvals cannot be saved as session/always command permissions. Use Approve or Reject.`);
+              return;
+            }
 	        await this.apiCall('editMessageReplyMarkup', {
 	          chat_id: chatId,
 	          message_id: messageId,
@@ -4866,23 +5480,12 @@ export class TelegramChannel {
       const latest = getConfig().getConfig() as any;
       const activeProvider = latest.llm?.provider || 'ollama';
       const primaryModel = latest.llm?.providers?.[activeProvider]?.model || 'unknown';
-      let connections: Record<string, any> = {};
-      try {
-        const connPath = path.join(getConfig().getConfigDir(), 'connections.json');
-        if (fs.existsSync(connPath)) connections = JSON.parse(fs.readFileSync(connPath, 'utf-8')) || {};
-      } catch {}
-      const providers = [
-        { id: 'anthropic', name: '🤖 Anthropic Claude', connected: !!(connections.anthropic as any)?.connected },
-        { id: 'openai', name: '🔴 OpenAI - API Key', connected: !!(connections.openai as any)?.connected },
-        { id: 'openai_codex', name: '💬 OpenAI - Codex (OAuth)', connected: !!(connections.openai_codex as any)?.connected },
-        { id: 'ollama', name: '🦙 Ollama (Local)', connected: true },
-        { id: 'llama_cpp', name: '📚 llama.cpp (Local)', connected: true },
-        { id: 'lm_studio', name: '🎨 LM Studio (Local)', connected: true },
-      ];
+      const providers = await this.buildTelegramModelProviderMenu();
       const rows = providers.map((p: any) => [{
         text: `${p.connected ? '✅' : '⭕'} ${p.name}${activeProvider === p.id ? ' <- active' : ''}`,
         callback_data: `md:prov:${p.id}`,
       }]);
+      if (!rows.length) rows.push([{ text: 'No connected providers found', callback_data: 'noop' }]);
       await edit(
         `🔄 <b>LLM Provider & Model</b>\n\n<b>Current:</b> ${activeProvider} / <code>${primaryModel}</code>\n\nSelect a provider:`,
         rows,
@@ -4896,43 +5499,12 @@ export class TelegramChannel {
 
     if (data.startsWith('md:prov:')) {
       const provider = data.slice('md:prov:'.length);
-      const modelsByProvider: Record<string, string[]> = {
-        anthropic: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-        openai_codex: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex'],
-        ollama: [],
-        llama_cpp: [],
-        lm_studio: [],
-      };
-      if (provider === 'ollama') {
-        try {
-          const endpoint = cfg.llm?.providers?.ollama?.endpoint || cfg.ollama?.endpoint || 'http://localhost:11434';
-          const resp = await fetch(`${endpoint}/api/tags`);
-          if (resp.ok) {
-            const d: any = await resp.json();
-            modelsByProvider.ollama = (d.models || []).map((m: any) => m.name);
-          }
-        } catch {}
-      } else if (provider === 'llama_cpp') {
-        try {
-          const endpoint = cfg.llm?.providers?.llama_cpp?.endpoint || 'http://localhost:8080';
-          const resp = await fetch(`${endpoint}/v1/models`);
-          if (resp.ok) {
-            const d: any = await resp.json();
-            modelsByProvider.llama_cpp = (d.data || []).map((m: any) => m.id);
-          }
-        } catch {}
-      } else if (provider === 'lm_studio') {
-        try {
-          const endpoint = cfg.llm?.providers?.lm_studio?.endpoint || 'http://localhost:1234';
-          const resp = await fetch(`${endpoint}/v1/models`);
-          if (resp.ok) {
-            const d: any = await resp.json();
-            modelsByProvider.lm_studio = (d.data || []).map((m: any) => m.id);
-          }
-        } catch {}
+      const availableProviders = await this.buildTelegramModelProviderMenu();
+      if (!availableProviders.some((p) => p.id === provider)) {
+        await edit(`❌ <code>${this.htmlEscape(provider)}</code> is not connected right now.`, [[{ text: '⬅️ Back', callback_data: 'md:list' }]]);
+        return;
       }
-      const models = (modelsByProvider[provider] || []).slice(0, 20);
+      const models = (await this.listTelegramProviderModels(provider)).slice(0, 20);
       if (models.length === 0) {
         await edit(`❌ No models available for <b>${provider}</b>.`, [[{ text: '⬅️ Back', callback_data: 'md:list' }]]);
         return;
@@ -4968,19 +5540,16 @@ export class TelegramChannel {
       );
       try {
         let isConnected = false;
-        if (provider === 'ollama') {
-          const endpoint = cfg.llm?.providers?.ollama?.endpoint || cfg.ollama?.endpoint || 'http://localhost:11434';
-          const resp = await fetch(`${endpoint}/api/tags`).catch(() => null);
-          isConnected = !!resp?.ok;
-        } else if (provider === 'llama_cpp') {
-          const endpoint = cfg.llm?.providers?.llama_cpp?.endpoint || 'http://localhost:8080';
-          const resp = await fetch(`${endpoint}/v1/models`).catch(() => null);
-          isConnected = !!resp?.ok;
-        } else if (provider === 'lm_studio') {
-          const endpoint = cfg.llm?.providers?.lm_studio?.endpoint || 'http://localhost:1234';
-          const resp = await fetch(`${endpoint}/v1/models`).catch(() => null);
-          isConnected = !!resp?.ok;
+        if (TELEGRAM_LOCAL_MODEL_PROVIDERS.has(provider)) {
+          isConnected = (await this.listLocalProviderModels(provider, cfg)).length > 0;
         } else {
+          if (!this.listCredentialedModelProviderIds().has(provider)) {
+            await edit(
+              `❌ <b>Provider Not Connected</b>\n\n<code>${this.htmlEscape(provider)}</code> does not have saved credentials in the vault.`,
+              [[{ text: '⬅️ Back to Models', callback_data: 'md:list' }]],
+            );
+            return;
+          }
           const { buildProviderById } = require('../../providers/factory.js');
           const p = buildProviderById(provider);
           isConnected = !!(await p.testConnection());
@@ -5014,6 +5583,14 @@ export class TelegramChannel {
       const provider = parts[0];
       const model = parts.slice(1).join(':');
       try {
+        const availableProviders = await this.buildTelegramModelProviderMenu();
+        if (!availableProviders.some((p) => p.id === provider)) {
+          await edit(
+            `❌ <code>${this.htmlEscape(provider)}</code> is not connected right now.`,
+            [[{ text: '⬅️ Back to Models', callback_data: 'md:list' }]],
+          );
+          return;
+        }
         const cm = getConfig();
         const current = cm.getConfig() as any;
         const currentLlm = current.llm || {};
@@ -5282,6 +5859,32 @@ export class TelegramChannel {
       console.log(`[Telegram] Rejected message from unauthorized user ${userId}`);
       await this.sendMessage(chatId, '🔥 Unauthorized. Your Telegram user ID is not in the allowlist.\n\nYour ID: <code>' + userId + '</code>');
       return;
+    }
+
+    // ── Fast-abort: stop/wait/cancel-style phrases interrupt in-flight runs ──
+    // Mirrors OpenClaw's tryFastAbortFromMessage. Detects natural-language stop
+    // triggers (no slash needed) and immediately:
+    //   (1) cancels any pending inbound-debounce buffer for this conversation
+    //   (2) flips the active run's abort flag so the model loop exits cleanly
+    //   (3) sends a small acknowledgement so the user sees the stop landed
+    // Only runs when there's actually something to abort — otherwise the
+    // message falls through to the normal handlers (so plain "stop" in idle
+    // chat doesn't generate a weird ack).
+    if (text && this.isAbortMessage(text)) {
+      const abortKey = this.humanFeelKey(userId, chatId);
+      const hadBuffered = this.inboundCoalescer.hasPending(abortKey);
+      this.inboundCoalescer.cancel(abortKey);
+      this.pendingCoalesceDispatch.delete(abortKey);
+      const activeRun = this.activeRuns.get(abortKey);
+      if (activeRun) {
+        try { activeRun.abort(); } catch { /* ignore */ }
+        this.activeRuns.delete(abortKey);
+      }
+      if (hadBuffered || activeRun) {
+        await this.sendMessage(chatId, '⚙️ Stopped.');
+        return;
+      }
+      // No active run/buffer — let the message fall through to normal handling.
     }
 
     // ── /cancel — clear pending chat ─────────────────────────────────────────
@@ -5585,23 +6188,12 @@ export class TelegramChannel {
         const cfg = getConfig().getConfig() as any;
         const activeProvider = cfg.llm?.provider || 'ollama';
         const primaryModel = cfg.llm?.providers?.[activeProvider]?.model || 'unknown';
-        let connections: Record<string, any> = {};
-        try {
-          const connPath = path.join(getConfig().getConfigDir(), 'connections.json');
-          if (fs.existsSync(connPath)) connections = JSON.parse(fs.readFileSync(connPath, 'utf-8')) || {};
-        } catch {}
-        const providers = [
-          { id: 'anthropic', name: '🤖 Anthropic Claude', connected: !!(connections.anthropic as any)?.connected },
-          { id: 'openai', name: '🔴 OpenAI - API Key', connected: !!(connections.openai as any)?.connected },
-          { id: 'openai_codex', name: '💬 OpenAI - Codex (OAuth)', connected: !!(connections.openai_codex as any)?.connected },
-          { id: 'ollama', name: '🦙 Ollama (Local)', connected: true },
-          { id: 'llama_cpp', name: '📚 llama.cpp (Local)', connected: true },
-          { id: 'lm_studio', name: '🎨 LM Studio (Local)', connected: true },
-        ];
+        const providers = await this.buildTelegramModelProviderMenu();
         const rows = providers.map((p: any) => [{
           text: `${p.connected ? '✅' : '⭕'} ${p.name}${activeProvider === p.id ? ' <- active' : ''}`,
           callback_data: `md:prov:${p.id}`,
         }]);
+        if (!rows.length) rows.push([{ text: 'No connected providers found', callback_data: 'noop' }]);
         await this.apiCall('sendMessage', {
           chat_id: chatId,
           text: `🔄 <b>LLM Provider & Model</b>\n\n<b>Current:</b> ${activeProvider} / <code>${primaryModel}</code>\n\nSelect a provider:`,
@@ -5877,8 +6469,10 @@ export class TelegramChannel {
 
 	      if (approvals.length === 1 && showStatus === 'id') {
 	        const a = approvals[0];
+          const isDevSource = a.approvalKind === 'dev_source_edit' || a.toolName === 'request_dev_source_edit';
+          const isFinalAction = a.approvalKind === 'final_action' || a.toolName === 'request_final_action_approval';
 	        const textBody = [
-		          `⏳ <b>Command Approval</b>`,
+		          `⏳ <b>${isDevSource ? 'Dev Source Edit Approval' : (isFinalAction ? 'Final Action Approval' : 'Command Approval')}</b>`,
 		          ``,
 		          `<b>ID:</b> <code>${this.tgEscape(a.id)}</code>`,
 		          `<b>Status:</b> ${this.tgEscape(a.status)}`,
@@ -5886,8 +6480,11 @@ export class TelegramChannel {
 		          `<b>Risk:</b> ${Number(a.riskScore || 0)}/10`,
 		          `<b>Reason:</b> ${this.tgEscape(a.reason || a.action || '')}`,
 		          ``,
-		          `<code>${this.tgEscape(String(a.toolArgs?.command || '').slice(0, 1200))}</code>`,
-		        ].join('\n');
+              isDevSource && Array.isArray(a.devSourceEdit?.allowedFiles) ? `<b>Files:</b>\n${a.devSourceEdit.allowedFiles.map((file: string) => `• <code>${this.tgEscape(file)}</code>`).join('\n')}` : '',
+              isDevSource && a.devSourceEdit?.verificationProfile ? `<b>Verify profile:</b> <code>${this.tgEscape(a.devSourceEdit.verificationProfile)}</code>` : '',
+              isFinalAction && a.finalAction?.targetLabel ? `<b>Target:</b> ${this.tgEscape(a.finalAction.targetLabel)}` : '',
+              !isDevSource && !isFinalAction ? `<code>${this.tgEscape(String(a.toolArgs?.command || '').slice(0, 1200))}</code>` : '',
+		        ].filter(Boolean).join('\n');
 	        const kb: any[][] = [];
 	        if (a.status === 'pending') kb.push([{ text: '✅ Approve', callback_data: `ca:ap:${a.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${a.id}` }]);
 	        kb.push([{ text: '📋 Back to list', callback_data: 'ca:list:pending' }]);
@@ -5900,10 +6497,18 @@ export class TelegramChannel {
 	        return;
 	      }
 
-		      const lines = approvals.slice(0, 15).map(a =>
-		        `⏳ <code>#${a.id}</code> <b>${this.tgEscape(String(a.toolArgs?.command || '').slice(0, 40))}</b>\n   Origin: ${this.tgEscape(this.getCommandApprovalOrigin(a))} | Status: ${this.tgEscape(a.status)} | Risk: ${Number(a.riskScore || 0)}/10`
-		      );
-		      const kb = approvals.slice(0, 15).map(a => [{ text: String(a.toolArgs?.command || '').slice(0, 30) || a.id, callback_data: `ca:detail:${a.id}` }]);
+		      const lines = approvals.slice(0, 15).map(a => {
+            const label = a.approvalKind === 'final_action' || a.toolName === 'request_final_action_approval'
+              ? String(a.finalAction?.targetLabel || a.action || 'Final action')
+              : String(a.toolArgs?.command || a.action || a.id);
+		        return `⏳ <code>#${a.id}</code> <b>${this.tgEscape(label.slice(0, 40))}</b>\n   Origin: ${this.tgEscape(this.getCommandApprovalOrigin(a))} | Status: ${this.tgEscape(a.status)} | Risk: ${Number(a.riskScore || 0)}/10`;
+          });
+		      const kb = approvals.slice(0, 15).map(a => {
+            const label = a.approvalKind === 'final_action' || a.toolName === 'request_final_action_approval'
+              ? String(a.finalAction?.targetLabel || a.action || 'Final action')
+              : String(a.toolArgs?.command || a.action || a.id);
+            return [{ text: label.slice(0, 30) || a.id, callback_data: `ca:detail:${a.id}` }];
+          });
 	      kb.push([{ text: showStatus === 'done' ? '⏳ View pending' : '✅ View completed', callback_data: `ca:list:${showStatus === 'done' ? 'pending' : 'done'}` }]);
 	      await this.apiCall('sendMessage', {
 	        chat_id: chatId,
@@ -6041,10 +6646,6 @@ export class TelegramChannel {
         await this.sendMessage(chatId, '🔌 <b>Integration Setup</b>\n\nI can connect to any service that has an MCP server or webhook support.\n\nUsage: /setup &lt;service&gt;\nExamples:\n• /setup github\n• /setup slack\n• /setup jira\n• /setup discord\n• /setup notion\n• /setup linear\n\nOr just ask naturally: "connect me to GitHub"');
         return;
       }
-      if (this.deps.getIsModelBusy()) {
-        await this.sendMessage(chatId, '🔥 I\'m currently busy. Try again in a moment.');
-        return;
-      }
       await this.apiCall('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
       const sessionId = this.getTelegramSessionId(userId, chatId);
       const events: Array<{ type: string; data: any }> = [];
@@ -6134,12 +6735,6 @@ export class TelegramChannel {
         return;
       }
       await this.sendMessage(chatId, formatRepairProposalSafe(repair));
-      return;
-    }
-
-    // Check if model is busy
-    if (this.deps.getIsModelBusy()) {
-      await this.sendMessage(chatId, '🔥 I\'m currently busy with another task. Try again in a moment.');
       return;
     }
 
@@ -6380,98 +6975,68 @@ export class TelegramChannel {
         : imageAttachment
           ? '(Image attached — please analyze it)'
           : '');
-    const messageForModel = effectiveText;
 
-	    try {
-	      const telegramContext = 'CONTEXT: You are responding via Telegram via a direct interactive session (not a subagent). You have FULL ACCESS to all tools including complete workspace file access (read_file, list_files, list_directory, grep, semantic_search) and can see all files in the workspace. You are running on the user\'s local Windows PC. All computer tools (run_command, browser_open, browser_snapshot, browser_click, browser_fill, browser_press_key, browser_wait, browser_close, desktop_screenshot, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_wait, desktop_type, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard) are fully available and operational. Use them confidently when the user asks you to open, browse, or interact with anything on their computer.';
-      const isDesktopStatusCheck =
-	        /\b(vs code|vscode|codex)\b/i.test(text)
-	        && /\b(done|finished|complete|completed|responded)\b/i.test(text);
-	      const statusContext = isDesktopStatusCheck
-	        ? 'CONTEXT: This Telegram request is a desktop status check. First action should be desktop_screenshot (then desktop advisor flow), not browser tools.'
-	        : '';
-      const videoContext = videoAttachment
-	        ? `CONTEXT: A Telegram video attachment for this turn has already been downloaded into the workspace.\nLocal video path: ${videoAttachment.relPath}\nAbsolute path: ${videoAttachment.absPath}\nMime type: ${videoAttachment.mimeType}\nIf the user wants the clip analyzed, call analyze_video on this path before answering. Do not claim to have watched the video unless you actually ran analyze_video.`
-	        : '';
-      const imageContext = savedImageAttachment
-        ? `CONTEXT: A Telegram image attachment for this turn has already been saved into the workspace.\nLocal image path: ${savedImageAttachment.relPath}\nAbsolute path: ${savedImageAttachment.absPath}\nMime type: ${savedImageAttachment.mimeType}\nThe image is also attached as a vision payload, so you can inspect it visually and use this path for file/tool operations.`
-        : '';
-	      const callerContext = [telegramContext, statusContext || '', videoContext || '', imageContext || ''].filter(Boolean).join('\n');
-	      const turn = await this.runTelegramMainChatTurn({
-		        chatId,
-		        sessionId,
-		        message: messageForModel,
-		        sendSSE,
-		        callerContext,
-		        attachments: imageAttachment ? [imageAttachment] : undefined,
-		      });
-		      if (turn.aborted) return;
-	      const result = turn.result;
-	      const responseText = sanitizeFinalReply(result.text || '') || 'No response generated.';
-      const now = Date.now();
+    // ── Inbound debounce gate ───────────────────────────────────────────────
+    // If this is a pure-text message (no attachments) AND there's already a
+    // debounce buffer for this conversation OR debouncing would be helpful,
+    // route through the coalescer so burst-typed messages get merged into one
+    // model turn. Messages with attachments fire immediately — attachment
+    // download is already serialized per-message and the user reasonably
+    // expects an immediate response to media.
+    const debounceKey = this.humanFeelKey(userId, chatId);
+    const hasAnyAttachment = Boolean(videoAttachment || imageAttachment || savedImageAttachment);
+    const shouldDebounce = !hasAnyAttachment
+      && this.humanFeelConfig.inboundDebounceMs > 0
+      && Boolean(effectiveText);
 
-	      const userContent = videoAttachment
-	        ? `${text ? `${text} ` : ''}[Video attached via Telegram: ${videoAttachment.relPath}]`
-	        : savedImageAttachment
-	          ? `${text ? text + ' ' : ''}[Image attached via Telegram: ${savedImageAttachment.relPath}]`
-	        : imageAttachment
-	          ? `${text ? text + ' ' : ''}[Image attached via Telegram]`
-	          : effectiveText;
-
-	      await this.sendAiMessage(chatId, responseText);
-	      if (generatedImages.length) {
-	        try {
-	          await this.sendGeneratedImagesToChat(chatId, generatedImages);
-	        } catch (err: any) {
-	          console.warn(`[Telegram] Generated image delivery failed: ${err?.message}`);
-	        }
-	      }
-	      if (generatedVideos.length) {
-	        try {
-	          await this.sendGeneratedVideosToChat(chatId, generatedVideos);
-	        } catch (err: any) {
-	          console.warn(`[Telegram] Generated video delivery failed: ${err?.message}`);
-	        }
-	      }
-
-	      // ── Present any files the AI created or edited ──────────────────────────
-      // Reset per-turn dedup set, then send each unique file
-      this.filePresented.clear();
-      for (const { path: filePath, trigger } of presentedFiles) {
-        try {
-          await this.sendFilePresentation(chatId, filePath, trigger);
-        } catch (err: any) {
-          console.warn(`[Telegram] File presentation failed for ${filePath}: ${err?.message}`);
-        }
-      }
-
-      // Broadcast to web UI that a Telegram message was processed
-	      this.deps.broadcast({
-	        type: 'telegram_message',
-	        sessionId,
-	        from: userName,
-	        userId,
-	        message: { role: 'user', content: userContent, timestamp: now },
-	        responseMessage: {
-	          role: 'assistant',
-	          content: responseText,
-	          timestamp: now,
-	        generatedImages: generatedImages.length ? generatedImages : undefined,
-	        generatedVideos: generatedVideos.length ? generatedVideos : undefined,
-	        },
+    if (shouldDebounce) {
+      // Show typing right away so the user sees acknowledgement during the debounce.
+      await this.apiCall('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
+      // Register the dispatcher closure — it will run when the debounce timer
+      // expires with all messages buffered during the window joined together.
+      this.pendingCoalesceDispatch.set(debounceKey, async (combinedText) => {
+        await this.runDebouncedAiDispatch({
+          userId,
+          chatId,
+          userName,
+          text: combinedText, // combined message text from the debounce buffer
+          effectiveText: combinedText,
+          videoAttachment: null,
+          imageAttachment: null,
+          savedImageAttachment: null,
+          presentedFiles,
+          generatedImages,
+          generatedImageKeys,
+          generatedVideos,
+          generatedVideoKeys,
+          sessionId,
+          sendSSE,
+        });
       });
-
-      this.creativeProgressCounters.delete(sessionId);
-      this.creativeProgressStarted.delete(sessionId);
-      this.creativeProgressLastSentAt.delete(sessionId);
-      console.log(`[Telegram] Replied to ${userName}: ${responseText.slice(0, 80)}`);
-    } catch (err: any) {
-      this.creativeProgressCounters.delete(sessionId);
-      this.creativeProgressStarted.delete(sessionId);
-      this.creativeProgressLastSentAt.delete(sessionId);
-      console.error(`[Telegram] handleChat error:`, err.message);
-      await this.sendMessage(chatId, `🔥 Error: ${err.message}`);
+      this.inboundCoalescer.enqueue(debounceKey, effectiveText);
+      return; // async path — dispatcher will fire after debounce window
     }
+
+    // Synchronous path (attachments, or debouncing disabled) — dispatch now.
+    // Both flows go through `runDebouncedAiDispatch` so the human-feel
+    // streaming + abort plumbing is centralized in one place.
+    await this.runDebouncedAiDispatch({
+      userId,
+      chatId,
+      userName,
+      text,
+      effectiveText,
+      videoAttachment: videoAttachment || null,
+      imageAttachment: imageAttachment || null,
+      savedImageAttachment: savedImageAttachment || null,
+      presentedFiles,
+      generatedImages,
+      generatedImageKeys,
+      generatedVideos,
+      generatedVideoKeys,
+      sessionId,
+      sendSSE,
+    });
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────

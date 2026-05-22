@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { getConfig } from '../../config/config.js';
 import { refreshOperationalIndex, searchOperationalLayer, getOperationalRecord, getRelatedOperationalRecords } from './operational.js';
 import { parseMemoryNoteDocument } from './memory-note.js';
 import {
+  autoBackfillSqliteMemoryEmbeddings,
   backfillSqliteMemoryEmbeddings,
   getRelatedSqliteMemory,
   getSqliteMemoryGraphSnapshot,
@@ -13,7 +15,7 @@ import {
   syncSqliteMemoryIndex,
 } from './sqlite-store.js';
 export { getOperationalRecord } from './operational.js';
-export { backfillSqliteMemoryEmbeddings, getSqliteMemoryStatus } from './sqlite-store.js';
+export { autoBackfillSqliteMemoryEmbeddings, backfillSqliteMemoryEmbeddings, getSqliteMemoryStatus } from './sqlite-store.js';
 
 export type MemoryIndexSourceType =
   | 'chat_session'
@@ -165,7 +167,7 @@ const CHUNK_SIZE = 1200;
 const CHUNK_OVERLAP = 180;
 const EMBEDDING_DIM = 96;
 const MAX_SOURCE_BYTES = 450000;
-const MAX_RECORDS_FOR_SEMANTIC_RELATIONS = 900;
+const MAX_RECORDS_FOR_FULL_SEMANTIC_RELATIONS = 900;
 const STOP = new Set(['a','an','and','are','as','at','be','by','for','from','had','has','have','i','if','in','is','it','its','of','on','or','that','the','their','them','they','this','to','was','we','were','what','when','where','who','why','will','with','you','your']);
 const ROOT_DIRS = ['chats', 'tasks', 'cron', 'teams', 'proposals', 'memory', 'projects', 'schedules', 'obsidian'] as const;
 const MEMORY_PROFILE = process.env.PROMETHEUS_MEMORY_PROFILE === '1';
@@ -185,6 +187,10 @@ function memoryMark(label: string): void {
 function idxPaths(workspacePath: string) {
   const root = path.join(workspacePath, 'audit', '_index', 'memory');
   return { root, store: path.join(root, 'store.json'), manifest: path.join(root, 'manifest.json'), readme: path.join(root, 'README.md') };
+}
+
+function sqliteIndexPath(workspacePath: string): string {
+  return path.join(workspacePath, 'audit', '_index', 'memory', 'memory.sqlite');
 }
 
 function readIndexStatsFromLightFiles(workspacePath: string, fallbackUpdatedAt?: string): { totalRecords: number; totalChunks: number; updatedAt: string } {
@@ -220,12 +226,35 @@ type MemoryRefreshState = {
 };
 
 const memoryRefreshStates = new Map<string, MemoryRefreshState>();
+const automaticEmbeddingBackfills = new Set<string>();
+
+function automaticEmbeddingLimit(): number {
+  const cfg = getConfig().getConfig() as any;
+  const raw = Number(process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDING_LIMIT || cfg.memory?.embeddings?.auto_backfill_limit || 250);
+  return Math.max(0, Math.min(2000, Number.isFinite(raw) ? raw : 250));
+}
+
+function scheduleAutomaticEmbeddingBackfill(workspacePath: string): void {
+  const cfg = getConfig().getConfig() as any;
+  if (process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDINGS === '0' || cfg.memory?.embeddings?.auto_backfill === false) return;
+  const limit = automaticEmbeddingLimit();
+  if (limit <= 0 || automaticEmbeddingBackfills.has(workspacePath)) return;
+  automaticEmbeddingBackfills.add(workspacePath);
+  setTimeout(() => {
+    autoBackfillSqliteMemoryEmbeddings(workspacePath, { limit })
+      .catch(() => undefined)
+      .finally(() => {
+        automaticEmbeddingBackfills.delete(workspacePath);
+      });
+  }, 250);
+}
 
 function mergeMemoryRefreshOptions(current: MemoryRefreshOptions, next?: MemoryRefreshOptions): MemoryRefreshOptions {
   const merged: MemoryRefreshOptions = {
     force: Boolean(current.force || next?.force),
-    syncSqlite: Boolean(current.syncSqlite || next?.syncSqlite),
   };
+  if (current.syncSqlite === true || next?.syncSqlite === true) merged.syncSqlite = true;
+  else if (current.syncSqlite === false || next?.syncSqlite === false) merged.syncSqlite = false;
   const currentMin = Number.isFinite(Number(current.minIntervalMs)) ? Number(current.minIntervalMs) : null;
   const nextMin = Number.isFinite(Number(next?.minIntervalMs)) ? Number(next?.minIntervalMs) : null;
   if (currentMin !== null && nextMin !== null) merged.minIntervalMs = Math.min(currentMin, nextMin);
@@ -427,12 +456,13 @@ function parseContent(abs: string, relPath: string): { text: string; parsed?: an
 function removeChunkIndex(tokenIndex: Record<string, string[]>, chunk: ChunkItem): void {
   for (const t of new Set(chunk.terms)) {
     const arr = tokenIndex[t]; if (!arr) continue;
+    if (!Array.isArray(arr)) { delete tokenIndex[t]; continue; }
     const next = arr.filter((x) => x !== chunk.id); if (next.length) tokenIndex[t] = next; else delete tokenIndex[t];
   }
 }
 function addChunkIndex(tokenIndex: Record<string, string[]>, chunk: ChunkItem): void {
   for (const t of new Set(chunk.terms)) {
-    if (!tokenIndex[t]) tokenIndex[t] = [];
+    if (!Array.isArray(tokenIndex[t])) tokenIndex[t] = [];
     if (!tokenIndex[t].includes(chunk.id)) tokenIndex[t].push(chunk.id);
   }
 }
@@ -509,6 +539,7 @@ function overlapScore(aTerms: string[], bTerms: string[]): { count: number; scor
 function buildRelations(records: Record<string, RecordItem>, chunks: Record<string, ChunkItem>): RelationItem[] {
   const recs = Object.values(records);
   if (recs.length < 2) return [];
+  const relationCap = Math.max(5000, Math.min(50000, recs.length * 4));
   const chunksByRecord = new Map<string, ChunkItem[]>();
   for (const chunk of Object.values(chunks)) {
     if (!chunksByRecord.has(chunk.recordId)) chunksByRecord.set(chunk.recordId, []);
@@ -532,15 +563,13 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
     }
     const recordChunks = chunksByRecord.get(r.id) || [];
     const termsForRecord = uniqTop(recordChunks.flatMap((chunk) => (chunk.terms || []).slice(0, 24)), 28);
-    if (recs.length <= MAX_RECORDS_FOR_SEMANTIC_RELATIONS) {
-      const acc = new Array<number>(EMBEDDING_DIM).fill(0);
-      for (const chunk of recordChunks) {
-        const v = chunk.embedding || [];
-        for (let i = 0; i < Math.min(EMBEDDING_DIM, v.length); i++) acc[i] += v[i];
-      }
-      const inv = 1 / Math.max(1, recordChunks.length);
-      recEmbedding.set(r.id, acc.map((value) => Number((value * inv).toFixed(6))));
+    const acc = new Array<number>(EMBEDDING_DIM).fill(0);
+    for (const chunk of recordChunks) {
+      const v = chunk.embedding || [];
+      for (let i = 0; i < Math.min(EMBEDDING_DIM, v.length); i++) acc[i] += v[i];
     }
+    const inv = 1 / Math.max(1, recordChunks.length);
+    recEmbedding.set(r.id, acc.map((value) => Number((value * inv).toFixed(6))));
     recTerms.set(r.id, termsForRecord);
     for (const term of termsForRecord.slice(0, 12)) {
       if (!tokenBuckets.has(term)) tokenBuckets.set(term, []);
@@ -605,7 +634,7 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
     }
   }
 
-  if (recs.length <= MAX_RECORDS_FOR_SEMANTIC_RELATIONS) {
+  if (recs.length <= MAX_RECORDS_FOR_FULL_SEMANTIC_RELATIONS) {
     for (const a of recs) {
       const aVec = recEmbedding.get(a.id) || [];
       const aTerms = recTerms.get(a.id) || [];
@@ -630,9 +659,50 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
         });
       }
     }
+  } else {
+    for (const a of recs) {
+      const aVec = recEmbedding.get(a.id) || [];
+      const aTerms = recTerms.get(a.id) || [];
+      const candidateIds = new Set<string>();
+      for (const term of aTerms.slice(0, 10)) {
+        for (const rid of (tokenBuckets.get(term) || []).slice(0, 48)) {
+          if (rid !== a.id) candidateIds.add(rid);
+        }
+      }
+      let best: { recId: string; score: number } | null = null;
+      for (const bId of candidateIds) {
+        const b = records[bId];
+        if (!b) continue;
+        const overlap = overlapScore(aTerms, recTerms.get(bId) || []);
+        if (overlap.count < 2) continue;
+        if (relRoot(a.sourcePath) !== relRoot(b.sourcePath) && String(a.projectId || '') !== String(b.projectId || '') && overlap.count < 4) continue;
+        const sim = cosine(aVec, recEmbedding.get(bId) || []);
+        if (sim <= 0.42) continue;
+        if (!best || sim > best.score) best = { recId: bId, score: sim };
+      }
+      if (best) {
+        rels.push({
+          id: id('rel', `semantic_neighbor:${a.id}:${best.recId}`),
+          fromId: a.id,
+          toId: best.recId,
+          type: 'semantic_neighbor',
+          score: Number(best.score.toFixed(4)),
+        });
+      }
+    }
   }
 
   // Dedupe and cap for sanity.
+  const relationPriority: Record<string, number> = {
+    record_family: 4,
+    same_project: 3,
+    semantic_neighbor: 2,
+    shared_terms: 1,
+  };
+  rels.sort((a, b) => {
+    const byPriority = (relationPriority[b.type] || 0) - (relationPriority[a.type] || 0);
+    return byPriority || b.score - a.score;
+  });
   const seen = new Set<string>();
   const deduped: RelationItem[] = [];
   for (const r of rels) {
@@ -640,7 +710,7 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
     if (seen.has(k)) continue;
     seen.add(k);
     deduped.push(r);
-    if (deduped.length >= 5000) break;
+    if (deduped.length >= relationCap) break;
   }
   return deduped;
 }
@@ -650,6 +720,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   const { root, store: storePath, manifest: manifestPath, readme } = idxPaths(workspacePath);
   const auditRoot = path.join(workspacePath, 'audit');
   const now = Date.now(); const nowIso = new Date(now).toISOString();
+  const shouldSyncSqlite = options?.syncSqlite !== false;
   const manifest = readJson<Manifest>(manifestPath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), lastRunAtMs: 0, files: {} });
   memoryMark('manifest loaded');
   const minIntervalMs = Math.max(0, Number(options?.minIntervalMs ?? 20000));
@@ -675,7 +746,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   for (const relPath of rels) {
     const st = fs.statSync(path.join(auditRoot, relPath));
     const prev = manifest.files[relPath];
-    if (!prev || prev.mtimeMs !== st.mtimeMs || prev.size !== st.size) changed.push(relPath); else skipped += 1;
+    if (options?.force || !prev || prev.mtimeMs !== st.mtimeMs || prev.size !== st.size) changed.push(relPath); else skipped += 1;
   }
   memoryMark(`changes compared (changed=${changed.length}, removed=${removed})`);
   const maxChanged = Math.max(1, Number(options?.maxChangedFiles ?? 200));
@@ -685,6 +756,12 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     manifest.lastRunAtMs = now;
     manifest.updatedAt = manifest.updatedAt || nowIso;
     writeJson(manifestPath, manifest);
+    if (shouldSyncSqlite && !fs.existsSync(sqliteIndexPath(workspacePath)) && fs.existsSync(storePath)) {
+      const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: manifest.updatedAt || nowIso, records: {}, chunks: {}, tokenIndex: {}, relations: [] });
+      try { syncSqliteMemoryIndex(workspacePath, store); } catch { /* non-fatal: JSON index remains the fallback */ }
+      scheduleAutomaticEmbeddingBackfill(workspacePath);
+      memoryMark('missing sqlite synced from existing store');
+    }
     const stats = readIndexStatsFromLightFiles(workspacePath, manifest.updatedAt);
     memoryMark('no-op refresh complete');
     return { indexedFiles: 0, skippedFiles: skipped, removedFiles: 0, deferredFiles: deferred, ...stats };
@@ -767,8 +844,9 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   // Refresh operational layer alongside evidence rebuild (throttled — max once per 60s)
   try { refreshOperationalIndex(workspacePath, { minIntervalMs: 60000 }); } catch { /* non-fatal */ }
   memoryMark('operational refresh checked');
-  if (options?.syncSqlite) {
+  if (shouldSyncSqlite) {
     try { syncSqliteMemoryIndex(workspacePath, store); } catch { /* non-fatal: JSON index remains the fallback */ }
+    scheduleAutomaticEmbeddingBackfill(workspacePath);
     memoryMark('sqlite sync checked');
   }
   return { indexedFiles: indexed, skippedFiles: skipped, removedFiles: removed, deferredFiles: deferred, totalRecords: Object.keys(store.records).length, totalChunks: Object.keys(store.chunks).length, updatedAt: nowIso };
@@ -1012,11 +1090,9 @@ export function getMemoryGraphSnapshot(workspacePath: string): { generatedAt: st
     return readJson(graphPath, { generatedAt: new Date(0).toISOString(), nodeCount: 0, edgeCount: 0, nodes: [], edges: [] } as any);
   }
 
-  // No cache yet — run the first-ever refresh synchronously so we have something to return.
-  refreshMemoryIndexFromAudit(workspacePath, { minIntervalMs: 0, maxChangedFiles: 120 });
-  if (fs.existsSync(graphPath)) {
-    return readJson(graphPath, { generatedAt: new Date(0).toISOString(), nodeCount: 0, edgeCount: 0, nodes: [], edges: [] } as any);
-  }
+  // No cache yet: return the current store snapshot immediately while the
+  // indexer builds graph.json in the background.
+  scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
   const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
   const nodes = Object.values(store.records).map((r) => ({
     id: r.id,

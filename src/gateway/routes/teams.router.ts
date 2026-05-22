@@ -22,9 +22,9 @@ import {
 import { routeTeamEvent } from '../teams/team-event-router';
 import { runTeamMemberRoomTurn, scheduleTeamMemberAutoWake, scheduleTeamMemberDirectWake } from '../teams/team-member-room';
 import { dismissTeamSuggestion } from '../teams/team-detector';
-import { buildTeamDispatchTask, runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
 import { claimAgentForTeamWorkspace } from '../teams/team-workspace';
 import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
+import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import * as fs from 'fs';
 import * as path from 'path';
 import { appendManagerNote, getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -34,6 +34,12 @@ import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
 export const router = Router();
 
 const getAttachmentContext = () => require('../chat/attachment-context') as typeof import('../chat/attachment-context');
+const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
+
+export const runTeamAgentViaChat: typeof import('../teams/team-dispatch-runtime')['runTeamAgentViaChat'] = (...args) => {
+  const { runTeamAgentViaChat } = getTeamDispatchRuntime();
+  return runTeamAgentViaChat(...args);
+};
 
 let _cronScheduler: any;
 let _handleChat: (...args: any[]) => Promise<any>;
@@ -237,7 +243,6 @@ function buildPostTeamBroadcastManagerPrompt(broadcastText: string, deliveredCou
 export function pauseManagedTeamInternal(teamId: string, reason?: string) { return _pauseManagedTeamInternal(teamId, reason); }
 export function resumeManagedTeamInternal(teamId: string) { return _resumeManagedTeamInternal(teamId); }
 export function buildTeamDispatchContext(team: any, ctx?: string) { return _buildTeamDispatchContext(team, ctx); }
-export { runTeamAgentViaChat };
 
 export async function postTeamChatFromChannel(params: {
   teamId: string;
@@ -1079,6 +1084,7 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
     (async () => {
       try {
         const mergedContext = _buildTeamDispatchContext(team, context ? String(context) : undefined);
+        const { buildTeamDispatchTask } = getTeamDispatchRuntime();
         const dispatchPrompt = buildTeamDispatchTask({
           agentId: String(agentId),
           task: String(task),
@@ -1589,8 +1595,8 @@ router.post('/api/schedules', (req: any, res: any) => {
     });
   }
   
-  if (!name || !pattern || !prompt) {
-    return res.json({ success: false, error: 'name, pattern, and prompt are required' });
+  if (!name || !prompt) {
+    return res.json({ success: false, error: 'name and prompt are required' });
   }
   
   try {
@@ -1610,11 +1616,14 @@ router.post('/api/schedules', (req: any, res: any) => {
     }
     const selectedSubagentId = selectedTeamId ? '' : String(subagent_id || '').trim();
 
+    const normalizedSchedule = normalizeScheduleSpec(req.body.schedule || { pattern }, timezone || 'UTC');
+
     const job = _cronScheduler.createJob({
       name: scheduleName,
       prompt: promptText,
-      schedule: /^\d/.test(pattern) ? pattern : null,
-      runAt: !/^\d/.test(pattern) ? pattern : null,
+      type: normalizedSchedule.kind === 'one-shot' ? 'one-shot' : 'recurring',
+      schedule: normalizedSchedule.kind === 'recurring' ? normalizedSchedule.cron : null,
+      runAt: normalizedSchedule.kind === 'one-shot' ? normalizedSchedule.runAt : null,
       tz: timezone || 'UTC',
       delivery: 'web',
       ...(selectedSubagentId ? { subagent_id: selectedSubagentId } : {}),
@@ -1718,11 +1727,17 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
         });
       }
 
+      const hasPattern = pattern !== undefined || req.body.schedule !== undefined;
+      const normalizedSchedule = hasPattern
+        ? normalizeScheduleSpec(req.body.schedule || { pattern }, timezone || existing?.tz || 'UTC')
+        : null;
+
 	    const updates: any = {
 	      name: name ? String(name).slice(0, 100) : undefined,
 	      prompt: prompt ? String(prompt).slice(0, 2000) : undefined,
-	      schedule: pattern && /^\d/.test(pattern) ? pattern : undefined,
-	      runAt: pattern && !/^\d/.test(pattern) ? pattern : undefined,
+        type: normalizedSchedule ? (normalizedSchedule.kind === 'one-shot' ? 'one-shot' : 'recurring') : undefined,
+	      schedule: normalizedSchedule?.kind === 'recurring' ? normalizedSchedule.cron : undefined,
+	      runAt: normalizedSchedule?.kind === 'one-shot' ? normalizedSchedule.runAt : undefined,
         tz: timezone || undefined,
         subagent_id: incomingTeamId ? undefined : ownerAgent.agentId,
         team_id: incomingTeamId || undefined,
@@ -2037,101 +2052,16 @@ router.post('/api/schedules/parse', (req: any, res: any) => {
   }
   
   try {
-    let cron = '';
-    let preview = '';
-    const t = text.toLowerCase().trim();
-    
-    // Helper: extract time from text and handle AM/PM
-	    function extractTime(text: string): { hour: number; minute: number } | null {
-      // Match: "3:13pm", "15:13", "3:13", "11am", etc.
-      const timeMatch = text.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
-      if (!timeMatch) return null;
-      
-      let hour = parseInt(timeMatch[1], 10);
-      const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-      const period = timeMatch[3]?.toLowerCase();
-      
-      // Convert 12-hour to 24-hour format if AM/PM specified
-      if (period === 'pm' && hour !== 12) {
-        hour += 12;
-      } else if (period === 'am' && hour === 12) {
-        hour = 0;
-      }
-      
-      // Validate ranges
-      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-      
-	      return { hour, minute };
-	    }
-
-	    function extractDays(text: string): { cron: string; label: string } | null {
-	      if (/\bweekdays?\b|\bmon\s*(?:-|to)\s*fri\b/.test(text)) {
-	        return { cron: '1-5', label: 'weekdays' };
-	      }
-	      if (/\bweekends?\b/.test(text)) {
-	        return { cron: '0,6', label: 'weekends' };
-	      }
-	      const days = [
-	        ['sunday', '0', 'Sunday'],
-	        ['monday', '1', 'Monday'],
-	        ['tuesday', '2', 'Tuesday'],
-	        ['wednesday', '3', 'Wednesday'],
-	        ['thursday', '4', 'Thursday'],
-	        ['friday', '5', 'Friday'],
-	        ['saturday', '6', 'Saturday'],
-	      ];
-	      const hits = days.filter(([name]) => new RegExp(`\\b${name}\\b`).test(text));
-	      if (!hits.length) return null;
-	      return {
-	        cron: hits.map(([, n]) => n).join(','),
-	        label: hits.map(([, , label]) => label).join(', '),
-	      };
-	    }
-	    
-	    const dayInfo = extractDays(t);
-	    if (dayInfo) {
-	      const timeInfo = extractTime(t) || { hour: 9, minute: 0 };
-	      cron = `${timeInfo.minute} ${timeInfo.hour} * * ${dayInfo.cron}`;
-	      preview = `${dayInfo.label.charAt(0).toUpperCase()}${dayInfo.label.slice(1)} at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
-	    } else if (t.includes('daily') || t.includes('every day')) {
-	      const timeInfo = extractTime(t);
-      if (timeInfo) {
-        const hourStr = String(timeInfo.hour).padStart(2, '0');
-        const minStr = String(timeInfo.minute).padStart(2, '0');
-        cron = `${timeInfo.minute} ${timeInfo.hour} * * *`;
-        preview = `Daily at ${hourStr}:${minStr}`;
-      } else {
-        cron = '0 9 * * *';
-        preview = 'Daily at 09:00';
-      }
-	    } else if (t.includes('weekly')) {
-	      const timeInfo = extractTime(t);
-      if (timeInfo) {
-        cron = `${timeInfo.minute} ${timeInfo.hour} * * 1`;
-        preview = `Weekly on Monday at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
-      } else {
-        cron = '0 9 * * 1';
-        preview = 'Weekly on Monday at 09:00';
-      }
-	    } else if (/^\d{1,2} \d{1,2} \d|\d \d \*/.test(t)) {
-      cron = t;
-      preview = 'Custom cron pattern';
-    } else {
-      return res.json({
-        success: false,
-        error: 'Could not parse pattern. Try: "daily at 3:13pm", "daily at 15:13", "weekly", or cron like "0 9 * * *"',
-        confidence: 0,
-      });
-    }
-    
+    const normalized = parseSchedulePattern(text, timezone || 'UTC');
     res.json({
       success: true,
-      kind: 'cron',
-      cron,
-      human_text: preview,
-      preview,
+      kind: normalized.kind === 'one-shot' ? 'one_shot' : 'cron',
+      cron: normalized.kind === 'recurring' ? normalized.cron : undefined,
+      run_at: normalized.kind === 'one-shot' ? normalized.runAt : undefined,
+      human_text: normalized.preview,
+      preview: normalized.preview,
       timezone: timezone || 'UTC',
-      confidence: 0.8,
+      confidence: 0.9,
     });
   } catch (err: any) {
     res.json({ success: false, error: err.message });

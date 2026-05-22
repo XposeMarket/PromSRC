@@ -10,12 +10,12 @@ export function getCisSystemTools(): any[] {
     ['agents_and_teams', 'agents_and_teams - standalone subagents, managed teams, team chat, dispatches, and agent updates.'],
     ['prometheus_source_read', 'prometheus_source_read - Prometheus app/source inspection tools (read_source, grep_source, read_prom_file, etc.)'],
     ['prometheus_source_write', 'prometheus_source_write - Prometheus app/source editing tools for approved dev proposal tasks only.'],
-    ['workspace_write', 'workspace_write - workspace file mutation tools (create_file, replace_lines, delete_file, rename_file, etc.)'],
+    ['workspace_write', 'workspace_write - workspace file mutation and local command/process tools (create_file, replace_lines, run_command, start_process, process_status/process_log/process_wait/process_kill/process_submit, etc.)'],
     ['advanced_memory', 'advanced_memory - memory graph, timeline, project-scoped search, related-record, and index refresh tools.'],
     ['media_assets', 'media_assets - download and media analysis tools (download_url, download_media, analyze_image, analyze_video).'],
     ['media_quality', 'media_quality - image/video validation and render inspection tools (contrast, text overflow, frame renders, caption/audio timing).'],
-    ['automations', 'automations - scheduling and automation management tools (schedule_job, history, outputs, patching, stuck control).'],
-    ['external_apps', 'external_apps - connected external app tools (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian). Use connector_list first.'],
+    ['automations', 'automations - scheduling and automation operator tools (history, detail, outputs, patching, stuck control, dashboard). schedule_job is core.'],
+    ['external_apps', 'external_apps - only tools for currently connected external apps (Gmail, GitHub, Slack, Notion, Drive, Reddit, HubSpot, Salesforce, Stripe, GA4, Obsidian, X/Twitter, xAI/Grok). Use connector_list first.'],
     ['integration_admin', 'integration_admin - MCP server, webhook, and integration setup/admin tools.'],
     ['social_intelligence', 'social_intelligence - social profile intelligence and reporting tools.'],
     ['proposal_admin', 'proposal_admin - proposal inspection/editing administration tools.'],
@@ -453,12 +453,37 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'get_agent_models',
         description:
-          'Read the current model routing configuration: global primary model, agent_model_defaults, and per-agent model overrides. ' +
+          'Read the current model routing configuration: active/current primary model, agent_model_defaults, and per-agent model overrides. ' +
           'Use this before changing proposal executor, background, coordinator, switch_model, or subagent defaults.',
         parameters: {
           type: 'object',
           required: [],
           properties: {},
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_current_model',
+        description:
+          'Switch the current primary LLM provider/model for this live chat and persist it in .prometheus/config.json. ' +
+          'Use this when the user asks to switch the current AI/model now, e.g. "switch over to Grok 4.3" or "make GPT-5.5 the current model". ' +
+          'This updates llm.provider, llm.providers[provider].model, and models.primary; it is not an agent default/template change. ' +
+          'The next model call in the current turn and future turns will use the new current model.',
+        parameters: {
+          type: 'object',
+          required: ['model'],
+          properties: {
+            model: {
+              type: 'string',
+              description: 'Provider/model route in "provider/model" format, e.g. "xai/grok-4.3" or "openai_codex/gpt-5.5".',
+            },
+            reason: {
+              type: 'string',
+              description: 'Optional short reason shown in logs/UI, e.g. "user requested Grok".',
+            },
+          },
         },
       },
     },
@@ -532,7 +557,8 @@ export function getCisSystemTools(): any[] {
         name: 'save_agent_model_template',
         description:
           'Create or update a named template snapshot for agent_model_defaults. ' +
-          'If defaults is omitted, the current live defaults are saved. Use id or an existing name to modify a saved template.',
+          'If defaults is omitted, the current live defaults are saved. Use id or an existing name to modify a saved template. ' +
+          'This only saves the template; use select_agent_model_template/apply_agent_model_template to make it live.',
         parameters: {
           type: 'object',
           required: ['name'],
@@ -548,6 +574,34 @@ export function getCisSystemTools(): any[] {
             defaults: {
               type: 'object',
               description: 'Optional full agent_model_defaults map to save. Values use "provider/model"; omit to snapshot current defaults.',
+              additionalProperties: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_agent_model_template',
+        description:
+          'Modify an existing agent model default template by id or exact name without applying it. ' +
+          'Use this to rename a template or replace its saved defaults while leaving current live agent_model_defaults unchanged.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Template id or exact template name to modify.',
+            },
+            name: {
+              type: 'string',
+              description: 'Optional new template display name.',
+            },
+            defaults: {
+              type: 'object',
+              description: 'Optional replacement agent_model_defaults map. Values use "provider/model"; omit to rename only.',
               additionalProperties: { type: 'string' },
             },
           },
@@ -575,6 +629,24 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'select_agent_model_template',
+        description:
+          'Select and apply a saved agent model default template by id or exact name. Alias for apply_agent_model_template, named for on-the-fly template switching.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Template id or exact template name.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'delete_agent_model_template',
         description:
           'Remove a saved agent model default template by id or exact name. This does not change the currently applied agent_model_defaults.',
@@ -586,6 +658,87 @@ export function getCisSystemTools(): any[] {
               type: 'string',
               description: 'Template id or exact template name.',
             },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'request_final_action_approval',
+        description:
+          'Ask the user for one-shot approval before triggering a high-impact final UI action such as Post, Send, Publish, Submit, Purchase, Transfer, Delete, or Checkout. ' +
+          'Use after preparing the UI with browser/desktop tools and before the final click or Enter key. If approved, pass the returned final_action_approval_id to the exact next browser_click/browser_press_key/desktop_click/desktop_press_key call.',
+        parameters: {
+          type: 'object',
+          required: ['action_kind', 'target_label', 'summary'],
+          properties: {
+            action_kind: { type: 'string', enum: ['post', 'send', 'publish', 'submit', 'purchase', 'delete', 'transfer', 'other'], description: 'The final action category.' },
+            target_label: { type: 'string', description: 'Visible button/menu label or concise target name, e.g. "Post", "Send", "Publish", "Delete repository".' },
+            summary: { type: 'string', description: 'User-facing summary of exactly what will happen if approved, including content/account/recipient when relevant.' },
+            surface: { type: 'string', description: 'App/site/window/account context, e.g. "X in Chrome" or "Slack desktop".' },
+            next_tool_name: { type: 'string', enum: ['browser_click', 'browser_press_key', 'desktop_click', 'desktop_press_key'], description: 'Exact next tool that will consume the one-shot approval.' },
+            next_tool_args: { type: 'object', description: 'Optional subset of the exact next tool args to bind this approval to, excluding final_action_approval_id.' },
+            screenshot_id: { type: 'string', description: 'Optional screenshot_id for the prepared UI state.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'request_dev_source_edit',
+        description:
+          'Dev-only fast approval request for Prometheus to edit specific src/ or web-ui/ files in the current chat without creating a full proposal. ' +
+          'Use only when the user has asked for an immediate source fix and the exact affected files are known. Public builds disable this tool completely. ' +
+          'Approval unlocks only the listed files for this session; it never grants global or always-on source write access. ' +
+          'Include a grounded plan with user request, evidence from inspected files, current state, fix, execution steps, expected post-edit workflow, and verification.',
+        parameters: {
+          type: 'object',
+          required: ['files', 'reason', 'plan'],
+          properties: {
+            files: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Project-relative src/ or web-ui/ file paths to unlock, e.g. ["src/gateway/routes/chat.router.ts"].',
+            },
+            reason: { type: 'string', description: 'Short user-facing reason for the edit request.' },
+            plan: {
+              type: 'object',
+              description: 'Approved dev-edit execution plan. Keep it concise and evidence-based.',
+              properties: {
+                user_request: { type: 'string', description: 'What the user asked Prometheus to change.' },
+                reasoning: { type: 'string', description: 'Why these files and this approach are appropriate.' },
+                evidence: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      file: { type: 'string' },
+                      lines: { type: 'string' },
+                      finding: { type: 'string' },
+                    },
+                  },
+                  description: 'Observed file/line evidence that justifies the edit.',
+                },
+                current_state: { type: 'string', description: 'What the code currently does.' },
+                fix: { type: 'string', description: 'What will be changed.' },
+                steps: { type: 'array', items: { type: 'string' }, description: '2-6 execution steps to declare and follow after approval.' },
+                verification: { type: 'array', items: { type: 'string' }, description: 'Verification commands/checks to run.' },
+                expected_workflow: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'What the user should expect after approval and after edits apply live: tool unlock scope, verification, restart/reload behavior, completion note, and final response shape.',
+                },
+                completion_note_tag: { type: 'string', description: 'Tag to write with write_note after apply/restart. Default dev_edit_complete.' },
+              },
+            },
+            verification_profile: {
+              type: 'string',
+              enum: ['backend_build', 'webui_sync_check', 'full_build', 'none'],
+              description: 'Optional safe verification profile. Prefer this over verification_command: backend_build for backend/src, webui_sync_check for web-ui/mobile/static, full_build for mixed/runtime-wide changes, none when no build is needed.',
+            },
+            verification_command: { type: 'string', description: 'Legacy optional exact verification command. Prefer verification_profile for Prometheus dev source edits.' },
           },
         },
       },
@@ -664,15 +817,56 @@ export function getCisSystemTools(): any[] {
         },
       },
     },
-    // ── gateway_restart: build + graceful restart for proposals/repairs ────────
+    // ── prom_apply_dev_changes: smart dev sync/build/restart/reload ─────────────
+    {
+      type: 'function',
+      function: {
+        name: 'prom_apply_dev_changes',
+        description:
+          'Smart dev-only helper that makes Prometheus code/UI edits live. Use after applying approved source or web-ui/mobile changes. ' +
+          'For web-ui/mobile changes it runs npm run sync:web-ui and requests a desktop web UI reload. ' +
+          'For backend/src/gateway changes it runs the build and gracefully restarts the gateway. ' +
+          'For mixed backend + web-ui/mobile changes it syncs web-ui first, then builds/restarts, then the restarted gateway asks the desktop UI to reload. ' +
+          'Use this instead of manually remembering sync/build/restart/reload steps during local dev/proposal execution.',
+        parameters: {
+          type: 'object',
+          required: ['changed_surfaces', 'reason'],
+          properties: {
+            changed_surfaces: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: ['backend', 'src', 'gateway', 'web-ui', 'mobile', 'config', 'static'],
+              },
+              description: 'Changed areas. backend/src/gateway/config trigger build+restart; web-ui/mobile/static trigger sync:web-ui and desktop reload.',
+            },
+            mode: {
+              type: 'string',
+              enum: ['apply_live', 'verify_only'],
+              description: 'apply_live (default) syncs/builds/restarts/reloads as needed. verify_only runs the narrow safe verification/sync commands and does not restart the gateway.',
+            },
+            reason: { type: 'string', description: 'Why these changes are being applied live.' },
+            proposal_id: { type: 'string', description: 'Proposal ID if this is proposal execution.' },
+            dev_edit_id: { type: 'string', description: 'Dev edit id from request_dev_source_edit. Usually inferred from the current approved session.' },
+            completion_note_tag: { type: 'string', description: 'Completion note tag for dev edit continuation. Defaults to dev_edit_complete or the approved plan value.' },
+            title: { type: 'string', description: 'Human-readable title for restart/reload context.' },
+            summary: { type: 'string', description: 'Brief description of what changed.' },
+            affected_files: { type: 'array', items: { type: 'string' }, description: 'Changed file paths.' },
+            refresh_desktop: { type: 'boolean', description: 'Whether to reload connected desktop web UI clients. Defaults true.' },
+            test_instructions: { type: 'string', description: 'What to verify after restart/reload.' },
+          },
+        },
+      },
+    },
+    // ── gateway_restart: quick graceful restart ────────────────────────────────
     {
       type: 'function',
       function: {
         name: 'gateway_restart',
         description:
-          'Build TypeScript and gracefully restart the gateway. Use ONLY after applying source code changes ' +
-          '(proposals, repairs, src edits) that require a restart to take effect. ' +
-          'Runs npm run build in-process, then if successful, shuts down all subsystems and respawns the gateway. ' +
+          'Quickly and gracefully restart the gateway without running npm build. Use when the user asks to restart Prometheus/the gateway, ' +
+          'matching the quick restart flow offered by Telegram, mobile, and the /restart menu. ' +
+          'For source code changes that require build/sync, use prom_apply_dev_changes instead. ' +
           'The new process boots with a hot-restart context so it knows what changed. ' +
           'WARNING: This kills the current process. Only call this as your LAST action.',
         parameters: {
@@ -728,6 +922,82 @@ export function getCisSystemTools(): any[] {
               enum: ['enable', 'disable', 'status'],
               description: 'Whether to enable, disable, or inspect BUSINESS.md auto-injection for this session.',
             },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_entities',
+        description:
+          'List structured business entity files under workspace/entities. ' +
+          'Use to discover clients, projects, vendors, contacts, or social records before reading/updating them.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['client', 'project', 'vendor', 'contact', 'social'],
+              description: 'Optional entity type filter.',
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_entity',
+        description:
+          'Read one business entity markdown file from workspace/entities/[type] by slug id. ' +
+          'Use before updating a client, project, vendor, contact, or social entity.',
+        parameters: {
+          type: 'object',
+          required: ['type', 'id'],
+          properties: {
+            type: { type: 'string', enum: ['client', 'project', 'vendor', 'contact', 'social'] },
+            id: { type: 'string', description: 'Entity slug or name, e.g. acme-corp.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'write_entity',
+        description:
+          'Create or replace one structured business entity markdown file. ' +
+          'Use for high-confidence business facts only; prefer append_entity_event for dated activity/history.',
+        parameters: {
+          type: 'object',
+          required: ['type', 'id', 'content'],
+          properties: {
+            type: { type: 'string', enum: ['client', 'project', 'vendor', 'contact', 'social'] },
+            id: { type: 'string', description: 'Entity slug or name, e.g. acme-corp.' },
+            content: { type: 'string', description: 'Complete markdown content for the entity file.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'append_entity_event',
+        description:
+          'Ensure a business entity exists, then append a dated event/note to its Business Events section. ' +
+          'Best for Brain Dream reconciliation, team runs, client/prospect interactions, project events, vendor updates, and social account milestones.',
+        parameters: {
+          type: 'object',
+          required: ['type', 'id', 'event'],
+          properties: {
+            type: { type: 'string', enum: ['client', 'project', 'vendor', 'contact', 'social'] },
+            id: { type: 'string', description: 'Entity slug or name, e.g. acme-corp.' },
+            event: { type: 'string', description: 'One concise dated event to append.' },
+            display_name: { type: 'string', description: 'Optional display name for newly created entities.' },
+            source: { type: 'string', description: 'Optional evidence/source reference.' },
+            confidence: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Optional confidence label.' },
           },
         },
       },

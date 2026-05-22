@@ -179,7 +179,7 @@ function setQuickThinkingEffort(level) {
 
 function setSettingsTab(tab) {
   window.settingsTab = tab;
-  const tabs = ['system', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts'];
+  const tabs = ['system', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
 
   tabs.forEach(t => {
     const btn = document.getElementById(`settings-tab-${t}`);
@@ -206,6 +206,7 @@ function setSettingsTab(tab) {
         if (t === 'credentials') loadCredentialsTab();
         if (t === 'migration') loadMigrationPanel();
         if (t === 'shortcuts') loadShortcutsPanel();
+        if (t === 'pairing')   loadPairingPanel();
       } else {
         panel.style.display = 'none';
       }
@@ -897,7 +898,48 @@ function renderDynamicProviderPanel(provider) {
   const refreshButton = provider.runtime?.options?.supportsLiveModelDiscovery
     ? `<button class="btn btn-sm" onclick="refreshProviderModels('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>`
     : '';
-  return `<div id="${panelId}" style="display:none"><div class="right-section-title" style="margin-bottom:8px">${escHtml(provider.name)}</div>${description}${fields.map(field => renderProviderField(provider, field)).join('')}<div style="display:flex;gap:8px;margin-top:10px">${refreshButton}<button class="btn btn-sm" onclick="testProviderConnection('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button></div><div id="${statusId}" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>`;
+  const xaiOAuthPanel = provider.id === 'xai'
+    ? `<div style="margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+        <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px">Grok account OAuth</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">Connect your Grok/X account and set Auth Mode to oauth. xAI still decides whether X Premium, Premium+, or SuperGrok can use each endpoint.</div>
+        <div id="xai-oauth-disconnected-state" style="display:block">
+          <button class="btn btn-sm" onclick="startXaiOAuth()" style="background:#111827;color:#fff;border:1px solid #111827">Connect xAI OAuth</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="xai-oauth-manual-code" class="settings-input" placeholder="Paste xAI code if the browser cannot reach Prometheus" style="font-size:12px;min-width:0" />
+          <button class="btn btn-sm" onclick="submitXaiOAuthCode()" style="background:#fff;border:1px solid var(--line);color:var(--text);white-space:nowrap">Submit Code</button>
+        </div>
+        <div id="xai-oauth-connected-state" style="display:none">
+          <div id="xai-oauth-account-id" style="font-size:12px;color:var(--success);margin-bottom:8px">xAI OAuth connected</div>
+          <button class="btn btn-sm" onclick="disconnectXaiOAuth()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Disconnect xAI OAuth</button>
+        </div>
+        <div id="xai-oauth-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+      </div>`
+    : '';
+  const xApiOAuthPanel = provider.id === 'x'
+    ? `<div style="margin:12px 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+        <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px">Official X API OAuth</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">X API/xurl tools require an X Developer app and OAuth 2.0 user context. xAI/Grok OAuth stays separate for models, x_search, TTS, and STT.</div>
+        <div style="display:grid;gap:6px;margin-bottom:8px">
+          <input id="x-api-client-id" class="settings-input" placeholder="OAuth 2.0 Client ID, not API Key / Consumer Key" style="font-size:12px" />
+          <input id="x-api-client-secret" class="settings-input" placeholder="OAuth 2.0 Client Secret, not API Secret Key" type="password" style="font-size:12px" />
+          <input id="x-api-redirect-uri" class="settings-input" placeholder="http://localhost:8080/callback" style="font-size:12px" />
+          <input id="x-api-scopes" class="settings-input" placeholder="tweet.read users.read follows.read like.read bookmark.read offline.access" style="font-size:12px" />
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="saveXApiCredentials()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Save App</button>
+          <button class="btn btn-sm" onclick="startXApiOAuth()" style="background:#111827;color:#fff;border:1px solid #111827">Connect X API OAuth</button>
+          <button class="btn btn-sm" onclick="disconnectXApiOAuth()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Disconnect</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="x-api-manual-code" class="settings-input" placeholder="Paste X OAuth code if callback cannot reach Prometheus" style="font-size:12px;min-width:0" />
+          <button class="btn btn-sm" onclick="submitXApiOAuthCode()" style="background:#fff;border:1px solid var(--line);color:var(--text);white-space:nowrap">Submit Code</button>
+        </div>
+        <div id="x-api-oauth-account-id" style="font-size:12px;color:var(--success);margin-top:8px"></div>
+        <div id="x-api-oauth-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+      </div>`
+    : '';
+  return `<div id="${panelId}" style="display:none"><div class="right-section-title" style="margin-bottom:8px">${escHtml(provider.name)}</div>${description}${xaiOAuthPanel}${xApiOAuthPanel}${fields.map(field => renderProviderField(provider, field)).join('')}<div style="display:flex;gap:8px;margin-top:10px">${refreshButton}<button class="btn btn-sm" onclick="testProviderConnection('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button></div><div id="${statusId}" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>`;
 }
 
 function renderProviderSelectors() {
@@ -1046,6 +1088,7 @@ async function loadModelSettings() {
     Promise.allSettled([
       refreshCodexStatus(),
       refreshAnthropicStatus(),
+      refreshXaiStatus(),
       prov === 'openai' ? refreshOpenAIModels(true) : Promise.resolve(),
     ]).catch(() => {});
 
@@ -1077,7 +1120,7 @@ async function loadSessionCompactionSettings() {
     if (enabledEl) enabledEl.checked = s.rollingCompactionEnabled !== false;
     if (countEl) countEl.value = String(Number(s.rollingCompactionMessageCount) || 20);
     if (toolsEl) toolsEl.value = String(Number(s.rollingCompactionToolTurns) || 5);
-    if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 220);
+    if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
   } catch (e) {
     console.warn('loadSessionCompactionSettings error:', e);
@@ -1311,6 +1354,228 @@ async function submitManualCodexUrl() {
 async function disconnectCodex() {
   await api('/api/auth/openai/disconnect', { method: 'POST', body: '{}' });
   await refreshCodexStatus();
+}
+
+// --- xAI Grok OAuth UI ---------------------------------------------
+
+async function refreshXaiStatus() {
+  try {
+    const data = await api('/api/auth/xai/status');
+    const disc = document.getElementById('xai-oauth-disconnected-state');
+    const conn = document.getElementById('xai-oauth-connected-state');
+    const acct = document.getElementById('xai-oauth-account-id');
+    const oauthConnected = data?.oauthConnected ?? data?.auth === 'oauth';
+    if (oauthConnected) {
+      if (disc) disc.style.display = 'none';
+      if (conn) conn.style.display = 'block';
+      if (acct) {
+        const renews = data.expires_at ? ` Current access token auto-renews around ${new Date(data.expires_at).toLocaleString()}.` : '';
+        const refresh = data.refresh_available ? ' Refresh token stored for ongoing access.' : '';
+        acct.textContent = `xAI OAuth connected for Grok models/media tools.${refresh}${renews}`;
+      }
+    } else {
+      if (disc) disc.style.display = 'block';
+      if (conn) conn.style.display = 'none';
+    }
+  } catch {}
+}
+
+let _xaiPollTimer = null;
+
+async function startXaiOAuth() {
+  const statusEl = document.getElementById('xai-oauth-status');
+  setSettingsStatus(statusEl, 'info', 'Starting xAI login...');
+  if (_xaiPollTimer) { clearTimeout(_xaiPollTimer); _xaiPollTimer = null; }
+  try {
+    const data = await api('/api/auth/xai/start', { method: 'POST', body: '{}' });
+    if (data?.error) {
+      setSettingsStatus(statusEl, 'error', data.error);
+      return;
+    }
+    if (data?.authUrl) {
+      window.open(data.authUrl, '_blank');
+      setSettingsStatus(statusEl, 'info', 'Waiting for xAI browser authorization. If xAI shows a code, paste it below.');
+      _xaiPollTimer = setTimeout(_pollXaiOAuth, 2000);
+    } else {
+      setSettingsStatus(statusEl, 'error', 'No xAI auth URL returned');
+    }
+  } catch (e) {
+    setSettingsStatus(statusEl, 'error', e.message);
+  }
+}
+
+async function _pollXaiOAuth() {
+  _xaiPollTimer = null;
+  const statusEl = document.getElementById('xai-oauth-status');
+  try {
+    const data = await api('/api/auth/xai/poll');
+    if (data?.done) {
+      if (data.success) {
+        setSettingsStatus(statusEl, 'success', 'Connected. Auth Mode was switched to oauth.');
+        await refreshXaiStatus();
+      } else {
+        setSettingsStatus(statusEl, 'error', data.error || 'xAI OAuth failed');
+      }
+    } else {
+      _xaiPollTimer = setTimeout(_pollXaiOAuth, 2000);
+    }
+  } catch {
+    _xaiPollTimer = setTimeout(_pollXaiOAuth, 3000);
+  }
+}
+
+async function submitXaiOAuthCode() {
+  const statusEl = document.getElementById('xai-oauth-status');
+  const input = document.getElementById('xai-oauth-manual-code');
+  const code = String(input?.value || '').trim();
+  if (!code) {
+    setSettingsStatus(statusEl, 'info', 'Paste the code from the xAI browser page first.');
+    return;
+  }
+  setSettingsStatus(statusEl, 'info', 'Completing xAI OAuth...');
+  try {
+    const data = await api('/api/auth/xai/manual', { method: 'POST', body: JSON.stringify({ code }) });
+    if (data?.success) {
+      if (input) input.value = '';
+      setSettingsStatus(statusEl, 'success', 'Connected. Auth Mode was switched to oauth.');
+      await refreshXaiStatus();
+    } else {
+      setSettingsStatus(statusEl, 'error', data?.error || 'xAI OAuth code exchange failed.');
+    }
+  } catch (e) {
+    setSettingsStatus(statusEl, 'error', e.message);
+  }
+}
+
+async function disconnectXaiOAuth() {
+  await api('/api/auth/xai/disconnect', { method: 'POST', body: '{}' });
+  await refreshXaiStatus();
+  setSettingsStatus(document.getElementById('xai-oauth-status'), 'info', 'xAI OAuth disconnected. You can reconnect whenever you need OAuth.');
+}
+
+// --- Official X API OAuth UI -----------------------------------------
+
+let _xApiPollTimer = null;
+
+async function refreshXApiStatus() {
+  const statusEl = document.getElementById('x-api-oauth-status');
+  try {
+    const data = await api('/api/auth/x-api/status');
+    const redirect = document.getElementById('x-api-redirect-uri');
+    const scopes = document.getElementById('x-api-scopes');
+    const acct = document.getElementById('x-api-oauth-account-id');
+    if (redirect && !redirect.value) redirect.value = data?.redirect_uri || 'http://localhost:8080/callback';
+    if (scopes && !scopes.value) scopes.value = (data?.scopes || []).join(' ');
+    if (acct) {
+      if (data?.connected) {
+        const who = data.username ? `@${data.username}` : (data.user_id ? `user ${data.user_id}` : 'account connected');
+        const expires = data.expires_at ? ` - refreshes after ${new Date(data.expires_at).toLocaleString()}` : '';
+        acct.textContent = `X API OAuth connected: ${who}${expires}`;
+      } else if (data?.credentialsConfigured) {
+        acct.textContent = 'X API app saved. Connect OAuth when ready.';
+      } else {
+        acct.textContent = '';
+      }
+    }
+    if (statusEl && data?.redirect_uri) {
+      setSettingsStatus(statusEl, 'info', `Redirect URI: ${data.redirect_uri}`);
+    }
+  } catch {}
+}
+
+async function saveXApiCredentials() {
+  const statusEl = document.getElementById('x-api-oauth-status');
+  const clientId = document.getElementById('x-api-client-id')?.value?.trim() || '';
+  const clientSecret = document.getElementById('x-api-client-secret')?.value?.trim() || '';
+  const redirectUri = document.getElementById('x-api-redirect-uri')?.value?.trim() || '';
+  const scopes = document.getElementById('x-api-scopes')?.value?.trim() || '';
+  if (!clientId) {
+    setSettingsStatus(statusEl, 'error', 'X API Client ID is required.');
+    return;
+  }
+  setSettingsStatus(statusEl, 'info', 'Saving X API app credentials...');
+  try {
+    const data = await api('/api/auth/x-api/credentials', { method: 'POST', body: JSON.stringify({ clientId, clientSecret, redirectUri, scopes }) });
+    if (data?.success) {
+      setSettingsStatus(statusEl, 'success', `Saved. Use redirect URI in X Developer Portal: ${data.redirect_uri}`);
+      await refreshXApiStatus();
+    } else {
+      setSettingsStatus(statusEl, 'error', data?.error || 'Failed to save X API credentials.');
+    }
+  } catch (e) {
+    setSettingsStatus(statusEl, 'error', e.message);
+  }
+}
+
+async function startXApiOAuth() {
+  const statusEl = document.getElementById('x-api-oauth-status');
+  setSettingsStatus(statusEl, 'info', 'Starting X API OAuth...');
+  if (_xApiPollTimer) { clearTimeout(_xApiPollTimer); _xApiPollTimer = null; }
+  try {
+    const data = await api('/api/auth/x-api/start', { method: 'POST', body: '{}' });
+    if (data?.error) {
+      setSettingsStatus(statusEl, 'error', data.error);
+      return;
+    }
+    if (data?.authUrl) {
+      window.open(data.authUrl, '_blank');
+      setSettingsStatus(statusEl, 'info', 'Waiting for X browser authorization...');
+      _xApiPollTimer = setTimeout(_pollXApiOAuth, 2000);
+    } else {
+      setSettingsStatus(statusEl, 'error', 'No X API auth URL returned.');
+    }
+  } catch (e) {
+    setSettingsStatus(statusEl, 'error', e.message);
+  }
+}
+
+async function _pollXApiOAuth() {
+  _xApiPollTimer = null;
+  const statusEl = document.getElementById('x-api-oauth-status');
+  try {
+    const data = await api('/api/auth/x-api/poll');
+    if (data?.done) {
+      if (data.success) {
+        setSettingsStatus(statusEl, 'success', 'X API OAuth connected.');
+        await refreshXApiStatus();
+      } else {
+        setSettingsStatus(statusEl, 'error', data.error || 'X API OAuth failed.');
+      }
+    } else {
+      _xApiPollTimer = setTimeout(_pollXApiOAuth, 2000);
+    }
+  } catch {
+    _xApiPollTimer = setTimeout(_pollXApiOAuth, 3000);
+  }
+}
+
+async function submitXApiOAuthCode() {
+  const statusEl = document.getElementById('x-api-oauth-status');
+  const input = document.getElementById('x-api-manual-code');
+  const code = String(input?.value || '').trim();
+  if (!code) {
+    setSettingsStatus(statusEl, 'info', 'Paste the X OAuth code first.');
+    return;
+  }
+  setSettingsStatus(statusEl, 'info', 'Completing X API OAuth...');
+  try {
+    const data = await api('/api/auth/x-api/manual', { method: 'POST', body: JSON.stringify({ code }) });
+    if (data?.success) {
+      if (input) input.value = '';
+      setSettingsStatus(statusEl, 'success', 'X API OAuth connected.');
+      await refreshXApiStatus();
+    } else {
+      setSettingsStatus(statusEl, 'error', data?.error || 'X API OAuth code exchange failed.');
+    }
+  } catch (e) {
+    setSettingsStatus(statusEl, 'error', e.message);
+  }
+}
+
+async function disconnectXApiOAuth() {
+  await api('/api/auth/x-api/disconnect', { method: 'POST', body: '{}' });
+  await refreshXApiStatus();
+  setSettingsStatus(document.getElementById('x-api-oauth-status'), 'info', 'X API OAuth disconnected.');
 }
 
 // --- Anthropic Auth UI ------------------------------------------------
@@ -2744,7 +3009,7 @@ async function saveSettings() {
       rollingCompactionEnabled: document.getElementById('settings-rolling-compaction-enabled')?.checked !== false,
       rollingCompactionMessageCount: Number(document.getElementById('settings-rolling-compaction-count')?.value || 20),
       rollingCompactionToolTurns: Number(document.getElementById('settings-rolling-compaction-tools')?.value || 5),
-      rollingCompactionSummaryMaxWords: Number(document.getElementById('settings-rolling-compaction-words')?.value || 220),
+      rollingCompactionSummaryMaxWords: Number(document.getElementById('settings-rolling-compaction-words')?.value || 900),
       rollingCompactionModel: (document.getElementById('settings-rolling-compaction-model')?.value || '').trim(),
     };
     await api('/api/settings/bulk', {
@@ -2757,6 +3022,9 @@ async function saveSettings() {
         session: sessionPayload,
       }),
     });
+    if (window.settingsTab === 'models' || window._agentModelDefaultsLoadedToUI || window._brainModelConfigLoadedToUI) {
+      await saveModelTabLiveSettings({ showStatus: true });
+    }
     if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
       window.applyReasoningPrefsFromProviderConfig(providerPayload, providerPayload.provider);
     }
@@ -3380,20 +3648,16 @@ async function loadAgentModelDefaults() {
     const data = await api('/api/settings/agent-model-defaults');
     await applyAgentModelDefaultsToForm(data?.defaults || {});
     updateAgentModelTemplateCache(data);
+    window._agentModelDefaultsLoadedToUI = true;
   } catch (e) { console.warn('loadAgentModelDefaults error:', e); }
 }
 
-async function saveAgentModelDefaults() {
+async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
   const payload = getAgentModelDefaultsFromForm();
   const status = document.getElementById('amd-status');
-  const btn = document.querySelector('[onclick="saveAgentModelDefaults()"]');
-  if (btn?.disabled) return;
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save Agent Model Defaults'; } };
-  const safetyTimer = setTimeout(resetBtn, 15000);
   try {
-    await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify(payload) });
-    if (status) {
+    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify(payload) });
+    if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
       setTimeout(() => { setSettingsStatus(status, 'info', ''); }, 2500);
@@ -3401,16 +3665,18 @@ async function saveAgentModelDefaults() {
     if (payload.main_chat) {
       showToast('Main model changed', payload.main_chat, 'success', 5000);
     }
-    resetBtn();
+    return data;
   } catch(e) {
-    if (status) {
+    if (showStatus && status) {
       status.style.color = 'var(--err)';
       setSettingsStatus(status, 'error', e.message);
     }
-    resetBtn();
-  } finally {
-    clearTimeout(safetyTimer);
+    throw e;
   }
+}
+
+async function saveAgentModelDefaults() {
+  return persistAgentModelDefaultsFromForm({ showStatus: true });
 }
 
 async function saveAgentModelDefaultTemplate() {
@@ -3424,6 +3690,7 @@ async function saveAgentModelDefaultTemplate() {
   }
   if (status) status.textContent = 'Saving template...';
   try {
+    await saveModelTabLiveSettings({ showStatus: true });
     const selectedId = String(select?.value || '').trim();
     const data = await api('/api/settings/agent-model-default-templates', {
       method: 'POST',
@@ -3545,10 +3812,11 @@ async function loadBrainModelConfig() {
         modelSel.value = model;
       }
     }
+    window._brainModelConfigLoadedToUI = true;
   } catch (e) { console.warn('loadBrainModelConfig error:', e); }
 }
 
-async function saveBrainModelConfig() {
+function getBrainModelConfigFromForm() {
   const payload = {};
   for (const type of ['thought', 'dream']) {
     const prov  = document.getElementById(`brain-${type}-prov`)?.value?.trim()  || '';
@@ -3556,30 +3824,37 @@ async function saveBrainModelConfig() {
     if (type === 'thought') payload.thoughtModel = prov && model ? `${prov}/${model}` : '';
     else payload.dreamModel = prov && model ? `${prov}/${model}` : '';
   }
+  return payload;
+}
+
+async function persistBrainModelConfigFromForm({ showStatus = true } = {}) {
+  const payload = getBrainModelConfigFromForm();
   const status = document.getElementById('brain-model-status');
-  const btn = document.querySelector('[onclick="saveBrainModelConfig()"]');
-  if (btn?.disabled) return;
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save Brain Models'; } };
-  const safetyTimer = setTimeout(resetBtn, 15000);
   try {
     const result = await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(payload) });
     if (result?.success === false) throw new Error(result.error || 'Failed to save brain models');
-    if (status) {
+    if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
       setTimeout(() => { setSettingsStatus(status, 'info', ''); }, 2500);
     }
-    resetBtn();
+    return result;
   } catch (e) {
-    if (status) {
+    if (showStatus && status) {
       status.style.color = 'var(--err)';
       setSettingsStatus(status, 'error', e.message);
     }
-    resetBtn();
-  } finally {
-    clearTimeout(safetyTimer);
+    throw e;
   }
+}
+
+async function saveBrainModelConfig() {
+  return persistBrainModelConfigFromForm({ showStatus: true });
+}
+
+async function saveModelTabLiveSettings({ showStatus = false } = {}) {
+  await persistAgentModelDefaultsFromForm({ showStatus });
+  await persistBrainModelConfigFromForm({ showStatus });
 }
 
 window.amdProviderChange = amdProviderChange;
@@ -3624,6 +3899,7 @@ window.refreshHeartbeatSummary = refreshHeartbeatSummary;
 window.refreshOllamaModels = refreshOllamaModels;
 window.refreshOpenAIModels = refreshOpenAIModels;
 window.refreshProviderModels = refreshProviderModels;
+window.refreshXaiStatus = refreshXaiStatus;
 window.rejectMemory = rejectMemory;
 window.renderAgentsList = renderAgentsList;
 window.renderShortcutsList = renderShortcutsList;
@@ -3654,16 +3930,408 @@ window.setChannelStatus = setChannelStatus;
 window.setIntegTab = setIntegTab;
 window.setQuickSearchRigor = setQuickSearchRigor;
 window.setQuickThinkingEffort = setQuickThinkingEffort;
+// ─── Pairing panel ──────────────────────────────────────────────────────────
+// Owns the desktop side of the mobile pairing handshake. Visible under
+// Settings → Pairing. While the panel is open it polls /api/pairing/pending
+// every 3s as a fallback for the pairing_pending WS event so an approval
+// prompt always appears, even if the WS dropped.
+
+let _pairingPollTimer = null;
+let _pairingCurrentChallenge = null;
+
+async function loadPairingPanel() {
+  await loadRemoteAccessSettings();
+  await refreshPairingQR();
+  await refreshPairingPending();
+  await refreshPairedDevices();
+  _startPairingPolling();
+
+  _wireRemoteAccessHandlers();
+
+  const regen = document.getElementById('pairing-regen-btn');
+  if (regen && !regen.__wired) { regen.__wired = true; regen.addEventListener('click', refreshPairingQR); }
+
+  const copyLink = document.getElementById('pairing-copy-link-btn');
+  if (copyLink && !copyLink.__wired) {
+    copyLink.__wired = true;
+    copyLink.addEventListener('click', async () => {
+      if (!_pairingCurrentChallenge?.pairUrl) return;
+      try { await navigator.clipboard.writeText(_pairingCurrentChallenge.pairUrl); showToast?.('Link copied', '', 'success'); }
+      catch { showToast?.('Copy failed', '', 'error'); }
+    });
+  }
+
+  const copyCode = document.getElementById('pairing-copy-code-btn');
+  if (copyCode && !copyCode.__wired) {
+    copyCode.__wired = true;
+    copyCode.addEventListener('click', async () => {
+      if (!_pairingCurrentChallenge?.pairCode) return;
+      try { await navigator.clipboard.writeText(_pairingCurrentChallenge.pairCode); showToast?.('Pair code copied', '', 'success'); }
+      catch { showToast?.('Copy failed', '', 'error'); }
+    });
+  }
+}
+
+// ─── Remote access (Tailscale Funnel) ──────────────────────────────────────
+// Optional layer on top of local pairing — encodes a public HTTPS URL in the
+// QR so phones can pair off-LAN. Local Wi-Fi pairing still works the same.
+
+let _remoteAccessLoaded = false;
+
+function _setRemoteStatusPill(active) {
+  const pill = document.getElementById('pairing-remote-status-pill');
+  if (!pill) return;
+  if (active) {
+    pill.textContent = 'On';
+    pill.style.background = '#dcfce7';
+    pill.style.color = '#15803d';
+  } else {
+    pill.textContent = 'Off';
+    pill.style.background = '#eee';
+    pill.style.color = '#555';
+  }
+}
+
+async function loadRemoteAccessSettings() {
+  try {
+    const r = await api('/api/pairing/remote-access');
+    const ra = (r && r.remoteAccess) || { enabled: false, mode: 'tailscale-funnel', publicUrl: '' };
+    const enabledEl = document.getElementById('pairing-remote-enabled');
+    const modeEl    = document.getElementById('pairing-remote-mode');
+    const urlEl     = document.getElementById('pairing-remote-url');
+    if (enabledEl) enabledEl.checked = !!ra.enabled;
+    if (modeEl)    modeEl.value      = (ra.mode === 'custom') ? 'custom' : 'tailscale-funnel';
+    if (urlEl)     urlEl.value       = String(ra.publicUrl || '');
+    _setRemoteStatusPill(!!ra.enabled && !!ra.valid);
+    _remoteAccessLoaded = true;
+  } catch (err) {
+    const msg = document.getElementById('pairing-remote-msg');
+    if (msg) msg.innerHTML = `<span style="color:#b91c1c">Failed to load remote access settings: ${escHtml(err.message || err)}</span>`;
+  }
+}
+
+async function _saveRemoteAccess() {
+  const enabledEl = document.getElementById('pairing-remote-enabled');
+  const modeEl    = document.getElementById('pairing-remote-mode');
+  const urlEl     = document.getElementById('pairing-remote-url');
+  const msg       = document.getElementById('pairing-remote-msg');
+  if (!enabledEl || !modeEl || !urlEl) return;
+  const body = {
+    enabled:   !!enabledEl.checked,
+    mode:      modeEl.value,
+    publicUrl: String(urlEl.value || '').trim(),
+  };
+  if (msg) msg.textContent = 'Saving…';
+  try {
+    const r = await api('/api/pairing/remote-access', { method: 'PUT', body: JSON.stringify(body) });
+    if (!r?.success) throw new Error(r?.error || 'Failed to save');
+    const ra = r.remoteAccess || {};
+    _setRemoteStatusPill(!!ra.enabled && !!ra.valid);
+    if (msg) msg.innerHTML = `<span style="color:#15803d">Saved. Generate a new QR to use the ${ra.enabled ? 'public' : 'local'} URL.</span>`;
+    refreshPairingQR().catch(() => {});
+    showToast?.('Remote access updated', '', 'success');
+  } catch (err) {
+    if (msg) msg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Save failed')}</span>`;
+    showToast?.('Save failed', String(err.message || err), 'error');
+  }
+}
+
+async function _detectTailscale() {
+  const out = document.getElementById('pairing-ts-status');
+  const cmd = document.getElementById('pairing-ts-funnel-cmd');
+  const urlEl = document.getElementById('pairing-remote-url');
+  const modeEl = document.getElementById('pairing-remote-mode');
+  if (out) out.textContent = 'Checking…';
+  try {
+    const r = await api('/api/pairing/tailscale/status');
+    if (!r?.installed) {
+      if (out) out.innerHTML = `<span style="color:#b45309">${escHtml(r?.error || 'Tailscale CLI not found.')}</span><br><span style="font-size:11px">Install from <span style="font-family:ui-monospace">tailscale.com</span> and try again.</span>`;
+      return;
+    }
+    const lines = [];
+    lines.push(`<div><strong>Installed:</strong> <span style="color:#15803d">yes</span></div>`);
+    lines.push(`<div><strong>Logged in:</strong> ${r.loggedIn ? '<span style="color:#15803d">yes</span>' : '<span style="color:#b45309">no — run <span style="font-family:ui-monospace">tailscale up</span></span>'}</div>`);
+    if (r.hostname) lines.push(`<div><strong>Hostname:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.hostname)}</span></div>`);
+    if (r.suggestedUrl) lines.push(`<div><strong>Suggested URL:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.suggestedUrl)}</span></div>`);
+    lines.push(`<div><strong>Funnel:</strong> ${r.funnelActive ? `<span style="color:#15803d">active (ports: ${r.funnelPorts.join(', ')})</span>` : '<span style="color:#b45309">not active — run the command below</span>'}</div>`);
+    if (r.suggestedUrl) {
+      lines.push(`<div style="margin-top:8px"><button class="btn btn-sm" id="pairing-ts-apply-btn" style="background:#eaf2ff;border:1px solid #bdd3f6;color:#0d4faf">Use this URL</button></div>`);
+    }
+    if (out) out.innerHTML = lines.join('');
+    const port = (() => {
+      try { return new URL(window.location.origin).port || '18789'; } catch { return '18789'; }
+    })();
+    if (cmd) cmd.textContent = `tailscale funnel ${port}`;
+    const apply = document.getElementById('pairing-ts-apply-btn');
+    if (apply && r.suggestedUrl) {
+      apply.addEventListener('click', () => {
+        if (urlEl) urlEl.value = r.suggestedUrl;
+        if (modeEl) modeEl.value = 'tailscale-funnel';
+        showToast?.('URL applied — click Save', '', 'success');
+      });
+    }
+  } catch (err) {
+    if (out) out.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Detect failed')}</span>`;
+  }
+}
+
+function _wireRemoteAccessHandlers() {
+  const save   = document.getElementById('pairing-remote-save-btn');
+  const detect = document.getElementById('pairing-remote-detect-btn');
+  if (save   && !save.__wired)   { save.__wired   = true; save.addEventListener('click', _saveRemoteAccess); }
+  if (detect && !detect.__wired) { detect.__wired = true; detect.addEventListener('click', _detectTailscale); }
+}
+
+function _stopPairingPolling() {
+  if (_pairingPollTimer) { clearInterval(_pairingPollTimer); _pairingPollTimer = null; }
+}
+function _startPairingPolling() {
+  _stopPairingPolling();
+  _pairingPollTimer = setInterval(() => {
+    if (window.settingsTab !== 'pairing') { _stopPairingPolling(); return; }
+    refreshPairingPending().catch(() => {});
+  }, 3000);
+}
+
+async function refreshPairingQR() {
+  const wrap = document.getElementById('pairing-qr-wrap');
+  const meta = document.getElementById('pairing-qr-meta');
+  if (wrap) wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">Generating QR…</div>';
+  try {
+    const r = await api('/api/pairing/qr', { method: 'POST', body: JSON.stringify({}) });
+    if (!r?.success) throw new Error(r?.error || 'Failed to generate QR');
+    _pairingCurrentChallenge = r;
+    if (wrap) {
+      const pairCode = String(r.pairCode || '').trim();
+      wrap.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:18px;align-items:center;">
+          <div style="display:flex;justify-content:center;">${r.qrSvg || ''}</div>
+          <div style="display:flex;flex-direction:column;gap:10px;min-width:0;text-align:left;">
+            <div style="font-size:12px;font-weight:800;color:var(--text);text-transform:uppercase;letter-spacing:.06em;">Pair code</div>
+            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(22px,4vw,34px);font-weight:900;letter-spacing:.08em;line-height:1.15;color:#221a14;background:#fff8ef;border:1px solid #f3d6b9;border-radius:10px;padding:14px 16px;text-align:center;word-break:break-word;">
+              ${escHtml(pairCode || 'PAIR-....-....')}
+            </div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.45;">Scan the QR from Safari, or open the Home Screen app and enter this code.</div>
+            <button class="btn btn-sm" id="pairing-copy-code-btn" style="background:#fff;border:1px solid var(--line);color:var(--text);width:max-content">Copy code</button>
+          </div>
+        </div>`;
+      const copyCode = document.getElementById('pairing-copy-code-btn');
+      if (copyCode) {
+        copyCode.__wired = true;
+        copyCode.addEventListener('click', async () => {
+          if (!_pairingCurrentChallenge?.pairCode) return;
+          try { await navigator.clipboard.writeText(_pairingCurrentChallenge.pairCode); showToast?.('Pair code copied', '', 'success'); }
+          catch { showToast?.('Copy failed', '', 'error'); }
+        });
+      }
+    }
+    if (meta) {
+      const expires = new Date(r.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const warning = r.warning
+        ? `<div style="margin-top:6px;color:#b45309;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:6px 8px">${escHtml(r.warning)}</div>`
+        : '';
+      const lan = Array.isArray(r.lanOrigins) && r.lanOrigins.length
+        ? `<div style="margin-top:4px;color:var(--muted);font-size:11px">LAN: ${r.lanOrigins.map(x => `<span style="word-break:break-all">${escHtml(x)}</span>`).join(', ')}</div>`
+        : '';
+      const remoteBadge = r.remoteAccess && r.remoteAccess.active
+        ? `<div style="margin-top:6px;color:#0d4faf;background:#eaf2ff;border:1px solid #bdd3f6;border-radius:8px;padding:6px 8px;font-size:11px">Remote access ON — QR uses public URL (${escHtml(String(r.remoteAccess.mode || 'custom'))})</div>`
+        : '';
+      meta.innerHTML = `Expires at <strong>${escHtml(expires)}</strong> · <span style="word-break:break-all">${escHtml(r.pairUrl)}</span>${remoteBadge}${warning}${lan}`;
+    }
+  } catch (err) {
+    if (wrap) wrap.innerHTML = `<div style="color:#b91c1c;font-size:12px">${escHtml(err.message || 'Failed to generate QR')}</div>`;
+  }
+}
+
+async function refreshPairingPending() {
+  const list = document.getElementById('pairing-pending-list');
+  const count = document.getElementById('pairing-pending-count');
+  const tabBadge = document.getElementById('settings-pairing-pending-badge');
+  if (!list) return;
+  try {
+    const r = await api('/api/pairing/pending');
+    const reqs = Array.isArray(r?.requests) ? r.requests : [];
+    if (count) count.textContent = String(reqs.length);
+    if (tabBadge) {
+      tabBadge.textContent = String(reqs.length);
+      tabBadge.style.display = reqs.length > 0 ? 'inline-flex' : 'none';
+    }
+    if (!reqs.length) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:12px;font-style:italic">No incoming pairing requests.</div>';
+      return;
+    }
+    list.innerHTML = reqs.map(req => `
+      <div style="border:1px solid #f3d6b9;background:#fff8ef;border-radius:10px;padding:10px 12px" data-pairing-req="${escHtml(req.id)}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <strong style="flex:1;font-size:13px">${escHtml(req.deviceName || 'Mobile device')}</strong>
+          <span style="font-size:10px;font-weight:800;color:#c0541a;background:#ffe8d2;padding:2px 7px;border-radius:6px">pending</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">
+          ${escHtml(_summarizeUA(req.userAgent))} · ${escHtml(req.ipHint || 'unknown ip')}
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" style="flex:1;background:#16a34a;color:#fff;border:none" data-pairing-action="approve" data-id="${escHtml(req.id)}">✓ Allow</button>
+          <button class="btn btn-sm" style="flex:1;background:#fff;color:#b91c1c;border:1px solid #fecaca" data-pairing-action="deny" data-id="${escHtml(req.id)}">✕ Deny</button>
+        </div>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('[data-pairing-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        const act = btn.getAttribute('data-pairing-action');
+        btn.disabled = true; btn.style.opacity = '0.6';
+        try {
+          if (act === 'approve') {
+            const ok = await api('/api/pairing/approve', { method: 'POST', body: JSON.stringify({ requestId: id }) });
+            if (!ok?.success) throw new Error(ok?.error || 'Approve failed');
+            showToast?.('Device paired', '', 'success');
+          } else {
+            const ok = await api('/api/pairing/deny', { method: 'POST', body: JSON.stringify({ requestId: id }) });
+            if (!ok?.success) throw new Error(ok?.error || 'Deny failed');
+            showToast?.('Pairing denied', '', 'success');
+          }
+          await refreshPairingPending();
+          await refreshPairedDevices();
+        } catch (err) {
+          showToast?.('Pairing action failed', err.message, 'error');
+          btn.disabled = false; btn.style.opacity = '';
+        }
+      });
+    });
+  } catch (err) {
+    list.innerHTML = `<div style="color:#b91c1c;font-size:12px">${escHtml(err.message || 'Failed to load pending requests')}</div>`;
+  }
+}
+
+async function refreshPairedDevices() {
+  const list  = document.getElementById('pairing-device-list');
+  const count = document.getElementById('pairing-device-count');
+  if (!list) return;
+  try {
+    const r = await api('/api/pairing/devices');
+    const devices = Array.isArray(r?.devices) ? r.devices : [];
+    if (count) count.textContent = String(devices.length);
+    if (!devices.length) {
+      list.innerHTML = '<div style="color:var(--muted);font-size:12px;font-style:italic">No devices paired yet.</div>';
+      return;
+    }
+    list.innerHTML = devices.map(d => {
+      const lastSeen = d.lastSeenAt ? `last seen ${_pairingTimeAgo(d.lastSeenAt)}` : 'never';
+      const enabled = d.enabled !== false;
+      return `
+        <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff" data-pairing-device="${escHtml(d.id)}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <strong style="flex:1;font-size:13px">📱 ${escHtml(d.name || 'Device')}</strong>
+            <span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:6px;background:${enabled ? '#d9f7ed' : '#ffe0e0'};color:${enabled ? '#066046' : '#8b0000'}">${enabled ? 'enabled' : 'disabled'}</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:8px">
+            ${escHtml(_summarizeUA(d.lastUserAgent))} · ${escHtml(d.lastIpHint || 'unknown ip')} · ${escHtml(lastSeen)}
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" style="flex:1;background:${enabled ? '#fff' : '#16a34a'};color:${enabled ? 'var(--muted)' : '#fff'};border:1px solid ${enabled ? 'var(--line)' : '#16a34a'}" data-device-action="toggle" data-id="${escHtml(d.id)}" data-next="${enabled ? 'false' : 'true'}">${enabled ? 'Disable' : 'Enable'}</button>
+            <button class="btn btn-sm" style="flex:1;background:#fff;color:#b91c1c;border:1px solid #fecaca" data-device-action="remove" data-id="${escHtml(d.id)}">Remove</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    list.querySelectorAll('[data-device-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        const act = btn.getAttribute('data-device-action');
+        btn.disabled = true; btn.style.opacity = '0.6';
+        try {
+          if (act === 'toggle') {
+            const next = btn.getAttribute('data-next') === 'true';
+            const ok = await api(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
+            if (!ok?.success) throw new Error(ok?.error || 'Update failed');
+            showToast?.(next ? 'Device enabled' : 'Device disabled', '', 'success');
+          } else if (act === 'remove') {
+            if (!confirm('Remove this device? The user will need to scan a new QR to pair again.')) { btn.disabled = false; btn.style.opacity = ''; return; }
+            const ok = await api(`/api/pairing/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            if (!ok?.success) throw new Error(ok?.error || 'Remove failed');
+            showToast?.('Device removed', '', 'success');
+          }
+          await refreshPairedDevices();
+        } catch (err) {
+          showToast?.('Action failed', err.message, 'error');
+          btn.disabled = false; btn.style.opacity = '';
+        }
+      });
+    });
+  } catch (err) {
+    list.innerHTML = `<div style="color:#b91c1c;font-size:12px">${escHtml(err.message || 'Failed to load devices')}</div>`;
+  }
+}
+
+function _summarizeUA(ua) {
+  if (!ua) return 'unknown device';
+  const s = String(ua);
+  if (/iPhone/i.test(s))  return 'iPhone';
+  if (/iPad/i.test(s))    return 'iPad';
+  if (/Android/i.test(s)) return /Mobile/i.test(s) ? 'Android phone' : 'Android tablet';
+  if (/Macintosh/i.test(s)) return 'Mac';
+  if (/Windows/i.test(s)) return 'Windows';
+  return s.slice(0, 60);
+}
+function _pairingTimeAgo(ms) {
+  const delta = Date.now() - ms;
+  if (delta < 60000)        return 'just now';
+  if (delta < 3600000)      return `${Math.floor(delta / 60000)}m ago`;
+  if (delta < 86400000)     return `${Math.floor(delta / 3600000)}h ago`;
+  return `${Math.floor(delta / 86400000)}d ago`;
+}
+
+// WS listener: when a phone claims a QR, refresh the pending list immediately
+// (3s polling is fallback). Imported lazily via window.wsEventBus which is
+// already wired in the main shell.
+if (typeof window !== 'undefined') {
+  const _hookWs = () => {
+    if (!window.wsEventBus || window.__pairingWsHooked) return;
+    window.__pairingWsHooked = true;
+    window.wsEventBus.on('pairing_pending',        () => { if (window.settingsTab === 'pairing') refreshPairingPending(); else _bumpPairingBadge(); });
+    window.wsEventBus.on('pairing_approved',       () => { refreshPairedDevices().catch(() => {}); refreshPairingPending().catch(() => {}); });
+    window.wsEventBus.on('pairing_denied',         () => { if (window.settingsTab === 'pairing') refreshPairingPending(); });
+    window.wsEventBus.on('pairing_device_removed', () => { if (window.settingsTab === 'pairing') refreshPairedDevices(); });
+    window.wsEventBus.on('pairing_device_changed', () => { if (window.settingsTab === 'pairing') refreshPairedDevices(); });
+  };
+  _hookWs();
+  // Re-try once after a tick — wsEventBus may not be loaded yet at module init time.
+  setTimeout(_hookWs, 500);
+}
+
+function _bumpPairingBadge() {
+  // Fire-and-forget refresh so the tab badge updates even when the user is
+  // looking at a different settings tab.
+  api('/api/pairing/pending').then(r => {
+    const count = (r?.requests || []).length;
+    const tabBadge = document.getElementById('settings-pairing-pending-badge');
+    if (tabBadge) {
+      tabBadge.textContent = String(count);
+      tabBadge.style.display = count > 0 ? 'inline-flex' : 'none';
+    }
+  }).catch(() => {});
+}
+
+window.loadPairingPanel = loadPairingPanel;
 window.setSettingsTab = setSettingsTab;
 window.showIntegMsg = showIntegMsg;
 window.showMCPAddForm = showMCPAddForm;
 window.startCodexOAuth = startCodexOAuth;
+window.startXaiOAuth = startXaiOAuth;
+window.submitXaiOAuthCode = submitXaiOAuthCode;
+window.saveXApiCredentials = saveXApiCredentials;
+window.startXApiOAuth = startXApiOAuth;
+window.submitXApiOAuthCode = submitXApiOAuthCode;
+window.disconnectXApiOAuth = disconnectXApiOAuth;
 window.submitManualCodexUrl = submitManualCodexUrl;
 window.testChannel = testChannel;
 window.testAnthropicConnection = testAnthropicConnection;
 window.testProviderConnection = testProviderConnection;
 window.testSelectedChannel = testSelectedChannel;
 window.testWebhookEndpoint = testWebhookEndpoint;
+window.disconnectXaiOAuth = disconnectXaiOAuth;
 window.tickAgentHeartbeat = tickAgentHeartbeat;
 window.tickSubagentHb = tickSubagentHb;
 window.toggleCredVis = toggleCredVis;

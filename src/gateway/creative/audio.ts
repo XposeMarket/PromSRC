@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import {
   type CreativeAudioAnalysis,
   type CreativeAudioSourceType,
@@ -205,7 +206,7 @@ async function probeWithFfprobe(absPath: string): Promise<Partial<CreativeAudioA
     absPath,
   ];
   try {
-    const { stdout } = await execFileAsync('ffprobe', args, { windowsHide: true, maxBuffer: 1024 * 1024 * 4 });
+    const { stdout } = await execFileAsync(resolveRuntimeBinary('ffprobe', { allowPathFallback: true }), args, { windowsHide: true, maxBuffer: 1024 * 1024 * 4 });
     const parsed = JSON.parse(String(stdout || '{}'));
     const streams = Array.isArray(parsed?.streams) ? parsed.streams : [];
     const audioStream = streams.find((stream: any) => String(stream?.codec_type || '').toLowerCase() === 'audio') || streams[0];

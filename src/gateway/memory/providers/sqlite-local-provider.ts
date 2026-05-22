@@ -41,6 +41,7 @@ export function createSqliteLocalMemoryProvider(workspacePath: string): MemoryPr
           force: options?.force,
           maxChangedFiles: options?.limit || 500,
           minIntervalMs: 0,
+          syncSqlite: true,
         });
         return {
           ok: true,

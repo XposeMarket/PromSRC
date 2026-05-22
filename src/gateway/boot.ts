@@ -8,8 +8,12 @@
 
 import fs from 'fs';
 import path from 'path';
-import { addMessage, getHistoryForApiCall, type ChatMessage } from './session';
+import { addMessage, getHistoryForApiCall, getRecentToolLog, type ChatMessage } from './session';
 import { readRestartContext, clearRestartContext, queueStartupNotification, type RestartContext } from './lifecycle';
+import {
+  listHotRestartMainChatRecoveries,
+  type HotRestartMainChatRecovery,
+} from './runtime-recovery';
 
 export type BootAutomatedSession = {
   id: string;
@@ -30,7 +34,7 @@ type BootResult =
       sessionId: string;
       title: string;
       source: 'boot_startup' | 'hot_restart';
-      automatedSession: BootAutomatedSession;
+      automatedSession?: BootAutomatedSession | null;
       notificationId?: string;
     }
   | { status: 'failed'; reason: string };
@@ -45,6 +49,16 @@ type HandleChatFn = (
 type BootRunState = {
   lastRunDateLocal?: string;
   lastRunAt?: number;
+};
+
+type HotRestartTarget = {
+  sessionId: string;
+  recoverySummary: string;
+  telegram: {
+    enabled: boolean;
+    chatId?: number;
+    userId?: number;
+  };
 };
 
 function getLocalDateKey(now = new Date()): string {
@@ -106,23 +120,27 @@ function isInternalRestartHistoryMessage(msg: ChatMessage): boolean {
 function getRecentConversationForRestart(previousSessionId?: string): {
   excerpt: string;
   lastUserRequest: string;
+  recentToolLog: string;
 } {
   const sid = String(previousSessionId || '').trim();
   if (!sid) {
     return {
       excerpt: '(No previous session was recorded for this restart.)',
       lastUserRequest: '',
+      recentToolLog: '',
     };
   }
 
   try {
-    const history = getHistoryForApiCall(sid, 6, { maxMessages: 8 })
+    const history = getHistoryForApiCall(sid, 12, { maxMessages: 24 })
       .filter((msg) => !isInternalRestartHistoryMessage(msg));
+    const recentToolLog = getRecentToolLog(sid, 3, 3000);
 
     if (history.length === 0) {
       return {
         excerpt: `(No recent conversation history was available for session ${sid}.)`,
         lastUserRequest: '',
+        recentToolLog,
       };
     }
 
@@ -140,34 +158,75 @@ function getRecentConversationForRestart(previousSessionId?: string): {
       ?.trim()
       ?.slice(0, 220) || '';
 
-    return { excerpt, lastUserRequest };
+    return { excerpt, lastUserRequest, recentToolLog };
   } catch (err: any) {
     return {
       excerpt: `(Could not load recent conversation history for ${sid}: ${String(err?.message || err || 'unknown error')})`,
       lastUserRequest: '',
+      recentToolLog: '',
     };
   }
 }
 
-function buildHotRestartPrompt(lastUserRequest: string): string {
+function buildHotRestartPrompt(lastUserRequest: string, ctx?: RestartContext): string {
+  const devEdit = ctx?.devEditContinuation;
+  if (devEdit) {
+    const tag = devEdit.completionNoteTag || 'dev_edit_complete';
+    return [
+      'HOT RESTART DEV-EDIT FOLLOW-UP:',
+      'A hot restart/reload just completed after an approved Prometheus dev source edit.',
+      'Use the restart context, approved dev-edit plan, recent conversation, and recent tool log as factual memory.',
+      `Required next tool call: write_note({"tag":"${tag}","dev_edit_id":"${devEdit.id}","content":"<brief summary of files changed, verification, and live status>"}).`,
+      'This note completes the declared dev-edit plan. After the note succeeds, respond to the user with the usual concise edit summary.',
+      'Do not redo the source edits unless the context shows apply_live failed.',
+      lastUserRequest
+        ? `Refer to the user's latest request naturally: "${lastUserRequest}".`
+        : 'If no prior request is clear, say the approved dev edit was applied and the gateway is back.',
+      'Keep it short and concrete.',
+    ].join('\n').trim();
+  }
   return [
     'HOT RESTART FOLLOW-UP:',
     'A hot restart just completed and you are resuming an existing conversation.',
     'Write the assistant message that should appear right after the restart.',
-    'First, confirm naturally that the restart succeeded.',
+    'Use the restart context, runtime recovery summary, recent conversation, and recent tool log as factual memory.',
+    'Confirm the restart succeeded, state what was just completed when the context shows it, and give the next verification/action for the user.',
+    'If the main chat was interrupted mid-flow, explicitly acknowledge the checkpoint and ask whether the user wants you to continue from there.',
+    'If any background task, subagent, team run, scheduled task, heartbeat, or brain run was paused/interrupted, mention it briefly and ask whether the user wants it resumed. Include a short identifier when useful.',
     lastUserRequest
-      ? `Then briefly ask whether the user wants you to continue the in-flight work: "${lastUserRequest}".`
-      : 'Then briefly ask whether the user wants you to continue where you left off.',
+      ? `If the work is still in flight, refer to the user's latest request naturally: "${lastUserRequest}".`
+      : 'If no prior request is clear, say you are back and ready to continue.',
+    'Do not claim paused work resumed unless the runtime recovery summary says it auto-resumed.',
     'Keep it short, natural, and conversational.',
     'Do not call any tools.',
   ].join('\n').trim();
 }
 
-function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: string, lastUserRequest: string): string {
+function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: string, lastUserRequest: string, recentToolLog: string, recoverySummary: string): string {
   const didBuild = ctx.buildOutput !== undefined;
   const affectedFiles = Array.isArray(ctx.affectedFiles) && ctx.affectedFiles.length > 0
     ? ctx.affectedFiles.slice(0, 10).join('\n')
     : '(none recorded)';
+  const devEdit = ctx.devEditContinuation;
+  const devEditLines = devEdit ? [
+    '',
+    '[DEV EDIT CONTINUATION]',
+    `id: ${devEdit.id}`,
+    `approval_id: ${devEdit.approvalId || '(none)'}`,
+    `plan_hash: ${devEdit.planHash || '(none)'}`,
+    `status: ${devEdit.status}`,
+    `completion_note_tag: ${devEdit.completionNoteTag || 'dev_edit_complete'}`,
+    `summary: ${devEdit.summary || ctx.summary || '(none)'}`,
+    'approved_files:',
+    ...(Array.isArray(devEdit.allowedFiles) && devEdit.allowedFiles.length ? devEdit.allowedFiles.slice(0, 20) : ['(none recorded)']),
+    'plan_steps:',
+    ...(Array.isArray(devEdit.plan?.steps) && devEdit.plan.steps.length ? devEdit.plan.steps.slice(0, 8) : ['(none recorded)']),
+    'expected_workflow:',
+    ...(Array.isArray(devEdit.plan?.expectedWorkflow) && devEdit.plan.expectedWorkflow.length ? devEdit.plan.expectedWorkflow.slice(0, 8) : ['(none recorded)']),
+    'verification:',
+    ...(Array.isArray(devEdit.verification) && devEdit.verification.length ? devEdit.verification.slice(0, 8) : ['(none recorded)']),
+    '[/DEV EDIT CONTINUATION]',
+  ] : [];
 
   return [
     'CONTEXT: Internal hot-restart follow-up turn.',
@@ -184,18 +243,36 @@ function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: s
     `last_user_request: ${lastUserRequest || '(none detected)'}`,
     'affected_files:',
     affectedFiles,
+    ...devEditLines,
+    '',
+    'runtime_recovery_summary:',
+    recoverySummary || '(none)',
     '',
     'recent_conversation:',
     recentConversation,
+    '',
+    'recent_tool_log:',
+    recentToolLog || '(No recent tool log recorded.)',
     '[/HOT RESTART CONTEXT]',
   ].join('\n');
 }
 
 function buildHotRestartFallbackMessage(lastUserRequest: string): string {
   if (lastUserRequest) {
-    return `Hey - the restart was successful. Do you want me to keep going on "${lastUserRequest}"?`;
+    return `Hey - the restart was successful. I am back in the same thread and ready to keep going on "${lastUserRequest}".`;
   }
-  return 'Hey - the restart was successful. Do you want me to continue where we left off?';
+  return 'Hey - the restart was successful. I am back in the same thread and ready to continue where we left off.';
+}
+
+function appendRecoverySummaryToHotRestartMessage(text: string, recoverySummary: string): string {
+  const summary = String(recoverySummary || '').trim();
+  if (!summary || summary.startsWith('(No interrupted runtime records')) return text;
+  if (/interrupted|paused|checkpoint|resume/i.test(text)) return text;
+  return [
+    text,
+    '',
+    'I also found interrupted work from the restart and saved checkpoints for it. Would you like me to continue the main chat or resume any paused task/subagent from the recovery list?',
+  ].join('\n');
 }
 
 function sanitizeIdPart(value: string): string {
@@ -216,13 +293,109 @@ function buildAutoSessionMeta(kind: 'boot' | 'restart', restartCtx?: RestartCont
   const createdAt = Date.now();
   if (kind === 'restart') {
     const reasonPart = sanitizeIdPart(restartCtx?.reason || 'manual');
-    const id = `auto_restart_${reasonPart}_${createdAt}`;
+    const id = `brain_thought_restart_${reasonPart}_${createdAt}`;
     const title = `Restart (${restartCtx?.reason || 'manual'}) - ${new Date(createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
     return { id, title, source: 'hot_restart', createdAt };
   }
   const id = `auto_boot_${createdAt}`;
   const title = `Startup - ${new Date(createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
   return { id, title, source: 'boot_startup', createdAt };
+}
+
+function numberIfPositive(value: unknown): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function buildTargetRecoverySummary(
+  sessionId: string,
+  sessionRecovery: HotRestartMainChatRecovery | undefined,
+  allChatRecoveries: HotRestartMainChatRecovery[],
+): string {
+  const otherChatCount = allChatRecoveries.filter((recovery) => recovery.sessionId !== sessionId).length;
+  const lines: string[] = [];
+  if (sessionRecovery) {
+    lines.push(
+      `This chat session (${sessionRecovery.sessionId}) was interrupted during the restart:`,
+      sessionRecovery.summary,
+    );
+  } else {
+    lines.push(
+      `This chat session (${sessionId}) does not have an interrupted main-chat runtime in this restart window.`,
+      'Do not borrow checkpoint details, tool names, or user requests from any other chat session.',
+    );
+  }
+  if (otherChatCount > 0) {
+    lines.push(
+      '',
+      `${otherChatCount} other chat session(s) also had restart checkpoints and will receive their own restart messages.`,
+      'Do not mention their request text, tool names, or progress details in this chat.',
+    );
+  }
+  return lines.join('\n');
+}
+
+function telegramTargetForRestartSession(
+  restartCtx: RestartContext,
+  sessionId: string,
+  recovery?: HotRestartMainChatRecovery,
+): HotRestartTarget['telegram'] {
+  const previousSessionId = String(restartCtx.previousSessionId || '').trim();
+  const previousChatId = numberIfPositive(restartCtx.previousTelegramChatId);
+  if (previousSessionId && previousSessionId === sessionId && restartCtx.respondToTelegram && previousChatId) {
+    return {
+      enabled: true,
+      chatId: previousChatId,
+      userId: numberIfPositive(restartCtx.previousTelegramUserId),
+    };
+  }
+  if (recovery?.source === 'telegram' && recovery.chatId) {
+    return {
+      enabled: true,
+      chatId: recovery.chatId,
+      userId: recovery.userId,
+    };
+  }
+  return { enabled: false };
+}
+
+function buildHotRestartTargets(restartCtx: RestartContext, fallbackSessionId: string): HotRestartTarget[] {
+  const restartWindowStart = Math.max(0, Number(restartCtx.timestamp || 0) - 30_000);
+  const recoveries = listHotRestartMainChatRecoveries(30 * 60_000, restartWindowStart);
+  const bySession = new Map<string, HotRestartMainChatRecovery>();
+  for (const recovery of recoveries) {
+    if (recovery.sessionId && !bySession.has(recovery.sessionId)) bySession.set(recovery.sessionId, recovery);
+  }
+
+  const targets = new Map<string, HotRestartTarget>();
+  for (const recovery of recoveries) {
+    targets.set(recovery.sessionId, {
+      sessionId: recovery.sessionId,
+      recoverySummary: buildTargetRecoverySummary(recovery.sessionId, recovery, recoveries),
+      telegram: telegramTargetForRestartSession(restartCtx, recovery.sessionId, recovery),
+    });
+  }
+
+  const previousSessionId = String(restartCtx.previousSessionId || '').trim();
+  if (previousSessionId && !targets.has(previousSessionId)) {
+    targets.set(previousSessionId, {
+      sessionId: previousSessionId,
+      recoverySummary: buildTargetRecoverySummary(previousSessionId, bySession.get(previousSessionId), recoveries),
+      telegram: telegramTargetForRestartSession(restartCtx, previousSessionId, bySession.get(previousSessionId)),
+    });
+  }
+
+  if (targets.size === 0) {
+    const mobileFallback = restartCtx.originChannel === 'mobile' ? 'mobile_default' : '';
+    const targetSessionId = mobileFallback || fallbackSessionId;
+    targets.set(fallbackSessionId, {
+      sessionId: targetSessionId,
+      recoverySummary: buildTargetRecoverySummary(targetSessionId, undefined, recoveries),
+      telegram: { enabled: false },
+    });
+  }
+
+  return Array.from(targets.values());
 }
 
 export async function runBootMd(
@@ -235,80 +408,75 @@ export async function runBootMd(
     clearRestartContext();
 
     const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
-    const { excerpt, lastUserRequest } = getRecentConversationForRestart(restartCtx.previousSessionId);
+    const targets = buildHotRestartTargets(restartCtx, sessionMeta.id);
+    const results = await Promise.all(targets.map(async (target, index) => {
+      const { excerpt, lastUserRequest, recentToolLog } = getRecentConversationForRestart(target.sessionId);
+      const internalSessionId = `${sessionMeta.id}_${sanitizeIdPart(target.sessionId)}_${index}`;
+      let finalText = '';
+      try {
+        const result = await handleChat(
+          buildHotRestartPrompt(lastUserRequest, restartCtx),
+          internalSessionId,
+          (evt, data) => {
+            if (evt === 'tool_call') {
+              console.log(`[boot-md]  -> ${String(data?.action || 'unknown')} (unexpected during hot restart)`);
+            }
+          },
+          buildHotRestartCallerContext(restartCtx, excerpt, lastUserRequest, recentToolLog, target.recoverySummary),
+        );
+        finalText = String(result.text || '').trim();
+      } catch (err: any) {
+        console.warn(`[boot-md] Hot restart follow-up failed for ${target.sessionId}: ${String(err?.message || err)}`);
+      }
 
-    let finalText = '';
-    try {
-      const result = await handleChat(
-        buildHotRestartPrompt(lastUserRequest),
-        sessionMeta.id,
-        (evt, data) => {
-          if (evt === 'tool_call') {
-            console.log(`[boot-md]  -> ${String(data?.action || 'unknown')} (unexpected during hot restart)`);
-          }
-        },
-        buildHotRestartCallerContext(restartCtx, excerpt, lastUserRequest),
-      );
-      finalText = String(result.text || '').trim();
-    } catch (err: any) {
-      console.warn(`[boot-md] Hot restart follow-up failed: ${String(err?.message || err)}`);
-    }
+      if (!finalText) {
+        finalText = buildHotRestartFallbackMessage(lastUserRequest);
+      }
+      finalText = appendRecoverySummaryToHotRestartMessage(finalText, target.recoverySummary);
 
-    if (!finalText) {
-      finalText = buildHotRestartFallbackMessage(lastUserRequest);
-    }
-
-    console.log(`[boot-md] Hot restart complete: ${finalText.slice(0, 120)}`);
-    try {
-      addMessage(sessionMeta.id, {
-        role: 'assistant',
-        content: finalText,
-        timestamp: Date.now(),
-      });
-      if (restartCtx.previousSessionId && restartCtx.previousSessionId !== sessionMeta.id) {
-        addMessage(restartCtx.previousSessionId, {
+      console.log(`[boot-md] Hot restart complete for ${target.sessionId}: ${finalText.slice(0, 120)}`);
+      try {
+        addMessage(target.sessionId, {
           role: 'assistant',
           content: finalText,
           timestamp: Date.now(),
         });
+      } catch (e: any) {
+        console.warn(`[boot-md] Failed to persist hot restart message for ${target.sessionId}: ${e?.message}`);
       }
-    } catch (e: any) {
-      console.warn(`[boot-md] Failed to persist hot restart message: ${e?.message}`);
+
+      const notification = queueStartupNotification({
+        sessionId: target.sessionId,
+        title: sessionMeta.title,
+        text: finalText,
+        source: sessionMeta.source,
+        automatedSession: null,
+        previousSessionId: target.sessionId,
+        telegram: target.telegram,
+        devReload: restartCtx.devReload,
+      });
+
+      return {
+        finalText,
+        targetSessionId: target.sessionId,
+        notificationId: notification.id,
+      };
+    }));
+
+    const primary = results[0] || null;
+
+    if (!primary) {
+      return { status: 'skipped', reason: 'No hot restart targets found' };
     }
-
-    const automatedSession: BootAutomatedSession = {
-      id: sessionMeta.id,
-      title: sessionMeta.title,
-      history: [{ role: 'assistant', content: finalText }],
-      automated: true,
-      unread: true,
-      createdAt: sessionMeta.createdAt,
-      source: sessionMeta.source,
-      previousSessionId: restartCtx.previousSessionId,
-    };
-
-    const notification = queueStartupNotification({
-      sessionId: sessionMeta.id,
-      title: sessionMeta.title,
-      text: finalText,
-      source: sessionMeta.source,
-      automatedSession,
-      previousSessionId: restartCtx.previousSessionId,
-      telegram: {
-        enabled: !!restartCtx.respondToTelegram,
-        chatId: Number(restartCtx.previousTelegramChatId || 0) > 0 ? Number(restartCtx.previousTelegramChatId) : undefined,
-        userId: Number.isFinite(Number(restartCtx.previousTelegramUserId)) ? Number(restartCtx.previousTelegramUserId) : undefined,
-      },
-    });
 
     return {
       status: 'ran',
-      reply: finalText,
-      sessionId: sessionMeta.id,
+      reply: primary.finalText,
+      sessionId: primary.targetSessionId,
       title: sessionMeta.title,
       source: sessionMeta.source,
-      automatedSession,
-      notificationId: notification.id,
+      automatedSession: null,
+      notificationId: primary.notificationId,
     };
   }
 

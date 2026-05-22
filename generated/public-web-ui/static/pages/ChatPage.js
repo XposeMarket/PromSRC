@@ -3,7 +3,7 @@
  *
  * Chat page: sessions, sendChat (SSE), message rendering, process log,
  * progress panel, agent execution tracking, canvas panel, file upload,
- * context pinning, queued prompts.
+ * queued prompts.
  *
  * ~2,421 lines extracted from index.html (the final page extraction).
  *
@@ -22,6 +22,8 @@ import { createCreativeExportEngine } from '../components/creative/exportEngine.
 import { createCreativeMotionTemplateClient } from '../components/creative/motionTemplates.js';
 import { createHyperframesController } from '../components/creative/hyperframesController.js';
 import { createHyperframesCatalogBrowser } from '../components/creative/hyperframesCatalogBrowser.js';
+import { syncCreativeEditor } from '../components/creative/editor/index.js';
+import { installProcessRunCardHandlers, renderProcessRunCard } from '../components/ProcessRunCard.js';
 // (state.js imports handled via window.* proxy above)
 
 // ─── Global state: all shared mutable state accessed via window.* ───────────
@@ -64,12 +66,15 @@ function buildReasoningPayload() {
   return window.reasoningEnabled ? { enabled: true, level: window.reasoningLevel || 'low' } : undefined;
 }
 
-// Ensure context pin state exists on window
-if (window.contextPinMode === undefined) window.contextPinMode = false;
-if (window.contextPinnedIndices === undefined) window.contextPinnedIndices = [];
-
 // Terminal sessions state (loaded from server)
 if (window.terminalSessions === undefined) window.terminalSessions = [];
+if (window.mobileSessions === undefined) window.mobileSessions = [];
+if (window.telegramSessions === undefined) window.telegramSessions = [];
+if (window.discordSessions === undefined) window.discordSessions = [];
+if (window.whatsappSessions === undefined) window.whatsappSessions = [];
+if (window.channelSessionsByChannel === undefined) window.channelSessionsByChannel = {};
+if (window._mainChatStreamLastSeqBySession === undefined) window._mainChatStreamLastSeqBySession = {};
+if (window._mainChatStreamCatchupTimers === undefined) window._mainChatStreamCatchupTimers = {};
 window.terminalSessionRefreshTimer = null;
 if (window.currentCreativeMode === undefined) window.currentCreativeMode = null;
 if (window.prometheusCreativeScene === undefined) window.prometheusCreativeScene = createSceneDocument();
@@ -112,6 +117,15 @@ if (window.browserCanvasState === undefined) {
     frameBase64: '',
     frameWidth: 0,
     frameHeight: 0,
+    // Server-reported page geometry (used so overlay coords land on real pixels,
+    // not on the magic-nudge hack the old client had to use).
+    frameBitmapWidth: 0,
+    frameBitmapHeight: 0,
+    frameViewportWidth: 0,
+    frameViewportHeight: 0,
+    frameScrollX: 0,
+    frameScrollY: 0,
+    frameDevicePixelRatio: 1,
     selectedElement: null,
     namedElements: [],
     itemRoots: [],
@@ -124,6 +138,10 @@ if (window.browserCanvasState === undefined) {
     knowledgeRequestedFor: '',
     selectionPending: false,
     teachSession: null,
+    hoverElement: null,
+    interactableMap: null,
+    interactableMapRequestedAt: 0,
+    interactableMapRequestId: '',
     updatedAt: 0,
   };
 }
@@ -140,6 +158,8 @@ if (window._sessionThinking === undefined) window._sessionThinking = {};
 if (window._sessionAbortControllers === undefined) window._sessionAbortControllers = {};
 if (window._sessionStreamState === undefined) window._sessionStreamState = {};
 if (window._sessionQueuedPrompts === undefined) window._sessionQueuedPrompts = {};
+if (window._chatSendLocks === undefined) window._chatSendLocks = {};
+if (window._localMainChatClientRequestIds === undefined) window._localMainChatClientRequestIds = {};
 if (window._editRerunAbortResetSessions === undefined) window._editRerunAbortResetSessions = new Set();
 if (window._voicePendingTurns === undefined) window._voicePendingTurns = [];
 if (window.currentProgressThinkingActive === undefined) window.currentProgressThinkingActive = false;
@@ -164,6 +184,64 @@ function getChatSessionById(id) {
   return window.chatSessions.find(s => s.id === id) || null;
 }
 
+function newChatClientRequestId(sessionId) {
+  const suffix = crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return `web:${String(sessionId || 'default').replace(/[^a-zA-Z0-9_.:-]/g, '_').slice(0, 48)}:${suffix}`;
+}
+
+function normalizeChatSendFingerprint(message) {
+  return String(message || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 600);
+}
+
+function acquireChatSendLock(sessionId, message) {
+  const sid = String(sessionId || 'default');
+  const fingerprint = normalizeChatSendFingerprint(message);
+  if (!fingerprint) return null;
+  const now = Date.now();
+  const locks = window._chatSendLocks || (window._chatSendLocks = {});
+  const key = `${sid}::${fingerprint}`;
+  const existing = locks[key];
+  if (existing && now - Number(existing.at || 0) < 2500) return null;
+  const lock = { key, at: now };
+  locks[key] = lock;
+  return lock;
+}
+
+function releaseChatSendLock(lock) {
+  if (!lock?.key) return;
+  setTimeout(() => {
+    const locks = window._chatSendLocks || {};
+    if (locks[lock.key] === lock) delete locks[lock.key];
+  }, 2500);
+}
+
+function rememberLocalMainChatRequest(sessionId, clientRequestId) {
+  const sid = String(sessionId || '').trim();
+  const cid = String(clientRequestId || '').trim();
+  if (!sid || !cid) return;
+  const map = window._localMainChatClientRequestIds || (window._localMainChatClientRequestIds = {});
+  const bySession = map[sid] && typeof map[sid] === 'object' ? map[sid] : {};
+  bySession[cid] = Date.now();
+  map[sid] = bySession;
+}
+
+function forgetLocalMainChatRequest(sessionId, clientRequestId) {
+  const sid = String(sessionId || '').trim();
+  const cid = String(clientRequestId || '').trim();
+  if (!sid || !cid) return;
+  setTimeout(() => {
+    const bySession = window._localMainChatClientRequestIds?.[sid];
+    if (bySession) delete bySession[cid];
+  }, 15000);
+}
+
+function isLocalMainChatRequest(sessionId, clientRequestId) {
+  const sid = String(sessionId || '').trim();
+  const cid = String(clientRequestId || '').trim();
+  if (!sid || !cid) return false;
+  return !!window._localMainChatClientRequestIds?.[sid]?.[cid];
+}
+
 async function fetchJsonWithTimeout(url, timeoutMs = 2500) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -186,6 +264,7 @@ function makeEmptyStreamState() {
     currentProgressLines: [],
     currentProgressThinkingActive: false,
     currentProgressThinkingText: '',
+    liveTraceEntries: [],
     runtimeProgressState: { source: 'none', activeIndex: -1, items: [] },
     declaredPlanToolCounter: 0,
     declaredPlanToolActiveIndex: -1,
@@ -195,6 +274,8 @@ function makeEmptyStreamState() {
     lastHeartbeatLogSignature: '',
     currentTurnStartIndex: -1,
     activeModelBadge: null,
+    pendingApprovals: [],
+    forceAppendAssistantAfterInterruption: false,
   };
 }
 
@@ -219,11 +300,13 @@ function applyStreamStateToWindow(id) {
   window.currentProgressLines = Array.isArray(st.currentProgressLines) ? st.currentProgressLines : [];
   window.currentProgressThinkingActive = !!st.currentProgressThinkingActive;
   window.currentProgressThinkingText = st.currentProgressThinkingText || '';
+  window.liveTraceEntries = Array.isArray(st.liveTraceEntries) ? st.liveTraceEntries : [];
   window.runtimeProgressState = st.runtimeProgressState || { source: 'none', activeIndex: -1, items: [] };
   window.lastHeartbeat = st.lastHeartbeat || { state: 'idle', level: '', current_step: '-', retry_count: 0, format_violation_count: 0, message: '' };
   window.lastHeartbeatLogSignature = st.lastHeartbeatLogSignature || '';
   window.currentTurnStartIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   window.activeModelBadge = st.activeModelBadge || null;
+  window.pendingApprovals = Array.isArray(st.pendingApprovals) ? st.pendingApprovals : [];
 }
 
 function isSessionThinking(id) {
@@ -238,6 +321,34 @@ function syncActiveSessionRunState() {
   window.queuedPrompts = getSessionQueuedPrompts(activeId);
   currentAbortController = (window._sessionAbortControllers && window._sessionAbortControllers[activeId]) || null;
   return activeThinking;
+}
+
+async function requestGatewayMainChatAbort(sessionId = window.activeChatSessionId, source = 'desktop') {
+  const sid = String(sessionId || '').trim();
+  try {
+    const result = await api('/api/mobile/commands/stop-now', {
+      method: 'POST',
+      body: { sessionId: sid, source },
+      timeoutMs: 15000,
+    });
+    if (result?.success) {
+      addSessionProcessEntry(sid, 'warn', 'Gateway abort requested for active main chat runtime.', {
+        actor: 'Desktop Abort',
+        source,
+        target: result.target || null,
+      });
+      return true;
+    }
+    if (result?.message) {
+      addSessionProcessEntry(sid, 'warn', result.message, { actor: 'Desktop Abort', source });
+    }
+  } catch (err) {
+    addSessionProcessEntry(sid, 'error', `Gateway abort request failed: ${String(err?.message || err)}`, {
+      actor: 'Desktop Abort',
+      source,
+    });
+  }
+  return false;
 }
 
 function getSessionQueuedPrompts(id) {
@@ -539,6 +650,14 @@ function setRightPanelWidth(width, options = {}) {
   else rightPanel.style.removeProperty('max-width');
 }
 
+function resetRightPanelWidth() {
+  const rightPanel = document.getElementById('right-panel');
+  if (!rightPanel) return;
+  rightPanel.style.removeProperty('width');
+  rightPanel.style.removeProperty('min-width');
+  rightPanel.style.removeProperty('max-width');
+}
+
 function normalizeCreativeMode(mode) {
   const key = String(mode || '').trim().toLowerCase();
   if (key === 'canvas') return 'image';
@@ -584,9 +703,21 @@ function getBrowserCanvasState() {
       lastTool: '',
       statusLabel: 'Browser idle',
       frameBase64: '',
+      frameBlobUrl: '',
       frameWidth: 0,
       frameHeight: 0,
+      frameBitmapWidth: 0,
+      frameBitmapHeight: 0,
+      frameViewportWidth: 0,
+      frameViewportHeight: 0,
+      frameScrollX: 0,
+      frameScrollY: 0,
+      frameDevicePixelRatio: 1,
       selectedElement: null,
+      hoverElement: null,
+      interactableMap: null,
+      interactableMapRequestedAt: 0,
+      interactableMapRequestId: '',
       namedElements: [],
       itemRoots: [],
       extractionSchemas: [],
@@ -758,6 +889,21 @@ function restoreBrowserCanvasSessionState(saved) {
   state.frameBase64 = '';
   state.frameWidth = 0;
   state.frameHeight = 0;
+  // Blob URLs are only valid for this page lifetime — drop any in-memory ref and
+  // revoke whatever the previous run held.
+  if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
+  state.frameBlobUrl = '';
+  state.frameBitmapWidth = 0;
+  state.frameBitmapHeight = 0;
+  state.frameViewportWidth = 0;
+  state.frameViewportHeight = 0;
+  state.frameScrollX = 0;
+  state.frameScrollY = 0;
+  state.frameDevicePixelRatio = 1;
+  state.hoverElement = null;
+  state.interactableMap = null;
+  state.interactableMapRequestedAt = 0;
+  state.interactableMapRequestId = '';
   return state;
 }
 
@@ -1228,12 +1374,20 @@ function followBrowserCanvasSession(sessionId, options = {}) {
     state.lastTool = record.tool || '';
     state.statusLabel = record.statusLabel || state.statusLabel;
     state.streamActive = record.streamActive === true;
+    if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
+    state.frameBlobUrl = '';
     state.frameBase64 = record.frameBase64 || '';
+    if (state.frameBase64) {
+      const url = decodeBase64FrameToBlobUrl(state.frameBase64, record.frameFormat);
+      if (url) state.frameBlobUrl = url;
+    }
     state.frameWidth = Number(record.frameWidth || 0) || 0;
     state.frameHeight = Number(record.frameHeight || 0) || 0;
     state.frameFormat = record.frameFormat || 'png';
     state.updatedAt = Number(record.updatedAt || Date.now()) || Date.now();
   }
+  state.hoverElement = null;
+  state.interactableMap = null;
   state.controlCaptured = false;
   state.controlOwner = 'agent';
   state.selectionPending = false;
@@ -1263,12 +1417,20 @@ function returnBrowserCanvasToPrimarySession(options = {}) {
     state.lastTool = record.tool || '';
     state.statusLabel = record.statusLabel || state.statusLabel;
     state.streamActive = record.streamActive === true;
+    if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
+    state.frameBlobUrl = '';
     state.frameBase64 = record.frameBase64 || '';
+    if (state.frameBase64) {
+      const url = decodeBase64FrameToBlobUrl(state.frameBase64, record.frameFormat);
+      if (url) state.frameBlobUrl = url;
+    }
     state.frameWidth = Number(record.frameWidth || 0) || 0;
     state.frameHeight = Number(record.frameHeight || 0) || 0;
     state.frameFormat = record.frameFormat || 'png';
     state.updatedAt = Number(record.updatedAt || Date.now()) || Date.now();
   }
+  state.hoverElement = null;
+  state.interactableMap = null;
   state.controlCaptured = false;
   state.controlOwner = 'agent';
   state.selectionPending = false;
@@ -1352,15 +1514,25 @@ function focusBrowserCanvasFrameWrap() {
 function resolveBrowserCanvasViewportPointFromClient(clientX, clientY) {
   const state = getBrowserCanvasState();
   const frame = document.getElementById('browser-canvas-frame');
-  if (!frame || !String(state.frameBase64 || '').trim()) return null;
+  if (!frame || (!String(state.frameBase64 || '').trim() && !state.frameBlobUrl)) return null;
   const rect = frame.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;
-  const localX = Number(clientX || 0) - rect.left;
-  const localY = Number(clientY || 0) - rect.top;
-  if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) return null;
+  const computed = window.getComputedStyle(frame);
+  const borderLeft = parseFloat(computed.borderLeftWidth) || 0;
+  const borderTop = parseFloat(computed.borderTopWidth) || 0;
+  const borderRight = parseFloat(computed.borderRightWidth) || 0;
+  const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+  const innerWidth = rect.width - borderLeft - borderRight;
+  const innerHeight = rect.height - borderTop - borderBottom;
+  const localX = Number(clientX || 0) - rect.left - borderLeft;
+  const localY = Number(clientY || 0) - rect.top - borderTop;
+  if (localX < 0 || localY < 0 || localX > innerWidth || localY > innerHeight) return null;
+  const viewportWidth = Number(state.frameViewportWidth || state.frameWidth || innerWidth);
+  const viewportHeight = Number(state.frameViewportHeight || state.frameHeight || innerHeight);
+  // Subpixel coords — Playwright accepts floats and converts internally.
   return {
-    x: Math.round((localX / rect.width) * Number(state.frameWidth || rect.width)),
-    y: Math.round((localY / rect.height) * Number(state.frameHeight || rect.height)),
+    x: (localX / innerWidth) * viewportWidth,
+    y: (localY / innerHeight) * viewportHeight,
   };
 }
 
@@ -2326,12 +2498,18 @@ function renderBrowserCanvasSurface() {
       const renderMemoryList = (title, items, accentColor = '#93c5fd') => `
         <div style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#94a3b8">${escHtml(title)}</div>
         <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
-          ${items.map((entry) => `
+          ${items.map((entry) => {
+            const fullSelector = entry.selector || entry.tagName || 'element';
+            const truncatedSelector = fullSelector.length > 60
+              ? fullSelector.substring(0, 60) + '...'
+              : fullSelector;
+            return `
             <div style="border:1px solid rgba(148,163,184,0.14);border-radius:8px;padding:8px 10px;background:rgba(15,23,42,0.42)">
               <div style="font-size:12px;font-weight:700;color:#f8fafc;word-break:break-word">${escHtml(entry.name)}</div>
-              <div style="margin-top:4px;font-size:11px;color:${accentColor};word-break:break-word">${escHtml(entry.selector || entry.tagName || 'element')}</div>
+              <div style="margin-top:4px;font-size:11px;color:${accentColor};word-break:break-word;font-family:monospace;font-size:10px" title="${escHtml(fullSelector)}">${escHtml(truncatedSelector)}</div>
             </div>
-          `).join('')}
+          `;
+          }).join('')}
         </div>
       `;
       const renderSchemaList = (title, items) => `
@@ -2374,8 +2552,19 @@ function renderBrowserCanvasSurface() {
       : (mode === 'copilot' ? ((controlCaptured && !followingDetachedSession) ? 'text' : 'pointer') : 'default');
   }
   if (frameEl && hasFrame) {
-    const mime = String(state.frameFormat || 'png').toLowerCase() === 'jpeg' ? 'image/jpeg' : 'image/png';
-    frameEl.src = `data:${mime};base64,${state.frameBase64}`;
+    // Prefer object-URL transport: each new frame is decoded once (no base64 string churn,
+    // no data-URL re-parse). The blob URL is created in the WS handler and revoked
+    // when superseded, so we just point the <img> at the current one here.
+    if (state.frameBlobUrl) {
+      if (frameEl.dataset.frameBlobUrl !== state.frameBlobUrl) {
+        frameEl.src = state.frameBlobUrl;
+        frameEl.dataset.frameBlobUrl = state.frameBlobUrl;
+      }
+    } else if (state.frameBase64) {
+      const mime = String(state.frameFormat || 'png').toLowerCase() === 'jpeg' ? 'image/jpeg' : 'image/png';
+      frameEl.src = `data:${mime};base64,${state.frameBase64}`;
+      frameEl.dataset.frameBlobUrl = '';
+    }
   }
   if (frameMeta) frameMeta.style.display = hasFrame ? 'flex' : 'none';
   if (frameCaption) {
@@ -2409,8 +2598,11 @@ function renderBrowserCanvasSurface() {
     selectionText.title = fullSelectorText;
   }
   syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl);
+  ensureBrowserCanvasHoverBindings();
+  ensureBrowserCanvasFrameMetaResizeObserver(frameWrap, frameMeta, frameEl);
   updateBrowserSelectionOverlay(selectionBox, frameEl, state);
   updateBrowserTransientHighlight(clickHighlight, frameEl, state);
+  updateBrowserHoverOverlay();
   syncBrowserCanvasStream();
   updateDesignSelectionChip();
   updateCreativeModeControls();
@@ -2498,7 +2690,7 @@ function syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl) {
     frameWrap.style.justifyContent = 'flex-start';
   }
   if (!frameMeta || !frameEl) return;
-  const frameWidth = Math.round(frameEl.getBoundingClientRect().width || frameEl.clientWidth || 0);
+  const frameWidth = frameEl.getBoundingClientRect().width || frameEl.clientWidth || 0;
   if (frameWidth > 0) {
     frameMeta.style.width = `${frameWidth}px`;
     frameMeta.style.maxWidth = '100%';
@@ -2508,43 +2700,94 @@ function syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl) {
   }
 }
 
-function positionBrowserOverlayElement(overlayEl, frameEl, bounds) {
+// Keep the meta strip + every overlay aligned with the streamed <img> when the panel
+// (or the window) is resized, even outside of full re-renders. Previously frameMeta
+// only resynced inside renderBrowserCanvasSurface, so it drifted while idle.
+let browserCanvasFrameMetaResizeObserver = null;
+function ensureBrowserCanvasFrameMetaResizeObserver(frameWrap, frameMeta, frameEl) {
+  if (!frameWrap || !frameMeta || !frameEl || typeof ResizeObserver === 'undefined') return;
+  if (browserCanvasFrameMetaResizeObserver) return;
+  browserCanvasFrameMetaResizeObserver = new ResizeObserver(() => {
+    const wrap = document.getElementById('browser-canvas-frame-wrap');
+    const meta = document.getElementById('browser-canvas-frame-meta');
+    const img = document.getElementById('browser-canvas-frame');
+    if (!wrap || !meta || !img) return;
+    syncBrowserCanvasFrameLayout(wrap, meta, img);
+    const state = getBrowserCanvasState();
+    updateBrowserSelectionOverlay(document.getElementById('browser-canvas-selection-box'), img, state);
+    updateBrowserTransientHighlight(document.getElementById('browser-canvas-click-highlight'), img, state);
+    updateBrowserHoverOverlay();
+    updateBrowserAgentCursorOverlay(document.getElementById('browser-canvas-agent-cursor'), img, state);
+  });
+  try { browserCanvasFrameMetaResizeObserver.observe(frameWrap); } catch {}
+  try { browserCanvasFrameMetaResizeObserver.observe(frameEl); } catch {}
+}
+
+function positionBrowserOverlayElement(overlayEl, frameEl, bounds, options = {}) {
   if (!overlayEl || !frameEl || !bounds) return false;
-  const state = getBrowserCanvasState();
-  const viewportWidth = Number(state?.frameWidth || 0);
-  const viewportHeight = Number(state?.frameHeight || 0);
-  const frameWrap = frameEl.parentElement;
-  const frameRect = frameEl.getBoundingClientRect();
-  const wrapRect = frameWrap?.getBoundingClientRect?.();
-  if (!viewportWidth || !viewportHeight || !frameRect.width || !frameRect.height || !wrapRect?.width || !wrapRect?.height) {
+  const state = options.state || getBrowserCanvasState();
+  // Bounds arrive in CSS-px viewport coordinates from the page's getBoundingClientRect().
+  // The streamed bitmap covers that same viewport box, so we map by:
+  //   1. CSS-px viewport (state.frameViewportWidth/Height) → bitmap pixels (state.frameBitmapWidth/Height)
+  //   2. bitmap pixels → on-screen rendered <img> size (frameRect inner box)
+  // No magic nudge required — the prior 10/6 nudge was masking a missing DPR step.
+  const viewportWidth = Number(state?.frameViewportWidth || state?.frameWidth || 0);
+  const viewportHeight = Number(state?.frameViewportHeight || state?.frameHeight || 0);
+  if (!viewportWidth || !viewportHeight) {
     overlayEl.style.display = 'none';
     return false;
   }
-  // The <img> has a 1px border + border-radius; getBoundingClientRect includes the border,
-  // but the actual bitmap content starts at the inner edge. Also compensate for a small
-  // CDP screencast drift (overlays consistently land a few px up-left of the real element).
+  const frameWrap = frameEl.parentElement;
+  const frameRect = frameEl.getBoundingClientRect();
+  const wrapRect = frameWrap?.getBoundingClientRect?.();
+  if (!frameRect.width || !frameRect.height || !wrapRect?.width || !wrapRect?.height) {
+    overlayEl.style.display = 'none';
+    return false;
+  }
   const computed = window.getComputedStyle(frameEl);
   const borderLeft = parseFloat(computed.borderLeftWidth) || 0;
   const borderTop = parseFloat(computed.borderTopWidth) || 0;
-  const horizontalOverlayNudgePx = 10;
-  const verticalOverlayNudgePx = 6;
-  const scaleX = (frameRect.width - borderLeft * 2) / viewportWidth;
-  const scaleY = (frameRect.height - borderTop * 2) / viewportHeight;
+  const borderRight = parseFloat(computed.borderRightWidth) || 0;
+  const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+  const innerWidth = frameRect.width - borderLeft - borderRight;
+  const innerHeight = frameRect.height - borderTop - borderBottom;
+  if (innerWidth <= 0 || innerHeight <= 0) {
+    overlayEl.style.display = 'none';
+    return false;
+  }
+  // bounds.x/y are already in CSS-px viewport-relative coords. We map directly to the inner <img> box.
+  const scaleX = innerWidth / viewportWidth;
+  const scaleY = innerHeight / viewportHeight;
   const originLeft = frameRect.left - wrapRect.left + borderLeft;
   const originTop = frameRect.top - wrapRect.top + borderTop;
-  overlayEl.style.left = `${originLeft + (Number(bounds.x || 0) * scaleX) + horizontalOverlayNudgePx}px`;
-  overlayEl.style.top = `${originTop + (Number(bounds.y || 0) * scaleY) + verticalOverlayNudgePx}px`;
-  overlayEl.style.width = `${Math.max(18, Number(bounds.width || 0) * scaleX)}px`;
-  overlayEl.style.height = `${Math.max(18, Number(bounds.height || 0) * scaleY)}px`;
+  const boundX = Number(bounds.x) || 0;
+  const boundY = Number(bounds.y) || 0;
+  const boundW = Number(bounds.width) || 0;
+  const boundH = Number(bounds.height) || 0;
+  // Use subpixel CSS — the browser handles rendering crisp lines at fractional positions.
+  // No Math.max floor: small elements get small boxes. Optional padding can expand the visible
+  // outline if the caller really needs minimum size, but we don't impose it by default.
+  const padding = Number(options.padding) || 0;
+  overlayEl.style.left = `${originLeft + boundX * scaleX - padding}px`;
+  overlayEl.style.top = `${originTop + boundY * scaleY - padding}px`;
+  overlayEl.style.width = `${Math.max(0, boundW * scaleX + padding * 2)}px`;
+  overlayEl.style.height = `${Math.max(0, boundH * scaleY + padding * 2)}px`;
   return true;
 }
 
 function updateBrowserSelectionOverlay(selectionBox, frameEl, state = getBrowserCanvasState()) {
   if (!selectionBox || !frameEl) return;
-  const bounds = normalizeBrowserInteractionMode(state?.interactionMode) === 'teach' && !isFollowingDetachedBrowserCanvasSession(state)
-    ? state?.selectedElement?.bounds
-    : null;
-  if (!bounds || !positionBrowserOverlayElement(selectionBox, frameEl, bounds)) {
+  const mode = normalizeBrowserInteractionMode(state?.interactionMode);
+  if (isFollowingDetachedBrowserCanvasSession(state) || (mode !== 'teach' && mode !== 'copilot')) {
+    selectionBox.style.display = 'none';
+    return;
+  }
+  // Prefer the live-tracked bounds (re-resolved by the server every frame) so the box
+  // sticks to the element through scroll/layout shifts. Fall back to the snapshot
+  // captured at click time.
+  const live = state?.selectedElement?.liveBounds;
+  const bounds = (live && Number.isFinite(live.width) && live.width > 0) ? live : state?.selectedElement?.bounds;
+  if (!bounds || !positionBrowserOverlayElement(selectionBox, frameEl, bounds, { state })) {
     selectionBox.style.display = 'none';
     return;
   }
@@ -2572,8 +2815,8 @@ function updateBrowserTransientHighlight(highlightEl, frameEl, state = getBrowse
 function updateBrowserAgentCursorOverlay(cursorEl, frameEl, state = getBrowserCanvasState()) {
   if (!cursorEl || !frameEl) return;
   const cursor = state?.agentCursor;
-  const viewportWidth = Number(cursor?.viewportWidth || state?.frameWidth || 0);
-  const viewportHeight = Number(cursor?.viewportHeight || state?.frameHeight || 0);
+  const viewportWidth = Number(cursor?.viewportWidth || state?.frameViewportWidth || state?.frameWidth || 0);
+  const viewportHeight = Number(cursor?.viewportHeight || state?.frameViewportHeight || state?.frameHeight || 0);
   const x = Number(cursor?.x);
   const y = Number(cursor?.y);
   if (!cursor || !Number.isFinite(x) || !Number.isFinite(y) || !viewportWidth || !viewportHeight) {
@@ -2591,10 +2834,17 @@ function updateBrowserAgentCursorOverlay(cursorEl, frameEl, state = getBrowserCa
     cursorEl.style.display = 'none';
     return;
   }
-  const originLeft = frameRect.left - wrapRect.left;
-  const originTop = frameRect.top - wrapRect.top;
-  const left = originLeft + (x * (frameRect.width / viewportWidth));
-  const top = originTop + (y * (frameRect.height / viewportHeight));
+  const computed = window.getComputedStyle(frameEl);
+  const borderLeft = parseFloat(computed.borderLeftWidth) || 0;
+  const borderTop = parseFloat(computed.borderTopWidth) || 0;
+  const borderRight = parseFloat(computed.borderRightWidth) || 0;
+  const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+  const innerWidth = frameRect.width - borderLeft - borderRight;
+  const innerHeight = frameRect.height - borderTop - borderBottom;
+  const originLeft = frameRect.left - wrapRect.left + borderLeft;
+  const originTop = frameRect.top - wrapRect.top + borderTop;
+  const left = originLeft + (x * (innerWidth / viewportWidth));
+  const top = originTop + (y * (innerHeight / viewportHeight));
   cursorEl.style.display = 'block';
   cursorEl.style.left = `${left}px`;
   cursorEl.style.top = `${top}px`;
@@ -2763,7 +3013,178 @@ function inspectBrowserCanvasPoint(event) {
   }
   state.selectionPending = true;
   renderBrowserCanvasSurface();
-  wsSend({ type: 'browser:inspect_point', sessionId, x: viewportX, y: viewportY });
+  wsSend({
+    type: 'browser:inspect_point',
+    sessionId,
+    x: viewportX,
+    y: viewportY,
+    purpose: 'select',
+    track: true,
+  });
+}
+
+// ─── Live hover inspect ───────────────────────────────────────────────────────
+// We keep a recent "interactable map" (selector packs + bounds) snapshot client-side
+// and hit-test mousemoves locally — no round-trip per move. We still fall back to
+// a throttled server inspect_point for elements that aren't in the local map.
+
+const BROWSER_INTERACTABLE_MAP_TTL_MS = 1800;
+const BROWSER_HOVER_FALLBACK_MIN_INTERVAL_MS = 140;
+let browserHoverRafHandle = 0;
+let browserHoverPendingPoint = null;
+let browserLastHoverFallbackAt = 0;
+let browserLastHoverFingerprint = '';
+
+function maybeRequestBrowserInteractableMap(state = getBrowserCanvasState(), options = {}) {
+  if (!state) return;
+  const sessionId = String(state.sessionId || '').trim();
+  if (!sessionId) return;
+  if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
+  const mode = normalizeBrowserInteractionMode(state.interactionMode);
+  if (mode !== 'teach' && mode !== 'copilot' && options.force !== true) return;
+  const now = Date.now();
+  if (!options.force && (now - Number(state.interactableMapRequestedAt || 0)) < BROWSER_INTERACTABLE_MAP_TTL_MS) return;
+  state.interactableMapRequestedAt = now;
+  state.interactableMapRequestId = `imap_${now}`;
+  wsSend({
+    type: 'browser:inspect_map',
+    sessionId,
+    requestId: state.interactableMapRequestId,
+    limit: 240,
+  });
+}
+
+function hitTestBrowserInteractableMap(state, viewportX, viewportY) {
+  const map = state?.interactableMap;
+  if (!map || !Array.isArray(map.items) || !map.items.length) return null;
+  if ((Date.now() - Number(map.capturedAt || 0)) > 5000) return null;
+  // Prefer the smallest box that contains the point — that's the most specific element.
+  let best = null;
+  let bestArea = Infinity;
+  for (const item of map.items) {
+    const b = item?.bounds;
+    if (!b) continue;
+    const x = Number(b.x) || 0;
+    const y = Number(b.y) || 0;
+    const w = Number(b.width) || 0;
+    const h = Number(b.height) || 0;
+    if (viewportX < x || viewportY < y || viewportX > x + w || viewportY > y + h) continue;
+    const area = Math.max(1, w * h);
+    if (area < bestArea) {
+      bestArea = area;
+      best = item;
+    }
+  }
+  return best;
+}
+
+function applyBrowserHoverFromLocalMap(state, viewportX, viewportY) {
+  const hit = hitTestBrowserInteractableMap(state, viewportX, viewportY);
+  if (!hit) {
+    if (state.hoverElement) {
+      state.hoverElement = null;
+      updateBrowserHoverOverlay();
+    }
+    return false;
+  }
+  const fingerprint = `${hit.bounds?.x}|${hit.bounds?.y}|${hit.bounds?.width}|${hit.bounds?.height}|${hit.selector}`;
+  if (fingerprint === browserLastHoverFingerprint && state.hoverElement) return true;
+  browserLastHoverFingerprint = fingerprint;
+  state.hoverElement = {
+    selector: hit.selector,
+    pack: hit.pack || null,
+    tagName: hit.tagName || '',
+    role: hit.role || '',
+    text: hit.text || '',
+    bounds: hit.bounds,
+  };
+  updateBrowserHoverOverlay();
+  return true;
+}
+
+function maybeRequestBrowserHoverFallback(state, viewportX, viewportY) {
+  const now = Date.now();
+  if (now - browserLastHoverFallbackAt < BROWSER_HOVER_FALLBACK_MIN_INTERVAL_MS) return;
+  const sessionId = String(state.sessionId || '').trim();
+  if (!sessionId) return;
+  if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
+  browserLastHoverFallbackAt = now;
+  wsSend({
+    type: 'browser:inspect_point',
+    sessionId,
+    x: viewportX,
+    y: viewportY,
+    purpose: 'hover',
+    track: false,
+    requestId: `hover_${now}`,
+  });
+}
+
+function handleBrowserCanvasFramePointerMove(event) {
+  const state = getBrowserCanvasState();
+  if (!isBrowserCanvasSurfaceActive()) return;
+  const mode = normalizeBrowserInteractionMode(state.interactionMode);
+  if (mode !== 'teach' && mode !== 'copilot') return;
+  if (isFollowingDetachedBrowserCanvasSession(state)) return;
+  // While the user has the browser captured (i.e. typing into the page), don't draw
+  // hover overlays — the page itself should look "clicked into," not under inspection.
+  if (state.controlCaptured && state.controlOwner === 'user' && mode === 'copilot') return;
+  const point = resolveBrowserCanvasViewportPointFromClient(event?.clientX, event?.clientY);
+  if (!point) {
+    if (state.hoverElement) {
+      state.hoverElement = null;
+      updateBrowserHoverOverlay();
+    }
+    return;
+  }
+  browserHoverPendingPoint = point;
+  if (browserHoverRafHandle) return;
+  browserHoverRafHandle = requestAnimationFrame(() => {
+    browserHoverRafHandle = 0;
+    const pending = browserHoverPendingPoint;
+    browserHoverPendingPoint = null;
+    if (!pending) return;
+    const ok = applyBrowserHoverFromLocalMap(state, pending.x, pending.y);
+    if (!ok) {
+      // Schedule a refreshed interactable map, and ask the server directly while we wait.
+      maybeRequestBrowserInteractableMap(state);
+      maybeRequestBrowserHoverFallback(state, pending.x, pending.y);
+    }
+  });
+}
+
+function handleBrowserCanvasFramePointerLeave() {
+  const state = getBrowserCanvasState();
+  if (!state.hoverElement) return;
+  state.hoverElement = null;
+  browserLastHoverFingerprint = '';
+  updateBrowserHoverOverlay();
+}
+
+function updateBrowserHoverOverlay() {
+  const hoverEl = document.getElementById('browser-canvas-hover-box');
+  const frameEl = document.getElementById('browser-canvas-frame');
+  if (!hoverEl || !frameEl) return;
+  const state = getBrowserCanvasState();
+  const mode = normalizeBrowserInteractionMode(state.interactionMode);
+  const hover = state.hoverElement;
+  if (!hover?.bounds || (mode !== 'teach' && mode !== 'copilot') || isFollowingDetachedBrowserCanvasSession(state)) {
+    hoverEl.style.display = 'none';
+    return;
+  }
+  if (!positionBrowserOverlayElement(hoverEl, frameEl, hover.bounds, { state })) {
+    hoverEl.style.display = 'none';
+    return;
+  }
+  hoverEl.style.display = 'block';
+}
+
+function ensureBrowserCanvasHoverBindings() {
+  const frameWrap = document.getElementById('browser-canvas-frame-wrap');
+  if (!frameWrap || frameWrap.dataset.browserHoverBound === '1') return;
+  frameWrap.addEventListener('pointermove', handleBrowserCanvasFramePointerMove);
+  frameWrap.addEventListener('pointerleave', handleBrowserCanvasFramePointerLeave);
+  frameWrap.dataset.browserHoverBound = '1';
 }
 
 function updateBrowserElementNameDraft(value) {
@@ -3312,10 +3733,20 @@ function applyBrowserEventState(msg, options = {}) {
     clearQueuedBrowserControlInputs();
     clearBrowserCanvasStreamHeartbeat();
     state.frameBase64 = '';
+    if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
+    state.frameBlobUrl = '';
     state.frameWidth = 0;
     state.frameHeight = 0;
+    state.frameBitmapWidth = 0;
+    state.frameBitmapHeight = 0;
+    state.frameViewportWidth = 0;
+    state.frameViewportHeight = 0;
+    state.frameScrollX = 0;
+    state.frameScrollY = 0;
     state.frameFormat = 'png';
     state.selectedElement = null;
+    state.hoverElement = null;
+    state.interactableMap = null;
     state.agentCursor = null;
     state.controlCaptured = false;
     state.controlOwner = 'agent';
@@ -3362,21 +3793,24 @@ function applyBrowserEventState(msg, options = {}) {
 
 function applyCreativeModeUI() {
   const mode = normalizeCreativeMode(window.currentCreativeMode);
+  const suppressAutoOpen = window.__pmSuppressCreativeAutoOpen === true;
   const rightPanel = document.getElementById('right-panel');
   const panel = document.getElementById('canvas-panel');
   const topbar = document.getElementById('right-panel-topbar');
   const body = document.body;
   if (mode) {
     if (isStructuredCreativeMode(mode)) ensureCreativeSceneForMode(mode);
-    if (rightPanel && !rightPanel.classList.contains('open')) {
+    if (!suppressAutoOpen && rightPanel && !rightPanel.classList.contains('open')) {
       if (typeof window.toggleRightPanel === 'function') window.toggleRightPanel();
     }
-    if (body) body.classList.remove('right-collapsed');
-    if (rightPanel && !creativeModeSavedPanelWidth) {
+    if (!suppressAutoOpen && body) body.classList.remove('right-collapsed');
+    if (!suppressAutoOpen && rightPanel && !creativeModeSavedPanelWidth) {
       creativeModeSavedPanelWidth = rightPanel.style.width || `${rightPanel.offsetWidth || 0}px`;
     }
-    setRightPanelWidth(CREATIVE_MODE_PANEL_WIDTH, { minimumWidth: 960, lockMax: true });
-    if (!canvasOpen) toggleCanvas(true, { force: true });
+    if (!suppressAutoOpen) {
+      setRightPanelWidth(CREATIVE_MODE_PANEL_WIDTH, { minimumWidth: 960, lockMax: true });
+      if (!canvasOpen) toggleCanvas(true, { force: true });
+    }
   } else if (rightPanel) {
     if (creativeModeSavedPanelWidth && !/^0px$/i.test(creativeModeSavedPanelWidth)) {
       rightPanel.style.width = creativeModeSavedPanelWidth;
@@ -3388,7 +3822,7 @@ function applyCreativeModeUI() {
     rightPanel.style.removeProperty('max-width');
     creativeModeSavedPanelWidth = null;
   }
-  if (canvasOpen && rightPanel && panel) {
+  if (!suppressAutoOpen && canvasOpen && rightPanel && panel) {
     rightPanel.classList.add('canvas-open');
     rightPanel.scrollTop = 0;
     panel.style.display = 'flex';
@@ -3399,6 +3833,7 @@ function applyCreativeModeUI() {
   renderCanvasPublishControls();
   syncCanvasSurfaceWidthLock();
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
+  syncCreativeEditor({ mode: normalizeCreativeMode(window.currentCreativeMode), shell: document.getElementById('canvas-creative-shell'), scene: window.prometheusCreativeScene, api: window.prometheusCreativeCore });
 }
 
 function createBlankCreativeScene(mode = window.currentCreativeMode) {
@@ -3512,7 +3947,10 @@ function renderQueuedPromptsPanel() {
   list.innerHTML = queue.map((q, i) => `
     <div class="queued-item">
       <div class="queued-item-text">${escHtml(getQueuedTurnMessage(q))}${getQueuedTurnFiles(q).length ? `<span class="queued-item-attachments"> +${getQueuedTurnFiles(q).length} file(s)</span>` : ''}</div>
-      <button class="queued-item-btn" onclick="removeQueuedPrompt(${i})">Remove</button>
+      <div class="queued-item-actions">
+        <button class="queued-item-btn queued-steer-btn" onclick="steerQueuedPrompt(${i})">Steer</button>
+        <button class="queued-item-btn" onclick="removeQueuedPrompt(${i})">Remove</button>
+      </div>
     </div>
   `).join('');
 }
@@ -3523,6 +3961,88 @@ function removeQueuedPrompt(index) {
   queue.splice(index, 1);
   window.queuedPrompts = queue;
   updateQueuedPromptUI();
+}
+
+function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
+  const sid = String(sessionId || '').trim();
+  const sess = getChatSessionById(sid);
+  if (!sess) return false;
+  if (!Array.isArray(sess.history)) sess.history = [];
+  if (!Array.isArray(sess.processLog)) sess.processLog = [];
+  const st = getSessionStreamState(sid);
+  const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Math.max(0, Number(st.currentTurnStartIndex)) : 0;
+  const entries = sess.processLog.slice(startIndex);
+  const groupId = `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const text = String(steerText || '').trim();
+  if (entries.length) {
+    sess.history.push({
+      role: 'assistant',
+      content: 'Tool stream continued below.',
+      timestamp: Date.now(),
+      processEntries: entries,
+      workflowGroupId: groupId,
+      workflowPart: 'before_interruption',
+      workflowLabel: 'Tool stream before steer',
+    });
+  }
+  sess.history.push({
+    role: 'user',
+    content: text,
+    timestamp: Date.now(),
+    channel: 'web',
+    channelLabel: 'steer',
+    workflowGroupId: groupId,
+    workflowPart: 'interruption',
+    workflowLabel: 'Steer',
+  });
+  if (st) st.forceAppendAssistantAfterInterruption = true;
+  persistSession(sid);
+  if (window.activeChatSessionId === sid) {
+    window.chatHistory = sess.history;
+    renderChatMessages();
+  }
+  addSessionProcessEntry(sid, 'warn', `Chat steer queued: ${text.slice(0, 180)}`, {
+    actor: 'Chat Steer',
+    eventId: data?.eventId,
+    runtimeId: data?.runtimeId,
+  });
+  return true;
+}
+
+async function steerQueuedPrompt(index) {
+  const queue = getActiveQueuedPrompts();
+  if (!Number.isInteger(index) || index < 0 || index >= queue.length) return;
+  const turn = normalizeQueuedChatTurn(queue[index]);
+  const message = String(turn.message || '').trim();
+  if (!message) return;
+  if (getQueuedTurnFiles(turn).length) {
+    showToast('Steer needs text only for now', 'Remove attached files or let this queued prompt run next.', 'info');
+    return;
+  }
+  const sessionId = String(window.activeChatSessionId || '').trim();
+  if (!sessionId || !isSessionThinking(sessionId)) {
+    showToast('No active run to steer', 'This prompt can still run normally when the chat is idle.', 'info');
+    return;
+  }
+  try {
+    const data = await api('/api/chat/steer', {
+      method: 'POST',
+      body: {
+        sessionId,
+        message,
+        source: 'web_queue_button',
+      },
+      timeoutMs: 15000,
+    });
+    queue.splice(index, 1);
+    window.queuedPrompts = queue;
+    updateQueuedPromptUI();
+    appendChatSteerWorkflowSplit(sessionId, message, data);
+    showToast('Steer sent', 'Prometheus will fold it into the active run.', 'success', 1800);
+  } catch (err) {
+    addSessionProcessEntry(sessionId, 'error', `Steer failed: ${String(err?.message || err)}`, { actor: 'Chat Steer' });
+    showToast('Steer failed', String(err?.message || err), 'error');
+  }
 }
 
 function clearQueuedPrompts() {
@@ -3622,9 +4142,16 @@ function enqueueVoicePendingTurn(text, files = [], source = 'voice') {
   const message = String(text || '').trim();
   if (!message) return '';
   ensureActiveChatSessionExists();
+  const sessionId = String(window.activeChatSessionId || '');
+  if (isSessionThinking(sessionId) && (!Array.isArray(files) || files.length === 0)) {
+    submitDesktopVoiceAsLiveSteer(message, { source }).catch((err) => {
+      showToast('Voice steer failed', String(err?.message || err), 'error');
+    });
+    return '';
+  }
   const turn = {
     id: `voice_${Date.now()}_${++voicePendingTurnSeq}`,
-    sessionId: String(window.activeChatSessionId || ''),
+    sessionId,
     text: message,
     files: Array.isArray(files) ? files.slice() : [],
     source: String(source || 'voice'),
@@ -3680,7 +4207,11 @@ async function processVoicePendingTurns() {
   markVoicePendingTurn(turn.id, { state: 'sending' });
   renderChatMessages();
   try {
-    await sendChat(makeQueuedChatTurn(turn.text, turn.files), { voicePendingTurnId: turn.id });
+    await sendChat(makeQueuedChatTurn(turn.text, turn.files), {
+      voicePendingTurnId: turn.id,
+      voiceAgentHandoff: true,
+      voiceSource: turn.source || 'desktop_voice',
+    });
   } catch (err) {
     markVoicePendingTurn(turn.id, { state: 'queued' });
     showToast('Voice message send failed', String(err?.message || err), 'error');
@@ -3709,8 +4240,32 @@ function sanitizeChatSessionForStorage(session) {
   if (!session || typeof session !== 'object') return session;
   return {
     ...session,
+    history: Array.isArray(session.history)
+      ? session.history.map((msg) => sanitizeChatMessageForDurableStorage(msg))
+      : session.history,
     browserCanvasState: sanitizeBrowserCanvasStateForStorage(session.browserCanvasState),
   };
+}
+
+function sanitizeAttachmentPreviewForDurableStorage(attachment) {
+  if (!attachment || typeof attachment !== 'object') return attachment;
+  const next = { ...attachment };
+  const hasDurablePath = !!String(next.workspacePath || next.path || next.filePath || '').trim();
+  if (hasDurablePath) {
+    delete next.dataUrl;
+    delete next.base64;
+    delete next.file;
+  }
+  return next;
+}
+
+function sanitizeChatMessageForDurableStorage(msg) {
+  if (!msg || typeof msg !== 'object') return msg;
+  const next = { ...msg };
+  if (Array.isArray(next.attachmentPreviews)) {
+    next.attachmentPreviews = next.attachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage);
+  }
+  return next;
 }
 
 function sanitizeChatSessionsForStorage(sessions) {
@@ -3927,7 +4482,7 @@ function historyForServer(history = window.chatHistory || []) {
   return (Array.isArray(history) ? history : [])
     .filter((msg) => msg && (msg.role === 'user' || isAssistantLikeMessage(msg)))
     .map((msg) => ({
-      ...cloneChatMessageForBranch(msg),
+      ...sanitizeChatMessageForDurableStorage(cloneChatMessageForBranch(msg)),
       role: msg.role === 'user' ? 'user' : 'assistant',
       content: String(msg.content || ''),
       timestamp: Number(msg.timestamp) || Date.now(),
@@ -3935,14 +4490,17 @@ function historyForServer(history = window.chatHistory || []) {
     .filter((msg) => msg.content.trim());
 }
 
-async function syncActiveSessionHistoryToServer(history = window.chatHistory || []) {
+async function syncActiveSessionHistoryToServer(history = window.chatHistory || [], options = {}) {
   const sid = String(window.activeChatSessionId || '').trim();
   if (!sid) return;
   try {
     const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/history`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ history: historyForServer(history) }),
+      body: JSON.stringify({
+        history: historyForServer(history),
+        resetCompaction: options.resetCompaction === true,
+      }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } catch (err) {
@@ -3973,8 +4531,69 @@ function waitForSessionIdle(sessionId, timeoutMs = 1800) {
   });
 }
 
+function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
+  const sid = String(sessionId || '').trim();
+  const sess = getChatSessionById(sid);
+  if (!sess) return false;
+  const shouldAbort = data?.classification?.shouldAbortOriginalRun === true;
+  if (!shouldAbort && data?.steerApplied === true) {
+    return appendChatSteerWorkflowSplit(sid, transcript || '(voice interruption)', {
+      ...data,
+      eventId: data?.steerEventId || data?.eventId,
+      runtimeId: data?.runtimeId || data?.activeRun?.id,
+    });
+  }
+  if (!Array.isArray(sess.history)) sess.history = [];
+  if (!Array.isArray(sess.processLog)) sess.processLog = [];
+  const st = getSessionStreamState(sid);
+  const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Math.max(0, Number(st.currentTurnStartIndex)) : 0;
+  const entries = sess.processLog.slice(startIndex);
+  const groupId = `voice_workflow_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const intent = String(data?.classification?.intent || 'unknown');
+  const interruptionText = String(transcript || '').trim() || '(voice interruption)';
+  if (entries.length) {
+    sess.history.push({
+      role: 'assistant',
+      content: 'Tool stream continued below.',
+      timestamp: Date.now(),
+      processEntries: entries,
+      workflowGroupId: groupId,
+      workflowPart: 'before_interruption',
+      workflowLabel: 'Tool stream before interruption',
+    });
+  }
+  sess.history.push({
+    role: 'user',
+    content: interruptionText,
+    timestamp: Date.now(),
+    channel: 'voice',
+    channelLabel: 'voice interruption',
+    workflowGroupId: groupId,
+    workflowPart: 'interruption',
+    workflowLabel: `Interruption: ${intent}`,
+  });
+  const reply = String(data?.voiceReply || (shouldAbort ? 'Stopped.' : 'Got it.')).trim();
+  sess.history.push({
+    role: 'assistant',
+    content: shouldAbort
+      ? `${reply}\n\n[Stopped by user]\n\nVoice interruption stopped the active Prometheus worker. Process log preserved.`
+      : `${reply}\n\nTool stream continues after interruption.`,
+    timestamp: Date.now(),
+    processEntries: sess.processLog.slice(startIndex),
+    workflowGroupId: groupId,
+    workflowPart: shouldAbort ? 'abort_response' : 'interruption_response',
+    workflowLabel: shouldAbort ? 'Abort response' : 'Interruption response',
+  });
+  if (!shouldAbort && st) st.forceAppendAssistantAfterInterruption = true;
+  persistSession(sid);
+  if (window.activeChatSessionId === sid) {
+    window.chatHistory = sess.history;
+    renderChatMessages();
+  }
+  return shouldAbort;
+}
+
 function renderMessageActions(msg, originalIndex) {
-  if (contextPinMode) return '';
   const isUser = msg?.role === 'user';
   const copyTitle = isUser ? 'Copy prompt' : 'Copy response';
   const editOrFork = isUser
@@ -4030,7 +4649,11 @@ function setChatSessions(next) {
 }
 
 function normalizeStoredSession(session) {
-  const history = Array.isArray(session?.history) ? session.history.filter((msg) => !isInternalChatMessage(msg)) : [];
+  const history = stabilizeChatHistoryOrder(
+    collapseDuplicateAssistantMessages(
+      Array.isArray(session?.history) ? session.history.filter((msg) => !isInternalChatMessage(msg)) : []
+    )
+  );
   const title = isCommandSessionTitle(session?.title)
     ? makeSessionTitle(history)
     : session?.title;
@@ -4079,16 +4702,54 @@ function sessionStubFromServer(s) {
   });
 }
 
+function mergeServerSessionSummaries(summaries) {
+  if (!Array.isArray(summaries) || summaries.length === 0) return;
+  window.chatSessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
+  const byId = new Map(window.chatSessions.map(s => [String(s.id), s]));
+  for (const serverSession of summaries) {
+    if (!serverSession?.id) continue;
+    if (isInternalChatSession(serverSession)) continue;
+    const serverStub = sessionStubFromServer(serverSession);
+    const existing = byId.get(String(serverSession.id));
+    if (existing) {
+      const serverUpdatedAt = Number(serverStub.updatedAt || 0);
+      const localUpdatedAt = Number(existing.updatedAt || existing.createdAt || 0);
+      Object.assign(existing, {
+        title: serverStub.title || existing.title,
+        createdAt: existing.createdAt || serverStub.createdAt,
+        updatedAt: Math.max(localUpdatedAt, serverUpdatedAt) || serverStub.updatedAt,
+        source: serverStub.source || existing.source,
+        automated: existing.automated || serverStub.automated,
+        creativeMode: existing.creativeMode ?? serverStub.creativeMode,
+        canvasProjectRoot: existing.canvasProjectRoot || serverStub.canvasProjectRoot,
+        canvasProjectLabel: existing.canvasProjectLabel || serverStub.canvasProjectLabel,
+        canvasProjectLink: existing.canvasProjectLink || serverStub.canvasProjectLink,
+        mainChatGoal: serverStub.mainChatGoal || existing.mainChatGoal || null,
+      });
+      if (serverUpdatedAt > localUpdatedAt + 250 || !Array.isArray(existing.history) || existing.history.length === 0) {
+        existing._needsServerLoad = true;
+      }
+    } else {
+      window.chatSessions.push(serverStub);
+      byId.set(String(serverSession.id), serverStub);
+    }
+  }
+  window.chatSessions.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+}
+
 // Fetch a single session's full history from the server and populate the stub.
-async function _loadSessionFromServer(id) {
+async function _loadSessionFromServer(id, options = {}) {
   if (/^(brain_thought_|brain_dream_|brain_dream_cleanup_)/i.test(String(id || ''))) return;
   const sess = window.chatSessions.find(s => s.id === id);
-  if (!sess || !sess._needsServerLoad) return;
+  const force = options.force === true;
+  if (!sess || (!force && !sess._needsServerLoad)) return;
   try {
     const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}`, 2000);
     const s = data.session;
     if (!s) return;
-    sess.history = (s.history || [])
+    const localHistory = Array.isArray(sess.history) ? sess.history.slice() : [];
+    const localProcessLog = Array.isArray(sess.processLog) ? sess.processLog.slice() : [];
+    const serverHistory = (s.history || [])
       .filter((m) => !isInternalChatMessage(m))
       .map(m => ({
         ...m,
@@ -4096,7 +4757,10 @@ async function _loadSessionFromServer(id) {
         content: m.content || '',
         timestamp: m.timestamp,
       }));
-    sess.processLog = s.processLog || [];
+    sess.history = mergeServerAndLocalHistory(localHistory, serverHistory);
+    const serverProcessLog = Array.isArray(s.processLog) ? s.processLog : [];
+    const messageProcessLog = (sess.history || []).flatMap((m) => processEntriesForMessage(m));
+    sess.processLog = mergeProcessEntryLists(localProcessLog, serverProcessLog, messageProcessLog);
     sess.creativeMode = normalizeCreativeMode(s.creativeMode);
     sess.canvasProjectRoot = normalizeCanvasPath(s.canvasProjectRoot) || null;
     sess.canvasProjectLabel = s.canvasProjectLabel || null;
@@ -4107,6 +4771,11 @@ async function _loadSessionFromServer(id) {
     sess.creativeHtmlMotionClip = s.creativeHtmlMotionClip || null;
     sess.mainChatGoal = s.mainChatGoal || null;
     sess.mainChatGoalHistory = Array.isArray(s.mainChatGoalHistory) ? s.mainChatGoalHistory : [];
+    const channel = String(s.channel || sess.source || '').trim();
+    if (channel && channel !== 'web') {
+      sess.source = channel;
+      sess.automated = true;
+    }
     if (sess.history.length > 0) sess.title = makeSessionTitle(sess.history) || sess.title;
     sess.createdAt = s.createdAt || sess.createdAt;
     sess.updatedAt = s.lastActiveAt || sess.updatedAt;
@@ -4133,36 +4802,7 @@ async function loadChatSessions() {
   } catch {}
 
   if (serverSessions.length > 0) {
-    const byId = new Map(window.chatSessions.map(s => [s.id, s]));
-    for (const serverSession of serverSessions) {
-      if (!serverSession?.id) continue;
-      if (isInternalChatSession(serverSession)) continue;
-      const existing = byId.get(serverSession.id);
-      const serverStub = sessionStubFromServer(serverSession);
-      if (existing) {
-        Object.assign(existing, {
-          title: existing.title || serverStub.title,
-          createdAt: existing.createdAt || serverStub.createdAt,
-          updatedAt: Math.max(Number(existing.updatedAt) || 0, Number(serverStub.updatedAt) || 0) || serverStub.updatedAt,
-          source: existing.source || serverStub.source,
-          automated: existing.automated || serverStub.automated,
-          creativeMode: existing.creativeMode ?? serverStub.creativeMode,
-          canvasProjectRoot: existing.canvasProjectRoot || serverStub.canvasProjectRoot,
-          canvasProjectLabel: existing.canvasProjectLabel || serverStub.canvasProjectLabel,
-          canvasProjectLink: existing.canvasProjectLink || serverStub.canvasProjectLink,
-          creativeSceneDoc: existing.creativeSceneDoc || serverStub.creativeSceneDoc,
-          creativeSelectedId: existing.creativeSelectedId || serverStub.creativeSelectedId,
-          creativeTimelineMs: existing.creativeTimelineMs || serverStub.creativeTimelineMs,
-          creativeHtmlMotionClip: existing.creativeHtmlMotionClip || serverStub.creativeHtmlMotionClip,
-          mainChatGoal: serverStub.mainChatGoal || existing.mainChatGoal || null,
-        });
-        if (!Array.isArray(existing.history) || existing.history.length === 0) existing._needsServerLoad = true;
-      } else {
-        window.chatSessions.push(serverStub);
-        byId.set(serverSession.id, serverStub);
-      }
-    }
-    window.chatSessions.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+    mergeServerSessionSummaries(serverSessions);
   }
 
   if (window.chatSessions.length === 0) {
@@ -4220,6 +4860,7 @@ async function loadChatSessions() {
   saveChatSessions();
   if (window.activeChatSessionId) await _loadSessionFromServer(window.activeChatSessionId);
   syncActiveChat();
+  if (window.activeChatSessionId) catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
 
   // Load terminal sessions from the server
   loadTerminalSessions();
@@ -4299,7 +4940,27 @@ function syncActiveChat() {
   canvasProjectRoot = normalizeCanvasPath(sess?.canvasProjectRoot) || null;
   canvasProjectLabel = sess?.canvasProjectLabel || null;
   canvasProjectLink = normalizeCanvasProjectLink(sess?.canvasProjectLink);
-  creativeSceneDoc = sess?.creativeSceneDoc ? createSceneDocument(sess.creativeSceneDoc) : createSceneDocument();
+  const incomingCreativeSceneDoc = sess?.creativeSceneDoc ? createSceneDocument(sess.creativeSceneDoc) : createSceneDocument();
+  const currentElements = Array.isArray(creativeSceneDoc?.elements) ? creativeSceneDoc.elements : [];
+  const incomingElements = Array.isArray(incomingCreativeSceneDoc?.elements) ? incomingCreativeSceneDoc.elements : [];
+  const currentHasHyperframesSource = currentElements.some((element) => (
+    element?.type === 'hyperframes'
+    && (
+      String(element?.meta?.html || '').trim()
+      || String(element?.meta?.projectPath || '').trim()
+    )
+  ));
+  const incomingLooksLikeDefaultBlankVideoScene = incomingElements.length === 0
+    && normalizeCreativeMode(sess?.creativeMode || window.currentCreativeMode) === 'video'
+    && Math.round(Number(incomingCreativeSceneDoc?.durationMs) || 0) === 12000;
+  const sameCreativeSceneSession = String(window._lastCreativeSceneSessionId || '') === String(sess?.id || '');
+  if (sameCreativeSceneSession && currentHasHyperframesSource && incomingLooksLikeDefaultBlankVideoScene) {
+    console.warn('Refused stale blank Creative scene rehydration while HyperFrames source is active.', { incomingCreativeSceneDoc });
+    if (sess) sess.creativeSceneDoc = creativeSceneDoc;
+  } else {
+    creativeSceneDoc = incomingCreativeSceneDoc;
+  }
+  window._lastCreativeSceneSessionId = sess?.id || '';
   creativeSelectedId = sess?.creativeSelectedId || null;
   creativeTimelineMs = Number.isFinite(Number(sess?.creativeTimelineMs)) ? Number(sess.creativeTimelineMs) : 0;
   creativeHistoryPast = Array.isArray(sess?.creativeHistoryPast) ? sess.creativeHistoryPast.slice() : [];
@@ -4414,23 +5075,41 @@ function persistActiveChat() {
 
 // Load terminal sessions from the server
 async function loadTerminalSessions() {
+  const channels = ['terminal', 'mobile', 'telegram', 'discord', 'whatsapp'];
   try {
-    const res = await fetch('/api/sessions?channel=terminal');
-    const data = await res.json();
-    window.terminalSessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const results = await Promise.all(channels.map(async (channel) => {
+      const res = await fetch(`/api/sessions?channel=${encodeURIComponent(channel)}`);
+      const data = await res.json();
+      return [channel, Array.isArray(data.sessions) ? data.sessions : []];
+    }));
+    const byChannel = Object.fromEntries(results);
+    window.channelSessionsByChannel = byChannel;
+    window.terminalSessions = byChannel.terminal || [];
+    window.mobileSessions = byChannel.mobile || [];
+    window.telegramSessions = byChannel.telegram || [];
+    window.discordSessions = byChannel.discord || [];
+    window.whatsappSessions = byChannel.whatsapp || [];
+    mergeServerSessionSummaries(channels.flatMap((channel) => byChannel[channel] || []));
+    saveChatSessions();
   } catch {
     window.terminalSessions = [];
+    window.mobileSessions = [];
+    window.telegramSessions = [];
+    window.discordSessions = [];
+    window.whatsappSessions = [];
+    window.channelSessionsByChannel = {};
   }
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
 }
 
 // Open a terminal session by loading it from the server and adding to chat sessions
-async function openTerminalSession(id) {
+async function openTerminalSession(id, source = 'terminal') {
   try {
     const res = await fetch(`/api/sessions/${id}`);
     const data = await res.json();
     if (!data.session) return;
     const s = data.session;
+    source = String(s.channel || source || 'terminal').trim();
 
     // Check if already in chatSessions
     let existing = window.chatSessions.find(c => c.id === id);
@@ -4442,8 +5121,8 @@ async function openTerminalSession(id) {
           role: m.role === 'user' ? 'user' : 'assistant',
           content: m.content,
           timestamp: m.timestamp,
-          channel: 'terminal',
-          channelLabel: 'terminal',
+          channel: source,
+          channelLabel: source,
         })),
         processLog: [],
         creativeMode: normalizeCreativeMode(s.creativeMode),
@@ -4459,10 +5138,15 @@ async function openTerminalSession(id) {
         createdAt: s.createdAt,
         updatedAt: s.lastActiveAt,
         automated: false,
-        source: 'terminal',
+        source,
       };
       window.chatSessions.unshift(existing);
       saveChatSessions();
+    } else {
+      existing.source = source !== 'web' ? source : existing.source;
+      existing.automated = source !== 'web' ? true : existing.automated;
+      existing._needsServerLoad = true;
+      await _loadSessionFromServer(id, { force: true });
     }
 
     if (window.currentMode !== 'chat') {
@@ -4488,7 +5172,11 @@ function newChatSession() {
   if (typeof window.setSidebarSegTab === 'function') window.setSidebarSegTab('chats');
   window.activeChatSessionId = id;
   setAgentSessionId(id);
+  if (!getChatSessionById(id)) {
+    window.chatSessions.unshift(createEmptyChatSession(id));
+  }
   syncActiveChat();
+  saveChatSessions();
   // New regular chat always exits project mode
   if (typeof window._maybeClearProjectState === 'function') {
     window._maybeClearProjectState(id);
@@ -4516,6 +5204,19 @@ async function deleteChatSession(id, ev) {
   if (Array.isArray(window.terminalSessions)) {
     window.terminalSessions = window.terminalSessions.filter(s => s.id !== id);
   }
+  if (Array.isArray(window.mobileSessions)) {
+    window.mobileSessions = window.mobileSessions.filter(s => s.id !== id);
+  }
+  ['telegramSessions', 'discordSessions', 'whatsappSessions'].forEach((key) => {
+    if (Array.isArray(window[key])) window[key] = window[key].filter(s => s.id !== id);
+  });
+  if (window.channelSessionsByChannel && typeof window.channelSessionsByChannel === 'object') {
+    Object.keys(window.channelSessionsByChannel).forEach((channel) => {
+      if (Array.isArray(window.channelSessionsByChannel[channel])) {
+        window.channelSessionsByChannel[channel] = window.channelSessionsByChannel[channel].filter(s => s.id !== id);
+      }
+    });
+  }
   if (window.chatSessions.length === 0) {
     const newId = generateSessionId();
     window.activeChatSessionId = newId;
@@ -4539,10 +5240,11 @@ async function openSession(id) {
   window.activeChatSessionId = id;
   setAgentSessionId(id);
   const sess = window.chatSessions.find(s => s.id === id);
-  if (sess && sess._needsServerLoad) {
-    await _loadSessionFromServer(id);
+  if (sess) {
+    await _loadSessionFromServer(id, { force: true });
   }
   syncActiveChat();
+  catchUpMainChatStream(id).catch(() => {});
   refreshVisibleChannelsList();
   // Clear project state if switching to a non-project session
   if (typeof window._maybeClearProjectState === 'function') {
@@ -4884,7 +5586,11 @@ function getFileIcon(filename) {
 
 function renderFilePills(canvasFiles) {
   if (!Array.isArray(canvasFiles) || !canvasFiles.length) return '';
-  const pills = canvasFiles.map(filePath => {
+  const mediaCards = canvasFiles
+    .map((filePath) => normalizePresentedMediaFile(filePath))
+    .filter(Boolean);
+  const mediaKeys = new Set(mediaCards.map((file) => file.path));
+  const pills = canvasFiles.filter((filePath) => !mediaKeys.has(normalizeCanvasPath(filePath))).map(filePath => {
     const path = String(filePath || '');
     const name = path.split('/').pop().split('\\').pop() || path;
     const ext = name.split('.').pop().toLowerCase();
@@ -4900,7 +5606,7 @@ function renderFilePills(canvasFiles) {
         </div>
         <div class="file-pill-info">
           <div class="file-pill-name">${escHtml(name)}</div>
-          <div class="file-pill-meta">${escHtml(ext.toUpperCase())} file &middot; workspace</div>
+          <div class="file-pill-meta">${escHtml(ext.toUpperCase())} file</div>
         </div>
         <div class="file-pill-actions">
           <button class="file-pill-btn" title="Open in Canvas" onclick="canvasPresentFile(${pathArg}, ${nameArg})">
@@ -4912,7 +5618,82 @@ function renderFilePills(canvasFiles) {
         </div>
       </div>`;
   }).join('');
-  return `<div class="file-pills">${pills}</div>`;
+  return `${renderPresentedMediaCards(mediaCards)}${pills ? `<div class="file-pills">${pills}</div>` : ''}`;
+}
+
+function getPresentedMediaKind(pathOrName, mimeType = '') {
+  const mime = String(mimeType || '').toLowerCase();
+  const ext = String(pathOrName || '').split(/[\\/]/).pop().toLowerCase().match(/\.([a-z0-9]+)(?:[?#].*)?$/)?.[1] || '';
+  if (mime.startsWith('image/') || ['png', 'jpg', 'jpeg'].includes(ext)) return 'image';
+  if (mime.startsWith('video/') || ext === 'mp4') return 'video';
+  return '';
+}
+
+function normalizePresentedMediaFile(raw) {
+  const path = normalizeCanvasPath(
+    typeof raw === 'string'
+      ? raw
+      : (raw?.path || raw?.absPath || raw?.rel_path || raw?.relPath || raw?.to_path || raw?.toPath || raw?.from_path || raw?.fromPath || raw?.workspacePath || raw?.url || raw?.src || '')
+  );
+  if (!path) return null;
+  const name = String(
+    typeof raw === 'string'
+      ? path.split('/').pop().split('\\').pop()
+      : (raw?.file_name || raw?.fileName || raw?.name || raw?.title || path.split('/').pop().split('\\').pop())
+  || 'file').trim();
+  const kind = getPresentedMediaKind(name || path, typeof raw === 'object' ? (raw?.mime_type || raw?.mimeType || '') : '');
+  if (!kind) return null;
+  return {
+    kind,
+    path,
+    name,
+    bytes: Number(typeof raw === 'object' ? raw?.bytes : 0) || 0,
+    provider: String(typeof raw === 'object' ? (raw?.provider || '') : '').trim(),
+    model: String(typeof raw === 'object' ? (raw?.model || '') : '').trim(),
+  };
+}
+
+function renderPresentedMediaCards(files) {
+  const rows = Array.isArray(files) ? files.filter(Boolean) : [];
+  if (!rows.length) return '';
+  return `
+    <div class="assistant-image-gallery">
+      ${rows.map((file) => {
+        const inlineSrc = `/api/canvas/inline?path=${encodeURIComponent(file.path)}`;
+        const downloadSrc = `/api/canvas/download?path=${encodeURIComponent(file.path)}`;
+        const copyPathArg = encodeInlineJsString(file.path);
+        const fileNameArg = encodeInlineJsString(file.name);
+        const metaParts = [
+          file.kind === 'video' ? 'Presented video' : 'Presented image',
+          file.provider,
+          file.model,
+          formatGeneratedImageSize(file.bytes),
+        ].filter(Boolean);
+        const mediaStage = file.kind === 'video'
+          ? `<video class="assistant-generated-video" src="${escHtml(inlineSrc)}" controls playsinline preload="metadata"></video>`
+          : `<div class="assistant-image-preview assistant-image-preview--static"><img src="${escHtml(inlineSrc)}" alt="${escHtml(file.name)}" loading="lazy"></div>`;
+        return `
+          <div class="assistant-image-card">
+            <div class="assistant-image-stage">
+              ${mediaStage}
+            </div>
+            <div class="assistant-image-footer">
+              <div class="assistant-image-meta">
+                <div class="assistant-image-name">${escHtml(file.name)}</div>
+                ${metaParts.length ? `<div class="assistant-image-subtitle">${escHtml(metaParts.join(' | '))}</div>` : ''}
+              </div>
+              <div class="assistant-image-actions">
+                <button class="assistant-image-btn" type="button" title="Copy saved file path" aria-label="Copy saved file path" onclick="copyGeneratedImagePath(${copyPathArg})">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3.54-3.54a5 5 0 0 0-7.07-7.07L11 4"/><path d="M14 11a5 5 0 0 0-7.07 0L3.39 14.54a5 5 0 1 0 7.07 7.07L13 19"/></svg>
+                </button>
+                <a class="assistant-image-btn assistant-image-btn--primary" href="${escHtml(downloadSrc)}" download="${escHtml(file.name)}" title="Download file" aria-label="Download file">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </a>
+              </div>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>`;
 }
 
 function canvasDownloadFile(diskPath, filename) {
@@ -4972,6 +5753,42 @@ function getGeneratedImageCopyPath(image) {
 function getGeneratedImageInlineSrc(image) {
   const previewPath = getGeneratedImagePreviewPath(image);
   return previewPath ? `/api/canvas/inline?path=${encodeURIComponent(previewPath)}` : '';
+}
+
+function normalizeGeneratedVideoEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const relPath = normalizeCanvasPath(raw.rel_path || raw.relPath || '');
+  const absPath = normalizeCanvasPath(raw.path || raw.absPath || '');
+  const cachePath = normalizeCanvasPath(raw.cache_path || raw.cachePath || '');
+  const previewPath = absPath || relPath || cachePath;
+  if (!previewPath) return null;
+  const fileName = String(raw.file_name || raw.fileName || previewPath.split('/').pop() || 'generated-video.mp4').trim();
+  return {
+    previewPath,
+    relPath,
+    absPath,
+    cachePath,
+    fileName,
+    mimeType: String(raw.mime_type || raw.mimeType || 'video/mp4').trim() || 'video/mp4',
+    provider: String(raw.provider || '').trim(),
+    model: String(raw.model || '').trim(),
+    prompt: String(raw.prompt || '').trim(),
+    mode: String(raw.mode || '').trim(),
+    duration: Number(raw.duration || 0) || 0,
+    resolution: String(raw.resolution || '').trim(),
+    bytes: Number(raw.bytes || 0) || 0,
+    sourceUrl: String(raw.source_url || raw.sourceUrl || '').trim(),
+  };
+}
+
+function getGeneratedVideoInlineSrc(video) {
+  const normalized = normalizeGeneratedVideoEntry(video);
+  return normalized ? `/api/canvas/inline?path=${encodeURIComponent(normalized.previewPath)}` : '';
+}
+
+function getGeneratedVideoDownloadSrc(video) {
+  const normalized = normalizeGeneratedVideoEntry(video);
+  return normalized ? `/api/canvas/download?path=${encodeURIComponent(normalized.absPath || normalized.relPath || normalized.previewPath)}` : '';
 }
 
 async function copyTextToClipboard(text, successTitle, successBody = '') {
@@ -6872,10 +7689,73 @@ function renderAssistantGeneratedImages(message, messageIndex) {
     </div>`;
 }
 
+function renderAssistantGeneratedVideos(message) {
+  const rows = Array.isArray(message?.generatedVideos)
+    ? message.generatedVideos.map((video) => normalizeGeneratedVideoEntry(video)).filter(Boolean)
+    : [];
+  if (!rows.length) return '';
+
+  return `
+    <div class="assistant-image-gallery">
+      ${rows.map((video) => {
+        const inlineSrc = getGeneratedVideoInlineSrc(video);
+        const downloadSrc = getGeneratedVideoDownloadSrc(video);
+        const openPath = video.absPath || video.relPath || video.previewPath;
+        const openPathArg = encodeInlineJsString(openPath);
+        const fileNameArg = encodeInlineJsString(video.fileName);
+        const copyPathArg = encodeInlineJsString(openPath);
+        const metaParts = [
+          video.provider || 'Generated video',
+          video.model,
+          video.resolution,
+          video.duration ? `${video.duration}s` : '',
+          formatGeneratedImageSize(video.bytes),
+        ].filter(Boolean);
+        return `
+          <div class="assistant-image-card">
+            <div class="assistant-image-stage">
+              <video
+                class="assistant-generated-video"
+                src="${escHtml(inlineSrc)}"
+                controls
+                playsinline
+                preload="metadata"
+                style="width:100%;max-height:420px;display:block;background:#050816;border-radius:12px;object-fit:contain"
+              ></video>
+            </div>
+            <div class="assistant-image-footer">
+              <div class="assistant-image-meta">
+                <div class="assistant-image-name">${escHtml(video.fileName || 'Generated video')}</div>
+                ${metaParts.length ? `<div class="assistant-image-subtitle">${escHtml(metaParts.join(' | '))}</div>` : ''}
+              </div>
+              <div class="assistant-image-actions">
+                <button class="assistant-image-btn" type="button" title="Open in Canvas" aria-label="Open in Canvas" onclick="canvasPresentFile(${openPathArg}, ${fileNameArg})">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M8 9l-4 3 4 3"/><path d="M16 9l4 3-4 3"/><path d="M12 6v12"/></svg>
+                </button>
+                <button class="assistant-image-btn" type="button" title="Copy saved file path" aria-label="Copy saved file path" onclick="copyGeneratedImagePath(${copyPathArg})">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.07 0l3.54-3.54a5 5 0 0 0-7.07-7.07L11 4"/><path d="M14 11a5 5 0 0 0-7.07 0L3.39 14.54a5 5 0 1 0 7.07 7.07L13 19"/></svg>
+                </button>
+                <a class="assistant-image-btn assistant-image-btn--primary" href="${escHtml(downloadSrc)}" download="${escHtml(video.fileName)}" title="Download video" aria-label="Download video">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </a>
+              </div>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
 function renderArtifacts(artifacts) {
   const rows = Array.isArray(artifacts) ? artifacts : [];
   if (!rows.length) return '';
-  const cards = rows.map((a, idx) => {
+  const mediaCards = rows
+    .map((a) => normalizePresentedMediaFile(a))
+    .filter(Boolean);
+  const mediaKeys = new Set(mediaCards.map((file) => file.path));
+  const cards = rows.filter((a) => {
+    const locationTarget = normalizeCanvasPath(String(a?.to_path || a?.path || a?.from_path || '').trim());
+    return !locationTarget || !mediaKeys.has(locationTarget);
+  }).map((a, idx) => {
     const type = String(a?.type || '').trim();
     const title = String(a?.title || type || `Artifact ${idx + 1}`).trim();
     const status = String(a?.status || 'ok').toLowerCase();
@@ -6913,7 +7793,7 @@ function renderArtifacts(artifacts) {
       </div>
     `;
   }).join('');
-  return `<div class="artifact-list">${cards}</div>`;
+  return `${renderPresentedMediaCards(mediaCards)}${cards ? `<div class="artifact-list">${cards}</div>` : ''}`;
 }
 
 async function openInFileLocation(targetPath) {
@@ -6942,10 +7822,13 @@ function renderUserMessageContent(msg) {
     text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
   }
   text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
-  const imageAttachments = attachments.filter((a) => a && a.kind === 'image' && a.dataUrl);
+  const imageAttachments = attachments.filter((a) => a && a.kind === 'image' && (a.dataUrl || a.workspacePath));
   const fileAttachments = attachments.filter((a) => a && a.kind !== 'image');
   const imgHtml = imageAttachments.length
-    ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px">${imageAttachments.map((p) => `<img src="${p.dataUrl}" class="msg-img-thumb" title="${escHtml(p.name)}" onclick="openImgPreview(this.src,'${escHtml(p.name).replace(/'/g, '&#39;')}')">`).join('')}</div>`
+    ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px">${imageAttachments.map((p) => {
+        const src = p.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(p.workspacePath || ''))}`;
+        return `<img src="${escHtml(src)}" class="msg-img-thumb" title="${escHtml(p.name)}" onclick="openImgPreview(this.src,'${escHtml(p.name).replace(/'/g, '&#39;')}')">`;
+      }).join('')}</div>`
     : '';
   const fileHtml = fileAttachments.length
     ? `<div class="file-pills" style="margin-bottom:${text ? '8px' : '0'}">${fileAttachments.map((f) => {
@@ -6966,12 +7849,34 @@ function renderUserMessageContent(msg) {
     : '';
   return `${imgHtml}${fileHtml}${text ? `<div class="msg-content">${escHtml(text)}</div>` : ''}`;
 }
+
+function renderLiveTurnTrace(entries) {
+  const list = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry && String(entry.text || '').trim())
+    .slice(-18);
+  if (!list.length) return '';
+  return `<div class="live-turn-trace">
+    ${list.map((entry) => {
+      const type = String(entry.type || 'info').toLowerCase();
+      const label = type === 'assistant' ? 'Prometheus' : type === 'think' ? 'Reasoning' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+      const text = String(entry.text || '').trim();
+      const body = type === 'assistant'
+        ? `<div class="live-turn-md">${renderMd(text)}</div>`
+        : `<div class="live-turn-text">${escHtml(text)}</div>`;
+      return `<div class="live-turn-segment live-turn-${escHtml(type)}">
+        <span>${escHtml(label)}</span>
+        ${body}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
 
-  const visibleHistory = (window.chatHistory || [])
-    .map((msg, originalIndex) => ({ msg, originalIndex }))
+  const visibleHistory = collapseDuplicateAssistantMessageEntries((window.chatHistory || [])
+    .map((msg, originalIndex) => ({ msg, originalIndex })))
     .filter((entry) => !isInternalChatMessage(entry.msg));
   const voicePendingHtml = renderVoicePendingTurns();
 
@@ -6992,11 +7897,6 @@ function renderChatMessages() {
       && msg.role === 'user'
       && /^\s*\[Timer fired\]/i.test(String(msg?.content || ''));
     if (isSyntheticTimerTrigger) return '';
-    const pinClass = contextPinMode ? ' pin-selectable' : '';
-    const selectedClass = (contextPinMode && pinnedMessageIndices.has(originalIndex)) ? ' pin-selected' : '';
-    // Also show green for confirmed pins even outside pin mode
-    const confirmedClass = (!contextPinMode && confirmedPins.some(p => p.content === msg.content && p.role === (msg.role === 'user' ? 'user' : 'assistant'))) ? ' pin-selected' : '';
-    const clickHandler = contextPinMode ? ` onclick="togglePinMessage(${originalIndex})"` : '';
     const isTelegramMsg = String(msg?.channel || '').toLowerCase() === 'telegram';
     const isTimerMsg = String(msg?.channelLabel || '').toLowerCase() === 'timer' || /^\s*\[Timer fired\]/i.test(String(msg?.content || ''));
     const isGoalMsg = String(msg?.channelLabel || '').toLowerCase() === 'goal';
@@ -7011,20 +7911,29 @@ function renderChatMessages() {
       : (isGoalMsg
         ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
         : renderUserMessageContent(msg));
+    const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
+    const assistantContentHtml = !isUser
+      ? `${assistantApprovalHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
+      : userContentHtml;
     return `
-    <div class="msg-shell ${displayRole}${pinClass}${selectedClass}${confirmedClass}">
-      <div class="msg ${displayRole}${pinClass}${selectedClass}${confirmedClass}"${clickHandler}>
+    <div class="msg-shell ${displayRole}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}">
+      <div class="msg ${displayRole}">
         ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
-        <div class="msg-body">
-		          ${!isUser ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
-		          ${isUser ? userContentHtml : renderAssistantContent(msg.content)}
-		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
-		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
-		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
-		          ${(msg.role === 'ai' || msg.role === 'assistant') && msg.processEntries && msg.processEntries.length ? renderProcessPill(msg.processEntries) : ''}
-		          ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
-              ${renderMessageActions(msg, originalIndex)}
-		        </div>
+        <div class="msg-bubble-stack">
+          ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
+          <div class="msg-body">
+		            ${!isUser ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
+		            ${assistantContentHtml}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderThinkBlock(msg.thinking) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedVideos(msg) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
+		          </div>
+              ${msg.approvalRequest && !msg.content ? '' : renderMessageActions(msg, originalIndex)}
+        </div>
 	      </div>
 	    </div>`;
   }).join('') + voicePendingHtml;
@@ -7035,19 +7944,21 @@ function renderChatMessages() {
           ${window.currentProgressLines.map((l) => `<div>• ${escHtml(l)}</div>`).join('')}
         </div>`
 	      : '';
-	    const thinkingOnly = !window.streamingAIText && !progressHtml && !window.currentPreflightStatus;
+    const liveTraceHtml = renderLiveTurnTrace(window.liveTraceEntries || []);
+    const liveApprovalsHtml = renderStreamingApprovals(window.pendingApprovals || []);
+	    const thinkingOnly = !window.streamingAIText && !progressHtml && !liveTraceHtml && !liveApprovalsHtml;
 	    container.innerHTML += `
       <div class="msg-shell ai">
         <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
           <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
           <div class="msg-body">
             ${!thinkingOnly ? `<div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>` : ''}
-            ${window.currentPreflightStatus ? `<div class="msg-content" style="margin-bottom:6px;color:#26487e">${escHtml(window.currentPreflightStatus)}</div>` : ''}
-	            ${progressHtml}
-            ${window.streamingAIText
-              ? `<div id="streaming-text-content" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word">${escHtml(window.streamingAIText)}</div>`
-              : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`
+	            ${liveTraceHtml || progressHtml}
+            ${window.streamingAIText && !liveTraceHtml
+              ? `<div id="streaming-text-content" style="font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word">${renderMd(window.streamingAIText)}</div>`
+              : (liveTraceHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)
             }
+            ${liveApprovalsHtml}
             ${!thinkingOnly ? `<div style="margin-top:8px">
               <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
               <div id="current-turn-process" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6"></div>
@@ -7172,7 +8083,7 @@ async function rerunEditedUserMessage(originalIndex, nextText) {
   window.editingUserMessageIndex = -1;
   saveChatSessions();
   renderChatMessages();
-  await syncActiveSessionHistoryToServer(history.slice(0, originalIndex));
+  await syncActiveSessionHistoryToServer(history.slice(0, originalIndex), { resetCompaction: true });
   await sendChat(makeQueuedChatTurn(nextText), { reuseExistingUserIndex: originalIndex });
 }
 
@@ -7203,7 +8114,7 @@ async function switchPromptVariant(originalIndex, targetIndex, ev) {
   window.editingUserMessageIndex = -1;
   saveChatSessions();
   renderChatMessages();
-  await syncActiveSessionHistoryToServer(history);
+  await syncActiveSessionHistoryToServer(history, { resetCompaction: true });
 }
 
 function updatePromptVariantAfterRerun(userIndex) {
@@ -7478,6 +8389,240 @@ function renderProcessPill(entries) {
   `;
 }
 
+function processEntriesForMessage(msg) {
+  if (Array.isArray(msg?.processEntries) && msg.processEntries.length) {
+    return msg.processEntries.map(normalizeProcessEntryForRender).filter(Boolean);
+  }
+  const toolLog = String(msg?.toolLog || '').trim();
+  if (!toolLog) return [];
+  const ts = msg?.timestamp ? new Date(Number(msg.timestamp)).toLocaleTimeString() : '';
+  return [{
+    ts,
+    type: 'info',
+    actor: 'Prom',
+    content: toolLog,
+    extra: { source: 'toolLog' },
+  }];
+}
+
+function renderMessageProcessPill(msg) {
+  const entries = processEntriesForMessage(msg);
+  return entries.length ? renderProcessPill(entries) : '';
+}
+
+function processEntryKey(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  return [
+    String(entry.ts || entry.timestamp || ''),
+    String(entry.type || ''),
+    String(entry.actor || entry.extra?.actor || ''),
+    String(entry.content || '').slice(0, 500),
+  ].join('|');
+}
+
+function mergeProcessEntryLists(...lists) {
+  const out = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const raw of Array.isArray(list) ? list : []) {
+      const entry = normalizeProcessEntryForRender(raw);
+      if (!entry) continue;
+      const key = processEntryKey(entry);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      out.push(entry);
+    }
+  }
+  return out.slice(-500);
+}
+
+function chatMessageMergeKey(msg) {
+  if (!msg || typeof msg !== 'object') return '';
+  const role = String(msg.role || '');
+  const content = String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  const bucket = Math.floor(Number(msg.timestamp || 0) / 5000);
+  return `${role}|${bucket}|${content}`;
+}
+
+function normalizeChatHistoryTimestamps(history) {
+  let lastTimestamp = 0;
+  return (Array.isArray(history) ? history : []).map((raw) => {
+    if (!raw || typeof raw !== 'object') return raw;
+    const msg = { ...raw };
+    const numeric = Number(msg.timestamp);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      lastTimestamp = Math.max(lastTimestamp, numeric);
+      msg.timestamp = numeric;
+      return msg;
+    }
+    lastTimestamp = Math.max(lastTimestamp + 1, Date.now());
+    msg.timestamp = lastTimestamp;
+    return msg;
+  });
+}
+
+function stabilizeChatHistoryOrder(history) {
+  const normalized = normalizeChatHistoryTimestamps(history);
+  return normalized.sort((a, b) => Number(a?.timestamp || 0) - Number(b?.timestamp || 0));
+}
+
+function assistantContentMergeKey(msg) {
+  if (!isAssistantLikeMessage(msg)) return '';
+  const content = String(msg?.content || '').replace(/\s+/g, ' ').trim();
+  return content ? `assistant|${content}` : '';
+}
+
+function chatMessageRichnessScore(msg) {
+  if (!msg || typeof msg !== 'object') return 0;
+  return [
+    processEntriesForMessage(msg).length ? 100 : 0,
+    String(msg.toolLog || '').trim() ? 20 : 0,
+    String(msg.thinking || '').trim() ? 8 : 0,
+    Array.isArray(msg.artifacts) ? msg.artifacts.length : 0,
+    Array.isArray(msg.generatedImages) ? msg.generatedImages.length : 0,
+    Array.isArray(msg.generatedVideos) ? msg.generatedVideos.length : 0,
+    Array.isArray(msg.canvasFiles) ? msg.canvasFiles.length : 0,
+  ].reduce((sum, value) => sum + value, 0);
+}
+
+function mergeChatMessageMetadata(target, source) {
+  if (!target || !source) return target;
+  if (!target.processEntries?.length && source.processEntries?.length) target.processEntries = source.processEntries;
+  if (!target.toolLog && source.toolLog) target.toolLog = source.toolLog;
+  if (!target.thinking && source.thinking) target.thinking = source.thinking;
+  if (Array.isArray(source.artifacts) && source.artifacts.length && !target.artifacts?.length) target.artifacts = source.artifacts;
+  if (Array.isArray(source.generatedImages) && source.generatedImages.length && !target.generatedImages?.length) target.generatedImages = source.generatedImages;
+  if (Array.isArray(source.generatedVideos) && source.generatedVideos.length && !target.generatedVideos?.length) target.generatedVideos = source.generatedVideos;
+  if (Array.isArray(source.canvasFiles) && source.canvasFiles.length && !target.canvasFiles?.length) target.canvasFiles = source.canvasFiles;
+  return target;
+}
+
+function collapseDuplicateAssistantMessages(history) {
+  const list = Array.isArray(history) ? history : [];
+  const out = [];
+  const byAssistantContent = new Map();
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object' || isInternalChatMessage(raw)) continue;
+    const msg = { ...raw };
+    const key = assistantContentMergeKey(msg);
+    const existingIndex = key ? byAssistantContent.get(key) : undefined;
+    if (existingIndex !== undefined) {
+      const existing = out[existingIndex];
+      const richer = chatMessageRichnessScore(msg) > chatMessageRichnessScore(existing) ? msg : existing;
+      const leaner = richer === msg ? existing : msg;
+      out[existingIndex] = mergeChatMessageMetadata(richer, leaner);
+      continue;
+    }
+    if (key) byAssistantContent.set(key, out.length);
+    out.push(msg);
+  }
+  return out;
+}
+
+function collapseDuplicateAssistantMessageEntries(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const out = [];
+  const byAssistantContent = new Map();
+  for (const entry of list) {
+    const msg = entry?.msg;
+    if (!msg || typeof msg !== 'object' || isInternalChatMessage(msg)) continue;
+    const key = assistantContentMergeKey(msg);
+    const existingIndex = key ? byAssistantContent.get(key) : undefined;
+    if (existingIndex !== undefined) {
+      const existing = out[existingIndex];
+      const richer = chatMessageRichnessScore(msg) > chatMessageRichnessScore(existing.msg) ? entry : existing;
+      const leaner = richer === entry ? existing : entry;
+      richer.msg = mergeChatMessageMetadata({ ...richer.msg }, leaner.msg);
+      out[existingIndex] = richer;
+      continue;
+    }
+    if (key) byAssistantContent.set(key, out.length);
+    out.push(entry);
+  }
+  return out;
+}
+
+function mergeServerAndLocalHistory(localHistory, serverHistory) {
+  const merged = [];
+  const byKey = new Map();
+  const byAssistantContent = new Map();
+  const addOrMerge = (raw, source) => {
+    if (!raw || typeof raw !== 'object' || isInternalChatMessage(raw)) return;
+    const msg = {
+      ...raw,
+      role: raw.role,
+      content: raw.content || '',
+      timestamp: raw.timestamp || Date.now(),
+    };
+    const key = chatMessageMergeKey(msg);
+    const contentKey = assistantContentMergeKey(msg);
+    const existingByContent = contentKey ? byAssistantContent.get(contentKey) : null;
+    if (existingByContent) {
+      const richer = chatMessageRichnessScore(msg) > chatMessageRichnessScore(existingByContent) ? msg : existingByContent;
+      const leaner = richer === msg ? existingByContent : msg;
+      mergeChatMessageMetadata(richer, leaner);
+      if (richer !== existingByContent) {
+        const idx = merged.indexOf(existingByContent);
+        if (idx >= 0) merged[idx] = richer;
+        if (key) byKey.set(key, richer);
+        byAssistantContent.set(contentKey, richer);
+      }
+      return;
+    }
+    const existing = key ? byKey.get(key) : null;
+    if (existing) {
+      mergeChatMessageMetadata(existing, msg);
+      return;
+    }
+    if (key) byKey.set(key, msg);
+    if (contentKey) byAssistantContent.set(contentKey, msg);
+    merged.push(msg);
+  };
+  stabilizeChatHistoryOrder(serverHistory).forEach((msg) => addOrMerge(msg, 'server'));
+  stabilizeChatHistoryOrder(localHistory).forEach((msg) => addOrMerge(msg, 'local'));
+  return stabilizeChatHistoryOrder(merged);
+}
+
+function hasAssistantProcessBubbleAfterLastUser(history) {
+  const list = Array.isArray(history) ? history : [];
+  let lastUserIndex = -1;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (String(list[i]?.role || '') === 'user') {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  return list.slice(lastUserIndex + 1).some((msg) => (
+    isAssistantLikeMessage(msg) && processEntriesForMessage(msg).length > 0
+  ));
+}
+
+function buildRestartProcessPacketMessage(sess) {
+  if (!sess || typeof sess !== 'object') return null;
+  const history = Array.isArray(sess.history) ? sess.history : [];
+  if (hasAssistantProcessBubbleAfterLastUser(history)) return null;
+  const processLog = mergeProcessEntryLists(sess.processLog || []);
+  if (!processLog.length) return null;
+  const streamState = getSessionStreamState(String(sess.id || ''));
+  const startIndex = Number(streamState?.currentTurnStartIndex);
+  const turnEntries = Number.isFinite(startIndex) && startIndex >= 0
+    ? processLog.slice(startIndex)
+    : processLog.slice(-120);
+  const entries = turnEntries.length ? turnEntries : processLog.slice(-120);
+  if (!entries.length) return null;
+  return {
+    role: 'assistant',
+    content: [
+      'Restart Context Packet',
+      '',
+      'The gateway restarted before this turn could finish saving its final assistant response.',
+      'I preserved the process log from the interrupted turn. Open Process to inspect the full tool stream.',
+    ].join('\n'),
+    timestamp: Date.now() - 1,
+    processEntries: entries,
+  };
+}
+
 function normalizeProcessActor(rawActor, type, content, extra) {
   const explicit = String(rawActor || extra?.actor || '').trim();
   if (explicit) {
@@ -7491,21 +8636,51 @@ function normalizeProcessActor(rawActor, type, content, extra) {
   return 'Prom';
 }
 
+function normalizeProcessEntryForRender(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : null;
+  if (extra?.source === 'direct_response') return null;
+  const type = String(entry.type || 'info');
+  let content = String(entry.content ?? entry.text ?? '').trim();
+  const toolName = String(extra?.toolName || entry.toolName || '').trim();
+  if (!content && type === 'tool' && toolName) {
+    let args = '';
+    try {
+      args = extra?.args ? JSON.stringify(extra.args) : '';
+    } catch {
+      args = '';
+    }
+    content = args && args !== '{}' ? `${toolName} ${args}` : toolName;
+  }
+  if (!content && (type === 'result' || type === 'error') && toolName) {
+    content = type === 'error' ? `${toolName} failed` : `${toolName} complete`;
+  }
+  if (!content && ['tool', 'result', 'error', 'info'].includes(type)) return null;
+  return {
+    ...entry,
+    ts: entry.ts || entry.time || '',
+    type,
+    content,
+    extra,
+  };
+}
+
 function formatProcessLines(entries) {
-  if (!entries || entries.length === 0) return '<div style="color:var(--muted)">No process details.</div>';
+  const cleanEntries = (Array.isArray(entries) ? entries : []).map(normalizeProcessEntryForRender).filter(Boolean);
+  if (cleanEntries.length === 0) return '<div style="color:var(--muted)">No process details.</div>';
   const TYPE_COLORS = {
     user: 'var(--text)', think: '#388bfd', tool: '#e3b341',
     result: '#bc8cff', error: 'var(--red)', final: '#56d364',
     warn: 'var(--yellow)', step: '#56d364', info: '#79c0ff',
     split: 'var(--accent2)', synth: 'var(--accent2)',
   };
-  return entries.map(e => {
+  return cleanEntries.map(e => {
     const rawType = String(e.type || 'info');
     const actorLabel = normalizeProcessActor(e.actor, rawType, e.content, e.extra);
     const typeLabel = escHtml(rawType).toUpperCase();
     const typeColor = TYPE_COLORS[rawType] || 'var(--muted)';
     const content = escHtml(String(e.content || ''));
-    return `<div style="margin-bottom:4px"><span style="color:var(--muted)">[${escHtml(String(e.ts || ''))}]</span> <span style="color:#8b949e;font-weight:600">[${escHtml(actorLabel)}]</span> <span style="color:${typeColor};font-weight:600">${typeLabel}</span> ${content}</div>`;
+    return `<div style="margin-bottom:4px;white-space:pre-wrap"><span style="color:var(--muted)">[${escHtml(String(e.ts || ''))}]</span> <span style="color:#8b949e;font-weight:600">[${escHtml(actorLabel)}]</span> <span style="color:${typeColor};font-weight:600">${typeLabel}</span> ${content}</div>`;
   }).join('');
 }
 
@@ -7699,6 +8874,8 @@ function clearProcessLog() {
 function addProcessEntry(type, content, extra) {
   const ts = new Date().toLocaleTimeString();
   const actor = (extra && typeof extra === 'object' && extra.actor) ? String(extra.actor) : undefined;
+  const contentText = String(content || '');
+  if (!actor && contentText.startsWith('Task "') && (contentText.includes('check sidebar') || contentText.includes('nothing to report'))) return;
   window.processLogEntries.push({ ts, type, content, extra, actor });
   renderProcessLog();
   maybeAutoScrollRightColumn(window.isThinking || window.rightColumnAutoFollow);
@@ -7750,7 +8927,17 @@ function renderProcessLog() {
     return;
   }
 
-  el.innerHTML = window.processLogEntries.map((e,i) => {
+  const cleanEntries = window.processLogEntries.map(normalizeProcessEntryForRender).filter(Boolean);
+  if (cleanEntries.length !== window.processLogEntries.length) {
+    window.processLogEntries.splice(0, window.processLogEntries.length, ...cleanEntries);
+  }
+  if (cleanEntries.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px 0;opacity:0.5">Waiting for activity...</div>';
+    if (shouldFollow) el.scrollTop = el.scrollHeight;
+    return;
+  }
+
+  el.innerHTML = cleanEntries.map((e,i) => {
     const actorLabel = normalizeProcessActor(e.actor, e.type, e.content, e.extra);
     const actorChip = `<span style="color:#8b949e;font-weight:600">[${escHtml(actorLabel)}]</span>`;
     let icon, color, label, labelColor;
@@ -7860,6 +9047,7 @@ const CHAT_SLASH_COMMANDS = [
   { command: '/goal done', label: 'Mark the goal completed', placeholder: 'Optional completion note...' },
   { command: '/goal clear', label: 'Stop and archive the goal', placeholder: 'Optional archive note...' },
   { command: '/goal revise', label: 'Rewrite the active goal', placeholder: 'Write the revised goal...' },
+  { command: '/new', label: 'Start a fresh chat', placeholder: 'Use without extra text to open a new chat...' },
 ];
 let activeSlashCommand = null;
 let slashCommandSelectionIndex = 0;
@@ -7979,6 +9167,16 @@ function getChatComposerValue() {
   return `${activeSlashCommand.command}${value ? ` ${value}` : ''}`.trim();
 }
 
+function handleImmediateChatSlashCommand(message) {
+  const command = String(message || '').trim().toLowerCase();
+  if (command !== '/new') return false;
+  const input = document.getElementById('chat-input');
+  clearChatComposerAfterSend(input);
+  newChatSession();
+  showToast('New chat started', 'A fresh chat is ready.', 'success');
+  return true;
+}
+
 function handleSlashCommandInput(input) {
   if (!input) return;
   const value = String(input.value || '');
@@ -8029,6 +9227,21 @@ function persistSession(id) {
   if (window.activeChatSessionId === id) renderChatMessages();
 }
 
+function restoreActiveSessionIfStreamStoleFocus(previousActiveSessionId, streamSessionId) {
+  const previous = String(previousActiveSessionId || '').trim();
+  const streamSid = String(streamSessionId || '').trim();
+  if (!previous || !streamSid || previous === streamSid) return false;
+  if (String(window.activeChatSessionId || '') !== streamSid) return false;
+  const previousSession = getChatSessionById(previous);
+  if (!previousSession) return false;
+  window.activeChatSessionId = previous;
+  setAgentSessionId(previous);
+  syncActiveChat();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
+  return true;
+}
+
 // ---- Send chat (SSE version) ----
 async function sendChat(queuedMessage = null, options = {}) {
   const input = document.getElementById('chat-input');
@@ -8038,8 +9251,15 @@ async function sendChat(queuedMessage = null, options = {}) {
   const raw = queuedTurn ? queuedTurn.message : getChatComposerValue();
   const message = String(raw || '').trim();
   if (!message) return;
+  if (!queuedTurn && handleImmediateChatSlashCommand(message)) return;
   ensureActiveChatSessionExists();
   const thisSessionId = window.activeChatSessionId; // capture at send time — stable through async closure
+  const sendLock = (!queuedTurn && !Number.isInteger(options.reuseExistingUserIndex))
+    ? acquireChatSendLock(thisSessionId, message)
+    : { key: '', at: Date.now() };
+  if (!sendLock) return;
+  const clientRequestId = String(options.clientRequestId || '').trim() || newChatClientRequestId(thisSessionId);
+  rememberLocalMainChatRequest(thisSessionId, clientRequestId);
   const thisSession = getChatSessionById(thisSessionId);
   let streamState = getSessionStreamState(thisSessionId) || resetSessionStreamState(thisSessionId);
   const addProcessEntry = (type, content, extra) => addSessionProcessEntry(thisSessionId, type, content, extra);
@@ -8080,21 +9300,57 @@ async function sendChat(queuedMessage = null, options = {}) {
     }
     renderIfViewingThisSession();
   };
+  const appendLiveTrace = (type, text, { append = false } = {}) => {
+    const content = String(text || '');
+    if (!content) return;
+    if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+    const normalizedType = String(type || 'info').toLowerCase();
+    const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
+    if (append && last && last.type === normalizedType) {
+      last.text = `${last.text || ''}${content}`;
+    } else {
+      const trimmed = content.trim();
+      if (!trimmed) return;
+      if (last && last.type === normalizedType && String(last.text || '').trim() === trimmed) return;
+      streamState.liveTraceEntries.push({
+        id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        type: normalizedType,
+        text: trimmed,
+      });
+      if (streamState.liveTraceEntries.length > 28) {
+        streamState.liveTraceEntries = streamState.liveTraceEntries.slice(-28);
+      }
+    }
+    renderIfViewingThisSession();
+  };
   const sessionHistoryRef = thisSession ? (thisSession.history || (thisSession.history = [])) : window.chatHistory;
   if (thisSession && window.activeChatSessionId === thisSessionId) {
     window.chatHistory = sessionHistoryRef;
   }
   const sessionQueue = getSessionQueuedPrompts(thisSessionId);
   if (isSessionThinking(thisSessionId)) {
+    if (!queuedTurn && realtimeVoicePendingInterruptContext) {
+      const handled = await handleRealtimeVoiceInterruptionOnly(message);
+      if (handled) {
+        clearChatComposerAfterSend(input);
+        releaseChatSendLock(sendLock);
+        forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+        return;
+      }
+    }
     if (queuedTurn) {
       if (options.voicePendingTurnId) {
         markVoicePendingTurn(options.voicePendingTurnId, { state: 'queued' });
         renderIfViewingThisSession();
       }
+      releaseChatSendLock(sendLock);
+      forgetLocalMainChatRequest(thisSessionId, clientRequestId);
       return;
     }
     if (sessionQueue.length >= MAX_QUEUED_PROMPTS) {
       addProcessEntry('warn', `Queue full (${MAX_QUEUED_PROMPTS}). Wait for current run to finish.`);
+      releaseChatSendLock(sendLock);
+      forgetLocalMainChatRequest(thisSessionId, clientRequestId);
       return;
     }
     const queuedFiles = pendingChatFiles.length ? pendingChatFiles.slice() : [];
@@ -8107,6 +9363,8 @@ async function sendChat(queuedMessage = null, options = {}) {
     addProcessEntry('info', `Queued prompt #${sessionQueue.length}${queuedFiles.length ? ` with ${queuedFiles.length} file(s)` : ''}. It will run automatically next.`);
     clearChatComposerAfterSend(input);
     updateQueuedPromptUI();
+    releaseChatSendLock(sendLock);
+    forgetLocalMainChatRequest(thisSessionId, clientRequestId);
     return;
   }
   streamState = resetSessionStreamState(thisSessionId);
@@ -8143,6 +9401,35 @@ async function sendChat(queuedMessage = null, options = {}) {
   userTurnMessage.attachmentPreviews = uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined;
   userTurnMessage.timestamp = userTurnMessage.timestamp || Date.now();
   if (reuseExistingUserIndex < 0) sessionHistoryRef.push(userTurnMessage);
+  const userTurnIndex = sessionHistoryRef.indexOf(userTurnMessage);
+  const userTurnTimestamp = Number(userTurnMessage.timestamp || 0);
+  const assistantTurnTimestamp = Number.isFinite(userTurnTimestamp) && userTurnTimestamp > 0
+    ? userTurnTimestamp + 1
+    : Date.now();
+  const appendAssistantTurnForUser = (message) => {
+    const shouldAppendAfterInterruption = streamState.forceAppendAssistantAfterInterruption === true;
+    const assistantMessage = {
+      ...message,
+      role: message.role || 'ai',
+      timestamp: Number(message.timestamp || (shouldAppendAfterInterruption ? Date.now() : assistantTurnTimestamp)),
+    };
+    const existingIndex = sessionHistoryRef.findIndex((candidate, idx) => (
+      idx > userTurnIndex
+      && isAssistantLikeMessage(candidate)
+      && String(candidate.content || '').trim() === String(assistantMessage.content || '').trim()
+    ));
+    if (existingIndex >= 0) {
+      sessionHistoryRef[existingIndex] = mergeChatMessageMetadata({ ...assistantMessage }, sessionHistoryRef[existingIndex]);
+      return sessionHistoryRef[existingIndex];
+    }
+    if (!shouldAppendAfterInterruption && userTurnIndex >= 0 && userTurnIndex < sessionHistoryRef.length - 1) {
+      sessionHistoryRef.splice(userTurnIndex + 1, 0, assistantMessage);
+    } else {
+      sessionHistoryRef.push(assistantMessage);
+    }
+    if (shouldAppendAfterInterruption) streamState.forceAppendAssistantAfterInterruption = false;
+    return assistantMessage;
+  };
   if (options.voicePendingTurnId) removeVoicePendingTurnInternal(options.voicePendingTurnId);
   persistSession(thisSessionId);
   if (!queuedTurn) {
@@ -8190,11 +9477,52 @@ async function sendChat(queuedMessage = null, options = {}) {
   if (window.activeChatSessionId === thisSessionId) window.currentTurnStartIndex = streamState.currentTurnStartIndex;
   addProcessEntry('user', uploadedFileCount > 0 ? `${message} [+${uploadedFileCount} file(s)]` : message);
 
+  let desktopVoiceAgentHandoffContext = '';
+  const voiceLatencyTurnStartedAt = options.voiceAgentHandoff === true ? Date.now() : 0;
+  let voiceLatencyFirstPreflightLogged = false;
+  let voiceLatencyFirstTokenLogged = false;
+  if (options.voiceAgentHandoff === true) {
+    const voiceHandoff = await prepareDesktopVoiceAgentHandoff(thisSessionId, messageWithFiles, {
+      source: options.voiceSource || (options.voicePendingTurnId ? 'desktop_voice_pending' : 'desktop_voice_handoff'),
+    });
+    desktopVoiceAgentHandoffContext = String(voiceHandoff?.callerContext || '').trim();
+    if (!voiceHandoff?.shouldContinueToWorker) {
+      const reply = String(voiceHandoff?.result?.voiceReply || '').trim();
+      if (reply) {
+        appendAssistantTurnForUser({
+          role: 'ai',
+          content: reply,
+          processEntries: Array.isArray(thisSession?.processLog)
+            ? thisSession.processLog.slice(Math.max(0, Number(streamState.currentTurnStartIndex || 0)))
+            : [],
+          mode: window.useAgentMode ? 'agentic' : 'chat',
+        });
+      }
+      delete window._sessionThinking[thisSessionId];
+      delete window._sessionAbortControllers[thisSessionId];
+      if (window.activeChatSessionId === thisSessionId) {
+        syncActiveSessionRunState();
+        applyStreamStateToWindow(thisSessionId);
+        if (typeof window.setButtonState === 'function') window.setButtonState(false);
+      }
+      persistSession(thisSessionId);
+      renderIfViewingThisSession();
+      releaseChatSendLock(sendLock);
+      forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+      return;
+    }
+  }
+  if (voiceLatencyTurnStartedAt) {
+    logDesktopVoiceLatency(thisSessionId, 'worker handoff starting', voiceLatencyTurnStartedAt);
+  }
+
   const historyForAPI = sessionHistoryRef.slice(-13, -1).map(m => ({
     role: m.role === 'user' ? 'user' : 'assistant',
     content: m.content
   }));
   const combinedCallerContext = buildCombinedCallerContext(messageWithFiles);
+  const realtimeInterruptCallerContext = await finalizeRealtimeVoicePlaybackInterruptContext(messageWithFiles);
+  const turnCallerContext = [combinedCallerContext, realtimeInterruptCallerContext, desktopVoiceAgentHandoffContext].filter(Boolean).join('\n\n') || undefined;
   if (designMultiSelectedElements.length) clearDesignMultiSelection();
 
 		  const allSteps = [];
@@ -8203,6 +9531,8 @@ async function sendChat(queuedMessage = null, options = {}) {
 		  const canvasPresentedFiles = []; // file paths presented to canvas this turn
 		  const turnGeneratedImages = [];
 		  const turnGeneratedImageKeys = new Set();
+		  const turnGeneratedVideos = [];
+		  const turnGeneratedVideoKeys = new Set();
 		  const turnThinkingBuffer = [];
 		  const turnThinkingSeen = new Set();
 		  let pendingThinkingBurst = '';
@@ -8256,6 +9586,14 @@ async function sendChat(queuedMessage = null, options = {}) {
 		    if (!key || turnGeneratedImageKeys.has(key)) return;
 		    turnGeneratedImageKeys.add(key);
 		    turnGeneratedImages.push(image);
+		  };
+		  const collectTurnGeneratedVideo = (value) => {
+		    const video = normalizeGeneratedVideoEntry(value);
+		    if (!video) return;
+		    const key = video.absPath || video.relPath || video.previewPath || video.fileName;
+		    if (!key || turnGeneratedVideoKeys.has(key)) return;
+		    turnGeneratedVideoKeys.add(key);
+		    turnGeneratedVideos.push(video);
 		  };
 		  const getDeclaredPlanActiveIndex = () => {
 		    const progress = streamState.runtimeProgressState || {};
@@ -8317,7 +9655,7 @@ async function sendChat(queuedMessage = null, options = {}) {
         'Accept': 'text/event-stream'
       },
 	      signal: turnAbortController.signal,
-	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, pinnedMessages: confirmedPins.length > 0 ? confirmedPins : undefined, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, reasoning: buildReasoningPayload(), callerContext: combinedCallerContext || undefined })
+	      body: JSON.stringify({ message: messageWithFiles, history: historyForAPI, useTools: window.useAgentMode, sessionId: thisSessionId, clientRequestId, attachments: visionAttachments.length > 0 ? visionAttachments : undefined, attachmentPreviews: uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined, reasoning: buildReasoningPayload(), callerContext: turnCallerContext, origin: { channel: 'web', surface: 'desktop_app', device: 'computer', label: 'Desktop app', source: 'chat_page' } })
     });
 
     if (!res.ok) {
@@ -8340,7 +9678,11 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        if (!line.startsWith('data: ')) continue;
 	        let event;
 	        try { event = JSON.parse(line.slice(6)); } catch { continue; }
-	        if (event.type !== 'thinking_delta') flushPendingThinkingBurst();
+	        const activeBeforeStreamEvent = window.activeChatSessionId;
+	        const isReasoningCompanionEvent =
+	          event.type === 'model_stream_event'
+	          && /^reasoning_/i.test(String(event.event?.type || ''));
+	        if (event.type !== 'thinking_delta' && !isReasoningCompanionEvent) flushPendingThinkingBurst();
 
 	        switch (event.type) {
           case 'agent_mode':
@@ -8374,24 +9716,14 @@ async function sendChat(queuedMessage = null, options = {}) {
             if (chunk) {
               streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
               if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
-              // Update the thinking bubble in-place without full re-render
-              const streamEl = window.activeChatSessionId === thisSessionId ? document.getElementById('streaming-text-content') : null;
-              if (streamEl) {
-                streamEl.textContent += chunk;
-              } else if (window.activeChatSessionId === thisSessionId && window._sessionThinking?.[thisSessionId]) {
-                // First token: swap dots → streaming text div
-                const thinkingBubble = document.querySelector('#thinking-msg .thinking');
-                if (thinkingBubble) {
-                  const streamDiv = document.createElement('div');
-                  streamDiv.id = 'streaming-text-content';
-                  streamDiv.style.cssText = 'font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word';
-                  streamDiv.textContent = streamState.streamingAIText;
-                  thinkingBubble.replaceWith(streamDiv);
-                }
+              if (voiceLatencyTurnStartedAt && !voiceLatencyFirstTokenLogged) {
+                voiceLatencyFirstTokenLogged = true;
+                logDesktopVoiceLatency(thisSessionId, 'worker first token', voiceLatencyTurnStartedAt, { textLen: chunk.length });
               }
+              appendLiveTrace('assistant', chunk, { append: true });
             }
-	            break;
-	          }
+            break;
+          }
 
 	          case 'thinking_delta': {
 	            const chunk = String(event.thinking || event.text || '');
@@ -8399,7 +9731,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              pendingThinkingBurst += chunk;
 	              streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
 	              if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
-	              appendThinkingProgressChunk(chunk);
+	              appendLiveTrace('think', chunk, { append: true });
 	            }
 	            break;
 	          }
@@ -8409,6 +9741,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (thoughtText) {
 	              collectTurnThinking(thoughtText);
 	              logThinkingToProcess(thoughtText);
+	              appendLiveTrace('think', thoughtText);
 	            }
 	            break;
 	          }
@@ -8418,13 +9751,39 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              const thinkingText = String(event.thinking).trim();
 	              collectTurnThinking(thinkingText);
 	              logThinkingToProcess(thinkingText);
+	              appendLiveTrace('think', thinkingText);
 	            }
 	            break;
+
+          case 'model_stream_event': {
+            const modelEvent = event.event && typeof event.event === 'object' ? event.event : {};
+            const modelType = String(modelEvent.type || '').trim();
+            if (modelType === 'tool_call_start') {
+              const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
+              appendLiveTrace('tool', `Preparing ${name}...`);
+            } else if (modelType === 'tool_call_delta') {
+              // Arguments can stream token-by-token; keep the UI calm and let the
+              // final normalized tool event show the complete call.
+            } else if (modelType === 'tool_call_done') {
+              const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
+              appendLiveTrace('tool', `Prepared ${name}`);
+            }
+            break;
+          }
 
           case 'info': {
             if (event.message) {
               const msg = String(event.message);
               addProcessEntry('info', msg, event.actor ? { actor: event.actor } : undefined);
+            }
+            break;
+          }
+
+          case 'voice_milestone': {
+            const text = String(event.text || '').trim();
+            if (text) {
+              addProcessEntry('info', `Voice milestone: ${text}`, event.tool ? { actor: 'Voice Narrator', tool: event.tool } : { actor: 'Voice Narrator' });
+              speakVoiceMilestone(text, { force: event.stage === 'start', minGapMs: Number(event.minGapMs ?? 2500) || 2500 });
             }
             break;
           }
@@ -8453,13 +9812,17 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            break;
 	          }
 
-	          case 'ui_preflight':
-	            if (event.message) {
-	              streamState.currentPreflightStatus = String(event.message);
-	              pushProgressLine(streamState.currentPreflightStatus);
-	              renderIfViewingThisSession();
-	            }
-	            break;
+          case 'ui_preflight':
+            if (event.message) {
+              streamState.currentPreflightStatus = String(event.message);
+              pushProgressLine(streamState.currentPreflightStatus);
+              if (voiceLatencyTurnStartedAt && !voiceLatencyFirstPreflightLogged) {
+                voiceLatencyFirstPreflightLogged = true;
+                logDesktopVoiceLatency(thisSessionId, 'worker first preflight', voiceLatencyTurnStartedAt, { message: String(event.message) });
+              }
+              renderIfViewingThisSession();
+            }
+            break;
 
           case 'tool_call': {
             const action = String(event.action || '').trim();
@@ -8471,6 +9834,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             sawToolActivityThisTurn = true;
             if (action === 'context_compaction') {
               pushProgressLine('Compacting thread context...');
+              appendLiveTrace('tool', 'Compacting thread context...');
               addProcessEntry(
                 'tool',
                 `${stepPrefix}Compacting thread context...${syntheticTag}`,
@@ -8482,9 +9846,11 @@ async function sendChat(queuedMessage = null, options = {}) {
             const isBackgroundAgentTool = action.startsWith('background_');
             if (isSkillTool) {
               pushProgressLine(`${stepPrefix}${displayAction}`);
+              appendLiveTrace('tool', `${stepPrefix}${displayAction}`);
               addProcessEntry('skill', `${stepPrefix}${displayAction}${syntheticTag}`);
             } else if (isBackgroundAgentTool) {
               pushProgressLine(`${stepPrefix}${displayAction}`);
+              appendLiveTrace('tool', `${stepPrefix}${displayAction}`);
               addProcessEntry(
                 'tool',
                 `${stepPrefix}${displayAction}${syntheticTag}`,
@@ -8492,6 +9858,7 @@ async function sendChat(queuedMessage = null, options = {}) {
               );
             } else {
               if (action) pushProgressLine(`${stepPrefix}${displayAction}`);
+              if (action) appendLiveTrace('tool', `${stepPrefix}${displayAction}`);
               if (action) {
                 addProcessEntry(
                   'tool',
@@ -8520,6 +9887,13 @@ async function sendChat(queuedMessage = null, options = {}) {
 	                collectTurnGeneratedImage(event.extra.generated_image);
 	              }
 	            }
+	            if (action === 'generate_video' && ok) {
+	              if (Array.isArray(event?.extra?.generated_videos)) {
+	                event.extra.generated_videos.forEach((video) => collectTurnGeneratedVideo(video));
+	              } else if (event?.extra?.generated_video) {
+	                collectTurnGeneratedVideo(event.extra.generated_video);
+	              }
+	            }
 	            if (event.actor || isBackgroundAgentTool) extraData.actor = event.actor || 'Background Agent';
 	            const extraPayload = Object.keys(extraData).length ? extraData : undefined;
             if (action === 'context_compaction') {
@@ -8532,6 +9906,7 @@ async function sendChat(queuedMessage = null, options = {}) {
                 : `Thread compaction failed: ${text || '(no output)'}`;
               const displayResultText = String(text || '').trim() || baseResultText;
               pushProgressLine(status === 'skipped' ? 'Thread compaction skipped' : (ok ? 'Thread compacted' : 'Thread compaction failed'));
+              appendLiveTrace(ok ? 'result' : 'error', status === 'skipped' ? 'Thread compaction skipped' : (ok ? 'Thread compacted' : 'Thread compaction failed'));
               addProcessEntry(
                 ok ? 'result' : 'error',
                 `${stepPrefix}${displayResultText}${syntheticTag}`,
@@ -8541,6 +9916,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             }
             const resultDisplay = formatToolResultForLog(action, text, ok, streamState);
             if (action) pushProgressLine(`${stepPrefix}${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}`);
+            if (action) appendLiveTrace(ok ? 'result' : 'error', `${stepPrefix}${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}`);
             if (isBackgroundAgentTool) {
               try {
                 const parsed = JSON.parse(text);
@@ -8562,6 +9938,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             if (action && message) {
               const progressText = formatToolProgressForLog(action, message);
               pushProgressLine(progressText);
+              appendLiveTrace('tool', progressText);
               addProcessEntry('info', progressText, event.actor ? { actor: event.actor } : undefined);
             }
             break;
@@ -8733,10 +10110,11 @@ async function sendChat(queuedMessage = null, options = {}) {
                       return `${p}=failed${a.reason ? ` (${a.reason})` : ''}`;
                     }).join(' | ');
                     addProcessEntry('info', `Providers: ${providers}`);
-                  }
-                }
-              }
-            }
+	          }
+	        }
+	        restoreActiveSessionIfStreamStoleFocus(activeBeforeStreamEvent, thisSessionId);
+	      }
+	    }
 
             // Final answer
             if (s.finalAnswer) {
@@ -8795,8 +10173,9 @@ async function sendChat(queuedMessage = null, options = {}) {
                 const dot = document.getElementById('canvas-notify-dot');
                 if (dot) dot.style.display = 'block';
               }
-              // Auto-open canvas and load the file
-              canvasPresentFile(presentPath);
+              // Keep the user's current right-panel surface stable; the Canvas
+              // button/dot lets them open the presented file when they want it.
+              canvasPresentFile(presentPath, undefined, { autoOpen: false });
               // Track for file pill in chat message
               if (!canvasPresentedFiles.includes(presentPath)) {
                 canvasPresentedFiles.push(presentPath);
@@ -8848,29 +10227,28 @@ async function sendChat(queuedMessage = null, options = {}) {
     }
 
 	    if (finalReply) {
-	      const finalStep = allSteps.find(s => s.finalAnswer);
 	      const mergedThinking = persistTurnThinkingToProcess();
 	      await applyDesignAssistantOps(finalReply);
 	      applyCreativeAssistantOps(finalReply);
-	      const shouldAttachThinkingPanel = sawExecuteModeThisTurn || sawToolActivityThisTurn;
 	      const turnEntries = getTurnEntries();
-	      sessionHistoryRef.push({
+	      appendAssistantTurnForUser({
 	        role: 'ai',
 	        content: finalReply,
 	        artifacts: finalArtifacts,
 	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
 	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
 	        steps: allSteps,
 	        mode: window.useAgentMode ? 'agentic' : 'chat',
-		        thinking: (mergedThinking || shouldAttachThinkingPanel) ? (mergedThinking || finalStep?.thinking || '') : '',
 	        processEntries: turnEntries
 	      });
 	    } else {
 	      const turnEntries = getTurnEntries();
-	      sessionHistoryRef.push({
+	      appendAssistantTurnForUser({
 	        role: 'ai',
 	        content: 'No response received.',
 	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
 	        processEntries: turnEntries,
 	      });
 	    }
@@ -8901,11 +10279,12 @@ async function sendChat(queuedMessage = null, options = {}) {
               : streamedThinking
                 ? '[Stopped by user while thinking. Process log preserved.]'
                 : '[Generation stopped]');
-        sessionHistoryRef.push({
+        appendAssistantTurnForUser({
           role: 'ai',
           content,
           steps: allSteps,
           generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+          generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
           mode: window.useAgentMode ? 'agentic' : 'chat',
           thinking: streamedThinking || undefined,
           processEntries: turnEntries,
@@ -8919,10 +10298,11 @@ async function sendChat(queuedMessage = null, options = {}) {
         updateHeartbeatUI();
       }
       addProcessEntry('error', err.message);
-      sessionHistoryRef.push({
+      appendAssistantTurnForUser({
         role: 'ai',
         content: `Connection error: ${err.message}`,
         generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
         processEntries: turnEntries,
       });
     }
@@ -8940,12 +10320,15 @@ async function sendChat(queuedMessage = null, options = {}) {
     window.currentProgressLines = [];
     window.currentProgressThinkingActive = false;
     window.currentProgressThinkingText = '';
+    window.liveTraceEntries = [];
     window.lastHeartbeat = { ...streamState.lastHeartbeat, state: 'idle', level: '', message: '', current_step: 'done' };
     window.currentTurnStartIndex = -1;
     updateHeartbeatUI();
     renderChatMessages();
   }
   sendBtn.disabled = false;
+  releaseChatSendLock(sendLock);
+  forgetLocalMainChatRequest(thisSessionId, clientRequestId);
   updateQueuedPromptUI();
   if (Number.isInteger(options.reuseExistingUserIndex) && options.reuseExistingUserIndex >= 0) {
     updatePromptVariantAfterRerun(options.reuseExistingUserIndex);
@@ -9108,6 +10491,9 @@ document.getElementById('chat-input').addEventListener('blur', () => {
   setTimeout(hideSlashCommandPopover, 120);
 });
 
+document.addEventListener('keydown', handleRealtimeSpaceKeydown, true);
+document.addEventListener('keyup', handleRealtimeSpaceKeyup, true);
+
 queueMicrotask(() => refreshVoiceProviderStatus().catch(() => {}));
 
 // ---- WebSocket ----
@@ -9138,7 +10524,7 @@ let creativeTimelineMs = 0;
 let creativeHistoryPast = [];
 let creativeHistoryFuture = [];
 let creativeHtmlMotionClip = null;
-// Composition (multi-clip timeline). Video clips are HTML Motion or Remotion only.
+// Composition (multi-clip timeline). Video clips are HyperFrames, HTML Motion, or Remotion.
 let creativeComposition = null;
 let creativeHtmlMotionBlocksState = {
   loading: false,
@@ -9259,6 +10645,8 @@ let voiceSttProvider = 'browser';
 let voiceTtsProvider = 'browser';
 let voiceOutputVoice = '';
 let realtimeVoiceSelection = 'marin';
+let realtimeVoiceSpeed = 1.1;
+let realtimeNarrationMode = 'quiet';
 let voiceCatalogCache = {};
 let voiceRepliesEnabled = false;
 let regularVoiceControlsVisible = false;
@@ -9269,14 +10657,31 @@ let backendVoiceMimeType = 'audio/webm';
 let realtimeVoiceConfigured = false;
 let realtimeVoiceConnection = null;
 let realtimeVoiceConnecting = null;
+let xaiStreamingDictationConnection = null;
+let xaiStreamingDictationFinalText = '';
+let xaiStreamingDictationInterimText = '';
+let realtimeVoiceModeEpoch = 0;
+let realtimeListenMode = 'auto_send';
+let realtimeHoldSpaceActive = false;
 let realtimeVoicePlaybackActive = false;
 let realtimeVoiceActiveResponseId = '';
 let realtimeVoiceResponseWaiters = [];
 let realtimeVoiceSpeakChain = Promise.resolve();
+let realtimeNarrationChain = Promise.resolve();
+let realtimeNarrationLastSpokenAt = 0;
+let realtimeNarrationRecentKeys = new Map();
+let realtimeVoicePlaybackWarningShown = false;
+let realtimeAssistantSpeaking = false;
+let realtimeAssistantSpeakingUntil = 0;
+let realtimeAssistantEchoText = '';
+let realtimeAssistantSpokenText = '';
+let realtimeAssistantEchoTimer = null;
+let realtimeAssistantEchoSnippets = [];
 let realtimeContextPackCache = null;
 let realtimeContextPackFetchedAt = 0;
 let realtimeDictationConnection = null;
 let realtimeDictationConnecting = null;
+let realtimeDictationRecording = false;
 let realtimeDictationBaseText = '';
 let realtimeDictationFinalText = '';
 let realtimeDictationDeltas = new Map();
@@ -9290,12 +10695,18 @@ let realtimeDictationFallbackTimer = null;
 let realtimeDictationUtteranceSeq = 0;
 let realtimeDictationSubmittedUtteranceSeq = -1;
 let realtimeDictationSubmittedUtteranceUntil = 0;
+let realtimeDictationUtteranceStartedAt = 0;
+let realtimeDictationFirstDeltaLogged = false;
 let realtimeDraftRecognition = null;
 let realtimeDraftFinalText = '';
 let realtimeDraftInterimText = '';
 let realtimeDraftStartedAt = 0;
+let realtimeVoicePendingInterruptContext = null;
 
 const OPENAI_REALTIME_VOICE_IDS = new Set(['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar']);
+const DESKTOP_VOICE_SETTINGS_KEY = 'pm_voice_settings_v1';
+const DESKTOP_VOICE_MODES = new Set(['default', 'openai_realtime', 'xai']);
+let desktopVoiceSettings = loadDesktopVoiceSettings();
 
 const CANVAS_LANG_MAP = {
   js:'javascript', ts:'javascript', jsx:'javascript', tsx:'javascript', mjs:'javascript',
@@ -9345,6 +10756,115 @@ function storeVoiceSetting(key, value) {
   try { localStorage.setItem(`prometheus_${key}`, String(value || '')); } catch {}
 }
 
+function normalizeDesktopVoiceMode(value) {
+  const mode = String(value || '').trim();
+  return DESKTOP_VOICE_MODES.has(mode) ? mode : 'default';
+}
+
+function loadDesktopVoiceSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DESKTOP_VOICE_SETTINGS_KEY) || '{}');
+    const legacyStt = localStorage.getItem('prometheus_voice_stt_provider') || '';
+    const legacyTts = localStorage.getItem('prometheus_voice_tts_provider') || '';
+    const legacyMode = saved.voiceMode
+      || (legacyStt === 'xai' || legacyTts === 'xai' ? 'xai' : 'default');
+    return {
+      voiceMode: normalizeDesktopVoiceMode(legacyMode),
+      sttProvider: saved.sttProvider || legacyStt || 'browser',
+      ttsProvider: saved.ttsProvider || legacyTts || 'browser',
+      realtimeVoice: saved.realtimeVoice || getStoredVoiceSetting('realtime_voice', 'marin'),
+      realtimeSpeed: Number(saved.realtimeSpeed || getStoredVoiceSetting('realtime_voice_speed', '1.1') || 1.1),
+      serverVoice: saved.serverVoice || getStoredVoiceSetting('voice_xai_voice', 'eve'),
+      xaiSpeed: Number(saved.xaiSpeed || saved.realtimeSpeed || 1.0),
+      dictation: saved.dictation || 'milestone',
+      sttProviderLocked: saved.sttProviderLocked === true,
+    };
+  } catch {
+    return {
+      voiceMode: 'default',
+      sttProvider: 'browser',
+      ttsProvider: 'browser',
+      realtimeVoice: 'marin',
+      realtimeSpeed: 1.1,
+      serverVoice: 'eve',
+      xaiSpeed: 1.0,
+      dictation: 'milestone',
+      sttProviderLocked: false,
+    };
+  }
+}
+
+function saveDesktopVoiceSettings(settings = {}) {
+  desktopVoiceSettings = {
+    ...desktopVoiceSettings,
+    ...settings,
+    voiceMode: normalizeDesktopVoiceMode(settings.voiceMode || desktopVoiceSettings.voiceMode),
+  };
+  try { localStorage.setItem(DESKTOP_VOICE_SETTINGS_KEY, JSON.stringify(desktopVoiceSettings)); } catch {}
+  return desktopVoiceSettings;
+}
+
+function normalizeRealtimeVoiceSpeed(value) {
+  const speed = Number(value);
+  if (!Number.isFinite(speed)) return 1.1;
+  return Math.max(0.5, Math.min(1.5, Math.round(speed * 100) / 100));
+}
+
+function loadRealtimeVoiceSpeed() {
+  realtimeVoiceSpeed = normalizeRealtimeVoiceSpeed(getStoredVoiceSetting('realtime_voice_speed', '1.1'));
+  return realtimeVoiceSpeed;
+}
+
+function storeRealtimeVoiceSpeed(speed) {
+  realtimeVoiceSpeed = normalizeRealtimeVoiceSpeed(speed);
+  storeVoiceSetting('realtime_voice_speed', String(realtimeVoiceSpeed));
+  return realtimeVoiceSpeed;
+}
+
+function normalizeRealtimeNarrationMode(value) {
+  const mode = String(value || '').trim();
+  return ['quiet', 'milestones'].includes(mode) ? mode : 'quiet';
+}
+
+function loadRealtimeNarrationMode() {
+  realtimeNarrationMode = normalizeRealtimeNarrationMode(getStoredVoiceSetting('realtime_narration_mode', 'quiet'));
+  return realtimeNarrationMode;
+}
+
+function storeRealtimeNarrationMode(mode) {
+  realtimeNarrationMode = normalizeRealtimeNarrationMode(mode);
+  storeVoiceSetting('realtime_narration_mode', realtimeNarrationMode);
+  return realtimeNarrationMode;
+}
+
+function normalizeRealtimeListenMode(value) {
+  const mode = String(value || '').trim();
+  return ['auto_send', 'confirm_send', 'hold_space'].includes(mode) ? mode : 'auto_send';
+}
+
+function loadRealtimeListenMode() {
+  realtimeListenMode = normalizeRealtimeListenMode(getStoredVoiceSetting('realtime_listen_mode', 'auto_send'));
+  return realtimeListenMode;
+}
+
+function storeRealtimeListenMode(mode) {
+  realtimeListenMode = normalizeRealtimeListenMode(mode);
+  storeVoiceSetting('realtime_listen_mode', realtimeListenMode);
+  return realtimeListenMode;
+}
+
+function realtimeAllowsAutoSubmit() {
+  return realtimeListenMode === 'auto_send';
+}
+
+function realtimeUsesHoldSpace() {
+  return realtimeListenMode === 'hold_space';
+}
+
+function realtimeAllowsContinuousCapture() {
+  return realtimeVoiceRepliesEnabled && !realtimeUsesHoldSpace();
+}
+
 function setRegularVoiceControlsVisible(visible) {
   regularVoiceControlsVisible = !!visible;
   const controls = document.getElementById('voice-provider-controls');
@@ -9354,20 +10874,31 @@ function setRegularVoiceControlsVisible(visible) {
 }
 
 function setRealtimeVoiceControlsVisible(visible) {
-  const controls = document.getElementById('realtime-voice-provider-controls');
-  if (!controls) return;
-  controls.hidden = !visible;
-  controls.classList.toggle('visible', !!visible);
+  const controls = document.getElementById('voice-provider-controls');
+  if (controls && visible) {
+    controls.hidden = false;
+    controls.classList.add('visible');
+  }
+  const speedSelect = document.getElementById('realtime-voice-speed-select');
+  if (speedSelect) speedSelect.value = String(realtimeVoiceSpeed);
+  const narrationSelect = document.getElementById('realtime-narration-mode-select');
+  if (narrationSelect) narrationSelect.value = realtimeNarrationMode;
+  const select = document.getElementById('realtime-listen-mode-select');
+  if (select) select.value = realtimeListenMode;
   renderRealtimeWakeGateState();
 }
 
 function disableRealtimeVoiceMode() {
   if (!realtimeVoiceRepliesEnabled && !realtimeDictationConnection && !realtimeVoiceConnection) return;
+  realtimeVoiceModeEpoch += 1;
+  realtimeHoldSpaceActive = false;
+  clearRealtimeAssistantSpeakingState();
   realtimeVoiceRepliesEnabled = false;
   clearRealtimeWakeGate({ silent: true });
   closeRealtimeDictationConnection();
   closeRealtimeVoiceConnection();
-  setRealtimeVoiceControlsVisible(false);
+  resetRealtimeDictationTranscript();
+  renderVoiceProviderControls();
   setRealtimeVoiceButtonState();
 }
 
@@ -9379,11 +10910,35 @@ function resizeChatInput(input = document.getElementById('chat-input')) {
 
 function setVoiceDictationState(active) {
   voiceDictationActive = !!active && voiceDictationEnabled;
+  setUnifiedVoiceButtonState();
+}
+
+function setUnifiedVoiceButtonState() {
   const btn = document.getElementById('chat-voice-btn');
   if (!btn) return;
-  btn.classList.toggle('recording', voiceDictationActive);
-  btn.classList.toggle('active', voiceDictationEnabled);
-  btn.title = voiceDictationEnabled ? 'Stop dictation' : 'Dictate message';
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  const gate = getRealtimeWakeGate?.();
+  const realtimeActive = !!realtimeVoiceRepliesEnabled;
+  const regularActive = !!voiceDictationEnabled;
+  const recording = !!voiceDictationActive || !!(realtimeActive && realtimeDictationRecording);
+  btn.classList.toggle('recording', recording);
+  btn.classList.toggle('active', regularActive || realtimeActive);
+  btn.classList.toggle('silent', !!gate);
+  btn.classList.toggle('unconfigured', mode === 'openai_realtime' && !realtimeVoiceConfigured);
+  btn.dataset.voiceMode = mode;
+  const showWave = realtimeActive || mode === 'openai_realtime';
+  const micIcon = btn.querySelector('.voice-btn-icon-mic');
+  const waveIcon = btn.querySelector('.voice-btn-icon-wave');
+  if (micIcon) micIcon.hidden = showWave;
+  if (waveIcon) waveIcon.hidden = !showWave;
+  const modeLabel = mode === 'openai_realtime' ? 'OpenAI Realtime' : mode === 'xai' ? 'xAI / Grok' : 'Default voice';
+  btn.title = gate
+    ? `Silent until "${gate.phrase}"`
+    : realtimeActive
+      ? 'Stop OpenAI Realtime voice'
+      : regularActive
+        ? 'Stop dictation'
+        : `Start ${modeLabel}`;
   btn.setAttribute('aria-label', btn.title);
 }
 
@@ -9433,7 +10988,7 @@ function submitVoiceCommandIfPresent() {
     try { voiceRecognition.stop(); } catch {}
   }
   setTimeout(() => {
-    const result = sendChat();
+    const result = sendChat(null, { voiceAgentHandoff: true, voiceSource: 'desktop_regular_voice' });
     if (result?.catch) result.catch((err) => showToast('Voice send failed', String(err?.message || err), 'error'));
   }, 0);
   voiceDictationEnabled = false;
@@ -9465,6 +11020,7 @@ function toggleBrowserDictation() {
       try { voiceRecognition?.stop?.(); } catch {}
       return;
     }
+    stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'dictation_started' });
     setVoiceDictationState(true);
     showToast('Listening', 'Dictation is writing into the chat box.', 'info', 1800);
   };
@@ -9484,6 +11040,7 @@ function toggleBrowserDictation() {
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const transcript = String(event.results[i]?.[0]?.transcript || '').trim();
       if (!transcript) continue;
+      stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'dictation_transcribing' });
       if (event.results[i].isFinal) {
         voiceDictationFinalText = `${voiceDictationFinalText} ${transcript}`.trim();
         sawFinal = true;
@@ -9503,9 +11060,186 @@ function toggleBrowserDictation() {
 }
 
 async function stopBackendDictation() {
+  if (xaiStreamingDictationConnection) {
+    stopXaiStreamingDictation(false);
+    return;
+  }
   if (!backendVoiceRecorder) return;
   try { backendVoiceRecorder.stop(); } catch {}
   try { backendVoiceRecorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+}
+
+function buildGatewayWsUrl(path, params = {}) {
+  const url = new URL(path, location.origin);
+  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  try {
+    const token = localStorage.getItem('pm_device_token');
+    if (token) url.searchParams.set('pt', token);
+  } catch {}
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value == null || value === '') continue;
+    url.searchParams.set(key, String(value));
+  }
+  return url.toString();
+}
+
+function downsampleFloat32ToInt16(input, inputRate, outputRate) {
+  if (!input?.length) return new Int16Array(0);
+  const ratio = inputRate && outputRate && inputRate !== outputRate ? inputRate / outputRate : 1;
+  const length = ratio === 1 ? input.length : Math.max(1, Math.round(input.length / ratio));
+  const output = new Int16Array(length);
+  for (let i = 0; i < length; i += 1) {
+    let sample = 0;
+    if (ratio === 1) {
+      sample = input[i] || 0;
+    } else {
+      const start = Math.floor(i * ratio);
+      const end = Math.min(input.length, Math.floor((i + 1) * ratio));
+      let sum = 0;
+      let count = 0;
+      for (let j = start; j < end; j += 1) {
+        sum += input[j] || 0;
+        count += 1;
+      }
+      sample = count ? sum / count : input[start] || 0;
+    }
+    sample = Math.max(-1, Math.min(1, sample));
+    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+}
+
+function writeXaiStreamingDictationTranscript() {
+  writeDictationTranscript(xaiStreamingDictationInterimText);
+}
+
+function appendXaiStreamingDictationEvent(event) {
+  const text = String(event?.text || event?.transcript || event?.channel?.text || '').replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  if (event?.is_final === true || event?.speech_final === true || event?.type === 'transcript.done') {
+    xaiStreamingDictationFinalText = text;
+    xaiStreamingDictationInterimText = '';
+  } else {
+    xaiStreamingDictationInterimText = text;
+  }
+  voiceDictationFinalText = xaiStreamingDictationFinalText;
+  writeXaiStreamingDictationTranscript();
+}
+
+async function startXaiStreamingDictation() {
+  if (!navigator.mediaDevices?.getUserMedia || typeof WebSocket === 'undefined' || !(window.AudioContext || window.webkitAudioContext)) {
+    return toggleBackendDictationFallback();
+  }
+  const selected = getProviderInfo('stt', 'xai');
+  if (!selected?.configured) {
+    showToast('Voice provider not configured', `${selected?.label || 'xAI / Grok'} needs its API key on the gateway.`, 'error');
+    return;
+  }
+  const startedAt = Date.now();
+  const input = document.getElementById('chat-input');
+  voiceDictationBaseText = String(input?.value || '').trim();
+  voiceDictationFinalText = '';
+  xaiStreamingDictationFinalText = '';
+  xaiStreamingDictationInterimText = '';
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const audioContext = new AudioCtx({ sampleRate: 16000 });
+  const source = audioContext.createMediaStreamSource(stream);
+  const processor = audioContext.createScriptProcessor(2048, 1, 1);
+  const mutedGain = audioContext.createGain();
+  mutedGain.gain.value = 0;
+  const sampleRate = Math.round(audioContext.sampleRate || 16000);
+  const ws = new WebSocket(buildGatewayWsUrl('/api/voice/xai/stt-stream', {
+    sample_rate: sampleRate,
+    language: navigator.language?.split('-')?.[0] || 'en',
+    endpointing: 120,
+  }));
+  ws.binaryType = 'arraybuffer';
+  xaiStreamingDictationConnection = { ws, stream, audioContext, source, processor, mutedGain, stopping: false };
+  setVoiceDictationState(true);
+  voiceDictationEnabled = true;
+  showToast('Listening', 'xAI streaming dictation is live.', 'info', 1400);
+  let ready = false;
+  let fellBack = false;
+  const fallbackToBatch = async (reason) => {
+    if (fellBack || !xaiStreamingDictationConnection) return;
+    fellBack = true;
+    console.warn('[voice] xAI streaming dictation fallback:', reason);
+    stopXaiStreamingDictation(true);
+    voiceDictationEnabled = true;
+    voiceRepliesEnabled = true;
+    showToast('xAI streaming unavailable', 'Using xAI batch transcription instead.', 'error');
+    await toggleBackendDictationFallback();
+  };
+  const readyTimeout = setTimeout(() => {
+    if (!ready) fallbackToBatch('xAI streaming STT did not become ready');
+  }, 2800);
+  ws.addEventListener('message', (event) => {
+    let data = null;
+    try { data = JSON.parse(event.data); } catch { return; }
+    const type = String(data?.type || '');
+    if (type === 'transcript.created') {
+      ready = true;
+      clearTimeout(readyTimeout);
+      addProcessEntry?.('info', `xAI streaming STT ready in ${Date.now() - startedAt}ms.`);
+      return;
+    }
+    if (type === 'transcript.partial' || type === 'transcript.done') {
+      appendXaiStreamingDictationEvent(data);
+      if (type === 'transcript.done') submitVoiceCommandIfPresent();
+      return;
+    }
+    if (type === 'error') {
+      showToast('xAI streaming STT failed', String(data?.error?.message || data?.error || 'Unknown error'), 'error');
+      fallbackToBatch(data?.error?.message || data?.error || 'xAI streaming error');
+    }
+  });
+  ws.addEventListener('error', () => fallbackToBatch('websocket_error'));
+  ws.addEventListener('close', () => {
+    clearTimeout(readyTimeout);
+    if (!ready && !fellBack) fallbackToBatch('websocket_closed_before_ready');
+  });
+  processor.onaudioprocess = (event) => {
+    if (!xaiStreamingDictationConnection || xaiStreamingDictationConnection.stopping || ws.readyState !== WebSocket.OPEN) return;
+    const inputData = event.inputBuffer.getChannelData(0);
+    const pcm = downsampleFloat32ToInt16(inputData, audioContext.sampleRate || sampleRate, sampleRate);
+    if (pcm.byteLength > 0) {
+      try { ws.send(pcm.buffer); } catch {}
+    }
+  };
+  source.connect(processor);
+  processor.connect(mutedGain);
+  mutedGain.connect(audioContext.destination);
+  await audioContext.resume?.();
+}
+
+function stopXaiStreamingDictation(abort = false) {
+  const conn = xaiStreamingDictationConnection;
+  xaiStreamingDictationConnection = null;
+  if (!conn) return;
+  conn.stopping = true;
+  try { conn.processor?.disconnect?.(); } catch {}
+  try { conn.source?.disconnect?.(); } catch {}
+  try { conn.mutedGain?.disconnect?.(); } catch {}
+  try { conn.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+  try { conn.audioContext?.close?.(); } catch {}
+  if (abort) {
+    try { conn.ws?.close?.(); } catch {}
+    setVoiceDictationState(false);
+    return;
+  }
+  try { conn.ws?.send?.(JSON.stringify({ type: 'audio.done' })); } catch {}
+  setTimeout(() => {
+    try { conn.ws?.close?.(); } catch {}
+    voiceDictationFinalText = xaiStreamingDictationFinalText || xaiStreamingDictationInterimText || voiceDictationFinalText;
+    writeDictationTranscript('');
+    submitVoiceCommandIfPresent();
+    setVoiceDictationState(false);
+  }, 450);
+}
+
+async function toggleBackendDictationFallback() {
+  return toggleBackendDictation({ forceBatch: true });
 }
 
 async function transcribeBackendRecording(blob) {
@@ -9530,10 +11264,19 @@ async function transcribeBackendRecording(blob) {
   else showToast('No speech detected', '', 'info', 1800);
 }
 
-async function toggleBackendDictation() {
-  if (backendVoiceRecorder && voiceDictationActive) {
+async function toggleBackendDictation(options = {}) {
+  if ((backendVoiceRecorder || xaiStreamingDictationConnection) && voiceDictationActive) {
     await stopBackendDictation();
     return;
+  }
+  if (voiceSttProvider === 'xai' && options.forceBatch !== true) {
+    try {
+      await startXaiStreamingDictation();
+      return;
+    } catch (err) {
+      console.warn('[voice] xAI streaming dictation failed, falling back to batch STT', err);
+      showToast('xAI streaming unavailable', 'Using xAI batch transcription instead.', 'error');
+    }
   }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
     showToast('Voice recording unavailable', 'This browser cannot record microphone audio for backend STT.', 'error');
@@ -9545,6 +11288,7 @@ async function toggleBackendDictation() {
     return;
   }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'backend_dictation_started' });
   backendVoiceChunks = [];
   backendVoiceMimeType = getRecorderMimeType();
   backendVoiceRecorder = new MediaRecorder(stream, backendVoiceMimeType ? { mimeType: backendVoiceMimeType } : undefined);
@@ -9580,7 +11324,11 @@ async function toggleBackendDictation() {
 }
 
 function toggleVoiceDictation() {
-  if (voiceDictationEnabled || voiceDictationActive || voiceRecognition || backendVoiceRecorder) {
+  if (realtimeVoiceRepliesEnabled) {
+    toggleRealtimeVoiceReplies().catch((err) => showToast('Realtime voice could not stop', String(err?.message || err), 'error'));
+    return;
+  }
+  if (voiceDictationEnabled || voiceDictationActive || voiceRecognition || backendVoiceRecorder || xaiStreamingDictationConnection) {
     voiceDictationEnabled = false;
     voiceRepliesEnabled = false;
     setRegularVoiceControlsVisible(false);
@@ -9598,13 +11346,44 @@ function toggleVoiceDictation() {
       try { recorder.ondataavailable = null; recorder.onerror = null; recorder.onstop = null; recorder.stop(); } catch {}
       try { recorder.stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
     }
+    if (xaiStreamingDictationConnection) {
+      stopXaiStreamingDictation(true);
+    }
     showToast('Dictation off', '', 'info', 1400);
     return;
   }
   disableRealtimeVoiceMode();
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  if (mode === 'openai_realtime') {
+    toggleRealtimeVoiceReplies().catch((err) => showToast('Realtime voice could not start', String(err?.message || err), 'error'));
+    return;
+  }
+  if (mode === 'xai') {
+    const xaiTtsReady = isVoiceProviderConfigured('tts', 'xai');
+    const xaiSttReady = isVoiceProviderConfigured('stt', 'xai');
+    if (!xaiTtsReady) {
+      showToast('xAI/Grok voice unavailable', 'Connect xAI/Grok voice credentials, then try again. Using Default dictation for now.', 'error', 3200);
+      voiceSttProvider = 'browser';
+      voiceTtsProvider = 'browser';
+    } else {
+      voiceTtsProvider = 'xai';
+      voiceSttProvider = xaiSttReady ? 'xai' : 'browser';
+      if (!xaiSttReady) showToast('xAI/Grok transcription unavailable', 'Using browser dictation with xAI/Grok response voice.', 'info', 2600);
+    }
+    storeVoiceProvider('stt', voiceSttProvider);
+    storeVoiceProvider('tts', voiceTtsProvider);
+    saveDesktopVoiceSettings({ voiceMode: 'xai', sttProvider: voiceSttProvider, ttsProvider: voiceTtsProvider });
+  } else {
+    voiceSttProvider = 'browser';
+    voiceTtsProvider = 'browser';
+    storeVoiceProvider('stt', voiceSttProvider);
+    storeVoiceProvider('tts', voiceTtsProvider);
+    saveDesktopVoiceSettings({ voiceMode: 'default', sttProvider: 'browser', ttsProvider: 'browser' });
+  }
   voiceDictationEnabled = true;
   voiceRepliesEnabled = true;
   setRegularVoiceControlsVisible(true);
+  renderVoiceProviderControls();
   if (voiceSttProvider === 'browser') {
     toggleBrowserDictation();
     return;
@@ -9620,19 +11399,7 @@ function extractRealtimeClientSecret(data) {
 }
 
 function setRealtimeVoiceButtonState() {
-  const btn = document.getElementById('chat-realtime-voice-btn');
-  if (!btn) return;
-  const gate = getRealtimeWakeGate();
-  btn.classList.toggle('active', realtimeVoiceRepliesEnabled);
-  btn.classList.toggle('silent', !!gate);
-  btn.classList.toggle('unconfigured', !realtimeVoiceConfigured);
-  btn.disabled = false;
-  btn.title = gate
-    ? `Silent until "${gate.phrase}"`
-    : realtimeVoiceRepliesEnabled
-    ? 'Stop OpenAI Realtime replies'
-    : (realtimeVoiceConfigured ? 'OpenAI Realtime replies' : 'Connect OpenAI Codex OAuth or set an OpenAI Realtime API key');
-  btn.setAttribute('aria-label', btn.title);
+  setUnifiedVoiceButtonState();
 }
 
 function closeRealtimeVoiceConnection() {
@@ -9643,15 +11410,18 @@ function closeRealtimeVoiceConnection() {
   realtimeVoiceResponseWaiters.splice(0).forEach((resolve) => {
     try { resolve(); } catch {}
   });
+  clearRealtimeAssistantSpeakingState();
   try { connection?.dc?.close?.(); } catch {}
   try { connection?.pc?.close?.(); } catch {}
   try { if (connection?.audio) connection.audio.srcObject = null; } catch {}
 }
 
 function setRealtimeDictationRecordingState(active) {
-  const btn = document.getElementById('chat-realtime-voice-btn');
+  realtimeDictationRecording = !!active;
+  const btn = document.getElementById('chat-voice-btn');
   if (!btn) return;
   btn.classList.toggle('recording', !!active && realtimeVoiceRepliesEnabled);
+  setUnifiedVoiceButtonState();
 }
 
 function normalizeRealtimeWakePhrase(value) {
@@ -9706,7 +11476,7 @@ function parseRealtimeControlCommand(value) {
   if (/^(?:hey\s+)?(?:prometheus\s+)?(?:stop|cancel|abort|stop\s+that|cancel\s+that|abort\s+that|stop\s+the\s+task|cancel\s+the\s+task)$/.test(normalized)) {
     return { kind: 'interrupt' };
   }
-  if (/^(?:hey\s+)?(?:prometheus\s+)?(?:stop\s+talking|stop\s+speaking|be\s+quiet|mute\s+yourself)$/.test(normalized)) {
+  if (/^(?:hey\s+)?(?:prometheus\s+)?(?:stop\s+talking|stop\s+speaking|be\s+quiet|mute\s+yourself|wait|hold\s+on|pause|one\s+sec|one\s+second)$/.test(normalized)) {
     return { kind: 'mute_voice' };
   }
   return null;
@@ -9736,6 +11506,7 @@ function interruptActivePrometheusWorkerFromVoice() {
   try { window.stopGeneration?.(); } catch {}
   const ctrl = window._sessionAbortControllers?.[sid] || currentAbortController;
   try { if (ctrl && !ctrl.signal?.aborted) ctrl.abort(); } catch {}
+  requestGatewayMainChatAbort(sid, 'desktop_realtime_voice_interrupt').catch(() => {});
   addProcessEntry?.('warn', 'Realtime voice: worker interrupted by voice command.');
   return true;
 }
@@ -9749,7 +11520,7 @@ function handleRealtimeControlCommand(command) {
     return true;
   }
   if (command.kind === 'interrupt') {
-    stopRealtimeVoicePlayback();
+    stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'voice_command_interrupt' });
     const stopped = interruptActivePrometheusWorkerFromVoice();
     const text = stopped ? 'Stopped the active Prometheus worker.' : 'There is no active Prometheus worker to stop.';
     showToast('Realtime interrupt', text, stopped ? 'success' : 'info', 1800);
@@ -9757,7 +11528,7 @@ function handleRealtimeControlCommand(command) {
     return true;
   }
   if (command.kind === 'mute_voice') {
-    stopRealtimeVoicePlayback();
+    stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'voice_command_mute' });
     showToast('Realtime voice muted', '', 'info', 1400);
     return true;
   }
@@ -9770,7 +11541,7 @@ function getRealtimeWakeGate() {
 
 function renderRealtimeWakeGateState() {
   const status = document.getElementById('realtime-wake-gate-status');
-  const btn = document.getElementById('chat-realtime-voice-btn');
+  const btn = document.getElementById('chat-voice-btn');
   const gate = getRealtimeWakeGate();
   if (btn) {
     btn.classList.toggle('silent', !!gate);
@@ -9793,7 +11564,401 @@ function renderRealtimeWakeGateState() {
   status.innerHTML = `<span class="realtime-wake-gate-pill" title="Prometheus is listening silently for this wake phrase">Silent until &quot;${escHtml(gate.phrase)}&quot;</span><button type="button" class="realtime-wake-gate-btn" onclick="clearRealtimeWakeGate()">Wake</button>`;
 }
 
-function stopRealtimeVoicePlayback() {
+function normalizeRealtimeEchoText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanupRealtimeAssistantEchoSnippets(now = Date.now()) {
+  realtimeAssistantEchoSnippets = realtimeAssistantEchoSnippets.filter((item) => item && item.expiresAt > now);
+}
+
+function getRealtimeAssistantEchoSources() {
+  cleanupRealtimeAssistantEchoSnippets();
+  return [realtimeAssistantEchoText, ...realtimeAssistantEchoSnippets.map((item) => item.text)].filter(Boolean);
+}
+
+function hasRealtimeAssistantEchoMemory() {
+  return getRealtimeAssistantEchoSources().length > 0;
+}
+
+function clearRealtimeAssistantSpeakingState(options = {}) {
+  if (realtimeAssistantEchoTimer) clearTimeout(realtimeAssistantEchoTimer);
+  realtimeAssistantEchoTimer = null;
+  realtimeAssistantSpeaking = false;
+  realtimeAssistantSpeakingUntil = 0;
+  if (options.keepEcho !== true) {
+    realtimeAssistantEchoText = '';
+    realtimeAssistantSpokenText = '';
+  }
+}
+
+function beginRealtimeAssistantSpeakingEchoGuard(text) {
+  const normalized = normalizeRealtimeEchoText(text);
+  realtimeAssistantSpeaking = true;
+  realtimeAssistantSpeakingUntil = Date.now() + 2500;
+  realtimeAssistantEchoText = normalized;
+  realtimeAssistantSpokenText = String(text || '').replace(/\s+/g, ' ').trim();
+  if (normalized) {
+    cleanupRealtimeAssistantEchoSnippets();
+    realtimeAssistantEchoSnippets.push({
+      text: normalized,
+      expiresAt: Date.now() + 90000,
+    });
+    if (realtimeAssistantEchoSnippets.length > 8) realtimeAssistantEchoSnippets = realtimeAssistantEchoSnippets.slice(-8);
+  }
+  if (realtimeAssistantEchoTimer) clearTimeout(realtimeAssistantEchoTimer);
+  realtimeAssistantEchoTimer = null;
+}
+
+function finishRealtimeAssistantSpeakingEchoGuard(cooldownMs = 1000) {
+  if (realtimeAssistantEchoTimer) clearTimeout(realtimeAssistantEchoTimer);
+  realtimeAssistantSpeaking = false;
+  realtimeAssistantSpeakingUntil = Date.now() + Math.max(0, Number(cooldownMs) || 0);
+  realtimeAssistantEchoTimer = setTimeout(() => {
+    realtimeAssistantEchoTimer = null;
+    if (Date.now() >= realtimeAssistantSpeakingUntil) {
+      realtimeAssistantSpeakingUntil = 0;
+      realtimeAssistantEchoText = '';
+    }
+  }, Math.max(0, Number(cooldownMs) || 0) + 80);
+}
+
+function isRealtimeAssistantSpeechGuardActive() {
+  return !!(realtimeAssistantSpeaking || realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId || Date.now() < realtimeAssistantSpeakingUntil);
+}
+
+function shouldSuppressRealtimeAssistantEchoInput() {
+  if (!isRealtimeAssistantSpeechGuardActive()) return false;
+  return !(realtimeUsesHoldSpace() && realtimeHoldSpaceActive);
+}
+
+function isRealtimeAssistantEchoTranscript(transcript) {
+  const normalized = normalizeRealtimeEchoText(transcript);
+  if (normalized.length < 4) return false;
+  const sources = getRealtimeAssistantEchoSources();
+  if (!sources.length) return false;
+  const transcriptWords = normalized.split(' ').filter(Boolean);
+  if (!transcriptWords.length) return false;
+  for (const source of sources) {
+    if (normalized.length >= 4 && source.includes(normalized)) return true;
+    if (transcriptWords.length < 2) continue;
+    const sourceWords = new Set(source.split(' ').filter(Boolean));
+    const common = transcriptWords.filter((word) => sourceWords.has(word)).length;
+    const ratio = common / transcriptWords.length;
+    if (transcriptWords.length <= 3 && ratio >= 0.8) return true;
+    if (transcriptWords.length > 3 && ratio >= 0.55) return true;
+  }
+  return false;
+}
+
+function isRealtimeBargeInTranscript(transcript) {
+  const normalized = normalizeRealtimeWakePhrase(transcript);
+  if (!normalized) return false;
+  if (parseRealtimeControlCommand(transcript)) return true;
+  if (parseRealtimeWakeGateCommand(transcript)) return true;
+  const words = normalized.split(' ').filter(Boolean);
+  return words.length <= 8 && /^(?:hey\s+)?prometheus\s+(?:stop|wait|pause|hold|cancel|status|quiet|mute)\b/.test(normalized);
+}
+
+function captureRealtimeVoicePlaybackInterrupt(reason = 'barge_in') {
+  const active = !!(realtimeVoicePlaybackActive || realtimeAssistantSpeaking || realtimeVoiceActiveResponseId);
+  if (!active) return false;
+  realtimeVoicePendingInterruptContext = {
+    at: Date.now(),
+    reason,
+    responsePreview: String(realtimeAssistantSpokenText || realtimeAssistantEchoText || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+  };
+  try { addProcessEntry?.('warn', 'Realtime voice: spoken response interrupted by user.'); } catch {}
+  return true;
+}
+
+function consumeRealtimeVoicePlaybackInterruptContext() {
+  const ctx = realtimeVoicePendingInterruptContext;
+  if (!ctx) return '';
+  if (Date.now() - Number(ctx.at || 0) > 120000) {
+    realtimeVoicePendingInterruptContext = null;
+    return '';
+  }
+  realtimeVoicePendingInterruptContext = null;
+  return [
+    '[VOICE INTERRUPTION CONTEXT]',
+    'The user interrupted Prometheus while it was speaking via web realtime voice/dictation.',
+    'Treat the next user message as a barge-in/follow-up to the interrupted spoken response, not an unrelated new request.',
+    'Acknowledge that you were interrupted only if it helps the response; do not over-apologize.',
+    ctx.responsePreview ? `Interrupted spoken response preview:\n${ctx.responsePreview}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+async function finalizeRealtimeVoicePlaybackInterruptContext(userInterruptionTranscript = '') {
+  const ctx = realtimeVoicePendingInterruptContext;
+  if (!ctx) return '';
+  if (Date.now() - Number(ctx.at || 0) > 180000) {
+    realtimeVoicePendingInterruptContext = null;
+    return '';
+  }
+  realtimeVoicePendingInterruptContext = null;
+  const fallback = [
+    '[VOICE INTERRUPTION EVENT]',
+    `Reason: ${ctx.reason || 'barge_in'}`,
+    'Original user request: current desktop realtime chat turn',
+    `Spoken segment at interruption: ${ctx.responsePreview || '(unknown)'}`,
+    `User interruption: ${String(userInterruptionTranscript || '').trim() || '(none)'}`,
+    'Interpretation: unknown',
+    'Runtime instruction: Treat this as a live voice interruption/follow-up. Do not abort unless the user explicitly cancelled.',
+    '[/VOICE INTERRUPTION EVENT]',
+  ].join('\n');
+  try {
+    const response = await fetch('/api/voice-agent/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: window.activeChatSessionId || 'default',
+        reason: ctx.reason || 'barge_in',
+        currentSpokenSegment: ctx.responsePreview || '',
+        assistantTextSoFar: ctx.responsePreview || '',
+        transcript: userInterruptionTranscript,
+        userInterruptionTranscript,
+        voiceMode: 'desktop_realtime',
+        source: 'desktop_realtime_voice_agent',
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) return fallback;
+    return String(data?.injectedContextText || '').trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function handleRealtimeVoiceInterruptionOnly(userInterruptionTranscript = '') {
+  const ctx = realtimeVoicePendingInterruptContext;
+  if (!ctx) return false;
+  const sessionId = String(window.activeChatSessionId || 'default').trim() || 'default';
+  let data = null;
+  try {
+    const response = await fetch('/api/voice-agent/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        reason: ctx.reason || 'barge_in',
+        currentSpokenSegment: ctx.responsePreview || '',
+        assistantTextSoFar: ctx.responsePreview || '',
+        transcript: userInterruptionTranscript,
+        userInterruptionTranscript,
+        voiceMode: 'desktop_realtime',
+        source: 'desktop_realtime_voice_agent',
+      }),
+    });
+    data = await response.json().catch(() => ({}));
+  } catch (err) {
+    addProcessEntry?.('error', `Realtime voice interruption failed: ${String(err?.message || err)}`);
+    return false;
+  } finally {
+    realtimeVoicePendingInterruptContext = null;
+  }
+  if (!data?.success && !data?.ok) return false;
+  const intent = String(data?.classification?.intent || 'unknown');
+  addProcessEntry?.('warn', `Voice interruption: ${intent}${userInterruptionTranscript ? ` - ${userInterruptionTranscript}` : ''}`, {
+    actor: 'Voice Interruption',
+    eventId: data.eventId,
+  });
+  const splitAddedAbortMessage = appendVoiceInterruptionWorkflowSplit(sessionId, userInterruptionTranscript, data);
+  if (data?.classification?.shouldAbortOriginalRun) {
+    const ctrl = window._sessionAbortControllers?.[sessionId] || currentAbortController;
+    try { if (ctrl && !ctrl.signal?.aborted) ctrl.abort(); } catch {}
+    await requestGatewayMainChatAbort(sessionId, 'desktop_realtime_voice_interruption_event');
+    addProcessEntry?.('warn', 'Voice interruption requested worker abort. Process log preserved.', { actor: 'Voice Interruption' });
+    await waitForSessionIdle(sessionId, 2400);
+    const sess = getChatSessionById(sessionId);
+    const st = getSessionStreamState(sessionId);
+    if (sess) {
+      if (!Array.isArray(sess.history)) sess.history = [];
+      if (!Array.isArray(sess.processLog)) sess.processLog = [];
+      const last = sess.history[sess.history.length - 1];
+      const alreadyStopped = last && (last.role === 'ai' || last.role === 'assistant') && /^\[Stopped by user\]/i.test(String(last.content || ''));
+      if (!alreadyStopped && !splitAddedAbortMessage) {
+        const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : 0;
+        const turnEntries = sess.processLog.slice(Math.max(0, startIndex));
+        const streamedText = String(st?.streamingAIText || '').trim();
+        const content = streamedText
+          ? `[Stopped by user]\n\n${streamedText}`
+          : `[Stopped by user]\n\nVoice interruption stopped the active Prometheus worker. Process log preserved.`;
+        sess.history.push({
+          role: 'ai',
+          content,
+          timestamp: Date.now(),
+          mode: window.useAgentMode ? 'agentic' : 'chat',
+          processEntries: turnEntries,
+        });
+        if (window.activeChatSessionId === sessionId) {
+          window.chatHistory = sess.history;
+          renderChatMessages();
+        }
+        persistSession(sessionId);
+      }
+    }
+  }
+  const reply = String(data?.voiceReply || (intent === 'cancel' ? 'Stopped.' : 'Got it.')).trim();
+  if (reply) speakRealtimeNarration(reply, { force: true, minGapMs: 0 });
+  renderProcessLog?.();
+  return true;
+}
+
+async function submitDesktopVoiceAsLiveSteer(transcript = '', options = {}) {
+  const text = String(transcript || '').trim();
+  if (!text) return false;
+  const sessionId = String(window.activeChatSessionId || 'default').trim() || 'default';
+  const ctx = realtimeVoicePendingInterruptContext;
+  realtimeVoicePendingInterruptContext = null;
+  let data = null;
+  try {
+    const response = await fetch('/api/voice-agent/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        reason: ctx?.reason || 'voice_steer',
+        currentSpokenSegment: ctx?.responsePreview || '',
+        assistantTextSoFar: ctx?.responsePreview || '',
+        transcript: text,
+        userInterruptionTranscript: text,
+        voiceMode: 'desktop_realtime',
+        source: String(options.source || 'desktop_realtime_voice_steer'),
+      }),
+    });
+    data = await response.json().catch(() => ({}));
+    if (!response.ok || (!data?.success && !data?.ok)) return false;
+  } catch (err) {
+    addProcessEntry?.('error', `Realtime voice steer failed: ${String(err?.message || err)}`);
+    return false;
+  }
+  const intent = String(data?.classification?.intent || 'unknown');
+  addProcessEntry?.('warn', `Voice steer: ${intent}${text ? ` - ${text}` : ''}`, {
+    actor: 'Voice Steer',
+    eventId: data.eventId,
+    runtimeId: data.runtimeId,
+  });
+  appendVoiceInterruptionWorkflowSplit(sessionId, text, data);
+  if (data?.classification?.shouldAbortOriginalRun || data?.action === 'interrupt_worker') {
+    const ctrl = window._sessionAbortControllers?.[sessionId] || currentAbortController;
+    try { if (ctrl && !ctrl.signal?.aborted) ctrl.abort(); } catch {}
+    await requestGatewayMainChatAbort(sessionId, 'desktop_realtime_voice_steer');
+  }
+  const reply = String(data?.voiceReply || '').trim();
+  if (reply) speakRealtimeNarration(reply, { force: true, minGapMs: 0 });
+  renderProcessLog?.();
+  return true;
+}
+
+async function speakDesktopVoiceAgentReply(text) {
+  const reply = String(text || '').trim();
+  if (!reply) return;
+  if (realtimeVoiceRepliesEnabled) {
+    speakRealtimeNarration(reply, { force: true, minGapMs: 0 });
+    return;
+  }
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  const provider = mode === 'xai'
+    ? 'xai'
+    : (voiceTtsProvider || desktopVoiceSettings.ttsProvider || 'browser');
+  try {
+    if (provider === 'browser') {
+      speakWithBrowserVoice(reply);
+      return;
+    }
+    if (provider === 'openai_realtime') {
+      await speakWithRealtimeVoice(reply);
+      return;
+    }
+    const selected = getProviderInfo('tts', provider);
+    if (selected && !selected.configured) throw new Error(`${selected.label} needs its API key on the gateway.`);
+    await speakWithServerTts(reply, provider);
+  } catch (err) {
+    console.warn('[voice-agent] desktop ack TTS failed, falling back to browser speech:', err);
+    speakWithBrowserVoice(reply);
+  }
+}
+
+function logDesktopVoiceLatency(sessionId, stage, startedAt, extra = {}) {
+  const sid = String(sessionId || window.activeChatSessionId || 'default').trim() || 'default';
+  const elapsedMs = Math.max(0, Math.round(Date.now() - Number(startedAt || Date.now())));
+  const detail = extra && typeof extra === 'object' ? extra : {};
+  addSessionProcessEntry(sid, 'info', `Voice latency: ${stage} ${elapsedMs}ms.`, {
+    actor: 'Voice Latency',
+    stage,
+    elapsedMs,
+    ...detail,
+  });
+}
+
+async function prepareDesktopVoiceAgentHandoff(sessionId, transcript = '', options = {}) {
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const text = String(transcript || '').trim();
+  if (!text) return { shouldContinueToWorker: true, result: null, callerContext: '' };
+  try {
+    const handoffStartedAt = Date.now();
+    addSessionProcessEntry(sid, 'info', 'Voice Agent: preparing contextual acknowledgement.', { actor: 'Voice Agent' });
+    const response = await fetch('/api/voice-agent/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: sid,
+        transcript: text,
+        userInterruptionTranscript: text,
+        source: String(options.source || 'desktop_voice_handoff'),
+        voiceMode: realtimeVoiceRepliesEnabled ? 'desktop_realtime' : `desktop_${normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode)}`,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || (!result?.success && !result?.ok)) {
+      throw new Error(result?.error || `Voice Agent failed (${response.status})`);
+    }
+    logDesktopVoiceLatency(sid, 'voice-agent endpoint', handoffStartedAt, {
+      action: result?.action || '',
+      timings: result?.timings || null,
+    });
+    const reply = String(result?.voiceReply || '').trim();
+    if (result?.action === 'handoff_new_work') {
+      if (reply) {
+        logDesktopVoiceLatency(sid, 'ack TTS started', handoffStartedAt, { nonBlocking: true });
+        speakDesktopVoiceAgentReply(reply)
+          .then(() => logDesktopVoiceLatency(sid, 'ack TTS dispatched', handoffStartedAt, { nonBlocking: true }))
+          .catch((err) => addSessionProcessEntry(sid, 'warn', `Voice acknowledgement failed: ${String(err?.message || err)}`, { actor: 'Voice Latency' }));
+      }
+      logDesktopVoiceLatency(sid, 'worker handoff released', handoffStartedAt);
+      return {
+        shouldContinueToWorker: true,
+        result,
+        callerContext: String(result?.injectedContextText || '').trim(),
+      };
+    }
+    if (reply) {
+      logDesktopVoiceLatency(sid, 'ack TTS started', handoffStartedAt, { nonBlocking: false });
+      await speakDesktopVoiceAgentReply(reply);
+      logDesktopVoiceLatency(sid, 'ack TTS completed', handoffStartedAt, { nonBlocking: false });
+    }
+    if (result?.steerApplied === true || result?.action === 'steer_worker') {
+      appendVoiceInterruptionWorkflowSplit(sid, text, result);
+      return { shouldContinueToWorker: false, result, callerContext: '' };
+    }
+    if (result?.action === 'interrupt_worker') {
+      await requestGatewayMainChatAbort(sid, 'desktop_voice_agent_handoff');
+      return { shouldContinueToWorker: false, result, callerContext: '' };
+    }
+    return { shouldContinueToWorker: false, result, callerContext: '' };
+  } catch (err) {
+    addSessionProcessEntry(sid, 'error', `Voice Agent handoff failed: ${String(err?.message || err)}`, { actor: 'Voice Agent' });
+    return { shouldContinueToWorker: true, result: null, callerContext: '' };
+  }
+}
+
+function stopRealtimeVoicePlayback(options = {}) {
+  if (options.recordInterrupt === true) captureRealtimeVoicePlaybackInterrupt(options.reason || 'barge_in');
   try { window.speechSynthesis?.cancel?.(); } catch {}
   const audio = document.getElementById('realtime-voice-audio');
   try {
@@ -9801,18 +11966,19 @@ function stopRealtimeVoicePlayback() {
     if (audio) audio.currentTime = 0;
   } catch {}
   const dc = realtimeVoiceConnection?.dc;
-  if (realtimeVoicePlaybackActive && dc?.readyState === 'open') {
+  if ((realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) && dc?.readyState === 'open') {
     try { dc.send(JSON.stringify({ type: 'response.cancel' })); } catch {}
     try { dc.send(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
   }
   realtimeVoicePlaybackActive = false;
   realtimeVoiceActiveResponseId = '';
+  finishRealtimeAssistantSpeakingEchoGuard(400);
 }
 
 function activateRealtimeWakeGate(gate, options = {}) {
   if (!gate?.normalizedPhrase) return false;
   realtimeWakeGate = gate;
-  stopRealtimeVoicePlayback();
+  stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'wake_gate' });
   if (gate.workerPolicy === 'interrupt' && window._sessionThinking?.[window.activeChatSessionId]) {
     try { window.stopGeneration?.(); } catch {}
     addProcessEntry?.('warn', 'Realtime voice: worker interrupted before entering silent wake gate.');
@@ -9880,6 +12046,8 @@ function resetRealtimeDictationTranscript(options = {}) {
   realtimeDraftFinalText = '';
   realtimeDraftInterimText = '';
   realtimeDictationLastSubmittedText = '';
+  realtimeDictationUtteranceStartedAt = 0;
+  realtimeDictationFirstDeltaLogged = false;
   if (realtimeDictationSubmitTimer) clearTimeout(realtimeDictationSubmitTimer);
   realtimeDictationSubmitTimer = null;
   if (realtimeDictationFallbackTimer) clearTimeout(realtimeDictationFallbackTimer);
@@ -9922,6 +12090,8 @@ function isRecentRealtimeTranscriptSubmit(key, now = Date.now()) {
 }
 
 function writeRealtimeDictationTranscript() {
+  if (!realtimeVoiceRepliesEnabled) return;
+  if (shouldSuppressRealtimeAssistantEchoInput()) return;
   const input = document.getElementById('chat-input');
   if (!input) return;
   const interimText = Array.from(realtimeDictationDeltas.values()).join(' ').replace(/\s+/g, ' ').trim();
@@ -9955,6 +12125,7 @@ function appendRealtimeCompletedTranscript(itemId, transcript) {
 }
 
 function submitRealtimeDictationTranscript(sourceKey = '', messageOverride = '') {
+  if (!realtimeVoiceRepliesEnabled) return;
   if (realtimeDictationSubmitTimer) clearTimeout(realtimeDictationSubmitTimer);
   realtimeDictationSubmitTimer = null;
   if (realtimeDictationFallbackTimer) clearTimeout(realtimeDictationFallbackTimer);
@@ -9990,19 +12161,45 @@ function submitRealtimeDictationTranscript(sourceKey = '', messageOverride = '')
   }
 }
 
+function submitRealtimeDictationIfReady(sourceKey = '', messageOverride = '', options = {}) {
+  if (!realtimeVoiceRepliesEnabled) return false;
+  if (shouldSuppressRealtimeAssistantEchoInput() && options.force !== true) return false;
+  const message = String(messageOverride || getRealtimeDictationComposerText()).trim();
+  if (!message) return false;
+  const parsed = extractVoiceSubmitCommand(message);
+  if (parsed.shouldSubmit && parsed.text) {
+    submitRealtimeDictationTranscript(sourceKey || parsed.text, parsed.text);
+    return true;
+  }
+  if (options.force === true || realtimeAllowsAutoSubmit()) {
+    submitRealtimeDictationTranscript(sourceKey || message, message);
+    return true;
+  }
+  return false;
+}
+
 function scheduleRealtimeDictationFallbackSubmit(delayMs = 1300) {
   if (realtimeDictationFallbackTimer) clearTimeout(realtimeDictationFallbackTimer);
+  if (!realtimeVoiceRepliesEnabled) {
+    realtimeDictationFallbackTimer = null;
+    return;
+  }
+  if (shouldSuppressRealtimeAssistantEchoInput()) {
+    realtimeDictationFallbackTimer = null;
+    return;
+  }
+  if (!realtimeAllowsAutoSubmit()) {
+    realtimeDictationFallbackTimer = null;
+    return;
+  }
   realtimeDictationFallbackTimer = setTimeout(() => {
     realtimeDictationFallbackTimer = null;
+    if (!realtimeVoiceRepliesEnabled) return;
+    if (shouldSuppressRealtimeAssistantEchoInput()) return;
     if (getRealtimeWakeGate()) return;
     const text = getRealtimeDictationComposerText();
     if (!text) return;
-    const parsed = extractVoiceSubmitCommand(text);
-    if (parsed.shouldSubmit && parsed.text) {
-      submitRealtimeDictationTranscript(parsed.text, parsed.text);
-      return;
-    }
-    submitRealtimeDictationTranscript(text, text);
+    submitRealtimeDictationIfReady(text, text);
   }, Math.max(0, Number(delayMs) || 0));
 }
 
@@ -10026,9 +12223,11 @@ function beginImplicitRealtimeUtteranceIfSubmitted() {
 
 function startRealtimeDraftRecognition() {
   if (realtimeDraftRecognition || !realtimeVoiceRepliesEnabled) return;
+  if (realtimeUsesHoldSpace() && !realtimeHoldSpaceActive) return;
   const Recognition = getSpeechRecognitionCtor();
   if (!Recognition) return;
   const input = document.getElementById('chat-input');
+  const epoch = realtimeVoiceModeEpoch;
   realtimeDraftFinalText = '';
   realtimeDraftInterimText = '';
   realtimeDraftStartedAt = Date.now();
@@ -10038,12 +12237,14 @@ function startRealtimeDraftRecognition() {
   recognition.interimResults = true;
   recognition.lang = navigator.language || 'en-US';
   recognition.onresult = (event) => {
-    if (!realtimeVoiceRepliesEnabled || realtimeDraftRecognition !== recognition || getRealtimeWakeGate()) return;
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch || realtimeDraftRecognition !== recognition || getRealtimeWakeGate()) return;
+    if (shouldSuppressRealtimeAssistantEchoInput()) return;
     let interim = '';
     let sawFinal = false;
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const transcript = String(event.results[i]?.[0]?.transcript || '').trim();
       if (!transcript) continue;
+      stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'realtime_draft_transcribing' });
       if (event.results[i].isFinal) {
         realtimeDraftFinalText = `${realtimeDraftFinalText} ${transcript}`.trim();
         realtimeDraftInterimText = '';
@@ -10053,10 +12254,16 @@ function startRealtimeDraftRecognition() {
       }
     }
     realtimeDraftInterimText = interim;
+    if (hasRealtimeAssistantEchoMemory() && isRealtimeAssistantEchoTranscript([realtimeDraftFinalText, realtimeDraftInterimText].filter(Boolean).join(' '))) {
+      realtimeDraftFinalText = '';
+      realtimeDraftInterimText = '';
+      writeRealtimeDictationTranscript();
+      return;
+    }
     if (!realtimeDictationFinalText && !realtimeDictationDeltas.size) writeRealtimeDictationTranscript();
     const parsed = extractVoiceSubmitCommand(getRealtimeDictationComposerText());
     if (parsed.shouldSubmit && parsed.text) {
-      submitRealtimeDictationTranscript(parsed.text, parsed.text);
+      submitRealtimeDictationIfReady(parsed.text, parsed.text);
       return;
     }
     if (sawFinal) scheduleRealtimeDictationFallbackSubmit(650);
@@ -10069,7 +12276,9 @@ function startRealtimeDraftRecognition() {
   recognition.onend = () => {
     if (realtimeDraftRecognition !== recognition) return;
     realtimeDraftRecognition = null;
-    if (realtimeVoiceRepliesEnabled) setTimeout(startRealtimeDraftRecognition, 180);
+    if (realtimeVoiceRepliesEnabled && realtimeVoiceModeEpoch === epoch && (!realtimeUsesHoldSpace() || realtimeHoldSpaceActive)) {
+      setTimeout(startRealtimeDraftRecognition, 180);
+    }
   };
   try { recognition.start(); } catch { realtimeDraftRecognition = null; }
 }
@@ -10085,37 +12294,58 @@ function stopRealtimeDraftRecognition() {
   try { recognition.abort?.(); } catch {}
 }
 
-function handleRealtimeTranscriptionEvent(event) {
+function handleRealtimeTranscriptionEvent(event, epoch = realtimeVoiceModeEpoch) {
+  if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) return;
   const type = String(event?.type || '');
   if (type === 'input_audio_buffer.speech_started') {
     realtimeDictationUtteranceSeq += 1;
+    realtimeDictationUtteranceStartedAt = Date.now();
+    realtimeDictationFirstDeltaLogged = false;
+    logDesktopVoiceLatency(window.activeChatSessionId || 'default', 'mic speech started', realtimeDictationUtteranceStartedAt);
     realtimeDraftFinalText = '';
     realtimeDraftInterimText = '';
     if (!realtimeDictationFinalText && !realtimeDictationDeltas.size) {
       realtimeDictationBaseText = String(document.getElementById('chat-input')?.value || '').trim();
     }
     setRealtimeDictationRecordingState(true);
-    stopRealtimeVoicePlayback();
+    if (shouldSuppressRealtimeAssistantEchoInput()) return;
+    stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'barge_in' });
     return;
   }
   if (type === 'input_audio_buffer.speech_stopped' || type === 'input_audio_buffer.committed') {
     setRealtimeDictationRecordingState(false);
+    if (shouldSuppressRealtimeAssistantEchoInput()) return;
     if (realtimeCurrentUtteranceRecentlySubmitted()) return;
     beginImplicitRealtimeUtteranceIfSubmitted();
     scheduleRealtimeDictationFallbackSubmit(type === 'input_audio_buffer.committed' ? 900 : 1400);
     return;
   }
   if (type === 'conversation.item.input_audio_transcription.delta') {
+    stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'realtime_transcribing' });
+    if (shouldSuppressRealtimeAssistantEchoInput()) return;
     if (getRealtimeWakeGate()) return;
     if (realtimeCurrentUtteranceRecentlySubmitted()) return;
     beginImplicitRealtimeUtteranceIfSubmitted();
     const itemId = String(event?.item_id || 'current');
     const previous = realtimeDictationDeltas.get(itemId) || '';
-    realtimeDictationDeltas.set(itemId, `${previous}${String(event?.delta || '')}`.trim());
+    const candidate = `${previous}${String(event?.delta || '')}`.trim();
+    if (!realtimeDictationFirstDeltaLogged) {
+      realtimeDictationFirstDeltaLogged = true;
+      logDesktopVoiceLatency(window.activeChatSessionId || 'default', 'first STT delta', realtimeDictationUtteranceStartedAt || Date.now(), {
+        itemId,
+        textLen: candidate.length,
+      });
+    }
+    if (hasRealtimeAssistantEchoMemory() && isRealtimeAssistantEchoTranscript(candidate)) {
+      realtimeDictationDeltas.delete(itemId);
+      writeRealtimeDictationTranscript();
+      return;
+    }
+    realtimeDictationDeltas.set(itemId, candidate);
     writeRealtimeDictationTranscript();
     const parsed = extractVoiceSubmitCommand(getRealtimeDictationComposerText());
     if (parsed.shouldSubmit && parsed.text) {
-      submitRealtimeDictationTranscript(parsed.text, parsed.text);
+      submitRealtimeDictationIfReady(parsed.text, parsed.text);
     } else {
       scheduleRealtimeDictationFallbackSubmit(1800);
     }
@@ -10125,6 +12355,31 @@ function handleRealtimeTranscriptionEvent(event) {
     const itemId = String(event?.item_id || '');
     const rawTranscript = String(event?.transcript || '').replace(/\s+/g, ' ').trim();
     if (!rawTranscript) return;
+    logDesktopVoiceLatency(window.activeChatSessionId || 'default', 'STT final', realtimeDictationUtteranceStartedAt || Date.now(), {
+      itemId,
+      textLen: rawTranscript.length,
+    });
+    stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'realtime_transcribed' });
+    if (hasRealtimeAssistantEchoMemory() && isRealtimeAssistantEchoTranscript(rawTranscript)) {
+      if (itemId) realtimeDictationDeltas.delete(itemId);
+      realtimeDraftFinalText = '';
+      realtimeDraftInterimText = '';
+      writeRealtimeDictationTranscript();
+      return;
+    }
+    if (shouldSuppressRealtimeAssistantEchoInput()) {
+      if (itemId) realtimeDictationDeltas.delete(itemId);
+      if (isRealtimeAssistantEchoTranscript(rawTranscript) || !isRealtimeBargeInTranscript(rawTranscript)) return;
+      stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'barge_in' });
+      const control = parseRealtimeControlCommand(rawTranscript);
+      if (control && handleRealtimeControlCommand(control)) return;
+      const wakeCommand = parseRealtimeWakeGateCommand(rawTranscript);
+      if (wakeCommand) {
+        activateRealtimeWakeGate(wakeCommand);
+        return;
+      }
+      return;
+    }
     if (realtimeCurrentUtteranceRecentlySubmitted() || isRecentRealtimeTranscriptSubmit(rawTranscript)) {
       if (itemId) realtimeDictationDeltas.delete(itemId);
       return;
@@ -10151,7 +12406,7 @@ function handleRealtimeTranscriptionEvent(event) {
           realtimeDraftInterimText = '';
           const message = String(document.getElementById('chat-input')?.value || '').trim();
           const parsed = extractVoiceSubmitCommand(message);
-          submitRealtimeDictationTranscript(itemId || transcript, parsed.shouldSubmit && parsed.text ? parsed.text : message);
+          submitRealtimeDictationIfReady(itemId || transcript, parsed.shouldSubmit && parsed.text ? parsed.text : message);
         }
       }
       return;
@@ -10176,7 +12431,7 @@ function handleRealtimeTranscriptionEvent(event) {
       realtimeDraftInterimText = '';
       const message = String(document.getElementById('chat-input')?.value || '').trim();
       const parsed = extractVoiceSubmitCommand(message);
-      submitRealtimeDictationTranscript(itemId || transcript, parsed.shouldSubmit && parsed.text ? parsed.text : message);
+      submitRealtimeDictationIfReady(itemId || transcript, parsed.shouldSubmit && parsed.text ? parsed.text : message);
     }
     return;
   }
@@ -10192,6 +12447,7 @@ function closeRealtimeDictationConnection() {
   realtimeDictationConnecting = null;
   setRealtimeDictationRecordingState(false);
   stopRealtimeDraftRecognition();
+  resetRealtimeDictationTranscript();
   resetRealtimeDictationEventDedupe();
   try { connection?.dc?.close?.(); } catch {}
   try { connection?.pc?.close?.(); } catch {}
@@ -10199,9 +12455,11 @@ function closeRealtimeDictationConnection() {
 }
 
 async function ensureRealtimeDictationConnection() {
+  if (realtimeUsesHoldSpace() && !realtimeHoldSpaceActive) throw new Error('Realtime hold-to-talk is inactive.');
   if (realtimeDictationConnection?.dc?.readyState === 'open') return realtimeDictationConnection;
   if (realtimeDictationConnecting) return realtimeDictationConnecting;
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser cannot capture microphone audio.');
+  const epoch = realtimeVoiceModeEpoch;
   realtimeDictationConnecting = (async () => {
     resetRealtimeDictationTranscript({ baseFromInput: true });
     resetRealtimeDictationEventDedupe();
@@ -10217,19 +12475,30 @@ async function ensureRealtimeDictationConnection() {
       }),
     });
     const tokenData = await tokenResponse.json().catch(() => ({}));
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) throw new Error('Realtime voice stopped.');
     if (!tokenResponse.ok || tokenData?.success === false) {
       throw new Error(tokenData?.error || `Realtime transcription token request failed (${tokenResponse.status})`);
     }
     const clientSecret = extractRealtimeClientSecret(tokenData);
     if (!clientSecret) throw new Error('Realtime transcription client secret was missing from the gateway response.');
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) {
+      try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+      throw new Error('Realtime voice stopped.');
+    }
     const pc = new RTCPeerConnection();
     stream.getAudioTracks().forEach((track) => pc.addTrack(track, stream));
     const dc = pc.createDataChannel('oai-events');
     dc.addEventListener('message', (messageEvent) => {
       try {
-        handleRealtimeTranscriptionEvent(JSON.parse(messageEvent.data));
+        handleRealtimeTranscriptionEvent(JSON.parse(messageEvent.data), epoch);
       } catch {}
     });
     const dcOpen = new Promise((resolve, reject) => {
@@ -10248,12 +12517,24 @@ async function ensureRealtimeDictationConnection() {
       body: offer.sdp,
     });
     const answerSdp = await sdpResponse.text();
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) {
+      try { dc.close(); } catch {}
+      try { pc.close(); } catch {}
+      try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+      throw new Error('Realtime voice stopped.');
+    }
     if (!sdpResponse.ok) throw new Error(answerSdp || `Realtime transcription call failed (${sdpResponse.status})`);
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) {
+      try { dc.close(); } catch {}
+      try { pc.close(); } catch {}
+      try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+      throw new Error('Realtime voice stopped.');
+    }
     realtimeDictationConnection = { pc, dc, stream };
     pc.addEventListener('connectionstatechange', () => {
-      if (['closed', 'failed', 'disconnected'].includes(pc.connectionState)) {
+      if (realtimeVoiceModeEpoch === epoch && ['closed', 'failed', 'disconnected'].includes(pc.connectionState)) {
         closeRealtimeDictationConnection();
       }
     });
@@ -10262,6 +12543,55 @@ async function ensureRealtimeDictationConnection() {
     realtimeDictationConnecting = null;
   });
   return realtimeDictationConnecting;
+}
+
+async function startRealtimeInputCapture() {
+  if (!realtimeVoiceRepliesEnabled) return null;
+  if (realtimeUsesHoldSpace() && !realtimeHoldSpaceActive) return null;
+  startRealtimeDraftRecognition();
+  return ensureRealtimeDictationConnection();
+}
+
+function stopRealtimeInputCapture(options = {}) {
+  const shouldSubmit = options.submit === true;
+  const delayMs = Math.max(0, Number(options.delayMs ?? 220) || 0);
+  const finalize = () => {
+    if (shouldSubmit && realtimeVoiceRepliesEnabled) {
+      const text = getRealtimeDictationComposerText();
+      if (text) submitRealtimeDictationIfReady(text, text, { force: true });
+    }
+    closeRealtimeDictationConnection();
+    stopRealtimeDraftRecognition();
+  };
+  if (delayMs) setTimeout(finalize, delayMs);
+  else finalize();
+}
+
+function isEditableVoiceTarget(target) {
+  const el = target && target.nodeType === 1 ? target : null;
+  if (!el) return false;
+  const tag = String(el.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || !!el.isContentEditable || !!el.closest?.('[contenteditable="true"], input, textarea, select');
+}
+
+function handleRealtimeSpaceKeydown(event) {
+  if (!realtimeVoiceRepliesEnabled || !realtimeUsesHoldSpace() || realtimeHoldSpaceActive) return;
+  if (event.code !== 'Space' || event.repeat || isEditableVoiceTarget(event.target)) return;
+  event.preventDefault();
+  realtimeHoldSpaceActive = true;
+  resetRealtimeDictationTranscript({ baseFromInput: true });
+  startRealtimeInputCapture().catch((err) => {
+    realtimeHoldSpaceActive = false;
+    showToast('Realtime microphone failed', String(err?.message || err), 'error');
+  });
+}
+
+function handleRealtimeSpaceKeyup(event) {
+  if (!realtimeVoiceRepliesEnabled || !realtimeUsesHoldSpace() || !realtimeHoldSpaceActive) return;
+  if (event.code !== 'Space') return;
+  event.preventDefault();
+  realtimeHoldSpaceActive = false;
+  stopRealtimeInputCapture({ submit: true, delayMs: 420 });
 }
 
 function getProviderInfo(kind, provider) {
@@ -10300,7 +12630,15 @@ function fallbackVoiceCatalog(provider) {
       { id: 'cedar', label: 'Cedar' },
     ];
   }
-  if (provider === 'xai') return [{ id: 'eve', label: 'Eve' }];
+  if (provider === 'xai') {
+    return [
+      { id: 'eve', label: 'Eve' },
+      { id: 'ara', label: 'Ara' },
+      { id: 'rex', label: 'Rex' },
+      { id: 'sal', label: 'Sal' },
+      { id: 'leo', label: 'Leo' },
+    ];
+  }
   return [];
 }
 
@@ -10337,6 +12675,26 @@ function getRenderableVoiceProviders(kind) {
   return providers.filter((provider) => provider.id !== 'openai_realtime');
 }
 
+function isVoiceProviderConfigured(kind, provider) {
+  const info = getProviderInfo(kind, provider);
+  return !!info?.configured;
+}
+
+function renderVoiceModeSelect() {
+  const select = document.getElementById('voice-mode-provider');
+  if (!select) return;
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  const realtimeLabel = realtimeVoiceConfigured ? 'OpenAI Realtime' : 'OpenAI Realtime (not connected)';
+  const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
+  const xaiLabel = xaiReady ? 'xAI / Grok' : 'xAI / Grok (not connected)';
+  select.innerHTML = [
+    { value: 'default', label: 'Default' },
+    { value: 'openai_realtime', label: realtimeLabel },
+    { value: 'xai', label: xaiLabel },
+  ].map((option) => `<option value="${escHtml(option.value)}">${escHtml(option.label)}</option>`).join('');
+  select.value = mode;
+}
+
 function renderVoiceProviderSelect(kind) {
   const id = kind === 'stt' ? 'voice-stt-provider' : 'voice-tts-provider';
   const selected = kind === 'stt' ? voiceSttProvider : voiceTtsProvider;
@@ -10361,7 +12719,9 @@ async function renderOutputVoiceSelect() {
     return;
   }
   const voices = await getVoiceCatalog(provider);
-  const stored = getStoredVoiceSetting(`voice_${provider}_voice`, provider === 'xai' ? 'eve' : 'alloy');
+  const stored = provider === 'xai'
+    ? (desktopVoiceSettings.serverVoice || getStoredVoiceSetting(`voice_${provider}_voice`, 'eve'))
+    : getStoredVoiceSetting(`voice_${provider}_voice`, 'alloy');
   voiceOutputVoice = voices.some((voice) => voice.id === stored) ? stored : (voices[0]?.id || '');
   select.innerHTML = voices.map((voice) => `<option value="${escHtml(voice.id)}">${escHtml(voice.label || voice.id)}</option>`).join('');
   select.value = voiceOutputVoice;
@@ -10381,19 +12741,88 @@ async function renderRealtimeVoiceSelect() {
   select.value = realtimeVoiceSelection;
 }
 
+function renderRealtimeVoiceSpeedSelect() {
+  const select = document.getElementById('realtime-voice-speed-select');
+  if (!select) return;
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  const options = mode === 'xai'
+    ? [
+      { value: 0.75, label: '0.75x' },
+      { value: 1, label: '1.0x' },
+      { value: 1.1, label: '1.1x' },
+      { value: 1.25, label: '1.25x' },
+      { value: 1.5, label: '1.5x' },
+      { value: 2, label: '2.0x' },
+    ]
+    : [
+      { value: 0.9, label: '0.9x' },
+      { value: 1, label: '1.0x' },
+      { value: 1.1, label: '1.1x' },
+      { value: 1.2, label: '1.2x' },
+      { value: 1.35, label: '1.35x' },
+      { value: 1.5, label: '1.5x' },
+    ];
+  select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join('');
+  const speed = mode === 'xai'
+    ? Math.max(0.5, Math.min(2, Number(desktopVoiceSettings.xaiSpeed || 1.0) || 1.0))
+    : normalizeRealtimeVoiceSpeed(realtimeVoiceSpeed);
+  select.value = options.some((option) => option.value === speed) ? String(speed) : (mode === 'xai' ? '1' : '1.1');
+}
+
+function renderRealtimeNarrationModeSelect() {
+  const select = document.getElementById('realtime-narration-mode-select');
+  if (!select) return;
+  select.value = normalizeRealtimeNarrationMode(realtimeNarrationMode);
+}
+
+function renderRealtimeListenModeSelect() {
+  const select = document.getElementById('realtime-listen-mode-select');
+  if (!select) return;
+  select.value = normalizeRealtimeListenMode(realtimeListenMode);
+}
+
 function renderVoiceProviderControls() {
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  renderVoiceModeSelect();
   renderVoiceProviderSelect('stt');
   renderVoiceProviderSelect('tts');
-  setRegularVoiceControlsVisible(regularVoiceControlsVisible);
+  const controls = document.getElementById('voice-provider-controls');
+  const showControls = regularVoiceControlsVisible || realtimeVoiceRepliesEnabled;
+  if (controls) {
+    controls.hidden = !showControls;
+    controls.classList.toggle('visible', showControls);
+  }
+  const micLabel = document.getElementById('voice-mic-provider-label');
+  const speakLabel = document.getElementById('voice-speak-provider-label');
+  const realtimeVoiceLabel = document.getElementById('realtime-voice-label');
+  const speedLabel = document.getElementById('voice-speed-label');
+  const narrationLabel = document.getElementById('voice-narration-label');
+  const listenLabel = document.getElementById('realtime-listen-label');
+  if (micLabel) micLabel.hidden = true;
+  if (speakLabel) speakLabel.hidden = true;
+  if (realtimeVoiceLabel) realtimeVoiceLabel.hidden = mode !== 'openai_realtime';
+  if (speedLabel) speedLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
+  if (narrationLabel) narrationLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
+  if (listenLabel) listenLabel.hidden = mode !== 'openai_realtime';
+  const voiceLabel = document.getElementById('voice-output-voice-label');
+  if (voiceLabel && mode !== 'xai') voiceLabel.hidden = true;
   renderOutputVoiceSelect().catch(() => {});
   renderRealtimeVoiceSelect().catch(() => {});
+  renderRealtimeVoiceSpeedSelect();
+  renderRealtimeNarrationModeSelect();
+  renderRealtimeListenModeSelect();
   setRealtimeVoiceButtonState();
 }
 
 async function refreshVoiceProviderStatus() {
-  voiceSttProvider = getStoredVoiceProvider('stt', 'browser');
-  voiceTtsProvider = getStoredVoiceProvider('tts', 'browser');
-  realtimeVoiceSelection = getStoredVoiceSetting('realtime_voice', 'marin');
+  desktopVoiceSettings = loadDesktopVoiceSettings();
+  voiceSttProvider = desktopVoiceSettings.sttProvider || getStoredVoiceProvider('stt', 'browser');
+  voiceTtsProvider = desktopVoiceSettings.ttsProvider || getStoredVoiceProvider('tts', 'browser');
+  realtimeVoiceSelection = desktopVoiceSettings.realtimeVoice || getStoredVoiceSetting('realtime_voice', 'marin');
+  loadRealtimeVoiceSpeed();
+  realtimeVoiceSpeed = normalizeRealtimeVoiceSpeed(desktopVoiceSettings.realtimeSpeed || realtimeVoiceSpeed);
+  loadRealtimeNarrationMode();
+  loadRealtimeListenMode();
   try {
     const response = await fetch('/api/voice/status');
     const data = await response.json().catch(() => ({}));
@@ -10415,6 +12844,21 @@ async function refreshVoiceProviderStatus() {
     };
     realtimeVoiceConfigured = false;
   }
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  if (mode === 'openai_realtime') {
+    voiceSttProvider = 'browser';
+    voiceTtsProvider = 'browser';
+  } else if (mode === 'xai') {
+    const xaiTtsReady = isVoiceProviderConfigured('tts', 'xai');
+    const xaiSttReady = isVoiceProviderConfigured('stt', 'xai');
+    voiceTtsProvider = xaiTtsReady ? 'xai' : 'browser';
+    voiceSttProvider = xaiSttReady ? 'xai' : 'browser';
+  } else {
+    voiceSttProvider = 'browser';
+    voiceTtsProvider = 'browser';
+  }
+  storeVoiceProvider('stt', voiceSttProvider);
+  storeVoiceProvider('tts', voiceTtsProvider);
   renderVoiceProviderControls();
 }
 
@@ -10429,20 +12873,99 @@ function onVoiceProviderChanged() {
   storeVoiceProvider('tts', voiceTtsProvider);
   const voiceProvider = selectedRegularVoiceProvider();
   if (voiceProvider && voiceOutputVoice) storeVoiceSetting(`voice_${voiceProvider}_voice`, voiceOutputVoice);
+  saveDesktopVoiceSettings({
+    voiceMode: normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode),
+    sttProvider: voiceSttProvider,
+    ttsProvider: voiceTtsProvider,
+    serverVoice: voiceProvider === 'xai' && voiceOutputVoice ? voiceOutputVoice : desktopVoiceSettings.serverVoice,
+  });
   renderOutputVoiceSelect().catch(() => {});
   setRealtimeVoiceButtonState();
+}
+
+function onVoiceModeChanged() {
+  const select = document.getElementById('voice-mode-provider');
+  const mode = normalizeDesktopVoiceMode(select?.value || 'default');
+  if (mode !== 'openai_realtime') disableRealtimeVoiceMode();
+  if (mode === 'default') {
+    voiceSttProvider = 'browser';
+    voiceTtsProvider = 'browser';
+  } else if (mode === 'xai') {
+    voiceSttProvider = isVoiceProviderConfigured('stt', 'xai') ? 'xai' : 'browser';
+    voiceTtsProvider = isVoiceProviderConfigured('tts', 'xai') ? 'xai' : 'browser';
+  } else {
+    voiceSttProvider = 'browser';
+    voiceTtsProvider = 'browser';
+  }
+  storeVoiceProvider('stt', voiceSttProvider);
+  storeVoiceProvider('tts', voiceTtsProvider);
+  saveDesktopVoiceSettings({
+    voiceMode: mode,
+    sttProvider: voiceSttProvider,
+    ttsProvider: voiceTtsProvider,
+    realtimeVoice: realtimeVoiceSelection || desktopVoiceSettings.realtimeVoice || 'marin',
+    realtimeSpeed: realtimeVoiceSpeed,
+    serverVoice: desktopVoiceSettings.serverVoice || 'eve',
+    sttProviderLocked: true,
+  });
+  renderVoiceProviderControls();
+  setUnifiedVoiceButtonState();
 }
 
 function onRealtimeVoiceChanged() {
   const select = document.getElementById('realtime-voice-select');
   realtimeVoiceSelection = normalizeRealtimeVoice(select?.value || 'marin');
   storeVoiceSetting('realtime_voice', realtimeVoiceSelection);
+  saveDesktopVoiceSettings({ realtimeVoice: realtimeVoiceSelection });
   if (select) select.value = realtimeVoiceSelection;
   closeRealtimeVoiceConnection();
 }
 
+function onRealtimeVoiceSpeedChanged() {
+  const select = document.getElementById('realtime-voice-speed-select');
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  const rawSpeed = Number(select?.value || (mode === 'xai' ? 1 : 1.1));
+  const speed = mode === 'xai'
+    ? Math.max(0.5, Math.min(2, Math.round((Number.isFinite(rawSpeed) ? rawSpeed : 1) * 100) / 100))
+    : storeRealtimeVoiceSpeed(rawSpeed);
+  saveDesktopVoiceSettings(mode === 'xai' ? { xaiSpeed: speed } : { realtimeSpeed: speed });
+  if (select) select.value = String(speed);
+  if (realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) {
+    showToast('Realtime speed saved', 'Applies to the next spoken response.', 'info', 1800);
+  }
+}
+
+function onRealtimeNarrationModeChanged() {
+  const select = document.getElementById('realtime-narration-mode-select');
+  const mode = storeRealtimeNarrationMode(select?.value || 'quiet');
+  saveDesktopVoiceSettings({ dictation: mode === 'milestones' ? 'milestone' : 'quiet' });
+  if (select) select.value = mode;
+  realtimeNarrationRecentKeys.clear();
+  realtimeNarrationLastSpokenAt = 0;
+  if (realtimeVoiceRepliesEnabled || voiceRepliesEnabled) {
+    showToast('Voice narration', mode === 'milestones' ? 'Milestone narration enabled.' : 'Narration quiet.', 'info', 1800);
+  }
+}
+
+function onRealtimeListenModeChanged() {
+  const select = document.getElementById('realtime-listen-mode-select');
+  const previousMode = realtimeListenMode;
+  const mode = storeRealtimeListenMode(select?.value || 'auto_send');
+  if (select) select.value = mode;
+  if (!realtimeVoiceRepliesEnabled || previousMode === mode) return;
+  if (mode === 'hold_space') {
+    closeRealtimeDictationConnection();
+    stopRealtimeDraftRecognition();
+    resetRealtimeDictationTranscript();
+    realtimeHoldSpaceActive = false;
+    showToast('Hold Space enabled', 'Hold Space to talk. Release to send.', 'info', 2200);
+  } else if (previousMode === 'hold_space') {
+    startRealtimeInputCapture().catch((err) => showToast('Realtime microphone failed', String(err?.message || err), 'error'));
+  }
+}
+
 async function refreshRealtimeVoiceStatus() {
-  const btn = document.getElementById('chat-realtime-voice-btn');
+  const btn = document.getElementById('chat-voice-btn');
   if (!btn) return;
   try {
     const response = await fetch('/api/realtime/status');
@@ -10458,17 +12981,21 @@ async function refreshRealtimeVoiceStatus() {
 async function ensureRealtimeVoiceConnection() {
   if (realtimeVoiceConnection?.dc?.readyState === 'open') return realtimeVoiceConnection;
   if (realtimeVoiceConnecting) return realtimeVoiceConnecting;
+  const epoch = realtimeVoiceModeEpoch;
   realtimeVoiceConnecting = (async () => {
     const instructions = await getRealtimeContextPackInstructions();
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) throw new Error('Realtime voice stopped.');
     const tokenResponse = await fetch('/api/realtime/client-secret', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
+        speed: normalizeRealtimeVoiceSpeed(realtimeVoiceSpeed),
         instructions,
       }),
     });
     const tokenData = await tokenResponse.json().catch(() => ({}));
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) throw new Error('Realtime voice stopped.');
     if (!tokenResponse.ok || tokenData?.success === false) {
       throw new Error(tokenData?.error || `Realtime token request failed (${tokenResponse.status})`);
     }
@@ -10478,6 +13005,9 @@ async function ensureRealtimeVoiceConnection() {
     const pc = new RTCPeerConnection();
     const audio = document.getElementById('realtime-voice-audio') || document.createElement('audio');
     audio.autoplay = true;
+    audio.muted = false;
+    audio.volume = 1;
+    audio.playsInline = true;
     audio.style.display = 'none';
     if (!audio.id) {
       audio.id = 'realtime-voice-audio';
@@ -10485,7 +13015,13 @@ async function ensureRealtimeVoiceConnection() {
     }
     pc.ontrack = (event) => {
       audio.srcObject = event.streams[0];
-      audio.play?.().catch(() => {});
+      audio.play?.().catch((err) => {
+        console.warn('[Realtime voice] audio playback blocked', err);
+        if (!realtimeVoicePlaybackWarningShown) {
+          realtimeVoicePlaybackWarningShown = true;
+          showToast('Realtime audio blocked', 'Click the page once, then try the Realtime mic again.', 'error', 4200);
+        }
+      });
     };
     try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
     const dc = pc.createDataChannel('oai-events');
@@ -10495,12 +13031,14 @@ async function ensureRealtimeVoiceConnection() {
         const type = String(event?.type || '');
         if (type === 'response.created' || type === 'response.audio.delta' || type === 'response.output_audio.delta') {
           realtimeVoicePlaybackActive = true;
+          if (realtimeAssistantEchoText) realtimeAssistantSpeaking = true;
           const responseId = String(event?.response?.id || event?.response_id || '').trim();
           if (responseId) realtimeVoiceActiveResponseId = responseId;
         }
         if (type === 'response.done' || type === 'response.audio.done' || type === 'response.output_audio.done' || type === 'response.cancelled') {
           realtimeVoicePlaybackActive = false;
           realtimeVoiceActiveResponseId = '';
+          finishRealtimeAssistantSpeakingEchoGuard(2500);
           realtimeVoiceResponseWaiters.splice(0).forEach((resolve) => {
             try { resolve(); } catch {}
           });
@@ -10532,12 +13070,24 @@ async function ensureRealtimeVoiceConnection() {
       body: offer.sdp,
     });
     const answerSdp = await sdpResponse.text();
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) {
+      try { dc.close(); } catch {}
+      try { pc.close(); } catch {}
+      try { audio.srcObject = null; } catch {}
+      throw new Error('Realtime voice stopped.');
+    }
     if (!sdpResponse.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResponse.status})`);
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
+    if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) {
+      try { dc.close(); } catch {}
+      try { pc.close(); } catch {}
+      try { audio.srcObject = null; } catch {}
+      throw new Error('Realtime voice stopped.');
+    }
     realtimeVoiceConnection = { pc, dc, audio };
     pc.addEventListener('connectionstatechange', () => {
-      if (['closed', 'failed', 'disconnected'].includes(pc.connectionState)) realtimeVoiceConnection = null;
+      if (realtimeVoiceModeEpoch === epoch && ['closed', 'failed', 'disconnected'].includes(pc.connectionState)) realtimeVoiceConnection = null;
     });
     return realtimeVoiceConnection;
   })().finally(() => {
@@ -10554,6 +13104,105 @@ async function speakWithRealtimeVoice(text) {
     .catch(() => {})
     .then(() => speakWithRealtimeVoiceManaged(content));
   return realtimeVoiceSpeakChain;
+}
+
+function normalizeRealtimeNarrationKey(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function cleanupRealtimeNarrationRecentKeys(now = Date.now()) {
+  for (const [key, at] of realtimeNarrationRecentKeys.entries()) {
+    if (!at || now - at > 45000) realtimeNarrationRecentKeys.delete(key);
+  }
+}
+
+function shouldSpeakRealtimeNarration(text, options = {}) {
+  if (!realtimeVoiceRepliesEnabled || realtimeNarrationMode !== 'milestones') return false;
+  if (getRealtimeWakeGate()?.suppressVoice) return false;
+  const spoken = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!spoken || spoken.length < 6) return false;
+  const now = Date.now();
+  cleanupRealtimeNarrationRecentKeys(now);
+  const key = normalizeRealtimeNarrationKey(spoken);
+  if (!key || realtimeNarrationRecentKeys.has(key)) return false;
+  const minGap = Math.max(0, Number(options.minGapMs ?? 3500) || 0);
+  if (options.force !== true && now - realtimeNarrationLastSpokenAt < minGap) return false;
+  realtimeNarrationRecentKeys.set(key, now);
+  realtimeNarrationLastSpokenAt = now;
+  return true;
+}
+
+function speakRealtimeNarration(text, options = {}) {
+  const spoken = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!shouldSpeakRealtimeNarration(spoken, options)) return;
+  realtimeNarrationChain = realtimeNarrationChain
+    .catch(() => {})
+    .then(async () => {
+      if (!realtimeVoiceRepliesEnabled || realtimeNarrationMode !== 'milestones') return;
+      if (realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) return;
+      await speakWithRealtimeVoice(spoken);
+    })
+    .catch((err) => {
+      try { addProcessEntry?.('warn', `Realtime narration failed: ${String(err?.message || err)}`); } catch {}
+    });
+}
+
+function speakVoiceMilestone(text, options = {}) {
+  const spoken = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!spoken) return;
+  if (realtimeNarrationMode !== 'milestones') return;
+  if (realtimeVoiceRepliesEnabled) {
+    speakRealtimeNarration(spoken, options);
+    return;
+  }
+  if (!voiceRepliesEnabled) return;
+  cleanupRealtimeNarrationRecentKeys();
+  const key = normalizeRealtimeNarrationKey(spoken);
+  if (!key || realtimeNarrationRecentKeys.has(key)) return;
+  const now = Date.now();
+  const minGap = Math.max(0, Number(options.minGapMs ?? 3500) || 0);
+  if (options.force !== true && now - realtimeNarrationLastSpokenAt < minGap) return;
+  realtimeNarrationRecentKeys.set(key, now);
+  realtimeNarrationLastSpokenAt = now;
+  speakAssistantReply(spoken).catch((err) => {
+    try { addProcessEntry?.('warn', `Voice milestone failed: ${String(err?.message || err)}`); } catch {}
+  });
+}
+
+function realtimeNarrationFromToolCall(action, displayAction = '') {
+  const tool = String(action || '').trim();
+  const display = String(displayAction || '').replace(/\s+/g, ' ').trim();
+  if (!tool) return '';
+  if (tool.startsWith('browser_')) {
+    if (tool === 'browser_open') return 'Opening the browser.';
+    if (tool === 'browser_snapshot' || tool === 'browser_snapshot_delta') return 'Checking the page.';
+    if (tool.includes('click')) return 'Clicking in the browser.';
+    if (tool.includes('type')) return 'Typing in the browser.';
+    return 'Working in the browser.';
+  }
+  if (tool.startsWith('desktop_')) {
+    if (tool.includes('open')) return 'Opening it on your computer.';
+    if (tool.includes('click')) return 'Clicking on your computer.';
+    if (tool.includes('type')) return 'Typing on your computer.';
+    return 'Controlling your computer.';
+  }
+  if (tool === 'run_command') return 'Running a command.';
+  if (tool === 'web_search') return 'Searching the web.';
+  if (tool.startsWith('creative_') || tool.startsWith('canvas')) return 'Updating the workspace.';
+  if (tool.startsWith('background_')) return 'Starting a background agent.';
+  if (display) return display.length > 90 ? `${display.slice(0, 87).trim()}...` : display;
+  return '';
+}
+
+function realtimeNarrationFromToolResult(action, ok) {
+  const tool = String(action || '').trim();
+  if (!tool) return '';
+  if (tool.startsWith('browser_')) return ok ? 'Browser step complete.' : 'The browser step had an issue.';
+  if (tool.startsWith('desktop_')) return ok ? 'Computer control step complete.' : 'The computer control step had an issue.';
+  if (tool === 'run_command') return ok ? 'Command finished.' : 'The command failed.';
+  if (tool === 'web_search') return ok ? 'Search complete.' : 'Search had an issue.';
+  if (tool.startsWith('background_')) return ok ? 'Background agent is moving.' : 'Background agent had an issue.';
+  return ok ? '' : 'That step had an issue.';
 }
 
 function waitForRealtimeVoiceResponseSettled(timeoutMs = 700) {
@@ -10584,11 +13233,29 @@ async function cancelRealtimeVoiceResponse(dc, settleMs = 220) {
   await new Promise((resolve) => setTimeout(resolve, 80));
   realtimeVoicePlaybackActive = false;
   realtimeVoiceActiveResponseId = '';
+  finishRealtimeAssistantSpeakingEchoGuard(300);
 }
 
 async function speakWithRealtimeVoiceManaged(content) {
   const { dc } = await ensureRealtimeVoiceConnection();
+  if (!realtimeVoiceRepliesEnabled) return;
   await cancelRealtimeVoiceResponse(dc);
+  if (!realtimeVoiceRepliesEnabled) return;
+  try {
+    dc.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          output: {
+            voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
+            speed: normalizeRealtimeVoiceSpeed(realtimeVoiceSpeed),
+          },
+        },
+      },
+    }));
+  } catch {}
+  beginRealtimeAssistantSpeakingEchoGuard(content);
   const prompt = `Read this Prometheus response aloud exactly, without adding commentary:\n\n${content.slice(0, 5000)}`;
   dc.send(JSON.stringify({
     type: 'conversation.item.create',
@@ -10606,6 +13273,18 @@ async function speakWithRealtimeVoiceManaged(content) {
     },
   }));
   realtimeVoicePlaybackActive = true;
+  const audio = realtimeVoiceConnection?.audio || document.getElementById('realtime-voice-audio');
+  if (audio) {
+    audio.muted = false;
+    audio.volume = 1;
+    audio.play?.().catch((err) => {
+      console.warn('[Realtime voice] audio playback failed after response.create', err);
+      if (!realtimeVoicePlaybackWarningShown) {
+        realtimeVoicePlaybackWarningShown = true;
+        showToast('Realtime audio blocked', 'Click the page once, then try the Realtime mic again.', 'error', 4200);
+      }
+    });
+  }
 }
 
 function splitVoiceText(text, maxLength = 180) {
@@ -10708,10 +13387,21 @@ function playAudioBase64(audioBase64, mimeType) {
       audio.id = 'realtime-voice-audio';
       document.body.appendChild(audio);
     }
-    audio.onended = () => { URL.revokeObjectURL(url); resolve(true); };
-    audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not play generated audio.')); };
+    let settled = false;
+    const finish = (ok = true) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      if (ok) resolve(true);
+      else reject(new Error('Could not play generated audio.'));
+    };
+    audio.onended = () => finish(true);
+    audio.onpause = () => finish(true);
+    audio.onerror = () => finish(false);
     audio.src = url;
     audio.play?.().catch((err) => {
+      if (settled) return;
+      settled = true;
       URL.revokeObjectURL(url);
       reject(err);
     });
@@ -10730,11 +13420,14 @@ function speakWithBrowserVoice(text) {
 async function speakWithServerTts(text, provider) {
   const chunks = provider === 'groq' ? splitVoiceText(text, 180) : [String(text || '').trim().slice(0, 6000)];
   const voiceProvider = provider === 'openai' || provider === 'xai' ? provider : '';
-  const selectedVoice = voiceProvider ? getStoredVoiceSetting(`voice_${voiceProvider}_voice`, voiceProvider === 'xai' ? 'eve' : 'alloy') : '';
+  const selectedVoice = provider === 'xai'
+    ? (desktopVoiceSettings.serverVoice || getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'eve'))
+    : (voiceProvider ? getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'alloy') : '');
   for (const chunk of chunks.filter(Boolean)) {
     const body = { provider, text: chunk };
     if (provider === 'openai' && selectedVoice) body.voice = selectedVoice;
     if (provider === 'xai' && selectedVoice) body.voiceId = selectedVoice;
+    if (provider === 'xai') body.speed = Number(desktopVoiceSettings.xaiSpeed || 1.0);
     const response = await fetch('/api/voice/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -10774,11 +13467,22 @@ async function toggleRealtimeVoiceReplies() {
     showToast('Realtime voice not configured', 'Connect OpenAI Codex OAuth or set an OpenAI Realtime API key on the gateway.', 'error');
     return;
   }
+  realtimeVoiceModeEpoch += 1;
   realtimeVoiceRepliesEnabled = !realtimeVoiceRepliesEnabled;
+  const epoch = realtimeVoiceModeEpoch;
   if (realtimeVoiceRepliesEnabled) {
     voiceRepliesEnabled = false;
+    realtimeVoicePlaybackWarningShown = false;
+    saveDesktopVoiceSettings({
+      voiceMode: 'openai_realtime',
+      sttProvider: 'browser',
+      ttsProvider: 'browser',
+      realtimeVoice: realtimeVoiceSelection || 'marin',
+      realtimeSpeed: realtimeVoiceSpeed,
+    });
     setRegularVoiceControlsVisible(false);
     setRealtimeVoiceControlsVisible(true);
+    renderVoiceProviderControls();
     renderRealtimeVoiceSelect().catch(() => {});
     if (voiceDictationActive && voiceRecognition) {
       try { voiceRecognition.stop(); } catch {}
@@ -10789,20 +13493,30 @@ async function toggleRealtimeVoiceReplies() {
   }
   setRealtimeVoiceButtonState();
   if (realtimeVoiceRepliesEnabled) {
-    showToast('Realtime voice on', 'Speak naturally. Prometheus will receive the transcript and answer aloud.', 'success', 2600);
+    const listenMessage = realtimeUsesHoldSpace()
+      ? 'Hold Space to talk. Release to send.'
+      : realtimeListenMode === 'confirm_send'
+        ? 'Speak naturally. Say "send message" when you want Prometheus to receive it.'
+        : 'Speak naturally. Prometheus will receive the transcript and answer aloud.';
+    showToast('Realtime voice on', listenMessage, 'success', 2600);
     renderRealtimeWakeGateState();
-    startRealtimeDraftRecognition();
-    ensureRealtimeDictationConnection().catch((err) => {
-      realtimeVoiceRepliesEnabled = false;
-      clearRealtimeWakeGate({ silent: true });
-      closeRealtimeDictationConnection();
-      closeRealtimeVoiceConnection();
-      stopRealtimeDraftRecognition();
-      setRealtimeVoiceButtonState();
-      showToast('Realtime microphone failed', String(err?.message || err), 'error');
-    });
+    if (realtimeAllowsContinuousCapture()) {
+      startRealtimeInputCapture().catch((err) => {
+        if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch || /stopped|inactive/i.test(String(err?.message || err))) return;
+        realtimeVoiceRepliesEnabled = false;
+        realtimeVoiceModeEpoch += 1;
+        clearRealtimeWakeGate({ silent: true });
+        closeRealtimeDictationConnection();
+        closeRealtimeVoiceConnection();
+        stopRealtimeDraftRecognition();
+        setRealtimeVoiceButtonState();
+        showToast('Realtime microphone failed', String(err?.message || err), 'error');
+      });
+    }
     ensureRealtimeVoiceConnection().catch((err) => {
+      if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch || /stopped/i.test(String(err?.message || err))) return;
       realtimeVoiceRepliesEnabled = false;
+      realtimeVoiceModeEpoch += 1;
       clearRealtimeWakeGate({ silent: true });
       closeRealtimeDictationConnection();
       closeRealtimeVoiceConnection();
@@ -10811,11 +13525,14 @@ async function toggleRealtimeVoiceReplies() {
       showToast('Realtime voice failed', String(err?.message || err), 'error');
     });
   } else {
+    realtimeHoldSpaceActive = false;
+    clearRealtimeAssistantSpeakingState();
     clearRealtimeWakeGate({ silent: true });
     closeRealtimeDictationConnection();
     closeRealtimeVoiceConnection();
     stopRealtimeDraftRecognition();
-    setRealtimeVoiceControlsVisible(false);
+    resetRealtimeDictationTranscript();
+    renderVoiceProviderControls();
     try { window.speechSynthesis?.cancel?.(); } catch {}
     showToast('Realtime voice off', '', 'info', 1600);
   }
@@ -11560,7 +14277,31 @@ function restoreCreativeSnapshot(snapshot, options = {}) {
 
 function setCreativeSceneDoc(nextDoc, options = {}) {
   const previousSnapshot = options.recordHistory ? captureCreativeSnapshot() : null;
-  creativeSceneDoc = createSceneDocument(nextDoc || {});
+  const normalizedNextDoc = createSceneDocument(nextDoc || {});
+  const currentElements = Array.isArray(creativeSceneDoc?.elements) ? creativeSceneDoc.elements : [];
+  const nextElements = Array.isArray(normalizedNextDoc?.elements) ? normalizedNextDoc.elements : [];
+  const currentHasHyperframesSource = currentElements.some((element) => (
+    element?.type === 'hyperframes'
+    && (
+      String(element?.meta?.html || '').trim()
+      || String(element?.meta?.projectPath || '').trim()
+    )
+  ));
+  const looksLikeDefaultBlankVideoScene = nextElements.length === 0
+    && normalizeCreativeMode(window.currentCreativeMode) === 'video'
+    && Math.round(Number(normalizedNextDoc?.durationMs) || 0) === 12000;
+  if (
+    options.allowBlankOverwrite !== true
+    && currentHasHyperframesSource
+    && looksLikeDefaultBlankVideoScene
+  ) {
+    console.warn('Refused stale blank Creative scene overwrite while HyperFrames source is active.', { nextDoc: normalizedNextDoc });
+    try { addProcessEntry('warn', 'Creative scene sync ignored a stale blank snapshot while a HyperFrames clip is active.'); } catch {}
+    if (options.render !== false) renderCreativeWorkspace();
+    if (options.persist !== false) persistActiveChat();
+    return;
+  }
+  creativeSceneDoc = normalizedNextDoc;
   window.prometheusCreativeScene = creativeSceneDoc;
   if (creativeSelectedId && !creativeSceneDoc.elements.some((element) => element.id === creativeSelectedId)) {
     creativeSelectedId = creativeSceneDoc.elements[creativeSceneDoc.elements.length - 1]?.id || null;
@@ -12257,6 +14998,59 @@ function normalizeCreativeHtmlMotionClip(clip) {
   };
 }
 
+function sanitizeHtmlMotionExportFilename(value, fallback = 'html-motion-export.mp4') {
+  let name = String(value || '').split(/[\\/]/).pop().trim();
+  if (!name) name = fallback;
+  name = name.replace(/[^a-zA-Z0-9._\-() ]/g, '_').replace(/\s+/g, ' ').trim();
+  if (!name) name = fallback;
+  if (!/\.mp4$/i.test(name)) name += '.mp4';
+  return name;
+}
+
+function getExpectedHtmlMotionExportPath(clip, payload = {}) {
+  const filename = sanitizeHtmlMotionExportFilename(payload.filename || '');
+  if (!filename) return '';
+  const clipPath = normalizeCanvasPath(clip?.path || clip?.htmlPath || '');
+  const marker = '/html-motion/';
+  const markerIndex = clipPath.lastIndexOf(marker);
+  if (markerIndex >= 0) return `${clipPath.slice(0, markerIndex)}/exports/${filename}`;
+  const storageRoot = normalizeCanvasPath(creativeAssetsState?.storageRootRelative || creativeAssetsState?.storageRoot || canvasProjectRoot || '');
+  if (storageRoot) {
+    const base = storageRoot.replace(/\/+$/, '').replace(/\/html-motion$/i, '');
+    return `${base}/exports/${filename}`;
+  }
+  return '';
+}
+
+async function recoverHtmlMotionExportAfterFetchFailure(clip, payload = {}, err = null) {
+  const message = String(err?.message || err || '');
+  if (message && !/failed to fetch|networkerror|load failed/i.test(message)) return null;
+  const expectedPath = getExpectedHtmlMotionExportPath(clip, payload);
+  if (!expectedPath) return null;
+  const response = await fetch(`/api/canvas/file?path=${encodeURIComponent(expectedPath)}`);
+  const data = await response.json().catch(() => ({}));
+  const size = Number(data?.size || data?.bytes || 0);
+  if (!response.ok || data?.success === false || !data?.isBinary || size < 1024) return null;
+  return {
+    success: true,
+    recoveredAfterFetchFailure: true,
+    errorRecoveredFrom: message || 'HTML motion export response was interrupted',
+    renderer: 'html-motion',
+    creativeMode: 'video',
+    export: {
+      filename: expectedPath.split('/').pop() || sanitizeHtmlMotionExportFilename(payload.filename || ''),
+      path: normalizeCanvasPath(data.path || expectedPath),
+      absPath: normalizeCanvasPath(data.absPath || ''),
+      mimeType: data.mimeType || 'video/mp4',
+      size,
+    },
+    render: {
+      recovered: true,
+      strategy: 'workspace-file-exists-after-fetch-failure',
+    },
+  };
+}
+
 function getCreativeHtmlMotionPreviewUrl(clip = creativeHtmlMotionClip) {
   const normalized = normalizeCreativeHtmlMotionClip(clip);
   if (!normalized?.path) return '';
@@ -12368,6 +15162,75 @@ async function canvasCreateBlankHtmlMotionComposition(options = {}) {
   });
 }
 
+function buildSceneElementsFromHtmlMotionClip(clip) {
+  const width = Math.max(320, Number(clip?.width) || Number(creativeSceneDoc?.width) || 1080);
+  const height = Math.max(320, Number(clip?.height) || Number(creativeSceneDoc?.height) || 1920);
+  const durationMs = Math.max(1000, Number(clip?.durationMs) || Number(creativeSceneDoc?.durationMs) || 8000);
+  const assets = Array.isArray(clip?.assets) ? clip.assets : [];
+  const videoAssets = assets.filter((asset) => String(asset?.type || asset?.kind || '').toLowerCase() === 'video' && String(asset?.path || asset?.source || asset?.url || '').trim());
+  const audioAssets = assets.filter((asset) => String(asset?.type || asset?.kind || '').toLowerCase() === 'audio' && String(asset?.path || asset?.source || asset?.url || '').trim());
+  const elements = [];
+  if (videoAssets.length) {
+    const defaultSegment = Math.max(100, Math.round(durationMs / videoAssets.length));
+    let atMs = 0;
+    videoAssets.forEach((asset, index) => {
+      const source = String(asset.path || asset.source || asset.url || '').trim();
+      const assetDuration = Number(asset.durationMs || asset.duration || 0);
+      const segment = index === videoAssets.length - 1
+        ? Math.max(100, durationMs - atMs)
+        : Math.max(100, assetDuration || defaultSegment);
+      elements.push({
+        id: createCreativeLocalId('html-video'),
+        type: 'video',
+        x: 0,
+        y: 0,
+        width,
+        height,
+        rotation: 0,
+        opacity: 1,
+        zIndex: index,
+        meta: {
+          source,
+          fit: 'cover',
+          muted: true,
+          volume: 0,
+          timelineStartMs: atMs,
+          timelineDurationMs: segment,
+          trimStartMs: 0,
+          htmlMotionClipId: clip.id || null,
+          htmlMotionAssetId: asset.id || null,
+          label: asset.label || asset.filename || `HTML Motion video ${index + 1}`,
+        },
+      });
+      atMs += segment;
+    });
+  }
+  audioAssets.forEach((asset, index) => {
+    const source = String(asset.path || asset.source || asset.url || '').trim();
+    elements.push({
+      id: createCreativeLocalId('html-audio'),
+      type: 'audio',
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      rotation: 0,
+      opacity: 0,
+      zIndex: 1000 + index,
+      meta: {
+        source,
+        timelineStartMs: 0,
+        timelineDurationMs: Math.max(100, Number(asset.durationMs || asset.duration) || durationMs),
+        volume: Number.isFinite(Number(asset.volume)) ? Math.max(0, Math.min(1, Number(asset.volume))) : 1,
+        htmlMotionClipId: clip.id || null,
+        htmlMotionAssetId: asset.id || null,
+        label: asset.label || asset.filename || `HTML Motion audio ${index + 1}`,
+      },
+    });
+  });
+  return elements;
+}
+
 function setCreativeHtmlMotionClip(clip, options = {}) {
   const previousPath = String(creativeHtmlMotionClip?.path || '').trim();
   creativeHtmlMotionClip = normalizeCreativeHtmlMotionClip(clip);
@@ -12393,7 +15256,7 @@ function setCreativeHtmlMotionClip(clip, options = {}) {
       durationMs: creativeHtmlMotionClip.durationMs,
       frameRate: creativeHtmlMotionClip.frameRate,
       background: '#050816',
-      elements: [],
+      elements: buildSceneElementsFromHtmlMotionClip(creativeHtmlMotionClip),
     });
     setCreativeSceneDoc(nextDoc, { render: false, persist: false, recordHistory: options.recordHistory === true });
     creativeSelectedId = null;
@@ -12447,7 +15310,15 @@ async function createCreativeHtmlMotionClip(payload = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) throw new Error(data?.error || `HTTP ${response.status}`);
   await refreshCreativeStorageRootQuiet(data, 'video');
-  const clip = setCreativeHtmlMotionClip(data.clip, { updateScene: true, recordHistory: true, render: true, persist: true });
+  const shouldActivate = payload.updateScene !== false && payload.activate !== false;
+  const clip = shouldActivate
+    ? setCreativeHtmlMotionClip(data.clip, {
+        updateScene: true,
+        recordHistory: payload.recordHistory !== false,
+        render: payload.render !== false,
+        persist: payload.persist !== false,
+      })
+    : normalizeCreativeHtmlMotionClip(data.clip);
   addProcessEntry('info', `Prometheus Video: saved HTML motion clip ${clip.path}.`);
   return { ...data, clip };
 }
@@ -12603,7 +15474,21 @@ async function renderCreativeHtmlMotionSnapshot(payload = {}) {
 }
 
 async function exportCreativeHtmlMotionClip(payload = {}) {
-  const clip = normalizeCreativeHtmlMotionClip(payload.clip || creativeHtmlMotionClip);
+  const clip = normalizeCreativeHtmlMotionClip(payload.clip || (
+    payload.path || payload.htmlPath
+      ? {
+          ...creativeHtmlMotionClip,
+          id: payload.id || payload.clipId || 'html_motion_export',
+          path: payload.path || payload.htmlPath,
+          htmlPath: payload.path || payload.htmlPath,
+          title: payload.title || payload.filename || 'HTML motion export',
+          width: payload.width || creativeHtmlMotionClip?.width || creativeSceneDoc?.width,
+          height: payload.height || creativeHtmlMotionClip?.height || creativeSceneDoc?.height,
+          durationMs: payload.durationMs || creativeHtmlMotionClip?.durationMs || creativeSceneDoc?.durationMs,
+          frameRate: payload.frameRate || creativeHtmlMotionClip?.frameRate || creativeSceneDoc?.frameRate,
+        }
+      : creativeHtmlMotionClip
+  ));
   if (!clip) throw new Error('No active HTML motion clip. Create one first with creative_create_html_motion_clip.');
   const format = String(payload.format || 'mp4').trim().toLowerCase();
   if (format !== 'mp4') throw new Error('HTML motion clip export currently supports mp4.');
@@ -12642,6 +15527,12 @@ async function exportCreativeHtmlMotionClip(payload = {}) {
         durationMs,
         frameRate,
         force: payload.force === true,
+        maxFrames: Number(payload.maxFrames) || undefined,
+        forceHighFps: payload.forceHighFps === true,
+        perFrameTimeoutMs: Number(payload.perFrameTimeoutMs) || undefined,
+        skipSpatialQa: payload.skipSpatialQa === true,
+        workspaceOnly: payload.workspaceOnly !== false,
+        download: payload.download === true,
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -12658,6 +15549,19 @@ async function exportCreativeHtmlMotionClip(payload = {}) {
     if (data.export?.path) addProcessEntry('info', `Prometheus Video: exported HTML motion MP4 ${data.export.path}.`);
     return data;
   } catch (err) {
+    const recovered = await recoverHtmlMotionExportAfterFetchFailure(clip, payload, err).catch(() => null);
+    if (recovered) {
+      refreshCreativeExportChrome({
+        progress: 1,
+        elapsedMs: durationMs,
+        status: 'completed',
+        progressLabel: 'HTML motion export complete',
+      }, { force: true });
+      await refreshCreativeStorageRootQuiet(recovered, 'video');
+      await loadCreativeAssets({ mode: 'video', force: true, silent: true }).catch(() => {});
+      addProcessEntry('warn', `Prometheus Video: export response failed, but recovered MP4 ${recovered.export.path}.`);
+      return recovered;
+    }
     refreshCreativeExportChrome({
       status: 'failed',
       progressLabel: String(err?.message || err || 'HTML motion export failed'),
@@ -13735,6 +16639,12 @@ async function loadCreativeAssets(options = {}) {
       loading: false,
       error: '',
     };
+    window.prometheusCreativeAssetsState = creativeAssetsState;
+    try {
+      window.prometheusCreativeEditor?.hydrateCreativeAssets?.(creativeAssetsState);
+    } catch (err) {
+      console.warn('Could not hydrate Prometheus Video editor assets:', err);
+    }
     return creativeAssetsState;
   } catch (err) {
     if (requestToken !== creativeAssetsRequestToken) return null;
@@ -15010,7 +17920,10 @@ function syncHyperframesControllers(stage) {
       const controller = createHyperframesController({
         element,
         mount: placeholder,
-        api: { post: (url, body) => api(url, { method: 'POST', body }) },
+        api: {
+          post: (url, body) => api(url, { method: 'POST', body }),
+          get: (url) => api(url),
+        },
         onSourceChanged: (html) => {
           const live = creativeSceneDoc.elements.find((el) => el.id === elementId);
           if (live) {
@@ -15041,13 +17954,15 @@ function syncHyperframesControllers(stage) {
           window._lastHyperframesPick = info;
         },
         onError: (err) => console.warn('hyperframes controller error', err),
+        useStudio: element.meta?.useStudio === true,
       });
       entry = { controller, element };
       _hfControllers.set(elementId, entry);
     } else if (entry.element !== element) {
       // Element identity changed — refresh source HTML if it differs.
-      if (entry.controller.getHtml() !== element.meta?.html) {
-        entry.controller.setHtml(element.meta?.html || '');
+      const nextHtml = String(element.meta?.html || '');
+      if (nextHtml && entry.controller.getHtml() !== nextHtml) {
+        entry.controller.setHtml(nextHtml);
       }
       entry.element = element;
     }
@@ -15152,6 +18067,7 @@ function renderHyperframesInspector(selected) {
         ${layerRows}
       </div>
       <div class="creative-pill-row" style="margin-top:10px">
+        <button type="button" class="creative-chip-btn" onclick="canvasToggleHyperframesStudio('${safeElementId}')"><iconify-icon icon="solar:code-square-bold-duotone" width="14" height="14"></iconify-icon>${selected.meta?.useStudio === true ? 'Canvas Preview' : 'Studio'}</button>
         <button type="button" class="creative-chip-btn" onclick="canvasRefreshHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:refresh-bold-duotone" width="14" height="14"></iconify-icon>Refresh</button>
         <button type="button" class="creative-chip-btn" onclick="canvasLintHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:check-circle-bold-duotone" width="14" height="14"></iconify-icon>Lint</button>
         <button type="button" class="creative-chip-btn" onclick="canvasQaHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:eye-bold-duotone" width="14" height="14"></iconify-icon>QA</button>
@@ -15167,6 +18083,19 @@ function renderHyperframesInspector(selected) {
     </div>
   `;
 }
+
+window.canvasToggleHyperframesStudio = function (elementId) {
+  const live = getHyperframesElementById(elementId);
+  if (!live) return;
+  live.meta = { ...(live.meta || {}), useStudio: live.meta?.useStudio !== true };
+  const entry = _hfControllers.get(elementId);
+  if (entry) {
+    try { entry.controller.dispose(); } catch {}
+    _hfControllers.delete(elementId);
+  }
+  renderCreativeWorkspace();
+  persistActiveChat();
+};
 
 window.canvasHyperframesEditLayer = function (elementId, layerElementId, kind) {
   const entry = _hfControllers.get(elementId);
@@ -15226,11 +18155,34 @@ function updateHyperframesElementMeta(elementId, patch = {}, options = {}) {
   return live;
 }
 
+function getHyperframesElementEntryPath(element) {
+  const projectPath = String(element?.meta?.projectPath || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
+  const entryFile = String(element?.meta?.entryFile || 'index.html').trim().replace(/\\/g, '/').replace(/^\/+/g, '') || 'index.html';
+  if (!projectPath) return '';
+  return `${projectPath}/${entryFile}`.replace(/\/+/g, '/');
+}
+
+async function ensureHyperframesElementSourceHtml(element) {
+  if (!element || element.type !== 'hyperframes') return '';
+  const existing = String(element.meta?.html || '');
+  if (existing.trim()) return existing;
+  const entryPath = getHyperframesElementEntryPath(element);
+  if (!entryPath) return '';
+  const res = await api(`/api/canvas/file?path=${encodeURIComponent(entryPath)}`);
+  const html = typeof res?.content === 'string' ? res.content : '';
+  if (html.trim()) {
+    element.meta = { ...(element.meta || {}), html, dirty: false };
+    persistActiveChat();
+  }
+  return html;
+}
+
 window.canvasRefreshHyperframesClip = async function (elementId) {
   const live = getHyperframesElementById(elementId);
   if (!live) return;
   try {
-    const extraction = await api('/api/canvas/hyperframes/extract-layers', { method: 'POST', body: { html: live.meta?.html || '' } });
+    const html = await ensureHyperframesElementSourceHtml(live);
+    const extraction = await api('/api/canvas/hyperframes/extract-layers', { method: 'POST', body: { html } });
     if (!extraction?.success) throw new Error(extraction?.error || 'Could not parse HyperFrames clip');
     applyHyperframesExtractionToElement(live, extraction);
     renderCreativeWorkspace({ skipStageRender: true });
@@ -15244,7 +18196,8 @@ window.canvasLintHyperframesClip = async function (elementId) {
   const live = getHyperframesElementById(elementId);
   if (!live) return;
   try {
-    const lint = await api('/api/canvas/hyperframes/lint', { method: 'POST', body: { html: live.meta?.html || '' } });
+    const html = await ensureHyperframesElementSourceHtml(live);
+    const lint = await api('/api/canvas/hyperframes/lint', { method: 'POST', body: { html } });
     if (!lint?.success) throw new Error(lint?.error || 'HyperFrames lint failed');
     const lintResult = lint.lint || lint;
     updateHyperframesElementMeta(elementId, { lint: lintResult }, { skipStageRender: true });
@@ -15260,7 +18213,8 @@ window.canvasQaHyperframesClip = async function (elementId) {
   const live = getHyperframesElementById(elementId);
   if (!live) return;
   try {
-    const qaReport = await api('/api/canvas/hyperframes/qa', { method: 'POST', body: { html: live.meta?.html || '' } });
+    const html = await ensureHyperframesElementSourceHtml(live);
+    const qaReport = await api('/api/canvas/hyperframes/qa', { method: 'POST', body: { html } });
     if (!qaReport?.success) throw new Error(qaReport?.error || 'HyperFrames QA failed');
     const report = qaReport.report || qaReport;
     updateHyperframesElementMeta(elementId, { qaReport: report }, { skipStageRender: true });
@@ -15276,6 +18230,8 @@ window.canvasExportHyperframesClip = async function (elementId, format = 'mp4') 
   if (!live) return;
   try {
     showToast({ message: 'Rendering HyperFrames clip with producer...', kind: 'info' });
+    const html = await ensureHyperframesElementSourceHtml(live);
+    if (!html.trim()) throw new Error('HyperFrames source HTML is missing.');
     const safeId = String(live.meta?.compositionId || elementId || 'hyperframes').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'hyperframes';
     const variables = {};
     (Array.isArray(live.meta?.variableBindings) ? live.meta.variableBindings : []).forEach((binding) => {
@@ -15285,7 +18241,7 @@ window.canvasExportHyperframesClip = async function (elementId, format = 'mp4') 
     const result = await api('/api/canvas/hyperframes/render', {
       method: 'POST',
       body: {
-        html: live.meta?.html || '',
+        html,
         filename: `${safeId}.${String(format || 'mp4').toLowerCase()}`,
         format,
         fps: Number(creativeSceneDoc?.frameRate) || 60,
@@ -15296,6 +18252,20 @@ window.canvasExportHyperframesClip = async function (elementId, format = 'mp4') 
     if (!result?.success) throw new Error(result?.error || 'HyperFrames render failed');
     updateHyperframesElementMeta(elementId, { lastProducerExport: result }, { skipStageRender: true });
     if (result.outputPath) canvasDownloadFile(result.outputPath, result.outputPath.split(/[\\/]/).pop() || `${safeId}.${format}`);
+    creativeActiveExport = {
+      format: String(format || 'mp4').toLowerCase(),
+      renderer: 'hyperframes-producer',
+      serverJobId: result.job?.id || '',
+      startedAt: Date.now(),
+      frameRate: Number(creativeSceneDoc?.frameRate) || 60,
+      progress: 1,
+      elapsedMs: 0,
+      cancelRequested: false,
+      status: 'complete',
+      progressLabel: 'HyperFrames producer export complete',
+      hyperframesElementId: elementId,
+      outputPath: result.outputPath || '',
+    };
     showToast({ message: 'HyperFrames producer export complete.', kind: 'success' });
   } catch (err) {
     showToast({ message: `HyperFrames export failed: ${err?.message || err}`, kind: 'error' });
@@ -15332,6 +18302,9 @@ function insertHyperframesClip({ html, item, durationMs, compositionId, advanced
       },
     };
     creativeSceneDoc = applySceneGraphOps(creativeSceneDoc, [op]);
+    const inserted = [...(creativeSceneDoc.elements || [])].reverse().find((element) => element?.type === 'hyperframes' && element?.meta?.compositionId === compositionId);
+    creativeComposition = createVideoCompositionFromActiveClip({ scene: creativeSceneDoc, hyperframesClip: inserted || null });
+    persistCompositionState();
     if (modal) modal.remove();
     renderCreativeWorkspace();
     showToast({ message: `Inserted ${item?.name || 'HyperFrames clip'}`, kind: 'success' });
@@ -16266,8 +19239,8 @@ window.canvasCompositionLaneDrop = function(event, trackId) {
   }
   const track = comp.tracks.find((t) => t.id === trackId);
   if (!track) return;
-  if (!payload.lane || !['html-motion', 'remotion'].includes(payload.lane)) {
-    showToast?.('Use HTML Motion', 'Assets now go into HTML Motion, HyperFrames, or Remotion clips instead of raw timeline layers.', 'warning');
+  if (!payload.lane || !['hyperframes', 'html-motion', 'remotion'].includes(payload.lane)) {
+    showToast?.('Use HyperFrames', 'Assets now go into HyperFrames, HTML Motion, or Remotion clips instead of raw timeline layers.', 'warning');
     return;
   }
   try {
@@ -19720,15 +22693,21 @@ function buildCreativeSceneCallerContext() {
     .filter(Boolean)
     .join(', ');
   const elementSummary = creativeSceneDoc.elements.slice(0, 12).map((element) => {
-    const label = element.meta?.content || element.meta?.iconName || element.meta?.shape || element.type;
+    const label = element.type === 'hyperframes'
+      ? (element.meta?.compositionId || element.meta?.catalogId || 'HyperFrames composition')
+      : element.meta?.content || element.meta?.iconName || element.meta?.shape || element.type;
     const keyframeCount = Array.isArray(element.meta?.keyframes) ? element.meta.keyframes.length : 0;
-    return `- [${element.id}] ${element.type} @ (${element.x}, ${element.y}) ${element.width}x${element.height}${keyframeCount ? ` · keyframes ${keyframeCount}` : ''} :: ${String(label).slice(0, 80)}`;
+    const hfMeta = element.type === 'hyperframes'
+      ? ` · HyperFrames ${element.meta?.advancedBlock ? 'advanced' : 'editable'} · ${Math.max(0, Number(element.meta?.durationMs) || 0)}ms`
+      : '';
+    return `- [${element.id}] ${element.type} @ (${element.x}, ${element.y}) ${element.width}x${element.height}${hfMeta}${keyframeCount ? ` · keyframes ${keyframeCount}` : ''} :: ${String(label).slice(0, 80)}`;
   }).join('\n');
   return [
     `[CREATIVE_SCENE]`,
     `mode: ${mode}`,
+    creativeSceneDoc.elements.some((element) => element.type === 'hyperframes') ? 'HyperFrames clip mode is active: prefer hyperframes_* tools for source-backed edits, lint, QA, and export. Use HTML Motion tools only for legacy clips or explicit fallback.' : '',
     creativeHtmlMotionClip ? `activeHtmlMotionClip: ${creativeHtmlMotionClip.path || creativeHtmlMotionClip.title || 'yes'}` : '',
-    creativeHtmlMotionClip ? 'HTML motion clip mode is active: for edits, first call creative_read_html_motion_clip, then creative_patch_html_motion_clip with the smallest safe ops. Only recreate with creative_create_html_motion_clip when the user asks for a rebuild. QA/export with creative_render_html_motion_snapshot and creative_export_html_motion_clip.' : '',
+    creativeHtmlMotionClip ? 'Legacy HTML Motion clip mode is active: for edits, first call creative_read_html_motion_clip, then creative_patch_html_motion_clip with the smallest safe ops. Only recreate with creative_create_html_motion_clip when the user asks for a rebuild. QA/export with creative_render_html_motion_snapshot and creative_export_html_motion_clip.' : '',
     `canvas: ${creativeSceneDoc.width}x${creativeSceneDoc.height}`,
     `background: ${creativeSceneDoc.background || '#ffffff'}`,
     `durationMs: ${Math.max(1000, Number(creativeSceneDoc.durationMs) || 12000)}`,
@@ -19771,7 +22750,9 @@ function summarizeCreativeSceneForCommand() {
       rotation: element.rotation,
       opacity: element.opacity,
       zIndex: element.zIndex,
-      label: element.meta?.content || element.meta?.iconName || element.meta?.shape || element.meta?.src || element.type,
+      label: element.type === 'hyperframes'
+        ? (element.meta?.compositionId || element.meta?.catalogId || 'HyperFrames composition')
+        : element.meta?.content || element.meta?.iconName || element.meta?.shape || element.meta?.src || element.type,
       keyframes: Array.isArray(element.meta?.keyframes) ? element.meta.keyframes.length : 0,
     })),
     validation,
@@ -20342,15 +23323,16 @@ function sendCreativeCommandResult(sourceMessage, payload = {}) {
   });
 }
 
-function isCreativeCommandForActiveSession(message) {
+function isCreativeCommandForActiveSession(message, activeSessionId = window.activeChatSessionId || window.agentSessionId || '') {
   const sid = String(message?.sessionId || '').trim();
-  const activeSid = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const activeSid = String(activeSessionId || '').trim();
   return !!sid && !!activeSid && sid === activeSid;
 }
 
-async function ensureCreativeCommandSessionActive(message) {
+async function ensureCreativeCommandSessionActive(message, options = {}) {
   const sid = String(message?.sessionId || '').trim();
   if (!sid) return false;
+  const previousActiveSessionId = String(options.previousActiveSessionId || window.activeChatSessionId || '').trim();
   if (isCreativeCommandForActiveSession(message)) {
     const activeMode = normalizeCreativeMode(message?.creativeMode);
     if (activeMode && normalizeCreativeMode(window.currentCreativeMode) !== activeMode) {
@@ -20386,11 +23368,21 @@ async function ensureCreativeCommandSessionActive(message) {
     window.chatSessions.push(sess);
   }
 
+  const background = previousActiveSessionId && previousActiveSessionId !== sid;
+  const previousSuppress = window.__pmSuppressCreativeAutoOpen;
+  if (background) window.__pmSuppressCreativeAutoOpen = true;
   window.activeChatSessionId = sid;
   setAgentSessionId(sid);
   if (sess._needsServerLoad) await _loadSessionFromServer(sid);
   const mode = normalizeCreativeMode(message?.creativeMode || sess.creativeMode);
-  if (mode) applySessionCreativeMode(sid, mode, { resetScene: message?.resetScene === true });
+  if (mode) applySessionCreativeMode(sid, mode, { resetScene: message?.resetScene === true, persist: true });
+  if (background) {
+    window.activeChatSessionId = previousActiveSessionId;
+    setAgentSessionId(previousActiveSessionId);
+    window.__pmSuppressCreativeAutoOpen = previousSuppress;
+    return true;
+  }
+  window.__pmSuppressCreativeAutoOpen = previousSuppress;
   syncActiveChat();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
@@ -20703,9 +23695,10 @@ function applyCreativeFitAssetCommand(payload = {}) {
 
 function inferCreativeAssetType(source = '', explicitType = '') {
   const requested = String(explicitType || '').trim().toLowerCase();
-  if (requested === 'image' || requested === 'video') return requested;
+  if (requested === 'image' || requested === 'video' || requested === 'audio') return requested;
   const ext = String(source || '').split('?')[0].split('#')[0].split('.').pop().toLowerCase();
   if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'].includes(ext)) return 'audio';
   return 'image';
 }
 
@@ -20725,20 +23718,32 @@ function applyCreativeAddAssetCommand(payload = {}) {
     meta.volume = Number.isFinite(Number(payload.volume)) ? Math.max(0, Math.min(1, Number(payload.volume))) : (meta.muted ? 0 : 1);
     meta.trimStartMs = Math.max(0, Number(payload.trimStartMs ?? meta.trimStartMs) || 0);
     if (Number.isFinite(Number(payload.trimEndMs))) meta.trimEndMs = Math.max(0, Number(payload.trimEndMs));
-    meta.timelineStartMs = Math.max(0, Number(payload.startMs ?? payload.timelineStartMs ?? meta.timelineStartMs) || 0);
+    const explicitStart = payload.startMs ?? payload.timelineStartMs ?? meta.timelineStartMs;
+    meta.timelineStartMs = Number.isFinite(Number(explicitStart))
+      ? Math.max(0, Number(explicitStart))
+      : getCreativeTimelineAppendStartMs();
     if (Number.isFinite(Number(payload.durationMs ?? payload.timelineDurationMs))) {
       meta.timelineDurationMs = Math.max(100, Number(payload.durationMs ?? payload.timelineDurationMs));
     } else if (Number.isFinite(Number(creativeSceneDoc?.durationMs))) {
       meta.timelineDurationMs = Math.max(100, Number(creativeSceneDoc.durationMs));
     }
+  } else if (type === 'audio') {
+    const explicitStart = payload.startMs ?? payload.timelineStartMs ?? meta.timelineStartMs;
+    meta.timelineStartMs = Number.isFinite(Number(explicitStart))
+      ? Math.max(0, Number(explicitStart))
+      : getCreativeTimelineAppendStartMs();
+    if (Number.isFinite(Number(payload.durationMs ?? payload.timelineDurationMs))) {
+      meta.timelineDurationMs = Math.max(100, Number(payload.durationMs ?? payload.timelineDurationMs));
+    }
+    meta.volume = Number.isFinite(Number(payload.volume)) ? Math.max(0, Math.min(1, Number(payload.volume))) : 1;
   }
   const nextDoc = executeSceneGraphOps(creativeSceneDoc, [{
     op: 'add',
     type,
-    x: Number.isFinite(Number(payload.x)) ? Number(payload.x) : Math.round(creativeSceneDoc.width * 0.12),
-    y: Number.isFinite(Number(payload.y)) ? Number(payload.y) : Math.round(creativeSceneDoc.height * 0.12),
-    width: Number.isFinite(Number(payload.width)) ? Number(payload.width) : Math.round(creativeSceneDoc.width * 0.46),
-    height: Number.isFinite(Number(payload.height)) ? Number(payload.height) : Math.round(creativeSceneDoc.height * 0.46),
+    x: Number.isFinite(Number(payload.x)) ? Number(payload.x) : (type === 'video' ? 0 : Math.round(creativeSceneDoc.width * 0.12)),
+    y: Number.isFinite(Number(payload.y)) ? Number(payload.y) : (type === 'video' ? 0 : Math.round(creativeSceneDoc.height * 0.12)),
+    width: Number.isFinite(Number(payload.width)) ? Number(payload.width) : (type === 'video' ? Math.round(creativeSceneDoc.width) : Math.round(creativeSceneDoc.width * 0.46)),
+    height: Number.isFinite(Number(payload.height)) ? Number(payload.height) : (type === 'video' ? Math.round(creativeSceneDoc.height) : Math.round(creativeSceneDoc.height * 0.46)),
     rotation: Number.isFinite(Number(payload.rotation)) ? Number(payload.rotation) : 0,
     opacity: Number.isFinite(Number(payload.opacity)) ? Number(payload.opacity) : 1,
     zIndex: Number.isFinite(Number(payload.zIndex)) ? Number(payload.zIndex) : (creativeSceneDoc.elements || []).length,
@@ -20747,6 +23752,20 @@ function applyCreativeAddAssetCommand(payload = {}) {
   const added = nextDoc.elements[nextDoc.elements.length - 1] || null;
   commitCreativeCommandDoc(nextDoc, { selectedId: added?.id || creativeSelectedId });
   return { addedId: added?.id || null, type, source };
+}
+
+function getCreativeTimelineAppendStartMs() {
+  const elements = Array.isArray(creativeSceneDoc?.elements) ? creativeSceneDoc.elements : [];
+  const ends = elements
+    .filter((element) => ['video', 'audio'].includes(String(element?.type || '').toLowerCase()))
+    .map((element) => {
+      const meta = element?.meta || {};
+      const start = Math.max(0, Number(meta.timelineStartMs ?? meta.startMs ?? element.startMs) || 0);
+      const duration = Math.max(0, Number(meta.timelineDurationMs ?? meta.durationMs ?? element.durationMs) || 0);
+      return start + duration;
+    })
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return ends.length ? Math.max(...ends) : 0;
 }
 
 function buildCreativeTemplateElements(template, payload = {}, mode = normalizeCreativeMode(window.currentCreativeMode)) {
@@ -21171,28 +24190,57 @@ function createVideoCompositionFromActiveClip(seed = {}) {
   const doc = seed.scene || creativeSceneDoc || {};
   const tracks = defaultCompositionTracks();
   const htmlClip = seed.htmlMotionClip || creativeHtmlMotionClip || null;
+  const hyperframesClip = seed.hyperframesClip || (Array.isArray(doc.elements) ? doc.elements.find((el) => el?.type === 'hyperframes') : null);
   const videoTrack = tracks[0];
-  const durationMs = Math.max(1000, Number(htmlClip?.durationMs || doc.durationMs) || 12000);
-  const clips = htmlClip?.path ? [{
-    id: `clip_${htmlClip.id || 'html_motion'}`,
-    trackId: videoTrack.id,
-    label: htmlClip.title || 'HTML Motion',
-    inMs: 0,
-    outMs: durationMs,
-    trimStartMs: 0,
-    trimEndMs: 0,
-    lane: 'html-motion',
-    source: { kind: 'html-motion', clipPath: htmlClip.path, compositionId: htmlClip.composition?.id || null },
-    transitionIn: null,
-    transitionOut: null,
-    locked: false,
-    meta: {},
-  }] : [];
+  const activeDurationMs = Number(hyperframesClip?.meta?.durationMs || hyperframesClip?.timing?.durationMs || htmlClip?.durationMs || doc.durationMs);
+  const durationMs = Math.max(1000, activeDurationMs || 12000);
+  const clips = [];
+  if (hyperframesClip && (hyperframesClip?.meta?.html || hyperframesClip?.meta?.projectPath)) {
+    clips.push({
+      id: `clip_${hyperframesClip.id || 'hyperframes'}`,
+      trackId: videoTrack.id,
+      label: hyperframesClip.meta?.compositionId || hyperframesClip.title || 'HyperFrames',
+      inMs: 0,
+      outMs: durationMs,
+      trimStartMs: 0,
+      trimEndMs: 0,
+      lane: 'hyperframes',
+      source: {
+        kind: 'hyperframes',
+        html: hyperframesClip.meta?.html || '',
+        projectPath: hyperframesClip.meta?.projectPath || null,
+        entryFile: hyperframesClip.meta?.entryFile || null,
+        elementId: hyperframesClip.id,
+        compositionId: hyperframesClip.meta?.compositionId || null,
+        variables: hyperframesClip.meta?.variables || {},
+      },
+      transitionIn: null,
+      transitionOut: null,
+      locked: false,
+      meta: { sourceFormat: 'hyperframes' },
+    });
+  } else if (htmlClip?.path) {
+    clips.push({
+      id: `clip_${htmlClip.id || 'html_motion'}`,
+      trackId: videoTrack.id,
+      label: htmlClip.title || 'HTML Motion',
+      inMs: 0,
+      outMs: durationMs,
+      trimStartMs: 0,
+      trimEndMs: 0,
+      lane: 'html-motion',
+      source: { kind: 'html-motion', clipPath: htmlClip.path, compositionId: htmlClip.composition?.id || null },
+      transitionIn: null,
+      transitionOut: null,
+      locked: false,
+      meta: {},
+    });
+  }
   return {
-    id: `comp_${htmlClip?.id || doc.id || 'video'}`,
+    id: `comp_${hyperframesClip?.id || htmlClip?.id || doc.id || 'video'}`,
     version: 1,
-    width: Number(htmlClip?.width || doc.width) || 1920,
-    height: Number(htmlClip?.height || doc.height) || 1080,
+    width: Number(hyperframesClip?.width || htmlClip?.width || doc.width) || 1920,
+    height: Number(hyperframesClip?.height || htmlClip?.height || doc.height) || 1080,
     frameRate: Math.max(1, Number(htmlClip?.frameRate || doc.frameRate) || 60),
     durationMs,
     background: doc.background || '#000000',
@@ -21202,7 +24250,7 @@ function createVideoCompositionFromActiveClip(seed = {}) {
     captions: Array.isArray(doc.captions) ? doc.captions : [],
     brandKit: doc.brandKit || null,
     selectedClipId: clips[0]?.id || null,
-    meta: { videoClipLanes: ['html-motion', 'remotion'] },
+    meta: { videoClipLanes: ['hyperframes', 'html-motion', 'remotion'] },
   };
 }
 
@@ -21270,8 +24318,8 @@ function compositionAddClip(comp, input) {
   const outMs = Number.isFinite(Number(input.outMs))
     ? Math.max(inMs + 1, Number(input.outMs))
     : inMs + Math.max(1, Number(input.durationMs) || 4000);
-  const lane = ['html-motion', 'remotion'].includes(input.lane) ? input.lane : '';
-  if (!lane) throw new Error('Video timeline clips must use html-motion or remotion.');
+  const lane = ['hyperframes', 'html-motion', 'remotion'].includes(input.lane) ? input.lane : '';
+  if (!lane) throw new Error('Video timeline clips must use hyperframes, html-motion, or remotion.');
   const clip = {
     id: compositionId('clip'),
     trackId,
@@ -21281,7 +24329,11 @@ function compositionAddClip(comp, input) {
     trimStartMs: Math.max(0, Number(input.trimStartMs) || 0),
     trimEndMs: Math.max(0, Number(input.trimEndMs) || 0),
     lane,
-    source: input.source || (lane === 'html-motion' ? { kind: 'html-motion', clipPath: '' } : { kind: 'remotion', templateId: '', input: {} }),
+    source: input.source || (lane === 'hyperframes'
+      ? { kind: 'hyperframes', html: '', elementId: '', compositionId: null, variables: {} }
+      : lane === 'html-motion'
+        ? { kind: 'html-motion', clipPath: '' }
+        : { kind: 'remotion', templateId: '', input: {} }),
     transitionIn: null,
     transitionOut: null,
     locked: false,
@@ -21411,27 +24463,33 @@ function compositionLint(comp) {
 }
 
 async function handleCreativeCommandMessage(message) {
-  if (!(await ensureCreativeCommandSessionActive(message))) {
+  const previousActiveSessionId = String(window.activeChatSessionId || '').trim();
+  const previousAgentSessionId = String(window.agentSessionId || '').trim();
+  const previousCreativeMode = window.currentCreativeMode;
+  const previousSuppress = window.__pmSuppressCreativeAutoOpen;
+  if (!(await ensureCreativeCommandSessionActive(message, { previousActiveSessionId }))) {
     sendCreativeCommandResult(message, {
       success: false,
       error: 'Creative command target session is not available in this UI client.',
     });
     return;
   }
-  const command = String(message?.command || '').trim();
-  const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {};
-  const mode = normalizeCreativeMode(window.currentCreativeMode);
-  if (!isStructuredCreativeMode(mode)) {
-    sendCreativeCommandResult(message, {
-      success: false,
-      error: 'No Image or Video creative workspace is active in this UI session.',
-    });
-    return;
-  }
-  ensureCreativeSceneForMode(mode);
+  const backgroundCommand = previousActiveSessionId && String(message?.sessionId || '').trim() !== previousActiveSessionId;
+  try {
+    const command = String(message?.command || '').trim();
+    const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {};
+    const mode = normalizeCreativeMode(window.currentCreativeMode);
+    if (!isStructuredCreativeMode(mode)) {
+      sendCreativeCommandResult(message, {
+        success: false,
+        error: 'No Image or Video creative workspace is active in this UI session.',
+      });
+      return;
+    }
+    ensureCreativeSceneForMode(mode);
 
-  let data = null;
-  if (command === 'get_state') {
+    let data = null;
+    if (command === 'get_state') {
     data = {
       scene: summarizeCreativeSceneForCommand(),
       selectedElement: getCreativeCommandSelectedElement(),
@@ -21440,11 +24498,12 @@ async function handleCreativeCommandMessage(message) {
         audioTrack: getCreativeAudioTrackConfig(),
         creativeLibraries: normalizeCreativeMode(mode) === 'video'
           ? {
-              videoSurface: 'HTML Motion, HyperFrames, Remotion, and Pretext only.',
+              videoSurface: 'Prometheus Video editor supports editable scene-graph media layers plus HTML Motion, HyperFrames, Remotion, and Pretext clips.',
               htmlMotionAccess: 'Create with creative_create_html_motion_clip or creative_apply_html_motion_template, edit existing clips with creative_read_html_motion_clip plus creative_patch_html_motion_clip, inspect with creative_render_html_motion_snapshot, then export with creative_export_html_motion_clip.',
               hyperframesAccess: 'Use hyperframes_browse_catalog, hyperframes_insert_clip, hyperframes_apply_patch, hyperframes_lint, hyperframes_qa, and hyperframes_export for component-driven video systems. Use creative_* HyperFrames tools only for legacy compatibility.',
               remotionAccess: 'Use creative_list_motion_templates, creative_preview_motion_template, creative_apply_motion_template, and creative_generate_motion_variants for Remotion-backed video systems.',
-              removedVideoSurface: ['scene-graph layers', 'shape layers', 'regular animation presets', 'editable video scene templates', 'direct asset layers'],
+              elementTypes: ['text', 'shape', 'icon', 'image', 'video', 'audio', 'group', 'hyperframes'],
+              assetAccess: 'Generated and imported Creative assets hydrate into the Prometheus Video editor asset panel. Use creative_add_asset/add_element or generation tools to place durable workspace-backed media layers.',
             }
           : {
               iconSystem: 'Iconify',
@@ -21490,7 +24549,7 @@ async function handleCreativeCommandMessage(message) {
     creativeTimelineMs = 0;
     creativeHtmlMotionClip = null;
     stopCreativeAudioPreview({ reset: true, dispose: true });
-    setCreativeSceneDoc(creativeSceneDoc, { render: false, persist: false });
+    setCreativeSceneDoc(creativeSceneDoc, { render: false, persist: false, allowBlankOverwrite: true });
     renderCreativeWorkspace();
     persistActiveChat();
     data = {
@@ -21797,7 +24856,7 @@ async function handleCreativeCommandMessage(message) {
     } else if (command === 'add_element') {
       clearCreativeHtmlMotionClip({ render: false, persist: false });
       const type = String(payload.type || '').trim().toLowerCase();
-      if (!['text', 'shape', 'icon', 'image', 'video', 'group'].includes(type)) throw new Error('add_element requires type text, shape, icon, image, video, or group.');
+      if (!['text', 'shape', 'icon', 'image', 'video', 'audio', 'group'].includes(type)) throw new Error('add_element requires type text, shape, icon, image, video, audio, or group.');
       const nextDoc = executeSceneGraphOps(creativeSceneDoc, [{
         op: 'add',
       type,
@@ -22079,7 +25138,9 @@ async function handleCreativeCommandMessage(message) {
         : (getSelectedCreativeElement()?.type === 'hyperframes'
             ? getSelectedCreativeElement()
             : (creativeSceneDoc.elements || []).find((element) => element?.type === 'hyperframes' && element.visible !== false));
-      if (hyperframesClip?.meta?.html) {
+      if (hyperframesClip && (hyperframesClip?.meta?.html || hyperframesClip?.meta?.projectPath)) {
+        const html = await ensureHyperframesElementSourceHtml(hyperframesClip);
+        if (!html.trim()) throw new Error('HyperFrames source HTML is missing.');
         const durationMs = Math.max(1000, Number(payload.durationMs || payload.duration_ms) || Number(hyperframesClip.meta.durationMs) || Number(creativeSceneDoc.durationMs) || 6000);
         let sampleTimes = Array.isArray(payload.sampleTimesMs)
           ? payload.sampleTimesMs.map((value) => Number(value)).filter((value) => Number.isFinite(value))
@@ -22091,7 +25152,7 @@ async function handleCreativeCommandMessage(message) {
         const qa = await api('/api/canvas/hyperframes/qa', {
           method: 'POST',
           body: {
-            html: hyperframesClip.meta.html,
+            html,
             width: Number(payload.width) || Number(hyperframesClip.width) || Number(creativeSceneDoc.width) || 1080,
             height: Number(payload.height) || Number(hyperframesClip.height) || Number(creativeSceneDoc.height) || 1920,
             durationMs,
@@ -22356,7 +25417,20 @@ async function handleCreativeCommandMessage(message) {
     throw new Error(`Unknown creative command: ${command}`);
   }
 
-  sendCreativeCommandResult(message, { success: true, data });
+    sendCreativeCommandResult(message, { success: true, data });
+  } finally {
+    window.__pmSuppressCreativeAutoOpen = previousSuppress;
+    if (backgroundCommand && previousActiveSessionId && getChatSessionById(previousActiveSessionId)) {
+      window.activeChatSessionId = previousActiveSessionId;
+      if (previousAgentSessionId) setAgentSessionId(previousAgentSessionId);
+      else setAgentSessionId(previousActiveSessionId);
+      window.currentCreativeMode = previousCreativeMode;
+      syncActiveChat();
+      if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+      if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
+      if (canvasOpen) toggleCanvas(false, { force: true });
+    }
+  }
 }
 
 function buildBrowserTeachCallerContext(latestMessage = '') {
@@ -25171,6 +28245,7 @@ function toggleRightPanel() {
   if (toggleBtn) toggleBtn.classList.toggle('active', isOpen);
   // When closing: clear inline resize styles so CSS width:0 takes effect
   if (!isOpen && wasOpen) {
+    if (canvasOpen) toggleCanvas(false, { force: true });
     panel.style.removeProperty('width');
     panel.style.removeProperty('min-width');
     panel.style.removeProperty('max-width');
@@ -25253,6 +28328,7 @@ function toggleCanvas(nextOpen = null, options = {}) {
     if (rightPanel) {
       rightPanel.classList.remove('canvas-open');
       rightPanel.scrollTop = rightPanelCanvasSavedScrollTop || 0;
+      resetRightPanelWidth();
     }
 	    // Reset fullscreen if active
 	    if (canvasFullscreenMode) {
@@ -25269,6 +28345,7 @@ function toggleCanvas(nextOpen = null, options = {}) {
 	    if (btn) { btn.style.background=''; btn.style.borderColor=''; btn.style.color=''; }
 	  }
     syncHeaderCanvasChrome();
+    if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
 	  syncCanvasSurfaceWidthLock();
     syncBrowserCanvasStream({ force: true });
 	}
@@ -26144,6 +29221,8 @@ function uploadResultsToAttachmentPreviews(uploadResults) {
         name: r.name,
         ext: r.ext || '',
         workspacePath: r.workspacePath || '',
+        relPath: r.relPath || '',
+        mimeType: r.mimeType || '',
         dataUrl: `data:${r.mimeType};base64,${r.base64}`,
       };
     }
@@ -26217,6 +29296,31 @@ function chatFileUploadInit() {
     window.__prometheusChatPasteInit = true;
     document.addEventListener('paste', handleChatPaste);
   }
+}
+
+function setupChatMessageScrollbarFade() {
+  const messages = document.getElementById('chat-messages');
+  if (!messages || messages.dataset.scrollbarFadeBound === '1') return;
+  messages.dataset.scrollbarFadeBound = '1';
+  let fadeTimer = null;
+
+  const hideSoon = (delay = 560) => {
+    if (fadeTimer) clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => {
+      messages.classList.remove('chat-scroller-active');
+      fadeTimer = null;
+    }, delay);
+  };
+
+  const reveal = () => {
+    messages.classList.add('chat-scroller-active');
+    hideSoon();
+  };
+
+  messages.addEventListener('scroll', reveal, { passive: true });
+  messages.addEventListener('wheel', reveal, { passive: true });
+  messages.addEventListener('touchmove', reveal, { passive: true });
+  messages.addEventListener('pointerdown', reveal);
 }
 
 function canvasInitDrop() {
@@ -26840,12 +29944,93 @@ function getApprovalRiskLevel(score) {
   return 'low';
 }
 
+function getApprovalToolLabel(toolName = '') {
+  const tool = String(toolName || '').trim();
+  if (!tool) return 'action';
+  if (tool === 'desktop_click') return 'desktop click';
+  if (tool === 'desktop_press_key') return 'desktop keypress';
+  if (tool === 'browser_click') return 'browser click';
+  if (tool === 'browser_press_key' || tool === 'browser_key') return 'browser keypress';
+  if (tool === 'run_command') return 'command';
+  return tool.replace(/_/g, ' ');
+}
+
+function summarizeApprovalForHumans(record = {}, fallback = {}) {
+  const toolName = String(record.toolName || fallback.toolName || '').trim();
+  const approvalKind = String(record.approvalKind || fallback.approvalKind || '').trim();
+  const status = String(record.status || fallback.status || 'pending').trim().toLowerCase();
+  const args = record.toolArgs && typeof record.toolArgs === 'object' ? record.toolArgs : {};
+  const finalAction = record.finalAction || fallback.finalAction || null;
+  const devSourceEdit = record.devSourceEdit || fallback.devSourceEdit || null;
+  const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
+  const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
+
+  if (isFinalAction) {
+    const target = String(finalAction?.targetLabel || args.target_label || 'final action').trim();
+    const summary = String(finalAction?.summary || record.reason || fallback.summary || '').trim();
+    return {
+      title: status === 'pending' ? `Ready to ${String(finalAction?.actionKind || args.action_kind || 'continue')}` : 'Final action',
+      summary: summary || `Approve ${target}.`,
+      detail: target,
+    };
+  }
+
+  if (isDevSource) {
+    const files = Array.isArray(devSourceEdit?.allowedFiles) ? devSourceEdit.allowedFiles : [];
+    return {
+      title: 'Dev source edit',
+      summary: String(record.reason || fallback.summary || 'Approve a scoped source edit.').trim(),
+      detail: files.length ? `${files.length} file${files.length === 1 ? '' : 's'} requested` : '',
+    };
+  }
+
+  if (toolName === 'run_command') {
+    const command = String(args.command || record.command || '').trim();
+    return {
+      title: 'Command approval',
+      summary: command ? `Run command${args.cwd ? ` in ${args.cwd}` : ''}` : 'Run a command.',
+      detail: command,
+    };
+  }
+
+  if (toolName.startsWith('desktop_')) {
+    const windowLabel = String(args.window_name || args.app || '').trim();
+    const target = args.element != null
+      ? `element ${args.element}`
+      : Number.isFinite(Number(args.x)) && Number.isFinite(Number(args.y))
+        ? `point ${Number(args.x)}, ${Number(args.y)}`
+        : '';
+    return {
+      title: status === 'pending' ? 'Desktop action' : 'Desktop action',
+      summary: `${status === 'pending' ? 'Approve' : 'Review'} ${getApprovalToolLabel(toolName)}${windowLabel ? ` in ${windowLabel}` : ''}.`,
+      detail: target,
+    };
+  }
+
+  if (toolName.startsWith('browser_')) {
+    const target = args.element || args.selector || (args.ref != null ? `ref ${args.ref}` : '');
+    return {
+      title: status === 'pending' ? 'Browser action' : 'Browser action',
+      summary: `${status === 'pending' ? 'Approve' : 'Review'} ${getApprovalToolLabel(toolName)}.`,
+      detail: String(target || '').trim(),
+    };
+  }
+
+  return {
+    title: toolName ? `${getApprovalToolLabel(toolName)} approval` : 'Approval required',
+    summary: String(record.reason || fallback.reason || record.summary || fallback.summary || record.action || '').trim(),
+    detail: '',
+  };
+}
+
 function renderSessionApprovalCard(item) {
   const risk = getApprovalRiskLevel(item.riskScore ?? 0);
   const palette = SESSION_APPROVAL_RISK_COLORS[risk] || SESSION_APPROVAL_RISK_COLORS.medium;
   const systems = Array.isArray(item.affectedSystems) ? item.affectedSystems : [];
   const status = String(item.status || 'pending').toLowerCase();
   const isProposal = item.approvalType === 'proposal';
+  const isDevSource = item.approvalKind === 'dev_source_edit' || item.toolName === 'request_dev_source_edit';
+  const isFinalAction = item.approvalKind === 'final_action' || item.toolName === 'request_final_action_approval';
   const approveEndpoint = isProposal ? `/api/proposals/${item.id}/approve` : `/api/approvals/${item.id}/approve`;
   const denyEndpoint = isProposal ? `/api/proposals/${item.id}/deny` : `/api/approvals/${item.id}/deny`;
   return `<div class="approval-card" style="background:${palette.bg};border-color:${palette.border};padding:10px 12px">
@@ -26859,13 +30044,19 @@ function renderSessionApprovalCard(item) {
     ${item.summary ? `<div style="font-size:11px;color:${palette.text};margin-bottom:6px;line-height:1.4;opacity:0.9">${escHtml(String(item.summary).slice(0, 180))}</div>` : ''}
     ${item.command ? `<pre style="margin:0 0 8px;background:rgba(255,255,255,0.82);border:1px solid ${palette.border};border-radius:8px;padding:8px;font-size:10px;color:${palette.strongText || palette.text};white-space:pre-wrap;word-break:break-word;font-family:'IBM Plex Mono',monospace">${escHtml(String(item.command).slice(0, 300))}</pre>` : ''}
     ${item.scopedTarget ? `<div style="font-size:10px;color:${palette.text};margin:-3px 0 7px;line-height:1.3">Scope: ${escHtml(String(item.scopedTarget).slice(0, 140))}</div>` : ''}
+    ${Array.isArray(item.devSourceEdit?.allowedFiles) && item.devSourceEdit.allowedFiles.length ? `<div style="font-size:10px;color:${palette.text};margin:-3px 0 7px;line-height:1.35">Files: ${item.devSourceEdit.allowedFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
     ${systems.length ? `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px">${systems.map((s) => `<span style="font-size:9px;background:rgba(255,255,255,0.74);color:${palette.strongText || palette.text};border:1px solid ${palette.border};border-radius:4px;padding:1px 5px;font-family:monospace">${escHtml(s)}</span>`).join('')}</div>` : ''}
     ${isProposal
       ? `<div style="display:flex;gap:6px">
           <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
           <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="flex:1;border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Deny</button>
         </div>`
-      : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      : (isDevSource || isFinalAction)
+        ? `<div style="display:flex;gap:6px">
+          <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
+          <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="flex:1;border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Reject</button>
+        </div>`
+        : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
           <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve Once</button>
           <button onclick="resolveSessionApproval('${item.id}','approve_session','${approveEndpoint}','session')" style="border:none;background:#0f766e;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">This Session</button>
           <button onclick="resolveSessionApproval('${item.id}','approve_always','${approveEndpoint}','always')" style="border:none;background:#2563eb;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Always Allow</button>
@@ -26874,10 +30065,301 @@ function renderSessionApprovalCard(item) {
   </div>`;
 }
 
+function normalizeChatApprovalRecord(record = {}, fallback = {}) {
+  const id = String(record.id || record.approvalId || fallback.id || fallback.approvalId || '').trim();
+  const toolName = String(record.toolName || fallback.toolName || '').trim();
+  const approvalKind = String(record.approvalKind || fallback.approvalKind || '').trim();
+  const action = String(record.action || fallback.action || fallback.summary || record.summary || '').trim();
+  const command = String(record.command || record.toolArgs?.command || fallback.command || '').trim();
+  const status = String(record.status || fallback.status || 'pending').trim().toLowerCase();
+  const sessionId = String(record.sourceSessionId || record.sessionId || fallback.sourceSessionId || fallback.sessionId || '').trim();
+  const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
+  const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
+  const human = summarizeApprovalForHumans(record, fallback);
+  return {
+    id,
+    sessionId,
+    toolName,
+    approvalKind,
+    title: isDevSource ? 'Dev source edit approval' : (isFinalAction ? 'Final action approval' : human.title),
+    action,
+    command,
+    reason: String(record.reason || fallback.reason || record.summary || fallback.summary || '').trim(),
+    summary: human.summary || String(record.summary || fallback.summary || action || '').trim(),
+    humanDetail: human.detail || '',
+    riskScore: Number.isFinite(Number(record.riskScore)) ? Number(record.riskScore) : Number(fallback.riskScore || 0),
+    affectedSystems: Array.isArray(record.affectedSystems) ? record.affectedSystems : (Array.isArray(fallback.affectedSystems) ? fallback.affectedSystems : []),
+    scopedAction: String(record.scopedAction || fallback.scopedAction || '').trim(),
+    scopedTarget: String(record.scopedTarget || fallback.scopedTarget || '').trim(),
+    devSourceEdit: record.devSourceEdit || fallback.devSourceEdit || null,
+    finalAction: record.finalAction || fallback.finalAction || null,
+    status: status || 'pending',
+  };
+}
+
+function renderInlineApprovalRequest(item) {
+  if (!item || !item.id) return '';
+  const approval = normalizeChatApprovalRecord(item);
+  const risk = getApprovalRiskLevel(approval.riskScore || 0);
+  const systems = Array.isArray(approval.affectedSystems) ? approval.affectedSystems.filter(Boolean) : [];
+  const pending = approval.status === 'pending';
+  const statusLabel = approval.status === 'approved' ? 'approved' : approval.status === 'rejected' ? 'denied' : approval.status;
+  const idArg = encodeInlineJsString(approval.id);
+  const approveEndpoint = encodeInlineJsString(`/api/approvals/${approval.id}/approve`);
+  const denyEndpoint = encodeInlineJsString(`/api/approvals/${approval.id}/deny`);
+  const technicalText = approval.command || approval.scopedAction || approval.action;
+  const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
+  const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
+  const isCommandApproval = approval.toolName === 'run_command';
+  const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+  const verificationCommand = approval.devSourceEdit?.verificationCommand || '';
+  const devPlan = approval.devSourceEdit?.plan || null;
+  const devEvidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
+  const devSteps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
+  const devExpectedWorkflow = Array.isArray(devPlan?.expectedWorkflow)
+    ? devPlan.expectedWorkflow
+    : (Array.isArray(devPlan?.expected_workflow) ? devPlan.expected_workflow : []);
+  const showTechnicalDetails = Boolean(technicalText || approval.reason || systems.length || approval.scopedTarget);
+  return `<div class="chat-approval-card chat-approval-card-${risk} chat-approval-card-${escHtml(statusLabel)}" data-approval-id="${escHtml(approval.id)}">
+    <div class="chat-approval-head">
+      <div>
+        <div class="chat-approval-kicker">${pending ? 'Approval needed' : 'Approval result'}</div>
+        <div class="chat-approval-title">${escHtml(approval.title || 'Approval required')}</div>
+      </div>
+      <div class="chat-approval-badges">
+        <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
+        ${pending ? `<span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>` : ''}
+      </div>
+    </div>
+    ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
+    ${approval.humanDetail ? `<div class="chat-approval-subdetail">${escHtml(approval.humanDetail)}</div>` : ''}
+    ${devPlan?.reasoning ? `<div class="chat-approval-scope"><span>Reasoning</span>${escHtml(String(devPlan.reasoning))}</div>` : ''}
+    ${devPlan?.currentState || devPlan?.fix ? `<div class="chat-approval-scope"><span>Fix</span>${[
+      devPlan.currentState ? `Current: ${String(devPlan.currentState)}` : '',
+      devPlan.fix ? `Fix: ${String(devPlan.fix)}` : '',
+    ].filter(Boolean).map(escHtml).join('<br>')}</div>` : ''}
+    ${devEvidence.length ? `<details class="chat-approval-technical" open>
+      <summary>Evidence</summary>
+      ${devEvidence.slice(0, 5).map((item) => `<div class="chat-approval-reason"><span>${escHtml(String(item.file || 'file'))}${item.lines ? `:${escHtml(String(item.lines))}` : ''}</span>${escHtml(String(item.finding || ''))}</div>`).join('')}
+    </details>` : ''}
+    ${devSteps.length ? `<details class="chat-approval-technical">
+      <summary>Plan</summary>
+      <ol class="chat-approval-plan">${devSteps.slice(0, 8).map((step) => `<li>${escHtml(String(step))}</li>`).join('')}</ol>
+    </details>` : ''}
+    ${devExpectedWorkflow.length ? `<details class="chat-approval-technical" open>
+      <summary>Expected workflow after edits</summary>
+      <ol class="chat-approval-plan">${devExpectedWorkflow.slice(0, 8).map((step) => `<li>${escHtml(String(step))}</li>`).join('')}</ol>
+    </details>` : ''}
+    ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
+    ${verificationCommand ? `<div class="chat-approval-scope"><span>Verify</span>${escHtml(verificationCommand)}</div>` : ''}
+    ${showTechnicalDetails ? `<details class="chat-approval-technical">
+      <summary>Technical details</summary>
+      ${approval.reason ? `<div class="chat-approval-reason"><span>Reason</span>${escHtml(approval.reason)}</div>` : ''}
+      ${technicalText ? `<pre class="chat-approval-command">${escHtml(technicalText)}</pre>` : ''}
+      ${approval.scopedTarget ? `<div class="chat-approval-scope"><span>Scope</span>${escHtml(approval.scopedTarget)}</div>` : ''}
+      ${systems.length ? `<div class="chat-approval-systems">${systems.map((system) => `<span>${escHtml(String(system))}</span>`).join('')}</div>` : ''}
+    </details>` : ''}
+    ${isCommandApproval ? `<div class="chat-approval-process" data-approval-process="${escHtml(approval.id)}">
+      <button class="chat-approval-process-toggle" type="button" onclick="loadApprovalProcessRun(${idArg})">Open terminal</button>
+      <div class="chat-approval-process-body" id="approval-process-${escHtml(approval.id)}"></div>
+    </div>` : ''}
+    ${pending
+      ? `<div class="chat-approval-actions">
+          <button class="chat-approval-btn chat-approval-approve" type="button" onclick="resolveInlineApproval(${idArg}, 'approve', ${approveEndpoint})">Approve</button>
+          <button class="chat-approval-btn chat-approval-deny" type="button" onclick="resolveInlineApproval(${idArg}, 'deny', ${denyEndpoint})">Reject</button>
+          ${isDevSource || isFinalAction ? '' : `<button class="chat-approval-link" type="button" onclick="resolveInlineApproval(${idArg}, 'approve_session', ${approveEndpoint}, 'session')">Trust this session</button>
+          <button class="chat-approval-link" type="button" onclick="resolveInlineApproval(${idArg}, 'approve_always', ${approveEndpoint}, 'always')">Always allow</button>`}
+        </div>`
+      : `<div class="chat-approval-resolved">This request was ${escHtml(statusLabel)}.</div>`}
+  </div>`;
+}
+
+async function loadApprovalProcessRun(id, options = {}) {
+  const approvalId = String(id || '').trim();
+  const body = document.getElementById(`approval-process-${approvalId}`);
+  if (!approvalId || !body) return;
+  const processWrap = body.closest('.chat-approval-process');
+  const toggle = processWrap?.querySelector?.('.chat-approval-process-toggle');
+  const forceOpen = options?.forceOpen === true || Number(options?.attempts || 1) > 1;
+  if (!forceOpen && body.dataset.terminalOpen === '1') {
+    body.innerHTML = '';
+    body.dataset.terminalOpen = '0';
+    if (toggle) toggle.textContent = 'Open terminal';
+    return;
+  }
+  body.dataset.terminalOpen = '1';
+  if (toggle) toggle.textContent = 'Close terminal';
+  const attempts = Math.max(1, Math.min(8, Number(options?.attempts || 1)));
+  const delayMs = Math.max(150, Math.min(2500, Number(options?.delayMs || 500)));
+  body.innerHTML = '<div class="chat-approval-subdetail">Loading command run...</div>';
+  try {
+    let run = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const data = await api('/api/processes?limit=100');
+      const runs = Array.isArray(data?.runs) ? data.runs : [];
+      run = runs.find((item) => String(item?.approvalId || '') === approvalId);
+      if (run) break;
+      if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    body.innerHTML = run
+      ? renderProcessRunCard(run)
+      : '<div class="chat-approval-subdetail">No linked command run yet. It will appear here after execution starts.</div>';
+  } catch (err) {
+    body.innerHTML = `<div class="chat-approval-subdetail">Could not load command run: ${escHtml(err?.message || err)}</div>`;
+  }
+}
+
+async function fetchApprovalDetailsById(id) {
+  const approvalId = String(id || '').trim();
+  if (!approvalId) return null;
+  try {
+    const data = await api('/api/approvals?status=all');
+    const approval = (data.approvals || []).find((item) => String(item.id || '') === approvalId);
+    return approval || null;
+  } catch (err) {
+    console.warn('[ChatPage] could not fetch approval details:', err);
+    return null;
+  }
+}
+
+function upsertInlineApprovalMessage(approvalInput, options = {}) {
+  const approval = normalizeChatApprovalRecord(approvalInput);
+  if (!approval.id) return false;
+  const sessionId = approval.sessionId || String(window.activeChatSessionId || '').trim();
+  if (!sessionId) return false;
+  const sess = getChatSessionById(sessionId);
+  if (!sess) return false;
+  if (!Array.isArray(sess.history)) sess.history = [];
+  const existing = sess.history.find((msg) => String(msg?.approvalRequest?.id || '') === approval.id);
+  if (existing) {
+    existing.approvalRequest = { ...(existing.approvalRequest || {}), ...approval };
+    existing.timestamp = Number(existing.timestamp) || Date.now();
+  } else if (options.create !== false) {
+    sess.history.push({
+      role: 'assistant',
+      content: '',
+      approvalRequest: approval,
+      timestamp: Date.now(),
+    });
+  }
+  if (window.activeChatSessionId === sessionId) {
+    window.chatHistory = sess.history;
+    renderChatMessages();
+  } else {
+    sess.unread = true;
+  }
+  persistSession(sessionId);
+  return true;
+}
+
+function approvalFromEventPayload(event = {}, status = '') {
+  const id = String(event.approvalId || event.id || event.approval?.id || '').trim();
+  const base = event.approval && typeof event.approval === 'object' ? event.approval : {};
+  const approval = normalizeChatApprovalRecord(base, {
+    ...event,
+    id,
+    status: status || base.status || event.status || 'pending',
+  });
+  if (!approval.sessionId) approval.sessionId = String(event.sessionId || window.activeChatSessionId || '').trim();
+  if (status) approval.status = status;
+  return approval;
+}
+
+function upsertStreamingApproval(sessionId, approvalInput) {
+  const approval = normalizeChatApprovalRecord(approvalInput);
+  if (!sessionId || !approval.id) return false;
+  const st = getSessionStreamState(sessionId);
+  if (!st) return false;
+  const list = Array.isArray(st.pendingApprovals) ? st.pendingApprovals : [];
+  const idx = list.findIndex((item) => String(item?.id || '') === approval.id);
+  if (idx >= 0) list[idx] = { ...list[idx], ...approval };
+  else list.push(approval);
+  st.pendingApprovals = list.slice(-6);
+  if (window.activeChatSessionId === sessionId) {
+    applyStreamStateToWindow(sessionId);
+    renderChatMessages();
+  }
+  return true;
+}
+
+function updateStreamingApprovalStatus(sessionId, id, status = '', event = {}) {
+  if (!id) return false;
+  const st = getSessionStreamState(sessionId);
+  if (!st || !Array.isArray(st.pendingApprovals)) return false;
+  const idx = st.pendingApprovals.findIndex((item) => String(item?.id || '') === id);
+  if (idx < 0) return false;
+  st.pendingApprovals[idx] = normalizeChatApprovalRecord(st.pendingApprovals[idx], {
+    ...event,
+    id,
+    status: status || st.pendingApprovals[idx].status || 'pending',
+  });
+  st.pendingApprovals[idx].status = status || st.pendingApprovals[idx].status || 'pending';
+  if (window.activeChatSessionId === sessionId) {
+    applyStreamStateToWindow(sessionId);
+    renderChatMessages();
+  }
+  return true;
+}
+
+function renderStreamingApprovals(items = []) {
+  const visible = (Array.isArray(items) ? items : []).filter((item) => item && item.id);
+  if (!visible.length) return '';
+  return `<div class="chat-live-approvals">${visible.map((item) => renderInlineApprovalRequest(item)).join('')}</div>`;
+}
+
+async function showInlineApprovalFromEvent(event = {}) {
+  const id = String(event.approvalId || event.id || '').trim();
+  const details = event.approval ? null : (id ? await fetchApprovalDetailsById(id) : null);
+  const approval = event.approval
+    ? approvalFromEventPayload(event, 'pending')
+    : normalizeChatApprovalRecord(details || {}, {
+      ...event,
+      id,
+      status: 'pending',
+    });
+  if (!approval.sessionId) approval.sessionId = String(event.sessionId || window.activeChatSessionId || '').trim();
+  if (isSessionThinking(approval.sessionId)) {
+    upsertStreamingApproval(approval.sessionId, approval);
+    return;
+  }
+  upsertInlineApprovalMessage(approval);
+}
+
+function updateInlineApprovalStatusFromEvent(event = {}, status = '') {
+  const id = String(event.approvalId || event.id || event.approval?.id || '').trim();
+  if (!id) return;
+  const sessionId = String(event.sessionId || event.approval?.sessionId || event.approval?.sourceSessionId || window.activeChatSessionId || '').trim();
+  updateStreamingApprovalStatus(sessionId, id, status, event.approval || event);
+  const targetSessions = sessionId ? [getChatSessionById(sessionId)].filter(Boolean) : (window.chatSessions || []);
+  targetSessions.forEach((sess) => {
+    const msg = (sess.history || []).find((entry) => String(entry?.approvalRequest?.id || '') === id);
+    if (!msg) return;
+    msg.approvalRequest = normalizeChatApprovalRecord(msg.approvalRequest, {
+      ...event,
+      id,
+      status,
+      summary: event.summary,
+    });
+    msg.approvalRequest.status = status || msg.approvalRequest.status || 'pending';
+    persistSession(sess.id);
+  });
+}
+
+async function resolveInlineApproval(id, action, endpoint, grantScope = '') {
+  const ok = await resolveSessionApproval(id, action, endpoint, grantScope);
+  if (ok) {
+    const approved = action !== 'deny';
+    updateInlineApprovalStatusFromEvent({ approvalId: id, sessionId: window.activeChatSessionId }, approved ? 'approved' : 'rejected');
+    if (approved) setTimeout(() => loadApprovalProcessRun(id, { attempts: 6, delayMs: 500, forceOpen: true }), 100);
+  }
+}
+
 async function loadSessionApprovals() {
   const list = document.getElementById('session-approvals-list');
   const badge = document.getElementById('session-approvals-badge');
+  const section = document.getElementById('session-approvals-section');
   if (!list || !badge) return;
+  if (section) section.style.display = 'none';
   const currentSessionId = String(window.activeChatSessionId || '').trim();
   try {
     const [approvalData, proposalData] = await Promise.all([
@@ -26888,13 +30370,17 @@ async function loadSessionApprovals() {
       .filter((a) => String(a.sourceSessionId || a.sessionId || '').trim() === currentSessionId)
       .map((a) => ({
         id: a.id,
-        title: a.toolName === 'run_command' ? 'Command approval' : 'Tool approval',
+        title: a.approvalKind === 'dev_source_edit' || a.toolName === 'request_dev_source_edit' ? 'Dev source edit approval' : (a.approvalKind === 'final_action' || a.toolName === 'request_final_action_approval' ? 'Final action approval' : (a.toolName === 'run_command' ? 'Command approval' : 'Tool approval')),
         summary: a.reason || a.summary || '',
         riskScore: a.riskScore ?? 0,
         affectedSystems: a.affectedSystems || [],
         command: a.command || a.scopedAction || '',
         scopedTarget: a.scopedTarget || '',
         status: a.status || 'pending',
+        toolName: a.toolName || '',
+        approvalKind: a.approvalKind || '',
+        devSourceEdit: a.devSourceEdit || null,
+        finalAction: a.finalAction || null,
         approvalType: 'command',
       }));
     const proposalItems = (proposalData.proposals || [])
@@ -26909,6 +30395,18 @@ async function loadSessionApprovals() {
       approvalType: 'proposal',
     }));
     const all = [...approvalItems, ...proposalItems];
+    const inlineStreamOwnsApprovals = Boolean(
+      currentSessionId
+      && window._sessionThinking?.[currentSessionId]
+      && approvalItems.length
+    );
+    if (inlineStreamOwnsApprovals) {
+      if (section) section.style.display = 'none';
+      list.innerHTML = '';
+      badge.style.display = 'inline-block';
+      badge.textContent = String(all.length);
+      return;
+    }
     if (!all.length) {
       list.innerHTML = '<div style="font-size:11px;color:var(--muted);text-align:center;padding:12px 0;opacity:0.6">No pending actions</div>';
       badge.style.display = 'none';
@@ -26933,122 +30431,21 @@ async function resolveSessionApproval(id, action, endpoint, grantScope = '') {
     if (typeof window.checkPendingProposalsBadge === 'function') window.checkPendingProposalsBadge();
     const label = action === 'deny' ? 'Denied' : grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved';
     addProcessEntry('info', `${label}: ${id}`);
+    return true;
   } catch (err) {
     showToast('Error', err.message || 'Could not resolve action', 'error');
+    return false;
   }
 }
 
 if (typeof window.loadSessionApprovals !== 'function') window.loadSessionApprovals = loadSessionApprovals;
 if (typeof window.resolveSessionApproval !== 'function') window.resolveSessionApproval = resolveSessionApproval;
-
-// ---- Context Pinning ----
-const MAX_PINS = 3;
-let contextPinMode = false;
-let pinnedMessageIndices = new Set();
-let confirmedPins = []; // Array of { role, content } sent with each request
-
-function toggleContextPinMode() {
-  const pop = document.getElementById('context-pin-popover');
-  if (!pop) return;
-  const isOpen = pop.classList.contains('open');
-  // Close other popovers
-  document.getElementById('quick-mode-popover')?.classList.remove('open');
-  if (isOpen) {
-    cancelContextPin();
-  } else {
-    contextPinMode = true;
-    pop.classList.add('open');
-    document.body.classList.add('context-pin-active');
-    // Reset selection to currently confirmed pins
-    pinnedMessageIndices = new Set();
-    for (const pin of confirmedPins) {
-      const idx = window.chatHistory.findIndex(m => m.content === pin.content && m.role === pin.role);
-      if (idx >= 0) pinnedMessageIndices.add(idx);
-    }
-    updatePinUI();
-    renderChatMessages();
-  }
+if (typeof window.resolveInlineApproval !== 'function') window.resolveInlineApproval = resolveInlineApproval;
+if (typeof window.loadApprovalProcessRun !== 'function') window.loadApprovalProcessRun = loadApprovalProcessRun;
+if (!window.__promProcessRunHandlersInstalled) {
+  window.__promProcessRunHandlersInstalled = true;
+  installProcessRunCardHandlers(document);
 }
-
-function cancelContextPin() {
-  contextPinMode = false;
-  pinnedMessageIndices = new Set();
-  document.getElementById('context-pin-popover')?.classList.remove('open');
-  document.body.classList.remove('context-pin-active');
-  renderChatMessages();
-}
-
-function confirmContextPin() {
-  confirmedPins = [];
-  for (const idx of pinnedMessageIndices) {
-    const msg = window.chatHistory[idx];
-    if (msg) confirmedPins.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
-  }
-  contextPinMode = false;
-  document.getElementById('context-pin-popover')?.classList.remove('open');
-  document.body.classList.remove('context-pin-active');
-  updatePinBadge();
-  renderChatMessages();
-  if (confirmedPins.length > 0) {
-    addProcessEntry('info', `${confirmedPins.length} message(s) pinned to context.`);
-  } else {
-    addProcessEntry('info', 'Context pins cleared.');
-  }
-}
-
-function togglePinMessage(index) {
-  if (!contextPinMode) return;
-  if (pinnedMessageIndices.has(index)) {
-    pinnedMessageIndices.delete(index);
-  } else if (pinnedMessageIndices.size < MAX_PINS) {
-    pinnedMessageIndices.add(index);
-  }
-  updatePinUI();
-  renderChatMessages();
-}
-
-function removePinFromList(index) {
-  pinnedMessageIndices.delete(index);
-  updatePinUI();
-  renderChatMessages();
-}
-
-function updatePinUI() {
-  const countEl = document.getElementById('context-pin-count');
-  const listEl = document.getElementById('context-pin-list');
-  if (countEl) countEl.textContent = `${pinnedMessageIndices.size}/${MAX_PINS} selected`;
-  if (listEl) {
-    if (pinnedMessageIndices.size === 0) {
-      listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);text-align:center;padding:8px">Click messages in chat to select them</div>';
-    } else {
-      listEl.innerHTML = Array.from(pinnedMessageIndices).map(idx => {
-        const msg = window.chatHistory[idx];
-        if (!msg) return '';
-        const icon = msg.role === 'user' ? '👤' : '<img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;">';
-        const text = msg.content.slice(0, 60) + (msg.content.length > 60 ? '...' : '');
-        return `<div class="pin-card">
-          <span>${icon}</span>
-          <div class="pin-card-text">${escHtml(text)}</div>
-          <button class="pin-card-remove" onclick="removePinFromList(${idx})">&times;</button>
-        </div>`;
-      }).join('');
-    }
-  }
-}
-
-function updatePinBadge() {
-  const label = document.getElementById('context-pin-label');
-  if (label) {
-    label.textContent = confirmedPins.length > 0 ? `Context (${confirmedPins.length})` : 'Context';
-  }
-  const btn = document.getElementById('context-pin-btn');
-  if (btn) {
-    btn.style.borderColor = confirmedPins.length > 0 ? '#86d4a8' : '';
-    btn.style.background = confirmedPins.length > 0 ? '#f0faf4' : '';
-    btn.style.color = confirmedPins.length > 0 ? '#0a6b3d' : '';
-  }
-}
-
 
 // ─── Expose on window for HTML onclick handlers ────────────────
 window.generateSessionId = generateSessionId;
@@ -27065,6 +30462,7 @@ window.bgtToast = bgtToast;
 window.showConfirm = showConfirm;
 window.renderQueuedPromptsPanel = renderQueuedPromptsPanel;
 window.removeQueuedPrompt = removeQueuedPrompt;
+window.steerQueuedPrompt = steerQueuedPrompt;
 window.clearQueuedPrompts = clearQueuedPrompts;
 window.updateQueuedPromptUI = updateQueuedPromptUI;
 window.removeVoicePendingTurn = removeVoicePendingTurn;
@@ -27132,6 +30530,7 @@ window.addProcessEntry = addProcessEntry;
 window.renderProcessLog = renderProcessLog;
 window.togglePL = togglePL;
 window.isFailedTurnReply = isFailedTurnReply;
+window.requestGatewayMainChatAbort = requestGatewayMainChatAbort;
 window.sendChat = sendChat;
 window.spawnAgentExecution = spawnAgentExecution;
 window.addAgentLog = addAgentLog;
@@ -27143,8 +30542,12 @@ window.openProcessLogFile = openProcessLogFile;
 window.clearChat = clearChat;
 window.toggleVoiceDictation = toggleVoiceDictation;
 window.toggleRealtimeVoiceReplies = toggleRealtimeVoiceReplies;
+window.onVoiceModeChanged = onVoiceModeChanged;
 window.onVoiceProviderChanged = onVoiceProviderChanged;
 window.onRealtimeVoiceChanged = onRealtimeVoiceChanged;
+window.onRealtimeVoiceSpeedChanged = onRealtimeVoiceSpeedChanged;
+window.onRealtimeNarrationModeChanged = onRealtimeNarrationModeChanged;
+window.onRealtimeListenModeChanged = onRealtimeListenModeChanged;
 window.clearRealtimeWakeGate = clearRealtimeWakeGate;
 window.getCanvasLang = getCanvasLang;
 window.isHtmlFile = isHtmlFile;
@@ -27223,6 +30626,7 @@ window.onChatFileInputChange = onChatFileInputChange;
 window.uploadStagedFilesToCanvas = uploadStagedFilesToCanvas;
 window.buildFileContextNote = buildFileContextNote;
 window.chatFileUploadInit = chatFileUploadInit;
+window.setupChatMessageScrollbarFade = setupChatMessageScrollbarFade;
 window.canvasInitDrop = canvasInitDrop;
 window.canvasPickFiles = canvasPickFiles;
 window.canvasPickFolder = canvasPickFolder;
@@ -27310,13 +30714,6 @@ window.addEventListener('resize', () => {
     repositionDesignPopovers();
   }
 });
-window.toggleContextPinMode = toggleContextPinMode;
-window.cancelContextPin = cancelContextPin;
-window.confirmContextPin = confirmContextPin;
-window.togglePinMessage = togglePinMessage;
-window.removePinFromList = removePinFromList;
-window.updatePinUI = updatePinUI;
-window.updatePinBadge = updatePinBadge;
 window.renderChannelsList = renderChannelsList;
 
 // ─── WS Event Handlers (F5) ────────────────────────────────────
@@ -27378,24 +30775,59 @@ wsEventBus.on('session_notification', (msg) => {
   const appendToPreviousSession = () => {
     const prevId = String(msg.previousSessionId || '').trim();
     const text = String(msg.text || '');
-    if (!prevId || !text) return;
-    const prev = (window.chatSessions || []).find((s) => s.id === prevId);
-    if (!prev) return;
+    if (!prevId || !text) return null;
+    window.chatSessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
+    let prev = window.chatSessions.find((s) => s.id === prevId);
+    if (!prev) {
+      prev = {
+        id: prevId,
+        title: msg.title || 'Restarted chat',
+        history: [],
+        processLog: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        automated: false,
+        source: String(msg.source || 'hot_restart'),
+        unread: true,
+      };
+      window.chatSessions.unshift(prev);
+    }
     prev.history = Array.isArray(prev.history) ? prev.history : [];
+    const packet = buildRestartProcessPacketMessage(prev);
+    if (packet) {
+      prev.history.push(packet);
+    }
     const last = prev.history.length > 0 ? prev.history[prev.history.length - 1] : null;
     if (!last || String(last.role || '') !== 'assistant' || String(last.content || '') !== text) {
       prev.history.push({ role: 'assistant', content: text });
     }
     prev.updatedAt = Date.now();
+    prev.unread = true;
     saveChatSessions();
     if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
     if (window.activeChatSessionId === prevId) renderChatMessages();
+    return prev;
   };
   const ack = () => {
     if (msg.notificationId) {
       wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId) });
     }
   };
+  if (String(msg.source || '') === 'hot_restart') {
+    const restored = appendToPreviousSession();
+    if (restored?.id) {
+      window.activeChatSessionId = restored.id;
+      setAgentSessionId(restored.id);
+      restored.unread = false;
+      saveChatSessions();
+      syncActiveChat();
+      if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+      renderChatMessages();
+      catchUpMainChatStream(restored.id).catch(() => {});
+    }
+    ack();
+    return;
+  }
   if (msg.automatedSession && typeof window.upsertAutomatedSession === 'function') {
     window.upsertAutomatedSession(msg.automatedSession, { markUnread: true });
     appendToPreviousSession();
@@ -27420,6 +30852,49 @@ wsEventBus.on('session_notification', (msg) => {
   }
 });
 
+wsEventBus.on('delivery_notification', (msg) => {
+  if (!msg) return;
+  const sid = String(msg.sessionId || window.activeChatSessionId || '').trim();
+  const text = String(msg.text || msg.caption || '').trim();
+  const imageDataUrl = String(msg.imageDataUrl || '').trim();
+  const attachmentPath = String(msg.attachmentPath || '').trim();
+  const fileName = String(msg.fileName || '').trim();
+  const parts = [];
+  if (text) parts.push(text);
+  if (imageDataUrl) parts.push(`![${escHtml(String(msg.caption || 'Delivered image'))}](${imageDataUrl})`);
+  else if (attachmentPath) parts.push(`Delivered file: ${fileName || attachmentPath}`);
+  const content = parts.join('\n\n').trim();
+  if (!content) return;
+  let sess = (window.chatSessions || []).find((s) => s.id === sid);
+  if (!sess) {
+    sess = {
+      id: sid || `delivery_${Date.now()}`,
+      title: 'Delivered update',
+      history: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      source: String(msg.target || 'delivery'),
+      automated: true,
+    };
+    window.chatSessions = window.chatSessions || [];
+    window.chatSessions.unshift(sess);
+  }
+  sess.history = Array.isArray(sess.history) ? sess.history : [];
+  sess.history.push({
+    role: 'assistant',
+    content,
+    timestamp: Number(msg.timestamp || Date.now()),
+    channel: String(msg.target || 'web'),
+    channelLabel: 'delivery',
+  });
+  sess.updatedAt = Date.now();
+  if (sess.id !== window.activeChatSessionId) sess.unread = true;
+  saveChatSessions();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  if (sess.id === window.activeChatSessionId) renderChatMessages();
+  if (typeof bgtToast === 'function') bgtToast('Delivered update', text || fileName || 'Screenshot delivered');
+});
+
 function appendTelegramMessageToSession(sessionId, message) {
   const sid = String(sessionId || '').trim();
   if (!sid || !message || !message.role) return;
@@ -27440,7 +30915,6 @@ function appendTelegramMessageToSession(sessionId, message) {
     last
     && String(last.role || '') === String(next.role || '')
     && String(last.content || '') === String(next.content || '')
-    && String(last.channel || '').toLowerCase() === 'telegram'
   ) {
     return;
   }
@@ -27449,6 +30923,328 @@ function appendTelegramMessageToSession(sessionId, message) {
   sess.title = makeSessionTitle(sess.history);
   if (sid !== window.activeChatSessionId) sess.unread = true;
 }
+
+function inferChannelFromSessionId(sessionId, fallback = '') {
+  const sid = String(sessionId || '');
+  const fb = String(fallback || '').trim().toLowerCase();
+  if (fb) return fb;
+  if (sid.startsWith('telegram_')) return 'telegram';
+  if (sid.startsWith('mobile_')) return 'mobile';
+  if (sid.startsWith('discord_')) return 'discord';
+  if (sid.startsWith('whatsapp_')) return 'whatsapp';
+  if (sid.startsWith('cli_')) return 'terminal';
+  if (/^(task_|cron_|brain_|auto_)/i.test(sid)) return 'system';
+  return 'web';
+}
+
+function ensureChannelChatSession(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || isInternalChatSession({ id: sid })) return null;
+  let sess = getChatSessionById(sid);
+  const channel = inferChannelFromSessionId(sid, options.channel || options.source);
+  if (!sess) {
+    sess = {
+      ...createEmptyChatSession(sid),
+      title: options.title || (channel === 'web' ? 'New chat' : `${channel[0].toUpperCase()}${channel.slice(1)} chat`),
+      source: channel !== 'web' ? channel : undefined,
+      automated: channel !== 'web',
+      unread: sid !== window.activeChatSessionId,
+    };
+    window.chatSessions = window.chatSessions || [];
+    window.chatSessions.unshift(sess);
+  }
+  sess.history = Array.isArray(sess.history) ? sess.history : [];
+  sess.processLog = Array.isArray(sess.processLog) ? sess.processLog : [];
+  if (channel !== 'web') {
+    sess.source = sess.source || channel;
+    sess.automated = true;
+  }
+  return sess;
+}
+
+function appendLiveTraceToStreamState(streamState, type, text, { append = false } = {}) {
+  const content = String(text || '');
+  if (!content) return;
+  if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+  const normalizedType = String(type || 'info').toLowerCase();
+  const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
+  if (append && last && last.type === normalizedType) {
+    last.text = `${last.text || ''}${content}`;
+    return;
+  }
+  const trimmed = content.trim();
+  if (!trimmed) return;
+  if (last && last.type === normalizedType && String(last.text || '').trim() === trimmed) return;
+  streamState.liveTraceEntries.push({
+    id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: normalizedType,
+    text: trimmed,
+  });
+  if (streamState.liveTraceEntries.length > 28) {
+    streamState.liveTraceEntries = streamState.liveTraceEntries.slice(-28);
+  }
+}
+
+async function refreshSessionFromServer(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  const sess = getChatSessionById(sid);
+  if (!sess) return;
+  sess._needsServerLoad = true;
+  await _loadSessionFromServer(sid, { force: true });
+  if (sid === window.activeChatSessionId) syncActiveChat();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+}
+
+function shouldProcessMainChatStreamEvent(msg = {}) {
+  const sid = String(msg.sessionId || '').trim();
+  const seq = Number(msg.seq);
+  if (!sid || !Number.isFinite(seq)) return true;
+  const key = String(msg.streamId || 'default');
+  const map = window._mainChatStreamLastSeqBySession || (window._mainChatStreamLastSeqBySession = {});
+  const prev = map[sid] && typeof map[sid] === 'object' ? map[sid] : {};
+  const last = Number(prev[key] || -1);
+  if (seq <= last) return false;
+  prev[key] = seq;
+  map[sid] = prev;
+  return true;
+}
+
+function applyMainChatStreamFrame(sessionId, frame) {
+  if (!frame || typeof frame !== 'object') return;
+  handleMainChatStreamEvent({
+    sessionId,
+    streamId: frame.streamId,
+    seq: frame.seq,
+    event: frame.type || frame.event,
+    at: frame.at,
+    data: frame.data || {},
+  });
+}
+
+async function catchUpMainChatStream(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  try {
+    const data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=0`, 2500);
+    const events = Array.isArray(data?.events) ? data.events : [];
+    events.forEach((frame) => applyMainChatStreamFrame(sid, frame));
+    if (data?.active) scheduleMainChatStreamCatchup(sid);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function scheduleMainChatStreamCatchup(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  const timers = window._mainChatStreamCatchupTimers || (window._mainChatStreamCatchupTimers = {});
+  if (timers[sid]) return;
+  timers[sid] = setTimeout(async () => {
+    delete timers[sid];
+    const data = await catchUpMainChatStream(sid);
+    if (data?.active && window.activeChatSessionId === sid) scheduleMainChatStreamCatchup(sid);
+  }, 1800);
+}
+
+function handleMainChatStreamEvent(msg = {}) {
+  const sid = String(msg.sessionId || '').trim();
+  if (!sid) return;
+  if (!shouldProcessMainChatStreamEvent(msg)) return;
+  const activeBeforeStreamEvent = window.activeChatSessionId;
+  // Locally-started desktop turns are already handled by the /api/chat SSE reader.
+  // The websocket bridge is for other live surfaces: Telegram, mobile, CLI, and
+  // any channel turn this desktop tab is observing rather than owning.
+  const clientRequestId = String(msg?.data?.clientRequestId || msg?.clientRequestId || '').trim();
+  if (isLocalMainChatRequest(sid, clientRequestId)) return;
+  if (window._sessionAbortControllers?.[sid]) return;
+  const evt = { type: String(msg.event || ''), ...(msg.data || {}) };
+  const sess = ensureChannelChatSession(sid, { source: evt?.message?.channel || evt?.origin?.channel });
+  if (!sess) return;
+  const streamState = getSessionStreamState(sid) || resetSessionStreamState(sid);
+  const isViewing = sid === window.activeChatSessionId;
+  const renderIfViewing = () => {
+    if (!isViewing) return;
+    applyStreamStateToWindow(sid);
+    syncActiveSessionRunState();
+    renderProgressPanel();
+    renderChatMessages();
+  };
+
+  if (evt.type === 'user_message') {
+    const raw = evt.message && typeof evt.message === 'object' ? evt.message : {};
+    const content = String(raw.content || evt.content || '').trim();
+    if (content) {
+      const next = {
+        role: 'user',
+        content,
+        timestamp: Number(raw.timestamp || Date.now()),
+        channel: inferChannelFromSessionId(sid, raw.channel),
+        channelLabel: raw.channelLabel || raw.channel || inferChannelFromSessionId(sid),
+        attachmentPreviews: Array.isArray(raw.attachmentPreviews)
+          ? raw.attachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage)
+          : undefined,
+      };
+      const last = sess.history[sess.history.length - 1];
+      let appended = false;
+      if (!last || String(last.role || '') !== 'user' || String(last.content || '') !== content) {
+        sess.history.push(next);
+        appended = true;
+      }
+      sess.title = makeSessionTitle(sess.history);
+      if (appended) addSessionProcessEntry(sid, 'user', content, { actor: next.channelLabel || next.channel || 'Channel' });
+    }
+    window._sessionThinking[sid] = true;
+    streamState.currentTurnStartIndex = sess.processLog.length;
+    renderIfViewing();
+  } else if (evt.type === 'token') {
+    const chunk = String(evt.text || '');
+    if (chunk) {
+      window._sessionThinking[sid] = true;
+      streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
+      appendLiveTraceToStreamState(streamState, 'assistant', chunk, { append: true });
+      renderIfViewing();
+    }
+  } else if (evt.type === 'thinking_delta') {
+    const chunk = String(evt.thinking || evt.text || '');
+    if (chunk) {
+      window._sessionThinking[sid] = true;
+      streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
+      appendLiveTraceToStreamState(streamState, 'think', chunk, { append: true });
+      renderIfViewing();
+    }
+  } else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
+    const text = String(evt.thinking || evt.text || '').trim();
+    if (text) {
+      addSessionProcessEntry(sid, 'think', text);
+      appendLiveTraceToStreamState(streamState, 'think', text);
+      renderIfViewing();
+    }
+  } else if (evt.type === 'ui_preflight' || evt.type === 'info') {
+    const text = String(evt.message || '').trim();
+    if (text) {
+      streamState.currentPreflightStatus = text;
+      streamState.currentProgressLines = Array.isArray(streamState.currentProgressLines) ? streamState.currentProgressLines : [];
+      const last = streamState.currentProgressLines[streamState.currentProgressLines.length - 1];
+      if (last !== text) streamState.currentProgressLines.push(text);
+      if (streamState.currentProgressLines.length > 8) streamState.currentProgressLines = streamState.currentProgressLines.slice(-8);
+      addSessionProcessEntry(sid, 'info', text, evt.actor ? { actor: evt.actor } : undefined);
+      renderIfViewing();
+    }
+  } else if (evt.type === 'tool_call') {
+    const action = String(evt.action || '').trim();
+    if (action) {
+      const args = evt.args && typeof evt.args === 'object' ? evt.args : {};
+      const text = formatToolCallForLog(action, args, streamState);
+      addSessionProcessEntry(sid, action.startsWith('skill_') ? 'skill' : 'tool', text, evt.actor ? { actor: evt.actor, ...args } : args);
+      appendLiveTraceToStreamState(streamState, 'tool', text);
+      renderIfViewing();
+    }
+  } else if (evt.type === 'tool_result') {
+    const action = String(evt.action || '').trim();
+    const resultText = String(evt.result || '');
+    const ok = evt.error === true ? false : !/^ERROR:/i.test(resultText);
+    const text = action ? formatToolResultForLog(action, resultText, ok, streamState) : resultText;
+    addSessionProcessEntry(sid, ok ? 'result' : 'error', text, evt.actor ? { actor: evt.actor } : undefined);
+    appendLiveTraceToStreamState(streamState, ok ? 'result' : 'error', action ? `${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}` : text);
+    renderIfViewing();
+  } else if (evt.type === 'tool_progress') {
+    const action = String(evt.action || evt.name || '').trim();
+    const message = String(evt.message || evt.progress || evt.status || '').trim();
+    const ratio = Number.isFinite(Number(evt.ratio)) ? ` ${Math.round(Number(evt.ratio) * 100)}%` : '';
+    const text = [action ? formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '') : 'Tool progress', message || ratio.trim()]
+      .filter(Boolean)
+      .join(': ');
+    addSessionProcessEntry(sid, 'info', text, evt.actor ? { actor: evt.actor } : undefined);
+    appendLiveTraceToStreamState(streamState, 'info', text);
+    renderIfViewing();
+  } else if (evt.type === 'progress_state') {
+    streamState.runtimeProgressState = {
+      source: String(evt.source || 'none'),
+      activeIndex: Number(evt.activeIndex || -1),
+      items: Array.isArray(evt.items) ? evt.items.map((item, idx) => ({
+        id: String(item.id || `p${idx + 1}`),
+        text: String(item.text || '').slice(0, 120),
+        status: String(item.status || 'pending'),
+      })) : [],
+    };
+    sess.progressState = streamState.runtimeProgressState;
+    renderIfViewing();
+  } else if (evt.type === 'done') {
+    const reply = String(evt.reply || '').trim();
+    const streamed = String(streamState.streamingAIText || '').trim();
+    const content = reply || streamed;
+    if (content) {
+      const last = sess.history[sess.history.length - 1];
+      if (!last || !isAssistantLikeMessage(last) || String(last.content || '') !== content) {
+        let lastUserTimestamp = 0;
+        for (let i = sess.history.length - 1; i >= 0; i--) {
+          if (String(sess.history[i]?.role || '') === 'user') {
+            lastUserTimestamp = Number(sess.history[i]?.timestamp || 0) || 0;
+            break;
+          }
+        }
+        sess.history.push({
+          role: 'ai',
+          content,
+          thinking: evt.thinking || streamState.streamingThinkingText || undefined,
+          timestamp: lastUserTimestamp > 0 ? lastUserTimestamp + 1 : Date.now(),
+          channel: inferChannelFromSessionId(sid),
+          channelLabel: inferChannelFromSessionId(sid),
+          processEntries: sess.processLog.slice(Number(streamState.currentTurnStartIndex || 0)),
+        });
+      }
+      sess.title = makeSessionTitle(sess.history);
+    }
+    delete window._sessionThinking[sid];
+    window._sessionStreamState[sid] = makeEmptyStreamState();
+    if (sid !== window.activeChatSessionId) sess.unread = true;
+    setTimeout(() => refreshSessionFromServer(sid).catch(() => {}), 900);
+    renderIfViewing();
+  } else if (evt.type === 'error') {
+    const text = String(evt.message || 'Unknown error').trim();
+    addSessionProcessEntry(sid, 'error', text);
+    delete window._sessionThinking[sid];
+    if (sid !== window.activeChatSessionId) sess.unread = true;
+    renderIfViewing();
+  }
+
+  sess.updatedAt = Date.now();
+  if (sid !== window.activeChatSessionId) sess.unread = true;
+  window.chatSessions.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  saveChatSessions();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  refreshVisibleChannelsList();
+  restoreActiveSessionIfStreamStoleFocus(activeBeforeStreamEvent, sid);
+}
+
+wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
+
+function appendVoiceAgentToolProcessEvent(msg = {}) {
+  const sid = String(msg.sessionId || '').trim();
+  if (!sid) return;
+  const evt = { type: String(msg.event || ''), ...(msg.data || {}) };
+  const action = String(evt.action || evt.name || '').trim();
+  if (!action) return;
+  if (evt.type === 'tool_call') {
+    const args = evt.args && typeof evt.args === 'object' ? evt.args : {};
+    addSessionProcessEntry(sid, action.startsWith('voice_skill') ? 'skill' : 'tool', formatToolCallForLog(action, args, null), {
+      actor: 'Voice Agent',
+      ...args,
+    });
+    return;
+  }
+  if (evt.type === 'tool_result') {
+    const resultText = String(evt.result || evt.output || '').trim();
+    const ok = evt.error === true ? false : !/^ERROR:/i.test(resultText);
+    addSessionProcessEntry(sid, ok ? 'result' : 'error', formatToolResultForLog(action, resultText, ok, null), {
+      actor: 'Voice Agent',
+    });
+  }
+}
+
+wsEventBus.on('voice_agent_tool_event', appendVoiceAgentToolProcessEvent);
 
 function appendTimerMessageToSession(sessionId, message) {
   const sid = String(sessionId || '').trim();
@@ -27556,6 +31352,14 @@ wsEventBus.on('timer_done', (msg) => {
   const sid = String(msg?.sessionId || msg?.timer?.sessionId || '').trim();
   appendTimerMessageToSession(sid, msg?.message);
   appendTimerProcessEntry(sid, 'info', `Timer complete: ${String(msg?.timer?.label || msg?.timerId || 'timer')}.`);
+  if (msg?.voiceIfActive === true && sid && sid === window.activeChatSessionId) {
+    const text = String(msg?.result || msg?.message?.content || '').trim();
+    if (text && (realtimeVoiceRepliesEnabled || voiceRepliesEnabled)) {
+      speakAssistantReply(text).catch((err) => {
+        console.warn('[timer voice] failed to speak timer result:', err?.message || err);
+      });
+    }
+  }
 });
 
 wsEventBus.on('timer_failed', (msg) => {
@@ -27677,6 +31481,26 @@ wsEventBus.on('browser:agent_registered', (msg) => {
   persistActiveChat();
 });
 
+function decodeBase64FrameToBlobUrl(base64, format) {
+  if (!base64) return '';
+  try {
+    const mime = String(format || 'png').toLowerCase() === 'jpeg' ? 'image/jpeg' : 'image/png';
+    const binary = atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mime });
+    return URL.createObjectURL(blob);
+  } catch {
+    return '';
+  }
+}
+
+function revokeBrowserFrameBlobUrl(url) {
+  if (!url) return;
+  try { URL.revokeObjectURL(url); } catch {}
+}
+
 wsEventBus.on('browser:frame', (msg) => {
   upsertBrowserSessionRecord({
     ...msg,
@@ -27700,15 +31524,44 @@ wsEventBus.on('browser:frame', (msg) => {
   if (allowInteractionSync && msg?.mode) state.interactionMode = normalizeBrowserInteractionMode(msg.mode);
   if (allowInteractionSync && typeof msg?.captured === 'boolean') state.controlCaptured = msg.captured === true;
   if (allowInteractionSync && msg?.controlOwner) state.controlOwner = String(msg.controlOwner || '').trim().toLowerCase() === 'user' ? 'user' : 'agent';
-  if (typeof msg?.frameBase64 === 'string' && msg.frameBase64.trim()) state.frameBase64 = msg.frameBase64;
+  if (typeof msg?.frameBase64 === 'string' && msg.frameBase64.trim()) {
+    state.frameBase64 = msg.frameBase64;
+    // Replace prior blob URL with a fresh one and revoke the old one.
+    const newBlobUrl = decodeBase64FrameToBlobUrl(msg.frameBase64, msg?.frameFormat);
+    if (newBlobUrl) {
+      const previous = state.frameBlobUrl;
+      state.frameBlobUrl = newBlobUrl;
+      if (previous) setTimeout(() => revokeBrowserFrameBlobUrl(previous), 0);
+    }
+  }
   if (Number.isFinite(Number(msg?.frameWidth))) state.frameWidth = Number(msg.frameWidth);
   if (Number.isFinite(Number(msg?.frameHeight))) state.frameHeight = Number(msg.frameHeight);
+  // New geometry from server — used by every overlay so the magic-nudge hack can stay dead.
+  if (Number.isFinite(Number(msg?.bitmapWidth))) state.frameBitmapWidth = Number(msg.bitmapWidth);
+  if (Number.isFinite(Number(msg?.bitmapHeight))) state.frameBitmapHeight = Number(msg.bitmapHeight);
+  if (Number.isFinite(Number(msg?.viewportWidth))) state.frameViewportWidth = Number(msg.viewportWidth);
+  if (Number.isFinite(Number(msg?.viewportHeight))) state.frameViewportHeight = Number(msg.viewportHeight);
+  if (Number.isFinite(Number(msg?.scrollX))) state.frameScrollX = Number(msg.scrollX);
+  if (Number.isFinite(Number(msg?.scrollY))) state.frameScrollY = Number(msg.scrollY);
+  if (Number.isFinite(Number(msg?.devicePixelRatio))) state.frameDevicePixelRatio = Number(msg.devicePixelRatio) || 1;
+  // Live selection bounds — server re-resolves the tracked element each frame so
+  // the orange selection box stays glued to it through scroll / layout shifts.
+  if (msg?.liveSelection && msg.liveSelection.bounds) {
+    if (state.selectedElement) {
+      state.selectedElement.liveBounds = msg.liveSelection.bounds;
+    }
+  } else if (state.selectedElement) {
+    state.selectedElement.liveBounds = null;
+  }
   state.frameFormat = String(msg?.frameFormat || state.frameFormat || 'png').trim().toLowerCase() === 'jpeg' ? 'jpeg' : 'png';
   state.streamActive = true;
   state.streamTransport = String(msg?.transport || state.streamTransport || 'snapshot').trim().toLowerCase();
   state.streamFocus = String(msg?.focus || state.streamFocus || 'passive').trim().toLowerCase() === 'interactive' ? 'interactive' : 'passive';
   state.streamStatus = `${String(state.streamTransport || 'stream').toUpperCase()} feed active`;
   state.streamLastFrameAt = Number(msg?.timestamp || Date.now()) || Date.now();
+  // Refresh the interactable map every ~2s while the stream is interactive — lets
+  // hover inspect work entirely client-side most of the time.
+  maybeRequestBrowserInteractableMap(state);
   renderBrowserCanvasSurface();
 });
 
@@ -27769,16 +31622,48 @@ wsEventBus.on('browser:selection', (msg) => {
   if (!isBrowserEventForActiveSession(msg, { scope: 'visible' })) return;
   const state = getBrowserCanvasState();
   const teach = getBrowserTeachSession(state);
+  const purpose = String(msg?.purpose || 'select').trim();
+  // Hover inspects use purpose:'hover'. They populate state.hoverElement only and
+  // never overwrite the persistent selection / teach pipeline.
+  if (purpose === 'hover') {
+    if (msg?.selection && typeof msg.selection === 'object') {
+      state.hoverElement = {
+        selector: String(msg.selection.selector || '').trim(),
+        pack: msg.selection.pack || null,
+        tagName: String(msg.selection.tagName || '').trim(),
+        role: String(msg.selection.role || '').trim(),
+        text: String(msg.selection.text || '').trim(),
+        bounds: msg.selection.bounds || null,
+      };
+    } else {
+      state.hoverElement = null;
+    }
+    renderBrowserCanvasSurface();
+    return;
+  }
   state.selectionPending = false;
   if (msg?.selection && typeof msg.selection === 'object') {
     state.selectedElement = {
       selector: String(msg.selection.selector || '').trim(),
+      pack: msg.selection.pack || null,
       tagName: String(msg.selection.tagName || '').trim(),
       id: String(msg.selection.id || '').trim(),
+      role: String(msg.selection.role || '').trim(),
       text: String(msg.selection.text || '').trim(),
       bounds: msg.selection.bounds || null,
+      liveBounds: msg.selection.bounds || null,
     };
     state.elementNameDraftKey = '';
+    // Tell the server to keep re-resolving the bounds of this selection so it
+    // stays glued to the element through scroll/layout shifts.
+    const sessionId = String(msg?.sessionId || state.sessionId || '').trim();
+    if (sessionId && state.selectedElement.pack && window.ws && window.ws.readyState === WebSocket.OPEN) {
+      wsSend({
+        type: 'browser:track_selection',
+        sessionId,
+        pack: state.selectedElement.pack,
+      });
+    }
     if (isBrowserTeachRecording(state) && teach.pendingSelectionIntent?.action === 'click') {
       const staged = createBrowserTeachClickStep(state.selectedElement, teach.pendingSelectionIntent, state);
       teach.pendingSelectionIntent = null;
@@ -27787,18 +31672,37 @@ wsEventBus.on('browser:selection', (msg) => {
       addProcessEntry('info', `Teach: staged ${teach.pendingStep.summary || 'browser click step'}.`);
     } else {
       teach.pendingSelectionIntent = null;
-      addProcessEntry('info', `Browser: selected ${state.selectedElement.selector || state.selectedElement.tagName || 'element'} in teach mode.`);
+      addProcessEntry('info', `Browser: selected ${state.selectedElement.selector || state.selectedElement.tagName || 'element'}.`);
     }
   } else {
     state.selectedElement = null;
     state.elementNameDraft = '';
     state.elementNameDraftKey = '';
     teach.pendingSelectionIntent = null;
+    // Stop tracking on the server.
+    const sessionId = String(msg?.sessionId || state.sessionId || '').trim();
+    if (sessionId && window.ws && window.ws.readyState === WebSocket.OPEN) {
+      wsSend({ type: 'browser:clear_selection', sessionId });
+    }
     addProcessEntry('warn', 'Browser: no selectable element found at that point.');
   }
   state.updatedAt = Number(msg.timestamp || Date.now()) || Date.now();
   renderBrowserCanvasSurface();
   persistActiveChat();
+});
+
+wsEventBus.on('browser:inspect_map_result', (msg) => {
+  if (!isBrowserEventForActiveSession(msg, { scope: 'visible' })) return;
+  const state = getBrowserCanvasState();
+  if (msg?.map && Array.isArray(msg.map.items)) {
+    state.interactableMap = {
+      items: msg.map.items,
+      viewport: msg.map.viewport || null,
+      scroll: msg.map.scroll || { x: 0, y: 0 },
+      devicePixelRatio: Number(msg.map.devicePixelRatio || 1),
+      capturedAt: Number(msg.map.capturedAt || Date.now()),
+    };
+  }
 });
 
 wsEventBus.on('browser:knowledge', (msg) => {
@@ -28165,10 +32069,22 @@ wsEventBus.on('bg_agent_done', (msg) => {
 // When ask_team_coordinator runs (or the team coordinator is working), the backend
 // broadcasts coordinator_progress WS events so the process log shows activity
 // instead of appearing to hang silently.
+wsEventBus.on('voice_interruption', (msg) => {
+  const sessionId = String(msg?.sessionId || '').trim();
+  const activeSessionId = String(window.activeChatSessionId || '').trim();
+  if (!sessionId || sessionId !== activeSessionId) return;
+  const intent = String(msg?.intent || 'unknown').trim();
+  addSessionProcessEntry(sessionId, 'warn', `Voice interruption: ${intent}${msg?.shouldAbortOriginalRun ? ' (worker abort requested)' : ''}`, {
+    actor: 'Voice Interruption',
+    eventId: msg?.eventId,
+    runtimeId: msg?.runtimeId,
+  });
+});
+
 wsEventBus.on('coordinator_progress', (msg) => {
-  const matchesSession = msg.sessionId && msg.sessionId === window.activeChatSessionId;
-  const isActiveRun = window.isThinking || matchesSession;
-  if (!isActiveRun) return;
+  const eventSessionId = String(msg.sessionId || '').trim();
+  const activeSessionId = String(window.activeChatSessionId || '').trim();
+  if (!eventSessionId || eventSessionId !== activeSessionId) return;
   const teamTag = msg.teamId ? ` [team:${msg.teamId}]` : '';
   addProcessEntry('info', `[coordinator${teamTag}] ${formatForwardedToolMessageForLog(msg.message).slice(0, 200)}`, { actor: 'Coordinator' });
   renderProcessLog();
@@ -28191,6 +32107,19 @@ wsEventBus.on('coordinator_progress', (msg) => {
         badge.style.display = 'inline-block';
         badge.textContent = '+';
       }
+    }
+    if (eventName === 'approval_created' && matchesSession) {
+      showInlineApprovalFromEvent(msg);
+    } else if (matchesSession) {
+      const statusByEvent = {
+        approval_approved: 'approved',
+        approval_denied: 'rejected',
+        approval_executing: 'approved',
+        approval_executed: 'approved',
+        approval_failed: 'failed',
+        approval_expired: 'expired',
+      };
+      updateInlineApprovalStatusFromEvent(msg, statusByEvent[eventName] || '');
     }
   });
 });

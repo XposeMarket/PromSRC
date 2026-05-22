@@ -276,7 +276,8 @@ function buildIncludes(rawIncludes: any, elements: Partial<Record<CreativeLibrar
   }
   const derived: string[] = [];
   CREATIVE_LIBRARY_SECTIONS.forEach((section) => {
-    (Array.isArray(elements[section]) ? elements[section] : []).forEach((entry) => {
+    const entries = elements[section];
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
       if (entry?.label) derived.push(entry.label);
     });
   });

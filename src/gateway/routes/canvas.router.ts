@@ -62,6 +62,7 @@ import {
   applyHtmlMotionTemplate,
   summarizeHtmlMotionTemplates,
 } from '../creative/html-motion-templates';
+import { resolveBundledPlaywrightChromium, resolveRuntimeBinary } from '../../runtime/dependencies';
 
 export const router = Router();
 
@@ -190,6 +191,32 @@ function guessContentType(filePath: string): string {
       return 'image/webp';
     case '.ico':
       return 'image/x-icon';
+    case '.mp4':
+      return 'video/mp4';
+    case '.m4v':
+      return 'video/x-m4v';
+    case '.mov':
+      return 'video/quicktime';
+    case '.webm':
+      return 'video/webm';
+    case '.ogv':
+      return 'video/ogg';
+    case '.avi':
+      return 'video/x-msvideo';
+    case '.mkv':
+      return 'video/x-matroska';
+    case '.mp3':
+      return 'audio/mpeg';
+    case '.m4a':
+      return 'audio/mp4';
+    case '.wav':
+      return 'audio/wav';
+    case '.ogg':
+      return 'audio/ogg';
+    case '.aac':
+      return 'audio/aac';
+    case '.flac':
+      return 'audio/flac';
     case '.txt':
       return 'text/plain; charset=utf-8';
     default:
@@ -1302,6 +1329,8 @@ async function getPlaywrightModuleForCreativeRender(): Promise<any> {
 }
 
 function findCreativeRenderBrowserExecutable(): string | undefined {
+  const bundled = resolveBundledPlaywrightChromium();
+  if (bundled) return bundled;
   const candidates = [
     process.env.CHROME_PATH,
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -1828,7 +1857,8 @@ function buildCustomCreativeLibraryIncludes(
   }
   const derived: string[] = [];
   CREATIVE_LIBRARY_SECTIONS.forEach((section) => {
-    (Array.isArray(elements[section]) ? elements[section] : []).forEach((entry) => {
+    const entries = elements[section];
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
       if (entry?.label) derived.push(entry.label);
     });
   });
@@ -2201,7 +2231,7 @@ async function hasCreativeFfmpeg(): Promise<boolean> {
   if (!creativeFfmpegAvailabilityPromise) {
     creativeFfmpegAvailabilityPromise = (async () => {
       try {
-        await execFileAsync('ffmpeg', ['-version'], {
+        await execFileAsync(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), ['-version'], {
           windowsHide: true,
           maxBuffer: 1024 * 1024,
         });
@@ -3126,10 +3156,25 @@ async function setHtmlMotionPageTime(page: any, atMs: number): Promise<void> {
     };
     await Promise.all(media.map((node) => new Promise((resolve) => {
       try {
+        const hasExplicitTiming = node.hasAttribute('data-start')
+          || node.hasAttribute('data-from')
+          || node.hasAttribute('data-trim-start')
+          || node.hasAttribute('data-offset')
+          || node.hasAttribute('data-media-start')
+          || node.hasAttribute('data-duration')
+          || node.hasAttribute('data-end');
+        if (!hasExplicitTiming) {
+          // Custom HTML Motion clips often own media seeking inside their
+          // prometheus-html-motion-seek handler. Do not override those videos
+          // with global timeline seconds, or multi-shot HTML clips freeze or
+          // seek every embedded video to the wrong offset.
+          resolve(true);
+          return;
+        }
         const elementStart = readSeconds(node, ['data-start', 'data-from'], 0);
-        const trimStart = readSeconds(node, ['data-trim-start', 'data-offset'], 0);
+        const trimStart = readSeconds(node, ['data-trim-start', 'data-offset', 'data-media-start'], 0);
         const duration = Number.isFinite(node.duration) && node.duration > 0 ? node.duration : Math.max(0, timeSeconds - elementStart + trimStart);
-        const target = Math.max(0, Math.min(duration || 0, timeSeconds - elementStart + trimStart));
+        const target = Math.max(0, Math.min(Math.max(0, (duration || 0) - 0.02), timeSeconds - elementStart + trimStart));
         node.pause();
         if (timeSeconds + 0.0001 < elementStart) {
           if (Math.abs((Number(node.currentTime) || 0) - trimStart) >= 0.04) node.currentTime = trimStart;
@@ -3175,7 +3220,7 @@ async function setHtmlMotionPageTime(page: any, atMs: number): Promise<void> {
       resolve(true);
     }));
   })`);
-  await page.waitForTimeout(20);
+  await page.waitForTimeout(90);
 }
 
 async function screenshotHtmlMotionFrame(page: any, options: {
@@ -3676,7 +3721,7 @@ async function maybeFinalizeCreativeRenderArtifact(
       throw new Error('relativePath must stay within the creative exports directory');
     }
     fs.mkdirSync(path.dirname(finalTargetPath), { recursive: true });
-    await execFileAsync('ffmpeg', [
+    await execFileAsync(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), [
       '-y',
       '-i', tempSourcePath,
       '-c:v', 'libx264',
@@ -4370,6 +4415,37 @@ router.get('/api/canvas/inline', (req: any, res: any, next: any) => _requireGate
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     res.type(contentType);
+    if (/^(video|audio)\//i.test(contentType)) {
+      const range = String(req.headers.range || '').trim();
+      res.setHeader('Accept-Ranges', 'bytes');
+      if (range) {
+        const match = range.match(/^bytes=(\d*)-(\d*)$/);
+        if (match) {
+          const startRaw = match[1];
+          const endRaw = match[2];
+          let start = startRaw ? Number(startRaw) : 0;
+          let end = endRaw ? Number(endRaw) : stat.size - 1;
+          if (!startRaw && endRaw) {
+            const suffixLength = Number(endRaw);
+            start = Math.max(0, stat.size - suffixLength);
+            end = stat.size - 1;
+          }
+          if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && start < stat.size) {
+            end = Math.min(end, stat.size - 1);
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+            res.setHeader('Content-Length', String(end - start + 1));
+            fs.createReadStream(absPath, { start, end }).pipe(res);
+            return;
+          }
+        }
+        res.status(416);
+        res.setHeader('Content-Range', `bytes */${stat.size}`);
+        res.end();
+        return;
+      }
+      res.setHeader('Content-Length', String(stat.size));
+    }
     res.sendFile(absPath);
   } catch (err: any) {
     const message = String(err?.message || 'Inline preview failed');
@@ -5503,14 +5579,13 @@ router.post('/api/canvas/html-motion-clip/export', (req: any, res: any, next: an
           '-c:a', 'aac',
           '-b:a', '192k',
           '-t', (durationMs / 1000).toFixed(3),
-          '-shortest',
         );
       }
       ffmpegArgs.push(
         '-movflags', '+faststart',
         outputPath,
       );
-      await execFileAsync('ffmpeg', ffmpegArgs, {
+      await execFileAsync(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), ffmpegArgs, {
         windowsHide: true,
         timeout: Math.max(60_000, Math.min(300_000, durationMs * 8)),
         maxBuffer: 1024 * 1024 * 32,
@@ -7146,6 +7221,70 @@ router.post('/api/canvas/hyperframes/apply-patch', (req: any, res: any, next: an
   }
 });
 
+function getHyperframesStudioDistDir(): string {
+  const candidates = [
+    path.resolve(getWorkspaceRoot(), 'node_modules', '@hyperframes', 'studio', 'dist'),
+    path.resolve(process.cwd(), 'node_modules', '@hyperframes', 'studio', 'dist'),
+    path.resolve(__dirname, '../../../node_modules/@hyperframes/studio/dist'),
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(path.join(candidate, 'index.html')));
+  if (!found) throw new Error('@hyperframes/studio dist/index.html was not found. Run npm install after upgrading HyperFrames packages.');
+  return found;
+}
+
+function injectPrometheusStudioBridge(html: string): string {
+  const bridge = `<script>
+(function(){
+  window.__PROMETHEUS_HYPERFRAMES_STUDIO__ = true;
+  window.addEventListener('message', function(event){
+    var data = event && event.data || {};
+    if (!data || data.source !== 'prometheus-hyperframes-studio-parent') return;
+    if (data.type === 'load-html') {
+      window.__PROMETHEUS_INITIAL_HYPERFRAMES_HTML__ = String(data.html || '');
+      window.dispatchEvent(new CustomEvent('prometheus-hyperframes-load-html', { detail: { html: window.__PROMETHEUS_INITIAL_HYPERFRAMES_HTML__ } }));
+    }
+  });
+  window.parent && window.parent.postMessage({ source:'prometheus-hyperframes-studio', type:'ready' }, '*');
+})();
+</script>`;
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${bridge}</head>`);
+  return `${bridge}${html}`;
+}
+
+// GET /api/canvas/hyperframes/studio/*
+// Serves the bundled @hyperframes/studio static app so Prometheus can embed the
+// real HyperFrames editor surface beside its existing canvas/timeline UX.
+router.get('/api/canvas/hyperframes/studio', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+  try {
+    const indexPath = path.join(getHyperframesStudioDistDir(), 'index.html');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(injectPrometheusStudioBridge(fs.readFileSync(indexPath, 'utf-8')));
+  } catch (err: any) {
+    res.status(500).send(String(err?.message || 'Could not serve HyperFrames Studio.'));
+  }
+});
+
+router.get('/api/canvas/hyperframes/studio/*', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), (req: any, res: any) => {
+  try {
+    const studioDir = getHyperframesStudioDistDir();
+    const requested = String(req.params?.[0] || 'index.html').replace(/\\/g, '/');
+    const target = path.resolve(studioDir, requested || 'index.html');
+    if (!isPathInside(studioDir, target) || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
+      res.status(404).send('HyperFrames Studio asset not found.');
+      return;
+    }
+    if (path.basename(target).toLowerCase() === 'index.html') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(injectPrometheusStudioBridge(fs.readFileSync(target, 'utf-8')));
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.sendFile(target);
+  } catch (err: any) {
+    res.status(500).send(String(err?.message || 'Could not serve HyperFrames Studio asset.'));
+  }
+});
+
 // POST /api/canvas/hyperframes/parse  body: { html }
 // Lightweight inspection: composition metadata + element count. Used by the
 // canvas to decide whether an HTML blob is a HyperFrames composition before
@@ -7293,6 +7432,7 @@ router.post('/api/canvas/hyperframes/render', (req: any, res: any, next: any) =>
       html,
       workspacePath,
       outputPath,
+      compositionId: String(req.body?.compositionId || req.body?.composition_id || '').trim() || undefined,
       fps: ([24, 30, 60].includes(Number(req.body?.fps)) ? Number(req.body?.fps) : 60) as any,
       quality: (['draft', 'standard', 'high'].includes(String(req.body?.quality)) ? String(req.body?.quality) : 'standard') as any,
       format,

@@ -1778,6 +1778,9 @@ export function createHyperframesElement(input = {}) {
 
 export function createSceneDocument(input = {}) {
   const elements = Array.isArray(input.elements) ? input.elements.map((element) => createSceneNode(element)) : [];
+  const captions = Array.isArray(input.captions)
+    ? cloneData(input.captions)
+    : (Array.isArray(input.subtitles) ? cloneData(input.subtitles) : []);
   return {
     id: input.id || createId('scene'),
     version: Number.isFinite(Number(input.version)) ? Number(input.version) : 1,
@@ -1791,7 +1794,8 @@ export function createSceneDocument(input = {}) {
     motionTemplates: Array.isArray(input.motionTemplates)
       ? input.motionTemplates.map((entry) => normalizeMotionTemplateInstance(entry))
       : [],
-    captions: Array.isArray(input.captions) ? cloneData(input.captions) : [],
+    captions,
+    subtitles: captions,
     brandKit: normalizeSceneBrandKit(input.brandKit),
     selectedId: input.selectedId || null,
   };
@@ -2159,6 +2163,24 @@ export function applySceneGraphOps(doc, ops = []) {
     const op = rawOp || {};
     const kind = String(op.op || '').trim().toLowerCase();
     if (!kind) continue;
+    if (kind === 'set-scene') {
+      const patch = op.patch || {};
+      if (Number.isFinite(Number(patch.width))) nextDoc.width = Math.max(1, Number(patch.width));
+      if (Number.isFinite(Number(patch.height))) nextDoc.height = Math.max(1, Number(patch.height));
+      if (patch.background != null) nextDoc.background = String(patch.background || '#ffffff');
+      if (Number.isFinite(Number(patch.durationMs))) nextDoc.durationMs = Math.max(1000, Number(patch.durationMs));
+      if (Number.isFinite(Number(patch.frameRate))) nextDoc.frameRate = Math.max(1, Number(patch.frameRate));
+      if (patch.audioTrack !== undefined) nextDoc.audioTrack = normalizeAudioTrack(patch.audioTrack);
+      if (Array.isArray(patch.captions) || Array.isArray(patch.subtitles)) {
+        const captions = cloneData(Array.isArray(patch.captions) ? patch.captions : patch.subtitles);
+        nextDoc.captions = captions;
+        nextDoc.subtitles = captions;
+      }
+      if (Array.isArray(patch.elements)) {
+        nextElements.splice(0, nextElements.length, ...patch.elements.map((element) => createSceneNode(element)));
+      }
+      continue;
+    }
     if (kind === 'add-motion-template') {
       nextDoc.motionTemplates = [
         ...(Array.isArray(nextDoc.motionTemplates) ? nextDoc.motionTemplates : []),

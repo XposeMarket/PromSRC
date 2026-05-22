@@ -5,7 +5,6 @@ import { getConfig, getAgents, getAgentById, ensureAgentWorkspace, resolveAgentW
 import { broadcastWS, broadcastTeamEvent, resolveChannelsConfig, normalizeTelegramConfig, normalizeDiscordConfig, normalizeWhatsAppConfig } from '../comms/broadcaster';
 import { listManagedTeams, getManagedTeam, saveManagedTeam, deleteManagedTeam } from '../teams/managed-teams';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
-import { spawnAgent } from '../../agents/spawner';
 import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getSession, setWorkspace } from '../session';
@@ -22,6 +21,7 @@ type WhatsAppChannelConfig = any;
 export const router = Router();
 
 const getAttachmentContext = () => require('../chat/attachment-context') as typeof import('../chat/attachment-context');
+const getAgentSpawner = () => require('../../agents/spawner') as typeof import('../../agents/spawner');
 
 let _cronScheduler: any;
 let _telegramChannel: any;
@@ -40,6 +40,8 @@ let _runInteractiveTurn: (
   reasoningOptions?: any,
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
   modelOverride?: string,
+  flags?: any,
+  turnOrigin?: any,
 ) => Promise<{ type: string; text: string; thinking?: string }>;
 
 export function initChannelsRouter(deps: {
@@ -58,6 +60,8 @@ export function initChannelsRouter(deps: {
     reasoningOptions?: any,
     attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     modelOverride?: string,
+    flags?: any,
+    turnOrigin?: any,
   ) => Promise<{ type: string; text: string; thinking?: string }>;
 }): void {
   _cronScheduler = deps.cronScheduler;
@@ -511,7 +515,7 @@ router.post('/api/channels/send-test/:channel', async (req, res) => {
 
   if (channel === 'telegram') {
     try {
-      await _telegramChannel.sendToAllowed('🦞 Prometheus test message - Telegram is connected!');
+      await _telegramChannel.sendToAllowed('🔥 Prometheus test message - Telegram is connected!');
       res.json({ success: true });
     } catch (err: any) {
       res.json({ success: false, error: String(err?.message || err) });
@@ -1624,6 +1628,7 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
   });
 
   const startedAt = Date.now();
+  const { spawnAgent } = getAgentSpawner();
   const result = await spawnAgent({
     agentId,
     task,

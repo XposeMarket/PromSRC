@@ -20,6 +20,7 @@ files:
   - generated/public-web-ui/**/*
   - assets/**/*
   - node_modules/**/*
+  - runtime-dependencies.public.json
   - package.json
   - "!generated/public-web-ui/**/*.map"
   - "!generated/public-web-ui/**/*.log"
@@ -46,6 +47,20 @@ files:
   - "!*.mp4"
   - "!*.png"
   - "!eng.traineddata"
+  - "!node_modules/.bin/**/*"
+  - "!node_modules/@electron/**/*"
+  - "!node_modules/@electron-builder/**/*"
+  - "!node_modules/@types/**/*"
+  - "!node_modules/@typescript-eslint/**/*"
+  - "!node_modules/app-builder-bin/**/*"
+  - "!node_modules/app-builder-lib/**/*"
+  - "!node_modules/builder-util/**/*"
+  - "!node_modules/builder-util-runtime/**/*"
+  - "!node_modules/electron/**/*"
+  - "!node_modules/electron-builder/**/*"
+  - "!node_modules/eslint/**/*"
+  - "!node_modules/eslint-*/**/*"
+  - "!node_modules/tsx/**/*"
   - "!CIS.docx"
   - "!Prometheus_CIS_Plan.docx"
   - "!Prometheus_Teams_CIS_Master_Plan.docx"
@@ -70,6 +85,9 @@ files:
   - "!dist/tools/self-update.js"
   - "!dist/tools/source-access.js"
   - "!node_modules/.cache/**/*"
+  - "!node_modules/playwright-core/.local-browsers/**/*"
+  - "!node_modules/playwright/.local-browsers/**/*"
+  - "!node_modules/gif.js/site/**/*"
   - "!.git/**/*"
   - "!**/*.log"
 
@@ -115,9 +133,16 @@ asar: true
 asarUnpack:
   - "node_modules/better-sqlite3/**/*"
   - "node_modules/node-pty/**/*"
+  - "node_modules/onnxruntime-node/**/*"
+  - "node_modules/@ffmpeg-installer/**/*"
+  - "node_modules/@ffprobe-installer/**/*"
 
 extraResources:
   - from: "generated/bundled-skills"
     to: "bundled-skills"
+    filter:
+      - "**/*"
+  - from: "node_modules/playwright-core/.local-browsers"
+    to: "playwright-browsers"
     filter:
       - "**/*"

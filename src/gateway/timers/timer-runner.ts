@@ -8,6 +8,7 @@ import {
   isModelBusy,
   setModelBusy,
 } from '../comms/broadcaster';
+import { deliverToTargets, type DeliveryDeps } from '../delivery-router';
 
 type RunInteractiveTurn = (
   message: string,
@@ -24,6 +25,7 @@ type RunInteractiveTurn = (
 export interface MainChatTimerRunnerDeps {
   runInteractiveTurn: RunInteractiveTurn;
   tickMs?: number;
+  telegramChannel?: any;
 }
 
 export class MainChatTimerRunner {
@@ -31,10 +33,12 @@ export class MainChatTimerRunner {
   private runningTimerId: string | null = null;
   private readonly runInteractiveTurn: RunInteractiveTurn;
   private readonly tickMs: number;
+  private readonly deliveryDeps: DeliveryDeps;
 
   constructor(deps: MainChatTimerRunnerDeps) {
     this.runInteractiveTurn = deps.runInteractiveTurn;
     this.tickMs = Math.max(1000, Math.floor(Number(deps.tickMs) || 5000));
+    this.deliveryDeps = { telegramChannel: deps.telegramChannel, broadcastWS };
   }
 
   start(): void {
@@ -111,16 +115,27 @@ export class MainChatTimerRunner {
         `[Timer ${timer.id}] This is a delayed main-chat user turn. Treat it like the user just sent it in this same chat session.`,
       );
       const text = String(result?.text || '').trim();
-      updateMainChatTimer(timer.id, {
+      const completedTimer = updateMainChatTimer(timer.id, {
         status: 'completed',
         completedAt: new Date().toISOString(),
         resultPreview: text.slice(0, 500),
-      });
+      }) || timer;
+      if (timer.delivery?.telegram === true && text) {
+        await deliverToTargets({
+          text,
+          target: 'telegram',
+          sessionId: timer.sessionId,
+          source: 'timer_done',
+        }, this.deliveryDeps).catch((err) => {
+          console.warn('[TimerRunner] telegram delivery failed:', err?.message || err);
+        });
+      }
       broadcastWS({
         type: 'timer_done',
         timerId: timer.id,
         sessionId: timer.sessionId,
-        timer,
+        timer: completedTimer,
+        voiceIfActive: timer.delivery?.voiceIfActive === true || timer.delivery?.voice_if_active === true,
         message: {
           role: 'assistant',
           content: text,

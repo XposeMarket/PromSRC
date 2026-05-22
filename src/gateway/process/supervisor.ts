@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { execSync } from 'child_process';
+import pty from 'node-pty';
 import { getConfig } from '../../config/config';
 import { broadcastWS } from '../comms/broadcaster';
 import { ProcessRunStore } from './store';
@@ -10,6 +11,7 @@ import type {
   ProcessLogResult,
   ProcessRunExit,
   ProcessRunRecord,
+  ProcessShell,
   ProcessSpawnInput,
   ProcessTerminationReason,
 } from './types';
@@ -25,11 +27,47 @@ function trimPreview(text: string): string {
   return text.slice(-MAX_PREVIEW_CHARS);
 }
 
-function getShellInvocation(command: string): { shell: string; args: string[] } {
+function normalizeShell(input?: ProcessShell): ProcessShell {
+  const shell = String(input || 'auto').toLowerCase();
+  if (shell === 'powershell' || shell === 'cmd' || shell === 'bash') return shell;
+  return 'auto';
+}
+
+function isPowerShellNative(command: string): boolean {
+  return /^\s*(?:get|set|new|remove|copy|move|rename|test|resolve|select|where|foreach|measure|convertto|convertfrom|invoke|start|stop)-[a-z]/i.test(command)
+    || /^\s*\$[A-Za-z_][\w:.-]*\s*=/.test(command);
+}
+
+function resolveShell(input: ProcessShell | undefined, command: string): Exclude<ProcessShell, 'auto'> {
+  const shell = normalizeShell(input);
+  if (shell !== 'auto') return shell;
+  if (process.platform === 'win32') return isPowerShellNative(command) ? 'powershell' : 'powershell';
+  return 'bash';
+}
+
+function getShellInvocation(command: string, requestedShell?: ProcessShell): { requestedShell: ProcessShell; shellKind: Exclude<ProcessShell, 'auto'>; shell: string; args: string[] } {
+  const shellKind = resolveShell(requestedShell, command);
   if (process.platform === 'win32') {
-    return { shell: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] };
+    if (shellKind === 'cmd') {
+      return { requestedShell: normalizeShell(requestedShell), shellKind, shell: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] };
+    }
+    if (shellKind === 'bash') {
+      return { requestedShell: normalizeShell(requestedShell), shellKind, shell: process.env.PROMETHEUS_BASH_PATH || 'bash.exe', args: ['-lc', command] };
+    }
+    return {
+      requestedShell: normalizeShell(requestedShell),
+      shellKind,
+      shell: process.env.PROMETHEUS_POWERSHELL_PATH || 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+    };
   }
-  return { shell: process.env.SHELL || '/bin/bash', args: ['-lc', command] };
+  if (shellKind === 'powershell') {
+    return { requestedShell: normalizeShell(requestedShell), shellKind, shell: process.env.PROMETHEUS_POWERSHELL_PATH || 'pwsh', args: ['-NoProfile', '-Command', command] };
+  }
+  if (shellKind === 'cmd') {
+    return { requestedShell: normalizeShell(requestedShell), shellKind: 'bash', shell: process.env.SHELL || '/bin/bash', args: ['-lc', command] };
+  }
+  return { requestedShell: normalizeShell(requestedShell), shellKind: 'bash', shell: process.env.SHELL || '/bin/bash', args: ['-lc', command] };
 }
 
 function killProcessTree(child: ChildProcessWithoutNullStreams): void {
@@ -43,6 +81,18 @@ function killProcessTree(child: ChildProcessWithoutNullStreams): void {
     }
   }
   try { child.kill('SIGKILL'); } catch {}
+}
+
+function buildSummary(exitCode: number | null, stderr: string, stdout: string): string {
+  const source = exitCode === 0 ? stdout : (stderr || stdout);
+  return String(source || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-4)
+    .join('\n')
+    .slice(0, 1000);
 }
 
 export class ProcessSupervisor {
@@ -92,26 +142,36 @@ export class ProcessSupervisor {
     const cwd = path.resolve(String(input.cwd || getConfig().getWorkspacePath() || process.cwd()));
     const runId = `run_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const startedAt = nowIso();
+    const invocation = getShellInvocation(command, input.shell);
     const record: ProcessRunRecord = {
       runId,
       sessionId: input.sessionId,
       taskId: input.taskId,
       codingSessionId: input.codingSessionId,
+      approvalId: input.approvalId,
+      rerunOf: input.rerunOf,
       command,
       cwd,
       mode: input.mode || 'foreground',
+      shell: invocation.shellKind,
+      shellCommand: [invocation.shell, ...invocation.args].join(' '),
+      pty: input.pty === true,
       title: input.title,
       state: 'starting',
       startedAt,
       updatedAt: startedAt,
+      stdinOpen: input.stdinMode === 'pipe' || input.input != null || input.pty === true,
       stdoutBytes: 0,
       stderrBytes: 0,
       outputPreview: '',
     };
     this.persistAndBroadcast(record, 'process_run_started');
 
-    const { shell, args } = getShellInvocation(command);
-    const child = spawn(shell, args, {
+    if (input.pty === true) {
+      return this.spawnPty(input, record, invocation);
+    }
+
+    const child = spawn(invocation.shell, invocation.args, {
       cwd,
       env: process.env,
       windowsHide: true,
@@ -126,9 +186,9 @@ export class ProcessSupervisor {
     let noOutputTimer: NodeJS.Timeout | null = null;
     const captureOutput = input.captureOutput !== false;
 
-    const updateRecord = (patch: Partial<ProcessRunRecord>, eventType = 'process_run_update') => {
+    const updateRecord = (patch: Partial<ProcessRunRecord>, eventType = 'process_run_update', extra: Record<string, unknown> = {}) => {
       Object.assign(record, patch, { updatedAt: nowIso() });
-      this.persistAndBroadcast(record, eventType);
+      this.persistAndBroadcast(record, eventType, extra);
     };
 
     const touchOutput = () => {
@@ -160,7 +220,7 @@ export class ProcessSupervisor {
       }
       record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
       touchOutput();
-      this.persistAndBroadcast(record, 'process_run_output');
+      this.persistAndBroadcast(record, 'process_run_output', { stream: kind, chunk: text });
     };
 
     child.stdout.on('data', (chunk) => onChunk('stdout', chunk));
@@ -205,11 +265,16 @@ export class ProcessSupervisor {
         updateRecord({
           state: 'exited',
           completedAt: nowIso(),
+          durationMs: Date.now() - Date.parse(startedAt),
           exitCode: code,
           exitSignal: signal,
           terminationReason: reason,
           timedOut: exit.timedOut,
           noOutputTimedOut: exit.noOutputTimedOut,
+          stdinOpen: false,
+          waitingForInputHint: false,
+          completionSummary: code === 0 ? buildSummary(code, stderr, stdout) : undefined,
+          failureSummary: code === 0 ? undefined : buildSummary(code, stderr, stdout),
         }, 'process_run_exited');
         this.active.delete(runId);
         resolve(exit);
@@ -235,6 +300,137 @@ export class ProcessSupervisor {
       closeStdin: () => {
         if (!child.stdin || child.stdin.destroyed) return false;
         child.stdin.end();
+        updateRecord({ stdinOpen: false, waitingForInputHint: false });
+        return true;
+      },
+    };
+
+    this.active.set(runId, managed);
+    return managed;
+  }
+
+  private async spawnPty(
+    input: ProcessSpawnInput,
+    record: ProcessRunRecord,
+    invocation: ReturnType<typeof getShellInvocation>,
+  ): Promise<ManagedProcessRun> {
+    const runId = record.runId;
+    const cwd = record.cwd;
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let forcedReason: ProcessTerminationReason | null = null;
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    let noOutputTimer: NodeJS.Timeout | null = null;
+    const captureOutput = input.captureOutput !== false;
+
+    const updateRecord = (patch: Partial<ProcessRunRecord>, eventType = 'process_run_update', extra: Record<string, unknown> = {}) => {
+      Object.assign(record, patch, { updatedAt: nowIso() });
+      this.persistAndBroadcast(record, eventType, extra);
+    };
+
+    const touchOutput = () => {
+      const ts = nowIso();
+      record.lastOutputAt = ts;
+      record.updatedAt = ts;
+      if (input.noOutputTimeoutMs && input.noOutputTimeoutMs > 0 && !settled) {
+        if (noOutputTimer) clearTimeout(noOutputTimer);
+        noOutputTimer = setTimeout(() => {
+          forcedReason = 'no_output_timeout';
+          managed.cancel('no_output_timeout');
+        }, input.noOutputTimeoutMs);
+        if (typeof (noOutputTimer as any).unref === 'function') (noOutputTimer as any).unref();
+      }
+    };
+
+    const ptyProcess = pty.spawn(invocation.shell, invocation.args, {
+      name: 'xterm-color',
+      cols: 120,
+      rows: 30,
+      cwd,
+      env: process.env as any,
+    });
+
+    const onChunk = (chunk: string) => {
+      const text = String(chunk);
+      if (captureOutput) stdout += text;
+      record.stdoutBytes += Buffer.byteLength(text);
+      this.store.appendStdout(runId, text);
+      record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
+      record.waitingForInputHint = /(?:press any key|password|passphrase|enter .*:|continue\?|y\/n|\[y\/n\]|waiting for input)/i.test(record.outputPreview);
+      touchOutput();
+      this.persistAndBroadcast(record, 'process_run_output', { stream: 'stdout', chunk: text });
+    };
+
+    ptyProcess.onData(onChunk);
+    updateRecord({ pid: ptyProcess.pid, state: 'running' });
+
+    if (input.input) ptyProcess.write(input.input);
+
+    if (input.timeoutMs && input.timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        forcedReason = 'overall_timeout';
+        managed.cancel('overall_timeout');
+      }, input.timeoutMs);
+      if (typeof (timeoutTimer as any).unref === 'function') (timeoutTimer as any).unref();
+    }
+
+    const waitPromise = new Promise<ProcessRunExit>((resolve) => {
+      ptyProcess.onExit(({ exitCode, signal }) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (noOutputTimer) clearTimeout(noOutputTimer);
+        const reason: ProcessTerminationReason = forcedReason || (signal ? 'signal' : 'exit');
+        const exit: ProcessRunExit = {
+          runId,
+          reason,
+          exitCode,
+          exitSignal: signal || null,
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
+          noOutputTimedOut: reason === 'no_output_timeout',
+        };
+        updateRecord({
+          state: 'exited',
+          completedAt: nowIso(),
+          durationMs: Date.now() - Date.parse(record.startedAt),
+          exitCode,
+          exitSignal: signal || null,
+          terminationReason: reason,
+          timedOut: exit.timedOut,
+          noOutputTimedOut: exit.noOutputTimedOut,
+          stdinOpen: false,
+          waitingForInputHint: false,
+          completionSummary: exitCode === 0 ? buildSummary(exitCode, stderr, stdout) : undefined,
+          failureSummary: exitCode === 0 ? undefined : buildSummary(exitCode, stderr, stdout),
+        }, 'process_run_exited');
+        this.active.delete(runId);
+        resolve(exit);
+      });
+    });
+
+    const managed: ManagedProcessRun = {
+      runId,
+      pid: ptyProcess.pid,
+      record,
+      wait: async () => waitPromise,
+      cancel: (reason = 'manual_cancel') => {
+        if (settled) return;
+        forcedReason = reason;
+        updateRecord({ state: 'exiting', terminationReason: reason });
+        try { ptyProcess.kill(); } catch {}
+      },
+      write: (data: string) => {
+        if (settled) return false;
+        ptyProcess.write(String(data));
+        updateRecord({ waitingForInputHint: false, stdinOpen: true });
+        return true;
+      },
+      closeStdin: () => {
+        if (settled) return false;
+        updateRecord({ stdinOpen: false, waitingForInputHint: false });
         return true;
       },
     };
@@ -268,10 +464,10 @@ export class ProcessSupervisor {
     return run.wait();
   }
 
-  private persistAndBroadcast(record: ProcessRunRecord, eventType: string): void {
+  private persistAndBroadcast(record: ProcessRunRecord, eventType: string, extra: Record<string, unknown> = {}): void {
     this.store.writeRecord(record);
     try {
-      broadcastWS({ type: eventType, run: record, timestamp: Date.now() });
+      broadcastWS({ type: eventType, run: record, ...extra, timestamp: Date.now() });
     } catch {
       // WebSocket broadcast is best-effort.
     }

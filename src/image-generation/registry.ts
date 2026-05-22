@@ -28,30 +28,39 @@ function normalizeProviderId(value?: string): string {
   return normalized === 'auto' ? '' : normalized;
 }
 
-function inferProviderIdFromModel(model?: string): string {
+function inferProviderIdsFromModel(model?: string): string[] {
   const normalized = String(model || '').trim().toLowerCase();
-  if (!normalized) return '';
+  if (!normalized) return [];
   if (
     normalized.startsWith('grok-')
     || normalized.includes('grok-imagine')
     || normalized.includes('grok-image')
   ) {
-    return 'xai';
+    return ['xai'];
   }
-  if (normalized.startsWith('gpt-image-')) return 'openai';
-  return '';
+  if (normalized.startsWith('gpt-image-')) return ['openai', 'openai_codex'];
+  return [];
+}
+
+function compatibleProviderIds(providerId?: string): string[] {
+  const normalized = normalizeProviderId(providerId);
+  if (!normalized) return [];
+  if (normalized === 'openai') return ['openai', 'openai_codex'];
+  if (normalized === 'openai_codex') return ['openai_codex', 'openai'];
+  return [normalized];
 }
 
 function buildAutoCandidateIds(explicitProvider?: string): string[] {
   const imageCfg = getImageGenerationConfig();
   const llmProvider = String((getConfig().getConfig() as any)?.llm?.provider || '').trim().toLowerCase();
   const ordered = [
-    normalizeProviderId(explicitProvider),
-    normalizeProviderId(imageCfg.provider),
+    ...compatibleProviderIds(explicitProvider),
+    ...compatibleProviderIds(imageCfg.provider),
+    ...inferProviderIdsFromModel(imageCfg.model),
     llmProvider === 'openai' || llmProvider === 'openai_codex' || llmProvider === 'xai' ? llmProvider : '',
-    'xai',
     'openai_codex',
     'openai',
+    'xai',
   ].filter(Boolean);
 
   return Array.from(new Set(ordered));
@@ -69,11 +78,14 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
   const imageCfg = getImageGenerationConfig();
   const saveToWorkspace = request.save_to_workspace ?? imageCfg.save_to_workspace;
   const outputDir = request.output_dir || imageCfg.default_output_dir;
-  const requestedProviderId = normalizeProviderId(request.provider) || inferProviderIdFromModel(request.model);
+  const requestedProviderId = normalizeProviderId(request.provider);
+  const requestedProviderIds = requestedProviderId
+    ? compatibleProviderIds(requestedProviderId)
+    : inferProviderIdsFromModel(request.model);
 
   if (!prompt) {
     return buildImageGenerationError({
-      provider: requestedProviderId || 'image_generation',
+      provider: requestedProviderIds[0] || 'image_generation',
       model: request.model,
       prompt,
       aspectRatio,
@@ -82,36 +94,34 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     });
   }
 
-  if (requestedProviderId) {
-    const provider = PROVIDERS_BY_ID.get(requestedProviderId);
-    if (!provider) {
-      return buildImageGenerationError({
-        provider: requestedProviderId,
-        model: request.model,
-        prompt,
-        aspectRatio,
-        error: `Unknown image generation provider "${requestedProviderId}".`,
-        errorType: 'invalid_provider',
-      });
+  if (requestedProviderIds.length) {
+    let sawKnownProvider = false;
+    for (const candidateId of requestedProviderIds) {
+      const provider = PROVIDERS_BY_ID.get(candidateId);
+      if (!provider) continue;
+      sawKnownProvider = true;
+      if (await provider.isAvailable()) {
+        return provider.generate({
+          prompt,
+          aspect_ratio: aspectRatio,
+          reference_images: referenceImages,
+          count,
+          model: request.model,
+          output_dir: outputDir,
+          save_to_workspace: saveToWorkspace,
+        });
+      }
     }
-    if (!(await provider.isAvailable())) {
-      return buildImageGenerationError({
-        provider: requestedProviderId,
-        model: provider.resolveModel(request.model),
-        prompt,
-        aspectRatio,
-        error: `Image generation provider "${requestedProviderId}" is not available.`,
-        errorType: 'provider_unavailable',
-      });
-    }
-    return provider.generate({
-      prompt,
-      aspect_ratio: aspectRatio,
-      reference_images: referenceImages,
-      count,
+    const primaryProviderId = requestedProviderIds[0];
+    return buildImageGenerationError({
+      provider: primaryProviderId,
       model: request.model,
-      output_dir: outputDir,
-      save_to_workspace: saveToWorkspace,
+      prompt,
+      aspectRatio,
+      error: sawKnownProvider
+        ? `Image generation provider "${primaryProviderId}" is not available.`
+        : `Unknown image generation provider "${primaryProviderId}".`,
+      errorType: sawKnownProvider ? 'provider_unavailable' : 'invalid_provider',
     });
   }
 

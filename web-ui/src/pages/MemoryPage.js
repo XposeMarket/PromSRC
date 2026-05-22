@@ -50,6 +50,7 @@ function createMemoryDraft() {
 const state = {
   initialized: false,
   graphLoadedAt: 0,
+  graphFetchPromise: null,
   canvas: null,
   ctx: null,
   stageEl: null,
@@ -81,6 +82,7 @@ const state = {
   selectedNodeId: null,
   detailCache: new Map(),
   dragState: null,
+  pointers: new Map(),
   controlsCollapsed: true,
   drawerMode: 'detail',
   memoryDraft: createMemoryDraft(),
@@ -1334,11 +1336,13 @@ function selectNode(nodeId) {
 }
 
 async function fetchGraph(options = {}) {
+  if (!options.refreshIndex && state.graphFetchPromise) return state.graphFetchPromise;
+  const promise = (async () => {
   if (options.refreshIndex === true) {
     updateStatsText('refreshing index');
     await api(ENDPOINTS.MEMORY_REFRESH, { method: 'POST', body: '{}' }).catch(() => null);
   }
-  const data = await api(ENDPOINTS.MEMORY_GRAPH);
+  const data = await api(ENDPOINTS.MEMORY_GRAPH, { timeoutMs: 60000 });
   processGraph(data);
   // Freshly-created node objects start at (0,0). Always snap them to their layout
   // base positions so they don't have to spring out from the origin — that
@@ -1351,6 +1355,13 @@ async function fetchGraph(options = {}) {
   if (state.emptyEl) state.emptyEl.style.display = state.recordNodes.length ? 'none' : 'flex';
   updateStatsText();
   draw();
+  })();
+  state.graphFetchPromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (state.graphFetchPromise === promise) state.graphFetchPromise = null;
+  }
 }
 
 function explodeNodes(power = 4.8) {
@@ -1420,6 +1431,23 @@ function loadImageShapeFromFile(file) {
 
 function handlePointerMove(event) {
   if (!state.canvas) return;
+  if (state.pointers.has(event.pointerId)) state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (state.dragState?.type === 'pinch') {
+    const points = [...state.pointers.values()];
+    if (points.length < 2) return;
+    const a = points[0];
+    const b = points[1];
+    const dist = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
+    const centerX = (a.x + b.x) / 2;
+    const centerY = (a.y + b.y) / 2;
+    const rect = state.canvas.getBoundingClientRect();
+    const nextScale = clamp(state.dragState.startScale * (dist / state.dragState.startDistance), 0.04, 2.8);
+    state.transform.scale = nextScale;
+    state.transform.x = centerX - rect.left - state.dragState.centerWorldX * nextScale;
+    state.transform.y = centerY - rect.top - state.dragState.centerWorldY * nextScale;
+    hideTooltip();
+    return;
+  }
   if (state.dragState?.type === 'pan') {
     state.transform.x = state.dragState.originX + (event.clientX - state.dragState.startClientX);
     state.transform.y = state.dragState.originY + (event.clientY - state.dragState.startClientY);
@@ -1445,6 +1473,27 @@ function handlePointerMove(event) {
 
 function handlePointerDown(event) {
   if (!state.canvas) return;
+  event.preventDefault();
+  try { state.canvas.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
+  state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (state.pointers.size >= 2) {
+    const points = [...state.pointers.values()];
+    const a = points[0];
+    const b = points[1];
+    const centerX = (a.x + b.x) / 2;
+    const centerY = (a.y + b.y) / 2;
+    const centerWorld = uiToWorld(centerX, centerY);
+    state.dragState = {
+      type: 'pinch',
+      startDistance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+      startScale: state.transform.scale,
+      centerWorldX: centerWorld.x,
+      centerWorldY: centerWorld.y,
+    };
+    state.canvas.classList.add('is-dragging');
+    hideTooltip();
+    return;
+  }
   const node = getNodeAtPoint(event.clientX, event.clientY);
   if (node && node.interactive !== false) {
     const world = uiToWorld(event.clientX, event.clientY);
@@ -1464,7 +1513,16 @@ function handlePointerDown(event) {
   state.canvas.classList.add('is-dragging');
 }
 
-function handlePointerUp() {
+function handlePointerUp(event) {
+  if (event?.pointerId != null) {
+    state.pointers.delete(event.pointerId);
+    try { state.canvas?.releasePointerCapture?.(event.pointerId); } catch { /* noop */ }
+  }
+  if (state.dragState?.type === 'pinch') {
+    state.dragState = null;
+    if (state.canvas) state.canvas.classList.remove('is-dragging');
+    return;
+  }
   if (state.dragState?.type === 'node') {
     const wasClick = !state.dragState.moved;
     const clickedNodeId = state.dragState.nodeId;
@@ -1624,6 +1682,7 @@ function setupCanvas() {
   state.canvas.addEventListener('pointerdown', handlePointerDown);
   window.addEventListener('pointermove', handlePointerMove);
   window.addEventListener('pointerup', handlePointerUp);
+  window.addEventListener('pointercancel', handlePointerUp);
   state.canvas.addEventListener('wheel', handleWheel, { passive: false });
   state.stageEl.addEventListener('dragenter', (event) => {
     event.preventDefault();
@@ -1755,6 +1814,9 @@ function toggleDefaultShape() {
 }
 
 function init() {
+  if (state.initialized && (!state.canvas || !state.canvas.isConnected || document.getElementById('memory-graph-canvas') !== state.canvas)) {
+    memoryPageUnmount();
+  }
   if (state.initialized) return;
   state.initialized = true;
   setupCanvas();
@@ -1780,6 +1842,33 @@ export async function refreshMemoryGraph(forceIndex = false) {
   }
 }
 
+export function memoryPageUnmount() {
+  if (state.canvas) {
+    state.canvas.removeEventListener('pointerdown', handlePointerDown);
+    state.canvas.removeEventListener('wheel', handleWheel);
+    state.canvas.classList.remove('is-dragging');
+  }
+  window.removeEventListener('pointermove', handlePointerMove);
+  window.removeEventListener('pointerup', handlePointerUp);
+  window.removeEventListener('pointercancel', handlePointerUp);
+  try { state.resizeObserver?.disconnect?.(); } catch { /* noop */ }
+  if (state.raf) cancelAnimationFrame(state.raf);
+  clearTimeout(state.shuffleTimer);
+  state.initialized = false;
+  state.canvas = null;
+  state.ctx = null;
+  state.stageEl = null;
+  state.tooltipEl = null;
+  state.emptyEl = null;
+  state.detailEl = null;
+  state.statsEl = null;
+  state.dragState = null;
+  state.pointers.clear();
+  state.graphFetchPromise = null;
+  state.resizeObserver = null;
+  state.raf = 0;
+}
+
 export function memoryPageActivate() {
   const wasInitialized = state.initialized;
   init();
@@ -1790,10 +1879,10 @@ export function memoryPageActivate() {
 
 window.refreshMemoryGraph = refreshMemoryGraph;
 window.memoryPageActivate = memoryPageActivate;
+window.memoryPageUnmount = memoryPageUnmount;
 window.toggleMemoryControlsPanel = toggleMemoryControlsPanel;
 window.closeMemoryDetailDrawer = closeMemoryDetailDrawer;
 window.openAddMemoryDrawer = openAddMemoryDrawer;
 window.shuffleMemoryGraph = shuffleMemoryGraph;
 window.triggerMemoryImageInput = triggerMemoryImageInput;
 window.toggleDefaultShape = toggleDefaultShape;
-init();

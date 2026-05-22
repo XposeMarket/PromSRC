@@ -10,15 +10,22 @@
  */
 
 import http from 'http';
+import https from 'https';
 import os from 'os';
+import fs from 'fs';
+import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { getConfig } from '../../config/config';
+import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { setWss } from '../comms/broadcaster';
 import { hookBus } from '../hooks';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
 import {
   browserHandleUserInput,
   browserInspectPoint,
+  browserGetInteractableMap,
+  setBrowserLiveSelectionFromPack,
+  clearBrowserLiveSelectionTracker,
   getBrowserNamedElementsForSession,
   saveBrowserNamedElement,
   saveBrowserTeachSessionSnapshot,
@@ -37,7 +44,7 @@ import { isProviderStatusChecking, readProviderStatusCache } from '../provider-s
 import { readCachedGpuInfo } from '../gpu-detector';
 
 export interface ServerBundle {
-  server: http.Server;
+  server: http.Server | https.Server;
   wss: WebSocketServer;
 }
 
@@ -49,6 +56,140 @@ function sendRawJson(res: http.ServerResponse, body: any): void {
   res.setHeader('Connection', 'close');
   res.setHeader('Content-Length', Buffer.byteLength(json));
   res.end(json);
+}
+
+const STATIC_MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.svg': 'image/svg+xml; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+const RAW_FILE_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
+
+function isInsideRoot(filePath: string, root: string): boolean {
+  const resolved = path.resolve(filePath);
+  const resolvedRoot = path.resolve(root);
+  return resolved === resolvedRoot || resolved.startsWith(`${resolvedRoot}${path.sep}`);
+}
+
+function sendRawFile(req: http.IncomingMessage, res: http.ServerResponse, filePath: string): boolean {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return false;
+    res.statusCode = 200;
+    res.setHeader('Content-Type', STATIC_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Connection', 'close');
+    res.setHeader('Content-Length', stat.size);
+    if (String(req.method || 'GET').toUpperCase() === 'HEAD') {
+      res.end();
+      return true;
+    }
+    if (stat.size <= RAW_FILE_BUFFER_LIMIT_BYTES) {
+      res.end(fs.readFileSync(filePath));
+      return true;
+    }
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', () => {
+      if (!res.headersSent) res.statusCode = 500;
+      try { res.end(); } catch {}
+    });
+    stream.pipe(res);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tryRawWebStaticFastPath(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  const rawUrl = String(req.url || '/');
+  if (rawUrl.startsWith('/api/') || rawUrl === '/ws') return false;
+
+  let pathname = '/';
+  try {
+    pathname = decodeURIComponent(new URL(rawUrl, 'http://localhost').pathname || '/');
+  } catch {
+    return false;
+  }
+  if (pathname.includes('\0')) return false;
+
+  const root = resolvePrometheusRoot();
+  const webUiRoot = isPublicDistributionBuild() && hasPublicWebUiBuild()
+    ? getPublicWebUiRoot()
+    : path.join(root, 'web-ui');
+  const publicRoot = getPublicWebUiRoot();
+  const candidates: Array<{ root: string; file: string }> = [];
+
+  const push = (candidateRoot: string, relPath: string) => {
+    const file = path.join(candidateRoot, relPath.replace(/^\/+/, ''));
+    if (isInsideRoot(file, candidateRoot)) candidates.push({ root: candidateRoot, file });
+  };
+
+  if (pathname === '/' || pathname === '/index.html') {
+    push(webUiRoot, 'index.html');
+  } else if (pathname.startsWith('/src/')) {
+    push(webUiRoot, pathname);
+  } else if (pathname.startsWith('/static/')) {
+    push(publicRoot, pathname);
+    push(webUiRoot, pathname);
+  } else if (pathname.startsWith('/assets/')) {
+    push(path.join(root, 'assets'), pathname.slice('/assets/'.length));
+  } else if (pathname.startsWith('/vendor/pretext/')) {
+    push(path.join(root, 'node_modules', '@chenglou', 'pretext', 'dist'), pathname.slice('/vendor/pretext/'.length));
+  } else if (pathname.startsWith('/vendor/jspdf/')) {
+    push(path.join(root, 'node_modules', 'jspdf', 'dist'), pathname.slice('/vendor/jspdf/'.length));
+  } else {
+    push(webUiRoot, pathname);
+  }
+
+  for (const item of candidates) {
+    if (fs.existsSync(item.file) && sendRawFile(req, res, item.file)) return true;
+  }
+  return false;
+}
+
+function tryHttpsRedirect(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  httpsPort?: number,
+): boolean {
+  if (!httpsPort) return false;
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  const rawUrl = String(req.url || '/');
+  if (rawUrl.startsWith('/api/') || rawUrl === '/ws') return false;
+
+  // If the request reached us through an HTTPS-terminating proxy (e.g.
+  // Tailscale Funnel), the public-facing connection is already https and
+  // redirecting to our local httpsPort would point the client at an
+  // internal port it can't reach. Trust the standard forwarded header.
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  if (xfProto === 'https') return false;
+
+  const hostHeader = String(req.headers.host || '').trim();
+  const hostname = hostHeader.startsWith('[')
+    ? hostHeader.slice(0, hostHeader.indexOf(']') + 1)
+    : (hostHeader.split(':')[0] || 'localhost');
+  const location = `https://${hostname}:${httpsPort}${rawUrl || '/'}`;
+  res.statusCode = 307;
+  res.setHeader('Location', location);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Connection', 'close');
+  res.end();
+  return true;
 }
 
 function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerResponse): boolean {
@@ -126,31 +267,88 @@ export function createServer(
   app: http.RequestListener,
   port: number,
   host: string,
+  tlsOptions?: https.ServerOptions,
+  redirectHttpsPort?: number,
 ): ServerBundle {
-  const server = http.createServer((req, res) => {
-    res.setHeader('Connection', 'close');
-    res.on('finish', () => {
+  const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
+    const pathname = String(req.url || '').split('?')[0];
+    const isChatSseRequest = String(req.method || '').toUpperCase() === 'POST' && pathname === '/api/chat';
+    if (!isChatSseRequest) {
+      res.setHeader('Connection', 'close');
+      res.shouldKeepAlive = false;
+    }
+    const destroyRequestSocket = () => {
+      if (isChatSseRequest) return;
       setImmediate(() => {
         try { req.socket.destroy(); } catch {}
       });
-    });
+    };
+    req.on('aborted', destroyRequestSocket);
+    req.on('error', destroyRequestSocket);
+    res.on('finish', destroyRequestSocket);
+    res.on('close', destroyRequestSocket);
     if (tryRawGatewayFastPath(req, res)) return;
+    if (!tlsOptions && tryHttpsRedirect(req, res, redirectHttpsPort)) return;
+    if (tryRawWebStaticFastPath(req, res)) return;
     app(req, res);
-  });
-  server.requestTimeout = 30_000;
-  server.headersTimeout = 15_000;
-  server.keepAliveTimeout = 1_000;
-  server.maxRequestsPerSocket = 100;
+  };
+  const server = tlsOptions
+    ? https.createServer(tlsOptions, requestHandler)
+    : http.createServer(requestHandler);
+  const httpSockets = new Set<any>();
+  const socketSweeper = setInterval(() => {
+    for (const socket of httpSockets) {
+      if (socket.destroyed || socket.readyState !== 'open' || socket.readableEnded || socket.writableEnded) {
+        httpSockets.delete(socket);
+        try { socket.destroy(); } catch {}
+      }
+    }
+  }, 2_000);
+  socketSweeper.unref?.();
+  server.on('close', () => clearInterval(socketSweeper));
+  server.requestTimeout = 0;
+  server.headersTimeout = 60_000;
+  server.keepAliveTimeout = 65_000;
+  server.maxRequestsPerSocket = 0;
   server.on('connection', (socket) => {
+    httpSockets.add(socket);
     socket.setNoDelay(true);
-    socket.setKeepAlive(false);
-    socket.setTimeout(30_000, () => socket.destroy());
+    socket.setKeepAlive(true, 30_000);
+    socket.setTimeout(0);
     socket.on('end', () => setImmediate(() => {
       try { socket.destroy(); } catch {}
     }));
+    socket.on('close', () => httpSockets.delete(socket));
     socket.on('error', () => {});
   });
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  server.on('upgrade', (req, socket, head) => {
+    httpSockets.delete(socket);
+    let pathname = '';
+    try {
+      pathname = new URL(String(req.url || ''), 'http://localhost').pathname;
+    } catch {}
+    if (pathname !== '/ws') return;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req);
+    });
+  });
+  const wss = new WebSocketServer({ noServer: true });
+  const wsSweeper = setInterval(() => {
+    wss.clients.forEach((client: any) => {
+      const socket = client?._socket;
+      if (
+        client.readyState !== WebSocket.OPEN
+        || socket?.destroyed
+        || socket?.readyState !== 'open'
+        || socket?.readableEnded
+        || socket?.writableEnded
+      ) {
+        try { client.terminate(); } catch {}
+      }
+    });
+  }, 2_000);
+  wsSweeper.unref?.();
+  server.on('close', () => clearInterval(wsSweeper));
 
   // Register wss with the broadcaster so broadcastWS() works everywhere
   setWss(wss);
@@ -164,6 +362,18 @@ export function createServer(
       return;
     }
     console.error('[Gateway] WebSocket error:', err?.message || err);
+    process.exit(1);
+  });
+
+  server.on('error', (err: any) => {
+    if (err?.code === 'EADDRINUSE') {
+      console.error(`[Gateway] Port ${host}:${port} is already in use.`);
+      console.error('[Gateway] Another gateway instance is likely already running or the port is stuck.');
+      console.error('[Gateway] Close the other process or run: prom gateway stop');
+      process.exit(1);
+      return;
+    }
+    console.error('[Gateway] HTTP server error:', err?.message || err);
     process.exit(1);
   });
 
@@ -205,6 +415,14 @@ export function createServer(
       try { ws.ping(); } catch { try { ws.terminate(); } catch {} }
     }, 30_000);
     if (typeof (heartbeatTimer as any).unref === 'function') (heartbeatTimer as any).unref();
+    req.socket.on('end', () => {
+      clearHeartbeat();
+      try { ws.terminate(); } catch {}
+    });
+    req.socket.on('error', () => {
+      clearHeartbeat();
+      try { ws.terminate(); } catch {}
+    });
 
     const pending = listPendingStartupNotifications().filter((n) => !n.delivered?.web);
     const sendStartupNotification = (item: any) => {
@@ -221,6 +439,23 @@ export function createServer(
       try {
         ws.send(JSON.stringify(payload));
         console.log(`[Prom] Sent startup notification ${item.id} -> session ${item.sessionId}`);
+        if (item.devReload?.enabled) {
+          const delayMs = Number.isFinite(Number(item.devReload.delayMs)) ? Math.max(250, Number(item.devReload.delayMs)) : 1200;
+          setTimeout(() => {
+            try {
+              if (ws.readyState === 1) {
+                ws.send(JSON.stringify({
+                  type: 'dev_reload_requested',
+                  target: 'desktop',
+                  source: 'hot_restart',
+                  reason: item.devReload?.reason || item.title || 'Prometheus dev changes applied',
+                  surfaces: item.devReload?.surfaces || [],
+                  timestamp: Date.now(),
+                }));
+              }
+            } catch {}
+          }, delayMs);
+        }
       } catch (err: any) {
         console.warn(`[Prom] Failed to send startup notification ${item.id}: ${err?.message || err}`);
       }
@@ -442,19 +677,59 @@ export function createServer(
           return;
         }
         if (msg?.type === 'browser:inspect_point' && msg?.sessionId) {
+          const trackSelection = msg?.track === true || msg?.purpose === 'select';
+          const purpose = String(msg?.purpose || '').trim() || 'select';
           browserInspectPoint(
             String(msg.sessionId || ''),
             Number(msg.x),
             Number(msg.y),
+            { trackSelection },
           ).then((selection) => {
             const payload = {
               type: 'browser:selection',
               sessionId: String(msg.sessionId || ''),
               selection,
+              purpose,
+              requestId: msg?.requestId,
               timestamp: Date.now(),
             };
             broadcastPayload(payload);
           }).catch(() => {});
+          return;
+        }
+        if (msg?.type === 'browser:inspect_map' && msg?.sessionId) {
+          browserGetInteractableMap(String(msg.sessionId || ''), {
+            limit: Number(msg?.limit) || 240,
+            includeStatic: msg?.includeStatic === true,
+          }).then((mapResult) => {
+            try {
+              ws.send(JSON.stringify({
+                type: 'browser:inspect_map_result',
+                sessionId: String(msg.sessionId || ''),
+                requestId: msg?.requestId,
+                map: mapResult,
+                timestamp: Date.now(),
+              }));
+            } catch {}
+          }).catch(() => {});
+          return;
+        }
+        if (msg?.type === 'browser:track_selection' && msg?.sessionId) {
+          const pack = msg?.pack && typeof msg.pack === 'object' ? msg.pack : null;
+          const normalized = setBrowserLiveSelectionFromPack(String(msg.sessionId || ''), pack);
+          try {
+            ws.send(JSON.stringify({
+              type: 'browser:track_selection_ack',
+              sessionId: String(msg.sessionId || ''),
+              tracked: !!normalized,
+              pack: normalized,
+              timestamp: Date.now(),
+            }));
+          } catch {}
+          return;
+        }
+        if (msg?.type === 'browser:clear_selection' && msg?.sessionId) {
+          clearBrowserLiveSelectionTracker(String(msg.sessionId || ''));
           return;
         }
         if (msg?.type === 'browser:knowledge:request' && msg?.sessionId) {

@@ -12,6 +12,7 @@ import { observeInternalWatchTarget } from '../internal-watch/internal-watch-run
 import { listTasks, loadTask, saveTask, updateTaskStatus } from '../tasks/task-store';
 import { peekPendingEvents } from '../teams/notify-bridge';
 import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
+import { normalizeScheduleSpec } from './schedule-pattern';
 
 export interface SchedulerAdminResult {
   success: boolean;
@@ -467,14 +468,26 @@ function buildSchedulePatch(args: any): { patch: Record<string, any>; errors: st
     }
   }
   const rawKind = String(schedule.kind || args?.kind || '').trim().toLowerCase();
-  if (rawKind === 'one_shot' || rawKind === 'one-shot') patch.type = 'one-shot';
-  if (rawKind === 'recurring') patch.type = 'recurring';
-  if (schedule.cron !== undefined || args?.cron !== undefined) patch.schedule = String(schedule.cron ?? args.cron ?? '').trim();
-  if (schedule.run_at !== undefined || args?.run_at !== undefined) {
-    const rawRunAt = String(schedule.run_at ?? args.run_at ?? '').trim();
-    const parsed = new Date(rawRunAt);
-    if (!Number.isFinite(parsed.getTime())) errors.push(`Invalid run_at value: "${rawRunAt}"`);
-    else patch.runAt = parsed.toISOString();
+  const hasScheduleUpdate = rawKind || schedule.cron !== undefined || args?.cron !== undefined || schedule.run_at !== undefined || args?.run_at !== undefined || schedule.text !== undefined || schedule.time !== undefined || schedule.days_of_week !== undefined || schedule.daysOfWeek !== undefined || schedule.repeat !== undefined || schedule.every_hours !== undefined || schedule.everyHours !== undefined || schedule.every_days !== undefined || schedule.everyDays !== undefined;
+  if (hasScheduleUpdate) {
+    try {
+      const normalized = normalizeScheduleSpec({
+        ...schedule,
+        kind: schedule.kind || args?.kind || undefined,
+        cron: schedule.cron ?? args?.cron,
+        run_at: schedule.run_at ?? args?.run_at,
+      }, patch.tz);
+      patch.type = normalized.kind === 'one-shot' ? 'one-shot' : 'recurring';
+      if (normalized.kind === 'recurring') {
+        patch.schedule = normalized.cron;
+        patch.runAt = null;
+      } else {
+        patch.runAt = normalized.runAt;
+        patch.schedule = null;
+      }
+    } catch (err: any) {
+      errors.push(err?.message || String(err));
+    }
   }
   if (args?.expected_outputs !== undefined || args?.expectedOutputs !== undefined) {
     patch.expectedOutputs = normalizeExpectedOutputs(args.expected_outputs ?? args.expectedOutputs);

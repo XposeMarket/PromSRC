@@ -85,7 +85,6 @@ function abCall(method: string, path: string, body?: object): Promise<any> {
     req.end();
   });
 }
-
 /** abCall with automatic retry on transient errors */
 async function abCallWithRetry(method: string, path: string, body?: object, retries = MAX_RETRIES): Promise<any> {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -911,29 +910,4 @@ export function registerAgentBuilderTools(toolsArray: any[]): any[] {
   }
   console.log(`[AgentBuilder] Registered ${AGENT_BUILDER_TOOL_DEFINITIONS.length} Agent Builder tools (agent_builder.enabled=true)`);
   return AGENT_BUILDER_TOOL_DEFINITIONS;
-}
-
-// ─── Utility: inject workflow memory into system prompt ───────────────────────
-
-/**
- * Returns a block to append to Prometheus's system prompt.
- * Tells the LLM what workflows already exist so it doesn't try to recreate them.
- *
- * Usage in server-v2.ts:
- *   const systemPrompt = BASE_SYSTEM_PROMPT + '\n\n' + getWorkflowContextBlock();
- */
-export function getWorkflowContextBlock(): string {
-  const summary = workflowStore.toLLMSummary();
-  const stats = workflowStore.getStats();
-
-  return [
-    '---',
-    '## Your Workflow Memory',
-    `You have ${stats.total_workflows} workflow(s) registered (${stats.active_workflows} active).`,
-    'These are ALREADY BUILT AND DEPLOYED. Do not recreate them.',
-    'ALWAYS call search_workflow_templates() before architect_workflow().',
-    '',
-    summary,
-    '---'
-  ].join('\n');
 }

@@ -44,6 +44,7 @@ export function createHyperframesController(options = {}) {
     onPick = () => {},
     onError = () => {},
     canvasScale = 1,
+    useStudio = false,
   } = options;
 
   if (!element || element.type !== 'hyperframes') {
@@ -59,10 +60,41 @@ export function createHyperframesController(options = {}) {
   let pendingPatchOps = [];
   let patchTimer = null;
   let preview = null;
+  let studioFrame = null;
   let disposed = false;
+
+  function sourceProjectEntryPath() {
+    const projectPath = String(element.meta?.projectPath || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
+    const entryFile = String(element.meta?.entryFile || 'index.html').trim().replace(/\\/g, '/').replace(/^\/+/g, '') || 'index.html';
+    if (!projectPath) return '';
+    return `${projectPath}/${entryFile}`.replace(/\/+/g, '/');
+  }
+
+  async function ensureSourceHtml() {
+    if (html.trim()) return html;
+    const entryPath = sourceProjectEntryPath();
+    if (!entryPath || typeof api.get !== 'function') return html;
+    try {
+      const res = await api.get(`/api/canvas/file?path=${encodeURIComponent(entryPath)}`);
+      const content = typeof res?.content === 'string' ? res.content : '';
+      if (content.trim()) {
+        html = content;
+        onSourceChanged(html);
+      }
+    } catch (err) {
+      onError({ stage: 'load-project-source', error: err?.message || String(err), path: entryPath });
+    }
+    return html;
+  }
 
   async function loadPreview() {
     try {
+      await ensureSourceHtml();
+      if (!html.trim()) throw new Error('HyperFrames source HTML is missing.');
+      if (useStudio === true) {
+        loadStudio();
+        return;
+      }
       const res = await api.post('/api/canvas/hyperframes/preview-html', { html });
       const previewHtml = res?.previewHtml || html;
       if (preview) {
@@ -89,6 +121,39 @@ export function createHyperframesController(options = {}) {
     }
   }
 
+  function loadStudio() {
+    if (preview) {
+      try { preview.dispose(); } catch {}
+      preview = null;
+    }
+    if (!studioFrame) {
+      mount.innerHTML = '';
+      studioFrame = document.createElement('iframe');
+      studioFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-downloads');
+      studioFrame.className = 'creative-hyperframes-studio-frame';
+      studioFrame.title = element.title || element.meta?.compositionId || 'HyperFrames Studio';
+      studioFrame.style.cssText = 'display:block;width:100%;height:100%;border:0;background:#080a12;';
+      studioFrame.src = '/api/canvas/hyperframes/studio';
+      studioFrame.addEventListener('load', sendStudioHtml);
+      mount.appendChild(studioFrame);
+    } else {
+      sendStudioHtml();
+    }
+  }
+
+  function sendStudioHtml() {
+    try {
+      studioFrame?.contentWindow?.postMessage({
+        source: 'prometheus-hyperframes-studio-parent',
+        type: 'load-html',
+        elementId: element.id,
+        html,
+      }, '*');
+    } catch (err) {
+      onError({ stage: 'studio-load-html', error: err?.message || String(err) });
+    }
+  }
+
   function applyExtraction(res = {}) {
     const nextExtraction = buildExtractionFromMeta({
       ...(element.meta || {}),
@@ -103,6 +168,8 @@ export function createHyperframesController(options = {}) {
 
   async function refreshLayers() {
     try {
+      await ensureSourceHtml();
+      if (!html.trim()) return;
       const res = await api.post('/api/canvas/hyperframes/extract-layers', { html });
       if (res?.success) {
         applyExtraction(res);
@@ -130,6 +197,7 @@ export function createHyperframesController(options = {}) {
         applyExtraction(res);
         // Reload preview with new source so visuals update.
         if (preview) preview.setHtml(await wrappedPreviewHtml());
+        if (studioFrame) sendStudioHtml();
       } else if (res?.warnings?.length) {
         onError({ stage: 'apply-patch', warnings: res.warnings });
       }
@@ -179,6 +247,7 @@ export function createHyperframesController(options = {}) {
     setHtml(nextHtml) {
       html = String(nextHtml || '');
       onSourceChanged(html);
+      if (studioFrame) sendStudioHtml();
       loadPreview();
       refreshLayers();
     },
@@ -188,6 +257,8 @@ export function createHyperframesController(options = {}) {
       if (patchTimer) clearTimeout(patchTimer);
       if (preview) preview.dispose();
       preview = null;
+      if (studioFrame?.parentNode) studioFrame.parentNode.removeChild(studioFrame);
+      studioFrame = null;
     },
   };
 }

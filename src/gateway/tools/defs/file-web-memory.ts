@@ -432,7 +432,7 @@ export function getFileWebMemoryTools(): any[] {
         parameters: {
           type: 'object', required: ['file'],
           properties: {
-            file: { type: 'string', description: 'Allowlisted prom-root file path, e.g. "SELF.md" or "scripts/dev-server.ts".' },
+            file: { type: 'string', description: 'Allowlisted prom-root file path, e.g. "scripts/dev-server.ts". SELF.md is a workspace-root file; use read_file("SELF.md").' },
           },
         },
       },
@@ -443,12 +443,12 @@ export function getFileWebMemoryTools(): any[] {
         name: 'read_prom_file',
         description:
           'Read an allowlisted file from the real Prometheus project root. READ-ONLY — internal/dev inspection only. ' +
-          'Use this for launcher/bootstrap/debug surfaces outside src/ and web-ui/, such as SELF.md, AGENTS.md, scripts/, electron/, build/, dist/, or .prometheus/. ' +
+          'Use this for launcher/bootstrap/debug surfaces outside src/ and web-ui/, such as scripts/, electron/, build/, dist/, or .prometheus/. SELF.md and AGENTS.md are workspace-root files; use read_file for them. ' +
           'Supports start_line+num_lines plus head/tail, and returns a directory listing when the target is a directory. Hidden in public/Electron builds.',
         parameters: {
           type: 'object', required: ['file'],
           properties: {
-            file: { type: 'string', description: 'Allowlisted prom-root path, e.g. "SELF.md" or "scripts".' },
+            file: { type: 'string', description: 'Allowlisted prom-root path, e.g. "scripts". SELF.md is a workspace-root file; use read_file("SELF.md").' },
             start_line: { type: 'number', description: '1-based line to start reading from (default: 1). Use with num_lines for a specific range.' },
             num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
             head: { type: 'number', description: 'Return only first N lines.' },
@@ -828,14 +828,14 @@ export function getFileWebMemoryTools(): any[] {
 	      type: 'function',
 	      function: {
 	        name: 'web_search',
-        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers. Use provider to force one engine, or provider:"multi" to force all configured engines. Use web_fetch on result URLs to read full page content.',
+        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, or provider:"multi" to force all configured engines. Use web_fetch on result URLs to read full page content.',
         parameters: {
           type: 'object', required: ['query'],
           properties: {
             query: { type: 'string', description: 'Search query' },
             max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
             multi_engine: { type: 'boolean', description: 'Default true. When true, queries every configured credentialed provider. Set false to use only the preferred search provider from Settings.' },
-            provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg'], description: 'Optional engine selector. Use multi for every configured engine, or a provider name for a true single-provider search.' },
+            provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional engine selector. Use multi for every configured engine, or a provider name for a true single-provider search.' },
           },
         },
       },
@@ -851,7 +851,7 @@ export function getFileWebMemoryTools(): any[] {
           properties: {
             query: { type: 'string', description: 'Search query' },
             max_results: { type: 'number', description: 'Maximum results to return. Default 5, max 10.' },
-            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg'], description: 'Optional provider override. Omit to use Settings preferred provider.' },
+            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider override. Omit to use Settings preferred provider.' },
           },
         },
       },
@@ -1314,7 +1314,7 @@ export function getFileWebMemoryTools(): any[] {
             reference_images: { type: 'array', items: { type: 'string' }, maxItems: 16, description: 'Optional reference images as local/workspace file paths, HTTPS URLs, or data URLs. These are sent as actual image inputs for supported reference/edit generation.' },
             aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired image aspect ratio' },
             count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many images to generate at once' },
-            provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Optional image provider override. Use xai for Grok Imagine.' },
+            provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Optional image provider override. openai may use either direct OpenAI API credentials or saved OpenAI OAuth/Codex auth; use xai for Grok Imagine.' },
             model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/images' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
@@ -1674,6 +1674,7 @@ export function getFileWebMemoryTools(): any[] {
             content: { type: 'string', description: 'Note content — what was done, decided, or discovered' },
             tag: { type: 'string', description: 'Optional tag: task, debug, discovery, or general' },
             task_id: { type: 'string', description: 'Optional task ID if related to a specific background task' },
+            dev_edit_id: { type: 'string', description: 'Optional dev edit id. Use with tag "dev_edit_complete" after prom_apply_dev_changes restarts/reloads Prometheus.' },
             step: { type: 'string', description: 'Optional step label' },
           },
         },

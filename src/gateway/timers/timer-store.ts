@@ -18,6 +18,8 @@ export interface MainChatTimer {
   completedAt?: string;
   resultPreview?: string;
   error?: string;
+  origin?: Record<string, any>;
+  delivery?: Record<string, any>;
 }
 
 interface TimerStoreData {
@@ -57,6 +59,8 @@ function normalizeTimer(raw: any): MainChatTimer | null {
     completedAt: raw?.completedAt ? String(raw.completedAt) : undefined,
     resultPreview: raw?.resultPreview ? String(raw.resultPreview) : undefined,
     error: raw?.error ? String(raw.error) : undefined,
+    origin: raw?.origin && typeof raw.origin === 'object' ? raw.origin : undefined,
+    delivery: raw?.delivery && typeof raw.delivery === 'object' ? raw.delivery : undefined,
   };
 }
 
@@ -92,6 +96,8 @@ export function createMainChatTimer(input: {
   instruction: string;
   dueAt: Date;
   label?: string;
+  origin?: Record<string, any>;
+  delivery?: Record<string, any>;
 }): MainChatTimer {
   const instruction = String(input.instruction || '').trim();
   const sessionId = String(input.sessionId || '').trim();
@@ -109,6 +115,8 @@ export function createMainChatTimer(input: {
     status: 'pending',
     createdAt: now,
     updatedAt: now,
+    origin: input.origin && typeof input.origin === 'object' ? input.origin : undefined,
+    delivery: input.delivery && typeof input.delivery === 'object' ? input.delivery : undefined,
   };
   const store = loadStore();
   store.timers.push(timer);

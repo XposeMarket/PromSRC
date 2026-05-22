@@ -146,8 +146,8 @@ export function addClip(comp: CreativeComposition, input: AddClipInput): Creativ
     ? Math.max(inMs + 1, explicitOut)
     : inMs + Math.max(1, explicitDur || 4000);
   const lane = String(input.lane || input.source?.kind || '').trim().toLowerCase();
-  if (lane !== 'html-motion' && lane !== 'remotion') {
-    throw new Error('Video composition clips must use html-motion or remotion lanes.');
+  if (lane !== 'html-motion' && lane !== 'remotion' && lane !== 'hyperframes') {
+    throw new Error('Video composition clips must use html-motion, remotion, or hyperframes lanes.');
   }
 
   const clip = normalizeCreativeClip({
@@ -324,14 +324,21 @@ export function lintComposition(comp: CreativeComposition): CompositionLintResul
       if (a.outMs <= a.inMs) {
         issues.push({ severity: 'error', code: 'clip_zero_duration', message: 'Clip has non-positive duration.', clipId: a.id, trackId: track.id });
       }
-      if (a.lane !== 'html-motion' && a.lane !== 'remotion') {
-        issues.push({ severity: 'error', code: 'clip_lane_removed', message: 'Video clips must use html-motion or remotion lanes.', clipId: a.id, trackId: track.id });
+      if (a.lane !== 'html-motion' && a.lane !== 'remotion' && a.lane !== 'hyperframes') {
+        issues.push({ severity: 'error', code: 'clip_lane_removed', message: 'Video clips must use html-motion, remotion, or hyperframes lanes.', clipId: a.id, trackId: track.id });
       }
       if (a.lane === 'html-motion' && (a.source.kind !== 'html-motion' || !a.source.clipPath)) {
         issues.push({ severity: 'error', code: 'html_motion_source_missing', message: 'HTML Motion clips require a clipPath source.', clipId: a.id, trackId: track.id });
       }
       if (a.lane === 'remotion' && (a.source.kind !== 'remotion' || !a.source.templateId)) {
         issues.push({ severity: 'error', code: 'remotion_source_missing', message: 'Remotion clips require a templateId source.', clipId: a.id, trackId: track.id });
+      }
+      if (a.lane === 'hyperframes') {
+        const hasInlineHtml = a.source.kind === 'hyperframes' && typeof a.source.html === 'string' && a.source.html.trim().length > 0;
+        const hasProjectEntry = a.source.kind === 'hyperframes' && typeof a.source.projectPath === 'string' && a.source.projectPath.trim().length > 0;
+        if (!hasInlineHtml && !hasProjectEntry) {
+          issues.push({ severity: 'error', code: 'hyperframes_source_missing', message: 'HyperFrames clips require source HTML or project metadata.', clipId: a.id, trackId: track.id });
+        }
       }
       for (let j = i + 1; j < items.length; j++) {
         const b = items[j];

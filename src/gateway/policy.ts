@@ -61,13 +61,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     tier: 'propose',
     riskScore: 3,
   },
-  // Desktop control → COMMIT
+  // Routine desktop control → READ
   {
     id: 'desktop-control',
-    description: 'Desktop automation requires explicit approval',
+    description: 'Routine desktop automation is allowed; final high-impact submissions should request explicit final-action approval',
     toolPattern: 'desktop_click|desktop_type|desktop_press|desktop_drag|desktop_launch|desktop_close',
-    tier: 'commit',
-    riskScore: 9,
+    tier: 'read',
+    riskScore: 3,
   },
   // Browser automation → PROPOSE
   {
@@ -104,7 +104,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'self-update',
     description: 'Self-update operations require approval',
-    toolPattern: 'self_update|propose_repair',
+    toolPattern: 'self_update',
     tier: 'commit',
     riskScore: 9,
   },

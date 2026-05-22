@@ -37,6 +37,10 @@ import {
   type SkillRequires,
   type SkillToolBinding,
 } from './skill-eligibility';
+import {
+  auditSkillImport,
+  type SkillImportAudit,
+} from './skill-import-auditor';
 
 export interface Skill {
   id: string;
@@ -93,6 +97,13 @@ export interface SkillChangeLedgerEntry {
   snapshotDir?: string;
   changedPaths: string[];
   reason?: string;
+}
+
+export interface SkillImportOptions {
+  id?: string;
+  overwrite?: boolean;
+  mode?: 'adapt' | 'force';
+  applySafeFixes?: boolean;
 }
 
 function normalizeSkillMatchText(value: string): string {
@@ -555,7 +566,26 @@ export class SkillsManager {
       .slice(0, Math.max(1, Math.floor(Number(limit) || 20)));
   }
 
-  async importBundle(source: string, options?: { id?: string; overwrite?: boolean }): Promise<Skill> {
+  async auditImportBundles(source: string, options?: { id?: string }): Promise<SkillImportAudit[]> {
+    const sourceText = String(source || '').trim();
+    if (!sourceText) throw new Error('source is required');
+    const tempRoot = fs.mkdtempSync(path.join(this.skillsDir, '.import-audit-'));
+
+    try {
+      const staged = await stageSkillBundleSource(sourceText, tempRoot);
+      const roots = findBundleRoots(staged);
+      if (!roots.length) throw new Error('No skill.json or SKILL.md found in bundle source');
+      if (options?.id && roots.length !== 1) throw new Error('id override can only be used when auditing a single skill bundle');
+      return roots.map((root) => auditSkillImport(root, {
+        source: sourceText,
+        fallbackId: options?.id,
+      }));
+    } finally {
+      try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch {}
+    }
+  }
+
+  async importBundle(source: string, options?: SkillImportOptions): Promise<Skill> {
     const installed = await this.importBundles(source, options);
     if (installed.length !== 1) {
       throw new Error(`Expected one skill bundle but found ${installed.length}. Leave id unset and use collection import semantics.`);
@@ -563,10 +593,12 @@ export class SkillsManager {
     return installed[0];
   }
 
-  async importBundles(source: string, options?: { id?: string; overwrite?: boolean }): Promise<Skill[]> {
+  async importBundles(source: string, options?: SkillImportOptions): Promise<Skill[]> {
     const sourceText = String(source || '').trim();
     if (!sourceText) throw new Error('source is required');
     const overwrite = options?.overwrite === true;
+    const mode = options?.mode || 'adapt';
+    const applySafeFixes = options?.applySafeFixes !== false;
     const tempRoot = fs.mkdtempSync(path.join(this.skillsDir, '.import-'));
 
     try {
@@ -580,6 +612,14 @@ export class SkillsManager {
         const pkg = loadSkillPackage(root, options?.id || path.basename(root));
         if (!pkg) continue;
         if (!pkg.validation.ok) throw new Error(`Invalid skill bundle "${pkg.id}": ${pkg.validation.errors.join('; ')}`);
+        const audit = auditSkillImport(root, {
+          source: sourceText,
+          fallbackId: options?.id,
+        });
+        if (mode !== 'force' && audit.status === 'blocked') {
+          const first = audit.findings.find((finding) => finding.severity === 'critical' || finding.severity === 'error');
+          throw new Error(`Imported skill bundle "${audit.skillId}" blocked by compatibility audit: ${first?.code || audit.summary}${first?.message ? ` - ${first.message}` : ''}`);
+        }
         assertSkillScanAllowed(scanSkillDirectory(root), `Imported skill bundle "${pkg.id}"`);
 
         const id = sanitizeSkillId(options?.id || pkg.id);
@@ -595,7 +635,16 @@ export class SkillsManager {
           importedAt: new Date().toISOString(),
           upstreamFolder: path.basename(root),
           prometheusImportedVersion: 1,
+          compatibilityAudit: {
+            status: audit.status,
+            sourceKind: audit.sourceKind,
+            findings: audit.findings.length,
+          },
         });
+        this.writeImportAudit(targetDir, id, audit);
+        if (mode !== 'force' && applySafeFixes && audit.manifestOverlay && audit.status !== 'blocked') {
+          this.writeManifestOverlayFile(targetDir, id, { ...audit.manifestOverlay, id });
+        }
         this.scanSkills();
         const loaded = this.get(id);
         if (!loaded) throw new Error(`Bundle import completed but skill "${id}" could not be loaded`);
@@ -614,6 +663,27 @@ export class SkillsManager {
       fs.writeFileSync(p, JSON.stringify(provenance, null, 2) + '\n', 'utf-8');
     } catch (err: any) {
       console.warn(`[Skills] Failed to write provenance for ${id}: ${err?.message || err}`);
+    }
+  }
+
+  private writeManifestOverlayFile(rootDir: string, id: string, manifest: Record<string, unknown>): void {
+    const p = getSkillOverlayPath(rootDir, id);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const { emoji: _emoji, ...manifestWithoutEmoji } = manifest || {};
+    fs.writeFileSync(p, JSON.stringify({
+      schemaVersion: 'prometheus-skill-bundle-v1',
+      ...manifestWithoutEmoji,
+      id: sanitizeSkillId(String(manifestWithoutEmoji.id || id)),
+    }, null, 2) + '\n', 'utf-8');
+  }
+
+  private writeImportAudit(rootDir: string, id: string, audit: SkillImportAudit): void {
+    try {
+      const p = getSkillImportAuditPath(rootDir, id);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, JSON.stringify(audit, null, 2) + '\n', 'utf-8');
+    } catch (err: any) {
+      console.warn(`[Skills] Failed to write import audit for ${id}: ${err?.message || err}`);
     }
   }
 
@@ -801,13 +871,14 @@ export class SkillsManager {
       `If a skill declares toolBinding metadata, treat requiredTools and defaultWorkflow as the expected operating contract; activate missing tool categories before using the workflow.\n` +
       `If a skill declares assignment.preferredAgent or assignedAgents/assignedTeams, consider routing substantial work to that agent/team when the task matches.\n` +
       `During and after real work, treat skills as living workflow playbooks: notice missing triggers, clearer steps, better tool order, reusable examples, templates, guardrails, and resources that would make the skill more useful next time.\n` +
-      `When a completed workflow seems reusable but no skill fit, briefly offer to turn it into a skill or record it as a candidate; do not interrupt casual conversation with skill maintenance chatter.\n` +
-      `For bundled skill templates/examples/schemas/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed.\n` +
+      `After a complex task (roughly 5+ tool calls), a tricky error fix, or a non-trivial workflow discovery, maintain the skill system while the evidence is fresh. If an existing skill was outdated, incomplete, wrong, or missing a useful example/template/reference, update it in the same turn with skill_resource_write/delete and skill_manifest_write rather than waiting to be asked.\n` +
+      `When a completed workflow seems reusable but no skill fit, create a durable playbook with skill_create_bundle when resources/examples/templates/schemas would help, or skill_create for a simple one-file skill; do not interrupt casual conversation with skill maintenance chatter.\n` +
+      `For bundled skill templates/examples/schemas/prompts/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed. Add focused resources under examples/, templates/, schemas/, prompts/, or references/ instead of bloating SKILL.md.\n` +
       `Use skill_inspect(id) for normalized metadata/provenance, and skill_manifest_write(id,manifest) to enrich imported skills with overlays.\n` +
       `Use skill_import_bundle(source) for directory/zip/GitHub skill bundles; skill_update_from_source(id) to refresh imported bundles; skill_export_bundle(id) to package one.\n` +
       `Use skill_create_bundle for reusable workflows that need templates/schemas/examples/references; skill_resource_write/delete to maintain bundle resources; use skill_create only for simple one-file playbooks.\n` +
       `skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create are core tools.\n` +
-      `Save new reusable workflows with skill_create_bundle when resources or rich metadata would help.` +
+      `Skills that are not maintained become liabilities; keep them current when real work exposes a gap.` +
       matchedBlock
     );
   }
@@ -942,6 +1013,11 @@ function classifyImportSource(source: string): string {
   if (/^https?:\/\//i.test(source)) return source.toLowerCase().split('?')[0].endsWith('.zip') ? 'zip-url' : 'url';
   if (source.toLowerCase().endsWith('.zip')) return 'zip-file';
   return 'directory';
+}
+
+function getSkillImportAuditPath(rootDir: string, skillIdOrFolder?: string): string {
+  const folderName = sanitizeSkillId(skillIdOrFolder || path.basename(rootDir));
+  return path.join(path.dirname(rootDir), '.manifests', `${folderName}.import-audit.json`);
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {

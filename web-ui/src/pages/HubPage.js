@@ -33,6 +33,7 @@ const _expanded = new Set();
 let _skills = [];
 let _hubSkillSearch = '';
 let _goals = [];
+let _curator = { suggestions: [], pending: 0, quarantined: 0, loading: false, actingId: '' };
 const _heatmap = { year: 0, month: 0, counts: {} };
 const _stats = { mode: 'overview', range: 'all', tools: null, models: null, loading: false };
 try {
@@ -435,7 +436,7 @@ function renderStatsTiles() {
   if (_stats.mode === 'overview') {
     const t = (_stats.tools && _stats.tools.stats) || {};
     const m = (_stats.models && _stats.models.stats) || {};
-    const sessions = m.sessions || t.sessions || 0;
+    const sessions = t.chatSessions || m.chatSessions || 0;
     const messages = t.messages || 0;
     const totalTokens = m.totalTokens || 0;
     const activeDays = t.activeDays || m.activeDays || 0;
@@ -475,7 +476,7 @@ function renderStatsTiles() {
     renderStatTile('Reasoning', compactNumber(s.reasoningTokens || 0)),
     renderStatTile('Cache', compactNumber(s.cacheTokens || 0)),
     renderStatTile('Model calls', compactNumber(s.messages || 0)),
-    renderStatTile('Sessions', compactNumber(s.sessions || 0)),
+    renderStatTile('Model sessions', compactNumber(s.modelSessions || s.sessions || 0)),
     renderStatTile('Favorite', String(s.favorite || '—')),
   ].join('');
 
@@ -496,6 +497,7 @@ function renderStatsTiles() {
       <div class="hub-models-table">
         <div class="hub-models-row hub-models-head">
           <div>Model</div>
+          <div class="hub-models-num">Calls</div>
           <div class="hub-models-num">Tokens</div>
           <div class="hub-models-num">Share</div>
           <div class="hub-models-bar-cell"></div>
@@ -506,6 +508,7 @@ function renderStatsTiles() {
           return `
             <div class="hub-models-row">
               <div class="hub-models-name" title="${escHtml(row.name)}">${escHtml(row.name)}</div>
+              <div class="hub-models-num">${escHtml(compactNumber(Number(row.calls) || 0))}</div>
               <div class="hub-models-num">${escHtml(compactNumber(tokens))}</div>
               <div class="hub-models-num">${share.toFixed(1)}%</div>
               <div class="hub-models-bar-cell"><div class="hub-models-bar" style="width:${Math.max(2, Math.min(100, share))}%"></div></div>
@@ -519,17 +522,272 @@ function renderStatsTiles() {
   if (footnoteEl) footnoteEl.textContent = data.summary || '';
 }
 
+// Skill Curator review queue
+function curatorStatusClass(status) {
+  const s = String(status || 'pending').toLowerCase();
+  if (s === 'applied') return 'applied';
+  if (s === 'rejected') return 'rejected';
+  if (s === 'quarantined') return 'quarantined';
+  return 'pending';
+}
+
+function curatorMarkdownSection(markdown, heading) {
+  const text = String(markdown || '');
+  if (!text) return '';
+  const target = String(heading || '').trim().toLowerCase();
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => {
+    const m = line.match(/^##\s+(.+?)\s*$/);
+    return m && m[1].trim().toLowerCase() === target;
+  });
+  if (start < 0) return '';
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i])) { end = i; break; }
+  }
+  return lines.slice(start + 1, end).join('\n').trim();
+}
+
+function curatorFirstSentence(text, fallback = '') {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return fallback;
+  const sentence = cleaned.match(/^(.{30,220}?[.!?])(?:\s|$)/);
+  return sentence ? sentence[1].trim() : cleaned.slice(0, 220);
+}
+
+function curatorToolLesson(markdown) {
+  const section = curatorMarkdownSection(markdown, 'Tool Sequence');
+  if (!section) return '';
+  const tools = Array.from(section.matchAll(/^\s*[-*]\s*`?([a-zA-Z0-9_.:-]+)`?/gm)).map((m) => m[1]);
+  const unique = [...new Set(tools)].slice(0, 5);
+  if (!unique.length) return '';
+  return `Captures a reusable tool sequence: ${unique.join(', ')}${tools.length > unique.length ? `, +${tools.length - unique.length} more` : ''}.`;
+}
+
+function curatorLessonSummary(s, content) {
+  if (s?.learnedBehavior) return String(s.learnedBehavior);
+  const action = curatorMarkdownSection(content, 'Suggested Action');
+  const outcome = curatorMarkdownSection(content, 'Outcome Excerpt');
+  const request = curatorMarkdownSection(content, 'Request Excerpt');
+  const toolLesson = curatorToolLesson(content);
+  const kind = String(s?.change?.kind || '').toLowerCase();
+  if (kind === 'write_resource') {
+    const first = curatorFirstSentence(action || s?.reason, 'Adds a reusable skill note from a completed run.');
+    const second = curatorFirstSentence(outcome || request, '');
+    return [first, toolLesson || second].filter(Boolean).join(' ');
+  }
+  if (kind === 'manifest_overlay') {
+    return curatorFirstSentence(action || s?.reason, 'Updates the skill manifest metadata so Prometheus can route to this skill more reliably.');
+  }
+  return curatorFirstSentence(action || s?.reason, 'Reviews a proposed skill improvement from Brain.');
+}
+
+function curatorApplyPreview(s) {
+  if (s?.approvePreview) return String(s.approvePreview);
+  const change = s?.change || {};
+  const kind = String(change.kind || '').toLowerCase();
+  const skill = String(s?.skillId || 'this skill');
+  const path = String(change.path || '').trim();
+  if (kind === 'write_resource') {
+    return `Approve will add ${path || 'a resource file'} to ${skill}.`;
+  }
+  if (kind === 'manifest_overlay') {
+    return `Approve will update ${skill}'s manifest metadata.`;
+  }
+  if (kind === 'review_only') {
+    return `Approve will mark this daily skill-change audit accepted without changing skill files.`;
+  }
+  return `Approve will apply this suggested change to ${skill}.`;
+}
+
+function curatorApproveLabel(s) {
+  const kind = String(s?.change?.kind || '').toLowerCase();
+  return kind === 'review_only' ? 'Approve audit' : 'Approve and add';
+}
+
+function renderCuratorSuggestion(s) {
+  const status = curatorStatusClass(s.status);
+  const risk = String(s.risk || 'low').toLowerCase();
+  const change = s.change || {};
+  const evidence = Array.isArray(s.evidence) ? s.evidence : [];
+  const findings = Array.isArray(s.scan?.findings) ? s.scan.findings : [];
+  const content = String(change.content || '').trim();
+  const lesson = curatorLessonSummary(s, content);
+  const applyPreview = curatorApplyPreview(s);
+  const isPending = status === 'pending';
+  const isBusy = _curator.actingId === s.id;
+  return `
+    <article class="hub-curator-card" data-status="${escHtml(status)}" data-risk="${escHtml(risk)}">
+      <div class="hub-curator-card-head">
+        <div class="hub-curator-title-wrap">
+          <div class="hub-curator-title">${escHtml(s.title || 'Untitled suggestion')}</div>
+          <div class="hub-curator-meta">
+            <span>${escHtml(s.skillId || 'unknown skill')}</span>
+            <span>${escHtml(s.lessonType || change.kind || 'change')}</span>
+            <span title="${escHtml(fmtDate(s.updatedAt))}">${escHtml(relTime(s.updatedAt))}</span>
+          </div>
+        </div>
+        <div class="hub-curator-badges">
+          <span class="hub-curator-badge status">${escHtml(status)}</span>
+          <span class="hub-curator-badge risk">${escHtml(risk)} risk</span>
+          <span class="hub-curator-badge scan">${escHtml(s.scan?.verdict || 'unscanned')}</span>
+        </div>
+      </div>
+      <div class="hub-curator-apply-preview">${escHtml(applyPreview)}</div>
+      <div class="hub-curator-lesson">${escHtml(lesson)}</div>
+      ${s.futureTrigger ? `<div class="hub-curator-trigger"><span>Future trigger</span>${escHtml(s.futureTrigger)}</div>` : ''}
+      ${s.whyUseful ? `<div class="hub-curator-why">${escHtml(s.whyUseful)}</div>` : ''}
+      <div class="hub-curator-reason">${escHtml(s.reason || '')}</div>
+      <div class="hub-curator-path" title="${escHtml(change.path || '')}"><span>Target</span>${escHtml(change.path || '(manifest overlay)')}</div>
+      ${evidence.length ? `
+        <div class="hub-curator-evidence">
+          ${evidence.slice(0, 4).map((item) => `<span title="${escHtml(item)}">${escHtml(item)}</span>`).join('')}
+          ${evidence.length > 4 ? `<span>+${evidence.length - 4} more</span>` : ''}
+        </div>
+      ` : ''}
+      <details class="hub-curator-details">
+        <summary>Raw evidence and scan details</summary>
+        <div class="hub-curator-detail-grid">
+          <div><span>ID</span><code>${escHtml(s.id || '')}</code></div>
+          <div><span>Created</span><code>${escHtml(fmtDate(s.createdAt))}</code></div>
+          <div><span>Updated</span><code>${escHtml(fmtDate(s.updatedAt))}</code></div>
+          <div><span>Scan hash</span><code>${escHtml(s.scan?.contentHash || '')}</code></div>
+          <div><span>Quality</span><code>${escHtml(String(s.qualityScore ?? 'legacy'))}</code></div>
+          <div><span>Auto</span><code>${escHtml(s.autoApplyEligible ? 'eligible' : 'review')}</code></div>
+        </div>
+        ${s.autoDecisionReason ? `<div class="hub-curator-findings">${escHtml(s.autoDecisionReason)}</div>` : ''}
+        ${findings.length ? `<div class="hub-curator-findings">${findings.map((f) => `<div>${escHtml(f.message || JSON.stringify(f))}</div>`).join('')}</div>` : ''}
+        ${content ? `<pre class="hub-curator-content">${escHtml(content.slice(0, 2400))}${content.length > 2400 ? '\n…' : ''}</pre>` : ''}
+      </details>
+      <div class="hub-curator-card-actions">
+        ${isPending ? `
+          <button class="hub-curator-btn approve" data-curator-action="apply" data-id="${escHtml(s.id)}" type="button" ${isBusy ? 'disabled' : ''}>${escHtml(curatorApproveLabel(s))}</button>
+          <button class="hub-curator-btn deny" data-curator-action="reject" data-id="${escHtml(s.id)}" type="button" ${isBusy ? 'disabled' : ''}>Deny</button>
+        ` : `<span class="hub-curator-resolved">${escHtml(status)}</span>`}
+      </div>
+    </article>
+  `;
+}
+
+function renderCuratorPanel() {
+  const list = document.getElementById('hub-curator-list');
+  const summary = document.getElementById('hub-curator-summary');
+  const subtitle = document.getElementById('hub-curator-subtitle');
+  if (!list) return;
+
+  const suggestions = Array.isArray(_curator.suggestions) ? _curator.suggestions : [];
+  const counts = suggestions.reduce((acc, item) => {
+    const s = curatorStatusClass(item.status);
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {});
+  if (subtitle) subtitle.textContent = _curator.loading ? 'Loading Brain skill suggestions...' : `${counts.pending || 0} pending, ${counts.quarantined || 0} quarantined, ${counts.applied || 0} applied, ${counts.rejected || 0} denied`;
+  if (summary) {
+    const low = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'low').length;
+    const medium = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'medium').length;
+    const high = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'high').length;
+    summary.innerHTML = [
+      renderStatTile('Pending', compactNumber(counts.pending || 0)),
+      renderStatTile('Quarantined', compactNumber(counts.quarantined || 0)),
+      renderStatTile('Low risk', compactNumber(low)),
+      renderStatTile('Medium risk', compactNumber(medium)),
+      renderStatTile('High risk', compactNumber(high)),
+      renderStatTile('Total', compactNumber(suggestions.length)),
+    ].join('');
+  }
+
+  if (_curator.loading && !suggestions.length) {
+    list.innerHTML = `<div class="hub-empty">Loading curator suggestions...</div>`;
+    return;
+  }
+  if (!suggestions.length) {
+    list.innerHTML = `<div class="hub-empty">No skill curator suggestions yet.</div>`;
+    return;
+  }
+  const sorted = suggestions.slice().sort((a, b) => {
+    const ap = curatorStatusClass(a.status) === 'pending' ? 0 : 1;
+    const bp = curatorStatusClass(b.status) === 'pending' ? 0 : 1;
+    return (ap - bp) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+  });
+  list.innerHTML = sorted.map(renderCuratorSuggestion).join('');
+  list.querySelectorAll('[data-curator-action]').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      handleCuratorAction(btn.getAttribute('data-id'), btn.getAttribute('data-curator-action'), btn);
+    });
+  });
+}
+
+async function loadCuratorSuggestions() {
+  _curator.loading = true;
+  renderCuratorPanel();
+  try {
+    const r = await api('/api/hub/skills/review', { timeoutMs: 30000 });
+    _curator.suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
+    _curator.pending = Number(r?.pending || 0);
+    _curator.quarantined = Number(r?.quarantined || 0);
+  } catch {
+    _curator.suggestions = [];
+  } finally {
+    _curator.loading = false;
+    _curator.actingId = '';
+    renderCuratorPanel();
+  }
+}
+
+async function runCuratorReview() {
+  _curator.loading = true;
+  renderCuratorPanel();
+  try {
+    await api('/api/hub/skills/review/run', {
+      method: 'POST',
+      body: { mode: 'pending' },
+      timeoutMs: 60000,
+    });
+  } catch (err) {
+    window.showToast?.('Skill curator run failed', err?.message || String(err), 'error');
+  } finally {
+    await loadCuratorSuggestions();
+  }
+}
+
+async function handleCuratorAction(id, action, btn) {
+  const suggestionId = String(id || '').trim();
+  const act = String(action || '').trim();
+  if (!suggestionId || !act) return;
+  _curator.actingId = suggestionId;
+  if (btn) btn.disabled = true;
+  renderCuratorPanel();
+  try {
+    await api(`/api/hub/skills/review/${encodeURIComponent(suggestionId)}/${act === 'apply' ? 'apply' : 'reject'}`, {
+      method: 'POST',
+      body: {},
+      timeoutMs: 30000,
+    });
+    await loadCuratorSuggestions();
+    loadSkills();
+  } catch (err) {
+    window.showToast?.('Skill curator action failed', err?.message || String(err), 'error');
+    _curator.actingId = '';
+    renderCuratorPanel();
+  }
+}
+
 async function loadStats() {
   _stats.loading = !(_stats.tools || _stats.models);
   renderStatsTiles();
   const range = encodeURIComponent(_stats.range);
   try {
-    const [tools, models] = await Promise.all([
-      api(`/api/hub/tools/overview?range=${range}`).catch(() => null),
-      api(`/api/hub/models/overview?range=${range}`).catch(() => null),
+    const [tools, models] = await Promise.allSettled([
+      api(`/api/hub/tools/overview?range=${range}`, { timeoutMs: 30000 }),
+      api(`/api/hub/models/overview?range=${range}`, { timeoutMs: 30000 }),
     ]);
-    _stats.tools = tools && tools.success !== false ? tools : null;
-    _stats.models = models && models.success !== false ? models : null;
+    if (tools.status === 'fulfilled' && tools.value && tools.value.success !== false) {
+      _stats.tools = tools.value;
+    }
+    if (models.status === 'fulfilled' && models.value && models.value.success !== false) {
+      _stats.models = models.value;
+    }
   } finally {
     _stats.loading = false;
     renderStatsTiles();
@@ -559,7 +817,7 @@ async function loadGoals() {
 
 async function loadHeatmap() {
   try {
-    const r = await api(`/api/hub/tools/heatmap?year=${_heatmap.year}&month=${_heatmap.month}`);
+    const r = await api(`/api/hub/tools/heatmap?year=${_heatmap.year}&month=${_heatmap.month}`, { timeoutMs: 30000 });
     _heatmap.counts = (r && r.counts) ? r.counts : {};
   } catch {
     _heatmap.counts = {};
@@ -583,7 +841,7 @@ async function loadWeek() {
   await Promise.all([...months].map(async (key) => {
     const [y, m] = key.split('-').map(Number);
     try {
-      const r = await api(`/api/hub/tools/heatmap?year=${y}&month=${m}`);
+      const r = await api(`/api/hub/tools/heatmap?year=${y}&month=${m}`, { timeoutMs: 30000 });
       const counts = (r && r.counts) ? r.counts : {};
       Object.assign(merged, counts);
     } catch { /* noop */ }
@@ -735,6 +993,18 @@ function wireHeader() {
       loadHeatmap();
     });
   }
+
+  const curatorRefresh = document.getElementById('hub-curator-refresh-btn');
+  if (curatorRefresh && !curatorRefresh._wired) {
+    curatorRefresh._wired = true;
+    curatorRefresh.addEventListener('click', loadCuratorSuggestions);
+  }
+
+  const curatorRun = document.getElementById('hub-curator-run-btn');
+  if (curatorRun && !curatorRun._wired) {
+    curatorRun._wired = true;
+    curatorRun.addEventListener('click', runCuratorReview);
+  }
 }
 
 export function hubPageActivate() {
@@ -749,11 +1019,13 @@ export function hubPageActivate() {
   loadStats();
   loadHeatmap();
   loadWeek();
+  loadCuratorSuggestions();
 }
 
 window.hubPageActivate = hubPageActivate;
 window.openHubSkillModal = openHubSkillModal;
 window.closeHubSkillModal = closeHubSkillModal;
+window.loadCuratorSuggestions = loadCuratorSuggestions;
 
 wsEventBus.on('main_chat_goal_updated', () => {
   const hub = document.getElementById('hub-view');

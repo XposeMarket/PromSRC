@@ -90,6 +90,7 @@ export class PrometheusExtensionRuntimeRegistry {
   private createApi(extensionId: string): PrometheusExtensionApi {
     return {
       registerTool: (tool) => this.registerTool(extensionId, tool),
+      unregisterTool: (name) => this.unregisterTool(name, extensionId),
       registerConnector: (connector) => this.registerConnector(extensionId, connector),
       registerProvider: (provider) => this.registerProvider(extensionId, provider),
       registerMcpPreset: (preset) => this.registerMcpPreset(extensionId, preset),
@@ -106,6 +107,13 @@ export class PrometheusExtensionRuntimeRegistry {
       throw new Error(`Tool "${tool.name}" is already registered by extension "${existing.extensionId}"`);
     }
     this.tools.set(tool.name, { ...tool, extensionId });
+  }
+
+  unregisterTool(name: string, extensionId?: string): boolean {
+    const existing = this.tools.get(name);
+    if (!existing) return false;
+    if (extensionId && existing.extensionId !== extensionId) return false;
+    return this.tools.delete(name);
   }
 
   registerConnector(extensionId: string, connector: PrometheusConnectorRuntime): void {
@@ -138,6 +146,17 @@ export class PrometheusExtensionRuntimeRegistry {
 
   listToolDefinitions(): any[] {
     return this.listTools().map(toFunctionTool);
+  }
+
+  listConnectedConnectorToolDefinitions(): any[] {
+    return this.listTools()
+      .filter((tool) => {
+        const connectorId = String((tool as any).connectorId || '').trim();
+        if (!connectorId) return true;
+        const connector = this.connectors.get(connectorId);
+        return connector?.isConnected?.() === true;
+      })
+      .map(toFunctionTool);
   }
 
   listConnectors(): Array<PrometheusConnectorRuntime & { extensionId: string }> {
@@ -180,7 +199,7 @@ export class PrometheusExtensionRuntimeRegistry {
     if (disconnected.length > 0) {
       lines.push(`\nNot connected (${disconnected.length}): ${disconnected.map((c) => c.id).join(', ')}`);
     }
-    lines.push('\nUse request_tool_category({"category":"external_apps"}) to unlock all connector tools for this session.');
+    lines.push('\nUse request_tool_category({"category":"external_apps"}) to unlock connected connector tools for this session.');
     return lines.join('\n');
   }
 }

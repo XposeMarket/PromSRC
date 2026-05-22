@@ -26,6 +26,10 @@ import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry.js';
 // ── Phase 5: Policy engine + audit log ──────────────────────────────────────
 import { getPolicyEngine } from '../gateway/policy.js';
 import { appendAuditEntry, maybeRotateLog } from '../gateway/audit-log.js';
+import {
+  clearSharedToolExecutionContext,
+  setSharedToolExecutionContext,
+} from './execution-context.js';
 
 export interface Tool {
   name: string;
@@ -84,33 +88,33 @@ export const SUBAGENT_PROFILES: Record<string, string[]> = {
     'find_replace', 'delete_file', 'list_files', 'list_directory', 'mkdir',
     'run_command', 'run_command_supervised', 'start_process', 'process_status', 'process_log', 'process_wait', 'process_kill', 'process_submit',
     'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'write_note',
-    'generate_image', 'generate_video',
+    'generate_image', 'generate_video', 'delivery_send', 'delivery_send_screenshot',
     'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'memory_index_refresh', 'task_control', 'grep_files', 'grep_file', 'search_files', 'file_stats', 'source_stats', 'webui_source_stats',
   ],
   // Data analyst: read files + web, no writes or shell mutations.
   analyst: [
     'read_file', 'list_files', 'list_directory', 'web_search', 'web_search_single', 'web_search_multi', 'web_fetch',
-    'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'write_note', 'task_control',
+    'memory_browse', 'memory_write', 'memory_read', 'memory_search', 'memory_read_record', 'memory_get_related', 'memory_graph_snapshot', 'write_note', 'task_control', 'delivery_send',
   ],
   // Browser automation agent: full browser + file access, no desktop.
   web_agent: [
-    'browser_open', 'browser_snapshot', 'browser_click', 'browser_fill',
+    'browser_doctor', 'browser_open', 'browser_snapshot', 'browser_click', 'browser_fill',
     'browser_drag', 'browser_upload_file', 'browser_press_key', 'browser_wait',
     'browser_scroll', 'browser_click_and_download', 'browser_close',
     'browser_get_focused_item', 'browser_get_page_text',
     'browser_scroll_collect', 'browser_scroll_collect_v2', 'browser_snapshot_delta',
     'browser_extract_structured', 'browser_element_watch',
     'browser_vision_screenshot', 'browser_vision_click', 'browser_vision_type',
-    'browser_send_to_telegram',
+    'browser_send_to_telegram', 'delivery_send', 'delivery_send_screenshot',
     'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'read_file', 'create_file', 'list_files',
     'list_directory', 'write_note', 'memory_browse', 'memory_write', 'memory_search', 'memory_read_record', 'memory_graph_snapshot', 'task_control',
   ],
   // Scraper: browser + write output files.
   scraper: [
-    'browser_open', 'browser_snapshot', 'browser_click', 'browser_fill',
+    'browser_doctor', 'browser_open', 'browser_snapshot', 'browser_click', 'browser_fill',
     'browser_drag', 'browser_upload_file', 'browser_press_key', 'browser_wait',
     'browser_scroll', 'browser_click_and_download', 'browser_close',
-    'browser_get_focused_item', 'browser_get_page_text', 'browser_send_to_telegram',
+    'browser_get_focused_item', 'browser_get_page_text', 'browser_send_to_telegram', 'delivery_send', 'delivery_send_screenshot',
     'browser_scroll_collect', 'browser_scroll_collect_v2', 'browser_snapshot_delta',
     'browser_extract_structured', 'browser_element_watch',
     'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'download_url', 'download_media', 'generate_image', 'generate_video', 'analyze_image', 'analyze_video', 'create_file', 'read_file', 'list_files',
@@ -129,6 +133,7 @@ export function getSubagentToolFilter(profile: string | undefined): string[] | u
 
 const TOOL_PROFILE_TOOL_NAMES: Record<Exclude<ToolProfile, 'full'>, ReadonlySet<string>> = {
   desktop: new Set([
+    'desktop_doctor',
     'desktop_screenshot',
     'desktop_get_monitors',
     'desktop_window_screenshot',
@@ -206,15 +211,18 @@ let _currentAgentId: string | undefined = undefined;
 export function setToolExecutionContext(sessionId: string, agentId?: string): void {
   _currentSessionId = sessionId || 'unknown';
   _currentAgentId = agentId;
+  setSharedToolExecutionContext(_currentSessionId, _currentAgentId);
 }
 
 export function clearToolExecutionContext(): void {
   _currentSessionId = 'unknown';
   _currentAgentId = undefined;
+  clearSharedToolExecutionContext();
 }
 
 class ToolRegistry {
   private tools: Map<string, Tool> = new Map();
+  private extensionToolNames = new Set<string>();
 
   private registerSafe(tool: Tool): void {
     try {
@@ -264,15 +272,13 @@ class ToolRegistry {
     if (!isPublicDistributionBuild()) {
       const { selfUpdateTool } = require('./self-update.js');
       const { readSourceTool, listSourceTool, sourceStatsTool, webUiSourceStatsTool } = require('./source-access.js');
-      const { proposeRepairTool } = require('./self-repair.js');
       // Self-update tool
       this.registerSafe(selfUpdateTool);
-      // Self-repair tools (source read + repair proposal)
+      // Source inspection tools for development builds
       this.registerSafe(readSourceTool);
       this.registerSafe(listSourceTool);
       this.registerSafe(sourceStatsTool);
       this.registerSafe(webUiSourceStatsTool);
-      this.registerSafe(proposeRepairTool);
     }
     // Persona / memory growth tools
     this.registerSafe(personaReadTool);
@@ -304,16 +310,34 @@ class ToolRegistry {
     this.registerSafe(vercelEnvTool);
     this.registerSafe(deployAnalysisTeamTool);
     this.registerSafe(viewConnectionsTool);
+    this.refreshExtensionTools();
+    // Desktop automation tools (Phase 2 — ToolRegistry integration)
+    for (const tool of allDesktopTools) {
+      this.registerSafe(tool);
+    }
+  }
+
+  register(tool: Tool): void {
+    this.tools.set(tool.name, tool);
+  }
+
+  refreshExtensionTools(): void {
+    for (const name of this.extensionToolNames) {
+      this.tools.delete(name);
+    }
+    this.extensionToolNames.clear();
+
     try {
       ensurePrometheusExtensionRuntimeLoaded();
       for (const extensionTool of getExtensionRuntimeRegistry().listTools()) {
+        const name = extensionTool.name;
         this.registerSafe({
-          name: extensionTool.name,
+          name,
           description: extensionTool.description,
           schema: {},
           jsonSchema: extensionTool.parameters,
           execute: async (args: any) => {
-            const result = await getExtensionRuntimeRegistry().executeTool(extensionTool.name, args);
+            const result = await getExtensionRuntimeRegistry().executeTool(name, args);
             return {
               success: !result.error,
               stdout: result.result,
@@ -323,18 +347,11 @@ class ToolRegistry {
             };
           },
         });
+        this.extensionToolNames.add(name);
       }
     } catch (err: any) {
       console.warn(`[tools] Extension tools unavailable: ${String(err?.message || err)}`);
     }
-    // Desktop automation tools (Phase 2 — ToolRegistry integration)
-    for (const tool of allDesktopTools) {
-      this.registerSafe(tool);
-    }
-  }
-
-  register(tool: Tool): void {
-    this.tools.set(tool.name, tool);
   }
 
   get(name: string): Tool | undefined {
@@ -642,4 +659,8 @@ export function getToolRegistry(): ToolRegistry {
     registryInstance = new ToolRegistry();
   }
   return registryInstance;
+}
+
+export function refreshExtensionTools(): void {
+  registryInstance?.refreshExtensionTools();
 }

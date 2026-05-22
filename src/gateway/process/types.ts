@@ -9,6 +9,7 @@ export type ProcessTerminationReason =
   | 'spawn_error';
 
 export type ProcessSpawnMode = 'foreground' | 'background';
+export type ProcessShell = 'auto' | 'powershell' | 'cmd' | 'bash';
 
 export interface ProcessRunRecord {
   runId: string;
@@ -18,7 +19,12 @@ export interface ProcessRunRecord {
   command: string;
   cwd: string;
   mode: ProcessSpawnMode;
+  shell?: ProcessShell;
+  shellCommand?: string;
   title?: string;
+  pty?: boolean;
+  approvalId?: string;
+  rerunOf?: string;
   pid?: number;
   state: ProcessRunState;
   startedAt: string;
@@ -30,6 +36,11 @@ export interface ProcessRunRecord {
   terminationReason?: ProcessTerminationReason;
   timedOut?: boolean;
   noOutputTimedOut?: boolean;
+  durationMs?: number;
+  stdinOpen?: boolean;
+  waitingForInputHint?: boolean;
+  failureSummary?: string;
+  completionSummary?: string;
   stdoutBytes: number;
   stderrBytes: number;
   outputPreview: string;
@@ -50,10 +61,14 @@ export interface ProcessSpawnInput {
   command: string;
   cwd: string;
   mode?: ProcessSpawnMode;
+  shell?: ProcessShell;
+  pty?: boolean;
   title?: string;
   sessionId?: string;
   taskId?: string;
   codingSessionId?: string;
+  approvalId?: string;
+  rerunOf?: string;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
   stdinMode?: 'ignore' | 'pipe';

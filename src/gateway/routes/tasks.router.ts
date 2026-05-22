@@ -11,7 +11,6 @@ import {
 } from '../tasks/task-store';
 import { loadScheduleMemory, loadRunLog } from '../scheduling/schedule-memory';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { backgroundStatus, backgroundProgress, backgroundJoin } from '../tasks/task-runner';
 import { getCredentialHandler } from '../../security/credential-handler';
 // setupErrorResponseEndpoint import removed (unused)
 import * as fs from 'fs';
@@ -25,6 +24,8 @@ import { buildTaskPauseSnapshot, formatTaskPauseSnapshot } from '../tasks/task-r
 
 
 export const router = Router();
+
+const getTaskRunnerRuntime = () => require('../tasks/task-runner') as typeof import('../tasks/task-runner');
 
 // Server-v2 singletons injected at registration
 let _cronScheduler: any;
@@ -436,18 +437,21 @@ router.get('/api/schedules/:scheduleId/run-log', (req, res) => {
 
 // Ephemeral one-shot background executions (additive)
 router.get('/api/background/:id/status', (req, res) => {
+  const { backgroundStatus } = getTaskRunnerRuntime();
   const status = backgroundStatus(String(req.params.id || ''));
   if (!status) { res.status(404).json({ success: false, error: 'Background task not found' }); return; }
   res.json({ success: true, status });
 });
 
 router.get('/api/background/:id/progress', (req, res) => {
+  const { backgroundProgress } = getTaskRunnerRuntime();
   const status = backgroundProgress(String(req.params.id || ''));
   if (!status) { res.status(404).json({ success: false, error: 'Background task not found' }); return; }
   res.json({ success: true, status });
 });
 
 router.post('/api/background/:id/join', async (req, res) => {
+  const { backgroundJoin } = getTaskRunnerRuntime();
   const joinPolicy = String(req.body?.join_policy || req.body?.joinPolicy || '').trim();
   const timeoutRaw = Number(req.body?.timeout_ms ?? req.body?.timeoutMs);
   const joined = await backgroundJoin({
@@ -804,11 +808,30 @@ router.post('/api/bg-tasks/:id/message', async (req: any, res: any) => {
   addMessage(sessionId, { role: 'user', content: userMessage, timestamp: Date.now() });
   appendJournal(task.id, { type: 'status_push', content: `User replied via task panel: ${userMessage.slice(0, 200)}` });
 
+  const panelInstruction = [
+    '[TASK PANEL USER REPLY]',
+    `The user replied from the task panel: ${userMessage}`,
+    '',
+    'Treat this as the highest-priority resume instruction for the next task round.',
+    /write\s+note|task[_\s-]*complete|complete\s+(the\s+)?task|you were finished|you are finished|you'?re finished/i.test(userMessage)
+      ? 'If the user says the work is finished, do not continue exploratory work. Call write_note with tag "task_complete" using a concise summary of the completed work, then write the final plain-text response. Do not call step_complete after task_complete.'
+      : 'Apply this guidance directly, then continue only the current approved task scope.',
+    '[/TASK PANEL USER REPLY]',
+  ].join('\n');
+
+  updateResumeContext(task.id, {
+    onResumeInstruction: panelInstruction,
+    messages: [
+      ...((task.resumeContext?.messages || []).slice(-9)),
+      { role: 'user', content: panelInstruction, timestamp: Date.now() },
+    ],
+  });
+
   // If the task is waiting for guidance, resume it so it processes the message.
   const needsResume = task.status === 'needs_assistance' || task.status === 'paused' || task.status === 'stalled';
   if (needsResume) {
     updateTaskStatus(task.id, 'queued');
-    const runner = new BackgroundTaskRunner(task.id, _handleChat, _makeBroadcastForTask(task.id), _telegramChannel);
+    const runner = new BackgroundTaskRunner(task.id, _handleChat, _makeBroadcastForTask(task.id), _telegramChannel, panelInstruction);
     runner.start().catch((err: any) => console.error(`[BackgroundTaskRunner] MessageResume ${task.id} error:`, err.message));
   }
 

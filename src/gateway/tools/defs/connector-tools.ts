@@ -56,7 +56,7 @@ export function buildConnectorStatus(): string {
   if (disconnected.length > 0) {
     lines.push(`\nNot connected (${disconnected.length}): ${disconnected.join(', ')}`);
   }
-  lines.push('\nUse request_tool_category({"category":"external_apps"}) to unlock all connector tools for this session.');
+  lines.push('\nUse request_tool_category({"category":"external_apps"}) to unlock connected connector tools for this session.');
   return lines.join('\n');
 }
 

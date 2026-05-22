@@ -68,9 +68,19 @@ router.post('/api/skills', (req, res) => {
 
 router.post('/api/skills/import', async (req, res) => {
   try {
-    const { source, id, overwrite } = req.body || {};
+    const { source, id, overwrite, mode, applySafeFixes } = req.body || {};
     if (!source) { res.status(400).json({ success: false, error: 'source required' }); return; }
-    const skills = await _sm.importBundles(String(source), { id: id ? String(id) : undefined, overwrite: overwrite === true });
+    if (mode === 'audit') {
+      const audits = await _sm.auditImportBundles(String(source), { id: id ? String(id) : undefined });
+      res.json({ success: true, mode: 'audit', audits, audit: audits[0] });
+      return;
+    }
+    const skills = await _sm.importBundles(String(source), {
+      id: id ? String(id) : undefined,
+      overwrite: overwrite === true,
+      mode: mode === 'force' ? 'force' : 'adapt',
+      applySafeFixes: applySafeFixes !== false,
+    });
     res.json({ success: true, skills: skills.map((skill: any) => withoutSkillEmoji(skill)), skill: withoutSkillEmoji(skills[0]) });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message });

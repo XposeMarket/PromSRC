@@ -129,6 +129,15 @@
   --progress-spinner-head: #3da1ff;
   --shadow-sm: 0 2px 8px rgba(4, 7, 12, 0.28);
   --shadow-md: 0 10px 30px rgba(4, 7, 12, 0.36);
+  --sidebar-bg: rgba(20, 20, 19, 0.78);
+  --sidebar-icon-bg: rgba(255,255,255,0.07);
+  --sidebar-icon-border: rgba(255,255,255,0.10);
+  --sidebar-item-bg: rgba(255,255,255,0.045);
+  --sidebar-item-hover: rgba(249,115,22,0.10);
+  --sidebar-active-bg: rgba(249,115,22,0.14);
+  --sidebar-search-bg: rgba(255,255,255,0.055);
+  --sidebar-seg-bg: rgba(255,255,255,0.055);
+  --sidebar-seg-active: rgba(249,115,22,0.13);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -239,11 +248,7 @@ body.right-canvas-open #system-pill {
   display: none !important;
 }
 
-body.right-canvas-open .sidebar:not(.collapsed) ~ .workspace .page-title {
-  display: none !important;
-}
-
-body.right-creative-canvas-open .page-title {
+body.right-canvas-open .page-title {
   display: none !important;
 }
 
@@ -291,13 +296,120 @@ body.right-creative-canvas-open .page-title {
   z-index: 100;
 }
 
+:root[data-theme="dark"] .sidebar,
+:root[data-theme="dark"] .topbar {
+  overflow: hidden;
+  isolation: isolate;
+  --pm-angle: 0deg;
+  --pm-shell-spin: 20s;
+  --pm-glow: rgba(249, 115, 22, 0.18);
+  background:
+    linear-gradient(
+      135deg,
+      rgba(20, 20, 19, 0.78),
+      color-mix(in srgb, rgba(20, 20, 19, 0.78), transparent 14%)
+    );
+  border-color: rgba(255,255,255,0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 0 0 1px rgba(255,255,255,0.08);
+  backdrop-filter: blur(18px) saturate(1.12);
+  -webkit-backdrop-filter: blur(18px) saturate(1.12);
+}
+
+:root[data-theme="dark"] .sidebar {
+  overflow: visible;
+  border-right-color: transparent;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 1px 0 0 rgba(255,255,255,0.08);
+}
+
+:root[data-theme="dark"] .topbar {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+:root[data-theme="dark"] .sidebar::before {
+  inset: 0;
+}
+
+:root[data-theme="dark"] .sidebar::before,
+:root[data-theme="dark"] .topbar::before {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    conic-gradient(
+      from var(--pm-angle),
+      transparent 0deg,
+      color-mix(in srgb, #f97316, transparent 88%) 52deg,
+      color-mix(in srgb, #f59e0b, transparent 92%) 95deg,
+      transparent 150deg,
+      color-mix(in srgb, #7c2d12, transparent 82%) 225deg,
+      transparent 310deg,
+      color-mix(in srgb, #fb5607, transparent 89%) 360deg
+    );
+  filter: blur(36px);
+  opacity: 0.46;
+  animation: prometheus-liquid-spin var(--pm-shell-spin) linear infinite;
+}
+
+:root[data-theme="dark"] .sidebar::after,
+:root[data-theme="dark"] .topbar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    conic-gradient(
+      from var(--pm-angle),
+      rgba(255,255,255,0.18),
+      color-mix(in srgb, #f97316, transparent 58%),
+      rgba(255,255,255,0.04),
+      color-mix(in srgb, #f59e0b, transparent 70%),
+      rgba(255,255,255,0.16)
+    );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  opacity: 0.42;
+  animation: prometheus-liquid-spin var(--pm-shell-spin) linear infinite;
+}
+
+:root[data-theme="dark"] .sidebar > *,
+:root[data-theme="dark"] .topbar > * {
+  position: relative;
+  z-index: 1;
+}
+
+:root[data-theme="dark"] .sidebar:hover,
+:root[data-theme="dark"] .topbar:hover,
+:root[data-theme="dark"] .topbar:focus-within {
+  --pm-glow: rgba(249, 115, 22, 0.24);
+  box-shadow:
+    0 0 24px var(--pm-glow),
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 0 0 1px rgba(255,255,255,0.10);
+}
+
 .sidebar.collapsed {
   width: 64px;
   min-width: 64px;
 }
 
-/* Hide sessions and hamburger when sidebar collapsed */
-.sidebar.collapsed #sidebar-sessions-section {
+/* Hide sessions, pinned chats, and hamburger when sidebar collapsed */
+.sidebar.collapsed #sidebar-sessions-section,
+.sidebar.collapsed #sidebar-pinned-section {
   display: none !important;
 }
 
@@ -778,6 +890,7 @@ main,
   display: none;
 }
 .sidebar.collapsed .new-chat { justify-content: center; padding: 10px 0; border-radius: 12px; }
+.sidebar.collapsed .sidebar-top { justify-content: center; padding-left: 0; padding-right: 0; }
 .sidebar.collapsed .nav-item { justify-content: center; }
 .sidebar.collapsed .session-item, .sidebar.collapsed .project-card { width: 44px; padding: 8px; justify-content: center; }
 
@@ -808,14 +921,35 @@ main,
   border-color: var(--line) !important;
 }
 :root[data-theme="dark"] .topbar {
-  background: rgba(255,255,255,0.04);
-  border-bottom-color: rgba(255,255,255,0.10);
+  border-bottom-color: rgba(255,255,255,0.08);
 }
 :root[data-theme="dark"] .main-shell-wrap { background: #1f1f1f; }
-:root[data-theme="dark"] .icon-btn { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.12); color: #e8e6e1; }
-:root[data-theme="dark"] .icon-btn:hover { background: rgba(255,255,255,0.14); }
-:root[data-theme="dark"] .status-pill { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); color: #9a9890; }
-:root[data-theme="dark"] .panel-toggle-btn { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); }
+:root[data-theme="dark"] .icon-btn,
+:root[data-theme="dark"] .panel-toggle-btn {
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255,255,255,0.075),
+      rgba(255,255,255,0.035)
+    );
+  border-color: rgba(255,255,255,0.11);
+  color: #e8e6e1;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    0 8px 18px rgba(0,0,0,0.16);
+}
+:root[data-theme="dark"] .icon-btn:hover,
+:root[data-theme="dark"] .panel-toggle-btn:hover {
+  background: rgba(249,115,22,0.11);
+  border-color: rgba(249,115,22,0.34);
+  color: #ffffff;
+}
+:root[data-theme="dark"] .status-pill {
+  background: rgba(255,255,255,0.055);
+  border-color: rgba(255,255,255,0.10);
+  color: #b9b4ac;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+}
 :root[data-theme="dark"] main { background: transparent; }
 :root[data-theme="dark"] .job-item,
 :root[data-theme="dark"] .skill-item,
@@ -920,8 +1054,9 @@ main,
 :root[data-theme="dark"] #mission-input,
 :root[data-theme="dark"] #skill-search-input {
   background: var(--panel-2);
-  border-color: var(--line);
+  border-color: rgba(0,0,0,0.04);
   color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
 }
 :root[data-theme="dark"] #chat-input::placeholder,
 :root[data-theme="dark"] #mission-input::placeholder,

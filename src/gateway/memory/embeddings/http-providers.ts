@@ -1,4 +1,5 @@
 import { getConfig } from '../../../config/config';
+import { buildCodexCloudflareHeaders, getValidToken, loadTokens } from '../../../auth/openai-oauth';
 import type { MemoryEmbeddingProvider, MemoryEmbeddingProviderStatus, MemoryEmbeddingResult } from './types';
 
 type HttpProviderOptions = {
@@ -7,6 +8,7 @@ type HttpProviderOptions = {
   local: boolean;
   defaultModel: string;
   endpoint: string;
+  statusEndpoint?: string;
   apiKey?: () => string | undefined;
   buildBody: (input: string | string[], model: string) => any;
   parseVectors: (json: any) => number[][];
@@ -37,6 +39,23 @@ function createHttpEmbeddingProvider(options: HttpProviderOptions): MemoryEmbedd
       if (!options.local && !key) {
         return { ok: false, reason: 'missing api key', providerId: options.id, model: options.defaultModel, local: options.local };
       }
+      if (options.local && options.statusEndpoint) {
+        try {
+          const response = await fetch(options.statusEndpoint, {
+            method: 'GET',
+            headers: {
+              ...(options.headers?.() || {}),
+              ...(key ? { authorization: `Bearer ${key}` } : {}),
+            },
+            signal: AbortSignal.timeout(1600),
+          });
+          if (!response.ok) {
+            return { ok: false, reason: `status HTTP ${response.status}`, providerId: options.id, model: options.defaultModel, local: options.local };
+          }
+        } catch (err: any) {
+          return { ok: false, reason: String(err?.message || err), providerId: options.id, model: options.defaultModel, local: options.local };
+        }
+      }
       return { ok: true, providerId: options.id, model: options.defaultModel, local: options.local };
     },
 
@@ -63,7 +82,7 @@ function createHttpEmbeddingProvider(options: HttpProviderOptions): MemoryEmbedd
         const text = await response.text().catch(() => '');
         throw new Error(`${options.id} embedding request failed: HTTP ${response.status}${text ? ` ${text.slice(0, 240)}` : ''}`);
       }
-      const json = await response.json();
+      const json = await response.json() as any;
       const vectors = assertVectors(options.parseVectors(json), options.id);
       return vectors.map(vector => ({
         vector,
@@ -92,16 +111,84 @@ export function createOpenAiEmbeddingProvider(): MemoryEmbeddingProvider {
   });
 }
 
+export function createOpenAiCodexOAuthEmbeddingProvider(): MemoryEmbeddingProvider {
+  const cfg = getConfig();
+  const data = cfg.getConfig() as any;
+  const providerCfg = data.memory?.embeddings?.providers?.openai_codex_oauth || data.memory?.embeddings?.providers?.openai_oauth || {};
+  const endpoint = normalizeEndpoint(String(providerCfg.endpoint || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'), '/embeddings');
+  const model = String(providerCfg.embedding_model || providerCfg.model || process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small');
+
+  async function resolveAuthHeaders(): Promise<Record<string, string>> {
+    const tokens = loadTokens(cfg.getConfigDir());
+    if (!tokens) throw new Error('OpenAI OAuth is not connected');
+
+    if (tokens.api_key) {
+      return { authorization: `Bearer ${tokens.api_key}` };
+    }
+
+    const accessToken = await getValidToken(cfg.getConfigDir());
+    return {
+      authorization: `Bearer ${accessToken}`,
+      ...buildCodexCloudflareHeaders(accessToken, tokens.account_id || ''),
+    };
+  }
+
+  return {
+    id: 'openai_codex_oauth',
+    label: 'OpenAI embeddings (OAuth)',
+    local: false,
+    defaultModel: model,
+
+    async status(): Promise<MemoryEmbeddingProviderStatus> {
+      const tokens = loadTokens(cfg.getConfigDir());
+      if (!tokens?.api_key && !tokens?.access_token) {
+        return { ok: false, reason: 'OpenAI OAuth not connected', providerId: 'openai_codex_oauth', model, local: false };
+      }
+      return { ok: true, providerId: 'openai_codex_oauth', model, local: false };
+    },
+
+    async embedQuery(input: string): Promise<MemoryEmbeddingResult> {
+      const [result] = await this.embedBatch([input]);
+      return result;
+    },
+
+    async embedBatch(inputs: string[]): Promise<MemoryEmbeddingResult[]> {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(await resolveAuthHeaders()),
+        },
+        body: JSON.stringify({ model, input: inputs }),
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`openai_codex_oauth embedding request failed: HTTP ${response.status}${text ? ` ${text.slice(0, 240)}` : ''}`);
+      }
+      const json = await response.json() as any;
+      const vectors = assertVectors((json?.data || []).map((item: any) => item?.embedding || []), 'openai_codex_oauth');
+      return vectors.map(vector => ({
+        vector,
+        providerId: 'openai_codex_oauth',
+        model,
+        dimensions: vector.length,
+      }));
+    },
+  };
+}
+
 export function createOllamaEmbeddingProvider(): MemoryEmbeddingProvider {
   const data = getConfig().getConfig() as any;
   const providerCfg = data.memory?.embeddings?.providers?.ollama || data.llm?.providers?.ollama || data.ollama || {};
   const endpoint = normalizeEndpoint(String(providerCfg.endpoint || process.env.OLLAMA_HOST || 'http://localhost:11434'), '/api/embed');
+  const statusEndpoint = normalizeEndpoint(String(providerCfg.endpoint || process.env.OLLAMA_HOST || 'http://localhost:11434'), '/api/tags');
   return createHttpEmbeddingProvider({
     id: 'ollama',
     label: 'Ollama embeddings',
     local: true,
     defaultModel: String(providerCfg.embedding_model || process.env.OLLAMA_EMBEDDING_MODEL || data.memory?.embedding_model || 'nomic-embed-text'),
     endpoint,
+    statusEndpoint,
     buildBody: (input, model) => ({ model, input }),
     parseVectors: (json) => json?.embeddings || (json?.embedding ? [json.embedding] : []),
   });
@@ -112,12 +199,14 @@ export function createLmStudioEmbeddingProvider(): MemoryEmbeddingProvider {
   const data = cfg.getConfig() as any;
   const providerCfg = data.memory?.embeddings?.providers?.lmstudio || data.llm?.providers?.lm_studio || {};
   const endpoint = normalizeEndpoint(String(providerCfg.endpoint || process.env.LM_STUDIO_ENDPOINT || 'http://localhost:1234/v1'), '/embeddings');
+  const statusEndpoint = normalizeEndpoint(String(providerCfg.endpoint || process.env.LM_STUDIO_ENDPOINT || 'http://localhost:1234/v1'), '/models');
   return createHttpEmbeddingProvider({
     id: 'lmstudio',
     label: 'LM Studio embeddings',
     local: true,
     defaultModel: String(providerCfg.embedding_model || providerCfg.model || process.env.LM_STUDIO_EMBEDDING_MODEL || 'text-embedding-nomic-embed-text-v1.5'),
     endpoint,
+    statusEndpoint,
     apiKey: () => cfg.resolveSecret(providerCfg.api_key || process.env.LM_STUDIO_API_KEY || ''),
     buildBody: (input, model) => ({ model, input }),
     parseVectors: (json) => (json?.data || []).map((item: any) => item?.embedding || []),

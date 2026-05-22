@@ -2,28 +2,126 @@
   "id": "x",
   "kind": "connector",
   "name": "X / Twitter",
-  "description": "Connect X through the Prometheus browser session for timeline reads, mentions, analytics, and posting flows.",
+  "description": "Connect X through an X Developer app and OAuth 2.0 User Context for X API/xurl-style tools, with browser-session login still available for UI-only posting flows.",
   "category": "Social",
   "enabledByDefault": true,
-  "docsUrl": "https://x.com/",
-  "tags": ["x", "twitter", "browser session"],
+  "docsUrl": "https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code",
+  "tags": ["x", "twitter", "browser session", "oauth", "x api", "xurl"],
   "runtime": {
-    "binding": "gateway/connections/browser-session:x"
+    "binding": "gateway/connections/x-api-oauth"
   },
   "ui": {
     "color": "#000000",
     "permissions": [
       { "icon": "@", "label": "Read timeline and mentions" },
-      { "icon": "=", "label": "Read tweet analytics and impressions" },
-      { "icon": "->", "label": "Post and reply with approval" }
+      { "icon": "=", "label": "Likes, bookmarks, reposts, follows, lists, Spaces, trends, and DMs when scopes allow" },
+      { "icon": "->", "label": "Post, reply, like, repost, follow, list, and DM with explicit approval" }
     ]
   },
   "ownership": {
-    "capabilities": ["social", "publishing", "browser_session"]
+    "tools": [
+      "x_api_me",
+      "x_api_request",
+      "x_api_get_post",
+      "x_api_get_posts",
+      "x_api_search_recent",
+      "x_api_search_all",
+      "x_api_delete_post",
+      "x_api_create_bookmark",
+      "x_api_delete_bookmark",
+      "x_api_get_bookmarks",
+      "x_api_create_post",
+      "x_api_like_post",
+      "x_api_unlike_post",
+      "x_api_get_liked_posts",
+      "x_api_get_liking_users",
+      "x_api_repost",
+      "x_api_unrepost",
+      "x_api_get_reposted_by",
+      "x_api_get_reposts_of_me",
+      "x_api_get_user",
+      "x_api_get_user_by_username",
+      "x_api_get_user_posts",
+      "x_api_get_user_mentions",
+      "x_api_get_followers",
+      "x_api_get_following",
+      "x_api_follow_user",
+      "x_api_unfollow_user",
+      "x_api_mute_user",
+      "x_api_unmute_user",
+      "x_api_block_user",
+      "x_api_unblock_user",
+      "x_api_get_list",
+      "x_api_get_owned_lists",
+      "x_api_get_list_posts",
+      "x_api_create_list",
+      "x_api_update_list",
+      "x_api_delete_list",
+      "x_api_add_list_member",
+      "x_api_remove_list_member",
+      "x_api_follow_list",
+      "x_api_unfollow_list",
+      "x_api_pin_list",
+      "x_api_unpin_list",
+      "x_api_search_spaces",
+      "x_api_get_space",
+      "x_api_get_trends",
+      "x_api_get_personalized_trends",
+      "x_api_send_dm",
+      "x_api_get_dm_events",
+      "x_api_get_usage"
+    ],
+    "capabilities": ["social", "publishing", "browser_session", "oauth", "official_api", "x_api_oauth"]
   },
   "setup": {
-    "authType": "browser_session",
+    "authType": "oauth",
     "statusMode": "generic",
+    "fields": [
+      {
+        "key": "clientId",
+        "label": "OAuth 2.0 Client ID (not API Key)",
+        "input": "text",
+        "secret": false,
+        "placeholder": "OAuth 2.0 Client ID from User authentication settings",
+        "help": "Do not paste the API Key / Consumer Key here. X OAuth 2.0 has a separate Client ID in Keys and tokens after OAuth 2.0 is enabled."
+      },
+      {
+        "key": "clientSecret",
+        "label": "OAuth 2.0 Client Secret",
+        "input": "password",
+        "secret": true,
+        "required": false,
+        "placeholder": "OAuth 2.0 Client Secret, if your app has one",
+        "help": "Use the OAuth 2.0 Client Secret, not the API Secret Key. Public PKCE apps may not require a secret."
+      },
+      {
+        "key": "redirectUri",
+        "label": "Callback / Redirect URI",
+        "input": "text",
+        "secret": false,
+        "required": false,
+        "placeholder": "http://localhost:8080/callback",
+        "help": "This must exactly match one callback URL in the X Developer app User authentication settings."
+      },
+      {
+        "key": "scopes",
+        "label": "OAuth Scopes",
+        "input": "text",
+        "secret": false,
+        "required": false,
+        "placeholder": "tweet.read tweet.write users.read follows.read follows.write like.read like.write bookmark.read bookmark.write list.read list.write mute.read mute.write block.read block.write dm.read dm.write space.read offline.access",
+        "help": "Request only scopes your X app is allowed to grant. For the full Prometheus surface, configure the X app for Read, Write, and Direct Message permissions."
+      },
+      {
+        "key": "bearerToken",
+        "label": "X App Bearer Token",
+        "input": "password",
+        "secret": true,
+        "required": false,
+        "placeholder": "Optional app-only bearer token",
+        "help": "Optional app-only token for metadata/future fallback only. User actions still require OAuth 2.0 User Context."
+      }
+    ],
     "browserLogin": {
       "url": "https://x.com/i/flow/login",
       "checkUrl": "https://x.com/home"

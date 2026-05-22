@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { getAgentById, getAgents, getConfig } from '../../../config/config';
+import { parseProviderModelRef } from '../../../agents/model-routing.js';
+import { resetProvider } from '../../../providers/factory.js';
 import { recordAgentRun } from '../../../scheduler';
 import { appendSubagentChatMessage } from '../subagent-chat-store';
 import {
@@ -86,11 +88,14 @@ const TEAM_AGENT_TOOL_NAMES = new Set([
   'spawn_subagent',
   'team_manage',
   'ask_team_coordinator',
+  'set_current_model',
   'set_agent_model',
   'get_agent_models',
   'list_agent_model_templates',
   'save_agent_model_template',
+  'update_agent_model_template',
   'apply_agent_model_template',
+  'select_agent_model_template',
   'delete_agent_model_template',
 ]);
 
@@ -2216,6 +2221,64 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         }
       }
 
+      case 'set_current_model': {
+        const modelRef = String(args?.model || '').trim();
+        const reason = String(args?.reason || '').trim();
+        if (!modelRef) {
+          return { name, args, result: 'ERROR: model is required. Format: "provider/model" e.g. "xai/grok-4.3" or "openai_codex/gpt-5.5"', error: true };
+        }
+        const parsed = parseProviderModelRef(modelRef);
+        if (!parsed) {
+          return { name, args, result: `ERROR: Invalid model "${modelRef}". Expected a known provider/model route such as "xai/grok-4.3" or "openai_codex/gpt-5.5".`, error: true };
+        }
+
+        try {
+          const cm = getConfig();
+          const current = cm.getConfig() as any;
+          const currentLlm = current.llm || {};
+          const currentProviders = currentLlm.providers || {};
+          cm.updateConfig({
+            llm: {
+              ...currentLlm,
+              provider: parsed.providerId,
+              providers: {
+                ...currentProviders,
+                [parsed.providerId]: {
+                  ...(currentProviders[parsed.providerId] || {}),
+                  model: parsed.model,
+                },
+              },
+            },
+            models: {
+              ...(current.models || {}),
+              primary: parsed.model,
+              roles: {
+                ...(current.models?.roles || {}),
+                manager: parsed.model,
+                executor: parsed.model,
+                verifier: parsed.model,
+              },
+            },
+          } as any);
+          resetProvider();
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              current_model: `${parsed.providerId}/${parsed.model}`,
+              provider: parsed.providerId,
+              model: parsed.model,
+              reason: reason || null,
+              note: 'Current primary model updated. This is not an agent_model_defaults change.',
+            }, null, 2),
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `set_current_model error: ${err.message}`, error: true };
+        }
+      }
+
       case 'set_agent_model': {
         const targetAgentId = String(args?.agent_id || '').trim();
         const model = String(args?.model || '').trim();
@@ -2263,6 +2326,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         try {
           const cfg = getConfig().getConfig() as any;
           const defaults = cfg.agent_model_defaults || {};
+          const activeProvider = String(cfg.llm?.provider || '').trim() || null;
           const primaryModel = cfg.llm?.providers?.[cfg.llm?.provider]?.model || cfg.models?.primary || null;
           const agents = (cfg.agents || []).map((a: any) => ({
             id: a.id,
@@ -2270,6 +2334,8 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             model: a.model || null,
           }));
           const result = {
+            current_primary: activeProvider && primaryModel ? `${activeProvider}/${primaryModel}` : primaryModel,
+            current_provider: activeProvider,
             global_primary: primaryModel,
             agent_model_defaults: defaults,
             active_agent_model_default_template: cfg.active_agent_model_default_template || null,
@@ -2284,7 +2350,9 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
 
       case 'list_agent_model_templates':
       case 'save_agent_model_template':
+      case 'update_agent_model_template':
       case 'apply_agent_model_template':
+      case 'select_agent_model_template':
       case 'delete_agent_model_template': {
         const { host, port } = resolveGatewayAddress();
         const baseUrl = `http://${host}:${port}/api/settings/agent-model-default-templates`;
@@ -2316,11 +2384,26 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           const id = String(args?.id || args?.name || '').trim();
           if (!id) return { name, args, result: 'ERROR: id or name is required.', error: true };
 
-          if (name === 'apply_agent_model_template') {
+          if (name === 'update_agent_model_template') {
+            const body: any = {};
+            if (typeof args?.name === 'string' && args.name.trim()) body.name = args.name.trim();
+            if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
+            if (!Object.keys(body).length) return { name, args, result: 'ERROR: provide name and/or defaults to update.', error: true };
+            const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const data = await resp.json() as any;
+            if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to update template'}`, error: true };
+            return { name, args, result: `Updated agent model template "${data.template?.name || id}" (${data.template?.id || id}).`, error: false };
+          }
+
+          if (name === 'apply_agent_model_template' || name === 'select_agent_model_template') {
             const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}/apply`, { method: 'POST' });
             const data = await resp.json() as any;
             if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to apply template'}`, error: true };
-            return { name, args, result: `Applied agent model template "${data.template?.name || id}". Current defaults: ${JSON.stringify(data.defaults || {}, null, 2)}`, error: false };
+            return { name, args, result: `Selected and applied agent model template "${data.template?.name || id}". Current defaults: ${JSON.stringify(data.defaults || {}, null, 2)}`, error: false };
           }
 
           const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' });

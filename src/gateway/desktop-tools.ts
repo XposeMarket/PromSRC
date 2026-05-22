@@ -12,6 +12,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
+import Jimp from 'jimp';
 import {
   getInstalledAppsInventory,
   searchInstalledApps,
@@ -23,6 +24,7 @@ import {
   desktopBackgroundPrepareSandbox,
   desktopBackgroundStatus,
 } from './desktop-background.js';
+import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -40,6 +42,18 @@ export interface DesktopWindowInfo {
   monitorIndex?: number;
 }
 
+export interface DesktopSomElement {
+  index: number;
+  role: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+}
+
 /** Per-display bounds in virtual screen coordinates (Windows Forms / Win32) */
 export interface DesktopMonitorInfo {
   index: number;
@@ -54,7 +68,7 @@ export interface DesktopMonitorInfo {
 export interface DesktopAdvisorPacket {
   screenshotId: string;
   screenshotBase64: string;
-  screenshotMime: 'image/png';
+  screenshotMime: 'image/png' | 'image/jpeg';
   width: number;
   height: number;
   capturedAt: number;
@@ -71,6 +85,12 @@ export interface DesktopAdvisorPacket {
   captureRegion?: { left: number; top: number; width: number; height: number };
   /** Virtual-screen units per screenshot pixel. Normally 1, but explicit for DPI/fallback safety. */
   coordinateScale?: { x: number; y: number };
+  normalizedScreenshot?: {
+    originalWidth: number;
+    originalHeight: number;
+    originalBytes: number;
+    bytes: number;
+  };
   /** How the bitmap maps to virtual-screen clicks */
   captureMode?: 'all' | 'primary' | 'monitor';
   /** When captureMode === 'monitor', which display index */
@@ -79,6 +99,7 @@ export interface DesktopAdvisorPacket {
   activeMonitorIndex?: number | null;
   /** Target window metadata for desktop_window_screenshot packets */
   targetWindow?: DesktopWindowInfo;
+  somElements?: DesktopSomElement[];
   /** Incremented whenever Prometheus performs an action that may change desktop/window state. */
   actionVersion?: number;
 }
@@ -89,6 +110,10 @@ export interface DesktopScreenshotOptions {
   capture?: 'all' | 'primary' | number;
   /** Optional crop region in virtual-screen coords: [x1, y1, x2, y2]. Applied after capture. */
   region?: [number, number, number, number];
+  /** Overlay numbered UI Automation marks and enable desktop_click(element=N). */
+  som?: boolean;
+  /** Skip OCR when the caller only needs a visual image packet. */
+  skipOcr?: boolean;
 }
 
 /** Optional pointer tools: coords relative to a monitor's top-left */
@@ -100,8 +125,9 @@ export interface DesktopPointerMonitorOptions {
 export type DesktopCoordinateSpace = 'virtual' | 'monitor' | 'capture' | 'window';
 
 export interface DesktopCoordinateTarget extends DesktopPointerMonitorOptions {
-  x: number;
-  y: number;
+  x?: number;
+  y?: number;
+  element?: number;
   coordinate_space?: DesktopCoordinateSpace;
   screenshot_id?: string;
   window_name?: string;
@@ -160,6 +186,10 @@ export function parseDesktopScreenshotToolArgs(
   } else if (typeof a.region === 'string') {
     const parts = a.region.split(',').map(Number);
     if (parts.length === 4 && parts.every(Number.isFinite)) opts.region = parts as [number, number, number, number];
+  }
+  const mode = String(a.mode || '').toLowerCase().trim();
+  if (a.som === true || a.som === 'true' || mode === 'som' || mode === 'set-of-mark') {
+    opts.som = true;
   }
   return Object.keys(opts).length > 0 ? opts : undefined;
 }
@@ -746,6 +776,87 @@ export async function desktopGetMonitorsSummary(): Promise<string> {
   return [`Monitors detected: ${monitors.length}.`, vsLine, ...lines].join('\n');
 }
 
+export async function desktopDoctor(sessionId: string): Promise<string> {
+  const lines: string[] = ['Desktop doctor:'];
+  const ok = (label: string, detail: string) => lines.push(`PASS ${label}: ${detail}`);
+  const warn = (label: string, detail: string) => lines.push(`WARN ${label}: ${detail}`);
+  const fail = (label: string, detail: string) => lines.push(`FAIL ${label}: ${detail}`);
+
+  try {
+    ensureWindows();
+    ok('Platform', 'Windows desktop automation is supported');
+  } catch (err: any) {
+    fail('Platform', err?.message || String(err));
+    return lines.join('\n');
+  }
+
+  let ctx: DesktopContextGathered | null = null;
+  try {
+    ctx = await gatherDesktopContextInternal();
+    ok('Monitor/DPI context', `${ctx.monitors.length || 0} monitor(s), virtual ${ctx.virtualScreen.width}x${ctx.virtualScreen.height} at (${ctx.virtualScreen.left},${ctx.virtualScreen.top})`);
+    if (!ctx.monitors.length) warn('Monitor/DPI context', 'no monitor records returned by Windows Forms');
+    const bad = ctx.monitors.filter((m) => m.width < 1 || m.height < 1);
+    if (bad.length) fail('Monitor bounds', `${bad.length} monitor(s) have invalid dimensions`);
+    else ok('Monitor bounds', 'all monitor dimensions are positive');
+  } catch (err: any) {
+    fail('Monitor/DPI context', err?.message || String(err));
+  }
+
+  try {
+    const shot = await captureScreenshotInternal({ kind: 'primary' });
+    const raw = fs.readFileSync(shot.path);
+    try { fs.unlinkSync(shot.path); } catch {}
+    const normalized = await normalizeScreenshotBuffer(raw, {
+      maxSide: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 2400),
+      maxBytes: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 5 * 1024 * 1024),
+      preferJpeg: true,
+    });
+    ok(
+      'Screenshot budget',
+      `primary raw=${shot.width}x${shot.height} ${Math.round(raw.byteLength / 1024)}KB, transport=${normalized.width}x${normalized.height} ${normalized.mimeType} ${Math.round(normalized.bytes / 1024)}KB, coordinateScale=${normalized.scaleX.toFixed(3)}x${normalized.scaleY.toFixed(3)}`,
+    );
+  } catch (err: any) {
+    fail('Screenshot budget', err?.message || String(err));
+  }
+
+  try {
+    const ocrEnabled = String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0';
+    if (!ocrEnabled) warn('OCR', 'disabled by PROMETHEUS_DESKTOP_OCR=0');
+    else {
+      const packet = getDesktopAdvisorPacket(sessionId);
+      if (packet?.ocrText) ok('OCR', `last packet has OCR text (${packet.ocrText.length} chars, confidence ${Math.round(packet.ocrConfidence || 0)}%)`);
+      else warn('OCR', 'enabled, but no OCR text is cached yet; run desktop_screenshot on a text-heavy window to verify');
+    }
+  } catch (err: any) {
+    fail('OCR', err?.message || String(err));
+  }
+
+  try {
+    const out = await desktopGetAccessibilityTree(undefined, 2, 40);
+    if (out.startsWith('ERROR:')) fail('UI Automation', out);
+    else ok('UI Automation', `returned ${out.split(/\r?\n/).length} line(s) from active window`);
+  } catch (err: any) {
+    fail('UI Automation', err?.message || String(err));
+  }
+
+  const packet = getDesktopAdvisorPacket(sessionId);
+  if (!packet) {
+    warn('Tool session', 'no desktop screenshot packet cached yet');
+  } else {
+    const ageSec = Math.round(desktopPacketAgeMs(packet) / 1000);
+    const stale = packet.actionVersion !== desktopActionVersion;
+    (stale ? warn : ok)(
+      'Tool session',
+      `last screenshot ${packet.screenshotId} is ${ageSec}s old, actionVersion=${packet.actionVersion}, current=${desktopActionVersion}${stale ? ' (stale after desktop action)' : ''}`,
+    );
+  }
+
+  if (ctx?.activeWindow) ok('Active window', describeDesktopWindowBounds(ctx.activeWindow));
+  else warn('Active window', 'no active window metadata available');
+
+  return lines.join('\n');
+}
+
 async function listWindowsInternal(): Promise<DesktopWindowInfo[]> {
   const ctx = await gatherDesktopContextInternal();
   return ctx.windows;
@@ -1130,6 +1241,38 @@ export async function resolveDesktopActionPoint(
   target: DesktopCoordinateTarget,
   label: string = 'point',
 ): Promise<{ ok: true; point: DesktopResolvedActionPoint } | { ok: false; message: string }> {
+  const elementIndex = Number((target as any).element);
+  if (Number.isFinite(elementIndex) && elementIndex > 0) {
+    const screenshotId = String(target.screenshot_id || '').trim();
+    if (!screenshotId) {
+      return { ok: false, message: `${label}: element targeting requires screenshot_id from a SOM desktop_screenshot or desktop_window_screenshot.` };
+    }
+    const packetResult = getDesktopAdvisorPacketByIdInternal(sessionId, screenshotId);
+    if (!packetResult.ok) return { ok: false, message: `${label}: ${packetResult.message}` };
+    const packet = packetResult.packet;
+    if (packet.actionVersion !== desktopActionVersion) {
+      return { ok: false, message: `${label}: ${describeStaleScreenshotRequirement(packet)}` };
+    }
+    const element = (packet.somElements || []).find((entry) => entry.index === Math.floor(elementIndex));
+    if (!element) {
+      return { ok: false, message: `${label}: SOM element #${Math.floor(elementIndex)} was not found in screenshot ${screenshotId}. Capture desktop_screenshot(mode="som") or desktop_window_screenshot(mode="som") again.` };
+    }
+    if (packet.targetWindow && desktopPacketAgeMs(packet) > DESKTOP_SCREENSHOT_FRESH_MS) {
+      return { ok: false, message: `${label}: ${describeFreshScreenshotRequirement(packet)}` };
+    }
+    return {
+      ok: true,
+      point: {
+        x: element.centerX,
+        y: element.centerY,
+        coordinateSpace: 'capture',
+        screenshotId: packet.screenshotId,
+        targetWindow: packet.targetWindow,
+        sourceNote: `[SOM #${element.index} ${element.role} "${element.name}" -> virtual (${element.centerX}, ${element.centerY})]`,
+      },
+    };
+  }
+
   const rawX = Number(target.x);
   const rawY = Number(target.y);
   const x = Math.floor(rawX);
@@ -1204,9 +1347,10 @@ export async function resolveDesktopActionPoint(
     const scaleY = Number(packet.coordinateScale?.y);
     const resolvedX = Math.floor(captureRegion.left + x * (Number.isFinite(scaleX) && scaleX > 0 ? scaleX : captureRegion.width / packet.width || 1));
     const resolvedY = Math.floor(captureRegion.top + y * (Number.isFinite(scaleY) && scaleY > 0 ? scaleY : captureRegion.height / packet.height || 1));
-    if (packet.targetWindow) {
+    const targetWindow = packet.targetWindow;
+    if (targetWindow) {
       const ctx = await gatherDesktopContextInternal();
-      const liveTarget = ctx.windows.find((w) => Number(w.handle) === Number(packet.targetWindow?.handle));
+      const liveTarget = ctx.windows.find((w) => Number(w.handle) === Number(targetWindow.handle));
       if (!liveTarget) {
         return { ok: false, message: `${label}: target window from screenshot is no longer visible. Capture a fresh desktop_window_screenshot.` };
       }
@@ -1217,9 +1361,9 @@ export async function resolveDesktopActionPoint(
         };
       }
       if (
-        [packet.targetWindow.left, packet.targetWindow.top, liveTarget.left, liveTarget.top].every((n) => Number.isFinite(Number(n))) &&
-        (Math.floor(Number(packet.targetWindow.left)) !== Math.floor(Number(liveTarget.left)) ||
-          Math.floor(Number(packet.targetWindow.top)) !== Math.floor(Number(liveTarget.top)))
+        [targetWindow.left, targetWindow.top, liveTarget.left, liveTarget.top].every((n) => Number.isFinite(Number(n))) &&
+        (Math.floor(Number(targetWindow.left)) !== Math.floor(Number(liveTarget.left)) ||
+          Math.floor(Number(targetWindow.top)) !== Math.floor(Number(liveTarget.top)))
       ) {
         return {
           ok: false,
@@ -1323,6 +1467,7 @@ function computeContentHash(base64: string): string {
 
 function createDesktopAdvisorPacket(input: {
   screenshotBase64: string;
+  screenshotMime?: 'image/png' | 'image/jpeg';
   width: number;
   height: number;
   capturedAt: number;
@@ -1334,17 +1479,19 @@ function createDesktopAdvisorPacket(input: {
   virtualScreen?: { left: number; top: number; width: number; height: number };
   captureRegion?: { left: number; top: number; width: number; height: number };
   coordinateScale?: { x: number; y: number };
+  normalizedScreenshot?: DesktopAdvisorPacket['normalizedScreenshot'];
   captureMode?: 'all' | 'primary' | 'monitor';
   captureMonitorIndex?: number;
   activeMonitorIndex?: number | null;
   targetWindow?: DesktopWindowInfo;
+  somElements?: DesktopSomElement[];
   actionVersion?: number;
 }): DesktopAdvisorPacket {
   const contentHash = computeContentHash(input.screenshotBase64);
   return {
     screenshotId: makeDesktopScreenshotId(input.capturedAt, contentHash),
     screenshotBase64: input.screenshotBase64,
-    screenshotMime: 'image/png',
+    screenshotMime: input.screenshotMime || 'image/png',
     width: input.width,
     height: input.height,
     capturedAt: input.capturedAt,
@@ -1357,10 +1504,12 @@ function createDesktopAdvisorPacket(input: {
     virtualScreen: input.virtualScreen,
     captureRegion: input.captureRegion,
     coordinateScale: input.coordinateScale,
+    normalizedScreenshot: input.normalizedScreenshot,
     captureMode: input.captureMode,
     captureMonitorIndex: input.captureMonitorIndex,
     activeMonitorIndex: input.activeMonitorIndex,
     targetWindow: input.targetWindow,
+    somElements: input.somElements,
     actionVersion: input.actionVersion ?? desktopActionVersion,
   };
 }
@@ -1691,6 +1840,106 @@ async function runOcr(imagePath: string): Promise<{ text: string; confidence: nu
   }
 }
 
+function parseSomElementsFromAccessibilityTree(treeText: string, captureRegion: { left: number; top: number; width: number; height: number }): DesktopSomElement[] {
+  const interactiveRoles = new Set([
+    'Button', 'Edit', 'ComboBox', 'ListItem', 'MenuItem', 'Hyperlink', 'CheckBox', 'RadioButton',
+    'TabItem', 'TreeItem', 'DataItem', 'Document', 'Pane', 'Text', 'Slider', 'Thumb',
+  ]);
+  const out: DesktopSomElement[] = [];
+  for (const raw of String(treeText || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = line.match(/^([A-Za-z][A-Za-z0-9_ -]*)(?::\s*"([^"]*)")?.*\((-?\d+),(-?\d+)\s+(\d+)x(\d+)\)/);
+    if (!m) continue;
+    const role = String(m[1] || '').trim();
+    const name = String(m[2] || '').replace(/\s+/g, ' ').trim();
+    const x = Number(m[3]);
+    const y = Number(m[4]);
+    const width = Number(m[5]);
+    const height = Number(m[6]);
+    if (![x, y, width, height].every(Number.isFinite) || width < 8 || height < 8) continue;
+    if (!interactiveRoles.has(role) && !name) continue;
+    const cx = x + width / 2;
+    const cy = y + height / 2;
+    if (
+      cx < captureRegion.left ||
+      cy < captureRegion.top ||
+      cx >= captureRegion.left + captureRegion.width ||
+      cy >= captureRegion.top + captureRegion.height
+    ) continue;
+    out.push({
+      index: out.length + 1,
+      role,
+      name: name.slice(0, 80),
+      x,
+      y,
+      width,
+      height,
+      centerX: Math.round(cx),
+      centerY: Math.round(cy),
+    });
+    if (out.length >= 80) break;
+  }
+  return out;
+}
+
+async function renderSomOverlay(
+  input: Buffer,
+  elements: DesktopSomElement[],
+  captureRegion: { left: number; top: number; width: number; height: number },
+): Promise<Buffer> {
+  if (!elements.length) return input;
+  const image = await Jimp.read(input);
+  const font = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  const scaleX = image.bitmap.width / Math.max(1, captureRegion.width);
+  const scaleY = image.bitmap.height / Math.max(1, captureRegion.height);
+  const red = Jimp.rgbaToInt(220, 38, 38, 255);
+  const yellow = Jimp.rgbaToInt(250, 204, 21, 255);
+  const black = Jimp.rgbaToInt(0, 0, 0, 210);
+
+  const drawRect = (x: number, y: number, w: number, h: number, color: number) => {
+    const x1 = Math.max(0, Math.min(image.bitmap.width - 1, Math.round(x)));
+    const y1 = Math.max(0, Math.min(image.bitmap.height - 1, Math.round(y)));
+    const x2 = Math.max(0, Math.min(image.bitmap.width - 1, Math.round(x + w)));
+    const y2 = Math.max(0, Math.min(image.bitmap.height - 1, Math.round(y + h)));
+    for (let xx = x1; xx <= x2; xx++) {
+      image.setPixelColor(color, xx, y1);
+      image.setPixelColor(color, xx, y2);
+    }
+    for (let yy = y1; yy <= y2; yy++) {
+      image.setPixelColor(color, x1, yy);
+      image.setPixelColor(color, x2, yy);
+    }
+  };
+
+  for (const el of elements) {
+    const x = (el.x - captureRegion.left) * scaleX;
+    const y = (el.y - captureRegion.top) * scaleY;
+    const w = Math.max(6, el.width * scaleX);
+    const h = Math.max(6, el.height * scaleY);
+    drawRect(x, y, w, h, yellow);
+    const label = String(el.index);
+    const labelW = Math.max(22, label.length * 10 + 8);
+    const labelH = 20;
+    const lx = Math.max(0, Math.min(image.bitmap.width - labelW, Math.round(x)));
+    const ly = Math.max(0, Math.min(image.bitmap.height - labelH, Math.round(y)));
+    for (let yy = ly; yy < ly + labelH; yy++) {
+      for (let xx = lx; xx < lx + labelW; xx++) image.setPixelColor(red, xx, yy);
+    }
+    drawRect(lx, ly, labelW, labelH, black);
+    image.print(font, lx + 5, ly + 1, label);
+  }
+  return image.getBufferAsync(Jimp.MIME_PNG);
+}
+
+function formatSomElements(elements: DesktopSomElement[]): string {
+  if (!elements.length) return '';
+  const lines = elements.slice(0, 40).map((el) => {
+    const name = el.name ? ` "${el.name}"` : '';
+    return `#${el.index} ${el.role}${name} @ (${el.x},${el.y}) ${el.width}x${el.height}`;
+  });
+  return `SOM elements (${elements.length}; click with desktop_click(element:N, screenshot_id:"...")):\n${lines.join('\n')}`;
+}
+
 export async function desktopScreenshot(
   sessionId: string,
   options?: DesktopScreenshotOptions,
@@ -1710,12 +1959,27 @@ export async function desktopScreenshot(
 
   const openWindows = ctx.windows;
   const activeWindow = ctx.activeWindow;
-  const ocr = await runOcr(shot.path);
+  const ocr = options?.skipOcr === true ? null : await runOcr(shot.path);
 
-  const png = fs.readFileSync(shot.path);
+  let png: Buffer = fs.readFileSync(shot.path);
   try { fs.unlinkSync(shot.path); } catch {}
+  const captureRegion = { left: shot.left, top: shot.top, width: shot.width, height: shot.height };
+  let somElements: DesktopSomElement[] = [];
+  if (options?.som === true) {
+    const treeText = await desktopGetAccessibilityTree(undefined, 5, 500).catch(() => '');
+    somElements = parseSomElementsFromAccessibilityTree(treeText, captureRegion);
+    png = await renderSomOverlay(png, somElements, captureRegion).catch((): Buffer => png);
+  }
 
-  const screenshotBase64 = png.toString('base64');
+  const normalized = await normalizeScreenshotBuffer(png, {
+    maxSide: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 2400),
+    maxBytes: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 5 * 1024 * 1024),
+    preferJpeg: true,
+  }).catch(() => null);
+  const imageBuffer = normalized?.buffer || png;
+  const imageWidth = normalized?.width || shot.width;
+  const imageHeight = normalized?.height || shot.height;
+  const screenshotBase64 = imageBuffer.toString('base64');
   const capturedAt = Date.now();
   const vs = ctx.virtualScreen;
   const activeMonitorIndex =
@@ -1725,8 +1989,9 @@ export async function desktopScreenshot(
 
   const packet = createDesktopAdvisorPacket({
     screenshotBase64,
-    width: shot.width,
-    height: shot.height,
+    screenshotMime: normalized?.mimeType || 'image/png',
+    width: imageWidth,
+    height: imageHeight,
     capturedAt,
     openWindows,
     activeWindow: activeWindow || undefined,
@@ -1734,11 +1999,23 @@ export async function desktopScreenshot(
     ocrConfidence: ocr?.confidence,
     monitors: ctx.monitors.length ? ctx.monitors : undefined,
     virtualScreen: vs.width > 0 ? vs : undefined,
-    captureRegion: { left: shot.left, top: shot.top, width: shot.width, height: shot.height },
-    coordinateScale: { x: 1, y: 1 },
+    captureRegion,
+    coordinateScale: {
+      x: shot.width / Math.max(1, imageWidth),
+      y: shot.height / Math.max(1, imageHeight),
+    },
+    normalizedScreenshot: normalized?.normalized
+      ? {
+          originalWidth: shot.width,
+          originalHeight: shot.height,
+          originalBytes: normalized.originalBytes,
+          bytes: normalized.bytes,
+        }
+      : undefined,
     captureMode: shot.captureMode,
     captureMonitorIndex: shot.captureMonitorIndex,
     activeMonitorIndex,
+    somElements: somElements.length ? somElements : undefined,
   });
   storeDesktopPacket(sessionId, packet);
 
@@ -1777,7 +2054,7 @@ export async function desktopScreenshot(
     `Use desktop_click/desktop_scroll with {x, y, coordinate_space:"capture", screenshot_id:"${packet.screenshotId}"} to target this exact screenshot; recapture after focus or window movement.`;
 
   return [
-    `Desktop screenshot captured (${shot.width}x${shot.height}).`,
+    `Desktop screenshot captured (${imageWidth}x${imageHeight}${normalized?.normalized ? `, normalized from ${shot.width}x${shot.height}` : ''}).`,
     screenshotIdLine,
     captureSummary,
     virtualLine,
@@ -1785,6 +2062,7 @@ export async function desktopScreenshot(
     activeMonLine,
     coordHint,
     screenshotUsageLine,
+    options?.som ? formatSomElements(somElements) || 'SOM mode requested, but no UI Automation elements were found inside this capture.' : '',
     `Active window: ${shortWindowLabel(activeWindow)}.`,
     `Open windows: ${openWindows.length}.`,
     ocrPreview ? `OCR text (${Math.round(ocr?.confidence || 0)}% confidence):\n${ocrPreview}${ocrLen > 400 ? ' ...' : ''}` : `OCR: unavailable.${noOcrHint}`,
@@ -2582,8 +2860,6 @@ try {
   if (${handle} -ne 0) {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]${handle})
   } else {
-    $hwnd = [System.Windows.Forms.Form]::ActiveForm
-    $fgWnd = [System.Runtime.InteropServices.Marshal]::GetActiveObject
     Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -2692,9 +2968,18 @@ async function captureAllMonitorBuffers(): Promise<Array<{ buf: Buffer; width: n
   const results: Array<{ buf: Buffer; width: number; height: number }> = [];
   for (let i = 0; i < monitorCount; i++) {
     const captured = await captureScreenshotInternal({ kind: 'monitor', index: i });
-    const buf = fs.readFileSync(captured.path);
+    const raw = fs.readFileSync(captured.path);
     try { fs.unlinkSync(captured.path); } catch { /* best effort */ }
-    results.push({ buf, width: captured.width, height: captured.height });
+    const normalized = await normalizeScreenshotBuffer(raw, {
+      maxSide: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 2400),
+      maxBytes: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 5 * 1024 * 1024),
+      preferJpeg: true,
+    }).catch(() => null);
+    results.push({
+      buf: normalized?.buffer || raw,
+      width: normalized?.width || captured.width,
+      height: normalized?.height || captured.height,
+    });
   }
   return results;
 }
@@ -3261,6 +3546,8 @@ export interface DesktopWindowScreenshotOptions {
   active?: boolean;
   focus_first?: boolean;
   padding?: number;
+  mode?: 'normal' | 'som';
+  som?: boolean;
 }
 
 export async function desktopWindowScreenshot(
@@ -3334,10 +3621,25 @@ export async function desktopWindowScreenshot(
   const activeWindow = ctx.activeWindow;
   const ocr = await runOcr(shot.path);
 
-  const png = fs.readFileSync(shot.path);
+  let png: Buffer = fs.readFileSync(shot.path);
   try { fs.unlinkSync(shot.path); } catch {}
+  const captureRegion = { left: shot.left, top: shot.top, width: shot.width, height: shot.height };
+  let somElements: DesktopSomElement[] = [];
+  if (options?.som === true || options?.mode === 'som') {
+    const treeText = await desktopGetAccessibilityTree(undefined, 5, 500).catch(() => '');
+    somElements = parseSomElementsFromAccessibilityTree(treeText, captureRegion);
+    png = await renderSomOverlay(png, somElements, captureRegion).catch((): Buffer => png);
+  }
 
-  const screenshotBase64 = png.toString('base64');
+  const normalized = await normalizeScreenshotBuffer(png, {
+    maxSide: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 2400),
+    maxBytes: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 5 * 1024 * 1024),
+    preferJpeg: true,
+  }).catch(() => null);
+  const imageBuffer = normalized?.buffer || png;
+  const imageWidth = normalized?.width || shot.width;
+  const imageHeight = normalized?.height || shot.height;
+  const screenshotBase64 = imageBuffer.toString('base64');
   const capturedAt = Date.now();
   const vs = ctx.virtualScreen;
   const activeMonitorIndex =
@@ -3347,8 +3649,9 @@ export async function desktopWindowScreenshot(
 
   const packet = createDesktopAdvisorPacket({
     screenshotBase64,
-    width: shot.width,
-    height: shot.height,
+    screenshotMime: normalized?.mimeType || 'image/png',
+    width: imageWidth,
+    height: imageHeight,
     capturedAt,
     openWindows,
     activeWindow: activeWindow || undefined,
@@ -3356,12 +3659,24 @@ export async function desktopWindowScreenshot(
     ocrConfidence: ocr?.confidence,
     monitors: ctx.monitors.length ? ctx.monitors : undefined,
     virtualScreen: vs.width > 0 ? vs : undefined,
-    captureRegion: { left: shot.left, top: shot.top, width: shot.width, height: shot.height },
-    coordinateScale: { x: 1, y: 1 },
+    captureRegion,
+    coordinateScale: {
+      x: shot.width / Math.max(1, imageWidth),
+      y: shot.height / Math.max(1, imageHeight),
+    },
+    normalizedScreenshot: normalized?.normalized
+      ? {
+          originalWidth: shot.width,
+          originalHeight: shot.height,
+          originalBytes: normalized.originalBytes,
+          bytes: normalized.bytes,
+        }
+      : undefined,
     captureMode: shot.captureMode,
     captureMonitorIndex: shot.captureMonitorIndex,
     activeMonitorIndex,
     targetWindow: target,
+    somElements: somElements.length ? somElements : undefined,
   });
   storeDesktopPacket(sessionId, packet);
 
@@ -3374,13 +3689,14 @@ export async function desktopWindowScreenshot(
     `Use coordinate_space="window" with screenshot_id="${packet.screenshotId}" for coordinates relative to the window's own top-left. For minimize/maximize/restore/close, use desktop_window_control.`;
 
   return [
-    `Window screenshot captured (${shot.width}x${shot.height}).`,
+    `Window screenshot captured (${imageWidth}x${imageHeight}${normalized?.normalized ? `, normalized from ${shot.width}x${shot.height}` : ''}).`,
     screenshotIdLine,
     `Target window: "${target.title}" (${target.processName}, handle=${target.handle}).`,
     `Window bounds: left=${Math.floor(left)}, top=${Math.floor(top)}, width=${Math.floor(width)}, height=${Math.floor(height)}.`,
     `Capture region: [${x1}, ${y1}] to [${x2}, ${y2}] (padding ${padding}px).`,
     captureUsageLine,
     windowUsageLine,
+    (options?.som === true || options?.mode === 'som') ? formatSomElements(somElements) || 'SOM mode requested, but no UI Automation elements were found inside this window capture.' : '',
     `Active window: ${shortWindowLabel(activeWindow)}.`,
     ocrPreview ? `OCR text (${Math.round(ocr?.confidence || 0)}% confidence):\n${ocrPreview}${ocrLen > 400 ? ' ...' : ''}` : 'OCR: unavailable.',
   ].join('\n');
@@ -3394,6 +3710,15 @@ export {
 
 export function getDesktopToolDefinitions(): any[] {
   return [
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_doctor',
+        description:
+          'Diagnose Prometheus Windows desktop automation health: monitor/DPI metadata, screenshot transport budget and coordinate scale, OCR status, UI Automation availability, active window, and stale screenshot session state. Read-only except for a tiny primary-screen probe capture.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
     {
       type: 'function',
       function: {
@@ -3419,6 +3744,8 @@ export function getDesktopToolDefinitions(): any[] {
               items: { type: 'number' },
               description: 'Optional crop region [x1, y1, x2, y2] in virtual-screen coords. Crops the captured image to this rectangle at full resolution. Use to zoom in on a specific area.',
             },
+            mode: { type: 'string', enum: ['normal', 'som'], description: 'Use som to overlay numbered UI Automation elements and enable desktop_click(element=N).' },
+            som: { type: 'boolean', description: 'Alias for mode="som".' },
           },
         },
       },
@@ -3494,6 +3821,8 @@ export function getDesktopToolDefinitions(): any[] {
             active: { type: 'boolean', description: 'Capture currently active window (default when no selector provided).' },
             focus_first: { type: 'boolean', description: 'Focus target window before screenshot (default true).' },
             padding: { type: 'number', description: 'Extra pixels around the window bounds (0-120, default 8).' },
+            mode: { type: 'string', enum: ['normal', 'som'], description: 'Use som to overlay numbered UI Automation elements and enable desktop_click(element=N).' },
+            som: { type: 'boolean', description: 'Alias for mode="som".' },
           },
         },
       },
@@ -3504,16 +3833,16 @@ export function getDesktopToolDefinitions(): any[] {
         name: 'desktop_click',
         description:
           'Perform an actual mouse click at Windows desktop coordinates using virtual, monitor, capture, or window space. ' +
-          'Always provide x and y for the click itself; if you do not know the target coordinates yet, call desktop_screenshot or desktop_window_screenshot first. ' +
+          'Provide x/y coordinates, or provide element=N from a SOM screenshot. If you do not know the target yet, call desktop_screenshot or desktop_window_screenshot first. ' +
           'For screenshot-driven clicks, pass the fresh screenshot_id with coordinate_space="capture" or "window"; avoid raw virtual coordinates after any focus/window movement. ' +
           'For maximize/minimize/restore/close, prefer desktop_window_control instead of clicking window chrome. ' +
           'Use modifier to hold Shift/Ctrl/Alt during click. Returns verification status (`confirmed`, `likely_noop`, `uncertain`, or `failed`) when verification is enabled.',
         parameters: {
           type: 'object',
-          required: ['x', 'y'],
           properties: {
-            x: { type: 'number', description: 'Required X coordinate in the chosen coordinate space' },
-            y: { type: 'number', description: 'Required Y coordinate in the chosen coordinate space' },
+            x: { type: 'number', description: 'X coordinate in the chosen coordinate space. Omit when using element.' },
+            y: { type: 'number', description: 'Y coordinate in the chosen coordinate space. Omit when using element.' },
+            element: { type: 'number', description: 'Numbered UI element from desktop_screenshot(mode="som") or desktop_window_screenshot(mode="som"). Requires screenshot_id.' },
             button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button (default left)' },
             double_click: { type: 'boolean', description: 'Double-click instead of single-click' },
             modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Rare. Only use when the user explicitly wants a modified click such as Shift+click or Ctrl+click.' },
@@ -3544,6 +3873,8 @@ export function getDesktopToolDefinitions(): any[] {
               description: 'Legacy alias for coordinate_space="monitor". If true, x/y are relative to monitor_index top-left.',
             },
             monitor_index: { type: 'integer', description: '0-based display index when using monitor coordinates' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this click triggers a final post/send/publish/purchase/delete/submit action.' },
+            capture_after: { type: 'boolean', description: 'If true, capture a fresh desktop screenshot after the click and include it in the result.' },
           },
         },
       },
@@ -3581,6 +3912,7 @@ export function getDesktopToolDefinitions(): any[] {
             window_handle: { type: 'number', description: 'Optional exact window handle when coordinate_space="window".' },
             monitor_relative: { type: 'boolean', description: 'Legacy alias for coordinate_space="monitor".' },
             monitor_index: { type: 'integer', description: '0-based display when using monitor coordinates' },
+            capture_after: { type: 'boolean', description: 'If true, capture a fresh desktop screenshot after the drag and include it in the result.' },
           },
         },
       },
@@ -3608,6 +3940,7 @@ export function getDesktopToolDefinitions(): any[] {
           required: ['text'],
           properties: {
             text: { type: 'string', description: 'Text to type' },
+            capture_after: { type: 'boolean', description: 'If true, capture a fresh desktop screenshot after typing and include it in the result.' },
           },
         },
       },
@@ -3622,6 +3955,7 @@ export function getDesktopToolDefinitions(): any[] {
           required: ['key'],
           properties: {
             key: { type: 'string', description: 'Key or combo, e.g. Enter, Escape, Ctrl+C, Alt+Tab' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action.' },
           },
         },
       },
@@ -3861,6 +4195,7 @@ export function getDesktopToolDefinitions(): any[] {
             window_handle: { type: 'number', description: 'Optional exact window handle when coordinate_space="window".' },
             monitor_relative: { type: 'boolean', description: 'Legacy alias for coordinate_space="monitor".' },
             monitor_index: { type: 'integer', description: '0-based display when using monitor coordinates' },
+            capture_after: { type: 'boolean', description: 'If true, capture a fresh desktop screenshot after scrolling and include it in the result.' },
           },
         },
       },

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../../config/config';
+import { toAsarUnpackedPath } from '../../../runtime/dependencies';
 
 export type CreativeModelKey = 'sam_encoder' | 'sam_decoder' | 'lama' | 'rmbg';
 
@@ -45,6 +46,11 @@ export function getCreativeModelsDir(): string {
 export function resolveCreativeModelPath(key: CreativeModelKey): string {
   const override = process.env[ENV_OVERRIDES[key]];
   if (override && override.trim()) return path.resolve(override.trim());
+  const resourcesPath = (process as any).resourcesPath ? String((process as any).resourcesPath) : '';
+  const bundledCandidate = resourcesPath
+    ? toAsarUnpackedPath(path.join(resourcesPath, 'creative-models', FILE_NAMES[key]))
+    : '';
+  if (bundledCandidate && fs.existsSync(bundledCandidate)) return bundledCandidate;
   return path.join(getCreativeModelsDir(), FILE_NAMES[key]);
 }
 

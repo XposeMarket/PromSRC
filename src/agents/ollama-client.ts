@@ -11,6 +11,7 @@
 
 import { getProvider, getModelForRole, getPrimaryModel, resetProvider } from '../providers/factory';
 import type { LLMProvider } from '../providers/LLMProvider';
+import type { ModelStreamEvent } from '../providers/LLMProvider';
 export type { LLMProvider };
 import {
   appendModelUsageEvent,
@@ -51,6 +52,7 @@ export class OllamaClient {
       onToken?: (chunk: string) => void;
       onThinking?: (chunk: string) => void;
       onReasoningSummary?: (chunk: string) => void;
+      onModelEvent?: (event: ModelStreamEvent) => void;
       abortSignal?: AbortSignal;
       /** Per-call provider override — used by switch_model tool for turn-scoped routing. Does NOT mutate global config. */
       provider?: LLMProvider;
@@ -71,6 +73,7 @@ export class OllamaClient {
       onToken:           options?.onToken,
       onThinking:        options?.onThinking,
       onReasoningSummary: options?.onReasoningSummary,
+      onModelEvent:      options?.onModelEvent,
       abortSignal:       options?.abortSignal,
       omitIntradayNotes: options?.omitIntradayNotes,
     });

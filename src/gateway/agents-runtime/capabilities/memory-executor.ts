@@ -19,9 +19,15 @@ import { appendTeamMemoryEvent } from '../../teams/team-workspace';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 import { inferTeamNoteContext } from './team-agent-helpers';
+import { appendEntityEvent, listEntities, readEntity, writeEntity } from '../../business/entity-store';
+import { formatIntradayNoteSourceLine, inferIntradayNoteSource } from '../../intraday-note-source';
 
 const MEMORY_TOOL_NAMES = new Set([
   'business_context_mode',
+  'list_entities',
+  'read_entity',
+  'write_entity',
+  'append_entity_event',
   'memory_browse',
   'memory_write',
   'memory_read',
@@ -126,6 +132,56 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           result: `BUSINESS.md auto-injection enabled for session ${sessionId}. Future turns in this session will receive [BUSINESS] context.${snapshotBlock}`,
           error: false,
         };
+      }
+
+      case 'list_entities': {
+        try {
+          const rows = listEntities(workspacePath, args?.type);
+          return { name, args, result: JSON.stringify({ count: rows.length, entities: rows }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `list_entities failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'read_entity': {
+        try {
+          const entity = readEntity(workspacePath, args?.type, args?.id);
+          return { name, args, result: JSON.stringify(entity.summary, null, 2) + `\n\n${entity.content}`, error: false };
+        } catch (err: any) {
+          return { name, args, result: `read_entity failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'write_entity': {
+        try {
+          const out = writeEntity(workspacePath, args?.type, args?.id, args?.content);
+          return {
+            name,
+            args,
+            result: `${out.created ? 'Created' : 'Updated'} entity ${out.summary.type}/${out.summary.id} at ${out.summary.path}`,
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `write_entity failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'append_entity_event': {
+        try {
+          const out = appendEntityEvent(workspacePath, args?.type, args?.id, args?.event, {
+            displayName: args?.display_name || args?.displayName,
+            source: args?.source,
+            confidence: args?.confidence,
+          });
+          return {
+            name,
+            args,
+            result: `${out.created ? 'Created' : 'Updated'} entity ${out.summary.type}/${out.summary.id} at ${out.summary.path}\n${out.appended}`,
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `append_entity_event failed: ${String(err?.message || err)}`, error: true };
+        }
       }
 
       case 'memory_browse': {
@@ -275,7 +331,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
 
       case 'memory_index_refresh': {
         try {
-          const out = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0 });
+          const out = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0, syncSqlite: true });
           return { name, args, result: JSON.stringify(out, null, 2), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_index_refresh failed: ${String(err?.message || err)}`, error: true };
@@ -378,7 +434,8 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           if (!fs.existsSync(memDir)) fs.mkdirSync(memDir, { recursive: true });
           const intradayFile = path.join(memDir, `${noteDate}-intraday-notes.md`);
           const timestamp = new Date().toISOString();
-          let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${noteContent}`;
+          const sourceLine = formatIntradayNoteSourceLine(inferIntradayNoteSource(sessionId, args));
+          let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${sourceLine}\n${noteContent}`;
           if (noteTaskId) entry += `\n_Related task: ${noteTaskId}_`;
           fs.appendFileSync(intradayFile, entry + '\n');
         } catch (err: any) {

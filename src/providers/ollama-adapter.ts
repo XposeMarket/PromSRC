@@ -99,18 +99,26 @@ export class OllamaAdapter implements LLMProvider {
             if (delta) {
               fullContent += delta;
               options!.onToken!(delta);
+              options?.onModelEvent?.({ type: 'assistant_delta', text: delta, nativeType: 'message.content', provider: this.id, model });
             }
 	            if (thinkDelta) {
 	              fullThinking += thinkDelta;
 	              if (options?.onThinking) {
 	                options.onThinking(thinkDelta);
+	                options.onModelEvent?.({ type: 'reasoning_delta', text: thinkDelta, nativeType: 'message.thinking', provider: this.id, model });
 	              } else {
 	                // Backward-compatible marker for older callers that only had onToken.
 	                options!.onToken!(`<think_delta>${thinkDelta}</think_delta>`);
 	              }
-	            }
+            }
             if (chunk?.message?.tool_calls?.length) {
-              tool_calls = chunk.message.tool_calls;
+              const calls = chunk.message.tool_calls;
+              tool_calls = calls;
+              for (const [idx, tc] of calls.entries()) {
+                const name = String(tc?.function?.name || tc?.name || '').trim();
+                const args = typeof tc?.function?.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc?.function?.arguments || tc?.arguments || {});
+                options?.onModelEvent?.({ type: 'tool_call_done', id: String(tc?.id || `ollama_tool_${idx}`), name, arguments: args, nativeType: 'message.tool_calls', provider: this.id, model });
+              }
             }
             lastMessage = chunk?.message;
           }

@@ -4,7 +4,10 @@
 
 import fs from 'fs';
 import path from 'path';
+import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import { getConfig, getAgents, getAgentById } from '../../config/config';
+import { parseProviderModelRef } from '../../agents/model-routing.js';
+import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
@@ -20,6 +23,52 @@ import { getProcessSupervisor } from '../process/supervisor';
 import { executeAgentBuilderTool } from './agent-builder-integration';
 import { SubagentManager } from './subagent-manager';
 import { appendSubagentChatMessage } from './subagent-chat-store';
+import { formatIntradayNoteSourceLine, inferIntradayNoteSource } from '../intraday-note-source';
+import {
+  creativeAnalyzeGeneratedVideo,
+  creativeAddAudioTrack,
+  creativeAddMusicBed,
+  creativeAddSoundEffects,
+  creativeAutoAssembleRoughCut,
+  creativeChainScene,
+  creativeCompareShots,
+  creativeCompositeVideoLayers,
+  creativeCreateProject,
+  creativeCreateStoryboard,
+  creativeExtractVideoFrame,
+  creativeExtractVideoFrames,
+  creativeExtractLayersForGeneration,
+  creativeGenerateImageShot,
+  creativeGenerateMotionGraphicsLayer,
+  creativeGenerateSequence,
+  creativeGenerateVideoShot,
+  creativeGetProject,
+  creativeGetStoryboard,
+  creativeDownloadAudio,
+  creativeExtractAudioFromVideo,
+  creativeListGenerations,
+  creativeListProjects,
+  creativeListStoryboards,
+  creativeGenerateVoiceover,
+  creativeImportAudio,
+  creativeMixAudioTracks,
+  creativeNormalizeLayerSpecs,
+  creativeOverlayHyperframesOnVideo,
+  creativePickContinuityFrame,
+  creativePreflightOverlay,
+  creativeRegisterGeneration,
+  creativeRenderGeneratedSequence,
+  creativeRefineVideoShot,
+  creativeRetryShotUntilPass,
+  creativeSampleCompositeFrames,
+  creativeSelectBestTake,
+  creativeStitchClips,
+  creativeSyncCaptionsToAudio,
+  creativeTranscribeAudio,
+  creativeWrapVideoAsHtmlMotionClip,
+  creativeWriteShotPrompt,
+  creativeValidateCompositionLayers,
+} from '../creative/generative-pipeline';
 import { buildObsoleteBrandBlockMessage, containsObsoleteProductBrand, normalizeWorkspaceAliasPath } from '../scheduled-output-guard';
 import {
   listManagedTeams,
@@ -49,16 +98,28 @@ import {
   deleteTeamContextReference,
 } from '../teams/managed-teams';
 import { triggerManagerReview, handleManagerConversation, verifySubagentResult } from '../teams/team-manager-runner';
-import { buildTeamDispatchTask, _bgAgentResults } from '../teams/team-dispatch-runtime';
 import { parseTeamMemberDirectSessionId, parseTeamMemberRoomSessionId, runTeamMemberRoomTurn, scheduleTeamMemberAutoWake } from '../teams/team-member-room';
 import { routeTeamEvent } from '../teams/team-event-router';
 import { appendTeamMemoryEvent, claimAgentForTeamWorkspace } from '../teams/team-workspace';
 import { notifyMainAgent } from '../teams/notify-bridge';
 import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
+import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
+
+const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
+const getBgAgentResults = () => getTeamDispatchRuntime()._bgAgentResults;
+const buildTeamDispatchTaskLazy: typeof import('../teams/team-dispatch-runtime')['buildTeamDispatchTask'] = (...args) => {
+  const { buildTeamDispatchTask } = getTeamDispatchRuntime();
+  return buildTeamDispatchTask(...args);
+};
 import {
   browserOpen,
+  browserSetProfileTarget,
   browserSnapshot,
+  browserListTabs,
+  browserSelectTab,
+  browserNewTab,
+  browserCloseTab,
   browserClick,
   browserFill,
   browserUploadFile,
@@ -83,6 +144,7 @@ import {
   browserSnapshotDelta,
   browserExtractStructured,
   browserTeachVerify,
+  browserDoctor,
   resolveBrowserObserveMode,
   getBrowserSessionInfo,
   getBrowserSessionMetadata,
@@ -117,10 +179,13 @@ import {
   desktopWindowControl,
   desktopScroll,
   desktopSendToTelegram,
+  getDesktopAdvisorPacket,
   desktopBackgroundStatus,
   desktopBackgroundPrepareSandbox,
   desktopBackgroundCommand,
+  desktopDoctor,
 } from '../desktop-tools';
+import { deliverToTargets, readAttachmentBuffer } from '../delivery-router';
 import {
   refreshMemoryIndexFromAudit,
   searchMemoryIndex,
@@ -173,7 +238,7 @@ import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from '../sche
 import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
 import type { SkillWindow } from '../prompt-context';
 import { isToolHiddenInPublicBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
-import { getApprovalQueue } from '../verification-flow.js';
+import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow.js';
 import { findCommandPermissionGrant, type ToolPermissionCandidate } from '../command-permissions';
 import {
   evaluateHardToolDeny,
@@ -182,6 +247,22 @@ import {
   type ToolExecutionPolicy,
 } from '../tool-deny-policy';
 import { DEV_SRC_SELF_EDIT_MODE, DEV_SRC_SELF_EDIT_REPAIR_MODE } from '../proposals/dev-src-self-edit.js';
+import {
+  createDevSourceEditApprovalScope,
+  type DevSourceEditScope,
+  getDevSourceEditContinuation,
+  grantDevSourceEditApproval,
+  getLatestPendingDevSourceEditContinuation,
+  getDevSourceEditGrant,
+  hasDevSourceEditGrant,
+  markDevSourceEditContinuationComplete,
+  upsertDevSourceEditContinuation,
+} from '../dev-source-approvals.js';
+import {
+  consumeFinalActionApproval,
+  createFinalActionApprovalScope,
+  grantFinalActionApproval,
+} from '../final-action-approvals.js';
 import {
   cancelMainChatTimer,
   createMainChatTimer,
@@ -204,6 +285,7 @@ import {
   scheduleJobStuckControlTool,
 } from '../scheduling/schedule-admin-tools';
 import { executeRegisteredCapabilityTool } from './capabilities/registry';
+import { appendEntityEvent, listEntities, readEntity, writeEntity } from '../business/entity-store';
 
 const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
 const getCreativeAssets = () => require('../creative/assets') as typeof import('../creative/assets');
@@ -276,12 +358,69 @@ export interface ExecuteToolDeps {
   buildBrowserLaunchCommand: (app: string, url: string) => string;
   normalizeWorkspacePathAliases: (rawCmd: string, workspacePath: string) => string;
   isAllowedShellCommand: (command: string) => boolean;
-  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>;
+  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; runId?: string }>;
   skillsManager: any;
   getSessionSkillWindows: (sessionId: string) => Map<string, SkillWindow>;
   sessionCurrentTurn: Map<string, number>;
   executionPolicy?: ToolExecutionPolicy;
   onHardToolDeny?: (event: { sessionId: string; toolName: string; args: any; decision: HardToolDenyDecision }) => void;
+}
+
+async function executeDeliverySendScreenshot(
+  args: any,
+  workspacePath: string,
+  deps: ExecuteToolDeps,
+  sessionId: string,
+): Promise<{ result: string; error: boolean }> {
+  const source = String(args?.source || 'desktop_new').trim().toLowerCase();
+  const caption = String(args?.caption || args?.text || '').trim()
+    || (source.startsWith('browser') ? 'Browser screenshot' : 'Desktop screenshot');
+  let imageBuffer: Buffer | undefined;
+  let mimeType = 'image/jpeg';
+  let fileName = source.startsWith('browser') ? 'browser-screenshot.jpg' : 'desktop-screenshot.jpg';
+
+  if (source === 'browser_new' || source === 'browser_last') {
+    const shot = await browserVisionScreenshot(sessionId);
+    if (!shot?.base64) return { result: 'ERROR: No browser screenshot available. Use browser_open first, or choose source="desktop_new".', error: true };
+    imageBuffer = Buffer.from(shot.base64, 'base64');
+    mimeType = shot.mimeType || 'image/jpeg';
+  } else if (source === 'desktop_new' || source === 'desktop_last') {
+    if (source === 'desktop_new') {
+      const capture = await desktopScreenshot(sessionId);
+      if (capture.startsWith('ERROR')) return { result: capture, error: true };
+    }
+    const packet = getDesktopAdvisorPacket(sessionId);
+    if (!packet?.screenshotBase64) {
+      return { result: 'ERROR: No desktop screenshot available. Call desktop_screenshot first or use source="desktop_new".', error: true };
+    }
+    imageBuffer = Buffer.from(packet.screenshotBase64, 'base64');
+    mimeType = 'image/jpeg';
+  } else if (source === 'file') {
+    const file = readAttachmentBuffer(String(args?.path || args?.file || args?.attachmentPath || ''), workspacePath);
+    imageBuffer = file.buffer;
+    mimeType = file.mimeType;
+    fileName = file.fileName;
+  } else {
+    return { result: 'ERROR: source must be desktop_new, desktop_last, browser_new, browser_last, or file.', error: true };
+  }
+
+  const delivered = await deliverToTargets({
+    sessionId,
+    target: args?.target || 'origin',
+    caption,
+    text: caption,
+    imageBuffer,
+    mimeType,
+    fileName,
+    source: 'delivery_send_screenshot',
+  }, { telegramChannel: deps.telegramChannel, broadcastWS: deps.broadcastWS });
+  const suffix = delivered.errors.length ? ` Errors: ${delivered.errors.join('; ')}` : '';
+  return {
+    result: delivered.delivered.length
+      ? `Screenshot delivered via ${delivered.delivered.join(', ')}.${suffix}`
+      : `ERROR: Screenshot delivery failed.${suffix}`,
+    error: delivered.delivered.length === 0,
+  };
 }
 
 function looksLikeNativeFileToolBypass(command: string): boolean {
@@ -713,7 +852,7 @@ async function extractCreativeAudioFromVideo(sourceAbsPath: string, outputDir: s
   }
   await new Promise<void>((resolve, reject) => {
     const { execFile } = require('child_process');
-    execFile('ffmpeg', [
+    execFile(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), [
       '-y',
       '-i', sourceAbsPath,
       '-vn',
@@ -734,6 +873,7 @@ async function extractCreativeAudioFromVideo(sourceAbsPath: string, outputDir: s
 function resolveCreativeEditorTimeoutMs(toolName: string, args?: any): number {
   if (toolName === 'creative_export' || toolName === 'creative_export_html_motion_clip') return 720000;
   if (toolName === 'creative_attach_audio_from_url' || toolName === 'creative_attach_audio_from_file') return 120000;
+  if (['creative_download_audio', 'creative_generate_voiceover', 'creative_transcribe_audio', 'creative_mix_audio_tracks', 'creative_extract_audio_from_video'].includes(toolName)) return 180000;
   if (toolName === 'creative_create_html_motion_clip') return 60000;
   if (toolName === 'creative_set_canvas' || toolName === 'creative_apply_motion_template') return 45000;
   if (toolName === 'creative_render_snapshot' || toolName === 'creative_render_html_motion_snapshot') {
@@ -744,6 +884,25 @@ function resolveCreativeEditorTimeoutMs(toolName: string, args?: any): number {
   }
   if (toolName === 'creative_search_icons' || toolName === 'creative_search_animations') return 30000;
   return 30000;
+}
+
+function resolveBoundedToolTimeoutMs(args: any, fallbackMs: number, maxMs: number): number {
+  const raw = Number(args?.timeout_ms ?? args?.timeoutMs ?? args?.timeout);
+  if (!Number.isFinite(raw) || raw <= 0) return fallbackMs;
+  return Math.max(5000, Math.min(maxMs, Math.round(raw)));
+}
+
+async function withBoundedToolTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    (timer as any)?.unref?.();
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function inferAgentIdFromSession(sessionId: string, args: any): string | undefined {
@@ -1199,6 +1358,35 @@ function getSourceVerificationCommandForSession(sessionId: string): string {
     : 'npm run build';
 }
 
+function getPromApplySurfacesForFiles(files: string[]): string[] {
+  const surfaces = new Set<string>();
+  for (const raw of files || []) {
+    const file = String(raw || '').replace(/\\/g, '/').trim();
+    if (file.startsWith('src/')) surfaces.add('backend');
+    if (file.startsWith('web-ui/src/mobile/')) surfaces.add('mobile');
+    else if (file.startsWith('web-ui/')) surfaces.add('web-ui');
+  }
+  return Array.from(surfaces);
+}
+
+function formatPromApplyDevChangesInstruction(files: string[], reason: string, mode: 'verify_only' | 'apply_live' = 'apply_live', devEditId?: string): string {
+  const surfaces = getPromApplySurfacesForFiles(files);
+  const safeReason = String(reason || 'Approved Prometheus dev source edits').replace(/"/g, '\\"');
+  const idPart = devEditId ? `, dev_edit_id:"${String(devEditId).replace(/"/g, '\\"')}"` : '';
+  return `prom_apply_dev_changes({changed_surfaces:${JSON.stringify(surfaces.length ? surfaces : ['backend'])}, mode:"${mode}", reason:"${safeReason}"${idPart}})`;
+}
+
+function getPostSourceEditInstructionForSession(sessionId: string, files: string[]): string {
+  const task = resolveTaskForSession(sessionId);
+  const mode = task?.proposalExecution?.mode;
+  if (mode === DEV_SRC_SELF_EDIT_MODE || mode === DEV_SRC_SELF_EDIT_REPAIR_MODE) {
+    return `Run the canonical sandbox verification command with run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) before completing the proposal task. Do not call prom_apply_dev_changes inside the isolated proposal sandbox.`;
+  }
+  const grant = getDevSourceEditGrant(sessionId);
+  const scopedFiles = files.length ? files : (grant?.allowedFiles || []);
+  return `Dev source write succeeded. Continue the approved dev-edit plan: reread the changed area if needed, run the approved verification checks, and use ${formatPromApplyDevChangesInstruction(scopedFiles, grant?.reason || 'Approved Prometheus dev source edits', 'verify_only', grant?.devEditId)} for a no-restart Prometheus build/sync preflight when the check is a Prometheus build. Do not call apply_live until the patch and approved verification/preflight step are complete. Then finalize with ${formatPromApplyDevChangesInstruction(scopedFiles, grant?.reason || 'Approved Prometheus dev source edits', 'apply_live', grant?.devEditId)}. After apply_live succeeds, call write_note with tag "${grant?.plan?.completionNoteTag || 'dev_edit_complete'}"${grant?.devEditId ? ` and dev_edit_id "${grant.devEditId}"` : ''}.`;
+}
+
 function validateSourceSyntaxBeforeWrite(absPath: string, content: string): string | null {
   const ext = path.extname(absPath).toLowerCase();
   if (!['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'].includes(ext)) return null;
@@ -1241,6 +1429,12 @@ function rejectInvalidSourceEdit(toolName: string, args: any, absPath: string, c
 }
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  if (name === 'terminal') {
+    const background = args?.background === true || args?.mode === 'background';
+    args = { ...args };
+    delete args.mode;
+    name = background ? 'start_process' : 'run_command';
+  }
   // Filename inference: if the model forgot to pass filename, use the last one
   const needsFilename = ['read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'delete_file'];
   if (needsFilename.includes(name)) {
@@ -1757,23 +1951,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		    if (!task) return null;
 		    return isProposalLikeSourceSessionId(String(task.sessionId || '')) ? task : null;
 		  }
-	      function isDevSrcSelfEditProposalSession(): boolean {
+      function isDevSrcSelfEditProposalSession(): boolean {
 	        const mode = resolveProposalExecutionTask()?.proposalExecution?.mode;
 	        return mode === DEV_SRC_SELF_EDIT_MODE || mode === DEV_SRC_SELF_EDIT_REPAIR_MODE;
 	      }
+      function isDevSourceWriteApprovedSession(): boolean {
+        return isDevSrcSelfEditProposalSession() || hasDevSourceEditGrant(sessionId);
+      }
 	      function ensureDevSrcSelfEditWriteSession(toolName: string, target: 'src' | 'web-ui' | 'prom-root'): ToolResult | null {
 	        const proposalTask = resolveProposalExecutionTask();
-        if (!proposalTask) {
+        if (!proposalTask && !hasDevSourceEditGrant(sessionId)) {
           return {
             name: toolName,
             args,
             result: target === 'src'
-              ? `ERROR: ${toolName} is only available for approved code_change proposal tasks. Use write_proposal with execution_mode="code_change" to request src/ changes from regular sessions.`
-              : `ERROR: ${toolName} is only available for approved internal-code proposal tasks.`,
+              ? `ERROR: ${toolName} requires approval before editing Prometheus source. Use request_dev_source_edit for a dev-only fast approval, or write_proposal with execution_mode="code_change" for the full proposal lane.`
+              : `ERROR: ${toolName} is only available for approved internal-code edit sessions.`,
             error: true,
           };
         }
-	        if (!isDevSrcSelfEditProposalSession()) {
+	        if (proposalTask && !isDevSrcSelfEditProposalSession()) {
 	          const targetLabel = target === 'src' ? 'src/' : target === 'web-ui' ? 'web-ui/' : 'prom-root';
 	          return {
 	            name: toolName,
@@ -1794,6 +1991,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 		  function enforceProposalWriteAccess(relPath: string, kind: 'file' | 'dir', toolName: string): ToolResult | null {
 		    const proposalTask = resolveProposalExecutionTask();
+        if (!proposalTask && hasDevSourceEditGrant(sessionId)) {
+          return enforceMutationScope(relPath, kind, toolName);
+        }
         if (!proposalTask) {
           return {
             name,
@@ -1802,7 +2002,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             error: true,
           };
         }
-	        if (!isDevSrcSelfEditProposalSession()) {
+        if (!isDevSourceWriteApprovedSession()) {
 	          return {
 	            name,
 	            args,
@@ -1827,7 +2027,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		    return enforceMutationScope(relPath, kind, toolName);
 		  }
 
-      if (GENERIC_WORKSPACE_MUTATION_TOOLS.has(name) && isDevSrcSelfEditProposalSession()) {
+      if (GENERIC_WORKSPACE_MUTATION_TOOLS.has(name) && isDevSourceWriteApprovedSession()) {
         return {
           name,
           args,
@@ -1845,8 +2045,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
     matchedRule: null as any,
   };
 
+  const isRoutineDesktopApprovalFreeTool = (toolName: string): boolean =>
+    /^desktop_(doctor|screenshot|get_monitors|window_screenshot|find_window|focus_window|window_control|click|drag|wait|type|type_raw|press_key|get_clipboard|set_clipboard|list_installed_apps|find_installed_app|launch_app|close_app|get_process_list|wait_for_change|diff_screenshot|background_status|scroll)$/i.test(String(toolName || ''));
+
   try {
     evaluation = getPolicyEngine().evaluateAction(sessionId, name, args);
+    if (evaluation.tier === 'commit' && isRoutineDesktopApprovalFreeTool(name)) {
+      evaluation = {
+        ...evaluation,
+        tier: 'read',
+        riskScore: Math.min(Number(evaluation.riskScore || 0), 3),
+        reason: 'Routine desktop automation is allowed without approval; final high-impact submissions should use explicit final-action approval.',
+      };
+    }
     const inferredAgentId = inferAgentIdFromSession(sessionId, args);
     appendAuditEntry({
       timestamp: new Date().toISOString(),
@@ -2003,6 +2214,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return null;
   }
 
+	  let approvedCommandApprovalId = '';
 	  if (name === 'run_command' && evaluation.tier === 'commit') {
 	    const rawCmd = String(args?.command || '').trim();
 	    if (!rawCmd) return { name, args, result: 'command is required', error: true };
@@ -2132,6 +2344,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        approvalId: approval.id,
 	        summary: approval.action,
 	        toolName: name,
+          approval: serializeApprovalForClient(approval),
       });
     } catch {}
 
@@ -2169,6 +2382,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        taskId: activeTaskId,
 	        approvalId: approval.id,
 	        summary: approval.action,
+          approval: serializeApprovalForClient(approval),
 	      });
     } catch {}
 
@@ -2180,6 +2394,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        error: true,
 	      };
 	    }
+      approvedCommandApprovalId = approval.id;
     }
 	  }
 
@@ -2272,6 +2487,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         approvalId: approval.id,
         summary: approval.action,
         toolName: name,
+        approval: serializeApprovalForClient(approval),
       });
     } catch {}
 
@@ -2309,6 +2525,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         taskId: activeTaskId,
         approvalId: approval.id,
         summary: approval.action,
+        approval: serializeApprovalForClient(approval),
       });
     } catch {}
 
@@ -2355,6 +2572,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
         streamActive: info.streamActive === true,
         streamTransport: info.streamTransport || '',
         streamFocus: info.streamFocus || 'passive',
+        browserTarget: info.browserTarget || '',
+        profileKind: info.profileKind || '',
+        profileLabel: info.profileLabel || '',
+        profileDir: info.profileDir || '',
+        debugPort: info.debugPort || 0,
         frameBase64: frame?.base64 || '',
         frameWidth: Number(frame?.width || 0),
         frameHeight: Number(frame?.height || 0),
@@ -2690,7 +2912,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const taskId = `team_room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
           const promise = run()
             .then((result) => {
-              const entry = _bgAgentResults.get(taskId);
+              const entry = getBgAgentResults().get(taskId);
               if (entry) {
                 entry.status = result.success ? 'complete' : 'failed';
                 entry.result = result;
@@ -2722,7 +2944,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 durationMs: 0,
                 agentName,
               };
-              const entry = _bgAgentResults.get(taskId);
+              const entry = getBgAgentResults().get(taskId);
               if (entry) {
                 entry.status = 'failed';
                 entry.result = result;
@@ -2742,7 +2964,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               } catch {}
               return result;
             });
-          _bgAgentResults.set(taskId, {
+          getBgAgentResults().set(taskId, {
             status: 'running',
             agentId,
             teamId,
@@ -2821,7 +3043,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         deps.bindTeamNotificationTargetFromSession(teamId, sessionId, 'dispatch_team_agent');
-        const dispatchPrompt = buildTeamDispatchTask({ agentId, task, teamId, context });
+        const dispatchPrompt = buildTeamDispatchTaskLazy({ agentId, task, teamId, context });
         const dispatchRecord = createTeamDispatchRecord(teamId, {
           agentId,
           agentName: String((getAgentById(agentId) as any)?.name || agentId),
@@ -2960,7 +3182,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const taskId = `team_bg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
           const promise = run()
             .then((result) => {
-              const entry = _bgAgentResults.get(taskId);
+              const entry = getBgAgentResults().get(taskId);
               if (entry) {
                 entry.status = result.success ? 'complete' : 'failed';
                 entry.result = result;
@@ -2975,14 +3197,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 durationMs: 0,
                 agentName: agentId,
               };
-              const entry = _bgAgentResults.get(taskId);
+              const entry = getBgAgentResults().get(taskId);
               if (entry) {
                 entry.status = 'failed';
                 entry.result = result;
               }
               return result;
             });
-          _bgAgentResults.set(taskId, {
+          getBgAgentResults().set(taskId, {
             status: 'running',
             agentId,
             teamId,
@@ -3022,7 +3244,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const block = args?.block !== false;
         const timeoutMs = Math.max(1000, Math.min(1800000, Number(args?.timeout_ms) || 300000));
         if (!taskId) return { name, args, result: 'ERROR: get_agent_result requires task_id', error: true };
-        const entry = _bgAgentResults.get(taskId);
+        const entry = getBgAgentResults().get(taskId);
         if (!entry) return { name, args, result: `ERROR: Unknown background team task_id: ${taskId}`, error: true };
         if (!block || entry.status !== 'running') {
           return { name, args, result: JSON.stringify({ success: entry.status === 'complete', status: entry.status, task_id: taskId, result: entry.result || null }, null, 2), error: entry.status === 'failed' };
@@ -4193,7 +4415,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        fs.unlinkSync(ds_absPath);
 	        const ds_display = 'src/' + ds_absPath.slice(ds_srcRoot.length + 1).replace(/\\/g, '/');
 	        console.log(`[edit_source] delete_source: ${ds_display} (session: ${ds_sid})`);
-	        return { name, args, result: `OK ${ds_display} deleted. Call run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) to compile and verify.`, error: false };
+	        return { name, args, result: `OK ${ds_display} deleted. ${getPostSourceEditInstructionForSession(sessionId, [ds_display])}`, error: false };
 	      }
 
 	      case 'list_source': {
@@ -4296,7 +4518,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const updated = replaceAll ? content.split(findText).join(replaceText) : content.replace(findText, replaceText);
 	        fs.writeFileSync(resolved.absPath, updated, 'utf-8');
 	        console.log(`[edit_prom] find_replace_prom: ${resolved.normalizedRel} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel} updated (${occurrences} occurrence${occurrences !== 1 ? 's' : ''} replaced). Run npm run build if the change affects runtime code.`, error: false };
+	        return { name, args, result: `OK ${resolved.normalizedRel} updated (${occurrences} occurrence${occurrences !== 1 ? 's' : ''} replaced). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
 	      }
 
 	      case 'replace_lines_prom': {
@@ -4329,7 +4551,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        lines.splice(start - 1, endClamped - start + 1, ...newContent.split('\n'));
 	        fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
 	        console.log(`[edit_prom] replace_lines_prom: ${resolved.normalizedRel} lines ${start}-${endClamped} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped} (now ${lines.length} lines). Run npm run build if the change affects runtime code.`, error: false };
+	        return { name, args, result: `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped} (now ${lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
 	      }
 
 	      case 'insert_after_prom': {
@@ -4358,7 +4580,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        lines.splice(insertAt, 0, ...content.split('\n'));
 	        fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
 	        console.log(`[edit_prom] insert_after_prom: ${resolved.normalizedRel} after line ${afterLine} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel}: inserted after line ${afterLine} (now ${lines.length} lines). Run npm run build if the change affects runtime code.`, error: false };
+	        return { name, args, result: `OK ${resolved.normalizedRel}: inserted after line ${afterLine} (now ${lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
 	      }
 
 	      case 'delete_lines_prom': {
@@ -4390,7 +4612,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        lines.splice(start - 1, endClamped - start + 1);
 	        fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
 	        console.log(`[edit_prom] delete_lines_prom: ${resolved.normalizedRel} lines ${start}-${endClamped} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped} (now ${lines.length} lines). Run npm run build if the change affects runtime code.`, error: false };
+	        return { name, args, result: `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped} (now ${lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
 	      }
 
 	      case 'write_prom_file': {
@@ -4419,7 +4641,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        fs.writeFileSync(resolved.absPath, content, 'utf-8');
 	        const lineCount = content.split('\n').length;
 	        console.log(`[edit_prom] write_prom_file: ${resolved.normalizedRel} (${lineCount} lines, session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel} written (${lineCount} lines). Run npm run build if the change affects runtime code.`, error: false };
+	        return { name, args, result: `OK ${resolved.normalizedRel} written (${lineCount} lines). ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
 	      }
 
 	      case 'delete_prom_file': {
@@ -4443,7 +4665,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
 	        fs.unlinkSync(resolved.absPath);
 	        console.log(`[edit_prom] delete_prom_file: ${resolved.normalizedRel} (session: ${sessionId})`);
-	        return { name, args, result: `OK ${resolved.normalizedRel} deleted. Run npm run build if the change affects runtime code.`, error: false };
+	        return { name, args, result: `OK ${resolved.normalizedRel} deleted. ${getPostSourceEditInstructionForSession(sessionId, [resolved.normalizedRel])}`, error: false };
 	      }
 
       // ── list_webui_source: list files/dirs inside web-ui/ ────────────────────
@@ -4523,9 +4745,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (frs_invalidEdit) return frs_invalidEdit;
         fs.writeFileSync(frs_absPath, frs_updated, 'utf-8');
         const frs_display = 'src/' + frs_absPath.slice(frs_srcRoot.length + 1).replace(/\\/g, '/');
-        const frs_buildCommand = getSourceVerificationCommandForSession(sessionId);
         console.log(`[edit_source] find_replace_source: ${frs_display} (session: ${frs_sid})`);
-        return { name, args, result: `✅ ${frs_display} updated (${frs_occurrences} occurrence${frs_occurrences !== 1 ? 's' : ''} replaced). Call run_command({command:"${frs_buildCommand}", shell:true}) to compile and verify.`, error: false };
+        return { name, args, result: `✅ ${frs_display} updated (${frs_occurrences} occurrence${frs_occurrences !== 1 ? 's' : ''} replaced). ${getPostSourceEditInstructionForSession(sessionId, [frs_display])}`, error: false };
       }
 
 	      case 'replace_lines_source': {
@@ -4560,9 +4781,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (rls_invalidEdit) return rls_invalidEdit;
         fs.writeFileSync(rls_absPath, rls_updated, 'utf-8');
         const rls_display = 'src/' + rls_absPath.slice(rls_srcRoot.length + 1).replace(/\\/g, '/');
-        const rls_buildCommand = getSourceVerificationCommandForSession(sessionId);
-        console.log(`[edit_source] replace_lines_source: ${rls_display} lines ${rls_start}-${rls_endClamped} (verify with ${rls_buildCommand}, session: ${rls_sid})`);
-        return { name, args, result: `✅ ${rls_display}: replaced lines ${rls_start}-${rls_endClamped} (now ${rls_lines.length} lines). Call run_command({command:"${rls_buildCommand}", shell:true}) to compile and verify.`, error: false };
+        console.log(`[edit_source] replace_lines_source: ${rls_display} lines ${rls_start}-${rls_endClamped} (session: ${rls_sid})`);
+        return { name, args, result: `✅ ${rls_display}: replaced lines ${rls_start}-${rls_endClamped} (now ${rls_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [rls_display])}`, error: false };
       }
 
       // ── insert_after_source: insert lines after a given line in src/ ─────────
@@ -4595,7 +4815,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(ias_absPath, ias_updated, 'utf-8');
         const ias_display = 'src/' + ias_absPath.slice(ias_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] insert_after_source: ${ias_display} after line ${ias_afterLine} (session: ${ias_sid})`);
-        return { name, args, result: `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_lines.length} lines). Call run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) to compile and verify.`, error: false };
+        return { name, args, result: `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [ias_display])}`, error: false };
       }
 
       // ── delete_lines_source: delete a range of lines from a src/ file ─────────
@@ -4631,7 +4851,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(dls_absPath, dls_updated, 'utf-8');
         const dls_display = 'src/' + dls_absPath.slice(dls_srcRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_source] delete_lines_source: ${dls_display} lines ${dls_start}-${dls_endClamped} (session: ${dls_sid})`);
-        return { name, args, result: `✅ ${dls_display}: deleted lines ${dls_start}-${dls_endClamped} (now ${dls_lines.length} lines). Call run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) to compile and verify.`, error: false };
+        return { name, args, result: `✅ ${dls_display}: deleted lines ${dls_start}-${dls_endClamped} (now ${dls_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [dls_display])}`, error: false };
       }
 
       // ── write_source: create or overwrite a file in src/ ─────────────────────
@@ -4662,7 +4882,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const ws_display = 'src/' + ws_absPath.slice(ws_srcRoot.length + 1).replace(/\\/g, '/');
         const ws_lineCount = ws_content.split('\n').length;
         console.log(`[edit_source] write_source: ${ws_display} (${ws_lineCount} lines, session: ${ws_sid})`);
-        return { name, args, result: `✅ ${ws_display} written (${ws_lineCount} lines). Call run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) to compile and verify.`, error: false };
+        return { name, args, result: `✅ ${ws_display} written (${ws_lineCount} lines). ${getPostSourceEditInstructionForSession(sessionId, [ws_display])}`, error: false };
       }
 
       // ── list_source: list files/dirs inside src/ ──────────────────────────────
@@ -4796,8 +5016,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(frwu_absPath, frwu_updated, 'utf-8');
         const frwu_display = 'web-ui/' + frwu_absPath.slice(frwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] find_replace_webui_source: ${frwu_display} (session: ${frwu_sid})`);
-        const frwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
-        return { name, args, result: `OK ${frwu_display} updated (${frwu_occurrences} occurrence${frwu_occurrences !== 1 ? 's' : ''} replaced). Verify with ${frwu_verifyCommand}.`, error: false };
+        return { name, args, result: `OK ${frwu_display} updated (${frwu_occurrences} occurrence${frwu_occurrences !== 1 ? 's' : ''} replaced). ${getPostSourceEditInstructionForSession(sessionId, [frwu_display])}`, error: false };
       }
 
       // ── replace_lines_webui_source ────────────────────────────────────────────
@@ -4834,8 +5053,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(rlwu_absPath, rlwu_updated, 'utf-8');
         const rlwu_display = 'web-ui/' + rlwu_absPath.slice(rlwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] replace_lines_webui_source: ${rlwu_display} lines ${rlwu_start}-${rlwu_endClamped} (session: ${rlwu_sid})`);
-        const rlwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
-        return { name, args, result: `OK ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines). Verify with ${rlwu_verifyCommand}.`, error: false };
+        return { name, args, result: `OK ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [rlwu_display])}`, error: false };
       }
 
       // ── insert_after_webui_source ─────────────────────────────────────────────
@@ -4868,8 +5086,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(iawu_absPath, iawu_updated, 'utf-8');
         const iawu_display = 'web-ui/' + iawu_absPath.slice(iawu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] insert_after_webui_source: ${iawu_display} after line ${iawu_afterLine} (session: ${iawu_sid})`);
-        const iawu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
-        return { name, args, result: `OK ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines). Verify with ${iawu_verifyCommand}.`, error: false };
+        return { name, args, result: `OK ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [iawu_display])}`, error: false };
       }
 
       // ── delete_lines_webui_source ─────────────────────────────────────────────
@@ -4905,8 +5122,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         fs.writeFileSync(dlwu_absPath, dlwu_updated, 'utf-8');
         const dlwu_display = 'web-ui/' + dlwu_absPath.slice(dlwu_webUiRoot.length + 1).replace(/\\/g, '/');
         console.log(`[edit_webui] delete_lines_webui_source: ${dlwu_display} lines ${dlwu_start}-${dlwu_endClamped} (session: ${dlwu_sid})`);
-        const dlwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
-        return { name, args, result: `OK ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines). Verify with ${dlwu_verifyCommand}.`, error: false };
+        return { name, args, result: `OK ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines). ${getPostSourceEditInstructionForSession(sessionId, [dlwu_display])}`, error: false };
       }
 
       // ── write_webui_source: create or overwrite a file in web-ui/ ────────────
@@ -4937,8 +5153,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const wwu_display = 'web-ui/' + wwu_absPath.slice(wwu_webUiRoot.length + 1).replace(/\\/g, '/');
         const wwu_lineCount = wwu_content.split('\n').length;
         console.log(`[edit_webui] write_webui_source: ${wwu_display} (${wwu_lineCount} lines, session: ${wwu_sid})`);
-        const wwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
-        return { name, args, result: `OK ${wwu_display} written (${wwu_lineCount} lines). Verify with ${wwu_verifyCommand}.`, error: false };
+        return { name, args, result: `OK ${wwu_display} written (${wwu_lineCount} lines). ${getPostSourceEditInstructionForSession(sessionId, [wwu_display])}`, error: false };
       }
 
       // ── send_telegram: proactively push text or screenshot to Telegram ────────
@@ -4966,9 +5181,58 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        fs.unlinkSync(dwu_absPath);
 	        const dwu_display = 'web-ui/' + dwu_absPath.slice(dwu_webUiRoot.length + 1).replace(/\\/g, '/');
 	        console.log(`[edit_webui] delete_webui_source: ${dwu_display} (session: ${dwu_sid})`);
-	        const dwu_verifyCommand = getSourceVerificationCommandForSession(sessionId);
-	        return { name, args, result: `OK ${dwu_display} deleted. Verify with ${dwu_verifyCommand}.`, error: false };
+	        return { name, args, result: `OK ${dwu_display} deleted. ${getPostSourceEditInstructionForSession(sessionId, [dwu_display])}`, error: false };
 	      }
+
+      case 'delivery_send': {
+        const msgText = String(args.text || args.message || '').trim();
+        if (msgText && containsObsoleteProductBrand(msgText)) {
+          return { name, args, result: `ERROR: ${buildObsoleteBrandBlockMessage('delivery payload')}`, error: true };
+        }
+        try {
+          let imageBuffer: Buffer | undefined;
+          let attachmentPath: string | undefined;
+          let mimeType = args.mimeType ? String(args.mimeType) : undefined;
+          let fileName: string | undefined;
+          if (args.imageBase64) {
+            imageBuffer = Buffer.from(String(args.imageBase64), 'base64');
+            mimeType = mimeType || 'image/png';
+          }
+          if (args.attachmentPath) {
+            const file = readAttachmentBuffer(String(args.attachmentPath), workspacePath);
+            attachmentPath = file.absPath;
+            fileName = file.fileName;
+            mimeType = mimeType || file.mimeType;
+            if (file.mimeType.startsWith('image/') && !imageBuffer) imageBuffer = file.buffer;
+          }
+          if (!msgText && !imageBuffer && !attachmentPath) return { name, args, result: 'ERROR: text, imageBase64, or attachmentPath is required.', error: true };
+          const delivered = await deliverToTargets({
+            sessionId,
+            target: args.target || 'origin',
+            text: msgText,
+            caption: String(args.caption || msgText || '').trim(),
+            attachmentPath,
+            imageBuffer,
+            mimeType,
+            fileName,
+            source: 'delivery_send',
+          }, { telegramChannel: deps.telegramChannel, broadcastWS: deps.broadcastWS });
+          const suffix = delivered.errors.length ? ` Errors: ${delivered.errors.join('; ')}` : '';
+          return {
+            name,
+            args,
+            result: delivered.delivered.length ? `Delivered via ${delivered.delivered.join(', ')}.${suffix}` : `ERROR: Delivery failed.${suffix}`,
+            error: delivered.delivered.length === 0,
+          };
+        } catch (err: any) {
+          return { name, args, result: `ERROR: Delivery failed: ${err?.message || err}`, error: true };
+        }
+      }
+
+      case 'delivery_send_screenshot': {
+        const delivered = await executeDeliverySendScreenshot(args, workspacePath, deps, sessionId);
+        return { name, args, result: delivered.result, error: delivered.error };
+      }
 
 	      case 'send_telegram': {
         if (!deps.telegramChannel) {
@@ -5426,6 +5690,142 @@ export async function executeTool(name: string, args: any, workspacePath: string
         };
       }
 
+      case 'creative_create_project': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const created = creativeCreateProject(storage, {
+            title: args?.title ? String(args.title) : undefined,
+            brief: args?.brief ? String(args.brief) : undefined,
+            targetFormat: args?.targetFormat || args?.target_format ? String(args.targetFormat || args.target_format) : undefined,
+            targetDurationSec: Number.isFinite(Number(args?.targetDurationSec ?? args?.target_duration_sec)) ? Number(args?.targetDurationSec ?? args?.target_duration_sec) : undefined,
+            aspectRatio: args?.aspectRatio || args?.aspect_ratio ? String(args.aspectRatio || args.aspect_ratio) : undefined,
+            resolution: args?.resolution ? String(args.resolution) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            storyboardId: args?.storyboardId || args?.storyboard_id ? String(args.storyboardId || args.storyboard_id) : undefined,
+            storyboardPath: args?.storyboardPath || args?.storyboard_path ? String(args.storyboardPath || args.storyboard_path) : undefined,
+            storyboard: args?.storyboard && typeof args.storyboard === 'object' ? args.storyboard : undefined,
+            sourceAssets: Array.isArray(args?.sourceAssets || args?.source_assets)
+              ? (args.sourceAssets || args.source_assets).map((item: any) => String(item)).filter(Boolean)
+              : (args?.sourceAssets || args?.source_assets ? String(args.sourceAssets || args.source_assets) : undefined),
+            notes: args?.notes && typeof args.notes === 'object' ? args.notes : {},
+          });
+          return {
+            name,
+            args,
+            result: `Created Creative project ${created.project.id} at ${created.path}${created.storyboard ? ` with storyboard ${created.storyboard.id}` : ''}.`,
+            error: false,
+            data: created,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_project_history': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const projectId = args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : '';
+          if (projectId || args?.path) {
+            const project = creativeGetProject(storage, { projectId, path: args?.path ? String(args.path) : undefined });
+            return {
+              name,
+              args,
+              result: `Loaded Creative project ${project.id}: ${project.title}.\n${JSON.stringify(project).slice(0, 10000)}`,
+              error: false,
+              data: { project },
+            };
+          }
+          const projects = creativeListProjects(storage, { limit: Number.isFinite(Number(args?.limit)) ? Number(args.limit) : undefined });
+          return {
+            name,
+            args,
+            result: `${name}: ${projects.length} project record${projects.length === 1 ? '' : 's'}.\n${JSON.stringify({ projects }).slice(0, 8000)}`,
+            error: false,
+            data: { projects },
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_create_storyboard': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const created = creativeCreateStoryboard(storage, {
+            title: args?.title ? String(args.title) : undefined,
+            brief: args?.brief ? String(args.brief) : undefined,
+            styleGuide: args?.styleGuide || args?.style_guide ? String(args.styleGuide || args.style_guide) : undefined,
+            characterBible: args?.characterBible || args?.character_bible ? String(args.characterBible || args.character_bible) : undefined,
+            shots: Array.isArray(args?.shots) ? args.shots : [],
+            metadata: args?.metadata && typeof args.metadata === 'object' ? args.metadata : {},
+          });
+          return {
+            name,
+            args,
+            result: `Created storyboard ${created.storyboard.id} with ${created.storyboard.shots.length} shot${created.storyboard.shots.length === 1 ? '' : 's'} at ${created.path}.`,
+            error: false,
+            data: created,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_storyboard_history': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const storyboardId = args?.storyboardId || args?.storyboard_id ? String(args.storyboardId || args.storyboard_id) : '';
+          if (storyboardId || args?.path) {
+            const storyboard = creativeGetStoryboard(storage, { storyboardId, path: args?.path ? String(args.path) : undefined });
+            return {
+              name,
+              args,
+              result: `Loaded storyboard ${storyboard.id} with ${storyboard.shots.length} shot${storyboard.shots.length === 1 ? '' : 's'}.\n${JSON.stringify(storyboard).slice(0, 9000)}`,
+              error: false,
+              data: { storyboard },
+            };
+          }
+          const storyboards = creativeListStoryboards(storage, { limit: Number.isFinite(Number(args?.limit)) ? Number(args.limit) : undefined });
+          return {
+            name,
+            args,
+            result: `${name}: ${storyboards.length} storyboard record${storyboards.length === 1 ? '' : 's'}.\n${JSON.stringify({ storyboards }).slice(0, 7000)}`,
+            error: false,
+            data: { storyboards },
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_write_shot_prompt': {
+        try {
+          const prompt = creativeWriteShotPrompt({
+            subject: args?.subject ? String(args.subject) : undefined,
+            action: args?.action ? String(args.action) : undefined,
+            setting: args?.setting ? String(args.setting) : undefined,
+            camera: args?.camera ? String(args.camera) : undefined,
+            lighting: args?.lighting ? String(args.lighting) : undefined,
+            style: args?.style ? String(args.style) : undefined,
+            continuity: args?.continuity ? String(args.continuity) : undefined,
+            endingFrameGoal: args?.endingFrameGoal || args?.ending_frame_goal ? String(args.endingFrameGoal || args.ending_frame_goal) : undefined,
+            negatives: Array.isArray(args?.negatives) ? args.negatives : (args?.negatives ? String(args.negatives) : undefined),
+            duration: Number.isFinite(Number(args?.duration)) ? Number(args.duration) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Wrote shot prompt.\n${JSON.stringify(prompt, null, 2)}`,
+            error: false,
+            data: prompt,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
       case 'creative_render_ascii_asset': {
         const storage = buildCreativeStorageForTool(workspacePath, sessionId);
         const render = await getCreativeAsciiRenderRuntime().renderCreativeAsciiAsset(storage, {
@@ -5494,6 +5894,1194 @@ export async function executeTool(name: string, args: any, workspacePath: string
             storageRootRelative: storage.rootRelPath,
           },
         };
+      }
+
+      case 'creative_extract_video_frame': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const extracted = await creativeExtractVideoFrame(storage, {
+            source: String(args?.source || args?.video || '').trim(),
+            frame: args?.frame,
+            timestamp: Number.isFinite(Number(args?.timestamp)) ? Number(args.timestamp) : undefined,
+            timestampMs: Number.isFinite(Number(args?.timestampMs ?? args?.timestamp_ms)) ? Number(args?.timestampMs ?? args?.timestamp_ms) : undefined,
+            percent: Number.isFinite(Number(args?.percent)) ? Number(args.percent) : undefined,
+            outputName: args?.outputName || args?.output_name ? String(args.outputName || args.output_name) : undefined,
+            registerAsAsset: args?.registerAsAsset !== false && args?.register_as_asset !== false,
+            tags: args?.tags,
+          });
+          return {
+            name,
+            args,
+            result: `Extracted video frame to ${extracted.frame.path}${extracted.asset ? ` and imported asset ${extracted.asset.id}.` : '.'}\n${JSON.stringify({
+              frame: extracted.frame,
+              asset: extracted.asset,
+              durationMs: extracted.durationMs,
+            }).slice(0, 5000)}`,
+            error: false,
+            data: extracted,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_extract_video_frames': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const extracted = await creativeExtractVideoFrames(storage, {
+            source: String(args?.source || args?.video || '').trim(),
+            frames: Array.isArray(args?.frames) ? args.frames : undefined,
+            timestamps: Array.isArray(args?.timestamps) ? args.timestamps.map((item: any) => Number(item)).filter(Number.isFinite) : undefined,
+            percents: Array.isArray(args?.percents) ? args.percents.map((item: any) => Number(item)).filter(Number.isFinite) : undefined,
+            count: Number.isFinite(Number(args?.count)) ? Number(args.count) : undefined,
+            rangeStartPercent: Number.isFinite(Number(args?.rangeStartPercent ?? args?.range_start_percent)) ? Number(args?.rangeStartPercent ?? args?.range_start_percent) : undefined,
+            rangeEndPercent: Number.isFinite(Number(args?.rangeEndPercent ?? args?.range_end_percent)) ? Number(args?.rangeEndPercent ?? args?.range_end_percent) : undefined,
+            outputNamePrefix: args?.outputNamePrefix || args?.output_name_prefix ? String(args.outputNamePrefix || args.output_name_prefix) : undefined,
+            registerAsAssets: args?.registerAsAssets !== false && args?.register_as_assets !== false,
+            contactSheet: args?.contactSheet !== false && args?.contact_sheet !== false,
+            tags: args?.tags,
+          });
+          return {
+            name,
+            args,
+            result: `Extracted ${extracted.frames.length} video frame${extracted.frames.length === 1 ? '' : 's'}${extracted.contactSheet ? ` with contact sheet ${extracted.contactSheet.path}` : ''}.\n${JSON.stringify({
+              frames: extracted.frames,
+              assetCount: extracted.assets.length,
+              contactSheet: extracted.contactSheet,
+              durationMs: extracted.durationMs,
+            }).slice(0, 7000)}`,
+            error: false,
+            data: extracted,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_register_generation': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const registered = await creativeRegisterGeneration(storage, {
+            kind: args?.kind,
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : null,
+            attempt: Number.isFinite(Number(args?.attempt)) ? Number(args.attempt) : undefined,
+            prompt: args?.prompt ? String(args.prompt) : null,
+            provider: args?.provider ? String(args.provider) : null,
+            model: args?.model ? String(args.model) : null,
+            mode: args?.mode ? String(args.mode) : null,
+            parentGenerationId: args?.parentGenerationId || args?.parent_generation_id ? String(args.parentGenerationId || args.parent_generation_id) : null,
+            parentAssetId: args?.parentAssetId || args?.parent_asset_id ? String(args.parentAssetId || args.parent_asset_id) : null,
+            sourceImage: args?.sourceImage || args?.source_image ? String(args.sourceImage || args.source_image) : null,
+            sourceVideo: args?.sourceVideo || args?.source_video ? String(args.sourceVideo || args.source_video) : null,
+            referenceImages: Array.isArray(args?.referenceImages || args?.reference_images)
+              ? (args.referenceImages || args.reference_images).map((item: any) => String(item)).filter(Boolean)
+              : [],
+            outputPath: args?.outputPath || args?.output_path ? String(args.outputPath || args.output_path) : null,
+            metadata: args?.metadata && typeof args.metadata === 'object' ? args.metadata : {},
+            tags: args?.tags,
+          });
+          return {
+            name,
+            args,
+            result: `Registered generation ${registered.generation.id}${registered.asset ? ` for asset ${registered.asset.id}` : ''}.\n${JSON.stringify(registered).slice(0, 5000)}`,
+            error: false,
+            data: registered,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_generation_history': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        const generations = creativeListGenerations(storage, {
+          shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+          limit: Number.isFinite(Number(args?.limit)) ? Number(args.limit) : undefined,
+        });
+        return {
+          name,
+          args,
+          result: `${name}: ${generations.length} generation record${generations.length === 1 ? '' : 's'}.\n${JSON.stringify({ generations }).slice(0, 8000)}`,
+          error: false,
+          data: { generations },
+        };
+      }
+
+      case 'creative_generate_image_shot': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const generated = await creativeGenerateImageShot(storage, {
+            prompt: String(args?.prompt || ''),
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            styleGuide: args?.styleGuide || args?.style_guide ? String(args.styleGuide || args.style_guide) : undefined,
+            aspectRatio: args?.aspectRatio || args?.aspect_ratio ? String(args.aspectRatio || args.aspect_ratio) : undefined,
+            referenceImages: Array.isArray(args?.referenceImages || args?.reference_images)
+              ? (args.referenceImages || args.reference_images).map((item: any) => String(item))
+              : (args?.referenceImages || args?.reference_images ? String(args.referenceImages || args.reference_images) : undefined),
+            characterReferences: Array.isArray(args?.characterReferences || args?.character_references)
+              ? (args.characterReferences || args.character_references).map((item: any) => String(item))
+              : (args?.characterReferences || args?.character_references ? String(args.characterReferences || args.character_references) : undefined),
+            locationReferences: Array.isArray(args?.locationReferences || args?.location_references)
+              ? (args.locationReferences || args.location_references).map((item: any) => String(item))
+              : (args?.locationReferences || args?.location_references ? String(args.locationReferences || args.location_references) : undefined),
+            negativePrompt: args?.negativePrompt || args?.negative_prompt ? String(args.negativePrompt || args.negative_prompt) : undefined,
+            seed: args?.seed,
+            continuityId: args?.continuityId || args?.continuity_id ? String(args.continuityId || args.continuity_id) : undefined,
+            outputRole: args?.outputRole || args?.output_role,
+            provider: args?.provider ? String(args.provider) : undefined,
+            model: args?.model ? String(args.model) : undefined,
+            count: Number.isFinite(Number(args?.count)) ? Number(args.count) : undefined,
+            outputDir: args?.outputDir || args?.output_dir ? String(args.outputDir || args.output_dir) : undefined,
+            parentGenerationId: args?.parentGenerationId || args?.parent_generation_id ? String(args.parentGenerationId || args.parent_generation_id) : undefined,
+            parentAssetId: args?.parentAssetId || args?.parent_asset_id ? String(args.parentAssetId || args.parent_asset_id) : undefined,
+            importToCreative: args?.importToCreative !== false && args?.import_to_creative !== false,
+          });
+          if (generated.toolResult.success && args?.addToEditor !== false && args?.add_to_editor !== false) {
+            const primaryAsset = generated.assets?.[0] || generated.primary?.asset || null;
+            const source = primaryAsset?.path || primaryAsset?.relativePath || generated.primary?.path || generated.primary?.file || '';
+            if (source) {
+              await sendCreativeCommand(deps.broadcastWS, {
+                sessionId,
+                mode: 'video',
+                command: 'add_asset',
+                payload: {
+                  source,
+                  type: 'image',
+                  assetType: 'image',
+                  fit: 'cover',
+                  meta: {
+                    shotId: args?.shotId || args?.shot_id || null,
+                    generationId: generated.generations?.[0]?.id || null,
+                  },
+                },
+                timeoutMs: resolveCreativeEditorTimeoutMs('creative_add_asset'),
+              }).catch(() => undefined);
+            }
+          }
+          return {
+            name,
+            args,
+            result: generated.toolResult.success
+              ? `Generated ${generated.images.length} image shot${generated.images.length === 1 ? '' : 's'} and registered ${generated.generations.length} generation record${generated.generations.length === 1 ? '' : 's'}.\n${JSON.stringify({
+                primary: generated.primary,
+                assets: generated.assets,
+                generations: generated.generations,
+              }).slice(0, 9000)}`
+              : `ERROR: ${generated.toolResult.error || 'image shot generation failed'}`,
+            error: generated.toolResult.success !== true,
+            data: generated,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_generate_video_shot': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const generated = await creativeGenerateVideoShot(storage, {
+            prompt: String(args?.prompt || ''),
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            image: args?.image ? String(args.image) : undefined,
+            referenceImages: Array.isArray(args?.referenceImages || args?.reference_images)
+              ? (args.referenceImages || args.reference_images).map((item: any) => String(item))
+              : (args?.referenceImages || args?.reference_images ? String(args.referenceImages || args.reference_images) : undefined),
+            video: args?.video ? String(args.video) : undefined,
+            mode: args?.mode ? String(args.mode) : undefined,
+            aspectRatio: args?.aspectRatio || args?.aspect_ratio ? String(args.aspectRatio || args.aspect_ratio) : undefined,
+            duration: Number.isFinite(Number(args?.duration)) ? Number(args.duration) : undefined,
+            resolution: args?.resolution ? String(args.resolution) : undefined,
+            provider: args?.provider ? String(args.provider) : undefined,
+            model: args?.model ? String(args.model) : undefined,
+            outputDir: args?.outputDir || args?.output_dir ? String(args.outputDir || args.output_dir) : undefined,
+            parentGenerationId: args?.parentGenerationId || args?.parent_generation_id ? String(args.parentGenerationId || args.parent_generation_id) : undefined,
+            parentAssetId: args?.parentAssetId || args?.parent_asset_id ? String(args.parentAssetId || args.parent_asset_id) : undefined,
+            importToCreative: args?.importToCreative !== false && args?.import_to_creative !== false,
+            pollIntervalMs: Number.isFinite(Number(args?.pollIntervalMs ?? args?.poll_interval_ms)) ? Number(args?.pollIntervalMs ?? args?.poll_interval_ms) : undefined,
+            timeoutMs: Number.isFinite(Number(args?.timeoutMs ?? args?.timeout_ms)) ? Number(args?.timeoutMs ?? args?.timeout_ms) : undefined,
+          });
+          if (generated.toolResult.success && args?.addToEditor !== false && args?.add_to_editor !== false) {
+            const source = generated.asset?.path || generated.asset?.relativePath || generated.video?.path || generated.video?.file || '';
+            if (source) {
+              await sendCreativeCommand(deps.broadcastWS, {
+                sessionId,
+                mode: 'video',
+                command: 'add_asset',
+                payload: {
+                  source,
+                  type: 'video',
+                  assetType: 'video',
+                  fit: 'cover',
+                  durationMs: Number(generated.asset?.durationMs || args?.duration || 0) || undefined,
+                  meta: {
+                    shotId: args?.shotId || args?.shot_id || null,
+                    generationId: generated.generation?.id || null,
+                  },
+                },
+                timeoutMs: resolveCreativeEditorTimeoutMs('creative_add_asset'),
+              }).catch(() => undefined);
+            }
+          }
+          return {
+            name,
+            args,
+            result: generated.toolResult.success
+              ? `Generated video shot${generated.generation ? ` ${generated.generation.id}` : ''}${generated.asset ? ` and imported asset ${generated.asset.id}` : ''}.\n${JSON.stringify({
+                video: generated.video,
+                asset: generated.asset,
+                generation: generated.generation,
+              }).slice(0, 7000)}`
+              : `ERROR: ${generated.toolResult.error || 'video shot generation failed'}`,
+            error: generated.toolResult.success !== true,
+            data: generated,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_analyze_generated_video': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const analyzed = await creativeAnalyzeGeneratedVideo(storage, {
+            source: String(args?.source || args?.video || '').trim(),
+            intendedPrompt: args?.intendedPrompt || args?.intended_prompt ? String(args.intendedPrompt || args.intended_prompt) : undefined,
+            continuityTarget: args?.continuityTarget || args?.continuity_target ? String(args.continuityTarget || args.continuity_target) : undefined,
+            qaCriteria: Array.isArray(args?.qaCriteria || args?.qa_criteria)
+              ? (args.qaCriteria || args.qa_criteria).map((item: any) => String(item)).filter(Boolean)
+              : (args?.qaCriteria || args?.qa_criteria ? String(args.qaCriteria || args.qa_criteria) : undefined),
+            frameCount: Number.isFinite(Number(args?.frameCount ?? args?.frame_count)) ? Number(args?.frameCount ?? args?.frame_count) : undefined,
+            useVision: args?.useVision !== false && args?.use_vision !== false,
+          });
+          return {
+            name,
+            args,
+            result: `Analyzed generated video ${analyzed.asset.name}: score ${analyzed.score}/100 (${analyzed.passed ? 'passed' : 'needs review'}).${analyzed.contactSheet ? ` Contact sheet: ${analyzed.contactSheet.path}` : ''}\n${JSON.stringify({
+              score: analyzed.score,
+              passed: analyzed.passed,
+              warnings: analyzed.warnings,
+              recommendations: analyzed.recommendations,
+              contactSheet: analyzed.contactSheet,
+              bestFrames: analyzed.frames.slice(0, 3),
+            }).slice(0, 8000)}`,
+            error: false,
+            data: analyzed,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_compare_shots': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const compared = await creativeCompareShots(storage, {
+            videos: Array.isArray(args?.videos)
+              ? args.videos.map((item: any) => String(item)).filter(Boolean)
+              : String(args?.videos || '').split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean),
+            intendedPrompt: args?.intendedPrompt || args?.intended_prompt ? String(args.intendedPrompt || args.intended_prompt) : undefined,
+            continuityTarget: args?.continuityTarget || args?.continuity_target ? String(args.continuityTarget || args.continuity_target) : undefined,
+            qaCriteria: Array.isArray(args?.qaCriteria || args?.qa_criteria)
+              ? (args.qaCriteria || args.qa_criteria).map((item: any) => String(item)).filter(Boolean)
+              : (args?.qaCriteria || args?.qa_criteria ? String(args.qaCriteria || args.qa_criteria) : undefined),
+            frameCount: Number.isFinite(Number(args?.frameCount ?? args?.frame_count)) ? Number(args?.frameCount ?? args?.frame_count) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Compared ${compared.analyses.length} shot takes. ${compared.recommendation}\n${JSON.stringify({
+              winner: compared.winner ? { source: compared.winner.source, score: compared.winner.score, passed: compared.winner.passed } : null,
+              analyses: compared.analyses.map((item) => ({ source: item.source, score: item.score, passed: item.passed, warnings: item.warnings })),
+            }).slice(0, 9000)}`,
+            error: false,
+            data: compared,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_select_best_take': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const selected = await creativeSelectBestTake(storage, {
+            shotId: String(args?.shotId || args?.shot_id || '').trim(),
+            intendedPrompt: args?.intendedPrompt || args?.intended_prompt ? String(args.intendedPrompt || args.intended_prompt) : undefined,
+            continuityTarget: args?.continuityTarget || args?.continuity_target ? String(args.continuityTarget || args.continuity_target) : undefined,
+            qaCriteria: Array.isArray(args?.qaCriteria || args?.qa_criteria)
+              ? (args.qaCriteria || args.qa_criteria).map((item: any) => String(item)).filter(Boolean)
+              : (args?.qaCriteria || args?.qa_criteria ? String(args.qaCriteria || args.qa_criteria) : undefined),
+            limit: Number.isFinite(Number(args?.limit)) ? Number(args.limit) : undefined,
+            useVision: args?.useVision !== false && args?.use_vision !== false,
+          });
+          return {
+            name,
+            args,
+            result: `${selected.recommendation}\n${JSON.stringify({
+              selected: selected.selected ? { generation: selected.selected.generation, score: selected.selected.score, passed: selected.selected.passed, outputPath: selected.selected.source } : null,
+              analyses: selected.analyses.map((item) => ({ generationId: item.generation?.id, score: item.score, passed: item.passed, outputPath: item.source, error: item.error || null })),
+            }).slice(0, 10000)}`,
+            error: false,
+            data: selected,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_retry_shot_until_pass': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const retried = await creativeRetryShotUntilPass(storage, {
+            prompt: String(args?.prompt || ''),
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            image: args?.image ? String(args.image) : undefined,
+            referenceImages: Array.isArray(args?.referenceImages || args?.reference_images)
+              ? (args.referenceImages || args.reference_images).map((item: any) => String(item))
+              : (args?.referenceImages || args?.reference_images ? String(args.referenceImages || args.reference_images) : undefined),
+            video: args?.video ? String(args.video) : undefined,
+            mode: args?.mode ? String(args.mode) : undefined,
+            aspectRatio: args?.aspectRatio || args?.aspect_ratio ? String(args.aspectRatio || args.aspect_ratio) : undefined,
+            duration: Number.isFinite(Number(args?.duration)) ? Number(args.duration) : undefined,
+            resolution: args?.resolution ? String(args.resolution) : undefined,
+            provider: args?.provider ? String(args.provider) : undefined,
+            model: args?.model ? String(args.model) : undefined,
+            outputDir: args?.outputDir || args?.output_dir ? String(args.outputDir || args.output_dir) : undefined,
+            parentGenerationId: args?.parentGenerationId || args?.parent_generation_id ? String(args.parentGenerationId || args.parent_generation_id) : undefined,
+            parentAssetId: args?.parentAssetId || args?.parent_asset_id ? String(args.parentAssetId || args.parent_asset_id) : undefined,
+            importToCreative: args?.importToCreative !== false && args?.import_to_creative !== false,
+            pollIntervalMs: Number.isFinite(Number(args?.pollIntervalMs ?? args?.poll_interval_ms)) ? Number(args?.pollIntervalMs ?? args?.poll_interval_ms) : undefined,
+            timeoutMs: Number.isFinite(Number(args?.timeoutMs ?? args?.timeout_ms)) ? Number(args?.timeoutMs ?? args?.timeout_ms) : undefined,
+            maxRetries: Number.isFinite(Number(args?.maxRetries ?? args?.max_retries)) ? Number(args?.maxRetries ?? args?.max_retries) : undefined,
+            passScore: Number.isFinite(Number(args?.passScore ?? args?.pass_score)) ? Number(args?.passScore ?? args?.pass_score) : undefined,
+            qaCriteria: Array.isArray(args?.qaCriteria || args?.qa_criteria)
+              ? (args.qaCriteria || args.qa_criteria).map((item: any) => String(item)).filter(Boolean)
+              : (args?.qaCriteria || args?.qa_criteria ? String(args.qaCriteria || args.qa_criteria) : undefined),
+            continuityTarget: args?.continuityTarget || args?.continuity_target ? String(args.continuityTarget || args.continuity_target) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Retried video shot ${retried.attempts.length} time${retried.attempts.length === 1 ? '' : 's'}; ${retried.passed ? 'passed' : 'needs review'}. ${retried.recommendation}\n${JSON.stringify({
+              selectedScore: retried.selected?.analysis?.score || null,
+              selectedVideo: retried.selected?.generated?.video || null,
+              attempts: retried.attempts.map((item) => ({ attempt: item.attempt, score: item.analysis?.score || null, passed: item.analysis?.passed || false, video: item.generated?.video })),
+            }).slice(0, 9000)}`,
+            error: retried.attempts.length === 0,
+            data: retried,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_refine_video_shot': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const refined = await creativeRefineVideoShot(storage, {
+            sourceVideo: String(args?.sourceVideo || args?.source_video || args?.video || '').trim(),
+            issueMode: args?.issueMode || args?.issue_mode,
+            issueDescription: args?.issueDescription || args?.issue_description ? String(args.issueDescription || args.issue_description) : undefined,
+            desiredCorrection: args?.desiredCorrection || args?.desired_correction ? String(args.desiredCorrection || args.desired_correction) : undefined,
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            keyframe: args?.keyframe ? String(args.keyframe) : undefined,
+            frameStrategy: args?.frameStrategy || args?.frame_strategy,
+            timestamp: Number.isFinite(Number(args?.timestamp)) ? Number(args.timestamp) : undefined,
+            percent: Number.isFinite(Number(args?.percent)) ? Number(args.percent) : undefined,
+            preserveStyle: args?.preserveStyle !== false && args?.preserve_style !== false,
+            preserveCharacter: args?.preserveCharacter !== false && args?.preserve_character !== false,
+            preserveLocation: args?.preserveLocation !== false && args?.preserve_location !== false,
+            duration: Number.isFinite(Number(args?.duration)) ? Number(args.duration) : undefined,
+            resolution: args?.resolution ? String(args.resolution) : undefined,
+            aspectRatio: args?.aspectRatio || args?.aspect_ratio ? String(args.aspectRatio || args.aspect_ratio) : undefined,
+            provider: args?.provider ? String(args.provider) : undefined,
+            model: args?.model ? String(args.model) : undefined,
+            maxRetries: Number.isFinite(Number(args?.maxRetries ?? args?.max_retries)) ? Number(args?.maxRetries ?? args?.max_retries) : undefined,
+            passScore: Number.isFinite(Number(args?.passScore ?? args?.pass_score)) ? Number(args?.passScore ?? args?.pass_score) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Refined video shot from keyframe${refined.keyframeAsset ? ` asset ${refined.keyframeAsset.id}` : ''}; ${refined.result.passed ? 'passed QA' : 'needs review'}.\n${JSON.stringify({
+              prompt: refined.prompt,
+              keyframe: refined.keyframe,
+              keyframeAsset: refined.keyframeAsset,
+              selected: refined.result.selected,
+              recommendation: refined.result.recommendation,
+            }).slice(0, 10000)}`,
+            error: false,
+            data: refined,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_generate_sequence': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const generated = await creativeGenerateSequence(storage, {
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            storyboardId: args?.storyboardId || args?.storyboard_id ? String(args.storyboardId || args.storyboard_id) : undefined,
+            storyboardPath: args?.storyboardPath || args?.storyboard_path ? String(args.storyboardPath || args.storyboard_path) : undefined,
+            generationMode: args?.generationMode || args?.generation_mode,
+            maxRetriesPerShot: Number.isFinite(Number(args?.maxRetriesPerShot ?? args?.max_retries_per_shot)) ? Number(args?.maxRetriesPerShot ?? args?.max_retries_per_shot) : undefined,
+            qaThreshold: Number.isFinite(Number(args?.qaThreshold ?? args?.qa_threshold)) ? Number(args?.qaThreshold ?? args?.qa_threshold) : undefined,
+            provider: args?.provider ? String(args.provider) : undefined,
+            model: args?.model ? String(args.model) : undefined,
+            duration: Number.isFinite(Number(args?.duration)) ? Number(args.duration) : undefined,
+            resolution: args?.resolution ? String(args.resolution) : undefined,
+            aspectRatio: args?.aspectRatio || args?.aspect_ratio ? String(args.aspectRatio || args.aspect_ratio) : undefined,
+            outputDir: args?.outputDir || args?.output_dir ? String(args.outputDir || args.output_dir) : undefined,
+            dryRun: args?.dryRun === true || args?.dry_run === true,
+            useVision: args?.useVision !== false && args?.use_vision !== false,
+          });
+          return {
+            name,
+            args,
+            result: `${generated.dryRun ? 'Planned' : 'Generated'} sequence for ${generated.storyboard.shots.length} storyboard shot${generated.storyboard.shots.length === 1 ? '' : 's'} with ${generated.failures.length} failure${generated.failures.length === 1 ? '' : 's'}.\n${JSON.stringify({
+              projectId: generated.project?.id || null,
+              storyboardId: generated.storyboard.id,
+              results: generated.shotResults.map((item) => ({ shotId: item.shotId || item.shot?.shotId, videoPath: item.videoPath || null, passed: item.passed ?? null, error: item.error || null, plan: item.plan })),
+              failures: generated.failures,
+            }).slice(0, 12000)}`,
+            error: false,
+            data: generated,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_extract_layers_for_generation': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const extracted = await creativeExtractLayersForGeneration(storage, {
+            source: String(args?.source || '').trim(),
+            prompt: args?.prompt ? String(args.prompt) : undefined,
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            parentGenerationId: args?.parentGenerationId || args?.parent_generation_id ? String(args.parentGenerationId || args.parent_generation_id) : undefined,
+            mode: args?.mode,
+            textEditable: args?.textEditable === true,
+            extractObjects: args?.extractObjects !== false,
+            maxTextLayers: Number(args?.maxTextLayers) || undefined,
+            maxShapeLayers: Number(args?.maxShapeLayers) || undefined,
+            useVision: args?.useVision !== false,
+            useOcr: args?.useOcr === true,
+            useSam: args?.useSam !== false,
+            inpaintBackground: args?.inpaintBackground !== false,
+            vectorTraceShapes: args?.vectorTraceShapes !== false,
+          });
+          return {
+            name,
+            args,
+            result: `Extracted ${extracted.extraction.layers.length} layer${extracted.extraction.layers.length === 1 ? '' : 's'} and registered ${extracted.registeredLayers.length} reusable layer generation record${extracted.registeredLayers.length === 1 ? '' : 's'}.\n${JSON.stringify({
+              generation: extracted.generation,
+              scenePath: extracted.extraction.scenePath,
+              registeredLayers: extracted.registeredLayers,
+              diagnostics: extracted.extraction.diagnostics,
+            }).slice(0, 9000)}`,
+            error: false,
+            data: extracted,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_pick_continuity_frame': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const picked = await creativePickContinuityFrame(storage, {
+            source: String(args?.source || args?.video || '').trim(),
+            strategy: args?.strategy,
+            candidatePercents: Array.isArray(args?.candidatePercents || args?.candidate_percents)
+              ? (args.candidatePercents || args.candidate_percents).map((item: any) => Number(item)).filter(Number.isFinite)
+              : undefined,
+            registerAsAsset: args?.registerAsAsset !== false && args?.register_as_asset !== false,
+            continuityPrompt: args?.continuityPrompt || args?.continuity_prompt ? String(args.continuityPrompt || args.continuity_prompt) : undefined,
+            useVision: args?.useVision !== false && args?.use_vision !== false,
+          });
+          return {
+            name,
+            args,
+            result: `Selected continuity frame ${picked.selected?.path || picked.selected?.outputPath || ''}${picked.asset ? ` and imported asset ${picked.asset.id}` : ''}.\n${JSON.stringify({
+              selected: picked.selected,
+              asset: picked.asset,
+              contactSheet: picked.contactSheet,
+              candidateCount: picked.candidates.length,
+              vision: picked.vision,
+            }).slice(0, 7000)}`,
+            error: false,
+            data: picked,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_chain_scene': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const chained = await creativeChainScene(storage, {
+            previousVideo: String(args?.previousVideo || args?.previous_video || args?.source || '').trim(),
+            nextPrompt: String(args?.nextPrompt || args?.next_prompt || args?.prompt || '').trim(),
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            frameStrategy: args?.frameStrategy || args?.frame_strategy,
+            timestamp: Number.isFinite(Number(args?.timestamp)) ? Number(args.timestamp) : undefined,
+            percent: Number.isFinite(Number(args?.percent)) ? Number(args.percent) : undefined,
+            duration: Number.isFinite(Number(args?.duration)) ? Number(args.duration) : undefined,
+            resolution: args?.resolution ? String(args.resolution) : undefined,
+            aspectRatio: args?.aspectRatio || args?.aspect_ratio ? String(args.aspectRatio || args.aspect_ratio) : undefined,
+            provider: args?.provider ? String(args.provider) : undefined,
+            model: args?.model ? String(args.model) : undefined,
+            parentGenerationId: args?.parentGenerationId || args?.parent_generation_id ? String(args.parentGenerationId || args.parent_generation_id) : undefined,
+            stitch: args?.stitch === true,
+            outputDir: args?.outputDir || args?.output_dir ? String(args.outputDir || args.output_dir) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Chained scene${chained.shot?.generation ? ` ${chained.shot.generation.id}` : ''} from continuity frame${chained.continuityAsset ? ` ${chained.continuityAsset.id}` : ''}.\n${JSON.stringify({
+              continuityFrame: chained.continuityFrame,
+              continuityAsset: chained.continuityAsset,
+              video: chained.shot?.video,
+              asset: chained.shot?.asset,
+              generation: chained.shot?.generation,
+              stitched: chained.stitched,
+            }).slice(0, 9000)}`,
+            error: false,
+            data: chained,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_wrap_video_as_html_motion_clip': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const wrapped = await creativeWrapVideoAsHtmlMotionClip(storage, {
+            source: String(args?.source || args?.video || '').trim(),
+            title: args?.title ? String(args.title) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            fit: args?.fit,
+            filename: args?.filename ? String(args.filename) : undefined,
+            importToCreative: args?.importToCreative !== false && args?.import_to_creative !== false,
+          });
+          return {
+            name,
+            args,
+            result: `Wrapped video as HTML Motion clip ${wrapped.clipPath}.\n${JSON.stringify({
+              clipPath: wrapped.clipPath,
+              asset: wrapped.asset,
+              durationMs: wrapped.durationMs,
+              width: wrapped.width,
+              height: wrapped.height,
+            }).slice(0, 5000)}`,
+            error: false,
+            data: wrapped,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_add_generated_clip_to_composition': {
+        const creativeMode = getCreativeMode(sessionId) === 'video' ? 'video' : (setCreativeMode(sessionId, 'video') || 'video');
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const wrapped = await creativeWrapVideoAsHtmlMotionClip(storage, {
+            source: String(args?.source || args?.video || '').trim(),
+            title: args?.title ? String(args.title) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            fit: args?.fit,
+            importToCreative: args?.importToCreative !== false && args?.import_to_creative !== false,
+          });
+          const placement = await sendCreativeCommand(deps.broadcastWS, {
+            sessionId,
+            mode: creativeMode,
+            command: 'composition_add_clip',
+            payload: {
+              trackId: args?.trackId || args?.track_id ? String(args.trackId || args.track_id) : undefined,
+              lane: 'html-motion',
+              source: { kind: 'html-motion', clipPath: wrapped.clipPath, compositionId: wrapped.asset.id },
+              atMs: Number.isFinite(Number(args?.atMs ?? args?.at_ms)) ? Number(args?.atMs ?? args?.at_ms) : undefined,
+              durationMs: wrapped.durationMs,
+              label: args?.label ? String(args.label) : (wrapped.asset.name || 'Generated video clip'),
+              ripple: args?.ripple === true,
+            },
+            timeoutMs: resolveCreativeEditorTimeoutMs('creative_composition_add_clip'),
+          });
+          return {
+            name,
+            args,
+            result: placement.success
+              ? `Added generated video clip to composition via ${wrapped.clipPath}.`
+              : `Wrapped clip, but composition placement failed: ${placement.error || 'unknown editor error'}`,
+            error: !placement.success,
+            data: { wrapped, placement },
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_render_generated_sequence': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const rawVideos = Array.isArray(args?.videos)
+            ? args.videos
+            : String(args?.videos || args?.source || '').split(/[\r\n,]+/).map((part) => part.trim()).filter(Boolean);
+          const rendered = await creativeRenderGeneratedSequence(storage, {
+            videos: rawVideos.map((item: any) => typeof item === 'string' ? item : {
+              source: String(item?.source || ''),
+              trimStartMs: Number.isFinite(Number(item?.trimStartMs ?? item?.trim_start_ms)) ? Number(item?.trimStartMs ?? item?.trim_start_ms) : undefined,
+              trimEndMs: Number.isFinite(Number(item?.trimEndMs ?? item?.trim_end_ms)) ? Number(item?.trimEndMs ?? item?.trim_end_ms) : undefined,
+              durationMs: Number.isFinite(Number(item?.durationMs ?? item?.duration_ms)) ? Number(item?.durationMs ?? item?.duration_ms) : undefined,
+              label: item?.label ? String(item.label) : undefined,
+            }),
+            filename: args?.filename ? String(args.filename) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            fit: args?.fit,
+            format: args?.format === 'webm' ? 'webm' : 'mp4',
+            transition: args?.transition,
+            transitionDurationMs: Number.isFinite(Number(args?.transitionDurationMs ?? args?.transition_duration_ms)) ? Number(args?.transitionDurationMs ?? args?.transition_duration_ms) : undefined,
+            audioHandling: args?.audioHandling || args?.audio_handling,
+            renderMode: args?.renderMode || args?.render_mode,
+          });
+          if (args?.addToEditor !== false && args?.add_to_editor !== false && rendered.outputRelPath) {
+            await sendCreativeCommand(deps.broadcastWS, {
+              sessionId,
+              mode: 'video',
+              command: 'add_asset',
+              payload: {
+                source: rendered.outputRelPath,
+                type: 'video',
+                assetType: 'video',
+                fit: 'cover',
+                durationMs: rendered.composition?.durationMs || undefined,
+                meta: { generatedSequence: true },
+              },
+              timeoutMs: resolveCreativeEditorTimeoutMs('creative_add_asset'),
+            }).catch(() => undefined);
+          }
+          return {
+            name,
+            args,
+            result: `Rendered generated sequence to ${rendered.outputRelPath}.\n${JSON.stringify({
+              outputPath: rendered.outputRelPath,
+              clipCount: rendered.clips.length,
+              render: rendered.render,
+            }).slice(0, 6000)}`,
+            error: false,
+            data: rendered,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_stitch_clips': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const rawClips = Array.isArray(args?.clips)
+            ? args.clips
+            : String(args?.clips || args?.videos || '').split(/[\r\n,]+/).map((part) => part.trim()).filter(Boolean);
+          const stitched = await creativeStitchClips(storage, {
+            clips: rawClips.map((item: any) => typeof item === 'string' ? item : {
+              source: String(item?.source || ''),
+              trimStartMs: Number.isFinite(Number(item?.trimStartMs ?? item?.trim_start_ms)) ? Number(item?.trimStartMs ?? item?.trim_start_ms) : undefined,
+              trimEndMs: Number.isFinite(Number(item?.trimEndMs ?? item?.trim_end_ms)) ? Number(item?.trimEndMs ?? item?.trim_end_ms) : undefined,
+              durationMs: Number.isFinite(Number(item?.durationMs ?? item?.duration_ms)) ? Number(item?.durationMs ?? item?.duration_ms) : undefined,
+              label: item?.label ? String(item.label) : undefined,
+            }),
+            filename: args?.filename ? String(args.filename) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            transition: args?.transition,
+            transitionDurationMs: Number.isFinite(Number(args?.transitionDurationMs ?? args?.transition_duration_ms)) ? Number(args?.transitionDurationMs ?? args?.transition_duration_ms) : undefined,
+            audioHandling: args?.audioHandling || args?.audio_handling,
+            format: args?.format === 'webm' ? 'webm' : 'mp4',
+          });
+          if (args?.addToEditor !== false && args?.add_to_editor !== false && stitched.outputRelPath) {
+            await sendCreativeCommand(deps.broadcastWS, {
+              sessionId,
+              mode: 'video',
+              command: 'add_asset',
+              payload: {
+                source: stitched.outputRelPath,
+                type: 'video',
+                assetType: 'video',
+                fit: 'cover',
+                durationMs: Number(stitched.asset?.durationMs || 0) || undefined,
+                meta: { stitched: true },
+              },
+              timeoutMs: resolveCreativeEditorTimeoutMs('creative_add_asset'),
+            }).catch(() => undefined);
+          }
+          return {
+            name,
+            args,
+            result: `Stitched ${stitched.clipPlan.length} clip${stitched.clipPlan.length === 1 ? '' : 's'} to ${stitched.outputRelPath}.\n${JSON.stringify(stitched).slice(0, 9000)}`,
+            error: false,
+            data: stitched,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_auto_assemble_rough_cut': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const rawVideos = Array.isArray(args?.videos) ? args.videos : [];
+          const assembled = await creativeAutoAssembleRoughCut(storage, {
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            storyboardId: args?.storyboardId || args?.storyboard_id ? String(args.storyboardId || args.storyboard_id) : undefined,
+            storyboardPath: args?.storyboardPath || args?.storyboard_path ? String(args.storyboardPath || args.storyboard_path) : undefined,
+            selectedTakes: args?.selectedTakes || args?.selected_takes,
+            videos: rawVideos.map((item: any) => typeof item === 'string' ? item : {
+              source: String(item?.source || ''),
+              shotId: item?.shotId || item?.shot_id ? String(item.shotId || item.shot_id) : undefined,
+              trimStartMs: Number.isFinite(Number(item?.trimStartMs ?? item?.trim_start_ms)) ? Number(item?.trimStartMs ?? item?.trim_start_ms) : undefined,
+              trimEndMs: Number.isFinite(Number(item?.trimEndMs ?? item?.trim_end_ms)) ? Number(item?.trimEndMs ?? item?.trim_end_ms) : undefined,
+              durationMs: Number.isFinite(Number(item?.durationMs ?? item?.duration_ms)) ? Number(item?.durationMs ?? item?.duration_ms) : undefined,
+              label: item?.label ? String(item.label) : undefined,
+            }),
+            filename: args?.filename ? String(args.filename) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            transition: args?.transition,
+            transitionDurationMs: Number.isFinite(Number(args?.transitionDurationMs ?? args?.transition_duration_ms)) ? Number(args?.transitionDurationMs ?? args?.transition_duration_ms) : undefined,
+            defaultTrimStartMs: Number.isFinite(Number(args?.defaultTrimStartMs ?? args?.default_trim_start_ms)) ? Number(args?.defaultTrimStartMs ?? args?.default_trim_start_ms) : undefined,
+            defaultTrimEndMs: Number.isFinite(Number(args?.defaultTrimEndMs ?? args?.default_trim_end_ms)) ? Number(args?.defaultTrimEndMs ?? args?.default_trim_end_ms) : undefined,
+            format: args?.format === 'webm' ? 'webm' : 'mp4',
+            audioHandling: args?.audioHandling || args?.audio_handling,
+          });
+          if (args?.addToEditor !== false && args?.add_to_editor !== false && assembled.stitched?.outputRelPath) {
+            await sendCreativeCommand(deps.broadcastWS, {
+              sessionId,
+              mode: 'video',
+              command: 'add_asset',
+              payload: {
+                source: assembled.stitched.outputRelPath,
+                type: 'video',
+                assetType: 'video',
+                fit: 'cover',
+                durationMs: Number(assembled.stitched.asset?.durationMs || 0) || undefined,
+                meta: { roughCut: true, timelinePath: assembled.timeline?.path || null },
+              },
+              timeoutMs: resolveCreativeEditorTimeoutMs('creative_add_asset'),
+            }).catch(() => undefined);
+          }
+          return {
+            name,
+            args,
+            result: `Assembled rough cut ${assembled.stitched.outputRelPath} with ${assembled.timeline.clips.length} clip${assembled.timeline.clips.length === 1 ? '' : 's'}; timeline ${assembled.timeline.path}.\n${JSON.stringify({
+              outputPath: assembled.stitched.outputRelPath,
+              timelinePath: assembled.timeline.path,
+              transition: assembled.stitched.ffmpeg,
+              projectId: assembled.project?.id || null,
+            }).slice(0, 9000)}`,
+            error: false,
+            data: assembled,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_normalize_layer_specs': {
+        try {
+          const normalized = creativeNormalizeLayerSpecs({
+            layers: Array.isArray(args?.layers) ? args.layers : [],
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Normalized ${normalized.layers.length} layer spec${normalized.layers.length === 1 ? '' : 's'} for ${normalized.width}x${normalized.height}, ${normalized.durationMs}ms.`,
+            error: false,
+            data: normalized,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_validate_composition_layers': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const validation = creativeValidateCompositionLayers(storage, {
+            layers: Array.isArray(args?.layers) ? args.layers : [],
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            strict: args?.strict === true,
+          });
+          return {
+            name,
+            args,
+            result: `${validation.ok ? 'Layer validation passed' : 'Layer validation failed'} with ${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}; complexity ${validation.complexityScore}.\n${JSON.stringify({ issues: validation.issues, normalized: validation.normalized }).slice(0, 12000)}`,
+            error: !validation.ok,
+            data: validation,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_preflight_overlay': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const preflight = await creativePreflightOverlay(storage, {
+            layers: Array.isArray(args?.layers) ? args.layers : [],
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            strict: args?.strict === true,
+            writePreview: args?.writePreview !== false && args?.write_preview !== false,
+          });
+          return {
+            name,
+            args,
+            result: `${preflight.ok ? 'Overlay preflight passed' : 'Overlay preflight failed'} with ${preflight.issues.length} issue${preflight.issues.length === 1 ? '' : 's'}${preflight.previewPath ? `; preview ${preflight.previewPath}` : ''}.\n${JSON.stringify({ issues: preflight.issues, previewPath: preflight.previewPath, complexityScore: preflight.complexityScore }).slice(0, 9000)}`,
+            error: !preflight.ok,
+            data: preflight,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_sample_composite_frames': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const sampled = await creativeSampleCompositeFrames(storage, {
+            layers: Array.isArray(args?.layers) ? args.layers : [],
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            timestampsMs: Array.isArray(args?.timestampsMs || args?.timestamps_ms)
+              ? (args.timestampsMs || args.timestamps_ms).map((item: any) => Number(item)).filter(Number.isFinite)
+              : undefined,
+            count: Number.isFinite(Number(args?.count)) ? Number(args.count) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Sampled ${sampled.frames.length} composite frame${sampled.frames.length === 1 ? '' : 's'}${sampled.contactSheet ? ` with contact sheet ${sampled.contactSheet.path}` : ''}.\n${JSON.stringify({ ok: sampled.ok, issues: sampled.issues, frames: sampled.frames, previewPath: sampled.previewPath, contactSheet: sampled.contactSheet }).slice(0, 10000)}`,
+            error: !sampled.ok,
+            data: sampled,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_generate_motion_graphics_layer': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const generated = await creativeGenerateMotionGraphicsLayer(storage, {
+            mode: args?.mode,
+            text: args?.text ? String(args.text) : undefined,
+            secondaryText: args?.secondaryText || args?.secondary_text ? String(args.secondaryText || args.secondary_text) : undefined,
+            accentColor: args?.accentColor || args?.accent_color ? String(args.accentColor || args.accent_color) : undefined,
+            startMs: Number.isFinite(Number(args?.startMs ?? args?.start_ms)) ? Number(args?.startMs ?? args?.start_ms) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            targetRegion: args?.targetRegion || args?.target_region,
+            data: args?.data && typeof args.data === 'object' ? args.data : undefined,
+            asset: args?.asset ? String(args.asset) : undefined,
+            filename: args?.filename ? String(args.filename) : undefined,
+            sample: args?.sample !== false,
+          });
+          return {
+            name,
+            args,
+            result: `Generated editable motion graphics layer ${generated.htmlPath}${generated.samples?.contactSheet ? `; contact sheet ${generated.samples.contactSheet.path}` : ''}.\n${JSON.stringify({ layer: generated.layer, htmlPath: generated.htmlPath, slots: generated.slots, issues: generated.preflight.issues, samples: generated.samples }).slice(0, 10000)}`,
+            error: false,
+            data: generated,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_overlay_hyperframes_on_video': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const rendered = await creativeOverlayHyperframesOnVideo(storage, {
+            baseVideo: String(args?.baseVideo || args?.base_video || args?.video || '').trim(),
+            overlayHtml: args?.overlayHtml || args?.overlay_html ? String(args.overlayHtml || args.overlay_html) : undefined,
+            overlayPath: args?.overlayPath || args?.overlay_path ? String(args.overlayPath || args.overlay_path) : undefined,
+            startMs: Number.isFinite(Number(args?.startMs ?? args?.start_ms)) ? Number(args?.startMs ?? args?.start_ms) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            position: args?.position,
+            bounds: args?.bounds,
+            blendMode: args?.blendMode || args?.blend_mode,
+            opacity: Number.isFinite(Number(args?.opacity)) ? Number(args.opacity) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            outputFilename: args?.outputFilename || args?.output_filename || args?.filename ? String(args.outputFilename || args.output_filename || args.filename) : undefined,
+            format: args?.format === 'webm' ? 'webm' : 'mp4',
+            sampleBeforeRender: args?.sampleBeforeRender !== false && args?.sample_before_render !== false,
+          });
+          return {
+            name,
+            args,
+            result: `Rendered overlay video to ${rendered.outputRelPath}; manifest ${rendered.compositionPath}.\n${JSON.stringify({ outputPath: rendered.outputRelPath, compositionPath: rendered.compositionPath, asset: rendered.asset, issues: rendered.preflight.issues, samples: rendered.samples }).slice(0, 10000)}`,
+            error: false,
+            data: rendered,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_composite_video_layers': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const rendered = await creativeCompositeVideoLayers(storage, {
+            layers: Array.isArray(args?.layers) ? args.layers : [],
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args?.durationMs ?? args?.duration_ms) : undefined,
+            frameRate: Number.isFinite(Number(args?.frameRate ?? args?.frame_rate)) ? Number(args?.frameRate ?? args?.frame_rate) : undefined,
+            filename: args?.filename ? String(args.filename) : undefined,
+            format: args?.format === 'webm' ? 'webm' : 'mp4',
+            sampleBeforeRender: args?.sampleBeforeRender !== false && args?.sample_before_render !== false,
+            strict: args?.strict !== false,
+            audioLayer: args?.audioLayer || args?.audio_layer,
+          });
+          return {
+            name,
+            args,
+            result: `Rendered composite video to ${rendered.outputRelPath}; manifest ${rendered.compositionPath}.\n${JSON.stringify({ outputPath: rendered.outputRelPath, compositionPath: rendered.compositionPath, asset: rendered.asset, issues: rendered.preflight.issues, samples: rendered.samples }).slice(0, 10000)}`,
+            error: false,
+            data: rendered,
+          };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_import_audio': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const imported = await creativeImportAudio(storage, {
+            source: String(args?.source || '').trim(),
+            label: args?.label ? String(args.label) : undefined,
+            tags: args?.tags,
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            copy: args?.copy !== false,
+          });
+          return { name, args, result: `Imported audio ${imported.audioTrack.source}; generation ${imported.generation.id}.\n${JSON.stringify({ asset: imported.asset, audioTrack: imported.audioTrack, analysis: imported.analysis, projectId: imported.project?.id || null }).slice(0, 10000)}`, error: false, data: imported };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_download_audio': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const downloaded = await creativeDownloadAudio(storage, {
+            url: String(args?.url || '').trim(),
+            label: args?.label ? String(args.label) : undefined,
+            tags: args?.tags,
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            outputDir: args?.outputDir || args?.output_dir ? String(args.outputDir || args.output_dir) : undefined,
+          });
+          return { name, args, result: `Downloaded audio to ${downloaded.audioTrack.source}; generation ${downloaded.generation.id}.\n${JSON.stringify({ download: downloaded.download, asset: downloaded.asset, audioTrack: downloaded.audioTrack, projectId: downloaded.project?.id || null }).slice(0, 10000)}`, error: false, data: downloaded };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_extract_audio_from_video': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const extracted = await creativeExtractAudioFromVideo(storage, {
+            source: String(args?.source || args?.video || '').trim(),
+            filename: args?.filename ? String(args.filename) : undefined,
+            format: args?.format === 'wav' ? 'wav' : args?.format === 'm4a' ? 'm4a' : 'mp3',
+            label: args?.label ? String(args.label) : undefined,
+            tags: args?.tags,
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+          });
+          return { name, args, result: `Extracted audio to ${extracted.outputPath}; generation ${extracted.generation.id}.\n${JSON.stringify({ asset: extracted.asset, audioTrack: extracted.audioTrack, analysis: extracted.analysis, projectId: extracted.project?.id || null }).slice(0, 10000)}`, error: false, data: extracted };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_generate_voiceover': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const generated = await creativeGenerateVoiceover(storage, {
+            text: String(args?.text || args?.script || '').trim(),
+            provider: args?.provider === 'xai'
+              ? 'xai'
+              : args?.provider === 'openai_realtime'
+                ? 'openai_realtime'
+                : args?.provider === 'openai'
+                  ? 'openai'
+                  : 'auto',
+            voice: args?.voice || args?.voiceId || args?.voice_id ? String(args.voice || args.voiceId || args.voice_id) : undefined,
+            language: args?.language ? String(args.language) : undefined,
+            speed: Number.isFinite(Number(args?.speed)) ? Number(args.speed) : undefined,
+            filename: args?.filename ? String(args.filename) : undefined,
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            shotId: args?.shotId || args?.shot_id ? String(args.shotId || args.shot_id) : undefined,
+            tags: args?.tags,
+          });
+          if (args?.addToEditor !== false && args?.add_to_editor !== false && generated.outputPath) {
+            await sendCreativeCommand(deps.broadcastWS, {
+              sessionId,
+              mode: 'video',
+              command: 'add_asset',
+              payload: {
+                source: generated.outputPath,
+                type: 'audio',
+                assetType: 'audio',
+                durationMs: Number(generated.asset?.durationMs || generated.audioTrack?.durationMs || 0) || undefined,
+                volume: Number.isFinite(Number(args?.volume)) ? Number(args.volume) : 1,
+                meta: {
+                  voiceover: true,
+                  generationId: generated.generation?.id || null,
+                  shotId: args?.shotId || args?.shot_id || null,
+                },
+              },
+              timeoutMs: resolveCreativeEditorTimeoutMs('creative_add_asset'),
+            }).catch(() => undefined);
+          }
+          return { name, args, result: `Generated voiceover ${generated.outputPath}; generation ${generated.generation.id}.\n${JSON.stringify({ asset: generated.asset, audioTrack: generated.audioTrack, analysis: generated.analysis, projectId: generated.project?.id || null }).slice(0, 10000)}`, error: false, data: generated };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_transcribe_audio': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const transcribed = await creativeTranscribeAudio(storage, {
+            source: String(args?.source || '').trim(),
+            provider: args?.provider === 'xai' ? 'xai' : 'openai',
+            language: args?.language ? String(args.language) : undefined,
+            filename: args?.filename ? String(args.filename) : undefined,
+          });
+          return { name, args, result: `Transcribed audio with ${transcribed.provider}; text length ${transcribed.text.length}.\n${JSON.stringify({ provider: transcribed.provider, text: transcribed.text, analysis: transcribed.analysis }).slice(0, 10000)}`, error: false, data: transcribed };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_sync_captions_to_audio': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const captions = await creativeSyncCaptionsToAudio(storage, {
+            transcript: args?.transcript || args?.text ? String(args.transcript || args.text) : undefined,
+            segments: Array.isArray(args?.segments) ? args.segments : undefined,
+            audioSource: args?.audioSource || args?.audio_source ? String(args.audioSource || args.audio_source) : undefined,
+            width: Number.isFinite(Number(args?.width)) ? Number(args.width) : undefined,
+            height: Number.isFinite(Number(args?.height)) ? Number(args.height) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args.durationMs ?? args.duration_ms) : undefined,
+            style: args?.style ? String(args.style) : undefined,
+            filename: args?.filename ? String(args.filename) : undefined,
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+          });
+          return { name, args, result: `Created synced caption layer ${captions.htmlPath} with ${captions.segments.length} segment${captions.segments.length === 1 ? '' : 's'}.\n${JSON.stringify({ layer: captions.layer, htmlPath: captions.htmlPath, segments: captions.segments, projectId: captions.project?.id || null, samples: captions.samples }).slice(0, 10000)}`, error: false, data: captions };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_add_audio_track': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const added = await creativeAddAudioTrack(storage, {
+            source: String(args?.source || '').trim(),
+            label: args?.label ? String(args.label) : undefined,
+            startMs: Number.isFinite(Number(args?.startMs ?? args?.start_ms)) ? Number(args.startMs ?? args.start_ms) : undefined,
+            durationMs: Number.isFinite(Number(args?.durationMs ?? args?.duration_ms)) ? Number(args.durationMs ?? args.duration_ms) : undefined,
+            trimStartMs: Number.isFinite(Number(args?.trimStartMs ?? args?.trim_start_ms)) ? Number(args.trimStartMs ?? args.trim_start_ms) : undefined,
+            trimEndMs: Number.isFinite(Number(args?.trimEndMs ?? args?.trim_end_ms)) ? Number(args.trimEndMs ?? args.trim_end_ms) : undefined,
+            volume: Number.isFinite(Number(args?.volume)) ? Number(args.volume) : undefined,
+            muted: args?.muted === true,
+            fadeInMs: Number.isFinite(Number(args?.fadeInMs ?? args?.fade_in_ms)) ? Number(args.fadeInMs ?? args.fade_in_ms) : undefined,
+            fadeOutMs: Number.isFinite(Number(args?.fadeOutMs ?? args?.fade_out_ms)) ? Number(args.fadeOutMs ?? args.fade_out_ms) : undefined,
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+          });
+          return { name, args, result: `Prepared audio track ${added.audioTrack.source}${added.project ? ` for project ${added.project.id}` : ''}.\n${JSON.stringify({ audioTrack: added.audioTrack, projectId: added.project?.id || null }).slice(0, 10000)}`, error: false, data: added };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_mix_audio_tracks': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const mixed = await creativeMixAudioTracks(storage, {
+            tracks: Array.isArray(args?.tracks) ? args.tracks : [],
+            filename: args?.filename ? String(args.filename) : undefined,
+            format: args?.format === 'wav' ? 'wav' : args?.format === 'm4a' ? 'm4a' : 'mp3',
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+          });
+          return { name, args, result: `Mixed audio to ${mixed.outputPath}.\n${JSON.stringify({ outputPath: mixed.outputPath, audioTrack: mixed.audioTrack, asset: mixed.asset, projectId: mixed.project?.id || null }).slice(0, 10000)}`, error: false, data: mixed };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_add_music_bed': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const music = await creativeAddMusicBed(storage, {
+            source: args?.source ? String(args.source) : undefined,
+            url: args?.url ? String(args.url) : undefined,
+            volume: Number.isFinite(Number(args?.volume)) ? Number(args.volume) : undefined,
+            fadeInMs: Number.isFinite(Number(args?.fadeInMs ?? args?.fade_in_ms)) ? Number(args.fadeInMs ?? args.fade_in_ms) : undefined,
+            fadeOutMs: Number.isFinite(Number(args?.fadeOutMs ?? args?.fade_out_ms)) ? Number(args.fadeOutMs ?? args.fade_out_ms) : undefined,
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            label: args?.label ? String(args.label) : undefined,
+          });
+          return { name, args, result: `Added music bed ${music.audioTrack.source}.\n${JSON.stringify({ audioTrack: music.audioTrack, asset: music.asset, projectId: music.project?.id || null }).slice(0, 10000)}`, error: false, data: music };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
+      }
+
+      case 'creative_add_sound_effects': {
+        const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+        try {
+          const sfx = await creativeAddSoundEffects(storage, {
+            effects: Array.isArray(args?.effects) ? args.effects : [],
+            projectId: args?.projectId || args?.project_id ? String(args.projectId || args.project_id) : undefined,
+            mix: args?.mix !== false,
+            filename: args?.filename ? String(args.filename) : undefined,
+          });
+          return { name, args, result: `Added ${sfx.tracks.length} sound effect track${sfx.tracks.length === 1 ? '' : 's'}${sfx.mix ? ` and mixed to ${sfx.mix.outputPath}` : ''}.\n${JSON.stringify({ tracks: sfx.tracks, mix: sfx.mix, projectId: sfx.project?.id || null }).slice(0, 10000)}`, error: false, data: sfx };
+        } catch (err: any) {
+          return { name, args, result: `${name}: ${err?.message || String(err)}`, error: true };
+        }
       }
 
       case 'creative_extract_layers': {
@@ -6061,6 +7649,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const width = Math.max(120, Number(args?.width) || Number(rendered?.width) || Number((metadata as any)?.resolution?.width) || 1080);
           const height = Math.max(120, Number(args?.height) || Number(rendered?.height) || Number((metadata as any)?.resolution?.height) || 1920);
           const durationMs = Math.max(100, Number(args?.durationMs ?? args?.duration_ms) || Number(rendered?.durationMs) || Number(extraction.durationMs) || 6000);
+          const compositionId = extraction.compositionId || catalogId || `hyperframes-${Date.now().toString(36)}`;
+          const projectSlug = sanitizeCreativeStorageSegment(compositionId, 'hyperframes-project');
+          const projectDir = path.join(storage.rootAbsPath, '.prometheus', 'creative', 'hyperframes-projects', projectSlug);
+          fs.mkdirSync(projectDir, { recursive: true });
+          const entryFile = 'index.html';
+          const entryPath = path.join(projectDir, entryFile);
+          fs.writeFileSync(entryPath, getHyperframesBridge().normalizeForHyperframes(html), 'utf8');
+          const projectPath = buildCreativeWorkspaceRelativePath(storage.rootAbsPath, projectDir);
           const element = {
             type: 'hyperframes',
             x: Number.isFinite(Number(args?.x)) ? Number(args.x) : 80,
@@ -6071,7 +7667,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
             zIndex: Number.isFinite(Number(args?.zIndex ?? args?.z_index)) ? Number(args?.zIndex ?? args?.z_index) : 10,
             meta: {
               html,
-              compositionId: extraction.compositionId || catalogId || '',
+              compositionId,
+              projectPath,
+              entryFile,
               sourceFormat: 'hyperframes',
               catalogId: catalogId || null,
               advancedBlock: args?.advanced === true || args?.advancedBlock === true || extraction.advancedBlock === true,
@@ -6255,9 +7853,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const fps = ([24, 30, 60].includes(fpsRaw) ? fpsRaw : 30) as any;
             const qualityRaw = String(args?.quality || 'standard').toLowerCase();
             const quality = (['draft', 'standard', 'high'].includes(qualityRaw) ? qualityRaw : 'standard') as any;
-            const useHtmlMotionFallback = args?.legacyHtmlMotion === true
-              || args?.legacy_html_motion === true
-              || String(args?.renderer || args?.engine || '').toLowerCase() === 'html-motion';
+            const requestedEngine = String(args?.renderer || args?.engine || '').toLowerCase();
+            const useHtmlMotionFallback = requestedEngine === 'html-motion'
+              || requestedEngine === 'html_motion'
+              || args?.producer === false;
             let producerFailure: { name: string; message: string } | null = null;
             if (!useHtmlMotionFallback) {
               const safeBase = sanitizeCreativeStorageSegment(compositionId, 'hyperframes-clip');
@@ -6350,6 +7949,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 durationMs,
                 frameRate: fps,
                 assets: [],
+                updateScene: false,
+                render: false,
               },
               timeoutMs: resolveCreativeEditorTimeoutMs('creative_create_html_motion_clip'),
             });
@@ -6377,6 +7978,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 durationMs,
                 frameRate: fps,
                 perFrameTimeoutMs: Number(args?.perFrameTimeoutMs ?? args?.per_frame_timeout_ms) || 45_000,
+                maxFrames: Number(args?.maxFrames ?? args?.max_frames) || undefined,
+                forceHighFps: args?.forceHighFps === true || args?.force_high_fps === true,
                 workspaceOnly: args?.workspaceOnly !== false,
                 download: args?.download === true,
                 force: args?.force === true,
@@ -6439,7 +8042,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
             },
           );
           let activated: any = null;
-          if (name === 'hyperframes_materialize' && args?.activate !== false) {
+          const shouldActivateMaterialized = args?.activate === true
+            || args?.activateHtmlMotion === true
+            || args?.activate_html_motion === true;
+          const shouldReplaceCanvasWithMaterialized = args?.replaceCanvas === true
+            || args?.replace_canvas === true
+            || args?.updateScene === true
+            || args?.update_scene === true;
+          if (name === 'hyperframes_materialize' && shouldActivateMaterialized) {
             const materializedHtml = fs.readFileSync(built.materialized.absClipPath, 'utf-8');
             const safeBase = sanitizeCreativeStorageSegment(built.materialized.compositionId, 'hyperframes-clip');
             activated = await sendCreativeCommand(deps.broadcastWS, {
@@ -6455,6 +8065,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 durationMs: Number(args?.durationMs ?? args?.duration_ms) || Number(clip?.meta?.durationMs) || 6000,
                 frameRate: Number(args?.frameRate ?? args?.frame_rate) || 60,
                 assets: [],
+                updateScene: shouldReplaceCanvasWithMaterialized,
+                activate: shouldReplaceCanvasWithMaterialized,
+                render: false,
               },
               timeoutMs: resolveCreativeEditorTimeoutMs('creative_create_html_motion_clip'),
             });
@@ -6462,7 +8075,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return {
             name,
             args,
-            result: `${name}: materialized HyperFrames clip ${built.id} at ${built.materialized.clipPath}${activated ? ' and activated it as the current HTML Motion clip' : ''}.\n${JSON.stringify({ ...built, activated }).slice(0, 4000)}`,
+            result: `${name}: materialized HyperFrames clip ${built.id} at ${built.materialized.clipPath}${activated ? (shouldReplaceCanvasWithMaterialized ? ' and replaced the current canvas with an HTML Motion clip' : ' and saved an HTML Motion copy without replacing the current canvas') : ''}.\n${JSON.stringify({ ...built, activated }).slice(0, 4000)}`,
             error: activated ? !activated.success : false,
             data: activated ? { ...built, activated } : built,
           };
@@ -7005,6 +8618,56 @@ export async function executeTool(name: string, args: any, workspacePath: string
         };
       }
 
+      case 'list_entities': {
+        try {
+          const rows = listEntities(workspacePath, args?.type);
+          return { name, args, result: JSON.stringify({ count: rows.length, entities: rows }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `list_entities failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'read_entity': {
+        try {
+          const entity = readEntity(workspacePath, args?.type, args?.id);
+          return { name, args, result: JSON.stringify(entity.summary, null, 2) + `\n\n${entity.content}`, error: false };
+        } catch (err: any) {
+          return { name, args, result: `read_entity failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'write_entity': {
+        try {
+          const out = writeEntity(workspacePath, args?.type, args?.id, args?.content);
+          return {
+            name,
+            args,
+            result: `${out.created ? 'Created' : 'Updated'} entity ${out.summary.type}/${out.summary.id} at ${out.summary.path}`,
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `write_entity failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'append_entity_event': {
+        try {
+          const out = appendEntityEvent(workspacePath, args?.type, args?.id, args?.event, {
+            displayName: args?.display_name || args?.displayName,
+            source: args?.source,
+            confidence: args?.confidence,
+          });
+          return {
+            name,
+            args,
+            result: `${out.created ? 'Created' : 'Updated'} entity ${out.summary.type}/${out.summary.id} at ${out.summary.path}\n${out.appended}`,
+            error: false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `append_entity_event failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
       case 'social_intel': {
         const tr = await socialIntelTool.execute(args) as any;
         const resultStr = tr?.stdout ?? tr?.error ?? JSON.stringify(tr);
@@ -7204,6 +8867,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		          extra: toolResult.success && toolResult.data
 		            ? {
 		                generated_video: toolResult.data?.video || toolResult.data,
+		                generated_videos: [toolResult.data?.video || toolResult.data],
 		              }
 		            : undefined,
 		        };
@@ -7651,6 +9315,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             command: normalizedCmd,
             cwd: commandCwd.cwd,
             mode: 'background',
+            shell: args.shell || 'auto',
+            pty: args.pty === true,
             title: args.title ? String(args.title) : undefined,
             stdinMode: args.stdin === true ? 'pipe' : 'ignore',
             noOutputTimeoutMs: args.noOutputTimeoutMs == null ? undefined : Number(args.noOutputTimeoutMs),
@@ -7787,16 +9453,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         // 8. Dev CLI tools: git, npm, node, npx, python, pip, tsc, cargo, etc.
         //    DEFAULT: captured mode (returns stdout/stderr). Pass visible:true to open a window.
-        else if (/^(git|npm|node|npx|yarn|pnpm|python|python3|pip|pip3|tsc|ts-node|cargo|rustc|go|java|javac|mvn|gradle|dotnet|docker|kubectl|az|aws)\b/.test(cmd)) {
+        else if (/^(git|npm|node|npx|yarn|pnpm|python|python3|pip|pip3|tsc|ts-node|cargo|rustc|go|java|javac|mvn|gradle|dotnet|docker|kubectl|az|aws|xurl)\b/.test(cmd)) {
           if (!wantVisible) {
             // Captured mode (DEFAULT) — wait for completion and return output
             try {
-              const captured = await deps.runCommandCaptured(normalizedCmd, commandCwd.cwd, 120_000);
+              const captured = await deps.runCommandCaptured(normalizedCmd, commandCwd.cwd, Number(args.timeoutMs || args.timeout_ms || 120_000), {
+                shell: args.shell,
+                pty: args.pty === true,
+                approvalId: approvedCommandApprovalId || undefined,
+              });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
               return {
                 name, args,
-                result: `${normalizedCmd} [${exitLabel}] cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+                result: `${normalizedCmd} [${exitLabel}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
                 error: (captured.code !== 0 && !captured.timedOut),
               };
             } catch (capErr: any) {
@@ -7823,12 +9493,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
           if (!wantVisible) {
             try {
-              const captured = await deps.runCommandCaptured(normalizedCmd, commandCwd.cwd, 120_000);
+              const captured = await deps.runCommandCaptured(normalizedCmd, commandCwd.cwd, Number(args.timeoutMs || args.timeout_ms || 120_000), {
+                shell: args.shell,
+                pty: args.pty === true,
+                approvalId: approvedCommandApprovalId || undefined,
+              });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
               return {
                 name, args,
-                result: `${normalizedCmd} [${exitLabel}] cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+                result: `${normalizedCmd} [${exitLabel}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
                 error: (captured.code !== 0 && !captured.timedOut),
               };
             } catch (capErr: any) {
@@ -8315,11 +9989,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
 
           const schedule = (args.schedule && typeof args.schedule === 'object') ? args.schedule : {};
-          const rawKind = String(schedule.kind || args.kind || 'recurring').trim().toLowerCase();
-          const kind: 'recurring' | 'one-shot' = (rawKind === 'one_shot' || rawKind === 'one-shot') ? 'one-shot' : 'recurring';
-          const cron = String(schedule.cron || args.cron || '').trim();
-          const runAtRaw = String(schedule.run_at || args.run_at || '').trim();
           const timezone = String(args.timezone || args.tz || '').trim() || undefined;
+          let normalizedSchedule;
+          try {
+            normalizedSchedule = normalizeScheduleSpec({
+              ...schedule,
+              kind: schedule.kind || args.kind || 'recurring',
+              cron: schedule.cron || args.cron,
+              run_at: schedule.run_at || args.run_at,
+            }, timezone);
+          } catch (err: any) {
+            return { name, args, result: err.message, error: true };
+          }
           const delivery = (args.delivery && typeof args.delivery === 'object') ? args.delivery : {};
           const channel = normalizeDeliveryChannel(delivery.channel || args.channel);
           const modelOverride = String(args.model_override || args.model || '').trim() || undefined;
@@ -8334,16 +10015,6 @@ export async function executeTool(name: string, args: any, workspacePath: string
             };
           }
 
-          if (kind === 'one-shot') {
-            if (!runAtRaw) return { name, args, result: 'schedule.kind=one_shot requires schedule.run_at (ISO datetime)', error: true };
-            const parsed = new Date(runAtRaw);
-            if (!Number.isFinite(parsed.getTime())) {
-              return { name, args, result: `Invalid run_at value: "${runAtRaw}"`, error: true };
-            }
-          } else if (!cron) {
-            return { name, args, result: 'schedule.kind=recurring requires schedule.cron', error: true };
-          }
-
           const requestedTeamId = String(args.team_id || args.teamId || '').trim() || undefined;
           if (requestedTeamId && !getManagedTeam(requestedTeamId)) {
             return { name, args, result: `Team not found: ${requestedTeamId}`, error: true };
@@ -8353,9 +10024,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
           let created = deps.cronScheduler.createJob({
             name: nameValue,
             prompt: instructionPrompt,
-            type: kind,
-            schedule: kind === 'recurring' ? cron : undefined,
-            runAt: kind === 'one-shot' ? new Date(runAtRaw).toISOString() : undefined,
+            type: normalizedSchedule.kind === 'one-shot' ? 'one-shot' : 'recurring',
+            schedule: normalizedSchedule.kind === 'recurring' ? normalizedSchedule.cron : undefined,
+            runAt: normalizedSchedule.kind === 'one-shot' ? normalizedSchedule.runAt : undefined,
             tz: timezone,
             sessionTarget: 'isolated',
             model: modelOverride,
@@ -8509,10 +10180,27 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
 
           const rawKind = String(schedule.kind || args.kind || '').trim().toLowerCase();
-          if (rawKind === 'one_shot' || rawKind === 'one-shot') patch.type = 'one-shot';
-          if (rawKind === 'recurring') patch.type = 'recurring';
-          if (schedule.cron !== undefined || args.cron !== undefined) patch.schedule = String(schedule.cron || args.cron || '').trim();
-          if (schedule.run_at !== undefined || args.run_at !== undefined) patch.runAt = String(schedule.run_at || args.run_at || '').trim();
+          const hasScheduleUpdate = rawKind || schedule.cron !== undefined || args.cron !== undefined || schedule.run_at !== undefined || args.run_at !== undefined || schedule.text !== undefined || schedule.time !== undefined || schedule.days_of_week !== undefined || schedule.daysOfWeek !== undefined || schedule.repeat !== undefined || schedule.every_hours !== undefined || schedule.everyHours !== undefined || schedule.every_days !== undefined || schedule.everyDays !== undefined;
+          if (hasScheduleUpdate) {
+            try {
+              const normalizedSchedule = normalizeScheduleSpec({
+                ...schedule,
+                kind: schedule.kind || args.kind || undefined,
+                cron: schedule.cron ?? args.cron,
+                run_at: schedule.run_at ?? args.run_at,
+              }, String(args.timezone || args.tz || '').trim() || undefined);
+              patch.type = normalizedSchedule.kind === 'one-shot' ? 'one-shot' : 'recurring';
+              if (normalizedSchedule.kind === 'recurring') {
+                patch.schedule = normalizedSchedule.cron;
+                patch.runAt = null;
+              } else {
+                patch.runAt = normalizedSchedule.runAt;
+                patch.schedule = null;
+              }
+            } catch (err: any) {
+              return { name, args, result: err.message, error: true };
+            }
+          }
 
           if (Object.keys(patch).length === 0) {
             return { name, args, result: 'No update fields provided for schedule_job(update).', error: true };
@@ -9037,7 +10725,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
             (async () => {
               try {
-                const dispatchPrompt = buildTeamDispatchTask({
+                const dispatchPrompt = buildTeamDispatchTaskLazy({
                   agentId,
                   task,
                   teamId,
@@ -9351,7 +11039,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const providerId = configuredModel.slice(0, slashIdx);
         const model = configuredModel.slice(slashIdx + 1);
         const { setTurnModelOverride } = require('../chat/model-switch-state');
-        setTurnModelOverride(sessionId, { providerId, model, reason });
+        setTurnModelOverride(sessionId, { providerId, model, reason, tier });
         return { name, args, result: `Switched to ${tier} tier: ${configuredModel}. Reverts automatically at end of turn.`, error: false };
       }
 
@@ -9360,103 +11048,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!text) {
           return { name, args, result: 'parse_schedule_pattern requires text parameter', error: true };
         }
-        
-        try {
-          let cron = '';
-          let preview = '';
-          const t = text.toLowerCase().trim();
-          
-          // Helper: extract time from text and handle AM/PM
-	          function extractTime(text: string): { hour: number; minute: number } | null {
-            const timeMatch = text.match(/(\d{1,2}):?(\d{2})?\s*(am|pm)?/i);
-            if (!timeMatch) return null;
-            
-            let hour = parseInt(timeMatch[1], 10);
-            const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
-            const period = timeMatch[3]?.toLowerCase();
-            
-            if (period === 'pm' && hour !== 12) {
-              hour += 12;
-            } else if (period === 'am' && hour === 12) {
-              hour = 0;
-            }
-            
-            if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-            
-	            return { hour, minute };
-	          }
 
-	          function extractDays(text: string): { cron: string; label: string } | null {
-	            if (/\bweekdays?\b|\bmon\s*(?:-|to)\s*fri\b/.test(text)) {
-	              return { cron: '1-5', label: 'weekdays' };
-	            }
-	            if (/\bweekends?\b/.test(text)) {
-	              return { cron: '0,6', label: 'weekends' };
-	            }
-	            const days = [
-	              ['sunday', '0', 'Sunday'],
-	              ['monday', '1', 'Monday'],
-	              ['tuesday', '2', 'Tuesday'],
-	              ['wednesday', '3', 'Wednesday'],
-	              ['thursday', '4', 'Thursday'],
-	              ['friday', '5', 'Friday'],
-	              ['saturday', '6', 'Saturday'],
-	            ];
-	            const hits = days.filter(([day]) => new RegExp(`\\b${day}\\b`).test(text));
-	            if (!hits.length) return null;
-	            return {
-	              cron: hits.map(([, n]) => n).join(','),
-	              label: hits.map(([, , label]) => label).join(', '),
-	            };
-	          }
-	          
-	          const dayInfo = extractDays(t);
-	          if (dayInfo) {
-	            const timeInfo = extractTime(t) || { hour: 9, minute: 0 };
-	            cron = `${timeInfo.minute} ${timeInfo.hour} * * ${dayInfo.cron}`;
-	            preview = `${dayInfo.label.charAt(0).toUpperCase()}${dayInfo.label.slice(1)} at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
-	          } else if (t.includes('daily') || t.includes('every day')) {
-	            const timeInfo = extractTime(t);
-            if (timeInfo) {
-              const hourStr = String(timeInfo.hour).padStart(2, '0');
-              const minStr = String(timeInfo.minute).padStart(2, '0');
-              cron = `${timeInfo.minute} ${timeInfo.hour} * * *`;
-              preview = `Daily at ${hourStr}:${minStr}`;
-            } else {
-              cron = '0 9 * * *';
-              preview = 'Daily at 09:00';
-            }
-	          } else if (t.includes('weekly')) {
-	            const timeInfo = extractTime(t);
-            if (timeInfo) {
-              cron = `${timeInfo.minute} ${timeInfo.hour} * * 1`;
-              preview = `Weekly on Monday at ${String(timeInfo.hour).padStart(2, '0')}:${String(timeInfo.minute).padStart(2, '0')}`;
-            } else {
-              cron = '0 9 * * 1';
-              preview = 'Weekly on Monday at 09:00';
-            }
-	          } else if (/^\d{1,2} \d{1,2} \d|\d \d \*/.test(t)) {
-            cron = t;
-            preview = 'Custom cron pattern';
-          } else {
-            return {
-              name,
-              args,
-              result: JSON.stringify({
-                success: false,
-                error: 'Could not parse pattern. Try: "daily at 3:13pm", "daily at 15:13", "weekly", or cron like "0 9 * * *"',
-              }, null, 2),
-              error: true,
-            };
-          }
-          
+        try {
+          const normalized = parseSchedulePattern(text, args.timezone || 'UTC');
           return {
             name,
             args,
             result: JSON.stringify({
               success: true,
-              cron,
-              preview,
+              kind: normalized.kind,
+              cron: normalized.kind === 'recurring' ? normalized.cron : undefined,
+              run_at: normalized.kind === 'one-shot' ? normalized.runAt : undefined,
+              preview: normalized.preview,
               timezone: args.timezone || 'UTC',
             }, null, 2),
             error: false,
@@ -9467,10 +11070,31 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       // Browser automation tools
-      case 'browser_open': {
-        const result = await browserOpen(sessionId, args.url || '', {
-          observe: resolveBrowserObserveMode('browser_open', args.observe),
+      case 'browser_doctor': {
+        const result = await browserDoctor(sessionId);
+        await broadcastBrowserStatus('browser_doctor');
+        return { name, args, result, error: /\bFAIL\b/.test(result) };
+      }
+      case 'browser_set_profile_target': {
+        const result = await browserSetProfileTarget(sessionId, args.target || 'prometheus', {
+          closeExisting: args.close_existing !== false,
+          profileDirectory: args.profile_directory ?? args.profileDirectory,
         });
+        await broadcastBrowserStatus('browser_set_profile_target');
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'browser_open': {
+        const timeoutMs = resolveBoundedToolTimeoutMs(args, 60000, 120000);
+        let result: string;
+        try {
+          result = await withBoundedToolTimeout(browserOpen(sessionId, args.url || '', {
+            observe: resolveBrowserObserveMode('browser_open', args.observe),
+            target: args.target != null ? String(args.target) : undefined,
+            profileDirectory: args.profile_directory ?? args.profileDirectory,
+          }), timeoutMs, 'browser_open');
+        } catch (err: any) {
+          result = `ERROR: browser_open did not finish in time: ${err?.message || err}`;
+        }
         await broadcastBrowserStatus('browser_open');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -9479,13 +11103,38 @@ export async function executeTool(name: string, args: any, workspacePath: string
         await broadcastBrowserStatus('browser_snapshot');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
+      case 'browser_list_tabs': {
+        const result = await browserListTabs(sessionId);
+        await broadcastBrowserStatus('browser_list_tabs');
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'browser_select_tab': {
+        const result = await browserSelectTab(sessionId, Number(args.index || 0));
+        await broadcastBrowserStatus('browser_select_tab');
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'browser_new_tab': {
+        const result = await browserNewTab(sessionId, args.url != null ? String(args.url) : undefined);
+        await broadcastBrowserStatus('browser_new_tab');
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'browser_close_tab': {
+        const result = await browserCloseTab(sessionId, args.index != null ? Number(args.index) : undefined);
+        await broadcastBrowserStatus('browser_close_tab');
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
       case 'browser_click': {
+        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        if (finalActionApprovalId) {
+          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
+          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        }
         const result = await browserClick(sessionId, {
           ref: args.ref != null ? Number(args.ref) : undefined,
           element: args.element != null ? String(args.element) : (args.element_name != null ? String(args.element_name) : undefined),
           selector: args.selector != null ? String(args.selector) : undefined,
         }, {
-          observe: resolveBrowserObserveMode('browser_click', args.observe),
+          observe: resolveBrowserObserveMode('browser_click', args.capture_after === true ? 'snapshot' : args.observe),
         });
         await broadcastBrowserStatus('browser_click');
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -9496,7 +11145,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           element: args.element != null ? String(args.element) : (args.element_name != null ? String(args.element_name) : undefined),
           selector: args.selector != null ? String(args.selector) : undefined,
         }, String(args.text || ''), {
-          observe: resolveBrowserObserveMode('browser_fill', args.observe),
+          observe: resolveBrowserObserveMode('browser_fill', args.capture_after === true ? 'snapshot' : args.observe),
         });
         await broadcastBrowserStatus('browser_fill');
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -9515,6 +11164,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'browser_press_key':
       case 'browser_key': {
         const keyToolName = name === 'browser_key' ? 'browser_key' : 'browser_press_key';
+        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        if (finalActionApprovalId) {
+          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: keyToolName, toolArgs: args });
+          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        }
         const result = await browserPressKey(sessionId, String(args.key || 'Enter'), {
           observe: resolveBrowserObserveMode(keyToolName, args.observe),
         });
@@ -9522,7 +11176,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'browser_type': {
-        const result = await browserType(sessionId, String(args.text || ''));
+        const result = await browserType(sessionId, String(args.text || ''), {
+          observe: resolveBrowserObserveMode('browser_type', args.capture_after === true ? 'snapshot' : args.observe),
+        });
         await broadcastBrowserStatus('browser_type');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -9536,7 +11192,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'browser_scroll': {
         const dir = String(args.direction || 'down').toLowerCase() === 'up' ? 'up' : 'down';
         const result = await browserScroll(sessionId, dir, Number(args.multiplier || 1), {
-          observe: resolveBrowserObserveMode('browser_scroll', args.observe),
+          observe: resolveBrowserObserveMode('browser_scroll', args.capture_after === true ? 'snapshot' : args.observe),
         });
         await broadcastBrowserStatus('browser_scroll');
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -9550,7 +11206,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           to_x: args.to_x != null ? Number(args.to_x) : undefined,
           to_y: args.to_y != null ? Number(args.to_y) : undefined,
           steps: args.steps != null ? Number(args.steps) : undefined,
-          observe: resolveBrowserObserveMode('browser_drag', args.observe),
+          observe: resolveBrowserObserveMode('browser_drag', args.capture_after === true ? 'snapshot' : args.observe),
         });
         await broadcastBrowserStatus('browser_drag');
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -9584,9 +11240,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
       case 'browser_send_to_telegram': {
         const caption = String(args.caption || 'Browser screenshot');
-        const result = await browserSendToTelegram(sessionId, caption, deps.telegramChannel);
+        const delivered = await executeDeliverySendScreenshot({ source: 'browser_new', target: 'telegram', caption }, workspacePath, deps, sessionId);
         await broadcastBrowserStatus('browser_send_to_telegram');
-        return { name, args, result, error: result.startsWith('ERROR') };
+        return { name, args, result: delivered.result, error: delivered.error };
       }
 
       // Vision fallback tools (Component 3)
@@ -9660,7 +11316,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'browser_run_js': {
-        const result = await browserRunJs(sessionId, String(args.code || ''));
+        const result = await browserRunJs(sessionId, String(args.code || ''), {
+          observe: resolveBrowserObserveMode('browser_run_js', args.observe),
+        });
         await broadcastBrowserStatus('browser_run_js');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -9811,6 +11469,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       // Desktop automation tools
+      case 'desktop_doctor': {
+        const result = await desktopDoctor(sessionId);
+        return { name, args, result, error: /\bFAIL\b/.test(result) };
+      }
       case 'desktop_screenshot': {
         // Use history-aware wrapper so desktop_diff_screenshot always has a prev packet
         const options = parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined);
@@ -9828,6 +11490,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
           active: args.active === true,
           focus_first: args.focus_first == null ? undefined : args.focus_first !== false,
           padding: args.padding == null ? undefined : Number(args.padding),
+          mode: String(args.mode || '').toLowerCase() === 'som' || args.som === true ? 'som' : 'normal',
+          som: args.som === true || String(args.mode || '').toLowerCase() === 'som',
         });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -9856,13 +11520,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const resolved = await resolveDesktopActionPoint(sessionId, {
           x: Number(args.x),
           y: Number(args.y),
+          element: args.element == null ? undefined : Number(args.element),
           coordinate_space: args.coordinate_space as any,
           screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
           window_name: args.window_name == null ? undefined : String(args.window_name),
           window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
           ...parseDesktopPointerMonitorArgs(args),
         }, 'desktop_click');
-        const result = !resolved.ok
+        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        if (resolved.ok && finalActionApprovalId) {
+          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
+          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        }
+        let result = !resolved.ok
           ? `ERROR: ${resolved.message}`
           : await desktopClick(
               resolved.point.x,
@@ -9880,6 +11550,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 allowRetryOnLikelyNoop: args.verify === 'strict',
               },
             );
+        if (!result.startsWith('ERROR') && args.capture_after === true) {
+          const after = await desktopScreenshotWithHistory(sessionId, { capture: 'all' });
+          result += `\n\nCapture after action:\n${after}`;
+        }
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_drag': {
@@ -9902,7 +11576,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               ...sharedTarget,
             }, 'desktop_drag.to')
           : fromPoint;
-        const result = !fromPoint.ok
+        let result = !fromPoint.ok
           ? `ERROR: ${fromPoint.message}`
           : !toPoint.ok
             ? `ERROR: ${toPoint.message}`
@@ -9919,6 +11593,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
                   coordinateSpace: fromPoint.point.coordinateSpace,
                 },
               );
+        if (!result.startsWith('ERROR') && args.capture_after === true) {
+          const after = await desktopScreenshotWithHistory(sessionId, { capture: 'all' });
+          result += `\n\nCapture after action:\n${after}`;
+        }
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_wait': {
@@ -9926,10 +11604,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_type': {
-        const result = await desktopType(String(args.text || ''));
+        let result = await desktopType(String(args.text || ''));
+        if (!result.startsWith('ERROR') && args.capture_after === true) {
+          const after = await desktopScreenshotWithHistory(sessionId, { capture: 'all' });
+          result += `\n\nCapture after action:\n${after}`;
+        }
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_press_key': {
+        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        if (finalActionApprovalId) {
+          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
+          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        }
         const result = await desktopPressKey(String(args.key || 'Enter'));
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -10074,6 +11761,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
             },
           );
         }
+        if (!result.startsWith('ERROR') && args.capture_after === true) {
+          const after = await desktopScreenshotWithHistory(sessionId, { capture: 'all' });
+          result += `\n\nCapture after action:\n${after}`;
+        }
         return { name, args, result, error: result.startsWith('ERROR') };
       }
 
@@ -10086,8 +11777,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
       // Send last screenshot to Telegram
       case 'desktop_send_to_telegram': {
         const caption = String(args.caption || 'Desktop screenshot');
-        const result = await desktopSendToTelegram(sessionId, caption, deps.telegramChannel);
-        return { name, args, result, error: result.startsWith('ERROR') };
+        const delivered = await executeDeliverySendScreenshot({ source: 'desktop_new', target: 'telegram', caption }, workspacePath, deps, sessionId);
+        return { name, args, result: delivered.result, error: delivered.error };
       }
 
       // Phase 5: Structured desktop task runner (removed — module deleted)
@@ -10384,7 +12075,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
           if (!fs.existsSync(memDir)) fs.mkdirSync(memDir, { recursive: true });
           const intradayFile = path.join(memDir, `${noteDate}-intraday-notes.md`);
           const timestamp = new Date().toISOString();
-          let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${noteContent}`;
+          const sourceLine = formatIntradayNoteSourceLine(inferIntradayNoteSource(sessionId, args));
+          let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${sourceLine}\n${noteContent}`;
           if (noteTaskId) entry += `\n_Related task: ${noteTaskId}_`;
           fs.appendFileSync(intradayFile, entry + '\n');
         } catch (err: any) {
@@ -10405,22 +12097,30 @@ export async function executeTool(name: string, args: any, workspacePath: string
             if (noteTag.toLowerCase() === 'task_complete') {
               const task = loadTask(taskId);
               const stepIndex = Number(task?.currentStepIndex);
-              const currentStep = Number.isInteger(stepIndex) ? task?.plan?.[stepIndex] : undefined;
-              if (task && currentStep?.notes === 'write_note_completion') {
-                mutatePlan(taskId, [{
-                  op: 'complete',
-                  step_index: stepIndex,
-                  notes: 'auto-complete: task_complete logged by write_note',
-                }]);
+              if (task && Number.isInteger(stepIndex)) {
+                const startIndex = Math.max(0, Math.min(stepIndex, task.plan.length));
+                const completions = task.plan
+                  .map((step: any, index: number) => ({ step, index }))
+                  .filter(({ step, index }: any) => index >= startIndex && step?.status !== 'done')
+                  .map(({ index }: any) => ({
+                    op: 'complete' as const,
+                    step_index: index,
+                    notes: 'auto-complete: task_complete logged by write_note',
+                  }));
+
+                if (completions.length > 0) {
+                  mutatePlan(taskId, completions);
+                }
+
                 const advancedTask = loadTask(taskId);
-                if (advancedTask && advancedTask.currentStepIndex === stepIndex) {
-                  advancedTask.currentStepIndex = Math.min(stepIndex + 1, advancedTask.plan.length);
+                if (advancedTask) {
+                  advancedTask.currentStepIndex = advancedTask.plan.length;
                   advancedTask.lastProgressAt = Date.now();
                   saveTask(advancedTask);
                 }
                 appendJournal(taskId, {
                   type: 'status_push',
-                  content: `Auto-advanced final step ${stepIndex + 1}: task_complete note logged by write_note.`,
+                  content: `Auto-completed task plan from step ${startIndex + 1}: task_complete note logged by write_note.`,
                 });
               }
             }
@@ -10438,7 +12138,24 @@ export async function executeTool(name: string, args: any, workspacePath: string
           });
         }
 
-        return { name, args, result: `Note saved [${noteTag}] (${noteContent.length} chars) â†’ intraday-notes`, error: false };
+        const completedDevEdit = markDevSourceEditContinuationComplete({
+          id: args.dev_edit_id || args.devEditId,
+          sessionId,
+          tag: noteTag,
+          note: noteContent,
+        });
+        const devEditSuffix = completedDevEdit
+          ? ` Dev edit continuation ${completedDevEdit.id} marked complete.`
+          : '';
+
+        return {
+          name,
+          args,
+          result: `Note saved [${noteTag}] (${noteContent.length} chars) -> intraday-notes.${devEditSuffix}`,
+          data: completedDevEdit ? { dev_edit_complete: true, dev_edit_id: completedDevEdit.id, tag: noteTag } : undefined,
+          extra: completedDevEdit ? { dev_edit_complete: true, dev_edit_id: completedDevEdit.id, tag: noteTag } : undefined,
+          error: false,
+        };
       }
 
       case 'save_site_shortcut': {
@@ -11584,6 +13301,65 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         // ── set_agent_model: update a specific agent's model or a type-level default ─
+        if (name === 'set_current_model') {
+          const modelRef = String(args?.model || '').trim();
+          const reason = String(args?.reason || '').trim();
+          if (!modelRef) {
+            return { name, args, result: 'ERROR: model is required. Format: "provider/model" e.g. "xai/grok-4.3" or "openai_codex/gpt-5.5"', error: true };
+          }
+
+          const parsed = parseProviderModelRef(modelRef);
+          if (!parsed) {
+            return { name, args, result: `ERROR: Invalid model "${modelRef}". Expected a known provider/model route such as "xai/grok-4.3" or "openai_codex/gpt-5.5".`, error: true };
+          }
+
+          try {
+            const cm = getConfig();
+            const current = cm.getConfig() as any;
+            const currentLlm = current.llm || {};
+            const currentProviders = currentLlm.providers || {};
+            cm.updateConfig({
+              llm: {
+                ...currentLlm,
+                provider: parsed.providerId,
+                providers: {
+                  ...currentProviders,
+                  [parsed.providerId]: {
+                    ...(currentProviders[parsed.providerId] || {}),
+                    model: parsed.model,
+                  },
+                },
+              },
+              models: {
+                ...(current.models || {}),
+                primary: parsed.model,
+                roles: {
+                  ...(current.models?.roles || {}),
+                  manager: parsed.model,
+                  executor: parsed.model,
+                  verifier: parsed.model,
+                },
+              },
+            } as any);
+            resetProvider();
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: true,
+                current_model: `${parsed.providerId}/${parsed.model}`,
+                provider: parsed.providerId,
+                model: parsed.model,
+                reason: reason || null,
+                note: 'Current primary model updated. This is not an agent_model_defaults change; the next model call in this live chat will use this route.',
+              }, null, 2),
+              error: false,
+            };
+          } catch (err: any) {
+            return { name, args, result: `set_current_model error: ${err.message}`, error: true };
+          }
+        }
+
         if (name === 'set_agent_model') {
           const targetAgentId = String(args?.agent_id || '').trim();
           const model         = String(args?.model      || '').trim();
@@ -11660,6 +13436,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const { getConfig: _gc2 } = require('../../config/config');
             const cfg2 = _gc2().getConfig() as any;
             const defaults = cfg2.agent_model_defaults || {};
+            const activeProvider = String(cfg2.llm?.provider || '').trim() || null;
             const primaryModel = cfg2.llm?.providers?.[cfg2.llm?.provider]?.model || cfg2.models?.primary || null;
             const agents = (cfg2.agents || []).map((a: any) => ({
               id:    a.id,
@@ -11667,6 +13444,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
               model: a.model || null,
             }));
             const result = {
+              current_primary: activeProvider && primaryModel ? `${activeProvider}/${primaryModel}` : primaryModel,
+              current_provider: activeProvider,
               global_primary: primaryModel,
               agent_model_defaults: defaults,
               active_agent_model_default_template: cfg2.active_agent_model_default_template || null,
@@ -11679,11 +13458,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
         }
 
-        // ── gateway_restart: build + graceful restart ───────────────────────
+        // ── gateway_restart: quick graceful restart ─────────────────────────
         if (
           name === 'list_agent_model_templates' ||
           name === 'save_agent_model_template' ||
+          name === 'update_agent_model_template' ||
           name === 'apply_agent_model_template' ||
+          name === 'select_agent_model_template' ||
           name === 'delete_agent_model_template'
         ) {
           const { getConfig: _gc3 } = require('../../config/config');
@@ -11720,11 +13501,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const id = String(args?.id || args?.name || '').trim();
             if (!id) return { name, args, result: 'ERROR: id or name is required.', error: true };
 
-            if (name === 'apply_agent_model_template') {
+            if (name === 'update_agent_model_template') {
+              const body: any = {};
+              if (typeof args?.name === 'string' && args.name.trim()) body.name = args.name.trim();
+              if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
+              if (!Object.keys(body).length) return { name, args, result: 'ERROR: provide name and/or defaults to update.', error: true };
+              const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+              });
+              const data = await resp.json() as any;
+              if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to update template'}`, error: true };
+              return { name, args, result: `Updated agent model template "${data.template?.name || id}" (${data.template?.id || id}).`, error: false };
+            }
+
+            if (name === 'apply_agent_model_template' || name === 'select_agent_model_template') {
               const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}/apply`, { method: 'POST' });
               const data = await resp.json() as any;
               if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to apply template'}`, error: true };
-              return { name, args, result: `Applied agent model template "${data.template?.name || id}". Current defaults: ${JSON.stringify(data.defaults || {}, null, 2)}`, error: false };
+              return { name, args, result: `Selected and applied agent model template "${data.template?.name || id}". Current defaults: ${JSON.stringify(data.defaults || {}, null, 2)}`, error: false };
             }
 
             const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -11736,10 +13532,194 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
         }
 
+        if (name === 'prom_apply_dev_changes') {
+          const surfaces = Array.isArray(args.changed_surfaces)
+            ? args.changed_surfaces.map((s: any) => String(s || '').trim().toLowerCase()).filter(Boolean)
+            : [];
+          const normalizedSurfaces: string[] = Array.from(new Set<string>(surfaces.map((surface: string) => {
+            if (surface === 'src' || surface === 'gateway') return 'backend';
+            return surface;
+          })));
+          const hasBackend = normalizedSurfaces.some((surface: string) => surface === 'backend' || surface === 'config');
+          const hasWeb = normalizedSurfaces.some((surface: string) => surface === 'web-ui' || surface === 'mobile' || surface === 'static');
+          const refreshDesktop = args.refresh_desktop !== false;
+          const mode = String(args.mode || 'apply_live').trim().toLowerCase();
+          const verifyOnly = mode === 'verify_only';
+          const reason = String(args.reason || 'Prometheus dev changes applied').trim();
+          if (!normalizedSurfaces.length) {
+            return { name, args, result: 'prom_apply_dev_changes requires at least one changed surface.', error: true };
+          }
+          if (!['apply_live', 'verify_only'].includes(mode)) {
+            return { name, args, result: 'prom_apply_dev_changes mode must be apply_live or verify_only.', error: true };
+          }
+          const requestedDevEditId = String(args.dev_edit_id || args.devEditId || '').trim();
+          const activeDevEdit = requestedDevEditId
+            ? getDevSourceEditContinuation(requestedDevEditId)
+            : getLatestPendingDevSourceEditContinuation(sessionId);
+          const completionNoteTag = String(
+            args.completion_note_tag
+            || args.completionNoteTag
+            || activeDevEdit?.completionNoteTag
+            || activeDevEdit?.plan?.completionNoteTag
+            || 'dev_edit_complete',
+          ).trim().replace(/\s+/g, '_').toLowerCase();
+
+          const runCommand = (command: string, timeoutMs: number) => {
+            const { execSync } = require('child_process');
+            const root = path.resolve(__dirname, '..', '..', '..');
+            const start = Date.now();
+            try {
+              const output = execSync(command, {
+                cwd: root,
+                encoding: 'utf-8',
+                timeout: timeoutMs,
+                stdio: 'pipe',
+                windowsHide: true,
+              });
+              return { success: true, command, output: String(output || '').slice(-2500), durationMs: Date.now() - start };
+            } catch (err: any) {
+              const output = [err?.stdout, err?.stderr, err?.message].filter(Boolean).join('\n');
+              return { success: false, command, output: String(output || '').slice(-2500), durationMs: Date.now() - start };
+            }
+          };
+
+          const steps: any[] = [];
+          if (hasWeb) {
+            const sync = runCommand('npm run sync:web-ui', 120_000);
+            steps.push(sync);
+            if (!sync.success) {
+              return {
+                name,
+                args,
+                result: `prom_apply_dev_changes failed during ${sync.command} (${sync.durationMs}ms).\n\n${sync.output}`,
+                error: true,
+              };
+            }
+          }
+
+          if (verifyOnly) {
+            if (hasBackend) {
+              const build = runCommand('npm run build:backend', 180_000);
+              steps.push(build);
+              if (!build.success) {
+                return {
+                  name,
+                  args,
+                  result:
+                    `prom_apply_dev_changes verify_only failed during ${build.command} (${build.durationMs}ms).` +
+                    (steps.length > 1 ? `\n\nCompleted first:\n${steps.slice(0, -1).map((s) => `- ${s.command}: ok (${s.durationMs}ms)`).join('\n')}` : '') +
+                    `\n\n${build.output}`,
+                  error: true,
+                };
+              }
+            }
+            return {
+              name,
+              args,
+              result:
+                `prom_apply_dev_changes verify_only succeeded. ` +
+                `${steps.map((s) => `${s.command} ok (${s.durationMs}ms)`).join('; ') || 'No verification command was needed'}. ` +
+                `Gateway was not restarted${hasWeb && refreshDesktop ? ', and no desktop reload was requested' : ''}.`,
+              error: false,
+            };
+          }
+
+          const buildDevEditContinuation = (status: 'applying_live') => activeDevEdit ? {
+            ...activeDevEdit,
+            status,
+            completionNoteTag,
+            affectedFiles: Array.isArray(args.affected_files) ? args.affected_files.map((f: any) => String(f || '').trim()).filter(Boolean) : activeDevEdit.affectedFiles,
+            changedSurfaces: normalizedSurfaces,
+            summary: String(args.summary || reason || activeDevEdit.summary || '').trim() || undefined,
+            verification: Array.isArray(activeDevEdit.verification) ? activeDevEdit.verification : activeDevEdit.plan?.verification,
+            updatedAt: Date.now(),
+          } : undefined;
+
+          const devEditContinuation = buildDevEditContinuation('applying_live');
+          if (devEditContinuation) {
+            upsertDevSourceEditContinuation(devEditContinuation);
+          }
+
+          if (hasBackend) {
+            try {
+              const { buildAndRestart } = require('../lifecycle');
+              const sessionHint = getSessionChannelHint(sessionId);
+              const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
+              const ctx = {
+                reason: (args.proposal_id ? 'proposal' : 'build_deploy') as any,
+                timestamp: Date.now(),
+                proposalId: args.proposal_id || undefined,
+                title: args.title || reason,
+                summary: args.summary || reason,
+                affectedFiles: Array.isArray(args.affected_files) ? args.affected_files : undefined,
+                testInstructions: args.test_instructions || undefined,
+                previousSessionId: sessionId,
+                originChannel: isTelegramSession ? 'telegram' : undefined,
+                respondToTelegram: isTelegramSession ? true : undefined,
+                previousTelegramChatId: Number.isFinite(Number(sessionHint?.chatId)) ? String(sessionHint?.chatId) : undefined,
+                previousTelegramUserId: Number.isFinite(Number(sessionHint?.userId)) ? Number(sessionHint?.userId) : undefined,
+                devReload: refreshDesktop
+                  ? { enabled: true, reason, surfaces: normalizedSurfaces, delayMs: 1200 }
+                  : undefined,
+                devEditContinuation,
+              };
+              const buildResult = await buildAndRestart(ctx);
+              if (!buildResult.success) {
+                return {
+                  name,
+                  args,
+                  result:
+                    `prom_apply_dev_changes failed during npm run build (${buildResult.durationMs}ms). Gateway was not restarted.` +
+                    (steps.length ? `\n\nCompleted first:\n${steps.map((s) => `- ${s.command}: ok (${s.durationMs}ms)`).join('\n')}` : '') +
+                    `\n\n${buildResult.output}`,
+                  error: true,
+                };
+              }
+              return {
+                name,
+                args,
+                result:
+                  `prom_apply_dev_changes succeeded. ` +
+                  `${hasWeb ? 'Synced web UI, ' : ''}build passed (${buildResult.durationMs}ms), gateway is restarting` +
+                  `${refreshDesktop ? ', and desktop web UI reload will be requested after reconnect.' : '.'}` +
+                  (devEditContinuation ? ` After restart, write_note with tag "${completionNoteTag}" will complete dev edit ${devEditContinuation.id}.` : ''),
+                error: false,
+              };
+            } catch (err: any) {
+              return { name, args, result: `prom_apply_dev_changes restart error: ${err.message}`, error: true };
+            }
+          }
+
+          if (refreshDesktop) {
+            try {
+              deps.broadcastWS?.({
+                type: 'dev_reload_requested',
+                target: 'desktop',
+                source: 'prom_apply_dev_changes',
+                reason,
+                surfaces: normalizedSurfaces,
+                timestamp: Date.now(),
+              });
+            } catch {}
+          }
+          return {
+            name,
+            args,
+            result:
+              `prom_apply_dev_changes succeeded. ` +
+              `${steps.map((s) => `${s.command} ok (${s.durationMs}ms)`).join('; ') || 'No build step required'}` +
+              `${refreshDesktop ? '; desktop web UI reload requested.' : '.'}` +
+              (devEditContinuation ? ` Next, call write_note with tag "${completionNoteTag}" to complete dev edit ${devEditContinuation.id}.` : ''),
+            data: devEditContinuation ? { dev_edit_id: devEditContinuation.id, completion_note_tag: completionNoteTag } : undefined,
+            extra: devEditContinuation ? { dev_edit_id: devEditContinuation.id, completion_note_tag: completionNoteTag } : undefined,
+            error: false,
+          };
+        }
+
         if (name === 'gateway_restart') {
           const reason = String(args.reason || 'manual restart').trim();
           try {
-            const { buildAndRestart } = require('../lifecycle');
+            const { gracefulRestart } = require('../lifecycle');
             const sessionHint = getSessionChannelHint(sessionId);
             const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
             const resolvedTelegramChatId = Number.isFinite(Number(args.telegram_chat_id))
@@ -11767,20 +13747,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
               previousTelegramChatId: Number.isFinite(resolvedTelegramChatId as number) ? String(resolvedTelegramChatId) : undefined,
               previousTelegramUserId: Number.isFinite(resolvedTelegramUserId as number) ? Number(resolvedTelegramUserId) : undefined,
             };
-            // buildAndRestart runs npm run build, then if successful, restarts.
-            // It's async and will kill the process, so we await it.
-            const buildResult = await buildAndRestart(ctx);
-            if (!buildResult.success) {
-              return {
-                name, args,
-                result: `❌ Build FAILED — gateway NOT restarting.\n\n${buildResult.output.slice(-1000)}`,
-                error: true,
-              };
-            }
-            // If we get here, the restart is in progress (process will exit shortly)
+            // Same quick restart path used by Telegram/mobile/terminal /restart.
+            // This is async and will kill the process, so it should remain a final action.
+            await gracefulRestart(ctx);
             return {
               name, args,
-              result: `✅ Build succeeded (${buildResult.durationMs}ms). Gateway is restarting now...`,
+              result: `✅ Quick gateway restart initiated. No npm build was run.`,
               error: false,
             };
           } catch (err: any) {
@@ -11800,6 +13772,325 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, ...connResult };
         }
 
+        // Extension tools that are not connector-prefixed, such as x_search and
+        // xai_live_search, are advertised by the runtime registry and should
+        // execute through the same extension boundary.
+        ensurePrometheusExtensionRuntimeLoaded();
+        if (getExtensionRuntimeRegistry().getTool(name)) {
+          const extensionResult = await getExtensionRuntimeRegistry().executeTool(name, args);
+          return { name, args, ...extensionResult };
+        }
+
+        if (name === 'request_final_action_approval') {
+          const scope = createFinalActionApprovalScope({
+            actionKind: args?.action_kind || args?.actionKind,
+            targetLabel: args?.target_label || args?.targetLabel || args?.button_label || args?.buttonLabel,
+            summary: args?.summary || args?.reason,
+            surface: args?.surface || args?.app || args?.site,
+            nextToolName: args?.next_tool_name || args?.nextToolName,
+            nextToolArgs: args?.next_tool_args || args?.nextToolArgs,
+            screenshotId: args?.screenshot_id || args?.screenshotId,
+            ttlMs: args?.ttl_ms || args?.ttlMs,
+          });
+
+          const approvalQueue = getApprovalQueue();
+          const activeTask = resolveTaskForSession(sessionId);
+          const activeTaskId = String(activeTask?.id || '').trim() || undefined;
+          const approvalOrigin = inferApprovalOrigin(sessionId, activeTask, args);
+          const action = `Approve final ${scope.actionKind} action: ${scope.targetLabel}`;
+
+          if (activeTaskId) {
+            updateTaskStatus(activeTaskId, 'needs_assistance', { pauseReason: 'awaiting_final_action_approval' });
+            appendJournal(activeTaskId, {
+              type: 'pause',
+              content: `Waiting for final-action approval: ${action.slice(0, 220)}`,
+            });
+          }
+
+          const approval = approvalQueue.create({
+            sessionId,
+            taskId: activeTaskId,
+            agentId: inferAgentIdFromSession(sessionId, args),
+            originType: approvalOrigin.originType,
+            originLabel: approvalOrigin.originLabel,
+            toolName: name,
+            toolArgs: {
+              action_kind: scope.actionKind,
+              target_label: scope.targetLabel,
+              summary: scope.summary,
+              surface: scope.surface,
+              next_tool_name: scope.nextToolName,
+              next_tool_args: scope.nextToolArgs,
+              screenshot_id: scope.screenshotId,
+            },
+            approvalKind: 'final_action',
+            action,
+            reason: scope.summary,
+            policyTier: 'commit',
+            riskScore: scope.actionKind === 'purchase' || scope.actionKind === 'transfer' || scope.actionKind === 'delete' ? 9 : 7,
+            affectedSystems: [scope.surface || 'external UI'],
+            finalAction: scope,
+          });
+
+          try {
+            appendAuditEntry({
+              timestamp: new Date().toISOString(),
+              sessionId,
+              agentId: inferAgentIdFromSession(sessionId, args),
+              actionType: 'approval_requested',
+              toolName: name,
+              toolArgs: approval.toolArgs,
+              policyTier: 'commit',
+              approvalStatus: 'pending',
+              resultSummary: `Queued final-action approval ${approval.id}`,
+            });
+          } catch {}
+
+          try {
+            deps.broadcastWS({
+              type: 'approval_created',
+              sessionId,
+              taskId: activeTaskId,
+              approvalId: approval.id,
+              summary: approval.action,
+              toolName: name,
+              approval: serializeApprovalForClient(approval),
+            });
+            if (activeTaskId) {
+              deps.broadcastWS({
+                type: 'task_needs_assistance',
+                taskId: activeTaskId,
+                title: activeTask?.title,
+                reason: 'Final action approval required',
+                detail: action,
+              });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
+            }
+          } catch {}
+
+          try {
+            if (deps.telegramChannel?.sendCommandApproval) {
+              await deps.telegramChannel.sendCommandApproval(approval);
+            }
+          } catch (err: any) {
+            console.warn('[final_action_approval] Could not send Telegram approval:', err?.message || err);
+          }
+
+          const approved = await new Promise<boolean>((resolve) => {
+            approvalQueue.onResolve(approval.id, (isApproved) => {
+              if (isApproved) {
+                grantFinalActionApproval(sessionId, approval.id, scope, 'approval');
+              }
+              resolve(isApproved);
+            });
+          });
+
+          try {
+            if (activeTaskId) {
+              updateTaskStatus(activeTaskId, 'running', { pauseReason: undefined });
+              appendJournal(activeTaskId, {
+                type: approved ? 'resume' : 'status_push',
+                content: approved
+                  ? `Final action approved: ${action.slice(0, 220)}`
+                  : `Final action rejected: ${action.slice(0, 220)}`,
+              });
+              deps.broadcastWS({ type: 'task_running', taskId: activeTaskId, title: activeTask?.title });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
+            }
+            deps.broadcastWS({
+              type: approved ? 'approval_approved' : 'approval_denied',
+              sessionId,
+              taskId: activeTaskId,
+              approvalId: approval.id,
+              summary: approval.action,
+              approval: serializeApprovalForClient(approval),
+            });
+          } catch {}
+
+          if (!approved) {
+            return { name, args, result: 'Final action approval was rejected.', error: true };
+          }
+
+          return {
+            name,
+            args,
+            result:
+              `Approved final ${scope.actionKind} action "${scope.targetLabel}". ` +
+              `Use final_action_approval_id="${approval.id}" on the exact next ${scope.nextToolName || 'desktop/browser action'} call. This approval is one-shot.`,
+            data: { final_action_approval_id: approval.id, next_tool_name: scope.nextToolName || '' },
+            error: false,
+          };
+        }
+
+        if (name === 'request_dev_source_edit') {
+          let scope: DevSourceEditScope;
+          try {
+            scope = createDevSourceEditApprovalScope({
+              sessionId,
+              files: args?.files || args?.allowed_files || args?.affected_files,
+              verificationCommand: args?.verification_command || args?.verificationCommand,
+              verificationProfile: args?.verification_profile || args?.verificationProfile,
+              reason: args?.reason || args?.summary,
+              plan: args?.plan || args?.dev_plan || args?.devPlan,
+              userRequest: args?.user_request || args?.userRequest,
+              reasoning: args?.reasoning,
+              evidence: args?.evidence,
+              currentState: args?.current_state || args?.currentState,
+              fix: args?.fix,
+              steps: args?.steps || args?.plan_steps || args?.planSteps,
+              verification: args?.verification,
+              expectedWorkflow: args?.expected_workflow || args?.expectedWorkflow || args?.after_edit_workflow || args?.afterEditWorkflow,
+              completionNoteTag: args?.completion_note_tag || args?.completionNoteTag,
+            });
+          } catch (err: any) {
+            return { name, args, result: `request_dev_source_edit error: ${err.message || err}`, error: true };
+          }
+
+          const existingGrant = getDevSourceEditGrant(sessionId);
+          const alreadyAllowed = existingGrant
+            && scope.allowedFiles.every((file) => existingGrant.allowedFiles.includes(file));
+          if (alreadyAllowed) {
+            return {
+              name,
+              args,
+              result: `Dev source edit scope is already approved for this session: ${scope.allowedFiles.join(', ')}`,
+              error: false,
+            };
+          }
+
+          const approvalQueue = getApprovalQueue();
+          const activeTask = resolveTaskForSession(sessionId);
+          const activeTaskId = String(activeTask?.id || '').trim() || undefined;
+          const approvalOrigin = inferApprovalOrigin(sessionId, activeTask, args);
+          const action = `Allow Prometheus dev source edits to: ${scope.allowedFiles.join(', ')}`;
+          const approval = approvalQueue.create({
+            sessionId,
+            taskId: activeTaskId,
+            agentId: inferAgentIdFromSession(sessionId, args),
+            originType: approvalOrigin.originType,
+            originLabel: approvalOrigin.originLabel,
+            toolName: name,
+            toolArgs: {
+              dev_edit_id: scope.devEditId,
+              files: scope.allowedFiles,
+              reason: scope.reason,
+              verification_command: scope.verificationCommand,
+              verification_profile: scope.verificationProfile,
+              plan: scope.plan,
+              plan_hash: scope.planHash,
+            },
+            approvalKind: 'dev_source_edit',
+            action,
+            reason: scope.reason || 'Prometheus requested dev-only source edit access for the listed files.',
+            policyTier: 'commit',
+            riskScore: 8,
+            affectedSystems: ['Prometheus source code'],
+            devSourceEdit: {
+              devEditId: scope.devEditId,
+              allowedFiles: scope.allowedFiles,
+              verificationCommand: scope.verificationCommand,
+              verificationProfile: scope.verificationProfile,
+              reason: scope.reason,
+              plan: scope.plan,
+              planHash: scope.planHash,
+              expiresAt: scope.expiresAt,
+            },
+          });
+          scope.approvalId = approval.id;
+
+          try {
+            appendAuditEntry({
+              timestamp: new Date().toISOString(),
+              sessionId,
+              agentId: inferAgentIdFromSession(sessionId, args),
+              actionType: 'approval_requested',
+              toolName: name,
+              toolArgs: approval.toolArgs,
+              policyTier: 'commit',
+              approvalStatus: 'pending',
+              resultSummary: `Queued dev source edit approval ${approval.id}`,
+            });
+          } catch {}
+
+          try {
+            deps.broadcastWS({
+              type: 'approval_created',
+              sessionId,
+              taskId: activeTaskId,
+              approvalId: approval.id,
+              summary: approval.action,
+              toolName: name,
+              approval: serializeApprovalForClient(approval),
+            });
+          } catch {}
+
+          try {
+            if (deps.telegramChannel?.sendCommandApproval) {
+              await deps.telegramChannel.sendCommandApproval(approval);
+            }
+          } catch (err: any) {
+            console.warn('[dev_source_approval] Could not send Telegram approval:', err?.message || err);
+          }
+
+          const approved = await new Promise<boolean>((resolve) => {
+            approvalQueue.onResolve(approval.id, (isApproved) => {
+              if (isApproved) {
+                try {
+                  grantDevSourceEditApproval(sessionId, scope, 'approval');
+                } catch (err: any) {
+                  console.warn('[dev_source_approval] Could not grant source edit scope:', err?.message || err);
+                  resolve(false);
+                  return;
+                }
+              }
+              resolve(isApproved);
+            });
+          });
+
+          try {
+            deps.broadcastWS({
+              type: approved ? 'approval_approved' : 'approval_denied',
+              sessionId,
+              taskId: activeTaskId,
+              approvalId: approval.id,
+              summary: approval.action,
+              approval: serializeApprovalForClient(approval),
+            });
+          } catch {}
+
+          if (!approved) {
+            return { name, args, result: 'Dev source edit approval was rejected.', error: true };
+          }
+          return {
+            name,
+            args,
+            result:
+              `Approved dev source edit scope for this session: ${scope.allowedFiles.join(', ')}.\n` +
+              `Approved plan hash: ${scope.planHash || 'none'}; dev_edit_id: ${scope.devEditId}.\n` +
+              `Use source-specific tools only. When edits are complete, finalize through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Approved Prometheus dev source edits', 'apply_live', scope.devEditId)}. ` +
+              `For a no-restart preflight, call the same tool with mode:"verify_only". After apply_live/reload succeeds, write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" to complete the dev edit plan.`,
+            data: {
+              devSourceEdit: {
+                devEditId: scope.devEditId,
+                allowedFiles: scope.allowedFiles,
+                plan: scope.plan,
+                planHash: scope.planHash,
+                completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
+              },
+            },
+            extra: {
+              devSourceEdit: {
+                devEditId: scope.devEditId,
+                allowedFiles: scope.allowedFiles,
+                plan: scope.plan,
+                planHash: scope.planHash,
+                completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
+              },
+            },
+            error: false,
+          };
+        }
+
 	        if (name === 'request_tool_category') {
 	          const categoryArgs = normalizeToolArgsForTool(name, args);
 	          const rawCategory = String(categoryArgs?.category || '').trim().toLowerCase();
@@ -11811,11 +14102,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          if (!requestedCategory || !runtimeCategories.includes(requestedCategory as ToolCategory)) {
 	            return { name, args, result: `Invalid category "${rawCategory}". Valid: ${runtimeCategories.join(', ')}`, error: true };
 	          }
-	          if (requestedCategory === 'prometheus_source_write' && !isDevSrcSelfEditProposalSession()) {
+	          if (requestedCategory === 'prometheus_source_write' && !isDevSourceWriteApprovedSession()) {
 	            return {
 	              name,
 	              args,
-	              result: 'BLOCKED: prometheus_source_write can only be activated for approved dev src proposal tasks.',
+	              result: 'BLOCKED: prometheus_source_write requires an approved dev source edit request or an approved dev src proposal task.',
 	              error: true,
 	            };
 	          }

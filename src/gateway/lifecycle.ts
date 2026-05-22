@@ -22,6 +22,9 @@ import path from 'path';
 import { spawn, execSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
 import { flushSession } from './session';
+import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
+import { getLastMainSessionId } from './comms/broadcaster';
+import type { DevSourceEditContinuation } from './dev-source-approvals';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,10 +41,17 @@ export interface RestartContext {
   buildOutput?: string;
   testInstructions?: string;
   previousSessionId?: string;
-  originChannel?: 'web' | 'telegram' | 'discord' | 'whatsapp' | 'unknown';
+  originChannel?: 'web' | 'mobile' | 'telegram' | 'discord' | 'whatsapp' | 'unknown';
   respondToTelegram?: boolean;
   previousTelegramChatId?: string;
   previousTelegramUserId?: number;
+  devReload?: {
+    enabled: boolean;
+    reason?: string;
+    surfaces?: string[];
+    delayMs?: number;
+  };
+  devEditContinuation?: DevSourceEditContinuation;
 }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -242,13 +252,14 @@ export interface PendingStartupNotification {
   title: string;
   text: string;
   source: 'boot_startup' | 'hot_restart';
-  automatedSession: BootAutomatedSession;
+  automatedSession?: BootAutomatedSession | null;
   previousSessionId?: string;
   telegram?: {
     enabled: boolean;
     chatId?: number;
     userId?: number;
   };
+  devReload?: RestartContext['devReload'];
   delivered: {
     web: boolean;
     telegram: boolean;
@@ -330,6 +341,14 @@ async function shutdownGateway(): Promise<void> {
   console.log('[lifecycle] Shutting down gateway subsystems...');
 
   // 1. Stop accepting new work
+  try {
+    const interrupted = prepareActiveRuntimesForGatewayShutdown('gateway_restart');
+    if (interrupted.length) {
+      console.log(`[lifecycle] Preserved ${interrupted.length} active runtime(s) for restart recovery.`);
+    }
+  } catch (e: any) {
+    console.warn('[lifecycle] Runtime recovery snapshot error:', e.message);
+  }
   try { _shutdownHooks.stopCron?.(); } catch (e: any) {
     console.warn('[lifecycle] Cron stop error:', e.message);
   }
@@ -380,8 +399,10 @@ async function shutdownGateway(): Promise<void> {
 export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   const root = getProjectRoot();
   const electronManaged = process.env.PROMETHEUS_ELECTRON_MANAGED === '1';
+  const fallbackPreviousSessionId = String(ctx.previousSessionId || getLastMainSessionId?.() || '').trim();
   const restartCtx: RestartContext = {
     ...ctx,
+    previousSessionId: fallbackPreviousSessionId || ctx.previousSessionId,
     restartLauncher: electronManaged ? 'electron' : 'prom_gateway_start',
     electronManaged,
   };

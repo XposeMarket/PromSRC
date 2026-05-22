@@ -15,6 +15,7 @@ import { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config.js';
 import { readModelUsageEvents } from '../../providers/model-usage.js';
 import { getAllMainChatGoalRecords } from '../main-chat-goals';
+import { listSessionSummaries, type SessionSummary } from '../session';
 import {
   applySkillCuratorSuggestion,
   listSkillCuratorSuggestions,
@@ -51,6 +52,30 @@ function readAuditLines(): string[] {
   const p = getAuditLogPath();
   if (!fs.existsSync(p)) return [];
   return fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim());
+}
+
+let _auditCachePath = '';
+let _auditCacheMtimeMs = 0;
+let _auditCacheSize = 0;
+let _auditCacheLines: string[] = [];
+
+function readAuditLinesCached(): string[] {
+  const p = getAuditLogPath();
+  let st: fs.Stats;
+  try { st = fs.statSync(p); } catch { return []; }
+  if (
+    p === _auditCachePath
+    && st.mtimeMs === _auditCacheMtimeMs
+    && st.size === _auditCacheSize
+  ) {
+    return _auditCacheLines;
+  }
+  const lines = fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim());
+  _auditCachePath = p;
+  _auditCacheMtimeMs = st.mtimeMs;
+  _auditCacheSize = st.size;
+  _auditCacheLines = lines;
+  return lines;
 }
 
 /**
@@ -177,6 +202,22 @@ function topEntry<T extends string | number>(map: Map<T, number>): { key: T | ''
   return { key, value };
 }
 
+function isUserChatSessionSummary(summary: SessionSummary): boolean {
+  const id = String(summary.id || '').trim();
+  if (!id) return false;
+  if (summary.channel === 'system') return false;
+  if (/^(auto_|task_|cron_|brain_|subagent_|subagent-chat_|team_|proposal_|dispatch_)/i.test(id)) return false;
+  return true;
+}
+
+function getChatSessionStats(): { sessions: number; messages: number } {
+  const summaries = listSessionSummaries().filter(isUserChatSessionSummary);
+  return {
+    sessions: summaries.length,
+    messages: summaries.reduce((sum, summary) => sum + (Number(summary.messageCount) || 0), 0),
+  };
+}
+
 router.get('/api/hub/skills/usage', (req: Request, res: Response) => {
   try {
     const range = String(req.query.range || 'week');
@@ -185,7 +226,7 @@ router.get('/api/hub/skills/usage', (req: Request, res: Response) => {
     // skill_read counts + lastUsed
     const counts = new Map<string, number>();
     const lastUsedMs = new Map<string, number>();
-    for (const line of readAuditLines()) {
+    for (const line of readAuditLinesCached()) {
       let e: any;
       try { e = JSON.parse(line); } catch { continue; }
       if (e.toolName !== 'skill_read') continue;
@@ -204,16 +245,25 @@ router.get('/api/hub/skills/usage', (req: Request, res: Response) => {
 
     if (_sm && (req.query.refresh === '1' || req.query.refresh === 'true')) _sm.scanSkills();
     const all = _sm ? _sm.getAll() : [];
+    const recentChangesBySkill = new Map<string, any[]>();
+    if (_sm) {
+      for (const entry of _sm.listChangeLedger(undefined, 500)) {
+        const id = String(entry.skillId || '').trim();
+        if (!id) continue;
+        const bucket = recentChangesBySkill.get(id) || [];
+        if (bucket.length < 3) {
+          bucket.push(entry);
+          recentChangesBySkill.set(id, bucket);
+        }
+      }
+    }
     const skills = all.map(s => {
-      // Latest mtime across the whole skill folder so editing any resource
-      // (not just SKILL.md) is reflected in "last modified".
       let lastModified: string | null = null;
       try {
-        if (s.rootDir && fs.existsSync(s.rootDir)) {
-          const m = latestMtimeInDir(s.rootDir);
-          if (m) lastModified = m.toISOString();
-        } else if (s.filePath && fs.existsSync(s.filePath)) {
+        if (s.filePath && fs.existsSync(s.filePath)) {
           lastModified = fs.statSync(s.filePath).mtime.toISOString();
+        } else if (s.rootDir && fs.existsSync(s.rootDir)) {
+          lastModified = fs.statSync(s.rootDir).mtime.toISOString();
         }
       } catch { /* noop */ }
       const lastMs = lastUsedMs.get(s.id) || 0;
@@ -230,7 +280,7 @@ router.get('/api/hub/skills/usage', (req: Request, res: Response) => {
         eligibility: s.eligibility,
         assignment: s.assignment,
         toolBinding: s.toolBinding,
-        recentChanges: _sm.listChangeLedger(s.id, 3),
+        recentChanges: recentChangesBySkill.get(s.id) || [],
         count: counts.get(s.id) || 0,
         lastUsed: lastMs ? new Date(lastMs).toISOString() : null,
         lastModified,
@@ -264,7 +314,7 @@ router.get('/api/hub/skills/review', (_req: Request, res: Response) => {
 router.post('/api/hub/skills/review/run', (req: Request, res: Response) => {
   try {
     if (!_sm) { res.status(500).json({ success: false, error: 'skills manager not initialized' }); return; }
-    const rawMode = String(req.body?.mode || 'pending').trim();
+    const rawMode = String(req.body?.mode || 'auto-safe').trim();
     const mode: SkillCuratorMode = rawMode === 'dry-run' || rawMode === 'auto-safe' ? rawMode : 'pending';
     const result = runSkillCurator({
       workspacePath: getConfig().getWorkspacePath(),
@@ -300,8 +350,9 @@ router.post('/api/hub/skills/review/:id/reject', (req: Request, res: Response) =
 
 router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
   try {
+    const chatStats = getChatSessionStats();
     const rawEvents: any[] = [];
-    for (const line of readAuditLines()) {
+    for (const line of readAuditLinesCached()) {
       try {
         const e = JSON.parse(line);
         if (e?.actionType === 'tool_call') rawEvents.push(e);
@@ -354,8 +405,11 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
       success: true,
       range: window.range,
       stats: {
-        sessions: sessions.size,
-        messages: total,
+        sessions: chatStats.sessions,
+        messages: chatStats.messages,
+        chatSessions: chatStats.sessions,
+        toolSessions: sessions.size,
+        toolCalls: total,
         total,
         activeDays,
         currentStreak: streaks.current,
@@ -379,6 +433,7 @@ router.get('/api/hub/tools/overview', (req: Request, res: Response) => {
 
 router.get('/api/hub/models/overview', (req: Request, res: Response) => {
   try {
+    const chatStats = getChatSessionStats();
     const rawEvents = readModelUsageEvents();
     const window = rangeWindow(String(req.query.range || 'all'), rawEvents.map((e) => e.timestamp));
     const inRange = rawEvents.filter((e) => {
@@ -390,6 +445,7 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
     const heatmapTokens: Record<string, number> = {};
     const sessions = new Set<string>();
     const models = new Map<string, number>();
+    const modelCalls = new Map<string, number>();
     const providers = new Map<string, number>();
     const hours = new Map<number, number>();
     const byDayModel = new Map<string, number>();
@@ -397,31 +453,34 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
     let outputTokens = 0;
     let reasoningTokens = 0;
     let cacheTokens = 0;
+    let totalTokens = 0;
 
     for (const e of inRange) {
-      const totalTokens = Number(e.totalTokens || 0);
+      const eventTotalTokens = Number(e.totalTokens || 0);
       const key = localDateKey(e.timestamp);
       if (!key) continue;
-      dayTokens[key] = (dayTokens[key] || 0) + totalTokens;
+      dayTokens[key] = (dayTokens[key] || 0) + eventTotalTokens;
       const t = Date.parse(e.timestamp || '');
-      if (t >= window.heatmapStartMs) heatmapTokens[key] = (heatmapTokens[key] || 0) + totalTokens;
+      if (t >= window.heatmapStartMs) heatmapTokens[key] = (heatmapTokens[key] || 0) + eventTotalTokens;
       const sessionId = String(e.sessionId || '').trim();
       if (sessionId && sessionId !== 'unknown') sessions.add(sessionId);
       const provider = String(e.provider || 'unknown');
       const model = String(e.model || 'unknown');
-      providers.set(provider, (providers.get(provider) || 0) + totalTokens);
-      models.set(model, (models.get(model) || 0) + totalTokens);
-      byDayModel.set(`${key}|${provider}|${model}`, (byDayModel.get(`${key}|${provider}|${model}`) || 0) + totalTokens);
+      providers.set(provider, (providers.get(provider) || 0) + eventTotalTokens);
+      models.set(model, (models.get(model) || 0) + eventTotalTokens);
+      modelCalls.set(model, (modelCalls.get(model) || 0) + 1);
+      byDayModel.set(`${key}|${provider}|${model}`, (byDayModel.get(`${key}|${provider}|${model}`) || 0) + eventTotalTokens);
       const hour = localHourKey(e.timestamp);
       if (hour >= 0) hours.set(hour, (hours.get(hour) || 0) + 1);
       inputTokens += Number(e.inputTokens || 0);
       outputTokens += Number(e.outputTokens || 0);
       reasoningTokens += Number(e.reasoningTokens || 0);
       cacheTokens += Number(e.cacheReadTokens || 0) + Number(e.cacheWriteTokens || 0);
+      totalTokens += eventTotalTokens;
     }
 
-    const totalTokens = inputTokens + outputTokens + reasoningTokens + cacheTokens;
     const favoriteModel = topEntry(models);
+    const favoriteModelByCalls = topEntry(modelCalls);
     const peakHour = topEntry(hours);
     const streaks = streaksFromCounts(dayTokens);
     const activeDays = Object.values(dayTokens).filter((count) => count > 0).length;
@@ -429,7 +488,7 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
     const topModels = [...models.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 10)
-      .map(([name, tokens]) => ({ name, tokens }));
+      .map(([name, tokens]) => ({ name, tokens, calls: modelCalls.get(name) || 0 }));
     const topProviders = [...providers.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 8)
@@ -448,6 +507,10 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
       stats: {
         sessions: sessions.size,
         messages: inRange.length,
+        chatSessions: chatStats.sessions,
+        chatMessages: chatStats.messages,
+        modelSessions: sessions.size,
+        modelCalls: inRange.length,
         total: totalTokens,
         totalTokens,
         inputTokens,
@@ -459,6 +522,8 @@ router.get('/api/hub/models/overview', (req: Request, res: Response) => {
         longestStreak: streaks.longest,
         peakHour: peakHour.value > 0 ? formatHour(Number(peakHour.key)) : '—',
         favorite: favoriteModel.key || '—',
+        favoriteByTokens: favoriteModel.key || '—',
+        favoriteByCalls: favoriteModelByCalls.key || '—',
       },
       daily,
       topModels,
@@ -483,7 +548,7 @@ router.get('/api/hub/tools/heatmap', (req: Request, res: Response) => {
     const end = new Date(year, month, 1).getTime();
 
     const buckets: Record<string, number> = {};
-    for (const line of readAuditLines()) {
+    for (const line of readAuditLinesCached()) {
       let e: any;
       try { e = JSON.parse(line); } catch { continue; }
       if (e.actionType !== 'tool_call') continue;

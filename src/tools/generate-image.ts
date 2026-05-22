@@ -83,7 +83,7 @@ export const generateImageTool = {
     reference_images: 'Optional local file paths, workspace-relative paths, HTTPS URLs, or data URLs to use as image references',
     aspect_ratio: 'Optional aspect ratio: landscape, square, or portrait',
     count: 'Optional number of images to generate at once (1-4)',
-    provider: 'Optional provider override: auto, openai, openai_codex, or xai. Use xai for Grok Imagine.',
+    provider: 'Optional provider override: auto, openai, openai_codex, or xai. openai may use either an OpenAI API key or saved OpenAI OAuth/Codex auth; use xai for Grok Imagine.',
     model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality',
     output_dir: 'Optional workspace-relative output directory (default: generated/images)',
     save_to_workspace: 'If false, keep the image only in Prometheus cache',
@@ -113,7 +113,7 @@ export const generateImageTool = {
       provider: {
         type: 'string',
         enum: ['auto', 'openai', 'openai_codex', 'xai'],
-        description: 'Image generation provider override',
+        description: 'Image generation provider override. openai may use either direct OpenAI API credentials or saved OpenAI OAuth/Codex auth.',
       },
       model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
       output_dir: { type: 'string', description: 'Workspace-relative output directory' },

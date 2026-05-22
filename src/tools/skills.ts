@@ -427,13 +427,19 @@ export const skillResourceDeleteTool = {
   execute: async (args: any): Promise<ToolResult> => {
     const sm = getDefaultSkillsManager();
     const id = String(args?.id || args?.skill_id || '').trim();
-    const resourcePath = String(args?.path || args?.resource_path || '').trim();
-    if (!id) return skillErr('id is required.');
-    if (!resourcePath) return skillErr('path is required.');
-    try {
-      const updated = sm.deleteResource(id, resourcePath, {
-        removeFromManifest: args?.removeFromManifest !== false && args?.remove_from_manifest !== false,
-      });
+      const resourcePath = String(args?.path || args?.resource_path || '').trim();
+      if (!id) return skillErr('id is required.');
+      if (!resourcePath) return skillErr('path is required.');
+      try {
+        const updated = sm.deleteResource(id, resourcePath, {
+          removeFromManifest: args?.removeFromManifest !== false && args?.remove_from_manifest !== false,
+          change: {
+            changeType: String(args?.changeType || args?.change_type || 'skill_resource_delete'),
+            appliedBy: String(args?.appliedBy || args?.applied_by || 'skill_resource_delete'),
+            reason: args?.reason ? String(args.reason) : undefined,
+            evidence: Array.isArray(args?.evidence) ? args.evidence.map(String) : undefined,
+          },
+        });
       return skillOk(`Deleted ${resourcePath} from skill "${updated.id}". Resources now: ${updated.resources.length}.`, updated);
     } catch (err: any) {
       return skillErr(`skill_resource_delete failed: ${err.message}`);
@@ -450,6 +456,10 @@ export const skillResourceDeleteTool = {
       id: { type: 'string' },
       path: { type: 'string' },
       removeFromManifest: { type: 'boolean' },
+      changeType: { type: 'string' },
+      appliedBy: { type: 'string' },
+      reason: { type: 'string' },
+      evidence: { type: 'array', items: { type: 'string' } },
     },
     additionalProperties: true,
   },
@@ -549,7 +559,7 @@ export const skillCuratorTool = {
         return skillOk(JSON.stringify({ suggestions }, null, 2), { suggestions });
       }
       if (action === 'run') {
-        const rawMode = String(args?.mode || 'pending').trim();
+        const rawMode = String(args?.mode || 'auto-safe').trim();
         const mode: SkillCuratorMode = rawMode === 'dry-run' || rawMode === 'auto-safe' ? rawMode : 'pending';
         const result = runSkillCurator({ workspacePath, skillsManager: sm, mode });
         return skillOk(JSON.stringify(result, null, 2), result);

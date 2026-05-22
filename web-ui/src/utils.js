@@ -154,7 +154,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
       ? `Chart.defaults.color='#cdd6f4';Chart.defaults.borderColor='rgba(255,255,255,0.1)';`
       : `Chart.defaults.color='#374151';Chart.defaults.borderColor='rgba(0,0,0,0.1)';`;
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>
+<script src="/vendor/chart/chart.umd.js"><\/script>
 <style>${sharedStyles}body{display:flex;align-items:center;justify-content:center;height:100vh}canvas{max-width:100%;max-height:100%}<\/style>
 </head><body><canvas id="c"></canvas>
 <script>try{${chartColors}const cfg=(${code});if(cfg.options)cfg.options.responsive=true;else cfg.options={responsive:true};new Chart(document.getElementById('c'),cfg);}catch(e){document.body.innerHTML='<pre style="color:red;padding:8px;font-size:11px">'+e.message+'<\\/pre>';}<\/script>
@@ -167,7 +167,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   }
   if (lang === 'mermaid') {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"><\/script>
+<script src="/vendor/mermaid/mermaid.min.js"><\/script>
 <style>${sharedStyles}html,body{height:100%}body{padding:0;font-family:sans-serif}.mm-shell{position:relative;min-height:280px;height:100%;overflow:hidden;background:transparent}.mm-viewport{position:absolute;inset:0;cursor:grab;touch-action:none;user-select:none}.mm-viewport.dragging{cursor:grabbing}.mm-stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}.mermaid svg{max-width:none!important;height:auto;background:transparent!important}.mermaid{background:transparent!important}.mm-controls{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}.mm-shell:hover .mm-controls{opacity:1;transform:translateY(0);pointer-events:auto}.mm-btn{border:1px solid ${mermaidControlsBorder};background:${mermaidControlsBg};color:${mermaidControlsText};border-radius:8px;padding:4px 9px;font-weight:700;font-size:12px;line-height:1;cursor:pointer;backdrop-filter:blur(2px)}.mm-btn:hover{filter:brightness(1.08)}.mm-hint{position:absolute;left:10px;bottom:10px;font-size:11px;color:${mermaidControlsText};opacity:0;transform:translateY(4px);background:${mermaidControlsBg};border:1px solid ${mermaidControlsBorder};border-radius:999px;padding:4px 9px;pointer-events:none;transition:opacity .2s ease,transform .2s ease}.mm-shell:hover .mm-hint{opacity:.82;transform:translateY(0)}<\/style>
 <\/head><body>
 <div class="mm-shell">

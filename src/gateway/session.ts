@@ -14,9 +14,26 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-  channel?: 'telegram' | 'web' | 'discord' | 'whatsapp' | 'system';
+  channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
   channelLabel?: string;
-  toolLog?: string; // compact tool call summary for this turn (injected by chat.router after turn completes)
+  origin?: TurnOrigin;
+  artifacts?: any[];
+  generatedImages?: any[];
+  generatedVideos?: any[];
+  attachmentPreviews?: any[];
+  canvasFiles?: string[];
+  processEntries?: any[];
+  toolLog?: string; // full tool call log for this turn (injected by chat.router after turn completes)
+}
+
+export interface TurnOrigin {
+  channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
+  surface?: 'desktop_app' | 'mobile_app' | 'public_web' | 'terminal' | 'bot' | 'automation' | string;
+  device?: 'computer' | 'phone' | 'tablet' | 'server' | 'unknown' | string;
+  chatId?: string;
+  userId?: string;
+  label?: string;
+  source?: string;
 }
 
 export type MainChatGoalStatus = 'active' | 'paused' | 'blocked' | 'done' | 'cleared' | 'failed';
@@ -98,9 +115,11 @@ export interface Session {
   id: string;
   history: ChatMessage[];
   workspace: string;
-  channel?: 'terminal' | 'telegram' | 'web' | 'system'; // Inferred from sessionId prefix
+  channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system'; // Inferred from sessionId prefix
   createdAt: number;
   lastActiveAt: number;
+  lastAssistantAt?: number;
+  mobileLastReadAt?: number;
   pendingMemoryFlush?: boolean;
   pendingCompaction?: boolean;
   contextTokenEstimate?: number;
@@ -127,9 +146,13 @@ export interface SessionMutationScope {
 
 export interface SessionSummary {
   id: string;
-  channel: 'terminal' | 'telegram' | 'web' | 'system';
+  channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
   createdAt: number;
   lastActiveAt: number;
+  lastAssistantAt?: number;
+  mobileLastReadAt?: number;
+  mobileUnread?: boolean;
+  activeRun?: boolean;
   messageCount: number;
   title: string;
   preview: string;
@@ -171,6 +194,7 @@ const SESSION_SAVE_DEBOUNCE_MS = 500;
 const sessionSaveTimers = new Map<string, NodeJS.Timeout>();
 const sessionMutationScopes = new Map<string, SessionMutationScope>();
 let sessionIndexCache: SessionIndex | null = null;
+let sessionIndexCommandTitleRebuildAttempted = false;
 
 const SESSION_DIR = (() => {
   try {
@@ -400,13 +424,23 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
   const createdAt = Number(input?.createdAt);
   const lastActiveAt = Number(input?.lastActiveAt);
   const messageCount = Number(input?.messageCount);
+  const channel = input?.channel === 'terminal'
+    || input?.channel === 'telegram'
+    || input?.channel === 'mobile'
+    || input?.channel === 'discord'
+    || input?.channel === 'whatsapp'
+    || input?.channel === 'system'
+    ? input.channel
+    : inferChannelFromSessionId(id);
   return {
     id,
-    channel: input?.channel === 'terminal' || input?.channel === 'telegram' || input?.channel === 'system'
-      ? input.channel
-      : 'web',
+    channel,
     createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
     lastActiveAt: Number.isFinite(lastActiveAt) ? lastActiveAt : Date.now(),
+    lastAssistantAt: Number.isFinite(Number(input?.lastAssistantAt)) ? Number(input.lastAssistantAt) : undefined,
+    mobileLastReadAt: Number.isFinite(Number(input?.mobileLastReadAt)) ? Number(input.mobileLastReadAt) : undefined,
+    mobileUnread: input?.mobileUnread === true,
+    activeRun: input?.activeRun === true,
     messageCount: Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0,
     title: String(input?.title || '(empty)').slice(0, 60) || '(empty)',
     preview: String(input?.preview || input?.title || '(empty)').slice(0, 60) || '(empty)',
@@ -473,6 +507,24 @@ function getSessionTitleFromHistory(history: any[]): string {
   return titleRaw.slice(0, 60) || 'New chat';
 }
 
+function getLastAssistantTimestamp(history: any[]): number | undefined {
+  if (!Array.isArray(history)) return undefined;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (msg?.role !== 'assistant') continue;
+    const ts = Number(msg.timestamp || 0);
+    return Number.isFinite(ts) && ts > 0 ? ts : Date.now();
+  }
+  return undefined;
+}
+
+function getMobileUnreadState(lastAssistantAt: number | undefined, mobileLastReadAt: number | undefined): boolean {
+  const assistantAt = Number(lastAssistantAt || 0);
+  if (!Number.isFinite(assistantAt) || assistantAt <= 0) return false;
+  const readAt = Number(mobileLastReadAt || 0);
+  return !Number.isFinite(readAt) || readAt < assistantAt;
+}
+
 function buildSessionSummary(session: Session): SessionSummary {
   if (INTERNAL_SESSION_ID_RE.test(session.id)) {
     return {
@@ -480,6 +532,10 @@ function buildSessionSummary(session: Session): SessionSummary {
       channel: 'system',
       createdAt: Number(session.createdAt || Date.now()),
       lastActiveAt: Number(session.lastActiveAt || Date.now()),
+      lastAssistantAt: undefined,
+      mobileLastReadAt: undefined,
+      mobileUnread: false,
+      activeRun: false,
       messageCount: 0,
       title: '(internal)',
       preview: '(internal)',
@@ -491,11 +547,17 @@ function buildSessionSummary(session: Session): SessionSummary {
     };
   }
   const title = getSessionTitleFromHistory(session.history);
+  const lastAssistantAt = getLastAssistantTimestamp(session.history);
+  const mobileLastReadAt = Number.isFinite(Number(session.mobileLastReadAt)) ? Number(session.mobileLastReadAt) : undefined;
   return {
     id: session.id,
-    channel: session.channel || 'web',
+    channel: session.channel || inferChannelFromSessionId(session.id),
     createdAt: Number(session.createdAt || Date.now()),
     lastActiveAt: Number(session.lastActiveAt || Date.now()),
+    lastAssistantAt,
+    mobileLastReadAt,
+    mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
+    activeRun: false,
     messageCount: Array.isArray(session.history) ? session.history.length : 0,
     title,
     preview: title,
@@ -510,7 +572,8 @@ function buildSessionSummary(session: Session): SessionSummary {
 function upsertSessionSummary(session: Session): void {
   const index = loadSessionIndex();
   const summary = buildSessionSummary(session);
-  if (summary.messageCount > 0) {
+  const shouldIndex = summary.messageCount > 0 || summary.channel === 'mobile';
+  if (shouldIndex) {
     index.summaries[summary.id] = summary;
   } else {
     delete index.summaries[summary.id];
@@ -533,13 +596,25 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     const history = Array.isArray(data?.history) ? data.history : [];
     const title = getSessionTitleFromHistory(history);
+    const lastAssistantAt = getLastAssistantTimestamp(history);
+    const mobileLastReadAt = Number.isFinite(Number(data?.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined;
+    const channel = data?.channel === 'terminal'
+      || data?.channel === 'telegram'
+      || data?.channel === 'mobile'
+      || data?.channel === 'discord'
+      || data?.channel === 'whatsapp'
+      || data?.channel === 'system'
+      ? data.channel
+      : inferChannelFromSessionId(sessionId);
     return {
       id: String(data?.id || sessionId),
-      channel: data?.channel === 'terminal' || data?.channel === 'telegram' || data?.channel === 'system'
-        ? data.channel
-        : 'web',
+      channel,
       createdAt: Number.isFinite(Number(data?.createdAt)) ? Number(data.createdAt) : Date.now(),
       lastActiveAt: Number.isFinite(Number(data?.lastActiveAt)) ? Number(data.lastActiveAt) : Date.now(),
+      lastAssistantAt,
+      mobileLastReadAt,
+      mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
+      activeRun: false,
       messageCount: history.length,
       title,
       preview: title,
@@ -565,7 +640,7 @@ function rebuildSessionIndex(): SessionIndex {
   for (const file of files) {
     const sessionId = file.slice(0, -5);
     const summary = buildSessionSummaryFromFile(sessionId);
-    if (summary && summary.messageCount > 0) {
+    if (summary && (summary.messageCount > 0 || summary.channel === 'mobile')) {
       index.summaries[summary.id] = summary;
     }
   }
@@ -580,14 +655,18 @@ export function listSessionSummaries(channel?: Session['channel']): SessionSumma
   if (hasSessionFiles) {
     if (Object.keys(index.summaries).length === 0) {
       index = rebuildSessionIndex();
-    } else if (Object.values(index.summaries).some((summary) => isCommandTitleText(summary.title))) {
+    } else if (
+      !sessionIndexCommandTitleRebuildAttempted
+      && Object.values(index.summaries).some((summary) => isCommandTitleText(summary.title))
+    ) {
+      sessionIndexCommandTitleRebuildAttempted = true;
       index = rebuildSessionIndex();
     }
   }
   return Object.values(index.summaries)
     .filter((summary) => !INTERNAL_SESSION_ID_RE.test(summary.id))
     .filter((summary) => !channel || summary.channel === channel)
-    .filter((summary) => summary.messageCount > 0)
+    .filter((summary) => summary.messageCount > 0 || summary.channel === 'mobile')
     .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
 }
 
@@ -605,6 +684,8 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       channel: data?.channel || inferChannelFromSessionId(sessionId),
       createdAt: Number.isFinite(Number(data?.createdAt)) ? Number(data.createdAt) : Date.now(),
       lastActiveAt: Number.isFinite(Number(data?.lastActiveAt)) ? Number(data.lastActiveAt) : Date.now(),
+      lastAssistantAt: Number.isFinite(Number(data?.lastAssistantAt)) ? Number(data.lastAssistantAt) : undefined,
+      mobileLastReadAt: Number.isFinite(Number(data?.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined,
       pendingMemoryFlush: data?.pendingMemoryFlush === true,
       pendingCompaction: data?.pendingCompaction === true,
       contextTokenEstimate: Number.isFinite(Number(data?.contextTokenEstimate)) ? Number(data.contextTokenEstimate) : undefined,
@@ -677,9 +758,36 @@ export function sessionExists(id: string): boolean {
   return !!sessionId && fs.existsSync(getSessionPath(sessionId));
 }
 
-function inferChannelFromSessionId(sessionId: string): Session['channel'] {
+export function touchSession(id: string, options: { channel?: Session['channel']; title?: string } = {}): Session {
+  const session = getSession(id);
+  if (options.channel) session.channel = options.channel;
+  session.lastActiveAt = Date.now();
+
+  const title = String(options.title || '').trim();
+  if (title && !session.history.length) {
+    session.history.push({
+      role: 'user',
+      content: title,
+      timestamp: session.lastActiveAt,
+      channel: session.channel,
+      channelLabel: session.channel === 'mobile' ? 'Mobile app' : session.channel,
+      origin: session.channel === 'mobile'
+        ? { channel: 'mobile', surface: 'mobile_app', device: 'phone', label: 'Mobile app', source: 'session_touch' }
+        : undefined,
+    });
+  }
+
+  saveSession(id);
+  return session;
+}
+
+
+function inferChannelFromSessionId(sessionId: string): NonNullable<Session['channel']> {
   if (sessionId.startsWith('cli_')) return 'terminal';
   if (sessionId.startsWith('telegram_')) return 'telegram';
+  if (sessionId.startsWith('mobile_')) return 'mobile';
+  if (sessionId.startsWith('discord_')) return 'discord';
+  if (sessionId.startsWith('whatsapp_')) return 'whatsapp';
   if (sessionId.startsWith('task_') || sessionId.startsWith('cron_')) return 'system';
   if (sessionId.startsWith('brain_')) return 'system';
   if (sessionId.startsWith('auto_')) return 'system';
@@ -717,21 +825,47 @@ function estimateHistoryTokens(history: ChatMessage[]): number {
   return total;
 }
 
+function getCompactedContextHistoryForTokenEstimate(session: Session): ChatMessage[] {
+  const rawMessages = Array.isArray(session.history) ? session.history : [];
+  const summary = String(session.latestContextSummary || '').trim();
+  if (!summary) return rawMessages;
+
+  const base = Number.isFinite(Number(session.contextStartIndex))
+    ? Math.max(0, Math.min(Math.floor(Number(session.contextStartIndex)), rawMessages.length))
+    : 0;
+  const summaryMsg: ChatMessage = {
+    role: 'assistant',
+    content: `[Rolling context summary]\n${summary}`,
+    timestamp: Number(session.contextSummaryUpdatedAt || Date.now()),
+    channel: 'system',
+  };
+  const since = base < rawMessages.length ? rawMessages.slice(base) : [];
+  return [summaryMsg, ...since];
+}
+
+function estimateActiveContextTokens(session: Session): number {
+  return estimateHistoryTokens(getCompactedContextHistoryForTokenEstimate(session));
+}
+
 function resolveSessionPolicy(): {
   maxMessages: number;
   compactionThreshold: number;
   memoryFlushThreshold: number;
+  compactionMinMessages: number;
 } {
   const defaults = {
     maxMessages: 120,
     compactionThreshold: 0.7,
     memoryFlushThreshold: 0.75,
+    compactionMinMessages: 20,
   };
   try {
     const cfg: any = getConfig().getConfig();
     const maxMessagesRaw = Number(cfg?.session?.maxMessages);
     const compactionThresholdRaw = Number(cfg?.session?.compactionThreshold);
     const memoryFlushThresholdRaw = Number(cfg?.session?.memoryFlushThreshold);
+    const rollingMessageCountRaw = Number(cfg?.session?.rollingCompactionMessageCount);
+    const compactionMinMessagesRaw = Number(cfg?.session?.compactionMinMessages);
     const maxMessages = Number.isFinite(maxMessagesRaw) && maxMessagesRaw >= 20
       ? Math.floor(maxMessagesRaw)
       : defaults.maxMessages;
@@ -741,10 +875,25 @@ function resolveSessionPolicy(): {
     const memoryFlushThreshold = Number.isFinite(memoryFlushThresholdRaw) && memoryFlushThresholdRaw >= 0.5 && memoryFlushThresholdRaw <= 0.98
       ? memoryFlushThresholdRaw
       : defaults.memoryFlushThreshold;
-    return { maxMessages, compactionThreshold, memoryFlushThreshold };
+    const fallbackMinMessages = Number.isFinite(rollingMessageCountRaw)
+      ? Math.max(2, Math.min(120, Math.floor(rollingMessageCountRaw)))
+      : defaults.compactionMinMessages;
+    const compactionMinMessages = Number.isFinite(compactionMinMessagesRaw)
+      ? Math.max(2, Math.min(120, Math.floor(compactionMinMessagesRaw)))
+      : fallbackMinMessages;
+    return { maxMessages, compactionThreshold, memoryFlushThreshold, compactionMinMessages };
   } catch {
     return defaults;
   }
+}
+
+function isRealContextMessage(msg: ChatMessage): boolean {
+  const content = String(msg?.content || '').trim();
+  if (!content) return false;
+  if (content === PRE_COMPACTION_SUMMARY_PROMPT) return false;
+  if (content === PRE_COMPACTION_MEMORY_FLUSH_PROMPT) return false;
+  if (/^\[(?:Rolling context summary|Compacted context summary|Active goal progress summary)\]/i.test(content)) return false;
+  return msg.role === 'user' || msg.role === 'assistant';
 }
 
 function trimHistory(session: Session, maxMessages: number): void {
@@ -768,7 +917,7 @@ function appendCompactionArtifacts(
     fs.mkdirSync(compactionDir, { recursive: true });
 
     const ts = new Date().toISOString();
-    const cleanSummary = scrubPersistedText(String(summaryText || '')).slice(0, 5000);
+    const cleanSummary = scrubPersistedText(String(summaryText || '')).slice(0, 12000);
     const cleanExtra = extra ? scrubPersistedData(extra) : undefined;
     const payload = {
       timestamp: ts,
@@ -819,6 +968,7 @@ function appendTranscriptArtifacts(
       role: msg.role,
       channel: msg.channel || undefined,
       channelLabel: msg.channelLabel || undefined,
+      origin: msg.origin || undefined,
       toolLog: cleanToolLog,
       synthetic: opts?.synthetic === true,
       content: cleanContent,
@@ -850,7 +1000,7 @@ export function recordSessionCompaction(
   const session = getSession(sessionId);
   const cleanSummary = String(summaryText || '').trim();
   if (!cleanSummary) return;
-  session.latestContextSummary = cleanSummary.slice(0, 5000);
+  session.latestContextSummary = cleanSummary.slice(0, 12000);
   session.contextStartIndex = Math.max(0, Math.floor(Number(baseMessageCount) || 0));
   session.contextSummaryUpdatedAt = Date.now();
   appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);
@@ -900,28 +1050,32 @@ export function listMainChatGoalRecords(): Array<MainChatGoalState & {
 }> {
   const summaries = listSessionSummaries();
   const out: Array<MainChatGoalState & { current: boolean; sessionTitle: string; sessionLastActiveAt: number }> = [];
+  const globalSeen = new Set<string>();
+  const pushGoalForSummary = (summary: SessionSummary, goal: MainChatGoalState | null | undefined, current: boolean) => {
+    const normalized = normalizeMainChatGoal(goal, summary.id);
+    if (!normalized || globalSeen.has(normalized.id)) return;
+    globalSeen.add(normalized.id);
+    out.push({
+      ...normalized,
+      current,
+      sessionTitle: summary.title,
+      sessionLastActiveAt: summary.lastActiveAt,
+    });
+  };
+
   for (const summary of summaries) {
-    let session: Session | null = null;
-    try {
-      session = getSession(summary.id);
-    } catch {
-      session = readSessionFileForSearch(summary.id);
-    }
+    pushGoalForSummary(summary, summary.mainChatGoal, true);
+  }
+
+  // Historical goals are useful context, but loading every session file can
+  // stall the Hub on long-lived installs. Scan the recent sessions only.
+  for (const summary of summaries.slice(0, 250)) {
+    const session = readSessionFileForSearch(summary.id);
     if (!session) continue;
-    const seen = new Set<string>();
-    const pushGoal = (goal: MainChatGoalState | null | undefined, current: boolean) => {
-      const normalized = normalizeMainChatGoal(goal, summary.id);
-      if (!normalized || seen.has(normalized.id)) return;
-      seen.add(normalized.id);
-      out.push({
-        ...normalized,
-        current,
-        sessionTitle: summary.title,
-        sessionLastActiveAt: summary.lastActiveAt,
-      });
-    };
-    pushGoal(session.mainChatGoal, true);
-    for (const goal of session.mainChatGoalHistory || []) pushGoal(goal, false);
+    pushGoalForSummary(summary, session.mainChatGoal, true);
+    for (const goal of session.mainChatGoalHistory || []) {
+      pushGoalForSummary(summary, goal, false);
+    }
   }
   return out.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
 }
@@ -945,7 +1099,7 @@ export function applyRollingCompactionToHistory(
     timestamp: Date.now(),
   };
   session.history = [summaryMsg];
-  session.contextTokenEstimate = estimateHistoryTokens(session.history);
+  session.contextTokenEstimate = estimateActiveContextTokens(session);
   saveSession(sessionId);
 }
 
@@ -1058,6 +1212,8 @@ export function getSession(id: string): Session {
         channel: data.channel || inferChannelFromSessionId(id),
         createdAt: data.createdAt || Date.now(),
         lastActiveAt: data.lastActiveAt || Date.now(),
+        lastAssistantAt: Number.isFinite(Number(data.lastAssistantAt)) ? Number(data.lastAssistantAt) : undefined,
+        mobileLastReadAt: Number.isFinite(Number(data.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined,
         pendingMemoryFlush: data.pendingMemoryFlush === true,
         pendingCompaction: data.pendingCompaction === true,
         contextTokenEstimate: Number.isFinite(Number(data.contextTokenEstimate))
@@ -1101,6 +1257,8 @@ export function getSession(id: string): Session {
     channel: inferChannelFromSessionId(id),
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
+    lastAssistantAt: undefined,
+    mobileLastReadAt: undefined,
     pendingMemoryFlush: false,
     pendingCompaction: false,
     contextTokenEstimate: 0,
@@ -1156,7 +1314,7 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
   const contextLimitTokens = resolveNumCtx();
   const thresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.memoryFlushThreshold);
   const compactionThresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.compactionThreshold);
-  const beforeTokens = estimateHistoryTokens(session.history);
+  const beforeTokens = estimateActiveContextTokens(session);
   let compactionInjected = false;
   let deferredForCompaction = false;
   let compactionApplied = false;
@@ -1169,10 +1327,13 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     && !session.pendingCompaction
   ) {
     const projectedTokens = beforeTokens + estimateMessageTokens(msg);
+    const realMessageCount = session.history.filter(isRealContextMessage).length + 1;
     const recentlyCompacted = session.history
       .slice(-8)
       .some((h) => h.role === 'user' && h.content === PRE_COMPACTION_SUMMARY_PROMPT);
-    const shouldCompact = projectedTokens >= compactionThresholdTokens && !recentlyCompacted;
+    const shouldCompact = realMessageCount >= sessionPolicy.compactionMinMessages
+      && projectedTokens >= compactionThresholdTokens
+      && !recentlyCompacted;
     if (shouldCompact) {
       const injectedMsg: ChatMessage = {
         role: 'user',
@@ -1194,10 +1355,13 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     && !session.pendingMemoryFlush
   ) {
     const projectedTokens = beforeTokens + estimateMessageTokens(msg);
+    const realMessageCount = session.history.filter(isRealContextMessage).length + 1;
     const recentlyPrompted = session.history
       .slice(-6)
       .some((h) => h.role === 'user' && h.content === PRE_COMPACTION_MEMORY_FLUSH_PROMPT);
-    const shouldInject = projectedTokens >= thresholdTokens && !recentlyPrompted;
+    const shouldInject = realMessageCount >= sessionPolicy.compactionMinMessages
+      && projectedTokens >= thresholdTokens
+      && !recentlyPrompted;
     if (shouldInject) {
       const injectedMsg: ChatMessage = {
         role: 'user',
@@ -1221,6 +1385,10 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
 
   if (!deferredForCompaction && !deferredForMemoryFlush) {
     session.history.push(storedMsg);
+    if (storedMsg.role === 'assistant') {
+      const assistantAt = Number(storedMsg.timestamp || Date.now());
+      session.lastAssistantAt = Number.isFinite(assistantAt) && assistantAt > 0 ? assistantAt : Date.now();
+    }
     appendTranscriptArtifacts(id, storedMsg, { synthetic: false });
   }
 
@@ -1234,7 +1402,7 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
   }
 
   trimHistory(session, maxMessages);
-  session.contextTokenEstimate = estimateHistoryTokens(session.history);
+  session.contextTokenEstimate = estimateActiveContextTokens(session);
   session.lastActiveAt = Date.now();
   if (!options.disableAutoSave) {
     saveSession(id);
@@ -1261,13 +1429,6 @@ export function getHistory(id: string, maxTurns: number = 10): ChatMessage[] {
   const maxMessages = maxTurns * 2;
   return session.history.slice(-maxMessages);
 }
-
-// Per-message content caps for history sent to the API.
-// Recent turns (last 2 turns = last 4 messages) get a generous cap so the model
-// has full fidelity on the most recent exchange. Older turns get a tighter cap
-// to keep the context window from blowing out on long sessions.
-const API_HISTORY_CONTENT_CAP_RECENT_CHARS = 3000;  // last 2 turns
-const API_HISTORY_CONTENT_CAP_OLDER_CHARS  = 1200;  // all older turns
 
 function buildActiveGoalSummaryMessage(session: Session): ChatMessage | null {
   const goal = session.mainChatGoal && ['active', 'paused', 'blocked'].includes(session.mainChatGoal.status)
@@ -1321,7 +1482,7 @@ export function getHistoryForApiCall(
     messages = goalSummaryMsg ? [summaryMsg, goalSummaryMsg, ...since] : [summaryMsg, ...since];
     if (messages.length > maxMessages) {
       const preserved = goalSummaryMsg ? [summaryMsg, goalSummaryMsg] : [summaryMsg];
-      messages = [...preserved, ...messages.slice(-(maxMessages - preserved.length))];
+      messages = [...preserved, ...since.slice(-maxMessages)];
     }
   } else {
     messages = goalSummaryMsg
@@ -1329,36 +1490,27 @@ export function getHistoryForApiCall(
       : rawMessages.slice(-maxMessages);
   }
 
-  const recentCutoff = messages.length - 4; // last 2 turns = 4 messages
-  return messages.map((msg, idx) => {
-    const cap = idx >= recentCutoff
-      ? API_HISTORY_CONTENT_CAP_RECENT_CHARS
-      : API_HISTORY_CONTENT_CAP_OLDER_CHARS;
+  return messages.map((msg) => {
     const cleaned = msg.role === 'assistant'
       ? stripInternalToolNotes(msg.content)
       : String(msg.content || '');
     const content = cleaned || (/\[tool-note:[^\]]+\]/i.test(String(msg.content || '')) ? '' : String(msg.content || ''));
     if (!content.trim()) return null;
-    if (content.length <= cap) return { ...msg, content };
-    const removed = content.length - cap;
-    return {
-      ...msg,
-      content: `${content.slice(0, cap)}\n[pruned: ${removed} chars]`,
-    };
+    return { ...msg, content };
   }).filter((msg): msg is ChatMessage => !!msg);
 }
 
 /**
- * Builds a compact [RECENT_TOOL_LOG] block from toolLog fields stored on the
+ * Builds a [RECENT_TOOL_LOG] block from full toolLog fields stored on the
  * last `lookbackTurns` assistant messages. Returns empty string if no tool
- * log data exists. Capped at maxChars.
+ * log data exists. If maxChars is omitted, no application-level cap is applied.
  *
  * Populated by chat.router after each turn completes via persistToolLog().
  */
 export function getRecentToolLog(
   id: string,
-  lookbackTurns: number = 3,
-  maxChars: number = 1500,
+  lookbackTurns: number = 5,
+  maxChars?: number,
 ): string {
   const session = getSession(id);
   const recentAssistant = session.history
@@ -1376,18 +1528,19 @@ export function getRecentToolLog(
   if (lines.length === 0) return '';
 
   const block = `[RECENT_TOOL_LOG]\n${lines.join('\n')}`;
-  return block.length <= maxChars ? block : block.slice(0, maxChars) + '\n[...truncated]';
+  if (!Number.isFinite(Number(maxChars)) || Number(maxChars) <= 0) return block;
+  return block.length <= Number(maxChars) ? block : block.slice(0, Number(maxChars)) + '\n[...truncated]';
 }
 
 /**
- * Persists a compact tool log string onto the most recent assistant message
+ * Persists a full tool log string onto the most recent assistant message
  * in session history. Called by chat.router after allToolResults are finalized.
  */
 export function persistToolLog(id: string, toolLog: string): void {
   const session = getSession(id);
   for (let i = session.history.length - 1; i >= 0; i--) {
     if (session.history[i].role === 'assistant') {
-      session.history[i].toolLog = toolLog.slice(0, 2000);
+      session.history[i].toolLog = toolLog;
       saveSession(id);
       return;
     }
@@ -1407,8 +1560,17 @@ export function clearHistory(id: string): void {
   saveSession(id);
 }
 
-export function replaceHistory(id: string, history: ChatMessage[]): void {
+export function replaceHistory(
+  id: string,
+  history: ChatMessage[],
+  options: { resetCompaction?: boolean } = {},
+): void {
   const session = getSession(id);
+  const previousSummary = session.latestContextSummary;
+  const previousContextStartIndex = Number.isFinite(Number(session.contextStartIndex))
+    ? Math.max(0, Math.floor(Number(session.contextStartIndex)))
+    : 0;
+  const previousSummaryUpdatedAt = session.contextSummaryUpdatedAt;
   session.history = (Array.isArray(history) ? history : [])
     .map((msg: any) => {
       const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : 'user';
@@ -1422,10 +1584,20 @@ export function replaceHistory(id: string, history: ChatMessage[]): void {
     .filter((msg) => msg.content.trim().length > 0);
   session.pendingCompaction = false;
   session.pendingMemoryFlush = false;
-  session.contextTokenEstimate = estimateHistoryTokens(session.history);
-  session.latestContextSummary = undefined;
-  session.contextStartIndex = 0;
-  session.contextSummaryUpdatedAt = undefined;
+  const shouldPreserveCompaction = options.resetCompaction !== true
+    && !!String(previousSummary || '').trim()
+    && previousContextStartIndex > 0
+    && session.history.length >= previousContextStartIndex;
+  if (shouldPreserveCompaction) {
+    session.latestContextSummary = previousSummary;
+    session.contextStartIndex = previousContextStartIndex;
+    session.contextSummaryUpdatedAt = previousSummaryUpdatedAt;
+  } else {
+    session.latestContextSummary = undefined;
+    session.contextStartIndex = 0;
+    session.contextSummaryUpdatedAt = undefined;
+  }
+  session.contextTokenEstimate = estimateActiveContextTokens(session);
   session.lastActiveAt = Date.now();
   saveSession(id);
 }
@@ -1570,6 +1742,17 @@ export function setCanvasProjectLink(id: string, nextLink: CanvasProjectLink | n
   return normalizeCanvasProjectLink(session.canvasProjectLink);
 }
 
+export function markSessionReadForMobile(id: string, readAt: number = Date.now()): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const session = getSession(sessionId);
+  const timestamp = Number.isFinite(Number(readAt)) ? Number(readAt) : Date.now();
+  session.mobileLastReadAt = Math.max(Number(session.mobileLastReadAt || 0) || 0, timestamp);
+  saveSession(sessionId);
+  return buildSessionSummary(session);
+}
+
+
 export function deleteSession(id: string): boolean {
   const sessionId = String(id || '').trim();
   if (!sessionId) return false;
@@ -1638,6 +1821,12 @@ function scrubSession(session: Session): Session {
       ...msg,
       content: scrubPersistedText(msg.content),
       toolLog: msg.toolLog ? scrubPersistedText(msg.toolLog) : msg.toolLog,
+      processEntries: Array.isArray(msg.processEntries)
+        ? msg.processEntries.map((entry) => ({
+            ...entry,
+            content: entry?.content ? scrubPersistedText(String(entry.content)) : entry?.content,
+          }))
+        : msg.processEntries,
     })),
   };
 }
@@ -1653,6 +1842,7 @@ function saveSession(id: string): void {
     sessionSaveTimers.delete(id);
     const latest = sessions.get(id);
     if (!latest) return;
+    latest.lastAssistantAt = getLastAssistantTimestamp(latest.history);
     ensureSessionDir();
     try {
       fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(latest), null, 2));
@@ -1675,6 +1865,7 @@ export function flushSession(id: string): void {
   }
   const session = sessions.get(id);
   if (!session) return;
+  session.lastAssistantAt = getLastAssistantTimestamp(session.history);
   ensureSessionDir();
   try {
     fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session), null, 2));

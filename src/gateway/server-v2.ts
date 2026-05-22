@@ -21,12 +21,10 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { spawnAgent } from '../agents/spawner';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions } from './session';
 import { hookBus } from './hooks';
 import { loadWorkspaceHooks } from './hook-loader';
 import { runBootMd } from './boot';
-import { TaskRunner, runTask, TaskTool, TaskState } from './tasks/task-runner';
 import { setupErrorResponseEndpoint } from './errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../security/credential-handler';
 import { getVerificationFlowManager } from './verification-flow';
@@ -66,6 +64,8 @@ import { TelegramChannel } from './comms/telegram-channel';
 import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { setShutdownHooks } from './lifecycle';
+import { attachXaiVoiceStreaming } from './voice/xai-streaming';
+import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import {
   createTask, loadTask, saveTask, updateTaskStatus, setTaskStepRunning,
@@ -88,7 +88,6 @@ import {
   buildTeamContextRuntimeBlock,
 } from './teams/managed-teams';
 import { triggerManagerReview, handleManagerConversation, setTeamRunAgentFn } from './teams/team-manager-runner';
-import { buildTeamDispatchTask } from './teams/team-dispatch-runtime';
 import { checkForTeamSuggestion } from './teams/team-detector';
 import { SubagentManager } from './agents-runtime/subagent-manager';
 
@@ -125,12 +124,12 @@ import {
 } from './tasks/task-router';
 import { router as skillsRouter, setSkillsRouterManager } from './routes/skills.router';
 import { router as tasksRouter, initTasksRouter, makeBroadcastForTask } from './routes/tasks.router';
-import { router as channelsRouter, initChannelsRouter, runSubagentChatTurnFromChannel, sanitizeAgentId, normalizeAgentsForSave } from './routes/channels.router';
+import { router as channelsRouter, initChannelsRouter, runSubagentChatTurnFromChannel } from './routes/channels.router';
+import { sanitizeAgentId, normalizeAgentsForSave } from './agents/agent-normalize';
 import {
   router as teamsRouter, initTeamsRouter, pauseManagedTeamInternal, resumeManagedTeamInternal,
   buildTeamDispatchContext, postTeamChatFromChannel, runTeamAgentViaChat,
 } from './routes/teams.router';
-import { runTeamAgentViaChat as _runTeamAgentViaChat2, setDispatchDeps } from './teams/team-dispatch-runtime';
 import { router as settingsRouter, initSettingsRouter } from './routes/settings.router';
 import { router as accountRouter, refreshPersistedSession, requireAccountAccess } from './routes/account.router';
 import { router as goalsRouter, initGoalsRouter } from './routes/goals.router';
@@ -141,6 +140,7 @@ import { router as extensionsRouter } from './routes/extensions.router';
 import { router as canvasRouter, initCanvasRouter } from './routes/canvas.router';
 import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
+import { router as pairingRouter } from './routes/pairing.router';
 import { router as obsidianRouter } from './routes/obsidian.router';
 import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
 import { router as onboardingRouter } from './routes/onboarding.router';
@@ -171,6 +171,7 @@ import { createServer } from './core/server';
 import { runStartup } from './core/startup';
 import { scheduleMemoryIndexRefresh } from './memory-index/index';
 import { requireGatewayAuth } from './gateway-auth';
+import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
 import {
   buildBootStartupSnapshot as _buildBootStartupSnapshot, loadWorkspaceFile,
   readDailyMemoryContext, detectToolCategories, readMemoryCategories, readMemorySnippets,
@@ -179,7 +180,7 @@ import {
 } from './prompt-context';
 import { internalAgentTaskRouter } from './agents-runtime/internal-agent-task';
 import {
-  registerAgentBuilderTools, executeAgentBuilderTool, AGENT_BUILDER_TOOL_NAMES, getWorkflowContextBlock,
+  registerAgentBuilderTools, executeAgentBuilderTool, AGENT_BUILDER_TOOL_NAMES,
 } from './agents-runtime/agent-builder-integration';
 
 // ─── B6: Chat router (handleChat + /api/chat + /api/status) ─────────────────
@@ -197,6 +198,36 @@ const CONFIG_DIR_PATH = configManager.getConfigDir();
 const PORT = config.gateway.port || (process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789);
 const HOST = config.gateway.host || process.env.GATEWAY_HOST || (process.env.DOCKER_CONTAINER ? '0.0.0.0' : '127.0.0.1');
 
+function resolveConfigPath(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return path.isAbsolute(raw) ? raw : path.resolve(CONFIG_DIR_PATH, raw);
+}
+
+function loadGatewayHttpsOptions(): { port: number; options: any } | null {
+  const httpsCfg = (config.gateway as any)?.https || {};
+  const enabled = httpsCfg.enabled === true || process.env.GATEWAY_HTTPS_ENABLED === '1' || process.env.GATEWAY_HTTPS_ENABLED === 'true';
+  if (!enabled) return null;
+  const port = Number(httpsCfg.port || process.env.GATEWAY_HTTPS_PORT || 18790);
+  const pfxPath = resolveConfigPath(httpsCfg.pfxPath || process.env.GATEWAY_HTTPS_PFX_PATH);
+  const keyPath = resolveConfigPath(httpsCfg.keyPath || process.env.GATEWAY_HTTPS_KEY_PATH);
+  const certPath = resolveConfigPath(httpsCfg.certPath || process.env.GATEWAY_HTTPS_CERT_PATH);
+  const passphrase = String(httpsCfg.passphrase || process.env.GATEWAY_HTTPS_PFX_PASSPHRASE || '').trim();
+
+  try {
+    if (pfxPath && fs.existsSync(pfxPath)) {
+      return { port, options: { pfx: fs.readFileSync(pfxPath), passphrase } };
+    }
+    if (keyPath && certPath && fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+      return { port, options: { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath), passphrase } };
+    }
+    console.warn('[Gateway] HTTPS requested but no certificate was found. Configure gateway.https.pfxPath or keyPath/certPath.');
+  } catch (err: any) {
+    console.warn('[Gateway] HTTPS certificate could not be loaded:', err?.message || err);
+  }
+  return null;
+}
+
 const STARTUP_PROFILE = process.env.PROMETHEUS_STARTUP_PROFILE === '1';
 const startupT0 = Date.now();
 let startupLast = startupT0;
@@ -211,18 +242,62 @@ type ChatRouterModule = typeof import('./routes/chat.router');
 let chatRouterModule: ChatRouterModule | null = null;
 let chatRouterDeps: Parameters<ChatRouterModule['initChatRouter']>[0] | null = null;
 let chatRouterInitialized = false;
+let chatRouterWarmupState: 'cold' | 'warming' | 'ready' | 'failed' = 'cold';
+let chatRouterWarmupStartedAt = 0;
+let chatRouterWarmupFinishedAt = 0;
+let chatRouterWarmupError = '';
 
 function getChatRouterModule(): ChatRouterModule {
   if (!chatRouterModule) {
-    chatRouterModule = require('./routes/chat.router') as ChatRouterModule;
-    startupMark('chat router module loaded');
+    chatRouterWarmupState = 'warming';
+    chatRouterWarmupStartedAt = chatRouterWarmupStartedAt || Date.now();
+    try {
+      chatRouterModule = require('./routes/chat.router') as ChatRouterModule;
+      startupMark('chat router module loaded');
+    } catch (err: any) {
+      chatRouterWarmupState = 'failed';
+      chatRouterWarmupFinishedAt = Date.now();
+      chatRouterWarmupError = String(err?.message || err);
+      throw err;
+    }
   }
   if (!chatRouterInitialized && chatRouterDeps) {
     chatRouterModule.initChatRouter(chatRouterDeps);
     chatRouterInitialized = true;
     startupMark('chat router initialized lazily');
   }
+  if (chatRouterInitialized) {
+    chatRouterWarmupState = 'ready';
+    chatRouterWarmupFinishedAt = chatRouterWarmupFinishedAt || Date.now();
+    chatRouterWarmupError = '';
+  }
   return chatRouterModule;
+}
+
+function warmChatRouter(reason = 'background'): void {
+  if (chatRouterWarmupState === 'warming' || chatRouterWarmupState === 'ready') return;
+  chatRouterWarmupState = 'warming';
+  chatRouterWarmupStartedAt = Date.now();
+  chatRouterWarmupFinishedAt = 0;
+  chatRouterWarmupError = '';
+  try {
+    getChatRouterModule();
+    console.log(`[Gateway] Chat router warmup complete (${reason}) in ${Date.now() - chatRouterWarmupStartedAt}ms`);
+  } catch (err: any) {
+    console.warn(`[Gateway] Chat router warmup failed (${reason}):`, err?.message || err);
+  }
+}
+
+function getChatRouterWarmupStatus(): Record<string, any> {
+  return {
+    state: chatRouterWarmupState,
+    startedAt: chatRouterWarmupStartedAt || null,
+    finishedAt: chatRouterWarmupFinishedAt || null,
+    elapsedMs: chatRouterWarmupStartedAt
+      ? ((chatRouterWarmupFinishedAt || Date.now()) - chatRouterWarmupStartedAt)
+      : 0,
+    error: chatRouterWarmupError || undefined,
+  };
 }
 
 function initChatRouterLazy(deps: Parameters<ChatRouterModule['initChatRouter']>[0]): void {
@@ -287,6 +362,7 @@ const cronScheduler = new CronScheduler({
   broadcast: broadcastWS,
   deliverTelegram: (text: string) => telegramChannel.sendToAllowed(text),
   getMainSessionId: () => getLastMainSessionId() || 'default',
+  getIsModelBusy: isModelBusy,
   getAvailableToolNames: () =>
     buildTools()
       .map((t: any) => String(t?.function?.name || '').trim())
@@ -439,8 +515,8 @@ const telegramChannel = new TelegramChannel(
   {
     handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments) =>
       handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter, attachments),
-    runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
-      runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
+    runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOrigin, requestMeta, callerOnToken) =>
+      runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOrigin, requestMeta, callerOnToken),
     addMessage,
     getIsModelBusy: isModelBusy,
     broadcast: broadcastWS,
@@ -578,13 +654,14 @@ startupMark('chat router init deferred');
 
 const mainChatTimerRunner = new MainChatTimerRunner({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
-    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
+  telegramChannel,
 });
 mainChatTimerRunner.start();
 
 const internalWatchRunner = new InternalWatchRunner({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
-    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride),
   broadcast: broadcastWS,
   cronScheduler,
 });
@@ -602,6 +679,57 @@ setNotifyBroadcastFn(broadcastWS);
 const app = createApp();
 startupMark('express app created');
 
+app.use((req, _res, next) => {
+  try {
+    const path = String(req.path || '').trim();
+    if (path === '/api/voice/tts' || path === '/api/voice/stt' || path === '/api/mobile/voice-debug' || path === '/api/realtime/call') {
+      const ua = String(req.headers['user-agent'] || '').slice(0, 160);
+      const pairing = req.headers['x-pairing-token'] ? 'pairing=yes' : 'pairing=no';
+      fs.appendFileSync('D:\\Prometheus\\voice-xai-debug.log', `[${new Date().toISOString()}] [voice-preauth] ${req.method} ${path} ${pairing} ua="${ua}"\n`);
+    }
+  } catch {}
+  next();
+});
+
+app.post('/api/mobile/voice-debug', (req, res) => {
+  try {
+    const ua = String(req.headers['user-agent'] || '').slice(0, 160);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const safe = {
+      event: String((body as any).event || '').slice(0, 80),
+      route: String((body as any).route || '').slice(0, 120),
+      mode: String((body as any).mode || '').slice(0, 40),
+      data: (body as any).data || {},
+    };
+    fs.appendFileSync('D:\\Prometheus\\voice-xai-debug.log', `[${new Date().toISOString()}] [voice-client] ua="${ua}" ${JSON.stringify(safe).slice(0, 1200)}\n`);
+  } catch {}
+  res.json({ success: true });
+});
+
+app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => {
+  const rawCfg = getConfig().getConfig() as any;
+  const provider: string = rawCfg.llm?.provider || 'ollama';
+  const isCloudProvider = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';
+  const cachedProviderStatus = readProviderStatusCache();
+  const connected = isCloudProvider ? true : !!cachedProviderStatus?.connected;
+  const providerChecking = !isCloudProvider && !cachedProviderStatus && isProviderStatusChecking();
+  const providerCfg = rawCfg.llm?.providers?.[provider] || {};
+  const activeModel: string = providerCfg.model || rawCfg.models?.primary || 'unknown';
+  res.json({
+    status: 'ok',
+    version: 'v2-tools',
+    ollama: connected,
+    providerOnline: connected,
+    providerChecking,
+    provider,
+    currentModel: activeModel,
+    workspace: rawCfg.workspace?.path || '',
+    search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
+    orchestration: null,
+    chatRouter: getChatRouterWarmupStatus(),
+  });
+});
+
 // ─── Router Registrations ────────────────────────────────────────────────────
 
 // Wire deps into routers
@@ -614,8 +742,8 @@ initChannelsRouter({
   telegramPersonaBots,
   telegramTeamRoomBridge,
   dispatchToAgent: _dispatchToAgent,
-  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride) =>
-    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride),
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride, flags, turnOrigin) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride, flags, turnOrigin),
 });
 initTeamsRouter({
   cronScheduler, handleChat, telegramChannel,
@@ -627,6 +755,10 @@ initSettingsRouter({ requireGatewayAuth });
 initGoalsRouter({ requireGatewayAuth, cronScheduler, telegramChannel, handleChat });
 startupMark('routers initialized');
 
+// Pairing endpoints are mounted BEFORE gateway-auth/account-access so an
+// unpaired mobile device can complete the QR handshake without an existing
+// session. Approval still gates access to every other API surface.
+app.use('/', pairingRouter);
 // Mount routers. Account auth endpoints stay available after gateway auth so
 // users can log in, refresh status, or recover from an expired subscription.
 // Everything else requires an active account/subscription on the server side.
@@ -656,7 +788,11 @@ app.use('/', requireGatewayAuth, requireAccountAccess, onboardingRouter);
 startupMark('routers mounted');
 
 // ─── Server ────────────────────────────────────────────────────────────────────
-const { server, wss } = createServer(app, PORT, HOST);
+const httpsGateway = loadGatewayHttpsOptions();
+const { server, wss } = createServer(app, PORT, HOST, undefined, httpsGateway?.port);
+const secureBundle = httpsGateway ? createServer(app, httpsGateway.port, HOST, httpsGateway.options) : null;
+const xaiVoiceStreaming = attachXaiVoiceStreaming(server);
+const secureXaiVoiceStreaming = secureBundle ? attachXaiVoiceStreaming(secureBundle.server) : null;
 startupMark('http server created');
 startRuntimeHeartbeat();
 setProposalsBroadcast(broadcastWS);
@@ -672,10 +808,11 @@ setShutdownHooks({
   stopInternalWatches: () => internalWatchRunner.stop(),
   stopHeartbeat: () => heartbeatRunner.stop(),
   stopBrain: () => brainRunner.stop(),
-  closeWebSocket: () => { try { wss.close(); } catch {} },
+  closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {} },
   closeHttpServer: () => new Promise<void>((resolve) => {
     try {
       server.close(() => resolve());
+      try { secureBundle?.server.close(); } catch {}
       setTimeout(resolve, 2000); // force-resolve after 2s
     } catch { resolve(); }
   }),
@@ -704,6 +841,8 @@ try { seedDefaultShortcuts(); console.log('[SiteShortcuts] Default shortcuts see
 
 server.listen(PORT, HOST, () => {
   startupMark('server listen callback');
+  const chatWarmupTimer = setTimeout(() => warmChatRouter('post-listen'), 1500);
+  if (typeof (chatWarmupTimer as any).unref === 'function') (chatWarmupTimer as any).unref();
   // Silently refresh persisted Supabase session so users stay logged in
   refreshPersistedSession().catch(() => {});
   try {
@@ -723,11 +862,23 @@ server.listen(PORT, HOST, () => {
   }, 1000).unref?.();
 });
 
+if (secureBundle && httpsGateway) {
+  secureBundle.server.listen(httpsGateway.port, HOST, () => {
+    console.log(`[Gateway] HTTPS listener ready on https://${HOST}:${httpsGateway.port}`);
+  });
+}
+
 let shuttingDown = false;
 function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('[Gateway] Shutting down...');
+  try {
+    const interrupted = prepareActiveRuntimesForGatewayShutdown(`signal_${signal.toLowerCase()}`);
+    if (interrupted.length) console.log(`[Gateway] Preserved ${interrupted.length} runtime(s) before ${signal}.`);
+  } catch (err: any) {
+    console.warn('[Gateway] Runtime preservation failed:', err?.message || err);
+  }
   try { credentialHandler.stop(); } catch {}
   try { verificationFlowManager.stop(); } catch {}
   console.log(`[Gateway] Received ${signal}; shutting down...`);
@@ -742,7 +893,11 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop(); } catch {}
   try { if (wss) wss.close(); } catch {}
+  try { secureBundle?.wss.close(); } catch {}
+  try { xaiVoiceStreaming.close(); } catch {}
+  try { secureXaiVoiceStreaming?.close(); } catch {}
   try {
+    try { secureBundle?.server.close(); } catch {}
     server.close(() => process.exit(0));
     const forceExitTimer = setTimeout(() => process.exit(0), 1200) as any;
     if (typeof forceExitTimer?.unref === 'function') forceExitTimer.unref();

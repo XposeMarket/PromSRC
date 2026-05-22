@@ -14,6 +14,8 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import type { ToolResult } from '../types.js';
+import { getConfig } from '../config/config';
+import { getValidXApiToken } from '../auth/x-api-oauth';
 
 // ─── Dependency injection ─────────────────────────────────────────────────────
 
@@ -38,6 +40,7 @@ const PLATFORM_CONFIG: Record<string, {
   vaultKey: string;
   apiEndpoint?: string;
   scrapingSupported: boolean;
+  tokenProvider?: 'vault' | 'x-api-oauth';
 }> = {
   instagram: {
     displayName: 'Instagram',
@@ -53,14 +56,16 @@ const PLATFORM_CONFIG: Record<string, {
   x: {
     displayName: 'X (Twitter)',
     vaultKey: 'social_x_token',
-    apiEndpoint: 'https://api.twitter.com/2',
+    apiEndpoint: 'https://api.x.com/2',
     scrapingSupported: true,
+    tokenProvider: 'x-api-oauth',
   },
   twitter: {
     displayName: 'X (Twitter)',
     vaultKey: 'social_x_token',
-    apiEndpoint: 'https://api.twitter.com/2',
+    apiEndpoint: 'https://api.x.com/2',
     scrapingSupported: true,
+    tokenProvider: 'x-api-oauth',
   },
   linkedin: {
     displayName: 'LinkedIn',
@@ -408,13 +413,18 @@ export const socialIntelTool = {
     let data: Record<string, any> | null = null;
     let tierUsed = 'none';
 
-    // ── Tier 1: Try official API if token exists and mode is full ─────────────
-    if (mode === 'full' && _resolveSecret) {
+    // ── Tier 1: Try official API if OAuth/token exists and mode is full ──────
+    if (mode === 'full') {
       try {
-        const token = await _resolveSecret(`vault://${config.vaultKey}`);
+        let token: string | null = null;
+        if (config.tokenProvider === 'x-api-oauth') {
+          token = await getValidXApiToken(getConfig().getConfigDir());
+        } else if (_resolveSecret) {
+          token = await _resolveSecret(`vault://${config.vaultKey}`);
+        }
         if (token) {
           data = await runApiTier(platform, handle, token);
-          if (data) tierUsed = 'official_api';
+          if (data) tierUsed = config.tokenProvider === 'x-api-oauth' ? 'x_api_oauth' : 'official_api';
         }
       } catch (e: any) {
         console.warn(`[social-intel] API tier error:`, e.message);

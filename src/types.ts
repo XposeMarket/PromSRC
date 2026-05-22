@@ -341,9 +341,22 @@ export interface PrometheusConfig {
   gateway: {
     port: number;
     host: string;
+    https?: {
+      enabled: boolean;
+      port: number;
+      pfxPath?: string;
+      passphrase?: string;
+      keyPath?: string;
+      certPath?: string;
+    };
     auth: {
       enabled: boolean;
       token?: string;
+    };
+    remoteAccess?: {
+      enabled: boolean;
+      mode: 'tailscale-funnel' | 'custom';
+      publicUrl: string;
     };
   };
   ollama: {
@@ -402,6 +415,12 @@ export interface PrometheusConfig {
     provider: string;
     path: string;
     embedding_model: string;
+    embeddings?: {
+      provider?: string;
+      auto_backfill?: boolean;
+      auto_backfill_limit?: number;
+      providers?: Record<string, Record<string, unknown>>;
+    };
   };
   memory_options?: {
     auto_confirm?: boolean;
@@ -426,6 +445,8 @@ export interface PrometheusConfig {
     maxMessages?: number;
     compactionThreshold?: number;
     memoryFlushThreshold?: number;
+    /** Minimum real user/assistant messages before token-threshold compaction may run. */
+    compactionMinMessages?: number;
     /**
      * Rolling context compaction (message-window based).
      * When enabled, the gateway periodically summarizes the thread and resets
@@ -434,10 +455,12 @@ export interface PrometheusConfig {
     rollingCompactionEnabled?: boolean;
     /** Trigger compaction when this many non-summary messages are reached. */
     rollingCompactionMessageCount?: number;
-    /** Number of recent assistant turns to include tool-log snippets from. */
+    /** Number of recent assistant turns to include full tool logs from. */
     rollingCompactionToolTurns?: number;
     /** Max words requested from the compactor summary. */
     rollingCompactionSummaryMaxWords?: number;
+    /** Optional context window override for the standalone compaction call. */
+    rollingCompactionNumCtx?: number;
     /** Optional model override for compaction (active provider model namespace). */
     rollingCompactionModel?: string;
     mainChatGoals?: {

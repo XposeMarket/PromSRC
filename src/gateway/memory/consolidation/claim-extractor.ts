@@ -56,6 +56,17 @@ function normalizeClaimText(text: string): string {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 700);
 }
 
+function looksLikeNoise(line: string): boolean {
+  const text = String(line || '').trim();
+  if (!text) return true;
+  if (/^(```|import\s+|export\s+|const\s+|let\s+|var\s+|function\s+|class\s+|<\/?[a-z])/i.test(text)) return true;
+  if (/^\s*[{[\]},:"'0-9._-]+\s*$/.test(text)) return true;
+  if (/^\[[^\]]+\]\s+(debug|trace|info|warn|error)\b/i.test(text)) return true;
+  if (/^(at\s+\S+\s+\(|error:|warning:|stack trace)/i.test(text)) return true;
+  if (/https?:\/\/\S+/.test(text) && text.length < 160) return true;
+  return false;
+}
+
 function canonicalKey(type: MemoryClaimType, text: string, projectId: string | null): string {
   const base = normalizeClaimText(text).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
   return `${type}:${projectId || 'root'}:${base || 'claim'}`;
@@ -94,19 +105,22 @@ function buildClaim(type: MemoryClaimType, text: string, source: SourceDoc, auth
 function extractFromLine(line: string, source: SourceDoc): MemoryClaim[] {
   const trimmed = normalizeClaimText(line);
   if (trimmed.length < 12) return [];
+  if (looksLikeNoise(trimmed)) return [];
   const claims: MemoryClaim[] = [];
   const patterns: Array<[MemoryClaimType, RegExp, string, number]> = [
-    ['user_correction', /\b(?:correction|actually|not that|instead remember|user corrected)\b[:\s-]*(.+)/i, 'user_correction', 0.94],
-    ['preference', /\b(?:user prefers|preference|prefer|likes|wants)\b[:\s-]*(.+)/i, 'explicit_user_instruction', 0.86],
-    ['decision', /\b(?:we decided|decision|decided to|final decision)\b[:\s-]*(.+)/i, 'verified_task_outcome', 0.84],
-    ['rule', /\b(?:rule|always|never|must|should not)\b[:\s-]*(.+)/i, 'explicit_user_instruction', 0.78],
-    ['task_outcome', /\b(?:completed|shipped|fixed|implemented|resolved)\b[:\s-]*(.+)/i, 'verified_task_outcome', 0.76],
-    ['open_loop', /\b(?:todo|follow up|open loop|needs|pending|blocked)\b[:\s-]*(.+)/i, 'assistant_inference', 0.68],
-    ['project_fact', /\b(?:project fact|fact|architecture|current state)\b[:\s-]*(.+)/i, 'assistant_inference', 0.66],
+    ['user_correction', /^(?:[-*]\s*)?(?:correction|actually|not that|instead remember|user corrected)\b[:\s-]+(.+)/i, 'user_correction', 0.94],
+    ['preference', /^(?:[-*]\s*)?(?:user prefers|user preference|preference|prefers|prefer|likes|wants)\b[:\s-]+(.+)/i, 'explicit_user_instruction', 0.86],
+    ['decision', /^(?:[-*]\s*)?(?:we decided|decided to|decision|final decision)\b[:\s-]+(.+)/i, 'verified_task_outcome', 0.84],
+    ['rule', /^(?:[-*]\s*)?(?:rule|always remember|never remember|must remember|should not remember|always use|never use|must use|should not use)\b[:\s-]+(.+)/i, 'explicit_user_instruction', 0.78],
+    ['task_outcome', /^(?:[-*]\s*)?(?:completed|shipped|fixed|implemented|resolved)\b[:\s-]+(.+)/i, 'verified_task_outcome', 0.76],
+    ['open_loop', /^(?:[-*]\s*)?(?:todo|follow up|open loop|pending|blocked)\b[:\s-]+(.+)/i, 'assistant_inference', 0.68],
+    ['project_fact', /^(?:[-*]\s*)?(?:project fact|architecture|current state)\b[:\s-]+(.+)/i, 'assistant_inference', 0.66],
   ];
   for (const [type, regex, authority, confidence] of patterns) {
     const match = trimmed.match(regex);
-    if (match?.[1] && match[1].length > 8) claims.push(buildClaim(type, match[1], source, authority, confidence));
+    if (!match?.[1] || match[1].length <= 8) continue;
+    if ((type === 'task_outcome' || type === 'open_loop') && !['task_state', 'proposal_state', 'project_state', 'chat_session'].includes(source.sourceType)) continue;
+    claims.push(buildClaim(type, match[1], source, authority, confidence));
   }
   return claims;
 }

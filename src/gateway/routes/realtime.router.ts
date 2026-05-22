@@ -11,11 +11,24 @@ const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = 'gpt-realtime-whisper';
 const REALTIME_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
 const REALTIME_INSTRUCTIONS_MAX_CHARS = Number(process.env.OPENAI_REALTIME_INSTRUCTIONS_MAX_CHARS || 18000);
 
+function resolveRealtimeSecret(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return '';
+  if (raw.startsWith('env:')) return String(process.env[raw.slice(4)] || '').trim();
+  return String(getConfig().resolveSecret(raw) || '').trim();
+}
+
 function getRealtimeApiKey(): string {
+  const cfg = getConfig().getConfig() as any;
+  const providers = cfg?.llm?.providers && typeof cfg.llm.providers === 'object' ? cfg.llm.providers : {};
+  const openAiProviderKey = typeof providers?.openai?.api_key === 'string'
+    ? resolveRealtimeSecret(providers.openai.api_key)
+    : '';
   return String(
     process.env.OPENAI_REALTIME_API_KEY
     || process.env.OPENAI_API_KEY
     || process.env.VOICE_TOOLS_OPENAI_KEY
+    || openAiProviderKey
     || ''
   ).trim();
 }
@@ -60,6 +73,12 @@ function sanitizeRealtimeModel(value: unknown): string {
 function sanitizeRealtimeVoice(value: unknown): string {
   const voice = String(value || process.env.OPENAI_REALTIME_VOICE || DEFAULT_REALTIME_VOICE).trim();
   return /^[a-zA-Z0-9._:-]+$/.test(voice) ? voice : DEFAULT_REALTIME_VOICE;
+}
+
+function sanitizeRealtimeSpeed(value: unknown): number {
+  const speed = Number(value || process.env.OPENAI_REALTIME_SPEED || 1);
+  if (!Number.isFinite(speed)) return 1;
+  return Math.max(0.25, Math.min(1.5, Math.round(speed * 100) / 100));
 }
 
 function sanitizeRealtimeTranscriptionModel(value: unknown): string {
@@ -198,13 +217,14 @@ function buildRealtimeClientSecretBody(req: express.Request): any {
 
   const model = sanitizeRealtimeModel(req.body?.model);
   const voice = sanitizeRealtimeVoice(req.body?.voice);
+  const speed = sanitizeRealtimeSpeed(req.body?.speed);
   const instructions = sanitizeRealtimeInstructions(req.body?.instructions);
   const body: any = {
     session: {
       type: 'realtime',
       model,
       audio: {
-        output: { voice },
+        output: { voice, speed },
       },
     },
   };
@@ -212,59 +232,115 @@ function buildRealtimeClientSecretBody(req: express.Request): any {
   return body;
 }
 
-router.post('/api/realtime/client-secret', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
+async function createRealtimeClientSecret(req: express.Request): Promise<{ value: string; auth: RealtimeAuthCandidate['auth']; data: any }> {
   const authCandidates = await getRealtimeAuthCandidates();
   if (!authCandidates.length) {
-    res.status(400).json({
-      success: false,
-      requiresApiKey: true,
-      requiresOAuth: true,
-      error: 'OpenAI Realtime requires OPENAI_REALTIME_API_KEY, OPENAI_API_KEY, VOICE_TOOLS_OPENAI_KEY, or a connected OpenAI Codex OAuth account.',
-    });
-    return;
+    throw Object.assign(new Error('OpenAI Realtime requires OPENAI_REALTIME_API_KEY, OPENAI_API_KEY, VOICE_TOOLS_OPENAI_KEY, or a connected OpenAI Codex OAuth account.'), { status: 400 });
   }
 
   const body = buildRealtimeClientSecretBody(req);
-
-  try {
-    let lastFailure: { status: number; data: any; auth: RealtimeAuthCandidate['auth'] } | null = null;
-    for (const candidate of authCandidates) {
-      const upstream = await fetch(REALTIME_CLIENT_SECRETS_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${candidate.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-      const text = await upstream.text();
-      let data: any = null;
-      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-      if (upstream.ok) {
-        res.json({ success: true, auth: candidate.auth, ...data });
-        return;
-      }
-
-      lastFailure = { status: upstream.status, data, auth: candidate.auth };
-      const shouldTryNextAuth = upstream.status === 401 || upstream.status === 403;
-      if (!shouldTryNextAuth) break;
+  let lastFailure: { status: number; data: any; auth: RealtimeAuthCandidate['auth'] } | null = null;
+  for (const candidate of authCandidates) {
+    const upstream = await fetch(REALTIME_CLIENT_SECRETS_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${candidate.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await upstream.text();
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+    if (upstream.ok) {
+      const value = String(data?.client_secret?.value || data?.value || data?.client_secret || '').trim();
+      if (!value) throw Object.assign(new Error('OpenAI Realtime client secret response did not include a token.'), { status: 502, details: data });
+      return { value, auth: candidate.auth, data };
     }
 
-    if (lastFailure) {
-      const data = lastFailure.data;
-      res.status(lastFailure.status).json({
+    lastFailure = { status: upstream.status, data, auth: candidate.auth };
+    const shouldTryNextAuth = upstream.status === 401 || upstream.status === 403;
+    if (!shouldTryNextAuth) break;
+  }
+
+  const data = lastFailure?.data;
+  throw Object.assign(new Error(data?.error?.message || data?.error || `OpenAI Realtime request failed (${lastFailure?.status || 502})`), {
+    status: lastFailure?.status || 502,
+    auth: lastFailure?.auth,
+    details: data,
+  });
+}
+
+router.post('/api/realtime/client-secret', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const result = await createRealtimeClientSecret(req);
+    res.json({ success: true, auth: result.auth, ...result.data });
+  } catch (err: any) {
+    res.status(Number(err?.status || 502)).json({
+      success: false,
+      auth: err?.auth,
+      error: err?.message || String(err),
+      details: err?.details,
+    });
+  }
+});
+
+router.post('/api/realtime/call', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  let sdp = String(req.body?.sdp || '');
+  if (!sdp.endsWith('\r\n')) {
+    sdp = `${sdp.replace(/\s+$/g, '')}\r\n`;
+  }
+  const sdpDiagnostics = {
+    sdpLength: sdp.length,
+    startsWithV: sdp.startsWith('v='),
+    hasAudio: /\r?\nm=audio\s/i.test(sdp),
+    firstLine: sdp.split(/\r?\n/, 1)[0] || '',
+  };
+  if (!sdpDiagnostics.startsWithV || !sdpDiagnostics.hasAudio) {
+    res.status(400).json({
+      success: false,
+      error: `Valid Realtime SDP audio offer is required. Received ${sdp.length} bytes.`,
+      ...sdpDiagnostics,
+    });
+    return;
+  }
+  try {
+    const secret = await createRealtimeClientSecret(req);
+    const upstream = await fetch('https://api.openai.com/v1/realtime/calls', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${secret.value}`,
+        'Content-Type': 'application/sdp',
+        'Content-Length': String(Buffer.byteLength(sdp, 'utf8')),
+      },
+      body: sdp,
+    });
+    const answer = await upstream.text();
+    if (!upstream.ok) {
+      console.warn('[Realtime] /api/realtime/call upstream failed', {
+        status: upstream.status,
+        auth: secret.auth,
+        ...sdpDiagnostics,
+        error: answer.slice(0, 500),
+      });
+      res.status(upstream.status).json({
         success: false,
-        auth: lastFailure.auth,
-        error: data?.error?.message || data?.error || `OpenAI Realtime request failed (${lastFailure.status})`,
-        details: data,
+        auth: secret.auth,
+        error: answer || `Realtime call failed (${upstream.status})`,
+        upstreamStatus: upstream.status,
+        ...sdpDiagnostics,
       });
       return;
     }
+    res.type('application/sdp').send(answer);
   } catch (err: any) {
-    res.status(502).json({
+    res.status(Number(err?.status || 502)).json({
       success: false,
-      error: `OpenAI Realtime request failed: ${err?.message || err}`,
+      auth: err?.auth,
+      error: err?.message || String(err),
+      details: err?.details,
     });
   }
 });

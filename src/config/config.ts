@@ -79,9 +79,22 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   gateway: {
     port: process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789,
     host: process.env.GATEWAY_HOST ?? (process.env.DOCKER_CONTAINER ? '0.0.0.0' : '127.0.0.1'),
+    https: {
+      enabled: process.env.GATEWAY_HTTPS_ENABLED === '1' || process.env.GATEWAY_HTTPS_ENABLED === 'true',
+      port: process.env.GATEWAY_HTTPS_PORT ? parseInt(process.env.GATEWAY_HTTPS_PORT, 10) : 18790,
+      pfxPath: process.env.GATEWAY_HTTPS_PFX_PATH,
+      passphrase: process.env.GATEWAY_HTTPS_PFX_PASSPHRASE,
+      keyPath: process.env.GATEWAY_HTTPS_KEY_PATH,
+      certPath: process.env.GATEWAY_HTTPS_CERT_PATH,
+    },
     auth: {
       enabled: true,
       token: undefined
+    },
+    remoteAccess: {
+      enabled: false,
+      mode: 'tailscale-funnel' as const,
+      publicUrl: '',
     }
   },
   ollama: {
@@ -117,11 +130,12 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       },
       openai_codex: {
         model: process.env.CODEX_MODEL ?? 'gpt-5.4',
+        reasoning_effort: process.env.CODEX_REASONING_EFFORT ?? 'low',
       },
       xai: {
         api_key: process.env.XAI_API_KEY ? `env:XAI_API_KEY` : '',
         endpoint: process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
-        model: process.env.XAI_MODEL ?? 'grok-4.20-reasoning',
+        model: process.env.XAI_MODEL ?? 'grok-4.3',
       },
     },
   } as any,
@@ -194,7 +208,32 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   memory: {
     provider: 'chromadb',
     path: path.join(CONFIG_DIR, 'memory'),
-    embedding_model: 'nomic-embed-text'
+    embedding_model: 'nomic-embed-text',
+    embeddings: {
+      provider: process.env.PROMETHEUS_MEMORY_EMBEDDING_PROVIDER || 'auto',
+      auto_backfill: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDINGS !== '0',
+      auto_backfill_limit: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDING_LIMIT
+        ? Math.max(0, Math.min(2000, Number(process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDING_LIMIT) || 250))
+        : 250,
+      providers: {
+        ollama: {
+          endpoint: process.env.OLLAMA_HOST ?? 'http://localhost:11434',
+          embedding_model: process.env.OLLAMA_EMBEDDING_MODEL ?? 'nomic-embed-text',
+        },
+        lmstudio: {
+          endpoint: process.env.LM_STUDIO_ENDPOINT ?? 'http://localhost:1234/v1',
+          embedding_model: process.env.LM_STUDIO_EMBEDDING_MODEL ?? 'text-embedding-nomic-embed-text-v1.5',
+          api_key: process.env.LM_STUDIO_API_KEY || undefined,
+        },
+        openai: {
+          api_key: process.env.OPENAI_API_KEY ? 'env:OPENAI_API_KEY' : '',
+          embedding_model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
+        },
+        openai_codex_oauth: {
+          embedding_model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
+        },
+      },
+    },
   },
   memory_options: {
     auto_confirm: true,
@@ -217,10 +256,11 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     maxMessages: 120,
     compactionThreshold: 0.7,
     memoryFlushThreshold: 0.75,
+    compactionMinMessages: 20,
     rollingCompactionEnabled: true,
     rollingCompactionMessageCount: 20,
     rollingCompactionToolTurns: 5,
-    rollingCompactionSummaryMaxWords: 220,
+    rollingCompactionSummaryMaxWords: 900,
     rollingCompactionModel: '',
     mainChatGoals: {
       enabled: true,

@@ -4,6 +4,8 @@ import { ToolResult } from '../types.js';
 import { log } from '../security/log-scrubber.js';
 import { getActiveAllowedWorkspaces, getActiveWorkspace } from './workspace-context.js';
 import { getProcessSupervisor } from '../gateway/process/supervisor.js';
+import { runTerminal } from '../gateway/terminal-service.js';
+import type { ProcessShell } from '../gateway/process/types.js';
 
 export interface ShellToolArgs {
   command: string;
@@ -13,6 +15,8 @@ export interface ShellToolArgs {
   timeout_ms?: number;
   noOutputTimeoutMs?: number;
   no_output_timeout_ms?: number;
+  shell?: ProcessShell;
+  pty?: boolean;
 }
 
 // ── Path confinement helper ───────────────────────────────────────────────────
@@ -168,13 +172,16 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
   const noOutputTimeoutMs = args.noOutputTimeoutMs ?? args.no_output_timeout_ms;
   const supervisor = getProcessSupervisor();
   try {
-    const run = await supervisor.spawn({
+    const result = await runTerminal({
       command: validation.command,
       cwd: validation.cwd,
       mode: args.background ? 'background' : 'foreground',
+      shell: args.shell || 'auto',
+      pty: args.pty === true,
       timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : 120000,
       noOutputTimeoutMs: noOutputTimeoutMs == null ? undefined : Number(noOutputTimeoutMs),
     });
+    const run = result.run;
     if (args.background) {
       return {
         success: true,
@@ -182,7 +189,7 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
         data: { runId: run.runId, run: run.record },
       };
     }
-    const output = await run.wait();
+    const output = result.exit || await run.wait();
     return {
       success: output.exitCode === 0,
       stdout: output.stdout,

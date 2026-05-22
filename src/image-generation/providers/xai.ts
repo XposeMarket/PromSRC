@@ -1,4 +1,5 @@
 import { getConfig } from '../../config/config.js';
+import { getValidXAIRuntimeCredentials, isXAIConnected } from '../../auth/xai-oauth.js';
 import type {
   ImageGenerationProvider,
   ImageGenerationResolvedRequest,
@@ -59,21 +60,39 @@ function getXAIImageProviderConfig(): Record<string, unknown> {
 function getApiBase(): string {
   const imageProviderCfg = getXAIImageProviderConfig();
   const llmProviderCfg = getXAIProviderConfig();
-  const configured = String(imageProviderCfg.endpoint || llmProviderCfg.endpoint || '').trim();
+  const configured = String(
+    imageProviderCfg.endpoint
+    || llmProviderCfg.endpoint
+    || process.env.PROMETHEUS_XAI_BASE_URL
+    || process.env.XAI_BASE_URL
+    || process.env.HERMES_XAI_BASE_URL
+    || '',
+  ).trim();
   return (configured || DEFAULT_ENDPOINT).replace(/\/+$/, '');
 }
 
-function getGenerationsEndpoint(): string {
-  return `${getApiBase()}/images/generations`;
-}
-
-function getEditsEndpoint(): string {
-  return `${getApiBase()}/images/edits`;
-}
-
-function getApiKey(): string | undefined {
+function getConfiguredAuthMode(): string {
   const providerCfg = getXAIProviderConfig();
+  const explicit = String(providerCfg.auth_mode || '').trim();
+  if (explicit) return explicit;
+  return isXAIConnected(getConfig().getConfigDir()) ? 'oauth' : 'api_key';
+}
+
+async function getBearerToken(): Promise<string | undefined> {
+  const providerCfg = getXAIProviderConfig();
+  if (getConfiguredAuthMode() === 'oauth') {
+    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir());
+    return creds.api_key;
+  }
   return resolveSecretReference(providerCfg.api_key) || process.env.XAI_API_KEY;
+}
+
+async function getRequestRuntime(): Promise<{ bearerToken?: string; baseUrl: string }> {
+  if (getConfiguredAuthMode() === 'oauth') {
+    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir());
+    return { bearerToken: creds.api_key, baseUrl: creds.base_url };
+  }
+  return { bearerToken: await getBearerToken(), baseUrl: getApiBase() };
 }
 
 function resolveDefaultModel(): string {
@@ -95,6 +114,14 @@ function buildImageInput(reference: { imageUrl: string }): { type: 'image_url'; 
   };
 }
 
+function buildGenerationsEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/images/generations`;
+}
+
+function buildEditsEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/images/edits`;
+}
+
 export class XAIImageGenerationProvider implements ImageGenerationProvider {
   readonly id = 'xai';
   readonly displayName = 'xAI Grok Imagine';
@@ -104,7 +131,11 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    return Boolean(getApiKey());
+    try {
+      return Boolean(await getBearerToken());
+    } catch {
+      return false;
+    }
   }
 
   resolveModel(requestedModel?: string): string {
@@ -116,7 +147,8 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
     const model = this.resolveModel(request.model);
     const aspectRatio = XAI_ASPECT_RATIO_BY_PROMETHEUS[request.aspect_ratio] || '16:9';
     const resolution = getResolution();
-    const apiKey = getApiKey();
+    const runtime = await getRequestRuntime().catch(() => ({ bearerToken: undefined, baseUrl: getApiBase() }));
+    const bearerToken = runtime.bearerToken;
     const referenceImages = request.reference_images || [];
 
     if (!prompt) {
@@ -130,13 +162,13 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
       });
     }
 
-    if (!apiKey) {
+    if (!bearerToken) {
       return buildImageGenerationError({
         provider: this.id,
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
-        error: 'XAI_API_KEY is not configured for Grok Imagine image generation.',
+        error: 'xAI credentials are not configured. Add XAI_API_KEY or connect xAI OAuth in Settings -> Models.',
         errorType: 'auth_required',
       });
     }
@@ -169,21 +201,21 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
           body.aspect_ratio = aspectRatio;
         }
 
-        response = await fetch(getEditsEndpoint(), {
+        response = await fetch(buildEditsEndpoint(runtime.baseUrl), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${bearerToken}`,
           },
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(5 * 60 * 1000),
         });
       } else {
-        response = await fetch(getGenerationsEndpoint(), {
+        response = await fetch(buildGenerationsEndpoint(runtime.baseUrl), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${bearerToken}`,
           },
           body: JSON.stringify({
             model,

@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { getActiveMemoryEmbeddingProvider, getMemoryEmbeddingStatus } from '../memory/embeddings/registry';
+import { getActiveMemoryEmbeddingProvider, getAutomaticMemoryEmbeddingProvider, getMemoryEmbeddingStatus } from '../memory/embeddings/registry';
 import { embedMemoryHash } from '../memory/embeddings/hash-provider';
 import { rerankMmr } from '../memory/ranking/mmr';
 import { temporalDecayMultiplier } from '../memory/ranking/temporal-decay';
@@ -482,7 +482,8 @@ function statusPenalty(status: string): number {
 function ftsQuery(query: string): string {
   const qTerms = uniqTop(terms(query), 12);
   if (!qTerms.length) return '';
-  return qTerms.map((term) => `${term.replace(/"/g, '""')}*`).join(' OR ');
+  const escaped = qTerms.map((term) => `${term.replace(/"/g, '""')}*`);
+  return escaped.length <= 5 ? escaped.join(' ') : escaped.join(' OR ');
 }
 
 function safeJson(value: unknown): string {
@@ -787,7 +788,13 @@ function scoreRow(
   embeddingModel?: string,
 ): { score: number; diagnostics: MemorySearchDiagnostics; vector: number[] } {
   const vec = blobToVector(row.embedding);
-  const sem = qEmbedding.length ? Math.max(0, cosine(qEmbedding, vec)) : 0.25;
+  const vectorCompatible = Boolean(
+    qEmbedding.length
+    && vec.length === qEmbedding.length
+    && (!embeddingProvider || !row.provider_id || String(row.provider_id) === embeddingProvider)
+    && (!embeddingModel || !row.model || String(row.model) === embeddingModel),
+  );
+  const sem = vectorCompatible ? Math.max(0, cosine(qEmbedding, vec)) : 0;
   const rc = recency(Number(row.timestamp_ms || 0), now);
   const temporal = temporalDecayMultiplier({
     timestampMs: Number(row.timestamp_ms || 0),
@@ -889,7 +896,20 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
     const mode = String(params.mode || 'quick');
     const limit = Math.max(1, Math.min(50, Number(params.limit || 8)));
     const qTerms = uniqTop(terms(q), 24);
-    const qEmbedding = queryVector?.vector?.length ? queryVector.vector : embedTerms(qTerms);
+    const storedEmbeddingProvider = String(db.prepare("SELECT value FROM memory_index_state WHERE key = 'embedding_provider'").get()?.value || 'hash');
+    const storedEmbeddingModel = String(db.prepare("SELECT value FROM memory_index_state WHERE key = 'embedding_model'").get()?.value || 'prometheus-hash-terms-v1');
+    const canUseRequestedVector = Boolean(
+      queryVector?.vector?.length
+      && queryVector.providerId === storedEmbeddingProvider
+      && queryVector.model === storedEmbeddingModel,
+    );
+    const activeQueryVector: SqliteSearchVector = canUseRequestedVector ? queryVector as SqliteSearchVector : {
+      vector: embedMemoryHash(q),
+      providerId: 'hash',
+      model: 'prometheus-hash-terms-v1',
+      dimensions: EMBEDDING_DIM,
+    };
+    const qEmbedding = activeQueryVector.vector;
     const query = ftsQuery(q);
     const now = Date.now();
     const recencyBias = mode === 'deep' || mode === 'timeline';
@@ -967,8 +987,8 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
           now,
           recencyBias,
           queryRoute,
-          queryVector?.providerId,
-          queryVector?.model,
+          activeQueryVector.providerId,
+          activeQueryVector.model,
         );
         return { entry, score: scored.score, diagnostics: scored.diagnostics, vector: scored.vector };
       })
@@ -1006,8 +1026,6 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
 
     const chunks = Number(db.prepare('SELECT COUNT(*) AS n FROM memory_chunks').get()?.n || 0);
     const indexedAt = String(db.prepare("SELECT value FROM memory_index_state WHERE key = 'indexed_at'").get()?.value || '');
-    const embeddingProvider = queryVector?.providerId || String(db.prepare("SELECT value FROM memory_index_state WHERE key = 'embedding_provider'").get()?.value || 'hash');
-    const embeddingModel = queryVector?.model || String(db.prepare("SELECT value FROM memory_index_state WHERE key = 'embedding_model'").get()?.value || 'prometheus-hash-terms-v1');
     return {
       query: q,
       mode,
@@ -1020,9 +1038,11 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
         indexedAt,
         backend: 'sqlite_fts_vector_hybrid',
         embedding: {
-          provider: embeddingProvider,
-          model: embeddingModel,
-          dimensions: queryVector?.dimensions || undefined,
+          provider: storedEmbeddingProvider,
+          model: storedEmbeddingModel,
+          queryProvider: activeQueryVector.providerId,
+          queryModel: activeQueryVector.model,
+          dimensions: activeQueryVector.dimensions || undefined,
         },
         rerank: mode === 'timeline' || params.rerank === false ? 'disabled' : 'mmr',
       },
@@ -1201,6 +1221,41 @@ export async function backfillSqliteMemoryEmbeddings(workspacePath: string, opti
     return { ok: false, provider: 'unknown', model: '', scanned: 0, updated: 0, skipped: 0, error: String(err?.message || err) };
   } finally {
     try { db.close(); } catch {}
+  }
+}
+
+export async function autoBackfillSqliteMemoryEmbeddings(workspacePath: string, options?: {
+  limit?: number;
+}): Promise<{
+  ok: boolean;
+  provider: string;
+  model: string;
+  dimensions?: number;
+  scanned: number;
+  updated: number;
+  skipped: number;
+  error?: string;
+}> {
+  try {
+    const provider = await getAutomaticMemoryEmbeddingProvider();
+    if (!provider) {
+      return {
+        ok: true,
+        provider: 'hash',
+        model: 'prometheus-hash-terms-v1',
+        scanned: 0,
+        updated: 0,
+        skipped: 0,
+        error: 'No automatic real embedding provider available.',
+      };
+    }
+    return await backfillSqliteMemoryEmbeddings(workspacePath, {
+      provider: provider.id,
+      limit: options?.limit,
+      force: false,
+    });
+  } catch (err: any) {
+    return { ok: false, provider: 'unknown', model: '', scanned: 0, updated: 0, skipped: 0, error: String(err?.message || err) };
   }
 }
 

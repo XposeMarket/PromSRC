@@ -27,7 +27,7 @@ import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/
 import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, replaceHistory, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, replaceHistory, touchSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, type TurnOrigin } from '../session';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -57,11 +57,16 @@ import {
   browserScroll,
   browserClose,
   formatBrowserInteractionContextBlock,
+  browserVisionScreenshot,
+  browserVisionClick,
+  browserVisionType,
+  browserPreviewScreenshot,
   browserGetFocusedItem,
   browserGetPageText,
   getBrowserToolDefinitions,
   getBrowserSessionInfo,
   getBrowserAdvisorPacket,
+  listBrowserSessions,
   type BrowserAdvisorPacket,
   type BrowserObserveMode,
   resolveBrowserObserveMode,
@@ -94,6 +99,8 @@ import {
   desktopDiffScreenshot,
   desktopScreenshotWithHistory,
   desktopGetActiveMonitorIndex,
+  desktopGetMonitors,
+  desktopGetMonitorsSummary,
   getDesktopToolDefinitions,
   getDesktopAdvisorPacket,
 } from '../desktop-tools';
@@ -111,6 +118,15 @@ import {
   setSchedulerRunAgentFn,
 } from '../../scheduler';
 import { TelegramChannel } from '../comms/telegram-channel';
+import { executeWebSearch, executeWebFetch } from '../../tools/web';
+import { executeWriteNote } from '../../tools/write-note';
+import { searchMemoryIndexAsync, readMemoryRecord } from '../memory-index/index';
+import {
+  cancelMainChatTimer,
+  createMainChatTimer,
+  listMainChatTimers,
+  updateMainChatTimer,
+} from '../timers/timer-store';
 // orchestration/multi-agent removed — stubs to prevent reference errors
 const OrchestrationTriggerState: any = class { recordToolResult() {} recordRoundNoProgress() {} shouldTrigger() { return { fire: false, reason: '' }; } markFired() {} };
 const callSecondaryPreflight: any = async () => null;
@@ -125,6 +141,19 @@ const formatPreflightExecutionObjective: any = () => '';
 const formatPreflightHint: any = () => '';
 const formatAdvisoryHint: any = () => '';
 const formatBrowserAdvisorHint: any = () => '';
+
+function buildVisionInjectedPreviewPayload(visionMessage: any): Record<string, any> | undefined {
+  const parts = Array.isArray(visionMessage?.content) ? visionMessage.content : [];
+  const imagePart = parts.find((part: any) => part?.type === 'image_url' || part?.type === 'image');
+  const dataUrl = String(imagePart?.image_url?.url || '').trim();
+  if (dataUrl) {
+    return { dataUrl, mimeType: dataUrl.match(/^data:([^;]+);/i)?.[1] || 'image/png' };
+  }
+  const base64 = String(imagePart?.source?.data || '').trim();
+  if (!base64) return undefined;
+  const mimeType = String(imagePart?.source?.media_type || 'image/png').trim() || 'image/png';
+  return { dataUrl: `data:${mimeType};base64,${base64}`, mimeType };
+}
 
 function formatRecentMessagesForCreativeHandoff(
   history: Array<{ role: string; content: string }>,
@@ -191,13 +220,280 @@ const clampPreemptConfig: any = (x: any) => x;
 const checkOrchestrationEligibility: any = () => false;
 const shouldRunPreflight: any = () => false;
 const secondarySupportsVision: any = () => false;
+
+const mobileChatRequestDedupe = new Map<string, { at: number; streamId: string; message: string }>();
+const MOBILE_CHAT_REQUEST_DEDUPE_TTL_MS = 2 * 60 * 1000;
+
+function normalizeClientRequestId(input: unknown): string {
+  return String(input || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 160);
+}
+
+function pruneMobileChatRequestDedupe(now = Date.now()): void {
+  for (const [key, entry] of mobileChatRequestDedupe.entries()) {
+    if (now - Number(entry?.at || 0) > MOBILE_CHAT_REQUEST_DEDUPE_TTL_MS) {
+      mobileChatRequestDedupe.delete(key);
+    }
+  }
+}
+
+function mobileChatRequestDedupeKey(sessionId: string, clientRequestId: string): string {
+  return `${String(sessionId || 'default')}::${clientRequestId}`;
+}
+
+function normalizeTurnOrigin(input: unknown, sessionId: string, fallback?: Partial<TurnOrigin>): TurnOrigin {
+  const raw = input && typeof input === 'object' ? input as Record<string, any> : {};
+  const sid = String(sessionId || '').trim();
+  const rawChannel = String(raw.channel || fallback?.channel || '').trim().toLowerCase();
+  const inferredChannel =
+    rawChannel === 'cli' ? 'terminal'
+      : rawChannel === 'terminal' || rawChannel === 'telegram' || rawChannel === 'mobile' || rawChannel === 'discord' || rawChannel === 'whatsapp' || rawChannel === 'system' || rawChannel === 'web'
+        ? rawChannel
+        : sid.startsWith('telegram_') ? 'telegram'
+          : sid.startsWith('mobile_') ? 'mobile'
+            : sid.startsWith('cli_') ? 'terminal'
+              : sid.startsWith('discord_') ? 'discord'
+                : sid.startsWith('whatsapp_') ? 'whatsapp'
+                  : sid.startsWith('task_') || sid.startsWith('cron_') || sid.startsWith('brain_') || sid.startsWith('auto_') ? 'system'
+                    : 'web';
+  const channel = inferredChannel as TurnOrigin['channel'];
+  const defaultSurface =
+    channel === 'telegram' || channel === 'discord' || channel === 'whatsapp' ? 'bot'
+      : channel === 'mobile' ? 'mobile_app'
+        : channel === 'terminal' ? 'terminal'
+          : channel === 'system' ? 'automation'
+            : 'desktop_app';
+  const defaultDevice =
+    channel === 'mobile' || channel === 'telegram' || channel === 'whatsapp' ? 'phone'
+      : channel === 'system' ? 'server'
+        : 'computer';
+  const cleanOptional = (value: unknown): string | undefined => {
+    const s = String(value ?? '').trim();
+    return s ? s.slice(0, 240) : undefined;
+  };
+  return {
+    channel,
+    surface: cleanOptional(raw.surface) || fallback?.surface || defaultSurface,
+    device: cleanOptional(raw.device) || fallback?.device || defaultDevice,
+    chatId: cleanOptional(raw.chatId) || fallback?.chatId,
+    userId: cleanOptional(raw.userId) || fallback?.userId,
+    label: cleanOptional(raw.label) || fallback?.label,
+    source: cleanOptional(raw.source) || fallback?.source,
+  };
+}
+
+function persistTurnOriginChannelHint(sessionId: string, origin: TurnOrigin): void {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  if (origin.channel === 'system') return;
+  setSessionChannelHint(sid, {
+    channel: origin.channel as 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp',
+    chatId: Number.isFinite(Number(origin.chatId)) ? Number(origin.chatId) : undefined,
+    userId: Number.isFinite(Number(origin.userId)) ? Number(origin.userId) : undefined,
+    timestamp: Date.now(),
+  });
+}
+
+
+function formatTurnOriginContext(origin: TurnOrigin, sessionId: string): string {
+  const title = origin.label || origin.channel;
+  const lines = [
+    '[TURN ORIGIN]',
+    `User contact channel: ${title}`,
+    `Surface: ${origin.surface || 'unknown'}`,
+    `User device/surface class: ${origin.device || 'unknown'}`,
+    `Session: ${sessionId || 'default'}`,
+    origin.chatId ? `External chat id: ${origin.chatId}` : '',
+    origin.userId ? `External user id: ${origin.userId}` : '',
+    '',
+    '[LOCAL RUNTIME]',
+    'Prometheus is still running on the user\'s local computer, with its normal local workspace, browser, shell, file, and desktop tools available according to the current tool policy.',
+    'The contact channel only describes where the user sent this message from. Do not treat Telegram, mobile, Discord, WhatsApp, or CLI as evidence that desktop/computer tasks are unavailable.',
+    'Use the origin only to adapt reply format and delivery assumptions, such as concise mobile responses or Telegram-friendly attachments.',
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+type MainChatStreamFrame = {
+  seq: number;
+  type: string;
+  at: number;
+  data: Record<string, any>;
+};
+
+type MainChatStreamState = {
+  sessionId: string;
+  streamId: string;
+  startedAt: number;
+  updatedAt: number;
+  active: boolean;
+  nextSeq: number;
+  events: MainChatStreamFrame[];
+  completedAt?: number;
+};
+
+const mainChatStreams = new Map<string, MainChatStreamState>();
+const MAIN_CHAT_STREAM_MAX_EVENTS = 800;
+const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
+
+function getMainChatStream(sessionId: string): MainChatStreamState | null {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  return mainChatStreams.get(sid) || null;
+}
+
+function pruneMainChatStreams(): void {
+  const cutoff = Date.now() - MAIN_CHAT_STREAM_TTL_MS;
+  for (const [sessionId, stream] of mainChatStreams.entries()) {
+    if (!stream.active && Number(stream.completedAt || stream.updatedAt || 0) < cutoff) {
+      mainChatStreams.delete(sessionId);
+    }
+  }
+}
+
+function beginMainChatStream(sessionId: string): MainChatStreamState {
+  pruneMainChatStreams();
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const stream: MainChatStreamState = {
+    sessionId: sid,
+    streamId: crypto.randomUUID(),
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    active: true,
+    nextSeq: 1,
+    events: [],
+  };
+  mainChatStreams.set(sid, stream);
+  return stream;
+}
+
+function finishMainChatStream(sessionId: string, streamId: string): void {
+  const stream = getMainChatStream(sessionId);
+  if (!stream || stream.streamId !== streamId) return;
+  stream.active = false;
+  stream.completedAt = Date.now();
+  stream.updatedAt = stream.completedAt;
+}
+
+function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
+  const stream = getMainChatStream(sessionId);
+  if (!stream || stream.streamId !== streamId) return null;
+  const cleanData = data && typeof data === 'object' ? { ...data } : {};
+  const frame: MainChatStreamFrame = {
+    seq: stream.nextSeq++,
+    type: String(type || 'event'),
+    at: Date.now(),
+    data: cleanData,
+  };
+  stream.events.push(frame);
+  if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
+    stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
+  }
+  stream.updatedAt = frame.at;
+  try {
+    broadcastWS({
+      type: 'main_chat_stream_event',
+      sessionId: stream.sessionId,
+      streamId: stream.streamId,
+      seq: frame.seq,
+      event: frame.type,
+      at: frame.at,
+      data: frame.data,
+    });
+  } catch {}
+  return frame;
+}
+
+function truncateRuntimeProcessText(value: unknown, max = 4000): string {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
+  const eventType = String(type || '').trim();
+  if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta') return null;
+  const ts = new Date().toLocaleTimeString();
+  const action = String(data?.action || data?.name || data?.toolName || '').trim();
+  if (eventType === 'tool_call') {
+    return {
+      ts,
+      type: 'tool',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(action ? `Preparing ${action}` : data?.message || 'Preparing tool'),
+      extra: {
+        source: 'runtime_checkpoint',
+        event: eventType,
+        toolName: action,
+        args: data?.args,
+        stepNum: data?.stepNum,
+      },
+    };
+  }
+  if (eventType === 'tool_result') {
+    return {
+      ts,
+      type: data?.error ? 'error' : 'result',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(data?.result || (action ? `${action} complete` : 'Tool complete')),
+      extra: {
+        source: 'runtime_checkpoint',
+        event: eventType,
+        toolName: action,
+        args: data?.args,
+        error: data?.error === true,
+        stepNum: data?.stepNum,
+      },
+    };
+  }
+  if (eventType === 'thinking' || eventType === 'agent_thought') {
+    return {
+      ts,
+      type: 'think',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(data?.thinking || data?.text || data?.message),
+      extra: { source: 'runtime_checkpoint', event: eventType },
+    };
+  }
+  if (eventType === 'error' || eventType === 'warn') {
+    return {
+      ts,
+      type: eventType === 'warn' ? 'warn' : 'error',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(data?.message || data?.error || data?.result),
+      extra: { source: 'runtime_checkpoint', event: eventType, toolName: action },
+    };
+  }
+  if (eventType === 'progress_state') {
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const active = Number.isFinite(Number(data?.activeIndex)) ? items[Number(data.activeIndex)] : null;
+    const reason = String(data?.reason || '').trim();
+    if (!active?.text && (!reason || /^(?:reset|request_start|none|idle|step[_\s-]*done|step[_\s-]*complete|done)$/i.test(reason))) return null;
+    const content = active?.text
+      ? `Plan: ${active.text}`
+      : reason
+        ? `Plan update: ${reason}`
+        : '';
+    if (!content) return null;
+    return {
+      ts,
+      type: 'step',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(content, 1000),
+      extra: { source: 'runtime_checkpoint', event: eventType, activeIndex: data?.activeIndex, total: data?.total },
+    };
+  }
+  const content = truncateRuntimeProcessText(data?.message || data?.text || data?.result || data?.summary, 2000);
+  if (!content) return null;
+  return {
+    ts,
+    type: eventType === 'ui_preflight' || eventType === 'info' ? 'info' : 'info',
+    actor: 'Prom',
+    content,
+    extra: { source: 'runtime_checkpoint', event: eventType, toolName: action },
+  };
+}
+
 import { resolvePrimaryModelCapabilities, buildVisionImagePart, type ModelCapabilities } from '../vision-chat';
-import {
-  browserVisionScreenshot,
-  browserVisionClick,
-  browserVisionType,
-  browserPreviewScreenshot,
-} from '../browser-tools';
 import {
   createTask,
   loadTask,
@@ -321,6 +617,7 @@ import {
   setTelegramChannelForBroadcaster,
   isModelBusy, setModelBusy,
   getLastMainSessionId, setLastMainSessionId,
+  setSessionChannelHint,
   type TelegramChannelConfig,
   type DiscordChannelConfig,
   type WhatsAppChannelConfig,
@@ -371,15 +668,17 @@ import {
   initTasksRouter,
   makeBroadcastForTask,
 } from './tasks.router';
-import {
-  router as channelsRouter,
-  initChannelsRouter,
-  sanitizeAgentId,
-  normalizeAgentsForSave,
-} from './channels.router';
+import { sanitizeAgentId, normalizeAgentsForSave } from '../agents/agent-normalize';
 import {
   registerLiveRuntime,
   finishLiveRuntime,
+  updateLiveRuntimeCheckpoint,
+  listLiveRuntimes,
+  getLiveRuntime,
+  abortLiveRuntime,
+  addPendingRuntimeSteer,
+  consumePendingRuntimeSteersForSession,
+  type RuntimeSteerEvent,
 } from '../live-runtime-registry';
 import {
   router as teamsRouter,
@@ -440,6 +739,7 @@ import {
   isBrowserToolName,
   isDesktopToolName,
   buildBrowserAck,
+  wrapUntrustedBrowserToolContent,
   buildDesktopAck,
   buildDesktopScreenshotContent,
   buildVisionScreenshotMessage,
@@ -494,7 +794,6 @@ import {
   registerAgentBuilderTools,
   executeAgentBuilderTool,
   AGENT_BUILDER_TOOL_NAMES,
-  getWorkflowContextBlock,
 } from '../agents-runtime/agent-builder-integration';
 
 
@@ -600,9 +899,24 @@ function resolveRollingCompactionPolicy(): RollingCompactionPolicy {
     enabled,
     messageCount: Number.isFinite(messageCountRaw) ? Math.max(10, Math.min(120, Math.floor(messageCountRaw))) : 20,
     toolTurns: Number.isFinite(toolTurnsRaw) ? Math.max(1, Math.min(12, Math.floor(toolTurnsRaw))) : 5,
-    summaryMaxWords: Number.isFinite(summaryMaxWordsRaw) ? Math.max(80, Math.min(500, Math.floor(summaryMaxWordsRaw))) : 220,
+    summaryMaxWords: Number.isFinite(summaryMaxWordsRaw) ? Math.max(80, Math.min(1500, Math.floor(summaryMaxWordsRaw))) : 900,
     model: String(cfg?.rollingCompactionModel || '').trim(),
   };
+}
+
+function resolveCompactionNumCtx(): number {
+  const cfg = (getConfig().getConfig() as any) || {};
+  const candidates = [
+    cfg?.session?.rollingCompactionNumCtx,
+    cfg?.llm?.num_ctx,
+    process.env.LOCALCLAW_SESSION_NUM_CTX,
+    process.env.LOCALCLAW_CHAT_NUM_CTX,
+  ];
+  for (const raw of candidates) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 512) return Math.floor(n);
+  }
+  return 8192;
 }
 
 function isCompactionSummaryMessage(msg: any): boolean {
@@ -631,22 +945,47 @@ function formatCompactionMessages(messages: Array<any>): string {
     const role = msg.role === 'assistant' ? 'assistant' : 'user';
     const ts = Number(msg.timestamp);
     const stamp = Number.isFinite(ts) ? new Date(ts).toISOString() : 'unknown-time';
-    const body = String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 700);
-    return `${idx + 1}. [${role}] (${stamp}) ${body}`;
-  }).join('\n');
+    const body = String(msg.content || '').trim();
+    return [
+      `--- message ${idx + 1} ---`,
+      `role: ${role}`,
+      `timestamp: ${stamp}`,
+      body,
+    ].join('\n');
+  }).join('\n\n');
 }
 
 function formatCompactionToolLogs(messages: Array<any>, toolTurns: number): string {
-  const lines = messages
+  const logs = messages
     .filter((m) => m.role === 'assistant' && m.toolLog)
     .slice(-toolTurns)
     .reverse()
     .map((m, idx) => {
-      const toolLog = String(m.toolLog || '').trim().slice(0, 500);
-      return `${idx + 1}. ${toolLog}`;
+      const ts = Number(m.timestamp);
+      const stamp = Number.isFinite(ts) ? new Date(ts).toISOString() : 'unknown-time';
+      const toolLog = String(m.toolLog || '').trim();
+      return [
+        `--- tool turn ${idx + 1} ---`,
+        `assistant_timestamp: ${stamp}`,
+        toolLog,
+      ].join('\n');
     })
     .filter(Boolean);
-  return lines.join('\n');
+  return logs.join('\n\n');
+}
+
+function formatCompactionArtifactPaths(sessionId: string): string {
+  const cfg = getConfig();
+  const workspacePath = cfg.getWorkspacePath();
+  const configDir = cfg.getConfigDir();
+  const paths = [
+    ['Session JSON', path.join(configDir, 'sessions', `${sessionId}.json`)],
+    ['Transcript Markdown', path.join(workspacePath, 'audit', 'chats', 'transcripts', `${sessionId}.md`)],
+    ['Transcript JSONL', path.join(workspacePath, 'audit', 'chats', 'transcripts', `${sessionId}.jsonl`)],
+    ['Compaction Markdown', path.join(workspacePath, 'audit', 'chats', 'compactions', `${sessionId}.md`)],
+    ['Compaction JSONL', path.join(workspacePath, 'audit', 'chats', 'compactions', `${sessionId}.jsonl`)],
+  ];
+  return paths.map(([label, filePath]) => `${label}: ${filePath}`).join('\n');
 }
 
 function getRollingCompactionProgress(
@@ -670,15 +1009,18 @@ function getRollingCompactionProgress(
 function buildFallbackCompactionSummary(previousSummary: string, recentWindow: Array<any>, maxWords: number): string {
   const lines: string[] = [];
   if (previousSummary) {
-    lines.push(`Previous summary: ${previousSummary.replace(/\s+/g, ' ').trim().slice(0, 900)}`);
+    lines.push('1. Primary Request and Intent:');
+    lines.push(previousSummary.replace(/\s+/g, ' ').trim().slice(0, 2400));
   }
   const newestFirst = [...recentWindow].reverse().slice(0, 10);
-  if (newestFirst.length > 0) lines.push('Latest updates (newest first):');
+  if (newestFirst.length > 0) lines.push('2. Recent Conversation Updates (newest first):');
   for (const msg of newestFirst) {
     const role = msg.role === 'assistant' ? 'Assistant' : 'User';
     const body = String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 240);
     if (body) lines.push(`- ${role}: ${body}`);
   }
+  lines.push('3. Continue From Here:');
+  lines.push('Resume directly from the latest user request. Do not recap this summary to the user unless they ask.');
   const words = lines.join('\n').split(/\s+/).filter(Boolean);
   return words.slice(0, Math.max(80, maxWords)).join(' ').trim();
 }
@@ -699,22 +1041,40 @@ async function maybeRunRollingCompaction(
     || extractLastCompactionSummary(session.history || []);
   const recentMessagesBlock = formatCompactionMessages(recentWindow);
   const recentToolLogsBlock = formatCompactionToolLogs(recentWindow, policy.toolTurns);
+  const artifactPathsBlock = formatCompactionArtifactPaths(sessionId);
 
   const promptLines: string[] = [
-    'Create a single rolling thread summary for context compaction.',
+    'Create a structured rolling resume packet for context compaction.',
     `Target length: <= ${policy.summaryMaxWords} words.`,
-    'Prioritize the most recent events first, but keep critical older context.',
-    'Include: current goal, key constraints/preferences, decisions made, files/tools touched, and unresolved items.',
-    'Do not invent details. If uncertain, say unclear.',
-    'Output plain text only.',
+    'This summary will be injected into a future model context so it can continue the same work after older messages are dropped.',
+    'Write it like a handoff/resume note, not like a user-facing recap.',
+    'Preserve concrete implementation state, decisions, file paths, function/class names, command/test results, blockers, user preferences, and the newest user request.',
+    'Keep the order below and include every section. Use concise bullets under each section. If a section has no known details, write "Unknown" or "None yet."',
+    'Do not invent details. Do not include generic advice. Output plain text only.',
+    '',
+    'Required format:',
+    '1. Primary Request and Intent:',
+    '2. Key Technical Concepts:',
+    '3. Files and Code Sections:',
+    '4. Errors, Fixes, and Test Results:',
+    '5. Problem Solving and Decisions:',
+    '6. Recent User Messages:',
+    '7. Pending Tasks:',
+    '8. Current Work:',
+    '9. Recovery Artifacts:',
+    '10. Continue From Here:',
+    'In "Continue From Here", explicitly instruct the next assistant to resume directly, avoid recapping the summary to the user, prioritize the latest task, protect user-owned changes, and continue naturally as if no compaction happened.',
     '',
     '[PREVIOUS_SUMMARY]',
     previousSummary || '(none)',
     '',
+    '[RECOVERY_ARTIFACT_PATHS]',
+    artifactPathsBlock,
+    '',
     `[RECENT_MESSAGES newest->oldest, window=${policy.messageCount}]`,
     recentMessagesBlock || '(none)',
     '',
-    `[RECENT_TOOL_LOGS newest->oldest, window=${policy.toolTurns}]`,
+    `[RECENT_TOOL_LOGS newest->oldest, assistant_turns=${policy.toolTurns}]`,
     recentToolLogsBlock || '(none)',
   ];
 
@@ -734,8 +1094,8 @@ async function maybeRunRollingCompaction(
       'manager',
       {
         temperature: 0.1,
-        num_ctx: 4096,
-        num_predict: 520,
+        num_ctx: resolveCompactionNumCtx(),
+        num_predict: Math.max(900, Math.min(2600, Math.ceil(policy.summaryMaxWords * 1.8))),
         ...(policy.model ? { model: policy.model } : {}),
         usageContext: { sessionId, agentId: 'context_compactor' },
       },
@@ -745,7 +1105,7 @@ async function maybeRunRollingCompaction(
 
     const rawSummary = String(compactResult?.message?.content || '');
     const summary = String(stripExplicitThinkTags(rawSummary)?.cleaned || '').trim() || previousSummary;
-    const boundedSummary = summary.slice(0, 5000).trim();
+    const boundedSummary = summary.slice(0, 12000).trim();
     if (!boundedSummary) return { compacted: false };
 
     recordSessionCompaction(
@@ -801,6 +1161,13 @@ async function handleChat(
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
   reasoningOptions?: ReasoningOptions,
   providerOverride?: string,
+  /**
+   * Optional secondary token-stream sink. Receives every visible-text token
+   * delta in addition to the standard sendSSE('token') broadcast. Used by
+   * channel adapters (Telegram, etc.) to feed the BlockChunker for paragraph-
+   * sized bubble splitting. Errors thrown by this callback are swallowed.
+   */
+  callerOnToken?: (token: string) => void,
 ): Promise<HandleChatResult> {
   try {
   const ollama = getOllamaClient();
@@ -820,10 +1187,22 @@ async function handleChat(
     setWorkspace(sessionId, workspacePath);
   }
   const rawSendSSE = sendSSE;
+  const callerContextText = String(callerContext || '');
+  const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
+  const voiceNarrator = createVoiceNarrator(sessionId, message, (data) => {
+    rawSendSSE('voice_milestone', data);
+    mirrorSessionChatEvent(sessionId, 'voice_milestone', data, broadcastWS);
+  }, abortSignal?.signal, {
+    suppressTaskStartFallback: voiceAgentHandoffActive,
+  });
   sendSSE = (event: string, data: any) => {
     rawSendSSE(event, data);
     mirrorSessionChatEvent(sessionId, event, data, broadcastWS);
+    try { voiceNarrator.observe(event, data); } catch (err: any) {
+      console.warn('[voice narrator] failed:', err?.message || err);
+    }
   };
+  sendSSE('ui_preflight', { message: 'Preparing Prometheus runtime...' });
   const isHandleChatGoalContinuation = isMainChatGoalContinuation(message);
   const handleChatGoalPolicy = isHandleChatGoalContinuation ? resolveMainChatGoalPolicy() : null;
   const handleChatGoalExecutionPolicy = isHandleChatGoalContinuation ? {
@@ -882,15 +1261,24 @@ async function handleChat(
     executionMode,
     message,
   });
-  const history = executionMode === 'cron'
+  const activeHistoryMessageCount = resolveRollingCompactionPolicy().messageCount;
+  const rawHistory = executionMode === 'cron'
     ? []
-    : getHistoryForApiCall(sessionId, 10);
+    : getHistoryForApiCall(sessionId, Math.ceil(activeHistoryMessageCount / 2), { maxMessages: activeHistoryMessageCount });
+  const normalizedIncomingMessage = String(message || '').replace(/\s+/g, ' ').trim();
+  // runInteractiveTurn persists the incoming user turn before calling handleChat.
+  // Keep persisted storage unchanged, but avoid sending that same turn twice to the model.
+  const history = rawHistory.length > 0
+    && rawHistory[rawHistory.length - 1]?.role === 'user'
+    && String(rawHistory[rawHistory.length - 1]?.content || '').replace(/\s+/g, ' ').trim() === normalizedIncomingMessage
+      ? rawHistory.slice(0, -1)
+      : rawHistory;
   if (executionMode !== 'cron') {
     autoActivateToolCategories(sessionId, message, history.length);
   }
   // Build compact tool log from last 3 assistant turns — injected into system prompt
   // so the model always knows what it recently did even across the short history window.
-  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolLog(sessionId, 3, 1500);
+  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolLog(sessionId, 5);
   const inferReferenceImageMimeType = (filePath: string): string => {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
@@ -961,6 +1349,9 @@ async function handleChat(
   const isProposalExecutionMode = executionMode === 'proposal_execution';
   // Tools always stripped from background/subagent runs.
   const alwaysStrip = new Set(isBackgroundOrSubagentMode ? ['start_task'] : []);
+  const guaranteedAutonomousCoreTools = new Set<string>([
+    ...(isBackgroundOrSubagentMode ? ['write_note'] : []),
+  ]);
   // write_note is a core runtime tool and must stay available in interactive chat.
   // Prompt context and tool docs already instruct the model when to skip it.
   const interactiveStrip = new Set<string>();
@@ -983,8 +1374,10 @@ async function handleChat(
     if (currentModelCapabilities.hasVision) return toolDefs;
     return toolDefs.filter((t: any) => !isVisionToolName(String(t?.function?.name || '')));
   };
-  const buildCurrentTurnBaseTools = (): any[] => {
-	    const allBuiltTools = buildTools(sessionId);
+  const buildCurrentTurnBaseTools = (categoryOverride?: Set<string>): any[] => {
+	    const allBuiltTools = categoryOverride
+        ? _buildTools({ getMCPManager }, categoryOverride)
+        : buildTools(sessionId);
 	    return isBootStartupTurn
 	      ? allBuiltTools.filter((t: any) => bootAllowedTools.has(String(t?.function?.name || '')))
 	      : isHotRestartTurn
@@ -994,6 +1387,7 @@ async function handleChat(
 	            const tName = String(t?.function?.name || '');
 	            if (alwaysStrip.has(tName)) return false;
 	            if (interactiveStrip.has(tName)) return false;
+	            if (guaranteedAutonomousCoreTools.has(tName)) return true;
 	            return effectiveToolFilter.some(pattern => {
 	              if (pattern.endsWith('*')) return tName.startsWith(pattern.slice(0, -1));
 	              return tName === pattern;
@@ -1015,14 +1409,15 @@ async function handleChat(
     'business_context_mode',
     'connector_list',
     'switch_model',
+    'set_current_model',
     ...(!isPublicDistributionBuild() ? [
       'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
       'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
       'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',
     ] : []),
   ]);
-  const buildCurrentTurnTools = (): any[] => {
-    const baseTools = buildCurrentTurnBaseTools();
+  const buildCurrentTurnTools = (categoryOverride?: Set<string>): any[] => {
+    const baseTools = buildCurrentTurnBaseTools(categoryOverride);
     let currentTools = isProposalExecutionMode
       ? baseTools.filter((t: any) => {
         const tName = String(t?.function?.name || '');
@@ -1034,10 +1429,125 @@ async function handleChat(
       : baseTools;
     return filterToolsForModelCapabilities(currentTools);
   };
+  const buildSwitchModelToolCategories = (): Set<string> => {
+    const switchCategories = new Set<string>();
+    if (browserVisionModeActive) {
+      switchCategories.add('browser_automation');
+      switchCategories.add('browser');
+    }
+    return switchCategories;
+  };
+  const buildToolsForGeneration = (generationOverride: any): any[] => {
+    const categoryOverride = generationOverride.source === 'turn_override'
+      ? buildSwitchModelToolCategories()
+      : undefined;
+    return buildCurrentTurnTools(categoryOverride);
+  };
+  const summarizeToolSurface = (toolDefs: any[]) => {
+    const byCategory: Record<string, number> = {};
+    for (const tool of toolDefs) {
+      const name = String(tool?.function?.name || '');
+      const category = getToolCategory(name) || 'core';
+      byCategory[category] = (byCategory[category] || 0) + 1;
+    }
+    return {
+      total: toolDefs.length,
+      activeCategories: Array.from(getActivatedToolCategories(sessionId)).sort(),
+      byCategory: Object.fromEntries(Object.entries(byCategory).sort(([a], [b]) => a.localeCompare(b))),
+    };
+  };
+  const toolNameOf = (tool: any): string => String(tool?.function?.name || '').trim();
+  const PRIORITY_TOOL_NAMES = new Set([
+    'write_note',
+    'request_tool_category',
+    'switch_model',
+    'set_current_model',
+    'get_agent_models',
+    'task_control',
+    'declare_plan',
+    'complete_plan_step',
+    'step_complete',
+    'delivery_send',
+    'delivery_send_screenshot',
+    'connector_list',
+    'business_context_mode',
+    'memory_search',
+    'memory_read_record',
+    'time_now',
+  ]);
+  const LEAN_WRITE_NOTE_SWITCH_TOOLS = new Set([
+    ...Array.from(PRIORITY_TOOL_NAMES),
+    'send_telegram',
+  ]);
+  const shouldUseLeanWriteNoteSwitchTools = (generationOverride: any): boolean => {
+    if (generationOverride?.source !== 'turn_override') return false;
+    if (String(generationOverride?.tier || '').trim().toLowerCase() !== 'low') return false;
+    const reason = String(generationOverride?.reason || '').trim().toLowerCase();
+    if (!/(^|[^a-z])write[_\s-]?note([^a-z]|$)|(^|[^a-z])note([^a-z]|$)|remember|memory/.test(reason)) return false;
+    if (/(command|shell|terminal|browser|desktop|file|search|lookup|read|analy[sz]e|creative|video|export|deliver)/.test(reason)) return false;
+    return true;
+  };
+  const maybeLeanToolsForSwitchModel = (toolDefs: any[], generationOverride: any): any[] => {
+    if (!shouldUseLeanWriteNoteSwitchTools(generationOverride)) return toolDefs;
+    const leanTools = toolDefs.filter((tool: any) => LEAN_WRITE_NOTE_SWITCH_TOOLS.has(toolNameOf(tool)));
+    if (!leanTools.some((tool: any) => toolNameOf(tool) === 'write_note')) return toolDefs;
+    console.warn('[tools] Lean switch_model write_note surface applied:', {
+      providerId: generationOverride.providerId,
+      model: generationOverride.model,
+      reason: generationOverride.reason,
+      before: summarizeToolSurface(toolDefs),
+      after: summarizeToolSurface(leanTools),
+    });
+    return leanTools;
+  };
+  const providerToolLimit = (providerId: string): number | null => {
+    const provider = String(providerId || '').trim().toLowerCase();
+    if (provider === 'xai') return 200;
+    return null;
+  };
+  const capToolsForProvider = (toolDefs: any[], generationOverride: any): any[] => {
+    const cfg = getConfig().getConfig() as any;
+    const activeProvider = String(cfg?.llm?.provider || '').trim();
+    const providerId = String(generationOverride.providerId || providerOverride || activeProvider || '').trim().toLowerCase();
+    const limit = providerToolLimit(providerId);
+    toolDefs = maybeLeanToolsForSwitchModel(toolDefs, generationOverride);
+    if (!limit || toolDefs.length <= limit) return toolDefs;
+
+    const selected: any[] = [];
+    const seen = new Set<string>();
+    const add = (tool: any): void => {
+      const name = toolNameOf(tool);
+      if (!name || seen.has(name) || selected.length >= limit) return;
+      selected.push(tool);
+      seen.add(name);
+    };
+
+    for (const tool of toolDefs) {
+      const name = toolNameOf(tool);
+      if (PRIORITY_TOOL_NAMES.has(name)) add(tool);
+    }
+    for (const tool of toolDefs) add(tool);
+
+    const dropped = toolDefs.length - selected.length;
+    const droppedTools = toolDefs
+      .map(toolNameOf)
+      .filter((name) => name && !seen.has(name));
+    console.warn(`[tools] Capped ${providerId} tool payload from ${toolDefs.length} to ${selected.length}; dropped ${dropped} tools to respect provider limit ${limit}.`, {
+      before: summarizeToolSurface(toolDefs),
+      after: summarizeToolSurface(selected),
+      droppedTools: droppedTools.slice(0, 80),
+      droppedToolCount: droppedTools.length,
+    });
+    sendSSE('info', {
+      message: `Tool surface capped for ${providerId}: ${toolDefs.length} -> ${selected.length} to fit provider limits.`,
+    });
+    return selected;
+  };
   let tools = buildCurrentTurnTools();
   const allToolResults: ToolResult[] = [];
+  const turnCanvasFiles = new Set<string>();
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
-    const result = recordSkillGardenerTurn({
+    recordSkillGardenerTurn({
       workspacePath,
       sessionId,
       executionMode,
@@ -1045,9 +1555,7 @@ async function handleChat(
       finalResponse,
       toolResults: allToolResults,
     });
-    const offer = String(result.offerText || '').trim();
-    if (!offer || String(finalResponse || '').includes(offer)) return finalResponse;
-    return `${String(finalResponse || '').trim()}\n\n${offer}`;
+    return finalResponse;
   };
   let allThinking = '';
   let preflightRoute: 'primary_direct' | 'primary_with_plan' | 'secondary_chat' | 'background_task' | null = null;
@@ -1093,7 +1601,9 @@ async function handleChat(
     model?: string;
     provider?: any;
     providerId?: string;
-    source: 'turn_override' | 'provider_override' | 'model_override' | 'config_default' | 'default';
+    source: 'turn_override' | 'provider_override' | 'model_override' | 'current_primary' | 'config_default' | 'default';
+    reason?: string;
+    tier?: 'low' | 'medium';
   } => {
     // Highest priority: turn-scoped override set by switch_model tool.
     const turnOverride = getTurnModelOverride(sessionId);
@@ -1104,6 +1614,8 @@ async function handleChat(
           provider: buildProviderById(String(turnOverride.providerId).trim()),
           providerId: String(turnOverride.providerId).trim(),
           source: 'turn_override',
+          reason: turnOverride.reason,
+          tier: turnOverride.tier,
         };
       } catch (err: any) {
         console.warn(`[v2] Failed to apply turn model override provider "${turnOverride.providerId}": ${err.message}`);
@@ -1144,9 +1656,30 @@ async function handleChat(
       }
     }
 
+    // Interactive chat's current model is the active primary provider/model.
+    // agent_model_defaults.main_chat is a route default, not the live model state.
+    const cfg = getConfig().getConfig() as any;
+    if ((executionMode || 'interactive') === 'interactive') {
+      const activeProvider = String(cfg?.llm?.provider || '').trim();
+      const activeModel = activeProvider
+        ? String(cfg?.llm?.providers?.[activeProvider]?.model || '').trim()
+        : '';
+      if (activeProvider && activeModel) {
+        try {
+          return {
+            model: activeModel,
+            provider: buildProviderById(activeProvider),
+            providerId: activeProvider,
+            source: 'current_primary',
+          };
+        } catch (err: any) {
+          console.warn(`[v2] Failed to build current primary provider "${activeProvider}": ${err.message}`);
+        }
+      }
+    }
+
     // Config defaults by execution mode (when no explicit/turn override is active).
     // This keeps per-mode model routing autonomous and stateless for each API call.
-    const cfg = getConfig().getConfig() as any;
     const defaults = cfg?.agent_model_defaults || {};
     const modeKeys = executionMode === 'interactive'
       ? ['main_chat']
@@ -1198,6 +1731,7 @@ async function handleChat(
     const model = String(generationOverride.model || modelOverride || providerCfgModel || getPrimaryModel() || '').trim() || 'configured primary model';
     return [
       '[CURRENT_MODEL]',
+      'This block describes the exact provider/model currently running this AI generation.',
       `provider=${providerId}`,
       `model=${model}`,
       `source=${generationOverride.source}`,
@@ -1214,8 +1748,9 @@ async function handleChat(
     const model = String(generationOverride.model || modelOverride || providerCfgModel || getPrimaryModel() || '').trim();
     return resolvePrimaryModelCapabilities({ providerId, model });
   };
-  currentModelCapabilities = resolveCapabilitiesForGenerationOverride(resolveProviderModelOverride());
-  tools = buildCurrentTurnTools();
+  const initialGenerationOverride = resolveProviderModelOverride();
+  currentModelCapabilities = resolveCapabilitiesForGenerationOverride(initialGenerationOverride);
+  tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
   const buildModelCapabilitySystemBlock = (): string => {
     const provider = currentModelCapabilities.provider || 'unknown';
     const model = currentModelCapabilities.model || 'unknown';
@@ -1245,6 +1780,41 @@ async function handleChat(
     progressState.manualStepAdvance = opts?.manualStepAdvance === true;
     emitProgressState('plan_created');
     return true;
+  };
+
+  const isReadOnlyDevPlanStep = (step: string): boolean => {
+    const text = String(step || '').toLowerCase();
+    return /\b(read|inspect|grep|search|list|locate|review|understand|check|confirm|compare|audit)\b/.test(text)
+      && !/\b(edit|patch|replace|write|insert|delete|update|fix|apply|sync|build|verify|test|restart|reload)\b/.test(text);
+  };
+
+  const seedDevSourceEditProgressPlan = (toolResult: ToolResult): void => {
+    const devPlan = (toolResult as any).extra?.devSourceEdit?.plan || (toolResult as any).data?.devSourceEdit?.plan;
+    const completionTag = String(
+      (toolResult as any).extra?.devSourceEdit?.completionNoteTag
+      || (toolResult as any).data?.devSourceEdit?.completionNoteTag
+      || devPlan?.completionNoteTag
+      || 'dev_edit_complete',
+    ).trim().replace(/\s+/g, '_').toLowerCase();
+    const approvedSteps = Array.isArray(devPlan?.steps)
+      ? devPlan.steps.map((step: any) => String(step || '').trim()).filter(Boolean)
+      : [];
+    const executionSteps = approvedSteps.filter((step: string) => !isReadOnlyDevPlanStep(step));
+    const devPlanSteps = [
+      ...(executionSteps.length ? executionSteps : ['Apply the approved scoped source patch.']),
+      'Run the approved verification checks, using prom_apply_dev_changes mode:"verify_only" for Prometheus build/sync checks.',
+      'Apply live dev changes with prom_apply_dev_changes mode:"apply_live".',
+      `Write completion note with tag "${completionTag}".`,
+    ].filter(Boolean).slice(0, 8);
+    if (devPlanSteps.length >= 2) {
+      seedProgressFromLines(devPlanSteps, 'declared', { manualStepAdvance: true });
+      stepCursor = 0;
+      manualPlanSkillScoutRequired = false;
+      manualPlanSkillScoutCompleted = true;
+      manualPlanSkillListDone = false;
+      manualPlanSkillReadCount = 0;
+      consecutiveStepFailures = 0;
+    }
   };
 
   // ── Progress step cursor ───────────────────────────────────────────────────────────
@@ -1527,6 +2097,7 @@ async function handleChat(
     : { type: 'CHAT' as FileOpType, reason: 'file-op v2 disabled' };
   let fileOpClassification = localFileOpClassification;
   if (fileOpRouterEnabled) {
+    sendSSE('ui_preflight', { message: 'Classifying the request...' });
     const secondaryClass = await callSecondaryFileOpClassifier({
       userMessage: message,
       recentHistory: history.slice(-4).map(h => ({ role: h.role, content: h.content })),
@@ -1757,6 +2328,21 @@ async function handleChat(
       trackFileOpMutation(toolName, toolArgs, toolResult, 'secondary');
       if (toolResult.error) fileOpHadToolFailure = true;
       markProgressStepResult(!toolResult.error, toolName);
+
+      if (toolName === 'request_dev_source_edit' && !toolResult.error) {
+        seedDevSourceEditProgressPlan(toolResult);
+      }
+
+      if (toolName === 'write_note' && !toolResult.error) {
+        const tag = String(toolArgs?.tag || toolArgs?.step || '').trim().replace(/\s+/g, '_').toLowerCase();
+        const completedDevEdit = toolResult.extra?.dev_edit_complete === true || toolResult.data?.dev_edit_complete === true || tag === 'dev_edit_complete';
+        if (completedDevEdit && progressState.manualStepAdvance && progressState.items.length >= 2) {
+          let guard = progressState.items.length + 1;
+          while (guard-- > 0 && progressState.items.some((item) => item.status === 'pending' || item.status === 'in_progress')) {
+            advanceProgressStep('dev_edit_complete');
+          }
+        }
+      }
       sendSSE('tool_result', { action: toolName, result: toolResult.result.slice(0, 500), error: toolResult.error, stepNum: allToolResults.length, synthetic: true, actor: 'secondary' });
       const goalReminder = `\n\n[GOAL REMINDER: Your task is still: "${message.slice(0, 120)}". Stay focused on this goal only.]`;
       const isBrowserTool = isBrowserToolName(toolName);
@@ -1764,13 +2350,14 @@ async function handleChat(
       // Visual screenshot tools deliver a post-action screenshot via the advisor packet.
       // Route through buildDesktopScreenshotContent so vision primaries get the PNG image.
       const isDesktopVisualTool1 = toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
-      const toolMessageContent = (isBrowserTool && multiAgentActive)
+      let toolMessageContent = (isBrowserTool && multiAgentActive)
         ? buildBrowserAck(toolName, toolResult) + goalReminder
         : (isDesktopTool && isDesktopVisualTool1)
           ? buildDesktopScreenshotContent(toolResult, sessionId, goalReminder)
           : (isDesktopTool)
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
+      if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
       messages.push({ role: 'tool', tool_name: toolName, content: toolMessageContent });
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       orchestrationLog.push(
@@ -1808,6 +2395,7 @@ async function handleChat(
   }
 
   const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
+  sendSSE('ui_preflight', { message: 'Building model context...' });
   const personalityCtx = await buildPersonalityContext(
     sessionId,
     workspacePath,
@@ -1832,7 +2420,9 @@ async function handleChat(
         browserInfo.title ? ` Current page: "${browserInfo.title}"` : ''
       }${
         browserInfo.url ? ` at ${browserInfo.url}` : ''
-      }. Use browser_snapshot to see current elements, or browser_click to navigate. Do NOT call browser_open unless you need to go to a completely different site.${
+      }. Browser profile: ${browserInfo.profileLabel || (browserInfo.profileKind === 'user' ? 'user Chrome profile' : 'Prometheus browser profile')}.${
+        browserInfo.debugPort ? ` CDP port: ${browserInfo.debugPort}.` : ''
+      } Use browser_snapshot to see current elements, or browser_click to navigate. Do NOT call browser_open unless you need to go to a completely different site.${
         browserInfo.mode ? ` Current browser control mode: ${browserInfo.mode}.` : ''
       }]${browserControlCtx ? `\n${browserControlCtx}` : ''}`
     : '';
@@ -1904,7 +2494,7 @@ async function handleChat(
       ? 'Proposal execution already has a fixed task plan. Do NOT call declare_plan. Execute steps in order, use tools directly, and call step_complete(note) after each completed step.'
       : 'Unless explicitly told otherwise by the user, do NOT call declare_plan. Default to direct execution. Call declare_plan only when the user explicitly asks for a plan/checklist/step-by-step approach or asks you to outline steps before acting. Do NOT call declare_plan for browser_* or desktop_* actions by default, and do NOT call it for single-phase work, read-only lookups, exploratory tasks, conversational replies, explanations, code generation, or skill-read-then-respond. When a plan is active, declare once, do not re-declare mid-turn, keep each step in_progress until truly complete, then complete_plan_step with concrete evidence, and finish only after all plan steps are complete.';
 const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-chat tool category and editor surface, not a separate assistant runtime. Use generate_image for one-shot raster image generation and generate_video for one-shot MP4 generation. Use creative_* and hyperframes_* tools directly for editable canvas, image, video, timeline, animation, HTML Motion, HyperFrames, Remotion, captioned clip, promo video, motion export, or multi-clip workspace work. switch_creative_mode only selects or clears editor workspace state; it must not change the assistant persona, prompt contract, history, or non-creative tool availability. Normal tools such as desktop_*, browser_*, run_command, scheduling, proposals, memory, connectors, and Codex/source tools remain valid while a Creative workspace is open. Creative work must be visual-first: after meaningful edits, call creative_get_state or creative_render_snapshot before deciding the next edit. These tools render actual canvas screenshots/frames and inject them into vision context like browser/desktop screenshots. For video workspace work, prefer HTML Motion / HyperFrames / Remotion / Pretext sources and use creative_list_html_motion_templates, creative_apply_html_motion_template, creative_create_html_motion_clip, creative_read_html_motion_clip, creative_patch_html_motion_clip, creative_list_html_motion_blocks, creative_apply_hyperframes_component, and Pretext text-fit tools when they fit. Before presenting or exporting creative work, run direct visual self-review with creative_render_snapshot; for video, use sampleTimesMs or frame batches when playback inspection matters.';
-  const hyperframesAgentRoutingInstruction = 'HyperFrames agent policy: when the user asks to create, compose, import, edit, lint, QA, materialize, or export HyperFrames video, prefer real HyperFrames sources over recreated lookalikes. Prefer first-class hyperframes_* tools when they can create source-backed catalog clips correctly. If a first-class HyperFrames tool fails, lacks catalog access, or cannot prove source-backed output, use run_command with the real local CLI (`npx hyperframes init`, `npx hyperframes add`, `npx hyperframes lint`, `npx hyperframes inspect`, `npx hyperframes render`) from an appropriate workspace directory and report exact CLI errors. Do not substitute hand-authored catalog labels, CSS mockups, or recreated components after the user asked for HyperFrames catalog/registry output. Start with hyperframes_browse_catalog or `npx hyperframes add` discovery, customize with HyperFrames/source-backed edits, then run lint/inspect/QA/export only after visual review. Use creative_list_hyperframes_components, creative_sync_hyperframes_catalog, and creative_apply_hyperframes_component only for low-level compatibility or migration work.';
+  const hyperframesAgentRoutingInstruction = 'HyperFrames agent policy: when the user asks to create, compose, import, edit, lint, QA, materialize, or export HyperFrames video, prefer real HyperFrames sources over recreated lookalikes. Prefer first-class hyperframes_* and creative_* tools when they can create source-backed catalog clips correctly; public desktop builds bundle the HyperFrames packages but do not rely on a user-installed global Node/npm/npx. If first-class tools fail or lack catalog access, use the packaged Prometheus runtime path surfaced by tool output or settings/runtime diagnostics before falling back to ambient commands, and report exact CLI/runtime errors. Do not substitute hand-authored catalog labels, CSS mockups, or recreated components after the user asked for HyperFrames catalog/registry output. Start with hyperframes_browse_catalog or bundled catalog discovery, customize with HyperFrames/source-backed edits, then run lint/inspect/QA/export only after visual review. Use creative_list_hyperframes_components, creative_sync_hyperframes_catalog, and creative_apply_hyperframes_component only for low-level compatibility or migration work.';
   const creativeDebuggingInstruction = 'Creative debugging tools: when working in video mode, use video_render_frame, video_render_contact_sheet, video_analyze_frame, video_analyze_timeline, video_check_keyframes, video_check_caption_timing, video_check_audio_sync, video_extract_clip_frames, and video_analyze_imported_video when those names fit the job. Use creative_element_inventory for a complete layer/timeline inventory with text, timing, animation, visibility, provenance, and validation details. Use creative_frame_trace to see which elements are actually active at exact timestamps, with resolved opacity/transform/z-order/source information. Use creative_frame_diff to compare two timestamps and detect what changed, appeared, disappeared, or stayed static. Use creative_history_status, creative_undo, and creative_redo to recover from destructive resets, bad template applications, failed batch edits, or visual regressions; after undo/redo, render or inspect the scene before continuing. For image mode, use image_get_element_at_point, image_get_overlaps, image_get_bounds_summary, image_check_text_overflow, image_check_contrast, and image_detect_empty_regions when diagnosing composition/layout issues. Use creative_export_trace before or after export when you need certainty about the scene hash, render/export job, saved scene, active export, or whether stale/cached output was used. Before risky rebuilds or large experiments, call creative_checkpoint with action "save"; restore a checkpoint if the design gets worse. If a scene is contaminated by duplicated ids, offscreen debris, stale template residue, editor artifacts, hidden layers, or ghost content, call creative_purge_scene first. Only call creative_reset_scene with force=true after a checkpoint/export or when the user explicitly asked for a fresh blank scene. Do not keep patching a corrupted video timeline when purge plus inventory/trace gives a cleaner path.';
   const teachModeSystemBlock = teachModeActive
       ? [
@@ -1944,10 +2534,10 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     if (executionMode === 'team_subagent') {
       // Team subagents inherit the broader Prometheus identity/memory first, then
       // receive their team-local role and task context as the most specific guidance.
-      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${(getConfig().getConfig() as any)?.agent_builder?.enabled === true ? '\n\n' + getWorkflowContextBlock() : ''}`;
+      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
     }
     const onboardingBlock = isOnboardingSession(sessionId) ? '\n\n' + getMeetAndGreetSystemPrompt() : '';
-    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${(getConfig().getConfig() as any)?.agent_builder?.enabled === true ? '\n\n' + getWorkflowContextBlock() : ''}${onboardingBlock}`;
+    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${onboardingBlock}`;
   };
   const messages: any[] = [
     {
@@ -2019,16 +2609,6 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     'browser_send_to_telegram',
     'browser_run_js',
   ]);
-  const BROWSER_FORCE_SCREENSHOT_AFTER_TOOLS = new Set([
-    'browser_click',
-    'browser_fill',
-    'browser_upload_file',
-    'browser_press_key',
-    'browser_drag',
-    'browser_scroll',
-    'browser_scroll_collect',
-  ]);
-
   const maybeAppendVisionScreenshotForTool = async (
     toolName: string,
     toolResult?: { error?: boolean; data?: any },
@@ -2081,7 +2661,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       const visionMessage = buildVisionScreenshotMessage(sessionId, 'desktop');
       if (visionMessage) {
         messages.push(visionMessage);
-        sendSSE('vision_injected', { source: 'desktop', tool: toolName });
+        sendSSE('vision_injected', { source: 'desktop', tool: toolName, preview: buildVisionInjectedPreviewPayload(visionMessage) });
         sendSSE('info', { message: `Vision screenshot injected (desktop) after ${toolName}.` });
       }
       return;
@@ -2110,17 +2690,6 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
           sendSSE('info', { message: `DOM delta injected (browser) after ${toolName}.` });
         }
       } catch {}
-      if (BROWSER_FORCE_SCREENSHOT_AFTER_TOOLS.has(toolName)) {
-        try { await browserVisionScreenshot(sessionId); } catch {}
-        const visionMessage = buildVisionScreenshotMessage(sessionId, 'browser');
-        if (visionMessage) {
-          messages.push(visionMessage);
-          sendSSE('vision_injected', { source: 'browser', tool: toolName });
-          sendSSE('info', { message: `Vision screenshot injected (browser) after ${toolName} (delta+vision mode).` });
-        } else {
-          sendSSE('info', { message: `Vision screenshot unavailable (browser) after ${toolName} (delta+vision mode).` });
-        }
-      }
       return;
     }
 
@@ -2137,7 +2706,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       const visionMessage = buildVisionScreenshotMessage(sessionId, 'browser');
       if (visionMessage) {
         messages.push(visionMessage);
-        sendSSE('vision_injected', { source: 'browser', tool: toolName });
+        sendSSE('vision_injected', { source: 'browser', tool: toolName, preview: buildVisionInjectedPreviewPayload(visionMessage) });
         sendSSE('info', { message: `Vision screenshot injected (browser) after ${toolName}.` });
       } else {
         sendSSE('info', { message: `Vision screenshot unavailable (browser) after ${toolName}.` });
@@ -2286,7 +2855,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
 
     if (visionMessage) {
       messages.push(visionMessage);
-      sendSSE('vision_injected', { source: 'browser', tool: toolName });
+      sendSSE('vision_injected', { source: 'browser', tool: toolName, preview: buildVisionInjectedPreviewPayload(visionMessage) });
       sendSSE('info', { message: `Vision screenshot injected (browser) after ${toolName}: ${reason}.` });
     } else {
       sendSSE('info', { message: `Vision screenshot unavailable (browser) after ${toolName}: ${reason}.` });
@@ -3467,6 +4036,22 @@ RULES:
   sendSSE('info', { message: 'Thinking...' });
   console.log('[v2] -- CHAT --');
 
+  const injectPendingChatSteers = (): number => {
+    const steers = consumePendingRuntimeSteersForSession(sessionId, 4);
+    if (!steers.length) return 0;
+    for (const steer of steers) {
+      messages.push({ role: 'user', content: buildChatSteerContextBlock(steer) });
+      messages.push({ role: 'assistant', content: 'Understood. I will steer the current run with this correction.' });
+      sendSSE('steer_applied', {
+        eventId: steer.id,
+        message: steer.message.slice(0, 500),
+        source: steer.source || 'web',
+      });
+      sendSSE('info', { message: `Steer applied: ${steer.message.slice(0, 120)}` });
+    }
+    return steers.length;
+  };
+
   for (let round = 0; ; round++) {
     if (round >= effectiveMaxToolRounds) {
       const allowExtendedFileOpLoop =
@@ -3493,6 +4078,8 @@ RULES:
     // ── Synthetic tool calls from browser advisor ─────────────────────────────
     // When the advisor queued deterministic tool calls (e.g. PageDown scroll),
     // skip LLM generation entirely for this round and execute them directly.
+    injectPendingChatSteers();
+
     if (pendingSyntheticToolCalls.length > 0) {
       const syntheticCalls = pendingSyntheticToolCalls.map((call: any, idx: number) => ({
         ...call,
@@ -3541,13 +4128,14 @@ RULES:
         // Other desktop/browser tools pass their real result text so AI always knows the outcome.
         // Visual screenshot tools also update the advisor packet with the post-action screenshot.
         const isDesktopVisualTool2 = toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
-        const toolMessageContent = (isBrowserTool && multiAgentActive)
+        let toolMessageContent = (isBrowserTool && multiAgentActive)
           ? buildBrowserAck(toolName, toolResult) + goalReminder
           : (isDesktopTool && isDesktopVisualTool2)
             ? buildDesktopScreenshotContent(toolResult, sessionId, goalReminder)
             : (isDesktopTool)
               ? buildDesktopAck(toolName, toolResult) + goalReminder
               : toolResult.result + goalReminder;
+        if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
         messages.push({
           role: 'tool',
           tool_name: toolName,
@@ -3688,6 +4276,8 @@ RULES:
     }
 
     let response: any;
+    let isGrokGeneration = false;
+    let grokGreetingLikeTurn = false;
     try {
       // In multi-agent mode, disable thinking for browser ops — the secondary AI
       // holds all context and issues exact directives; the primary just executes.
@@ -3704,15 +4294,57 @@ RULES:
           && (r.name.startsWith('browser_') || r.name.startsWith('desktop_')),
         )
       );
+	      const generationOverride = resolveProviderModelOverride();
 	      const requestedThinkMode = reasoningOptions?.enabled
 	        ? (reasoningOptions.level === 'extra_high' ? 'xhigh' : (reasoningOptions.level || 'low'))
 	        : undefined;
-	      const primaryThinkMode: boolean | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' =
-	        requestedThinkMode || ((multiAgentActive && !isActiveAutomationOp) ? true : false);
+	      const activeProviderForThinking = String(generationOverride.providerId || providerOverride || '').trim();
+	      const primaryThinkMode: boolean | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' | undefined =
+	        requestedThinkMode
+	          || ((multiAgentActive && !isActiveAutomationOp)
+	            ? true
+	            : (activeProviderForThinking === 'openai_codex' && !isActiveAutomationOp ? undefined : false));
+        isGrokGeneration = isGrokGenerationOverride(generationOverride);
+        grokGreetingLikeTurn = isGrokGeneration && isGrokGreetingLikeMessage(message);
+        let streamedVisibleText = '';
+        let suppressRunawayStream = false;
 	      const emitStreamToken = (chunk: string) => {
 	        if (abortSignal?.aborted) return;
 	        const text = String(chunk || '');
-	        if (text) sendSSE('token', { text });
+	        if (!text || suppressRunawayStream) return;
+          if (isGrokGeneration) {
+            streamedVisibleText += text;
+            if (streamedVisibleText.length > 800) {
+              if (grokGreetingLikeTurn && streamedVisibleText.length > 1200) {
+                suppressRunawayStream = true;
+                console.warn('[v2] GROK GREETING STREAM GUARD: suppressing oversized greeting output');
+                sendSSE('info', { message: 'Grok greeting output was too long; trimming the response.' });
+                return;
+              }
+              const paragraphs = streamedVisibleText
+                .split(/\n{2,}/)
+                .map(p => normalizeForDedup(p))
+                .filter(Boolean);
+              const tail = paragraphs.slice(-8);
+              const uniqueTail = new Set(tail);
+              if (tail.length >= 6 && uniqueTail.size <= 3) {
+                suppressRunawayStream = true;
+                console.warn('[v2] GROK STREAM REPETITION GUARD: suppressing repeated model output');
+                sendSSE('info', { message: 'Grok output repetition detected; trimming the response.' });
+                return;
+              }
+            }
+            if (streamedVisibleText.length > 8000) {
+              suppressRunawayStream = true;
+              console.warn('[v2] GROK STREAM LENGTH GUARD: suppressing oversized model output');
+              sendSSE('info', { message: 'Grok response is too long; trimming the output.' });
+              return;
+            }
+          }
+	        sendSSE('token', { text });
+	        if (callerOnToken) {
+	          try { callerOnToken(text); } catch { /* swallow — channel adapter errors must not break the chat run */ }
+	        }
 	      };
 	      const emitThinkingToken = (chunk: string, source: 'thinking' | 'reasoning_summary' = 'thinking') => {
 	        if (abortSignal?.aborted) return;
@@ -3721,9 +4353,14 @@ RULES:
 	        allThinking += text;
 	        sendSSE('thinking_delta', { thinking: text, source });
 	      };
-	      const generationOverride = resolveProviderModelOverride();
+	      const emitModelStreamEvent = (event: any) => {
+	        if (abortSignal?.aborted || !event || typeof event !== 'object') return;
+	        const type = String(event.type || '').trim();
+	        if (!type) return;
+	        sendSSE('model_stream_event', { event });
+	      };
       currentModelCapabilities = resolveCapabilitiesForGenerationOverride(generationOverride);
-      tools = buildCurrentTurnTools();
+      tools = capToolsForProvider(buildToolsForGeneration(generationOverride), generationOverride);
       currentModelSystemBlock = formatCurrentModelSystemBlock(generationOverride);
       if (generationOverride.source === 'turn_override') {
         // ── Local primary switch_model promotion ──────────────────────────────────
@@ -3753,13 +4390,14 @@ RULES:
         tools,
         temperature: 0.3,
         num_ctx: 8192,
-        num_predict: 4096,
+        num_predict: grokGreetingLikeTurn ? 256 : 4096,
 	        think: primaryThinkMode,
 	        model: generationOverride.model,
 	        provider: generationOverride.provider,
 	        onToken: emitStreamToken,
 	        onThinking: (chunk: string) => emitThinkingToken(chunk, 'thinking'),
 	        onReasoningSummary: (chunk: string) => emitThinkingToken(chunk, 'reasoning_summary'),
+	        onModelEvent: emitModelStreamEvent,
 	        abortSignal: abortSignal?.signal,
 	        usageContext: { sessionId, agentId: 'main' },
 	      });
@@ -4502,6 +5140,9 @@ RULES:
         String(reply || rawAssistantText || ''),
         { preflightReason: preflightReasonForTurn },
       );
+      if (isGrokGeneration) {
+        finalText = trimGrokRunawayRepetition(finalText);
+      }
       if (!finalText || finalText.length < 5) {
         if (allToolResults.length > 0) {
           // Build a meaningful auto-summary from what the tools actually did
@@ -4546,7 +5187,13 @@ RULES:
       if (greetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
       }
+      if (grokGreetingLikeTurn && finalText.length > 220) {
+        finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
+      }
       finalText = sanitizeFinalReply(finalText, { preflightReason: preflightReasonForTurn }) || 'Hey! How can I help?';
+      if (isGrokGeneration) {
+        finalText = trimGrokRunawayRepetition(finalText) || 'Hey! How can I help?';
+      }
       console.log(`[v2] FINAL: ${finalText.slice(0, 150)}`);
       if (progressState.items.length >= 2) {
         for (const item of progressState.items) {
@@ -4627,6 +5274,33 @@ RULES:
             }),
         ).values(),
       );
+      const collectGeneratedMedia = (mediaKind: 'image' | 'video'): any[] => {
+        const keys = mediaKind === 'image'
+          ? ['generated_images', 'generatedImages', 'images', 'generated_image', 'generatedImage', 'image']
+          : ['generated_videos', 'generatedVideos', 'videos', 'generated_video', 'generatedVideo', 'video'];
+        const rows: any[] = [];
+        for (const result of allToolResults as any[]) {
+          const sources = [result?.extra, result?.data, result].filter((source) => source && typeof source === 'object');
+          for (const source of sources) {
+            for (const key of keys) {
+              const value = source?.[key];
+              if (Array.isArray(value)) rows.push(...value);
+              else if (value && typeof value === 'object') rows.push(value);
+            }
+          }
+        }
+        return Array.from(new Map(rows.map((item) => {
+          const key = [
+            String(item?.path || item?.rel_path || item?.relPath || item?.url || item?.src || ''),
+            String(item?.file_name || item?.fileName || item?.name || ''),
+            String(item?.base64 || '').slice(0, 80),
+          ].join('|');
+          return [key, item];
+        })).values());
+      };
+      const finalGeneratedImages = collectGeneratedMedia('image');
+      const finalGeneratedVideos = collectGeneratedMedia('video');
+      const finalCanvasFiles = Array.from(turnCanvasFiles);
 
       const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(finalText);
       finalizeBoundTaskRun(/^\s*ERROR:/i.test(finalTextWithSkillOffer) ? 'failed' : 'complete', finalTextWithSkillOffer);
@@ -4636,6 +5310,9 @@ RULES:
         thinking: allThinking || undefined,
         toolResults: allToolResults.length > 0 ? allToolResults : undefined,
         artifacts: finalArtifacts.length > 0 ? finalArtifacts : undefined,
+        generatedImages: finalGeneratedImages.length > 0 ? finalGeneratedImages : undefined,
+        generatedVideos: finalGeneratedVideos.length > 0 ? finalGeneratedVideos : undefined,
+        canvasFiles: finalCanvasFiles.length > 0 ? finalCanvasFiles : undefined,
       };
     }
 
@@ -4689,8 +5366,9 @@ RULES:
       if (toolName === 'desktop_click') {
         const hasFiniteX = Number.isFinite(Number(toolArgs?.x));
         const hasFiniteY = Number.isFinite(Number(toolArgs?.y));
-        if (!hasFiniteX || !hasFiniteY) {
-          const blockMsg = 'Blocked desktop_click because it is an actual mouse click tool and requires numeric x and y coordinates. If the target point is not known yet, call desktop_screenshot or desktop_window_screenshot first, then retry with x and y.';
+        const hasFiniteElement = Number.isFinite(Number(toolArgs?.element)) && Number(toolArgs?.element) > 0;
+        if ((!hasFiniteX || !hasFiniteY) && !hasFiniteElement) {
+          const blockMsg = 'Blocked desktop_click because it is an actual mouse click tool and requires either numeric x/y coordinates or element=N from a SOM screenshot. If the target point is not known yet, call desktop_screenshot(mode:"som") or desktop_window_screenshot(mode:"som") first, then retry with element and screenshot_id.';
           allToolResults.push({ name: toolName, args: toolArgs, result: blockMsg, error: true });
           logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
           markProgressStepStart(toolName);
@@ -5505,6 +6183,21 @@ RULES:
       if (!toolResult.error) roundHadProgress = true;
       markProgressStepResult(!toolResult.error, toolName);
 
+      if (toolName === 'request_dev_source_edit' && !toolResult.error) {
+        seedDevSourceEditProgressPlan(toolResult);
+      }
+
+      if (toolName === 'write_note' && !toolResult.error) {
+        const tag = String(toolArgs?.tag || toolArgs?.step || '').trim().replace(/\s+/g, '_').toLowerCase();
+        const completedDevEdit = toolResult.extra?.dev_edit_complete === true || toolResult.data?.dev_edit_complete === true || tag === 'dev_edit_complete';
+        if (completedDevEdit && progressState.manualStepAdvance && progressState.items.length >= 2) {
+          let guard = progressState.items.length + 1;
+          while (guard-- > 0 && progressState.items.some((item) => item.status === 'pending' || item.status === 'in_progress')) {
+            advanceProgressStep('dev_edit_complete');
+          }
+        }
+      }
+
       // ── Orchestration: track trigger state
       orchestrationState.recordToolResult(round, toolName, toolArgs, toolResult.error);
       orchestrationLog.push(
@@ -5533,6 +6226,16 @@ RULES:
           });
         }
       }
+      if (toolName === 'set_current_model' && !toolResult.error) {
+        const modelRef = String(toolArgs?.model || '').trim();
+        const slashIdx = modelRef.indexOf('/');
+        sendSSE('main_model_changed', {
+          providerId: slashIdx > 0 ? modelRef.slice(0, slashIdx) : '',
+          model: slashIdx > 0 ? modelRef.slice(slashIdx + 1) : modelRef,
+          modelRef,
+          source: 'current_primary',
+        });
+      }
       if (toolName === 'set_agent_model' && !toolResult.error && String(toolArgs?.agent_type || '').trim() === 'main_chat') {
         const modelRef = String(toolArgs?.model || '').trim();
         const slashIdx = modelRef.indexOf('/');
@@ -5543,7 +6246,7 @@ RULES:
           source: 'agent_model_defaults.main_chat',
         });
       }
-      if (toolName === 'apply_agent_model_template' && !toolResult.error) {
+      if ((toolName === 'apply_agent_model_template' || toolName === 'select_agent_model_template') && !toolResult.error) {
         const modelRef = String((getConfig().getConfig() as any)?.agent_model_defaults?.main_chat || '').trim();
         if (modelRef) {
           const slashIdx = modelRef.indexOf('/');
@@ -5567,6 +6270,7 @@ RULES:
               ? presentPath
               : require('path').join(workspacePath, presentPath);
             addCanvasFile(sessionId, absPath);
+            turnCanvasFiles.add(String(presentPath));
             sendSSE('canvas_present', { path: String(presentPath), tool: toolName });
           }
         }
@@ -5582,20 +6286,21 @@ RULES:
       // Visual screenshot tools end with a screenshot stored in the advisor packet.
       // Give vision-capable primaries the actual PNG so they can see the post-action state.
       const isDesktopVisualTool3 = toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
-      const toolMessageContent = (isBrowserTool && multiAgentActive)
+      let toolMessageContent = (isBrowserTool && multiAgentActive)
         ? buildBrowserAck(toolName, toolResult) + goalReminder
         : (isDesktopTool && isDesktopVisualTool3)
           ? buildDesktopScreenshotContent(toolResult, sessionId, goalReminder)
           : (isDesktopTool)
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
+      if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
 	      messages.push({
 	        role: 'tool',
 	        tool_name: toolName,
 	        tool_call_id: toolCallId || undefined,
 	        content: toolMessageContent,
 	      });
-      if (toolName === 'request_tool_category' && !toolResult.error) {
+      if ((toolName === 'request_tool_category' || toolName === 'request_dev_source_edit') && !toolResult.error) {
         const previousNames = new Set(
           tools
             .map((t: any) => String(t?.function?.name || '').trim())
@@ -5605,9 +6310,7 @@ RULES:
         const newlyAvailable = tools
           .map((t: any) => String(t?.function?.name || '').trim())
           .filter((name: string) => name && !previousNames.has(name));
-        const refreshMessage = newlyAvailable.length > 0
-          ? `Tool schemas refreshed for this turn. Newly available: ${newlyAvailable.slice(0, 12).join(', ')}${newlyAvailable.length > 12 ? `, and ${newlyAvailable.length - 12} more` : ''}.`
-          : 'Tool schemas refreshed for this turn.';
+        const refreshMessage = summarizeUnlockedToolCategories(newlyAvailable, toolName === 'request_tool_category' ? String(toolArgs?.category || '') : '');
         sendSSE('info', { message: refreshMessage });
         messages.push({
           role: 'user',
@@ -5762,6 +6465,63 @@ function delayMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isGrokGenerationOverride(generationOverride: any): boolean {
+  const provider = String(generationOverride?.provider || generationOverride?.providerId || '').trim().toLowerCase();
+  const model = String(generationOverride?.model || '').trim().toLowerCase();
+  return provider === 'xai' || model.startsWith('grok-') || model.includes('/grok-');
+}
+
+function isGrokGreetingLikeMessage(text: string): boolean {
+  const raw = String(text || '').trim();
+  if (!raw || raw.length > 120) return false;
+  if (/\b(search|open|read|write|file|code|task|build|fix|debug|run|install|http|www\.|\\.com|please|could you|can you)\b/i.test(raw)) return false;
+  if (isGreetingLikeMessage(raw)) return true;
+  return /^(?:hi|hello|hey|yo|sup|howdy)(?:[!.?\s,]+(?:hi|hello|hey|yo|sup|howdy)){0,3}(?:[!.?\s,]+(?:prom|prometheus|claw))?[!.?\s]*$/i.test(raw);
+}
+
+function trimGrokRunawayRepetition(text: string): string {
+  const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!raw) return '';
+
+  const paragraphs = raw.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+  const kept: string[] = [];
+  const seen = new Map<string, number>();
+  for (const paragraph of paragraphs) {
+    const norm = normalizeForDedup(paragraph);
+    if (!norm) continue;
+    const count = (seen.get(norm) || 0) + 1;
+    seen.set(norm, count);
+    if (count > 2) break;
+    kept.push(paragraph);
+  }
+
+  const joined = kept.join('\n\n') || raw;
+  const sentences = joined.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length < 8) return joined.trim();
+
+  const out: string[] = [];
+  const sentenceSeen = new Map<string, number>();
+  for (const sentence of sentences) {
+    const norm = normalizeForDedup(sentence);
+    if (!norm) continue;
+    const count = (sentenceSeen.get(norm) || 0) + 1;
+    sentenceSeen.set(norm, count);
+    if (count > 2) break;
+    out.push(sentence);
+  }
+  return (out.length ? out.join(' ') : joined).trim();
+}
+
+function shouldCheckBlockedTaskFollowup(message: string): boolean {
+  const text = String(message || '').trim();
+  if (!text) return false;
+  if (parseTaskIdFromText(text)) return true;
+  if (isResumeIntent(text) || isRerunIntent(text) || isCancelIntent(text)) return true;
+  if (/^\s*(proceed|go ahead|ok|okay|continue|yes|yep|sure|do it|keep going|try again|move on|sounds good|ready|done|fixed|logged in|i logged in|all good)\.?\s*$/i.test(text)) return true;
+  if (/\b(logged in|fixed it|done now|all set|ready now|answered|clarification|the answer is|use this|try again)\b/i.test(text)) return true;
+  return false;
+}
+
 function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): void {
   const sid = String(sessionId || '').trim();
   if (!sid || activeMainChatGoalRuns.has(sid)) return;
@@ -5790,6 +6550,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
           source: 'goal',
           detail: current.goal.slice(0, 160),
           abortSignal,
+          onAbort: () => abortController.abort(),
         });
         setModelBusy(true);
         broadcastMainChatGoalState(sid, 'turn_started', { turnsUsed: current.turnsUsed });
@@ -5807,6 +6568,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
             undefined,
             abortSignal,
             'CONTEXT: Synthetic continuation turn for active main-chat goal mode.',
+            undefined,
             undefined,
             undefined,
             undefined,
@@ -5854,21 +6616,46 @@ async function runInteractiveTurn(
 	  callerContext?: string,
 	  reasoningOptions?: ReasoningOptions,
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+    attachmentPreviews?: any[],
     modelOverride?: string,
     flags?: { syntheticGoalContinuation?: boolean },
+    turnOriginInput?: TurnOrigin,
+    requestMeta?: { clientRequestId?: string },
+    /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
+    callerOnToken?: (token: string) => void,
 ): Promise<HandleChatResult> {
   const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
   const isTimerTurn = /^\s*\[Timer fired\]/i.test(String(message || ''));
+  const turnOrigin = normalizeTurnOrigin(turnOriginInput, sessionId, isTimerTurn || isGoalContinuationTurn ? { channel: 'system', surface: 'automation', device: 'server' } : undefined);
+  persistTurnOriginChannelHint(sessionId, turnOrigin);
+  const existingMainChatStream = getMainChatStream(sessionId);
+  const localMainChatStream = existingMainChatStream?.active ? null : beginMainChatStream(sessionId);
+  const upstreamSendSSE = sendSSE;
+  sendSSE = (event: string, data: any) => {
+    if (localMainChatStream) {
+      appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, event, data);
+    }
+    upstreamSendSSE(event, data);
+  };
   const userMsg = {
     role: 'user' as const,
     content: message,
     timestamp: Date.now(),
+    channel: turnOrigin.channel,
+    channelLabel: turnOrigin.label || turnOrigin.channel,
+    origin: turnOrigin,
     ...(isTimerTurn ? { channel: 'system' as const, channelLabel: 'timer' } : {}),
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
+    ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
-  const rollingCompactionPolicy = resolveRollingCompactionPolicy();
-  let rollingCompactionApplied = false;
+  appendMainChatStreamEvent(sessionId, localMainChatStream?.streamId || existingMainChatStream?.streamId || '', 'user_message', {
+    message: userMsg,
+    clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId),
+  });
+  try {
+    const rollingCompactionPolicy = resolveRollingCompactionPolicy();
+    let rollingCompactionApplied = false;
 
   if (!isSubagentChatSession && !isGoalContinuationTurn && /^\/goal(?:\s|$)/i.test(String(message || '').trim())) {
     const command = handleMainChatGoalCommand(sessionId, message);
@@ -5960,6 +6747,7 @@ async function runInteractiveTurn(
   });
 
   if (addResult.deferredForCompaction && addResult.compactionPrompt) {
+    sendSSE('ui_preflight', { message: 'Compacting the thread before continuing...' });
     console.log(`[v2] Context compaction triggered for session ${sessionId} (${addResult.estimatedTokens}/${addResult.contextLimitTokens} est. tokens)`);
     try {
       const internalCompactionContext = 'CONTEXT: Internal context compaction turn. Summarize prior conversation into compact retained context only.';
@@ -5985,6 +6773,7 @@ async function runInteractiveTurn(
     if (abortSignal?.aborted) return { type: 'chat', text: '' };
     addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
   } else if (addResult.deferredForMemoryFlush && addResult.memoryFlushPrompt) {
+    sendSSE('ui_preflight', { message: 'Saving important memory before continuing...' });
     console.log(`[v2] Pre-compaction memory flush triggered for session ${sessionId} (${addResult.estimatedTokens}/${addResult.contextLimitTokens} est. tokens)`);
     try {
       const internalFlushContext = 'CONTEXT: Internal pre-compaction memory flush turn. Before continuing, save important durable user/task facts to memory now.';
@@ -6011,7 +6800,11 @@ async function runInteractiveTurn(
   }
 
   console.log(`\n[v2] USER: ${message.slice(0, 100)}`);
-  const followupHandled = await tryHandleBlockedTaskFollowup(sessionId, message);
+  let followupHandled: string | null = null;
+  if (shouldCheckBlockedTaskFollowup(message)) {
+    sendSSE('ui_preflight', { message: 'Checking paused task follow-up...' });
+    followupHandled = await tryHandleBlockedTaskFollowup(sessionId, message);
+  }
   if (followupHandled) {
     if (!abortSignal?.aborted) {
       addMessage(sessionId, { role: 'assistant', content: followupHandled, timestamp: Date.now() });
@@ -6021,8 +6814,10 @@ async function runInteractiveTurn(
   }
 
   const pins = Array.isArray(pinnedMessages) ? pinnedMessages.slice(0, 3) : [];
+  sendSSE('ui_preflight', { message: 'Preparing chat context...' });
   const canvasCtx = getCanvasContextBlock(sessionId);
-  const mergedCallerContext = [callerContext, canvasCtx || undefined].filter(Boolean).join('\n\n') || undefined;
+  const originCtx = formatTurnOriginContext(turnOrigin, sessionId);
+  const mergedCallerContext = [originCtx, callerContext, canvasCtx || undefined].filter(Boolean).join('\n\n') || undefined;
   const result = await handleChat(
     message,
     sessionId,
@@ -6035,54 +6830,582 @@ async function runInteractiveTurn(
 	    undefined,
 	    Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
 	    reasoningOptions,
+	    undefined, // providerOverride
+	    callerOnToken,
 	  );
 
   const toolLogLines = result.toolResults && result.toolResults.length > 0
-    ? result.toolResults.slice(-8).map((r) => {
-        const ok = r.error ? '\u2717' : '\u2713';
-        const args = r.args ? JSON.stringify(r.args).slice(0, 60) : '';
-        const preview = String(r.result || '').slice(0, 100).replace(/\n/g, ' ');
-        return `${ok} ${r.name}(${args}): ${preview}`;
+    ? result.toolResults.map((r, idx) => {
+        const ok = r.error ? 'error' : 'ok';
+        let args = '';
+        try {
+          args = JSON.stringify(r.args ?? {}, null, 2);
+        } catch {
+          args = String(r.args ?? '');
+        }
+        return [
+          `--- tool call ${idx + 1} ---`,
+          `name: ${r.name}`,
+          `status: ${ok}`,
+          'args:',
+          args,
+          'result:',
+          String(r.result || ''),
+        ].join('\n');
       })
     : [];
-
-  if (toolLogLines.length > 0) {
-    persistToolLog(sessionId, toolLogLines.join('\n'));
-  }
-
   if (abortSignal?.aborted) {
     if (editRerunAbortResetSessions.has(String(sessionId || ''))) {
       return result;
     }
     const interruptedText = String(result.text || '').trim();
-    const checkpointText = [
+    const recentUsers = getHistory(sessionId, 8)
+      .filter((msg) => msg.role === 'user')
+      .map((msg) => String(msg.content || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    const currentRequest = String(message || '').replace(/\s+/g, ' ').trim();
+    const priorRequest = [...recentUsers].reverse().find((text) => text && text !== currentRequest) || '';
+    const workSummary = priorRequest && currentRequest && /^(ok|okay|yes|yep|sure|go ahead|do that|continue|please)\b/i.test(currentRequest)
+      ? `${priorRequest.slice(0, 220)} -> ${currentRequest.slice(0, 160)}`
+      : (currentRequest || priorRequest || 'the interrupted turn');
+    const stepSummary = result.toolResults && result.toolResults.length > 0
+      ? `Stopped after ${result.toolResults.length} step${result.toolResults.length !== 1 ? 's' : ''}.`
+      : 'Stopped before any tool calls completed.';
+    const checkpointPacket = [
       '[Interrupted by user]',
-      interruptedText || 'The turn was stopped before a final response was produced.',
+      `In the middle of: ${workSummary}`,
+      interruptedText || stepSummary,
       toolLogLines.length > 0
         ? `Recent tool/process context was preserved for continuation:\n${toolLogLines.join('\n')}`
         : 'No tool calls had completed yet.',
       'When the user asks to continue, resume from this checkpoint instead of restarting from scratch.',
     ].filter(Boolean).join('\n\n');
-    addMessage(sessionId, { role: 'assistant', content: checkpointText, timestamp: Date.now() }, {
+    const visibleCheckpointText = [
+      'Restart Context Packet',
+      '',
+      `Interrupted by user while I was working on: ${workSummary.slice(0, 260)}`,
+      stepSummary,
+      'Full tool/process context was preserved for continuation. Open Process to inspect the packet.',
+    ].join('\n');
+    addMessage(sessionId, {
+      role: 'assistant',
+      content: visibleCheckpointText,
+      timestamp: Date.now(),
+      toolLog: toolLogLines.join('\n\n') || checkpointPacket,
+      processEntries: [{
+        ts: new Date().toLocaleTimeString(),
+        type: 'warn',
+        actor: 'Prom',
+        content: checkpointPacket,
+        extra: { packetType: 'restart_context_packet', interrupted: true },
+      }],
+    }, {
       disableCompactionCheck: isSubagentChatSession,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
-    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId, [checkpointText]);
+    if (toolLogLines.length > 0) {
+      persistToolLog(sessionId, toolLogLines.join('\n\n'));
+    }
+    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
   } else {
-    addMessage(sessionId, { role: 'assistant', content: result.text, timestamp: Date.now() }, {
+    addMessage(sessionId, {
+      role: 'assistant',
+      content: result.text,
+      timestamp: Date.now(),
+      artifacts: Array.isArray(result.artifacts) && result.artifacts.length ? result.artifacts : undefined,
+      generatedImages: Array.isArray(result.generatedImages) && result.generatedImages.length ? result.generatedImages : undefined,
+      generatedVideos: Array.isArray(result.generatedVideos) && result.generatedVideos.length ? result.generatedVideos : undefined,
+      canvasFiles: Array.isArray(result.canvasFiles) && result.canvasFiles.length ? result.canvasFiles : undefined,
+      toolLog: toolLogLines.length ? toolLogLines.join('\n\n') : undefined,
+    }, {
       disableCompactionCheck: isSubagentChatSession,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
+    if (toolLogLines.length > 0) {
+      persistToolLog(sessionId, toolLogLines.join('\n\n'));
+    }
     if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId);
   }
 
-  return result;
+    return result;
+  } finally {
+    if (localMainChatStream) finishMainChatStream(sessionId, localMainChatStream.streamId);
+  }
 }
 
 function createSSESender(res: express.Response): (event: string, data: any) => void {
-  return (type: string, data: any) => { try { res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`); } catch {} };
+  return (type: string, data: any) => {
+    try {
+      if (res.destroyed || res.writableEnded) return;
+      res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    } catch {}
+  };
+}
+
+type VoiceNarrationEmitter = (data: Record<string, any>) => void;
+
+function voiceNarrationClean(value: any, max = 120): string {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/["`]/g, '')
+    .trim()
+    .slice(0, max)
+    .trim();
+}
+
+function voiceNarrationNaturalize(value: any): string {
+  let text = voiceNarrationClean(value, 180);
+  text = text
+    .replace(/^I am\b/i, "I'm")
+    .replace(/\bI am\b/g, "I'm")
+    .replace(/^I will\b/i, "I'll")
+    .replace(/\bI will\b/g, "I'll")
+    .replace(/^I have\b/i, "I've")
+    .replace(/\bI have\b/g, "I've");
+  return text.trim();
+}
+
+function extractJsonObjectLoose(text: string): any | null {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const unfenced = raw.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
+  const candidates = [unfenced];
+  const match = unfenced.match(/\{[\s\S]*\}/);
+  if (match?.[0]) candidates.push(match[0]);
+  for (const candidate of candidates) {
+    try { return JSON.parse(candidate); } catch {}
+  }
+  return null;
+}
+
+function voiceNarrationHost(value: any): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = /^https?:\/\//i.test(raw) ? new URL(raw) : new URL(`https://${raw}`);
+    return url.hostname.replace(/^www\./i, '');
+  } catch {
+    return voiceNarrationClean(raw, 60);
+  }
+}
+
+function voiceNarrationTargetFromArgs(args: any): string {
+  if (!args || typeof args !== 'object') return '';
+  return voiceNarrationClean(
+    args.title || args.id || args.path || args.file || args.filename || args.name || args.url || args.query || args.command || args.prompt || args.text,
+    90,
+  );
+}
+
+function voiceNarrationTaskRequestSummary(userMessage: string): string {
+  let text = voiceNarrationClean(userMessage, 180)
+    .replace(/^(?:okay|ok|alright|hey|yo)[,\s-]*/i, '')
+    .replace(/^(?:can|could|would)\s+(?:you|we)\s+(?:please\s+)?/i, '')
+    .replace(/^(?:please\s+|let'?s\s+|go ahead and\s+)/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  text = text.replace(/[?.!]+$/g, '').trim();
+  if (!text) return '';
+  if (!/^(?:fix|add|build|make|wire|search|look|check|inspect|update|change|clean|debug|test|run|open|create|remove|set|help)\b/i.test(text)) {
+    text = `work on ${text}`;
+  }
+  return text.slice(0, 140).trim();
+}
+
+function voiceNarrationTaskStartFallback(userMessage: string, data: any): string {
+  const summary = voiceNarrationTaskRequestSummary(userMessage);
+  if (summary) return `Sure, I'll go ahead and ${summary}.`;
+  const action = String(data?.action || '').trim();
+  const target = voiceNarrationTargetFromArgs(data?.args);
+  if (target) return `Sure, I'll start with ${target}.`;
+  if (action) return "Sure, I'll get started on that.";
+  return '';
+}
+
+function voiceNarrationForToolCall(action: string, args: any, userMessage: string): string {
+  const tool = String(action || '').trim();
+  const target = voiceNarrationTargetFromArgs(args);
+  const host = voiceNarrationHost(args?.url || args?.targetUrl || args?.href);
+  const query = voiceNarrationClean(args?.query || args?.q || args?.search || '', 90);
+  if (!tool) return '';
+  if (tool === 'declare_plan') return 'I have a plan now, and I will work through it step by step.';
+  if (tool === 'skill_list') return '';
+  if (tool === 'skill_read') return target ? `I'll check ${target} and see if it actually helps here.` : '';
+  if (tool === 'web_search') return query ? `I'll look up ${query} so I can stay grounded.` : '';
+  if (tool === 'browser_open') return host ? `I'm opening ${host}.` : '';
+  if (tool.startsWith('browser_')) {
+    if (/snapshot|inspect|observe/i.test(tool)) return '';
+    if (/click/i.test(tool)) return 'I am clicking the relevant browser control now.';
+    if (/fill|type/i.test(tool)) return 'I am entering the information in the browser now.';
+    if (/scroll|press_key/i.test(tool)) return 'I am navigating the page to find the next useful area.';
+    return '';
+  }
+  if (tool.startsWith('desktop_')) {
+    if (/screenshot|window/i.test(tool)) return '';
+    if (/click/i.test(tool)) return 'I am clicking the relevant desktop control now.';
+    if (/type/i.test(tool)) return 'I am typing that into the desktop app now.';
+    return '';
+  }
+  if (/^(read_file|file_read|list_files|search_files|grep|find_files|source_read)$/i.test(tool)) {
+    return target ? `I'm checking ${target} so I can make the right change.` : '';
+  }
+  if (/^(write_file|edit_file|create_file|patch_file|apply_patch|replace_file|delete_file)$/i.test(tool)) {
+    return target ? `I'm editing ${target} now.` : '';
+  }
+  if (/^(run_command|shell_command|terminal_run)$/i.test(tool)) {
+    const command = voiceNarrationClean(args?.command || args?.cmd || '', 80);
+    if (/test|vitest|jest|pytest|node --check|tsc|build|lint/i.test(command)) return "I'll run verification now.";
+    return '';
+  }
+  if (/^(generate_image|image_generation)/i.test(tool)) return 'I am generating the image now.';
+  if (/^(generate_video|video_generation)/i.test(tool)) return 'I am generating the video now.';
+  if (/^(canvas_|creative_)/i.test(tool)) return 'I am updating the workspace canvas now.';
+  if (/^background_/i.test(tool)) return 'I am starting a background agent to help with this.';
+  if (/memory/i.test(tool)) return '';
+  if (/approval/i.test(tool)) return 'I need approval before I take that action.';
+  const compactGoal = voiceNarrationClean(userMessage, 80);
+  return compactGoal ? `I am using ${tool.replace(/_/g, ' ')} to move this forward.` : '';
+}
+
+function voiceNarrationForToolResult(action: string, data: any): string {
+  const tool = String(action || '').trim();
+  const failed = data?.error === true || /^ERROR:/i.test(String(data?.result || ''));
+  if (!failed) return '';
+  if (tool.startsWith('browser_')) return 'That browser step had an issue, so I am going to adjust.';
+  if (tool.startsWith('desktop_')) return "That desktop step had an issue, so I'll check another route.";
+  if (/file|patch|edit|write|create/i.test(tool)) return 'That edit did not apply cleanly, so I am correcting it.';
+  if (/run_command|shell|terminal/i.test(tool)) return "That command failed, so I'll check what to change next.";
+  return 'That step hit an issue, so I am adjusting.';
+}
+
+function voiceNarrationSafeEvent(type: string, data: any): Record<string, any> {
+  const args = data?.args && typeof data.args === 'object' ? data.args : undefined;
+  const safeArgs: Record<string, any> = {};
+  if (args) {
+    for (const key of ['id', 'title', 'path', 'file', 'filename', 'name', 'url', 'query', 'command', 'cmd', 'text', 'prompt', 'phase']) {
+      if (args[key] !== undefined) safeArgs[key] = voiceNarrationClean(args[key], key === 'command' || key === 'cmd' ? 180 : 120);
+    }
+  }
+  return {
+    type,
+    action: voiceNarrationClean(data?.action || '', 80),
+    message: voiceNarrationClean(data?.message || '', 160),
+    result: voiceNarrationClean(data?.result || '', data?.error ? 180 : 260) || undefined,
+    error: data?.error === true,
+    stepNum: Number(data?.stepNum || 0) || undefined,
+    synthetic: data?.synthetic === true || undefined,
+    actor: voiceNarrationClean(data?.actor || '', 80) || undefined,
+    args: Object.keys(safeArgs).length ? safeArgs : undefined,
+  };
+}
+
+function voiceNarrationRecentMessages(sessionId: string, userMessage: string) {
+  try {
+    const session = getSession(sessionId);
+    const history = Array.isArray(session?.history) ? session.history : [];
+    const visible = history
+      .filter((msg: any) => (msg?.role === 'user' || msg?.role === 'assistant') && String(msg?.content || '').trim())
+      .slice(-5)
+      .map((msg: any) => ({ role: msg.role, content: voiceNarrationClean(msg.content, 700) }));
+    const current = voiceNarrationClean(userMessage, 700);
+    if (current && !visible.some((msg: any) => msg.role === 'user' && msg.content === current)) visible.push({ role: 'user', content: current });
+    return visible.slice(-5);
+  } catch {
+    return [{ role: 'user', content: voiceNarrationClean(userMessage, 700) }];
+  }
+}
+
+async function callVoiceNarratorModel(packet: any, abortSignal?: AbortSignal): Promise<{ action: 'reply' | 'no_reply'; text?: string } | null> {
+  const system = [
+    "You are Prometheus's live voice narrator.",
+    'You watch Prometheus work and decide whether to speak a short update.',
+    'Speak in first person as Prometheus, naturally and casually.',
+    'Do not start every line with "I am". Prefer contractions and direct language: "I\'ll", "I\'m", "Sure", "Let me".',
+    'Explain why the current action helps the user request, not just what tool is running.',
+    'Because speech may arrive after the event, prefer bridge phrasing for mid-turn updates: "I found...", "I checked...", "I read...", "That part is done; now I\'m...".',
+    'Use future/present intent only for task-start acknowledgements. Use recap-plus-next-step phrasing for tool results.',
+    'Never say generic filler like "checking available skills", "reading the relevant skill", "working in the browser", or "checking the page state".',
+    'If you cannot mention the concrete request/topic/file/site/action in a natural way, return {"action":"no_reply"}.',
+    'Good style: "I’ll check whether there’s already a voice workflow for this." Bad style: "I am checking the available skills."',
+    'Good mid-turn style: "I found the voice skill; I’m using it to guide this change." Bad style: "I am checking the available skills."',
+    'Do not expose raw tool names, JSON, stack traces, hidden system details, or private reasoning.',
+    'Do not narrate every event. Reply only when the user benefits from hearing it.',
+    'If currentState.isTaskStart is true, acknowledge the user request directly with a natural line like "Sure, I’ll go ahead and..." using the actual task.',
+    'For task-start, do not return no_reply unless the request is empty or unsafe to summarize.',
+    'Keep reply text under 24 words.',
+    'Return JSON only: {"action":"reply","text":"..."} or {"action":"no_reply"}.',
+  ].join('\n');
+  const timeoutMs = packet?.currentState?.isTaskStart ? 2600 : 1600;
+  const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+  const modelCall = getOllamaClient().chatWithThinking(
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: JSON.stringify(packet) },
+    ],
+    'manager',
+    {
+      temperature: 0.25,
+      num_ctx: 4096,
+      num_predict: 120,
+      think: false,
+      abortSignal,
+      usageContext: { sessionId: packet.sessionId, agentId: 'voice_narrator' },
+    } as any,
+  ).then((result: any) => {
+    const parsed = extractJsonObjectLoose(String(result?.message?.content || ''));
+    const action = String(parsed?.action || '').trim().toLowerCase();
+    if (action === 'no_reply') return { action: 'no_reply' as const };
+    if (action !== 'reply') return null;
+    const text = voiceNarrationNaturalize(parsed?.text || '');
+    if (!text || text.length < 6) return null;
+    if (/\b(tool_call|tool_result|json|sse|stack trace|system prompt)\b/i.test(text)) return null;
+    if (/\b(checking the available skills|reading the relevant skill|working in the browser|working in\s+\w+|in running|plan update|plan:|checking the page state|use the right workflow|before i act|inspect the actual page|inspect it directly)\b/i.test(text)) return { action: 'no_reply' as const };
+    if (/\b(skill_read|skill_list|tool_result|tool_call|ui_preflight|progress_state)\b/i.test(text)) return { action: 'no_reply' as const };
+    return { action: 'reply' as const, text };
+  }).catch(() => null);
+  return Promise.race([modelCall, timeout]);
+}
+
+function createVoiceNarrator(
+  sessionId: string,
+  userMessage: string,
+  emit: VoiceNarrationEmitter,
+  abortSignal?: AbortSignal,
+  options: { suppressTaskStartFallback?: boolean } = {},
+) {
+  let lastAt = 0;
+  const recent = new Map<string, number>();
+  const recentToolEvents: string[] = [];
+  const recentNarration: string[] = [];
+  const startedAt = Date.now();
+  let seq = 0;
+  let inFlight = false;
+  let firstToolAcknowledged = false;
+  const speak = (text: string, meta: Record<string, any> = {}) => {
+    const clean = voiceNarrationNaturalize(text);
+    if (!clean || clean.length < 8) return;
+    const now = Date.now();
+    for (const [key, at] of recent.entries()) {
+      if (now - at > 45000) recent.delete(key);
+    }
+    const key = clean.toLowerCase();
+    if (recent.has(key)) return;
+    const minGap = Number(meta.minGapMs ?? 3200) || 0;
+    if (meta.force !== true && now - lastAt < minGap) return;
+    recent.set(key, now);
+    lastAt = now;
+    recentNarration.push(clean);
+    if (recentNarration.length > 8) recentNarration.shift();
+    emit({
+      text: clean,
+      action: 'reply',
+      source: 'gateway_narrator',
+      createdAt: now,
+      elapsedMs: now - startedAt,
+      ...meta,
+    });
+  };
+  const rememberEvent = (type: string, data: any) => {
+    const action = voiceNarrationClean(data?.action || type, 80);
+    const target = voiceNarrationTargetFromArgs(data?.args);
+    const suffix = target ? ` ${target}` : (data?.message ? ` ${voiceNarrationClean(data.message, 80)}` : '');
+    recentToolEvents.push(`${type}: ${action}${suffix}`.trim());
+    if (recentToolEvents.length > 10) recentToolEvents.shift();
+  };
+  const maybeNarrate = (type: string, data: any, fallbackText: string, meta: Record<string, any> = {}) => {
+    if (meta.stage === 'task_start' && options.suppressTaskStartFallback === true) {
+      firstToolAcknowledged = true;
+      return;
+    }
+    const fallback = voiceNarrationNaturalize(meta.stage === 'task_start'
+      ? voiceNarrationTaskStartFallback(userMessage, data)
+      : fallbackText);
+    const canFallback = fallback && (meta.priority === 'warn' || meta.stage === 'task_start');
+    if (meta.stage === 'task_start') {
+      if (canFallback) speak(fallback, { ...meta, source: 'gateway_narrator_task_start_ack' });
+      return;
+    }
+    const mySeq = ++seq;
+    const packet = {
+      sessionId,
+      userRequest: voiceNarrationClean(userMessage, 1000),
+      recentMessages: voiceNarrationRecentMessages(sessionId, userMessage),
+      currentState: {
+        phase: type,
+        isTaskStart: meta.stage === 'task_start',
+        elapsedMs: Date.now() - startedAt,
+        event: voiceNarrationSafeEvent(type, data),
+        recentToolEvents: [...recentToolEvents],
+        recentNarration: [...recentNarration],
+      },
+      instruction: meta.stage === 'task_start'
+        ? 'This is the first real action for the turn. If useful, acknowledge the user request naturally and specifically, then say what you are starting. Use reply/no_reply JSON only.'
+        : 'Decide reply/no_reply for a live voice milestone. Interruptions are handled elsewhere; do not mention interruption unless it is in the packet.',
+    };
+    const run = async () => {
+      if (inFlight) {
+        if (canFallback) speak(fallback, { ...meta, source: 'gateway_narrator_fallback_busy' });
+        return;
+      }
+      inFlight = true;
+      try {
+        const decision = await callVoiceNarratorModel(packet, abortSignal);
+        if (mySeq < seq - 3) return;
+        if (decision?.action === 'reply' && decision.text) {
+          speak(decision.text, { ...meta, source: 'gateway_narrator_model', fallbackText: fallback });
+          return;
+        }
+        if (decision?.action === 'no_reply' && meta.stage === 'task_start' && canFallback) {
+          speak(fallback, { ...meta, source: 'gateway_narrator_task_start_fallback' });
+          return;
+        }
+        if (!decision && canFallback) speak(fallback, { ...meta, source: 'gateway_narrator_fallback' });
+      } finally {
+        inFlight = false;
+      }
+    };
+    void run();
+  };
+  return {
+    observe(type: string, data: any) {
+      if (type === 'voice_milestone') return;
+      if (['tool_call', 'tool_progress', 'tool_result', 'ui_preflight'].includes(type)) rememberEvent(type, data);
+      if (type === 'ui_preflight') {
+        return;
+      }
+      if (type === 'tool_call') {
+        const text = voiceNarrationForToolCall(String(data?.action || ''), data?.args, userMessage);
+        const isTaskStart = !firstToolAcknowledged && String(data?.action || '') !== 'declare_plan';
+        if (isTaskStart) firstToolAcknowledged = true;
+        maybeNarrate(type, data, text, {
+          stage: isTaskStart ? 'task_start' : 'tool_call',
+          tool: data?.action,
+          stepNum: data?.stepNum,
+          synthetic: data?.synthetic === true,
+          actor: data?.actor,
+          force: isTaskStart,
+          minGapMs: isTaskStart ? 0 : (data?.synthetic ? 4500 : 3200),
+        });
+        return;
+      }
+      if (type === 'tool_progress') {
+        const message = voiceNarrationClean(data?.message, 120);
+        if (/opening|checking|reading|writing|editing|verifying|searching|loading|connecting|retry|repair/i.test(message)) {
+          maybeNarrate(type, data, message, { stage: 'tool_progress', tool: data?.action, minGapMs: 6000 });
+        }
+        return;
+      }
+      if (type === 'tool_result') {
+        const text = voiceNarrationForToolResult(String(data?.action || ''), data);
+        maybeNarrate(type, data, text, { stage: 'tool_result', tool: data?.action, stepNum: data?.stepNum, priority: 'warn', minGapMs: 2500 });
+      }
+    },
+  };
+}
+
+type VoiceInterruptionIntent =
+  | 'course_correction'
+  | 'clarification'
+  | 'question'
+  | 'continue'
+  | 'pause'
+  | 'cancel'
+  | 'unknown';
+
+function classifyVoiceInterruption(text: string): {
+  intent: VoiceInterruptionIntent;
+  shouldAbortOriginalRun: boolean;
+  shouldPauseOriginalRun: boolean;
+  shouldInjectIntoRuntime: boolean;
+  shouldGiveImmediateVoiceReply: boolean;
+} {
+  const raw = String(text || '').trim();
+  const value = raw.toLowerCase();
+  const cancelRe = /\b(cancel|abort|kill|stop the task|stop this task|stop doing|don't do it|do not do it|nevermind|never mind|forget it|scratch that)\b|\bstop\b(?!\s+(talking|speaking|voice|audio))/;
+  const pauseRe = /\b(pause|hold on|wait a second|wait a sec|stop talking|quiet for a sec|give me a second)\b/;
+  const continueRe = /\b(continue|keep going|go on|resume|carry on|okay continue|ok continue)\b/;
+  const correctionRe = /\b(wait|actually|no\b|not like that|instead|i mean|what i mean|don't abort|do not abort|just inject|focus on|use .* instead|not desktop|not mobile)\b/;
+  const questionRe = /\?$|\b(what do you mean|why|how would|how can|is that|would that|can it|does that)\b/;
+  if (!value) {
+    return { intent: 'unknown', shouldAbortOriginalRun: false, shouldPauseOriginalRun: false, shouldInjectIntoRuntime: true, shouldGiveImmediateVoiceReply: true };
+  }
+  if (cancelRe.test(value)) {
+    return { intent: 'cancel', shouldAbortOriginalRun: true, shouldPauseOriginalRun: false, shouldInjectIntoRuntime: true, shouldGiveImmediateVoiceReply: true };
+  }
+  if (pauseRe.test(value)) {
+    return { intent: 'pause', shouldAbortOriginalRun: false, shouldPauseOriginalRun: true, shouldInjectIntoRuntime: true, shouldGiveImmediateVoiceReply: true };
+  }
+  if (continueRe.test(value)) {
+    return { intent: 'continue', shouldAbortOriginalRun: false, shouldPauseOriginalRun: false, shouldInjectIntoRuntime: true, shouldGiveImmediateVoiceReply: false };
+  }
+  if (questionRe.test(value)) {
+    return { intent: 'question', shouldAbortOriginalRun: false, shouldPauseOriginalRun: false, shouldInjectIntoRuntime: true, shouldGiveImmediateVoiceReply: true };
+  }
+  if (correctionRe.test(value)) {
+    return { intent: 'course_correction', shouldAbortOriginalRun: false, shouldPauseOriginalRun: false, shouldInjectIntoRuntime: true, shouldGiveImmediateVoiceReply: true };
+  }
+  return { intent: 'clarification', shouldAbortOriginalRun: false, shouldPauseOriginalRun: false, shouldInjectIntoRuntime: true, shouldGiveImmediateVoiceReply: true };
+}
+
+function buildVoiceInterruptionContextBlock(event: any): string {
+  const cls = event.classification || {};
+  const lines = [
+    '[VOICE INTERRUPTION EVENT]',
+    `Reason: ${voiceNarrationClean(event.reason || 'barge_in', 80)}`,
+    `Original user request: ${voiceNarrationClean(event.originalUserPrompt || '', 700) || '(unknown)'}`,
+    `Assistant/workflow state: ${event.isStreamActive ? 'A voice/chat stream was active when the user interrupted.' : 'Prometheus was speaking a prior response or milestone.'}`,
+    `Assistant text so far: ${voiceNarrationClean(event.assistantTextSoFar || '', 1000) || '(none captured)'}`,
+    `Spoken segment at interruption: ${voiceNarrationClean(event.currentSpokenSegment || '', 700) || '(unknown)'}`,
+    event.lastVoiceMilestone ? `Last voice milestone: ${voiceNarrationClean(event.lastVoiceMilestone, 300)}` : '',
+    `User interruption: ${voiceNarrationClean(event.userInterruptionTranscript || '', 700) || '(unclear)'}`,
+    `Interpretation: ${cls.intent || 'unknown'}`,
+    cls.intent === 'cancel'
+      ? 'Runtime instruction: The user explicitly cancelled. Stop/abort the active run if it is still running and do not continue stale work.'
+      : cls.intent === 'pause'
+        ? 'Runtime instruction: Pause voice output. Do not abort backend work by default unless the user explicitly asks to cancel.'
+        : 'Runtime instruction: Treat this as a live voice correction/follow-up. Do not abort by default. Incorporate the interruption before the next action or final response.',
+    '[/VOICE INTERRUPTION EVENT]',
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+function buildChatSteerContextBlock(event: RuntimeSteerEvent): string {
+  return [
+    '[LIVE CHAT STEER]',
+    `Steer id: ${voiceNarrationClean(event.id, 120)}`,
+    `Source: ${voiceNarrationClean(event.source || 'web', 80)}`,
+    event.kind ? `Kind: ${voiceNarrationClean(event.kind, 80)}` : '',
+    event.voiceContextPacketId ? `Voice context packet: ${voiceNarrationClean(event.voiceContextPacketId, 120)}` : '',
+    event.contextSummary ? `Current worker context:\n${voiceNarrationClean(event.contextSummary, 1600)}` : '',
+    event.spokenAck ? `Spoken acknowledgement already given to user: ${voiceNarrationClean(event.spokenAck, 500)}` : '',
+    `User steer: ${String(event.message || '').trim()}`,
+    event.requiresWorkerResponse
+      ? 'Runtime instruction: The user sent this while the current Prometheus run was active and expects the worker to address it. Incorporate it before the next action or final response. If it conflicts with earlier instructions, prefer this steer unless it is unsafe.'
+      : 'Runtime instruction: The user sent this while the current Prometheus run was active. Treat it as an immediate same-turn course correction, not as a separate future chat turn. Incorporate it before the next action or final response. If it conflicts with earlier instructions, prefer this steer unless it is unsafe.',
+    '[/LIVE CHAT STEER]',
+  ].filter(Boolean).join('\n');
+}
+
+function voiceInterruptionReply(intent: VoiceInterruptionIntent): string {
+  if (intent === 'cancel') return 'Got it. I am cancelling that.';
+  if (intent === 'pause') return 'Got it. I will pause the voice output.';
+  if (intent === 'question') return 'Got it. I will answer that in context.';
+  if (intent === 'continue') return '';
+  if (intent === 'course_correction') return 'Exactly. I will treat that as a correction and continue with the updated context.';
+  if (intent === 'unknown') return "I heard you interrupt, but I did not catch the correction clearly.";
+  return 'Got it. I will fold that into what I am doing.';
+}
+
+function appendVoiceInterruptionLog(event: any): void {
+  try {
+    const dir = path.join(getConfig().getConfigDir(), 'voice');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'interruptions.ndjson'), `${JSON.stringify(event)}\n`, 'utf-8');
+  } catch (err: any) {
+    console.warn('[voice interruption] log failed:', err?.message || err);
+  }
 }
 
 const ACTIVE_TASK_STATUSES: TaskStatus[] = [
@@ -6141,18 +7464,1989 @@ router.get('/api/status', async (_req, res) => {
   });
 });
 
+function summarizeMobileRuntime(runtime: any): Record<string, any> {
+  return {
+    id: String(runtime?.id || ''),
+    kind: String(runtime?.kind || ''),
+    label: String(runtime?.label || runtime?.kind || 'AI flow'),
+    sessionId: runtime?.sessionId ? String(runtime.sessionId) : '',
+    taskId: runtime?.taskId ? String(runtime.taskId) : '',
+    teamId: runtime?.teamId ? String(runtime.teamId) : '',
+    agentId: runtime?.agentId ? String(runtime.agentId) : '',
+    scheduleId: runtime?.scheduleId ? String(runtime.scheduleId) : '',
+    source: runtime?.source ? String(runtime.source) : '',
+    detail: runtime?.detail ? String(runtime.detail).slice(0, 500) : '',
+    startedAt: Number(runtime?.startedAt || 0),
+    abortable: runtime?.abortable === true,
+    abortRequestedAt: Number(runtime?.abortRequestedAt || 0) || null,
+  };
+}
+
+type VoiceAgentAction =
+  | 'answer_now'
+  | 'steer_worker'
+  | 'interrupt_worker'
+  | 'handoff_new_work'
+  | 'no_reply';
+
+const voiceAgentNarrationState = new Map<string, { signature: string; at: number; text?: string }>();
+const voiceAgentWorkerHandoffSessions = new Map<string, { at: number; transcript: string; eventId: string }>();
+const VOICE_AGENT_HANDOFF_SESSION_TTL_MS = 90 * 1000;
+
+function hasRecentVoiceAgentWorkerHandoff(sessionId: string): boolean {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return false;
+  const entry = voiceAgentWorkerHandoffSessions.get(sid);
+  if (!entry) return false;
+  if (Date.now() - Number(entry.at || 0) > VOICE_AGENT_HANDOFF_SESSION_TTL_MS) {
+    voiceAgentWorkerHandoffSessions.delete(sid);
+    return false;
+  }
+  return true;
+}
+
+function findActiveMainChatRuntimeForSession(sessionId: string, expectedRuntimeId = ''): any | null {
+  const sid = String(sessionId || '').trim();
+  const expected = String(expectedRuntimeId || '').trim();
+  return listLiveRuntimes()
+    .filter((runtime) => (
+      runtime.kind === 'main_chat'
+      && String(runtime.sessionId || '') === sid
+      && (!expected || runtime.id === expected)
+    ))
+    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+}
+
+function compactVoiceText(value: unknown, max = 500): string {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
+}
+
+function friendlyVoiceToolName(value: unknown): string {
+  return compactVoiceText(value, 120).replace(/_/g, ' ').trim();
+}
+
+function isVoiceContextNoiseText(value: unknown): boolean {
+  const text = compactVoiceText(value, 240).toLowerCase();
+  if (!text) return true;
+  return /^(?:request received|preparing prometheus runtime|preparing chat context|building model context|classifying (?:the )?request|thinking|processing|working|responding|preparing tool|tool complete|complete|done|step[_\s-]*done|step[_\s-]*complete|plan:|plan update:|reset\b|compacting (?:the )?thread|saving (?:important )?memory|checking paused task follow-up|building context|building prometheus runtime|tool schemas refreshed(?: for this turn)?\.?)\b/.test(text);
+}
+
+function isVoiceContextNoiseEvent(value: unknown): boolean {
+  return /^(?:heartbeat|token|thinking|thinking_delta|ui_preflight|voice_milestone|model_stream_event)$/i.test(String(value || '').trim());
+}
+
+function summarizeVoiceToolActivity(toolName: unknown, args: any, eventType = '', data: any = {}): string {
+  const tool = String(toolName || '').trim();
+  const friendly = friendlyVoiceToolName(tool || 'tool');
+  const target = voiceNarrationTargetFromArgs(args);
+  const failed = data?.error === true || /^ERROR:/i.test(String(data?.result || data?.message || ''));
+  if (!tool) return failed ? 'A step hit an issue.' : '';
+  if (tool === 'skill_list') return '';
+  if (tool === 'skill_read') return target ? `Read skill: ${target}` : 'Read a skill.';
+  if (/^(read_file|file_read|source_read)$/i.test(tool)) return target ? `Read file: ${target}` : 'Read a file.';
+  if (/^(list_files|search_files|grep|find_files)$/i.test(tool)) return target ? `Searched: ${target}` : 'Searched the workspace.';
+  if (/^(write_file|edit_file|create_file|patch_file|apply_patch|replace_file|delete_file)$/i.test(tool)) return target ? `Edited file: ${target}` : 'Edited files.';
+  if (/^(run_command|shell_command|terminal_run)$/i.test(tool)) {
+    const command = compactVoiceText(args?.command || args?.cmd || target, 140);
+    return command ? `Ran command: ${command}` : 'Ran a command.';
+  }
+  if (tool.startsWith('browser_')) return target ? `Used browser: ${target}` : `Used ${friendly}.`;
+  if (tool.startsWith('desktop_')) return target ? `Used desktop tool: ${target}` : `Used ${friendly}.`;
+  if (/memory/i.test(tool)) return '';
+  if (/approval/i.test(tool)) return failed ? 'Approval step hit an issue.' : 'Checked an approval step.';
+  if (failed) return `${friendly || 'Tool'} hit an issue.`;
+  if (String(eventType || '').toLowerCase() === 'tool_call') return target ? `Using ${friendly}: ${target}` : `Using ${friendly}.`;
+  return `${friendly || 'Tool'} completed.`;
+}
+
+function voiceNarrationLineFromActivity(text: unknown): string {
+  const value = compactVoiceText(text, 260);
+  if (!value || isVoiceContextNoiseText(value)) return '';
+  const skill = value.match(/^Read skill:\s*(.+)$/i)?.[1];
+  if (skill) return `I checked the ${skill} guidance and I'm applying it now.`;
+  const fileRead = value.match(/^Read file:\s*(.+)$/i)?.[1];
+  if (fileRead) return `I checked ${fileRead}; now I'm using that to make the next move cleanly.`;
+  const searched = value.match(/^Searched:\s*(.+)$/i)?.[1];
+  if (searched) return `I searched ${searched} and I'm narrowing it down from there.`;
+  const edited = value.match(/^Edited file:\s*(.+)$/i)?.[1];
+  if (edited) return `I updated ${edited}; now I'm checking that it holds together.`;
+  const command = value.match(/^Ran command:\s*(.+)$/i)?.[1];
+  if (command) {
+    if (/test|check|tsc|lint|build|vitest|jest|pytest|node --check/i.test(command)) return "I'm running verification now so I can catch anything before I call it done.";
+    return "I ran the command and I'm reading the result before I move again.";
+  }
+  if (/^Used browser:/i.test(value)) return "I've got the browser context now and I'm using it to decide the next step.";
+  if (/^Used desktop tool:/i.test(value)) return "I've checked the desktop state and I'm using that context now.";
+  if (/ completed\.?$/i.test(value) && !/^skill read completed/i.test(value)) return '';
+  if (/ hit an issue\.?$/i.test(value)) return "That step hit an issue, so I'm adjusting the route instead of pushing forward blindly.";
+  return value.length > 12 ? value : '';
+}
+
+function summarizeUnlockedToolCategories(names: string[], requestedCategory = ''): string {
+  const categories = new Set<string>();
+  const requested = compactVoiceText(requestedCategory, 120);
+  if (requested) categories.add(requested);
+  for (const name of names || []) {
+    const category = getToolCategory(String(name || '').trim());
+    if (category) categories.add(String(category));
+  }
+  const labels = Array.from(categories)
+    .map((category) => friendlyVoiceToolName(category))
+    .filter(Boolean);
+  if (!labels.length) return 'Tool category unlocked for this turn.';
+  return `Newly unlocked tool category: ${labels.join(', ')}.`;
+}
+
+function summarizeVoiceContextEntry(entry: any): Record<string, any> | null {
+  const event = compactVoiceText(entry?.extra?.event || entry?.event || '', 80);
+  const toolName = compactVoiceText(entry?.extra?.toolName || entry?.toolName || entry?.action || '', 120);
+  const args = entry?.extra?.args || entry?.args;
+  const type = String(entry?.type || 'info');
+  if (toolName === 'skill_list') return null;
+  if (isVoiceContextNoiseEvent(event) && type !== 'error' && type !== 'warn') return null;
+  let content = '';
+  if (event === 'tool_call' || event === 'tool_result' || toolName) {
+    content = summarizeVoiceToolActivity(toolName, args, event, {
+      error: entry?.extra?.error === true || type === 'error',
+      result: entry?.content || entry?.result,
+      message: entry?.message,
+    });
+  } else {
+    content = compactVoiceText(entry?.content || entry?.message || entry?.summary || '', type === 'error' || type === 'warn' ? 260 : 420);
+  }
+  if (!content || (type !== 'error' && type !== 'warn' && isVoiceContextNoiseText(content))) return null;
+  return {
+    type: type === 'think' ? 'info' : type,
+    actor: compactVoiceText(entry?.actor || 'Prom', 80) || 'Prom',
+    content,
+    toolName: toolName === 'skill_list' ? '' : toolName,
+    event,
+    ts: compactVoiceText(entry?.ts || entry?.at || '', 80),
+  };
+}
+
+function summarizeVoiceProcessEntries(entries: any[], limit = 10): Array<Record<string, any>> {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => summarizeVoiceContextEntry(entry))
+    .filter((entry): entry is Record<string, any> => !!entry && !!(entry.content || entry.toolName || entry.event))
+    .slice(-limit);
+}
+
+function summarizeVoiceStreamEvents(stream: MainChatStreamState | null, limit = 12): Array<Record<string, any>> {
+  const summarized: Array<Record<string, any> | null> = (stream?.events || [])
+    .map((frame) => {
+      const type = compactVoiceText(frame?.type || '', 80);
+      const data = frame?.data || {};
+      const action = compactVoiceText(data?.action || data?.name || data?.toolName || '', 120);
+      const error = data?.error === true || type === 'error';
+      if (action === 'skill_list') return null;
+      if (isVoiceContextNoiseEvent(type) && !error && type !== 'warn') return null;
+      let message = '';
+      if (type === 'tool_call' || type === 'tool_result' || action) {
+        message = summarizeVoiceToolActivity(action, data?.args, type, data);
+      } else {
+        message = compactVoiceText(data?.message || data?.text || data?.summary || (error ? data?.result : ''), error ? 260 : 420);
+      }
+      if (!message || (!error && isVoiceContextNoiseText(message))) return null;
+      return {
+        seq: frame.seq,
+        type,
+        at: frame.at,
+        message,
+        action,
+        error,
+      };
+    });
+  return summarized
+    .filter((frame): frame is Record<string, any> => !!frame && !!(frame.message || frame.action || frame.type))
+    .slice(-limit);
+}
+
+function summarizeVoiceObservation(sessionId: string): Record<string, any> {
+  let browser: Record<string, any> | null = null;
+  let desktop: Record<string, any> | null = null;
+  try {
+    const packet: any = getBrowserAdvisorPacket(sessionId);
+    if (packet) {
+      browser = {
+        title: compactVoiceText(packet.title || packet.pageTitle || packet.tabTitle || '', 180),
+        url: compactVoiceText(packet.url || '', 220),
+        summary: compactVoiceText(packet.summary || packet.pageSummary || packet.observation || packet.text || '', 700),
+        updatedAt: Number(packet.updatedAt || packet.at || 0) || null,
+      };
+    }
+  } catch {}
+  try {
+    const packet: any = getDesktopAdvisorPacket(sessionId);
+    if (packet) {
+      desktop = {
+        activeWindow: packet.activeWindow ? {
+          processName: compactVoiceText(packet.activeWindow.processName || '', 120),
+          title: compactVoiceText(packet.activeWindow.title || '', 220),
+        } : null,
+        summary: compactVoiceText(packet.summary || packet.observation || packet.ocrText || packet.text || '', 700),
+        updatedAt: Number(packet.updatedAt || packet.at || 0) || null,
+      };
+    }
+  } catch {}
+  return { browser, desktop };
+}
+
+function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string, any> = {}): Record<string, any> {
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const activeRuntime = findActiveMainChatRuntimeForSession(sid, String(options.expectedRuntimeId || options.runtimeId || ''));
+  const checkpoint = activeRuntime?.checkpoint && typeof activeRuntime.checkpoint === 'object' ? activeRuntime.checkpoint : {};
+  const session = getSession(sid);
+  const history = Array.isArray(session?.history) ? session.history : [];
+  const latestUser: any = [...history].reverse().find((entry: any) => String(entry?.role || '') === 'user') || null;
+  const latestAssistant: any = [...history].reverse().find((entry: any) => ['assistant', 'ai'].includes(String(entry?.role || ''))) || null;
+  const stream = getMainChatStream(sid);
+  const processEntries = summarizeVoiceProcessEntries(checkpoint.processEntries || [], 12);
+  const recentEvents = summarizeVoiceStreamEvents(stream, 16);
+  const currentGoal = compactVoiceText(
+    options.originalUserPrompt
+      || activeRuntime?.recoveryData?.message
+      || activeRuntime?.detail
+      || latestUser?.content
+      || latestUser?.body?.text
+      || '',
+    900,
+  );
+  const activeToolName = compactVoiceText(checkpoint.toolName || '', 120);
+  const checkpointEvent = compactVoiceText(checkpoint.event || '', 120);
+  const checkpointLabel = compactVoiceText(checkpoint.message || checkpoint.result || '', 500);
+  const activeToolLabel = checkpointLabel && !isVoiceContextNoiseText(checkpointLabel)
+    ? (activeToolName ? summarizeVoiceToolActivity(activeToolName, checkpoint.args, checkpointEvent, checkpoint) || checkpointLabel : checkpointLabel)
+    : '';
+  const currentPhase = checkpointEvent && !isVoiceContextNoiseEvent(checkpointEvent) && !isVoiceContextNoiseText(checkpointEvent)
+    ? checkpointEvent
+    : stream?.active
+      ? 'running'
+      : '';
+  const completed = processEntries
+    .filter((entry) => entry.type === 'result' || entry.event === 'tool_result')
+    .slice(-5)
+    .map((entry) => entry.toolName ? `${friendlyVoiceToolName(entry.toolName)}: ${entry.content}` : entry.content)
+    .filter(Boolean);
+  const displayPhase = currentPhase && currentPhase !== 'running' ? currentPhase : '';
+  const displayTool = activeToolName && activeToolName !== 'skill_list' ? friendlyVoiceToolName(activeToolName) : '';
+  const recentSummaryLines = [
+    currentGoal ? `Goal: ${currentGoal}` : '',
+    displayPhase ? `Current phase: ${displayPhase}` : '',
+    displayTool ? `Active step: ${displayTool}` : '',
+    activeToolLabel ? `Latest update: ${activeToolLabel}` : '',
+    completed.length ? `Recent completed work: ${completed.join(' | ')}` : '',
+  ].filter(Boolean);
+  return {
+    id: `voice_ctx_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+    createdAt: Date.now(),
+    sessionId: sid,
+    active: !!activeRuntime,
+    activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
+    currentGoal,
+    currentPhase: displayPhase,
+    activeToolName: displayTool,
+    activeToolLabel,
+    pendingSteerCount: Number(checkpoint.pendingSteerCount || 0) || 0,
+    lastSteer: checkpoint.lastSteer || null,
+    lastVoiceInterruption: checkpoint.voiceInterruptionEvent || null,
+    latestUser: latestUser ? compactVoiceText(latestUser.content || latestUser.body?.text || '', 700) : '',
+    latestAssistant: latestAssistant ? compactVoiceText(latestAssistant.content || latestAssistant.body?.text || '', 700) : '',
+    time: buildVoiceTimeContext(),
+    processEntries,
+    recentEvents,
+    observations: summarizeVoiceObservation(sid),
+    summary: recentSummaryLines.join('\n'),
+  };
+}
+
+function isVoiceStatusQuestion(text: string): boolean {
+  const value = String(text || '').toLowerCase();
+  return /\b(what are you doing|what're you doing|what is happening|what's happening|status|where are we|where are you|what step|what stage|what did you do|what have you done|what do you see|what are you seeing|what's on screen|what is on screen)\b/.test(value);
+}
+
+function isVoiceWakeOrSmallTalk(text: string): boolean {
+  const value = String(text || '').toLowerCase().replace(/[^\w\s']/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  if (/^(hey|hi|hello|yo|ok|okay)?\s*prometheus$/.test(value)) return true;
+  if (/^(hey|hi|hello|yo)\s+prometheus\s+(are you there|you there|can you hear me|hello|hi|hey)?$/.test(value)) return true;
+  if (/^(hey|hi|hello|yo|good morning|good afternoon|good evening|what's up|whats up|what is up|sup|you there|are you there|can you hear me|testing|test)$/.test(value)) return true;
+  if (/^(thanks|thank you|cool|awesome|nice|perfect|great|sounds good|got it|okay|ok)$/.test(value)) return true;
+  if (/^(what can you do|what do you do|who are you|what are you|tell me what you can do|help)$/.test(value)) return true;
+  return false;
+}
+
+function isVoiceWorkerRequest(text: string): boolean {
+  const value = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  if (value.length < 10 && !/\b(open|make|build|create|search|find|check|fix|run|send|write|edit|look up)\b/.test(value)) return false;
+  if (/\b(can you hear me|are you there|what's up|whats up|what is up|how are you|thank you|thanks|what can you do|what do you do|who are you|what are you)\b/.test(value)) return false;
+  return /\b(open|make|build|create|generate|write|edit|update|change|fix|debug|test|run|execute|install|start|stop|restart|search|find|look up|research|analyze|inspect|check|review|read|summarize|compare|calculate|schedule|remind|send|email|message|post|tweet|download|upload|move|copy|delete|save|export|render|record|capture|screenshot|browse|click|type|fill|go to|navigate|use|turn on|turn off|set up|help me|can you|could you|please)\b/.test(value);
+}
+
+function voiceConversationalReply(text: string, contextPacket: Record<string, any>): string {
+  const value = String(text || '').toLowerCase().replace(/[^\w\s']/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/\b(thanks|thank you)\b/.test(value)) return 'Of course.';
+  if (/\b(can you hear me|are you there|you there|testing|test)\b/.test(value)) return 'Yep, I can hear you.';
+  if (/\b(what can you do|what do you do|who are you|what are you)\b/.test(value)) return 'I can talk with you here, answer quick questions, and hand real work to Prometheus when you ask me to do something.';
+  if (/\b(how are you|what's up|whats up|what is up|sup)\b/.test(value)) return contextPacket.active ? 'I am here, and I am tracking the current work.' : 'I am here and ready.';
+  if (/prometheus/.test(value) || /^(hey|hi|hello|yo|good morning|good afternoon|good evening)/.test(value)) return contextPacket.active ? 'I am here, and I am tracking the current work.' : 'I am here.';
+  return 'I am here.';
+}
+
+function decideVoiceAgentAction(transcript: string, classification: ReturnType<typeof classifyVoiceInterruption>, contextPacket: Record<string, any>): VoiceAgentAction {
+  const text = String(transcript || '').trim();
+  if (!text) return 'no_reply';
+  if (isVoiceWakeOrSmallTalk(text)) return 'answer_now';
+  if (classification.shouldAbortOriginalRun) return 'interrupt_worker';
+  if (classification.shouldPauseOriginalRun) return 'answer_now';
+  if (!contextPacket.active) {
+    return isVoiceWorkerRequest(text) ? 'handoff_new_work' : 'answer_now';
+  }
+  if (classification.intent === 'continue') return 'no_reply';
+  if (classification.intent === 'question' || isVoiceStatusQuestion(text)) return 'answer_now';
+  if (classification.intent === 'unknown') return 'answer_now';
+  return 'steer_worker';
+}
+
+function voiceSteerKindFromIntent(intent: VoiceInterruptionIntent): RuntimeSteerEvent['kind'] {
+  if (intent === 'course_correction') return 'correction';
+  if (intent === 'question') return 'question';
+  if (intent === 'cancel') return 'cancel';
+  if (intent === 'pause') return 'pause';
+  if (intent === 'continue') return 'continue';
+  if (intent === 'clarification') return 'clarification';
+  return 'unknown';
+}
+
+function normalizeVoiceCommandText(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\w\s']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function exactActiveWorkerVoiceCommand(value: string): '' | 'stop' | 'pause' | 'status' {
+  const text = normalizeVoiceCommandText(value);
+  if (!text) return '';
+  if (/^(?:stop|cancel|abort|kill|stop task|stop this|stop this task|stop the task|stop working|nevermind|never mind|forget it|scratch that)$/.test(text)) return 'stop';
+  if (/^(?:pause|wait|hold on|wait a second|wait a sec|give me a second|give me a sec)$/.test(text)) return 'pause';
+  if (/^(?:status|what is the status|what's the status|whats the status|what are you doing|what is it doing|what's it doing|whats it doing|what do you see|what are you seeing)$/.test(text)) return 'status';
+  return '';
+}
+
+function composeVoiceAgentReply(action: VoiceAgentAction, transcript: string, classification: ReturnType<typeof classifyVoiceInterruption>, contextPacket: Record<string, any>): string {
+  const intent = classification.intent;
+  const summary = compactVoiceText(contextPacket.summary || '', 900);
+  const activeTool = compactVoiceText(contextPacket.activeToolName || '', 100);
+  const activeLabel = compactVoiceText(contextPacket.activeToolLabel || '', 260);
+  const browser = contextPacket.observations?.browser;
+  const desktop = contextPacket.observations?.desktop;
+  if (action === 'no_reply') return '';
+  if (action === 'interrupt_worker') return contextPacket.active ? 'Got it. I am stopping the active Prometheus worker.' : 'Got it. I do not see an active worker to stop.';
+  if (intent === 'pause') return 'Got it. I will keep voice quiet for a moment while the worker continues.';
+  if (isVoiceWakeOrSmallTalk(transcript)) {
+    return voiceConversationalReply(transcript, contextPacket);
+  }
+  if (action === 'handoff_new_work') return 'Got it. I will hand that to Prometheus as a new request.';
+  if (!contextPacket.active && hasRecentVoiceAgentWorkerHandoff(String(contextPacket.sessionId || '').trim())) {
+    return voiceConversationalReply(transcript, contextPacket);
+  }
+  if (classification.intent === 'unknown') return 'I heard you, but I did not catch the correction clearly.';
+  if (action === 'steer_worker') {
+    const steer = compactVoiceText(transcript, 180);
+    return steer ? `Got it. I will steer the active run with: ${steer}` : 'Got it. I will steer the active run with that update.';
+  }
+  if (/\b(what do you see|what are you seeing|what's on screen|what is on screen)\b/i.test(transcript)) {
+    const pieces = [];
+    if (browser?.title || browser?.url || browser?.summary) {
+      pieces.push(`browser: ${compactVoiceText([browser.title, browser.url, browser.summary].filter(Boolean).join(' - '), 360)}`);
+    }
+    if (desktop?.activeWindow?.title || desktop?.summary) {
+      pieces.push(`desktop: ${compactVoiceText([desktop.activeWindow?.title, desktop.summary].filter(Boolean).join(' - '), 360)}`);
+    }
+    return pieces.length
+      ? `Right now I have this context: ${pieces.join('. ')}.`
+      : 'I do not have a fresh visual packet yet. The worker can capture one if you want it to inspect the screen.';
+  }
+  if (summary) return `Right now I am tracking this worker state. ${summary.replace(/\n+/g, ' ')}`;
+  if (activeTool || activeLabel) return `I am in the active worker now${activeTool ? `, around ${activeTool}` : ''}${activeLabel ? `: ${activeLabel}` : '.'}`;
+  return contextPacket.active
+    ? 'The worker is active, but I do not have a detailed status packet yet.'
+    : voiceConversationalReply(transcript, contextPacket);
+}
+
+function buildVoiceContextSummaryForSteer(contextPacket: Record<string, any>): string {
+  return [
+    contextPacket.currentGoal ? `Goal: ${compactVoiceText(contextPacket.currentGoal, 500)}` : '',
+    contextPacket.currentPhase ? `Phase: ${compactVoiceText(contextPacket.currentPhase, 100)}` : '',
+    contextPacket.activeToolName ? `Active tool: ${compactVoiceText(contextPacket.activeToolName, 100)}` : '',
+    contextPacket.activeToolLabel ? `Latest update: ${compactVoiceText(contextPacket.activeToolLabel, 300)}` : '',
+    Array.isArray(contextPacket.processEntries) && contextPacket.processEntries.length
+      ? `Recent process: ${contextPacket.processEntries.slice(-4).map((entry: any) => compactVoiceText(entry.content || entry.toolName || entry.event || '', 180)).filter(Boolean).join(' | ')}`
+      : '',
+  ].filter(Boolean).join('\n');
+}
+
+type VoiceAgentDecision = {
+  action: VoiceAgentAction;
+  spokenReply: string;
+  workerInstruction?: string;
+  needsWorkerResponse?: boolean;
+  reason?: string;
+};
+
+type VoiceAgentProcessEntry = {
+  ts: string;
+  type: string;
+  content: string;
+  actor?: string;
+  extra?: Record<string, any>;
+};
+
+function pushVoiceAgentProcessEntry(trace: VoiceAgentProcessEntry[] | undefined, type: string, content: string, extra: Record<string, any> = {}): void {
+  if (!Array.isArray(trace)) return;
+  const text = compactVoiceText(content, 900);
+  if (!text) return;
+  const entry: VoiceAgentProcessEntry = {
+    ts: new Date().toLocaleTimeString(),
+    type,
+    content: text,
+    actor: 'Voice Agent',
+    extra: { actor: 'Voice Agent', source: 'voice_agent', ...extra },
+  };
+  const prev = trace[trace.length - 1];
+  if (prev && prev.type === entry.type && prev.content === entry.content) return;
+  trace.push(entry);
+}
+
+function voiceAgentToolResultSummary(raw: string): { ok: boolean; summary: string } {
+  const parsed = parseVoiceToolResult(raw);
+  const ok = parsed?.ok !== false;
+  const summary = compactVoiceText(parsed?.summary || parsed?.stdout || parsed?.text || parsed?.error || raw, 500);
+  return { ok, summary };
+}
+
+function broadcastVoiceAgentToolEvent(sessionId: string, event: 'tool_call' | 'tool_result', data: Record<string, any>): void {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  broadcastWS({
+    type: 'voice_agent_tool_event',
+    sessionId: sid,
+    event,
+    data: {
+      actor: 'Voice Agent',
+      source: 'voice_agent',
+      ...data,
+    },
+    at: Date.now(),
+  });
+}
+
+async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, args: Record<string, any>, trace?: VoiceAgentProcessEntry[]): Promise<string> {
+  const action = String(name || '').trim();
+  const cleanArgs = args && typeof args === 'object' ? args : {};
+  broadcastVoiceAgentToolEvent(sessionId, 'tool_call', { action, args: cleanArgs });
+  pushVoiceAgentProcessEntry(trace, action === 'voice_skill_lookup' ? 'skill' : 'tool', `Using ${friendlyVoiceToolName(action)}...`, { action, args: cleanArgs });
+  const raw = await executeVoiceAgentTool(sessionId, action, cleanArgs);
+  const summary = voiceAgentToolResultSummary(raw);
+  broadcastVoiceAgentToolEvent(sessionId, 'tool_result', {
+    action,
+    result: summary.summary,
+    error: !summary.ok,
+  });
+  pushVoiceAgentProcessEntry(trace, summary.ok ? 'result' : 'error', `${friendlyVoiceToolName(action)} ${summary.ok ? 'complete' : 'failed'}${summary.summary ? ` => ${summary.summary}` : ''}`, { action, result: summary.summary, error: !summary.ok });
+  return raw;
+}
+
+function buildVoiceTimeContext(): Record<string, any> {
+  const now = new Date();
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+  return {
+    nowIso: now.toISOString(),
+    timezone,
+    dateLabel: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+    timeLabel: now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }),
+  };
+}
+
+function voiceToolResult(ok: boolean, summary: string, data: Record<string, any> = {}): string {
+  return JSON.stringify({
+    ok,
+    summary: compactVoiceText(summary, 1200),
+    ...data,
+  }, null, 2);
+}
+
+function parseVoiceToolArgs(value: any): Record<string, any> {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isVoiceFetchEscalationUrl(rawUrl: string): boolean {
+  const value = String(rawUrl || '').trim();
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+    return /(^|\.)x\.com$|(^|\.)twitter\.com$|(^|\.)tiktok\.com$|(^|\.)instagram\.com$|(^|\.)youtube\.com$|(^|\.)youtu\.be$|(^|\.)facebook\.com$|(^|\.)threads\.net$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
+function summarizeVoiceSearchResult(result: any): Record<string, any> {
+  const stdout = compactVoiceText(result?.stdout || result?.data?.answer || result?.error || '', 1800);
+  const rows = Array.isArray(result?.data?.results) ? result.data.results
+    : Array.isArray(result?.data?.items) ? result.data.items
+      : [];
+  const results = rows.slice(0, 5).map((row: any) => ({
+    title: compactVoiceText(row?.title || row?.name || '', 160),
+    url: compactVoiceText(row?.url || row?.link || '', 240),
+    snippet: compactVoiceText(row?.snippet || row?.content || row?.description || '', 260),
+  })).filter((row: any) => row.title || row.url || row.snippet);
+  return { stdout, results };
+}
+
+function summarizeVoiceMemorySearch(raw: any): Record<string, any> {
+  const hits = Array.isArray(raw?.hits) ? raw.hits
+    : Array.isArray(raw?.results) ? raw.results
+      : Array.isArray(raw?.records) ? raw.records
+        : [];
+  return {
+    count: hits.length,
+    hits: hits.slice(0, 5).map((hit: any) => ({
+      recordId: compactVoiceText(hit?.recordId || hit?.record_id || hit?.id || '', 120),
+      title: compactVoiceText(hit?.title || hit?.canonicalKey || hit?.sourceTitle || hit?.source || '', 180),
+      why: compactVoiceText(hit?.whyMatched || hit?.summary || hit?.snippet || hit?.text || hit?.content || '', 360),
+      source: compactVoiceText(hit?.sourceType || hit?.source_type || hit?.layer || '', 80),
+    })),
+  };
+}
+
+function buildVoiceToolDefinitions(): any[] {
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'voice_web_search',
+        description: 'Fast voice wrapper around Prometheus web_search/web_search_single/web_search_multi. Use for quick current/factual lookup. Use multi for latest/current/news/compare/sensitive/current-event questions. Escalate deep research to handoff_new_work.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string' },
+            mode: { type: 'string', enum: ['auto', 'single', 'multi'], description: 'auto chooses single for simple questions and multi for latest/current/news/compare.' },
+            max_results: { type: 'number', description: 'Small number, usually 3-5.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_web_fetch',
+        description: 'Fast voice wrapper around Prometheus web_fetch for one clean text/article/docs URL. Do not use for X/Twitter, TikTok, Instagram, YouTube, auth/browser/media-heavy URLs; hand those to Worker.',
+        parameters: {
+          type: 'object',
+          required: ['url'],
+          properties: {
+            url: { type: 'string' },
+            max_chars: { type: 'number', description: 'Default 4000, hard capped for voice.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_write_note',
+        description: 'Fast voice wrapper around write_note. Use only when the user asks to remember, jot down, log, or save a short note.',
+        parameters: {
+          type: 'object',
+          required: ['content'],
+          properties: {
+            content: { type: 'string' },
+            tag: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_skill_lookup',
+        description: 'Fast voice wrapper around skill_list/skill_read summaries. Use to find relevant skills or answer questions about available workflows. Returns summaries only, not full skill instructions.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            id: { type: 'string', description: 'Specific skill id to summarize.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_memory_search',
+        description: 'Fast read-only wrapper around memory_search and optional memory_read_record. Use for recall: previous decisions, project history, preferences, what was said before. Do not write memory.',
+        parameters: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            query: { type: 'string' },
+            mode: { type: 'string', enum: ['quick', 'deep', 'timeline', 'project'] },
+            limit: { type: 'number' },
+            read_record_id: { type: 'string', description: 'Optional record id from a prior result to read one record.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_timer',
+        description: 'Fast voice wrapper around the existing Prometheus timer tool. Use to create/list/update/cancel one-shot main-chat timers. Timer execution is handled by the Worker when due.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['create', 'list', 'update', 'reschedule', 'cancel'] },
+            timer_id: { type: 'string' },
+            instruction: { type: 'string', description: 'What the Worker should do when the timer fires.' },
+            label: { type: 'string' },
+            delay_seconds: { type: 'number' },
+            due_at: { type: 'string', description: 'ISO timestamp if known.' },
+            delivery: {
+              type: 'object',
+              properties: {
+                origin: { type: 'boolean' },
+                telegram: { type: 'boolean' },
+                voice_if_active: { type: 'boolean' },
+              },
+              additionalProperties: true,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+  ];
+}
+
+async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
+  const workspacePath = getConfig().getWorkspacePath();
+  try {
+    if (name === 'voice_web_search') {
+      const query = String(args.query || '').trim();
+      if (!query) return voiceToolResult(false, 'Search query is required.');
+      const mode = String(args.mode || 'auto').toLowerCase();
+      const wantsMulti = mode === 'multi' || (mode === 'auto' && /\b(latest|current|today|news|compare|versus|vs|recent|breaking|price|stock|election|weather|recall|safety|law|legal|medical|financial)\b/i.test(query));
+      const result = await executeWebSearch({
+        query,
+        max_results: Math.min(6, Math.max(2, Number(args.max_results || 4) || 4)),
+        ...(wantsMulti ? { provider: 'multi' as const } : { multi_engine: false }),
+      });
+      return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Search failed.') : 'Search complete.', summarizeVoiceSearchResult(result));
+    }
+    if (name === 'voice_web_fetch') {
+      const url = String(args.url || '').trim();
+      if (!url) return voiceToolResult(false, 'URL is required.');
+      if (isVoiceFetchEscalationUrl(url)) {
+        return voiceToolResult(false, 'This URL needs Worker handling because it is social/video/media-heavy or may need browser/media analysis.', { escalateToWorker: true, url });
+      }
+      const result = await executeWebFetch({ url, max_chars: Math.min(6000, Math.max(1200, Number(args.max_chars || 4000) || 4000)) });
+      const text = compactVoiceText(result?.stdout || result?.error || '', 2400);
+      return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Fetch failed.') : 'Fetch complete.', { text, url });
+    }
+    if (name === 'voice_write_note') {
+      const content = String(args.content || '').trim();
+      if (!content) return voiceToolResult(false, 'Note content is required.');
+      const result = await executeWriteNote({ content, tag: String(args.tag || 'voice').trim() || 'voice' });
+      return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Note failed.') : 'Note saved.', { file: result.data?.file, tag: result.data?.tag });
+    }
+    if (name === 'voice_skill_lookup') {
+      _skillsManager.scanSkills();
+      const all = _skillsManager.getAll();
+      const id = String(args.id || '').trim();
+      const query = String(args.query || '').trim().toLowerCase();
+      const candidates = id
+        ? all.filter((skill: any) => String(skill.id || '') === id)
+        : all.filter((skill: any) => {
+            if (!query) return true;
+            const haystack = [
+              skill.id,
+              skill.name,
+              skill.description,
+              ...(Array.isArray(skill.triggers) ? skill.triggers : []),
+              ...(Array.isArray(skill.requiredTools) ? skill.requiredTools : []),
+            ].join(' ').toLowerCase();
+            return query.split(/\s+/).filter(Boolean).some((part) => haystack.includes(part));
+          });
+      const skills = candidates.slice(0, 8).map((skill: any) => ({
+        id: skill.id,
+        name: skill.name,
+        description: compactVoiceText(skill.description || skill.instructions || '', 260),
+        triggers: Array.isArray(skill.triggers) ? skill.triggers.slice(0, 8) : [],
+        requiredTools: Array.isArray(skill.requiredTools) ? skill.requiredTools.slice(0, 8) : [],
+      }));
+      return voiceToolResult(true, skills.length ? `Found ${skills.length} relevant skill${skills.length === 1 ? '' : 's'}.` : 'No matching skills found.', { skills });
+    }
+    if (name === 'voice_memory_search') {
+      const readRecordId = String(args.read_record_id || args.record_id || '').trim();
+      if (readRecordId) {
+        const out = readMemoryRecord(workspacePath, readRecordId);
+        return voiceToolResult(!!out.record, out.record ? 'Memory record read.' : `Memory record not found: ${readRecordId}`, { record: out.record ? compactVoiceText(JSON.stringify(out.record), 1800) : undefined });
+      }
+      const query = String(args.query || '').trim();
+      if (!query) return voiceToolResult(false, 'Memory search query is required.');
+      const modeRaw = String(args.mode || 'quick').trim().toLowerCase();
+      const mode = (modeRaw === 'deep' || modeRaw === 'project' || modeRaw === 'timeline') ? modeRaw : 'quick';
+      const out = await searchMemoryIndexAsync(workspacePath, {
+        query,
+        mode: mode as any,
+        limit: Math.min(6, Math.max(2, Number(args.limit || 5) || 5)),
+        rerank: true,
+        queryRoute: 'voice_agent',
+      });
+      return voiceToolResult(true, 'Memory search complete.', summarizeVoiceMemorySearch(out));
+    }
+    if (name === 'voice_timer') {
+      const action = String(args.action || '').trim().toLowerCase();
+      if (action === 'list') {
+        const timers = listMainChatTimers({ sessionId, includeDone: args.include_done === true });
+        return voiceToolResult(true, timers.length ? `You have ${timers.length} timer${timers.length === 1 ? '' : 's'}.` : 'No active timers.', { timers: timers.slice(0, 8) });
+      }
+      if (action === 'cancel') {
+        const timerId = String(args.timer_id || args.timerId || '').trim();
+        if (!timerId) return voiceToolResult(false, 'Timer id is required to cancel.');
+        const cancelled = cancelMainChatTimer(timerId);
+        return voiceToolResult(!!cancelled, cancelled ? 'Timer cancelled.' : `Timer not found: ${timerId}`, { timer: cancelled || undefined });
+      }
+      if (action === 'update' || action === 'reschedule') {
+        const timerId = String(args.timer_id || args.timerId || '').trim();
+        if (!timerId) return voiceToolResult(false, 'Timer id is required to update.');
+        const patch: Record<string, any> = {};
+        if (args.instruction !== undefined) patch.instruction = String(args.instruction || '').trim();
+        if (args.label !== undefined) patch.label = String(args.label || '').trim();
+        const delay = Number(args.delay_seconds ?? args.delaySeconds);
+        const dueAtRaw = String(args.due_at || args.dueAt || '').trim();
+        if (Number.isFinite(delay) && delay > 0) patch.dueAt = new Date(Date.now() + Math.max(5, Math.floor(delay)) * 1000).toISOString();
+        else if (dueAtRaw) {
+          const due = new Date(dueAtRaw);
+          if (Number.isFinite(due.getTime())) patch.dueAt = due.toISOString();
+        }
+        if (patch.dueAt) patch.status = 'pending';
+        const updated = Object.keys(patch).length ? updateMainChatTimer(timerId, patch) : null;
+        return voiceToolResult(!!updated, updated ? `Timer updated for ${new Date(updated.dueAt).toLocaleString()}.` : 'Timer update failed.', { timer: updated || undefined });
+      }
+      if (action === 'create') {
+        const instruction = String(args.instruction || args.prompt || '').trim();
+        if (!instruction) return voiceToolResult(false, 'Timer instruction is required.');
+        const delay = Number(args.delay_seconds ?? args.delaySeconds);
+        const dueAtRaw = String(args.due_at || args.dueAt || '').trim();
+        let dueAt: Date | null = null;
+        if (Number.isFinite(delay) && delay > 0) dueAt = new Date(Date.now() + Math.max(5, Math.floor(delay)) * 1000);
+        else if (dueAtRaw) {
+          const parsed = new Date(dueAtRaw);
+          if (Number.isFinite(parsed.getTime())) dueAt = parsed;
+        }
+        if (!dueAt) return voiceToolResult(false, 'Timer needs delay_seconds or due_at.');
+        const delivery = args.delivery && typeof args.delivery === 'object' ? args.delivery : {};
+        const timer = createMainChatTimer({
+          sessionId,
+          instruction,
+          dueAt,
+          label: String(args.label || '').trim() || undefined,
+          origin: { channel: 'voice', voiceMode: true },
+          delivery: {
+            origin: delivery.origin !== false,
+            telegram: delivery.telegram === true,
+            voiceIfActive: delivery.voice_if_active !== false,
+          },
+        } as any);
+        return voiceToolResult(true, `Timer created for ${new Date(timer.dueAt).toLocaleString()}.`, { timer });
+      }
+    }
+  } catch (err: any) {
+    return voiceToolResult(false, `${friendlyVoiceToolName(name)} failed: ${String(err?.message || err)}`);
+  }
+  return voiceToolResult(false, `Unknown voice tool: ${name}`);
+}
+
+function parseVoiceToolResult(raw: string): any {
+  try {
+    const parsed = JSON.parse(String(raw || '{}'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function extractFirstVoiceUrl(text: string): string {
+  return String(text || '').match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.;]+$/g, '') || '';
+}
+
+function cleanVoiceSearchFallbackQuery(text: string): string {
+  let value = String(text || '').trim();
+  value = value.replace(/https?:\/\/[^\s"'<>]+/ig, ' ');
+  value = value.replace(/\b(?:don't|do not|dont)\s+(?:hand|send|pass)\s+(?:it\s+)?(?:off|over)?\s*(?:to\s+)?(?:the\s+)?worker\b/ig, ' ');
+  value = value.replace(/\bwithout\s+(?:the\s+)?worker\b/ig, ' ');
+  value = value.replace(/\bas\s+(?:a\s+)?voice\s+agent\b/ig, ' ');
+  value = value.replace(/\b(?:can you|could you|please|go ahead and|test out|try out|your new|new|features?|web search|search feature|voice agent)\b/ig, ' ');
+  value = value.replace(/\b(?:look up|search for|search|find|tell me about)\b/ig, ' ');
+  value = value.replace(/[^\w\s'"-]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!value || /^(?:test|smoke test|quick test|it|that|this)$/i.test(value)) return 'OpenAI Realtime API voice tools';
+  return compactVoiceText(value, 180);
+}
+
+function findVoiceToolFallbackRequest(transcript: string): { name: string; args: Record<string, any> } | null {
+  const text = String(transcript || '').trim();
+  const lower = text.toLowerCase();
+  if (!text) return null;
+  const url = extractFirstVoiceUrl(text);
+  if (url && /\b(fetch|read|open|summari[sz]e|check)\b/i.test(text)) {
+    return { name: 'voice_web_fetch', args: { url, max_chars: 4000 } };
+  }
+  if (/\b(?:web\s*)?search|look\s+up|latest|current|news|compare|search everywhere\b/i.test(text)) {
+    const mode = /\b(latest|current|today|news|compare|versus|vs|recent|breaking|search everywhere)\b/i.test(text) ? 'multi' : 'single';
+    return {
+      name: 'voice_web_search',
+      args: {
+        query: cleanVoiceSearchFallbackQuery(text),
+        mode,
+        max_results: mode === 'multi' ? 5 : 3,
+      },
+    };
+  }
+  if (/\b(remember|jot|note|write down|log that|save a note|make a note)\b/i.test(text)) {
+    const content = text.replace(/^(?:prometheus[, ]*)?(?:please\s*)?(?:remember|jot down|make a note(?: that)?|write down|log that|save a note(?: that)?)\s*/i, '').trim();
+    return { name: 'voice_write_note', args: { content: content || text, tag: 'voice' } };
+  }
+  if (/\b(skill|workflow|playbook|guidance)\b/i.test(text)) {
+    return { name: 'voice_skill_lookup', args: { query: text } };
+  }
+  if (/\b(what did we decide|what did i say|last time|previously|do you remember|memory|recall)\b/i.test(text)) {
+    return { name: 'voice_memory_search', args: { query: text, mode: 'quick', limit: 5 } };
+  }
+  const minuteMatch = text.match(/\bin\s+(\d{1,4})\s*(seconds?|minutes?|hours?)\b/i);
+  if (/\b(timer|remind|reminder|in \d{1,4} (?:seconds?|minutes?|hours?))\b/i.test(text) && minuteMatch) {
+    const amount = Math.max(1, Number(minuteMatch[1]) || 1);
+    const unit = minuteMatch[2].toLowerCase();
+    const multiplier = unit.startsWith('hour') ? 3600 : unit.startsWith('minute') ? 60 : 1;
+    const instruction = text.replace(minuteMatch[0], '').replace(/\b(?:set|create)?\s*(?:a\s*)?(?:timer|reminder|remind me)\b/ig, '').trim() || text;
+    return {
+      name: 'voice_timer',
+      args: {
+        action: 'create',
+        delay_seconds: amount * multiplier,
+        instruction,
+        delivery: {
+          origin: true,
+          voice_if_active: true,
+          telegram: /\btelegram\b/i.test(text),
+        },
+      },
+    };
+  }
+  return null;
+}
+
+function voiceToolFallbackReply(name: string, raw: any): VoiceAgentDecision {
+  const ok = raw?.ok !== false;
+  const summary = compactVoiceText(raw?.summary || '', 420);
+  const escalate = raw?.escalateToWorker === true;
+  if (escalate) {
+    return {
+      action: 'handoff_new_work',
+      spokenReply: summary || 'That one needs the Prometheus worker, so I am handing it off.',
+      workerInstruction: summary || '',
+      needsWorkerResponse: true,
+      reason: 'voice_tool_escalated',
+    };
+  }
+  if (name === 'voice_web_search') {
+    const first = Array.isArray(raw?.results) ? raw.results.find((row: any) => row?.title || row?.snippet || row?.url) : null;
+    const detail = first
+      ? `${first.title ? `${first.title}. ` : ''}${first.snippet || first.url || ''}`
+      : (raw?.stdout || summary || (ok ? 'The search ran, but it did not return a clean summary.' : 'The search did not complete.'));
+    return {
+      action: 'answer_now',
+      spokenReply: compactVoiceText(ok ? `I ran that from the voice layer. ${detail}` : `I tried the voice web search, but it failed: ${detail}`, 850),
+      needsWorkerResponse: false,
+      reason: 'voice_tool_fallback_web_search',
+    };
+  }
+  if (name === 'voice_web_fetch') {
+    const text = compactVoiceText(raw?.text || summary || '', 760);
+    return { action: 'answer_now', spokenReply: ok ? `I fetched it from the voice layer. ${text}` : `I tried to fetch that from voice, but it failed: ${text}`, needsWorkerResponse: false, reason: 'voice_tool_fallback_web_fetch' };
+  }
+  if (name === 'voice_write_note') {
+    return { action: 'answer_now', spokenReply: ok ? 'Done, I saved that note.' : `I tried to save the note, but it failed: ${summary}`, needsWorkerResponse: false, reason: 'voice_tool_fallback_note' };
+  }
+  if (name === 'voice_skill_lookup') {
+    const skills = Array.isArray(raw?.skills) ? raw.skills.slice(0, 3).map((skill: any) => skill?.name || skill?.id).filter(Boolean).join(', ') : '';
+    return { action: 'answer_now', spokenReply: skills ? `I found the most relevant skill guidance: ${skills}.` : (summary || 'I checked the voice skill lookup and did not find a strong match.'), needsWorkerResponse: false, reason: 'voice_tool_fallback_skill' };
+  }
+  if (name === 'voice_memory_search') {
+    const hits = Array.isArray(raw?.hits) ? raw.hits.slice(0, 3).map((hit: any) => hit?.title || hit?.why).filter(Boolean).join('; ') : '';
+    return { action: 'answer_now', spokenReply: hits ? `I found this in memory: ${compactVoiceText(hits, 760)}` : (summary || 'I checked memory and did not find a strong match.'), needsWorkerResponse: false, reason: 'voice_tool_fallback_memory' };
+  }
+  if (name === 'voice_timer') {
+    return { action: 'answer_now', spokenReply: summary || (ok ? 'Done, I set the timer.' : 'I tried to set the timer, but it failed.'), needsWorkerResponse: false, reason: 'voice_tool_fallback_timer' };
+  }
+  return { action: 'answer_now', spokenReply: summary || 'Done.', needsWorkerResponse: false, reason: 'voice_tool_fallback' };
+}
+
+function voiceDecisionLooksLikeOldToolRefusal(decision: VoiceAgentDecision): boolean {
+  const text = `${decision.spokenReply || ''} ${decision.reason || ''}`.toLowerCase();
+  return /\b(?:can't|cannot|can not)\s+(?:actually\s+)?(?:run|use|do|access)\s+(?:web\s*)?(?:search|tools?)\b/.test(text)
+    || /\btool access lives in (?:the )?prometheus worker\b/.test(text)
+    || /\b(?:web\s*)?search .* only .* worker\b/.test(text);
+}
+
+async function maybeApplyVoiceToolFallback(sessionId: string, transcript: string, decision: VoiceAgentDecision, trace?: VoiceAgentProcessEntry[]): Promise<VoiceAgentDecision> {
+  if (decision.action === 'interrupt_worker' || decision.action === 'steer_worker' || decision.action === 'no_reply') return decision;
+  const explicitNoWorker = /\b(?:don't|do not|dont)\s+(?:hand|send|pass)\s+(?:it\s+)?(?:off|over)?\s*(?:to\s+)?(?:the\s+)?worker\b/i.test(transcript)
+    || /\bwithout\s+(?:the\s+)?worker\b/i.test(transcript);
+  const shouldRescue = explicitNoWorker || voiceDecisionLooksLikeOldToolRefusal(decision);
+  if (!shouldRescue && decision.action !== 'handoff_new_work') return decision;
+  const fallback = findVoiceToolFallbackRequest(transcript);
+  if (!fallback) return decision;
+  const raw = parseVoiceToolResult(await executeVoiceAgentToolWithTrace(sessionId, fallback.name, fallback.args, trace));
+  const toolDecision = voiceToolFallbackReply(fallback.name, raw);
+  if (toolDecision.action === 'handoff_new_work') {
+    toolDecision.workerInstruction = compactVoiceText(`${transcript}\n\nVoice tool result: ${raw?.summary || ''}`, 1400);
+  }
+  return toolDecision;
+}
+
+function safeParseVoiceAgentJson(raw: string): any | null {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const candidates = [
+    text,
+    text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(),
+    (text.match(/\{[\s\S]*\}/)?.[0] || '').trim(),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+  }
+  return null;
+}
+
+function normalizeVoiceAgentDecision(raw: any, fallback: VoiceAgentDecision): VoiceAgentDecision {
+  const allowed = new Set<VoiceAgentAction>(['answer_now', 'steer_worker', 'interrupt_worker', 'handoff_new_work', 'no_reply']);
+  const action = allowed.has(String(raw?.action || '') as VoiceAgentAction)
+    ? String(raw.action) as VoiceAgentAction
+    : fallback.action;
+  return {
+    action,
+    spokenReply: compactVoiceText(raw?.spokenReply || raw?.voiceReply || fallback.spokenReply || '', 900),
+    workerInstruction: compactVoiceText(raw?.workerInstruction || raw?.worker_instruction || fallback.workerInstruction || '', 1400),
+    needsWorkerResponse: raw?.needsWorkerResponse === true || raw?.needs_worker_response === true || fallback.needsWorkerResponse === true,
+    reason: compactVoiceText(raw?.reason || fallback.reason || '', 500),
+  };
+}
+
+function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record<string, any>): string {
+  return [
+    'You are Prometheus speaking through the user\'s voice interface.',
+    '',
+    'You have Prometheus\'s identity, memory, preferences, user knowledge, and current task context.',
+    'You are the live voice layer and you MAY call the provided voice_* tools directly.',
+    'The voice_* tools are safe wrappers around existing Prometheus tools. They are the only tools you may use from this layer.',
+    'Do not say web search, fetch, notes, memory search, skill lookup, or timers are only available to the Worker when a matching voice_* tool is provided.',
+    'Use voice tools for fast, low-risk, conversational support. If the request needs deeper research, browser/desktop interaction, files, coding, media analysis, account actions, approvals, or more than two tool calls, choose handoff_new_work or steer_worker instead.',
+    '',
+    'When the user asks something answerable from your context, answer directly.',
+    'When the user requests work that can be handled by a voice_* tool, call that tool and answer_now from the result.',
+    'When the user requests work requiring tools outside the voice_* set, files, browser, desktop control, coding, scheduling beyond voice_timer, memory mutation beyond voice_write_note, or long reasoning, acknowledge naturally first, then dispatch to the Prometheus worker.',
+    'When the user interrupts an active worker, decide whether to answer, steer, interrupt, hand off new work, or stay quiet.',
+    '',
+    'Hard boundary: never claim you used full Worker tools or changed files/accounts from the voice layer. You may truthfully say you searched, fetched, saved a note, checked memory, looked up skills, or set a timer when a voice_* tool result confirms it.',
+    'Speak like Prometheus: warm, specific, alive, and context-aware. Avoid generic acknowledgements like "I\'ll get started on that" unless no better context exists.',
+    '',
+    'Return ONLY strict JSON with this schema:',
+    '{"action":"answer_now|steer_worker|interrupt_worker|handoff_new_work|no_reply","spokenReply":"string","workerInstruction":"string optional","needsWorkerResponse":false,"reason":"string optional"}',
+    '',
+    'Action rules:',
+    '- answer_now: use when the user asks a status/context/question answerable from the injected context or from voice_* tool results. Do not dispatch the worker.',
+    '- steer_worker: use when there is an active worker and the user changes direction, adds a constraint, corrects the task, or asks the worker to do something within the active run.',
+    '- interrupt_worker: use only for explicit cancel/stop/abort intent.',
+    '- handoff_new_work: use when the user asks for new work that requires tools outside voice_*, files, browser, desktop, coding, media/account actions, or long reasoning and there is no active worker to steer.',
+    '- no_reply: use only when the transcript is empty, duplicate, or just says continue/resume without needing speech.',
+    '',
+    'Voice tool rules:',
+    '- voice_web_search: quick factual/current lookup. Use multi mode for latest/current/news/compare/sensitive/current events.',
+    '- voice_web_fetch: one clean text URL only. Social/video/media/auth pages must be handed to Worker.',
+    '- voice_write_note: only for explicit remember/jot/log/save-note requests.',
+    '- voice_skill_lookup: use to orient yourself with available workflows; mention only a concise summary.',
+    '- voice_memory_search: read-only recall for previous decisions, project history, preferences, and "what did we decide" questions.',
+    '- voice_timer: create/list/cancel/reschedule one-shot timers. Timer execution itself happens later through the Worker.',
+    '- Current time is injected. Do not call a tool just to know the time/date.',
+    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/skill/timer, prefer the matching voice_* tool.',
+    '- For a "test web search" request without a concrete query, run a tiny harmless search for "OpenAI Realtime API voice tools" and report that the smoke test worked.',
+    '',
+    '[CURRENT_TIME]',
+    JSON.stringify(buildVoiceTimeContext(), null, 2),
+    '[/CURRENT_TIME]',
+    '',
+    contextBlock,
+    '',
+    '[CURRENT_WORKER_CONTEXT_PACKET]',
+    JSON.stringify(contextPacket, null, 2),
+    '[/CURRENT_WORKER_CONTEXT_PACKET]',
+  ].filter(Boolean).join('\n');
+}
+
+function buildVoiceAgentHandoffContext(decision: VoiceAgentDecision, contextPacket: Record<string, any>, transcript: string): string {
+  if (!decision.workerInstruction && decision.action !== 'handoff_new_work') return '';
+  return [
+    '[VOICE_AGENT_HANDOFF]',
+    `Voice action: ${decision.action}`,
+    decision.spokenReply ? `Spoken acknowledgement already given: ${decision.spokenReply}` : '',
+    `Original voice transcript: ${compactVoiceText(transcript, 900)}`,
+    decision.workerInstruction ? `Worker instruction: ${decision.workerInstruction}` : '',
+    contextPacket?.summary ? `Voice context summary:\n${compactVoiceText(contextPacket.summary, 1200)}` : '',
+    'Runtime instruction: Continue as the Prometheus worker. The Voice Agent has already acknowledged the user; do the actual work with tools if needed and avoid repeating the same generic acknowledgement.',
+    '[/VOICE_AGENT_HANDOFF]',
+  ].filter(Boolean).join('\n');
+}
+
+async function callVoiceAgentDecisionModel(
+  sessionId: string,
+  transcript: string,
+  classification: ReturnType<typeof classifyVoiceInterruption>,
+  contextPacket: Record<string, any>,
+  fallback: VoiceAgentDecision,
+  trace?: VoiceAgentProcessEntry[],
+): Promise<VoiceAgentDecision> {
+  try {
+    const startedAt = Date.now();
+    const workspacePath = getConfig().getWorkspacePath();
+    const session = getSession(sessionId);
+    const history = Array.isArray(session?.history) ? session.history : [];
+    const contextStartedAt = Date.now();
+    const contextBlock = await buildPersonalityContext(
+      sessionId,
+      workspacePath,
+      transcript,
+      'interactive',
+      history.length,
+      _skillsManager,
+      undefined,
+      { profile: 'voice_agent' },
+    );
+    const contextBuildMs = Date.now() - contextStartedAt;
+    pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: context build ${contextBuildMs}ms.`, {
+      stage: 'voice_context_build',
+      elapsedMs: contextBuildMs,
+      totalMs: Date.now() - startedAt,
+    });
+    const system = buildVoiceAgentSystemPrompt(contextBlock, contextPacket);
+    const user = [
+      '[VOICE_TRANSCRIPT]',
+      transcript || '(empty)',
+      '[/VOICE_TRANSCRIPT]',
+      '',
+      '[CLASSIFIER_HINT]',
+      JSON.stringify(classification, null, 2),
+      '[/CLASSIFIER_HINT]',
+    ].join('\n');
+    const messages: any[] = [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ];
+    let result: any = null;
+    const tools = buildVoiceToolDefinitions();
+    const decisionStartedAt = Date.now();
+    for (let i = 0; i < 3; i++) {
+      const loopStartedAt = Date.now();
+      result = await getOllamaClient().chatWithThinking(messages, 'executor', {
+        tools: i < 2 ? tools : undefined,
+        temperature: 0.2,
+        num_ctx: 8192,
+        num_predict: 900,
+        think: 'none',
+        usageContext: { sessionId, agentId: 'voice_agent' },
+      });
+      pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: decision pass ${i + 1} ${Date.now() - loopStartedAt}ms.`, {
+        stage: 'voice_model_decision',
+        pass: i + 1,
+        elapsedMs: Date.now() - loopStartedAt,
+        totalMs: Date.now() - startedAt,
+      });
+      const message = result?.message || {};
+      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      if (!toolCalls.length || i >= 2) break;
+      messages.push({
+        role: 'assistant',
+        content: message.content || '',
+        tool_calls: toolCalls,
+      });
+      for (const call of toolCalls.slice(0, 2)) {
+        const name = String(call?.function?.name || '').trim();
+        const args = parseVoiceToolArgs(call?.function?.arguments);
+        const content = await executeVoiceAgentToolWithTrace(sessionId, name, args, trace);
+        messages.push({
+          role: 'tool',
+          tool_call_id: call?.id || `voice_tool_${Date.now()}`,
+          tool_name: name,
+          name,
+          content,
+        });
+      }
+    }
+    const content = String(result?.message?.content || '').trim();
+    const parsed = safeParseVoiceAgentJson(content);
+    if (!parsed) return await maybeApplyVoiceToolFallback(sessionId, transcript, fallback, trace);
+    const normalized = normalizeVoiceAgentDecision(parsed, fallback);
+    if (classification.shouldAbortOriginalRun) normalized.action = 'interrupt_worker';
+    if (classification.shouldPauseOriginalRun && normalized.action !== 'interrupt_worker') normalized.action = 'answer_now';
+    const finalDecision = await maybeApplyVoiceToolFallback(sessionId, transcript, normalized, trace);
+    pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: model decision total ${Date.now() - decisionStartedAt}ms.`, {
+      stage: 'voice_model_decision_total',
+      elapsedMs: Date.now() - decisionStartedAt,
+      totalMs: Date.now() - startedAt,
+      action: finalDecision.action,
+    });
+    return finalDecision;
+  } catch (err: any) {
+    console.warn('[voice-agent] model decision failed:', err?.message || err);
+    return await maybeApplyVoiceToolFallback(sessionId, transcript, fallback, trace);
+  }
+}
+
+function composeVoiceAgentNarration(contextPacket: Record<string, any>, options: Record<string, any> = {}): { action: 'reply' | 'no_reply'; voiceReply: string; signature: string } {
+  if (!contextPacket.active) return { action: 'no_reply', voiceReply: '', signature: 'inactive' };
+  const sid = String(contextPacket.sessionId || 'default');
+  const latestProcess = Array.isArray(contextPacket.processEntries)
+    ? contextPacket.processEntries
+        .map((entry: any) => ({
+          ...entry,
+          content: compactVoiceText(entry?.content || '', 260),
+        }))
+        .filter((entry: any) => entry.content && !isVoiceContextNoiseText(entry.content))
+        .slice(-4)
+    : [];
+  const latestActivity = [...latestProcess].reverse()
+    .map((entry: any) => voiceNarrationLineFromActivity(entry.content))
+    .find(Boolean) || '';
+  const activeLabel = voiceNarrationLineFromActivity(contextPacket.activeToolLabel || '');
+  const speakable = latestActivity || activeLabel;
+  const signature = [
+    contextPacket.activeRun?.id || '',
+    speakable,
+    latestProcess.map((entry: any) => `${entry.event || entry.type}:${entry.toolName || ''}:${entry.content || ''}`).join('|'),
+  ].join('::').slice(0, 1600);
+  if (!speakable) return { action: 'no_reply', voiceReply: '', signature };
+  const now = Date.now();
+  const minGapMs = Math.max(5500, Math.floor(Number(options.minGapMs || 6500)) || 6500);
+  const previous = voiceAgentNarrationState.get(sid);
+  if ((previous?.signature === signature || previous?.text === speakable) && now - Number(previous.at || 0) < Math.max(minGapMs, 18000)) {
+    return { action: 'no_reply', voiceReply: '', signature };
+  }
+  const voiceReply = compactVoiceText(speakable, 240);
+  voiceAgentNarrationState.set(sid, { signature, at: now, text: voiceReply });
+  return { action: voiceReply ? 'reply' : 'no_reply', voiceReply, signature };
+}
+
+router.get('/api/mobile/chat/stream/:sessionId', (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || '').trim();
+    if (!sessionId) {
+      res.status(400).json({ success: false, error: 'Session id required.' });
+      return;
+    }
+    pruneMainChatStreams();
+    const after = Math.max(0, Math.floor(Number(req.query.after || 0)) || 0);
+    const stream = getMainChatStream(sessionId);
+    const activeRuntime = listLiveRuntimes()
+      .filter((runtime) => runtime.kind === 'main_chat' && String(runtime.sessionId || '') === sessionId)
+      .map(summarizeMobileRuntime)
+      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    const frames = stream
+      ? stream.events
+        .filter((frame) => Number(frame.seq || 0) > after)
+        .map((frame) => ({
+          seq: frame.seq,
+          type: frame.type,
+          at: frame.at,
+          streamId: stream.streamId,
+          data: frame.data || {},
+        }))
+      : [];
+    res.json({
+      success: true,
+      sessionId,
+      active: !!activeRuntime || !!stream?.active,
+      run: activeRuntime,
+      stream: stream ? {
+        streamId: stream.streamId,
+        active: stream.active,
+        startedAt: stream.startedAt,
+        updatedAt: stream.updatedAt,
+        completedAt: stream.completedAt || null,
+        nextSeq: stream.nextSeq,
+        firstSeq: stream.events[0]?.seq || 0,
+        lastSeq: stream.events[stream.events.length - 1]?.seq || 0,
+      } : null,
+      events: frames,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/mobile/chat/runs', (_req, res) => {
+  try {
+    const runtimes = listLiveRuntimes()
+      .filter((runtime) => runtime.kind === 'main_chat')
+      .map(summarizeMobileRuntime)
+      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
+    res.json({
+      success: true,
+      activeSessionIds: Array.from(new Set(runtimes.map((runtime) => String(runtime.sessionId || '')).filter(Boolean))),
+      runs: runtimes,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/mobile/chat/runs/:sessionId', (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || '').trim();
+    if (!sessionId) {
+      res.status(400).json({ success: false, error: 'Session id required.' });
+      return;
+    }
+    const active = listLiveRuntimes()
+      .filter((runtime) => runtime.kind === 'main_chat' && String(runtime.sessionId || '') === sessionId)
+      .map(summarizeMobileRuntime)
+      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    const session = getSession(sessionId);
+    const history = Array.isArray(session?.history) ? session.history : [];
+    const latestAssistant = [...history].reverse().find((entry: any) => entry?.role === 'assistant') || null;
+    const latestUser = [...history].reverse().find((entry: any) => entry?.role === 'user') || null;
+    res.json({
+      success: true,
+      active: !!active,
+      run: active,
+      sessionId,
+      historyLength: history.length,
+      lastActiveAt: Number(session?.lastActiveAt || 0) || null,
+      latestAssistant: latestAssistant ? {
+        content: String(latestAssistant.content || ''),
+        timestamp: Number(latestAssistant.timestamp || 0) || null,
+      } : null,
+      latestUser: latestUser ? {
+        content: String(latestUser.content || ''),
+        timestamp: Number(latestUser.timestamp || 0) || null,
+      } : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/mobile/commands/models', async (_req, res) => {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const activeProvider = cfg.llm?.provider || 'ollama';
+    const providers = Object.entries(cfg.llm?.providers || {}).map(([id, value]: [string, any]) => ({
+      id,
+      model: String(value?.model || ''),
+      endpoint: String(value?.endpoint || ''),
+      active: id === activeProvider,
+    }));
+    res.json({
+      success: true,
+      activeProvider,
+      activeModel: cfg.llm?.providers?.[activeProvider]?.model || cfg.models?.primary || 'unknown',
+      providers,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/mobile/commands/stop-targets', (_req, res) => {
+  try {
+    res.json({ success: true, targets: listLiveRuntimes().map(summarizeMobileRuntime) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/mobile/commands/stop-now', (req, res) => {
+  try {
+    const sessionId = String(req.body?.sessionId || '').trim();
+    const target = listLiveRuntimes().find((runtime) =>
+      runtime.kind === 'main_chat'
+        && runtime.abortable
+        && (!sessionId || String(runtime.sessionId || '') === sessionId)
+    );
+    if (!target) {
+      res.json({ success: false, message: 'No active main chat turn is currently running for this session.' });
+      return;
+    }
+    const result = abortLiveRuntime(target.id);
+    res.json({
+      success: result.ok,
+      message: result.ok ? 'Main chat abort requested.' : (result.error || 'Abort failed.'),
+      target: summarizeMobileRuntime(result.runtime || target),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/mobile/commands/stop', (req, res) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Runtime id required.' });
+      return;
+    }
+    const runtime = getLiveRuntime(id);
+    if (!runtime) {
+      res.status(404).json({ success: false, error: 'Runtime is no longer active.' });
+      return;
+    }
+    const result = abortLiveRuntime(id);
+    res.json({
+      success: result.ok,
+      message: result.ok ? 'Abort requested.' : (result.error || 'Abort failed.'),
+      target: summarizeMobileRuntime(result.runtime || runtime),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/mobile/commands/screenshot', async (req, res) => {
+  try {
+    req.setTimeout?.(120_000);
+    res.setTimeout?.(120_000);
+    req.socket?.setTimeout?.(120_000);
+    const sessionId = String(req.body?.sessionId || 'mobile_default').trim() || 'mobile_default';
+    const target = String(req.body?.target || 'desktop').trim().toLowerCase();
+    const captureDesktop = async (options: any) => {
+      const result = await desktopScreenshotWithHistory(sessionId, { ...options, skipOcr: true });
+      const packet = getDesktopAdvisorPacket(sessionId);
+      return {
+        success: !/^ERROR:/i.test(String(result || '')),
+        result,
+        image: packet?.screenshotBase64 ? {
+          base64: packet.screenshotBase64,
+          mimeType: packet.screenshotMime || 'image/png',
+          width: packet.width,
+          height: packet.height,
+          screenshotId: packet.screenshotId,
+        } : null,
+      };
+    };
+    if (target === 'monitors') {
+      res.json({ success: true, result: await desktopGetMonitorsSummary() });
+      return;
+    }
+    if (target === 'desktop') {
+      const monitors = await desktopGetMonitors().catch(() => []);
+      const clean = (Array.isArray(monitors) ? monitors : [])
+        .filter((m: any) => Number.isFinite(Number(m?.index)) && Number(m?.width) > 0 && Number(m?.height) > 0)
+        .map((m: any) => ({
+          index: Math.max(0, Math.floor(Number(m.index))),
+          width: Math.max(1, Math.floor(Number(m.width))),
+          height: Math.max(1, Math.floor(Number(m.height))),
+          primary: !!m.primary,
+        }))
+        .sort((a: any, b: any) => a.index - b.index);
+      if (clean.length > 1) {
+        res.json({
+          success: true,
+          menu: 'desktop',
+          result: `Detected ${clean.length} monitors. Choose one to capture, or capture all monitors combined.`,
+          actions: [
+            { action: 'screenshot-desktop-all', label: 'All monitors combined', icon: 'monitor' },
+            ...clean.map((m: any) => ({
+              action: 'screenshot-desktop-monitor',
+              id: String(m.index),
+              label: `Monitor ${m.index + 1}${m.primary ? ' (Primary)' : ''} ${m.width}x${m.height}`,
+              icon: 'monitor',
+            })),
+          ],
+        });
+        return;
+      }
+      const monitorIndex = clean.length === 1 ? clean[0].index : 0;
+      res.json(await captureDesktop({ capture: monitorIndex }));
+      return;
+    }
+    if (target === 'desktop-all') {
+      res.json(await captureDesktop({ capture: 'all' }));
+      return;
+    }
+    if (target === 'desktop-monitor') {
+      const monitorIndex = Math.max(0, Math.floor(Number(req.body?.id || 0)));
+      res.json(await captureDesktop({ capture: monitorIndex }));
+      return;
+    }
+    if (target === 'primary') {
+      res.json(await captureDesktop({ capture: 'primary' }));
+      return;
+    }
+    if (target === 'som') {
+      res.json(await captureDesktop({ capture: 'all', som: true }));
+      return;
+    }
+    if (target === 'browser') {
+      const sessions = listBrowserSessions();
+      if (sessions.length > 1) {
+        res.json({
+          success: true,
+          menu: 'browser',
+          result: `Detected ${sessions.length} browser instances. Choose one to capture.`,
+          actions: sessions.slice(0, 12).map((session: any) => ({
+            action: 'screenshot-browser-session',
+            id: session.sessionId,
+            label: `${session.originLabel || session.label || session.sessionId}${session.title || session.url ? ` - ${session.title || session.url}` : ''}`.slice(0, 100),
+            icon: 'globe',
+          })),
+        });
+        return;
+      }
+      const selected = sessions[0]?.sessionId || sessionId;
+      const shot = await browserVisionScreenshot(selected);
+      const info = getBrowserSessionInfo(selected);
+      res.json({
+        success: !!shot?.base64,
+        result: shot?.base64
+          ? `Browser screenshot captured (${shot.width}x${shot.height}) from ${info?.originLabel || 'Browser'}.`
+          : 'ERROR: No browser session. Use browser_open first.',
+        image: shot?.base64 ? {
+          base64: shot.base64,
+          mimeType: shot.mimeType || 'image/png',
+          width: shot.width,
+          height: shot.height,
+          screenshotId: '',
+        } : null,
+      });
+      return;
+    }
+    if (target === 'browser-session') {
+      const selected = String(req.body?.id || '').trim();
+      const shot = selected ? await browserVisionScreenshot(selected) : null;
+      const info = selected ? getBrowserSessionInfo(selected) : null;
+      res.json({
+        success: !!shot?.base64,
+        result: shot?.base64
+          ? `Browser screenshot captured (${shot.width}x${shot.height}) from ${info?.originLabel || 'Browser'}.`
+          : 'ERROR: Browser session was not available.',
+        image: shot?.base64 ? {
+          base64: shot.base64,
+          mimeType: shot.mimeType || 'image/png',
+          width: shot.width,
+          height: shot.height,
+          screenshotId: '',
+        } : null,
+      });
+      return;
+    }
+    res.status(400).json({ success: false, error: 'Unknown screenshot target.' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/voice-agent/context', (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    res.json({
+      ok: true,
+      success: true,
+      contextPacket: buildVoiceWorkerContextPacket(sessionId, body),
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/voice-agent/context/:sessionId', (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || 'default').trim() || 'default';
+    res.json({
+      ok: true,
+      success: true,
+      contextPacket: buildVoiceWorkerContextPacket(sessionId, req.query as any),
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/voice-agent/narrate', (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const contextPacket = body.contextPacket && typeof body.contextPacket === 'object'
+      ? body.contextPacket
+      : buildVoiceWorkerContextPacket(sessionId, body);
+    const narration = composeVoiceAgentNarration(contextPacket, body);
+    res.json({
+      ok: true,
+      success: true,
+      ...narration,
+      contextPacket,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/voice-agent/input', async (req, res) => {
+  try {
+    const requestStartedAt = Date.now();
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const transcript = String(body.transcript || body.userInterruptionTranscript || body.message || '').trim();
+    const classification = classifyVoiceInterruption(transcript);
+    const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
+    const contextPacketStartedAt = Date.now();
+    const contextPacket = buildVoiceWorkerContextPacket(sessionId, {
+      ...body,
+      expectedRuntimeId: activeRuntime?.id || body.expectedRuntimeId || body.runtimeId || body.activeRunId,
+      originalUserPrompt: body.originalUserPrompt,
+    });
+    const contextPacketMs = Date.now() - contextPacketStartedAt;
+    const eventId = String(body.id || `voice_intr_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`);
+    const fallbackAction = decideVoiceAgentAction(transcript, classification, contextPacket);
+    const fallbackDecision: VoiceAgentDecision = {
+      action: fallbackAction,
+      spokenReply: composeVoiceAgentReply(fallbackAction, transcript, classification, contextPacket),
+      workerInstruction: fallbackAction === 'handoff_new_work' || fallbackAction === 'steer_worker' ? transcript : '',
+      needsWorkerResponse: classification.intent === 'question',
+      reason: 'deterministic_fallback',
+    };
+    const voiceProcessEntries: VoiceAgentProcessEntry[] = [];
+    pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', `Voice latency: worker packet ${contextPacketMs}ms.`, {
+      stage: 'voice_worker_context_packet',
+      elapsedMs: contextPacketMs,
+      totalMs: Date.now() - requestStartedAt,
+    });
+    const exactCommand = contextPacket.active ? exactActiveWorkerVoiceCommand(transcript) : '';
+    let decision: VoiceAgentDecision;
+    if (exactCommand) {
+      const action: VoiceAgentAction = exactCommand === 'stop' ? 'interrupt_worker' : 'steer_worker';
+      decision = {
+        action,
+        spokenReply: exactCommand === 'stop' ? 'Stopping.' : '',
+        workerInstruction: transcript,
+        needsWorkerResponse: exactCommand === 'status',
+        reason: `exact_active_worker_voice_command:${exactCommand}`,
+      };
+      pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', `Voice latency: exact ${exactCommand} command routed without model.`, {
+        stage: 'voice_fast_router',
+        command: exactCommand,
+        action,
+        totalMs: Date.now() - requestStartedAt,
+      });
+    } else {
+      decision = await callVoiceAgentDecisionModel(sessionId, transcript, classification, contextPacket, fallbackDecision, voiceProcessEntries);
+    }
+    const action = decision.action;
+    if (action === 'handoff_new_work') {
+      voiceAgentWorkerHandoffSessions.set(sessionId, {
+        at: Date.now(),
+        transcript: transcript.slice(0, 500),
+        eventId,
+      });
+    }
+    const event = {
+      id: eventId,
+      sessionId,
+      createdAt: new Date().toISOString(),
+      reason: String(body.reason || 'barge_in').trim() || 'barge_in',
+      originalUserPrompt: String(body.originalUserPrompt || '').trim(),
+      currentUserPrompt: transcript,
+      assistantTextSoFar: String(body.assistantTextSoFar || body.interruptedText || '').trim(),
+      assistantSpokenTextSoFar: String(body.assistantSpokenTextSoFar || '').trim(),
+      currentSpokenSegment: String(body.currentSpokenSegment || '').trim(),
+      lastVoiceMilestone: String(body.lastVoiceMilestone || '').trim(),
+      activeRunId: activeRuntime?.id || String(body.activeRunId || body.activeRequestId || '').trim(),
+      activeToolName: contextPacket.activeToolName || activeRuntime?.checkpoint?.toolName || '',
+      activeToolLabel: contextPacket.activeToolLabel || '',
+      activeWorkflowLabel: activeRuntime?.label || '',
+      userInterruptionTranscript: transcript,
+      classification,
+      status: 'captured',
+      voiceMode: String(body.voiceMode || '').trim(),
+      clientRequestId: String(body.activeRequestId || body.clientRequestId || '').trim(),
+      isStreamActive: body.isStreamActive === true,
+      voiceAgentAction: action,
+      voiceContextPacketId: contextPacket.id,
+    };
+    let injectedContextText = buildVoiceInterruptionContextBlock(event);
+    let steerApplied = false;
+    let steerEventId = '';
+    if (
+      action === 'steer_worker'
+      && activeRuntime?.id
+      && transcript
+      && !classification.shouldAbortOriginalRun
+      && (exactCommand === 'pause' || !classification.shouldPauseOriginalRun)
+    ) {
+      const steer = addPendingRuntimeSteer(activeRuntime.id, {
+        sessionId,
+        message: decision.workerInstruction || transcript,
+        source: String(body.source || `voice_${event.voiceMode || 'agent'}`).trim() || 'voice_agent',
+        clientRequestId: event.clientRequestId || undefined,
+        kind: voiceSteerKindFromIntent(classification.intent),
+        requiresWorkerResponse: decision.needsWorkerResponse === true,
+        voiceContextPacketId: contextPacket.id,
+        spokenAck: decision.spokenReply || undefined,
+        responseMode: decision.needsWorkerResponse ? 'worker_reply' : 'narrate',
+        contextSummary: buildVoiceContextSummaryForSteer(contextPacket),
+      });
+      if (steer.ok && steer.event) {
+        steerApplied = true;
+        steerEventId = steer.event.id;
+        injectedContextText = buildChatSteerContextBlock(steer.event);
+      }
+    }
+    if (action === 'handoff_new_work') {
+      injectedContextText = buildVoiceAgentHandoffContext(decision, contextPacket, transcript);
+    }
+    const voiceReply = decision.spokenReply;
+    const storedEvent = { ...event, injectedContextText, status: steerApplied ? 'injected_into_runtime' : 'handled_by_voice_agent', action, voiceReply, decision, contextPacket, processEntries: voiceProcessEntries };
+    const totalMs = Date.now() - requestStartedAt;
+    pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', `Voice latency: input endpoint total ${totalMs}ms.`, {
+      stage: 'voice_agent_input_total',
+      elapsedMs: totalMs,
+      action,
+      steerApplied,
+    });
+    appendVoiceInterruptionLog(storedEvent);
+    if (activeRuntime?.id) {
+      updateLiveRuntimeCheckpoint(activeRuntime.id, {
+        voiceInterruptionEvent: {
+          id: eventId,
+          intent: classification.intent,
+          action,
+          transcript: transcript.slice(0, 500),
+          injectedContextText,
+          steerApplied,
+          steerEventId,
+          voiceContextPacketId: contextPacket.id,
+          workerInstruction: compactVoiceText(decision.workerInstruction || '', 700),
+          voiceReply: voiceReply.slice(0, 500),
+          at: Date.now(),
+        },
+      });
+      if (action === 'interrupt_worker' && activeRuntime.abortable) {
+        abortLiveRuntime(activeRuntime.id);
+      }
+    }
+    broadcastWS({
+      type: 'voice_interruption',
+      sessionId,
+      eventId,
+      intent: classification.intent,
+      action,
+      shouldAbortOriginalRun: action === 'interrupt_worker',
+      runtimeId: activeRuntime?.id || '',
+      steerApplied,
+      steerEventId,
+      voiceContextPacketId: contextPacket.id,
+    });
+    res.json({
+      ok: true,
+      success: true,
+      eventId,
+      action,
+      steerApplied,
+      steerEventId,
+      runtimeId: activeRuntime?.id || '',
+      classification,
+      contextPacket,
+      decision,
+      processEntries: voiceProcessEntries,
+      timings: {
+        totalMs,
+        contextPacketMs,
+        fastRouted: !!exactCommand,
+        fastCommand: exactCommand || '',
+      },
+      injectedContextText,
+      voiceReply,
+      workerInstruction: decision.workerInstruction || '',
+      activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/mobile/voice/interruption', (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'mobile_default').trim() || 'mobile_default';
+    const transcript = String(body.userInterruptionTranscript || '').trim();
+    const classification = classifyVoiceInterruption(transcript);
+    const activeRuntime = findActiveMainChatRuntimeForSession(sessionId);
+    const contextPacket = buildVoiceWorkerContextPacket(sessionId, body);
+    const action = decideVoiceAgentAction(transcript, classification, contextPacket);
+    const eventId = String(body.id || `voice_intr_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`);
+    if (action === 'handoff_new_work') {
+      voiceAgentWorkerHandoffSessions.set(sessionId, {
+        at: Date.now(),
+        transcript: transcript.slice(0, 500),
+        eventId,
+      });
+    }
+    const event = {
+      id: eventId,
+      sessionId,
+      createdAt: new Date().toISOString(),
+      reason: String(body.reason || 'barge_in').trim() || 'barge_in',
+      originalUserPrompt: String(body.originalUserPrompt || '').trim(),
+      currentUserPrompt: transcript,
+      assistantTextSoFar: String(body.assistantTextSoFar || body.interruptedText || '').trim(),
+      assistantSpokenTextSoFar: String(body.assistantSpokenTextSoFar || '').trim(),
+      currentSpokenSegment: String(body.currentSpokenSegment || '').trim(),
+      lastVoiceMilestone: String(body.lastVoiceMilestone || '').trim(),
+      activeRunId: activeRuntime?.id || String(body.activeRunId || body.activeRequestId || '').trim(),
+      activeToolName: contextPacket.activeToolName || activeRuntime?.checkpoint?.toolName || '',
+      activeToolLabel: contextPacket.activeToolLabel || '',
+      activeWorkflowLabel: activeRuntime?.label || '',
+      userInterruptionTranscript: transcript,
+      classification,
+      status: 'captured',
+      voiceMode: String(body.voiceMode || '').trim(),
+      clientRequestId: String(body.activeRequestId || body.clientRequestId || '').trim(),
+      isStreamActive: body.isStreamActive === true,
+      voiceAgentAction: action,
+      voiceContextPacketId: contextPacket.id,
+    };
+    let injectedContextText = buildVoiceInterruptionContextBlock(event);
+    let steerApplied = false;
+    let steerEventId = '';
+    const voiceReply = composeVoiceAgentReply(action, transcript, classification, contextPacket);
+    if (
+      action === 'steer_worker'
+      && activeRuntime?.id
+      && transcript
+      && !classification.shouldAbortOriginalRun
+      && !classification.shouldPauseOriginalRun
+      && classification.intent !== 'unknown'
+    ) {
+      const steer = addPendingRuntimeSteer(activeRuntime.id, {
+        sessionId,
+        message: transcript,
+        source: String(body.source || `voice_${event.voiceMode || 'interruption'}`).trim() || 'voice_interruption',
+        clientRequestId: event.clientRequestId || undefined,
+        kind: voiceSteerKindFromIntent(classification.intent),
+        requiresWorkerResponse: classification.intent === 'question',
+        voiceContextPacketId: contextPacket.id,
+        spokenAck: voiceReply || undefined,
+        responseMode: classification.intent === 'question' ? 'worker_reply' : 'narrate',
+        contextSummary: buildVoiceContextSummaryForSteer(contextPacket),
+      });
+      if (steer.ok && steer.event) {
+        steerApplied = true;
+        steerEventId = steer.event.id;
+        injectedContextText = buildChatSteerContextBlock(steer.event);
+      }
+    }
+    const storedEvent = { ...event, injectedContextText, status: steerApplied ? 'injected_into_runtime' : 'handled_by_voice_agent', action, voiceReply, contextPacket };
+    appendVoiceInterruptionLog(storedEvent);
+    if (activeRuntime?.id) {
+      updateLiveRuntimeCheckpoint(activeRuntime.id, {
+        voiceInterruptionEvent: {
+          id: eventId,
+          intent: classification.intent,
+          action,
+          transcript: transcript.slice(0, 500),
+          injectedContextText,
+          steerApplied,
+          steerEventId,
+          voiceContextPacketId: contextPacket.id,
+          voiceReply: voiceReply.slice(0, 500),
+          at: Date.now(),
+        },
+      });
+      if (action === 'interrupt_worker' && activeRuntime.abortable) {
+        abortLiveRuntime(activeRuntime.id);
+      }
+    }
+    broadcastWS({
+      type: 'voice_interruption',
+      sessionId,
+      eventId,
+      intent: classification.intent,
+      action,
+      shouldAbortOriginalRun: action === 'interrupt_worker',
+      runtimeId: activeRuntime?.id || '',
+      steerApplied,
+      steerEventId,
+      voiceContextPacketId: contextPacket.id,
+    });
+    res.json({
+      ok: true,
+      success: true,
+      eventId,
+      action,
+      steerApplied,
+      steerEventId,
+      runtimeId: activeRuntime?.id || '',
+      classification,
+      contextPacket,
+      injectedContextText,
+      voiceReply,
+      activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/chat/steer', (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const message = String(body.message || '').trim();
+    if (!message) {
+      res.status(400).json({ ok: false, success: false, error: 'Message required' });
+      return;
+    }
+    const expectedRuntimeId = String(body.expectedRuntimeId || body.runtimeId || '').trim();
+    const activeRuntime = listLiveRuntimes()
+      .filter((runtime) => (
+        runtime.kind === 'main_chat'
+        && String(runtime.sessionId || '') === sessionId
+        && (!expectedRuntimeId || runtime.id === expectedRuntimeId)
+      ))
+      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    if (!activeRuntime?.id) {
+      res.status(409).json({ ok: false, success: false, error: 'No active steerable chat turn for this session.' });
+      return;
+    }
+    const steer = addPendingRuntimeSteer(activeRuntime.id, {
+      sessionId,
+      message,
+      source: String(body.source || 'web_queue_steer').trim() || 'web_queue_steer',
+      clientRequestId: String(body.clientRequestId || '').trim() || undefined,
+    });
+    if (!steer.ok || !steer.event) {
+      res.status(409).json({ ok: false, success: false, error: steer.error || 'Could not queue steer event.' });
+      return;
+    }
+    const injectedContextText = buildChatSteerContextBlock(steer.event);
+    updateLiveRuntimeCheckpoint(activeRuntime.id, {
+      chatSteerEvent: {
+        id: steer.event.id,
+        transcript: message.slice(0, 500),
+        injectedContextText,
+        at: Date.now(),
+      },
+    });
+    broadcastWS({
+      type: 'chat_steer',
+      sessionId,
+      eventId: steer.event.id,
+      runtimeId: activeRuntime.id,
+      message: message.slice(0, 500),
+    });
+    res.json({
+      ok: true,
+      success: true,
+      eventId: steer.event.id,
+      runtimeId: activeRuntime.id,
+      injectedContextText,
+      activeRun: summarizeMobileRuntime(activeRuntime),
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
 router.post('/api/chat', async (req, res) => {
-  const { message, sessionId = 'default', pinnedMessages, attachments, reasoning, callerContext } = req.body;
+  const { message, sessionId = 'default', pinnedMessages, attachments, attachmentPreviews, reasoning, callerContext } = req.body;
   if (!message || typeof message !== 'string') { res.status(400).json({ error: 'Message required' }); return; }
-  setLastMainSessionId(String(sessionId || 'default'));
+  const resolvedSessionId = String(sessionId || 'default');
+  const clientRequestId = normalizeClientRequestId(req.body?.clientRequestId || req.headers['x-client-request-id']);
+  setLastMainSessionId(resolvedSessionId);
+  const turnOrigin = normalizeTurnOrigin(req.body?.origin, resolvedSessionId, {
+    channel: req.headers['x-pairing-token'] ? 'mobile' : undefined,
+    surface: req.headers['x-pairing-token'] ? 'mobile_app' : undefined,
+    device: req.headers['x-pairing-token'] ? 'phone' : undefined,
+    source: 'api_chat',
+  });
+  persistTurnOriginChannelHint(resolvedSessionId, turnOrigin);
+  const isMobileChatRequest = turnOrigin.channel === 'mobile' || !!req.headers['x-pairing-token'];
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  const sendSSE = createSSESender(res);
+  if (clientRequestId) {
+    const now = Date.now();
+    pruneMobileChatRequestDedupe(now);
+    const dedupeKey = mobileChatRequestDedupeKey(resolvedSessionId, clientRequestId);
+    const duplicate = mobileChatRequestDedupe.get(dedupeKey);
+    if (duplicate && duplicate.message === message) {
+      const stream = getMainChatStream(resolvedSessionId);
+      res.write(`data: ${JSON.stringify({ type: 'info', message: 'Duplicate chat send ignored; original request is already running.', clientRequestId })}\n\n`);
+      for (const frame of stream?.events || []) {
+        if (stream?.streamId !== duplicate.streamId) continue;
+        res.write(`data: ${JSON.stringify({ type: frame.type, ...(frame.data || {}), seq: frame.seq, streamId: stream.streamId, at: frame.at, clientRequestId })}\n\n`);
+      }
+      res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId })}\n\n`);
+      res.end();
+      return;
+    }
+  }
+
+  const chatStream = beginMainChatStream(resolvedSessionId);
+  if (clientRequestId) {
+    mobileChatRequestDedupe.set(mobileChatRequestDedupeKey(resolvedSessionId, clientRequestId), {
+      at: Date.now(),
+      streamId: chatStream.streamId,
+      message,
+    });
+  }
+
+  const httpSendSSE = createSSESender(res);
+  let sendSSE = (event: string, data: any) => {
+    const eventData = clientRequestId ? { ...(data || {}), clientRequestId } : data;
+    const frame = appendMainChatStreamEvent(resolvedSessionId, chatStream.streamId, event, eventData);
+    const payload = frame
+      ? { ...(eventData || {}), seq: frame.seq, streamId: chatStream.streamId }
+      : eventData;
+    httpSendSSE(event, payload);
+  };
   sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
+  sendSSE('ui_preflight', { message: 'Request received. Starting chat turn...' });
   const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
 
   // ── Model busy guard — block cron scheduler while user chat is running ──
@@ -6163,38 +9457,86 @@ router.post('/api/chat', async (req, res) => {
   const runtimeId = registerLiveRuntime({
     kind: 'main_chat',
     label: 'Main chat',
-    sessionId: String(sessionId || 'default'),
-    source: 'web',
+    sessionId: resolvedSessionId,
+    source: turnOrigin.channel,
     detail: String(message || '').slice(0, 160),
     abortSignal,
+    onAbort: () => abortController.abort(),
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: {
+      message: String(message || ''),
+      origin: turnOrigin,
+      chatId: turnOrigin.chatId,
+      userId: turnOrigin.userId,
+      label: turnOrigin.label,
+      attachments: Array.isArray(attachments) ? attachments.map((a: any) => ({ name: a?.name, mimeType: a?.mimeType })) : [],
+    },
   });
+  const rawSendSSE = sendSSE;
+  const runtimeProcessEntries: Record<string, any>[] = [];
+  sendSSE = (event, data) => {
+    const checkpoint: Record<string, any> = { event, at: Date.now() };
+    if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
+    if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
+    if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+    const processEntry = runtimeProcessEntryFromSseEvent(event, data);
+    if (processEntry) {
+      runtimeProcessEntries.push(processEntry);
+      if (runtimeProcessEntries.length > 250) {
+        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+      }
+      checkpoint.processEntries = [...runtimeProcessEntries];
+    }
+    updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
+    rawSendSSE(event, data);
+  };
   let requestCompleted = false;
   res.on('close', () => {
     if (!requestCompleted && !abortSignal.aborted) {
+      if (isMobileChatRequest) {
+        console.log(`[v2] Mobile client disconnected — keeping task alive for session ${resolvedSessionId}`);
+        return;
+      }
       abortSignal.aborted = true;
       abortController.abort();
-      console.log(`[v2] Client disconnected — aborting task for session ${sessionId}`);
+      console.log(`[v2] Client disconnected — aborting task for session ${resolvedSessionId}`);
     }
   });
 
   try {
     const result = await runInteractiveTurn(
       message,
-	      sessionId,
+	      resolvedSessionId,
 	      sendSSE,
 	      pinnedMessages,
 		      abortSignal,
 		      typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
 		      reasoning && typeof reasoning === 'object' ? reasoning : undefined,
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
+          Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
+          undefined,
+          undefined,
+          turnOrigin,
+          { clientRequestId },
 			    );
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
-	      sendSSE('final', { text: result.text });
+	      sendSSE('final', {
+        text: result.text,
+        artifacts: result.artifacts,
+        generatedImages: result.generatedImages,
+        generatedVideos: result.generatedVideos,
+        canvasFiles: result.canvasFiles,
+      });
 	      sendSSE('done', {
         reply: result.text, mode: result.type,
         sections: [{ type: result.type === 'execute' ? 'tool_results' : 'text', content: result.text }],
-        thinking: result.thinking, results: result.toolResults, artifacts: result.artifacts,
+        thinking: result.thinking,
+        results: result.toolResults,
+        artifacts: result.artifacts,
+        generatedImages: result.generatedImages,
+        generatedVideos: result.generatedVideos,
+        canvasFiles: result.canvasFiles,
       });
     }
 		  } catch (err: any) {
@@ -6205,11 +9547,17 @@ router.post('/api/chat', async (req, res) => {
     }
   } finally {
     requestCompleted = true;
-    editRerunAbortResetSessions.delete(String(sessionId || 'default'));
+    editRerunAbortResetSessions.delete(resolvedSessionId);
+    if (clientRequestId) {
+      setTimeout(() => {
+        mobileChatRequestDedupe.delete(mobileChatRequestDedupeKey(resolvedSessionId, clientRequestId));
+      }, 5000);
+    }
     clearInterval(heartbeat);
     finishLiveRuntime(runtimeId);
+    finishMainChatStream(resolvedSessionId, chatStream.streamId);
     setModelBusy(false); // release busy guard — cron scheduler may now run
-    res.end();
+    if (!res.destroyed && !res.writableEnded) res.end();
   }
 });
 
@@ -6218,7 +9566,7 @@ router.get('/api/sessions', async (req, res) => {
   try {
     const channel = req.query.channel as string | undefined;
     if (channel) {
-      const validChannels = ['terminal', 'telegram', 'web', 'system'];
+      const validChannels = ['terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'];
       if (!validChannels.includes(channel)) {
         res.status(400).json({ error: 'Invalid channel. Valid values: ' + validChannels.join(', ') });
         return;
@@ -6231,13 +9579,42 @@ router.get('/api/sessions', async (req, res) => {
   }
 });
 
+router.post('/api/sessions', (req, res) => {
+  try {
+    const id = String(req.body?.id || req.body?.sessionId || '').trim();
+    if (!id) {
+      res.status(400).json({ error: 'Session id required' });
+      return;
+    }
+
+    const requestedChannel = String(req.body?.channel || '').trim();
+    const validChannels = ['terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'];
+    if (requestedChannel && !validChannels.includes(requestedChannel)) {
+      res.status(400).json({ error: 'Invalid channel. Valid values: ' + validChannels.join(', ') });
+      return;
+    }
+
+    const defaultChannel = req.headers['x-pairing-token'] ? 'mobile' : 'web';
+    const channel = (requestedChannel || defaultChannel) as any;
+    const session = touchSession(id, {
+      channel,
+      title: typeof req.body?.title === 'string' ? req.body.title : undefined,
+    });
+    res.json({ success: true, session: { id: session.id, channel: session.channel, createdAt: session.createdAt, lastActiveAt: session.lastActiveAt } });
+  } catch (err: any) {
+    console.error('[/api/sessions POST] Error:', err);
+    res.status(500).json({ error: err.message || 'Failed to create session' });
+  }
+});
+
+
 // ── Get single session by ID ──────────────────────────────────────────────────
 router.get('/api/sessions/search', (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const channel = String(req.query.channel || '').trim();
     const limit = Number(req.query.limit || 80);
-    const validChannels = ['', 'terminal', 'telegram', 'web', 'system'];
+    const validChannels = ['', 'terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'];
     if (!validChannels.includes(channel)) {
       res.status(400).json({ error: 'Invalid channel. Valid values: terminal, telegram, web, system' });
       return;
@@ -6265,6 +9642,23 @@ router.get('/api/sessions/search', (req, res) => {
   }
 });
 
+router.post('/api/sessions/:id/mobile-read', (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) {
+      res.status(400).json({ error: 'Session id required' });
+      return;
+    }
+    const readAt = Number.isFinite(Number(req.body?.readAt)) ? Number(req.body.readAt) : Date.now();
+    const summary = markSessionReadForMobile(id, readAt);
+    res.json({ success: true, session: summary });
+  } catch (e: any) {
+    console.error('[/api/sessions/:id/mobile-read POST] Error:', e);
+    res.status(500).json({ error: e.message || 'Failed to mark session read' });
+  }
+});
+
+
 router.post('/api/sessions/:id/history', (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
@@ -6273,7 +9667,7 @@ router.post('/api/sessions/:id/history', (req, res) => {
       return;
     }
     const history = Array.isArray(req.body?.history) ? req.body.history : [];
-    replaceHistory(id, history as any);
+    replaceHistory(id, history as any, { resetCompaction: req.body?.resetCompaction === true });
     res.json({ success: true });
   } catch (e: any) {
     console.error('[/api/sessions/:id/history POST] Error:', e);
@@ -6307,6 +9701,9 @@ router.get('/api/sessions/:id', (req, res) => {
         history: session.history,
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
+        lastAssistantAt: session.lastAssistantAt || null,
+        mobileLastReadAt: session.mobileLastReadAt || null,
+        mobileUnread: Number(session.lastAssistantAt || 0) > Number(session.mobileLastReadAt || 0),
         creativeMode: session.creativeMode || null,
         canvasProjectRoot: session.canvasProjectRoot || null,
         canvasProjectLabel: session.canvasProjectLabel || null,

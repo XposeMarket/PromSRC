@@ -140,7 +140,7 @@ export async function generateVideo(request: VideoGenerationRequest): Promise<Vi
     prompt,
     mode,
     aspectRatio,
-    error: 'No video generation provider is available. Configure xAI API access.',
+    error: 'No video generation provider is available. Configure xAI API access or connect xAI OAuth.',
     errorType: 'provider_unavailable',
   });
 }

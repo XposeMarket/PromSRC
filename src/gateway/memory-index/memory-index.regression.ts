@@ -3,7 +3,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getRelatedMemory, readMemoryRecord, scheduleMemoryIndexRefresh, searchMemoryIndex } from './index.js';
+import { getRelatedMemory, readMemoryRecord, refreshMemoryIndexFromAudit, scheduleMemoryIndexRefresh, searchMemoryIndex } from './index.js';
+import { getSqliteMemoryStatus } from './sqlite-store.js';
 
 function writeJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -161,6 +162,25 @@ async function main(): Promise<void> {
         return false;
       }
     });
+
+    const workspaceC = path.join(tmpRoot, 'workspace-c');
+    const memoryRootC = path.join(workspaceC, 'audit', 'memory', 'root');
+    fs.mkdirSync(memoryRootC, { recursive: true });
+    fs.writeFileSync(
+      path.join(memoryRootC, 'MEMORY.md'),
+      '# MEMORY\n\n## Key Decisions\n- Use SQLite FTS/vector search as the primary memory backend when available.\n',
+      'utf-8',
+    );
+    refreshMemoryIndexFromAudit(workspaceC, { force: true, minIntervalMs: 0, maxChangedFiles: 500 });
+    const sqliteStatus = getSqliteMemoryStatus(workspaceC);
+    if (sqliteStatus.available) {
+      assert.ok(sqliteStatus.records && sqliteStatus.records > 0, 'refresh should populate SQLite memory records by default');
+      const sqliteSearch = searchMemoryIndex(workspaceC, { query: 'primary memory backend', limit: 3 });
+      assert.equal(sqliteSearch.stats.backend, 'sqlite_fts_vector_hybrid');
+      assert.ok(sqliteSearch.hits.length > 0, 'SQLite-backed search should return indexed memory hits');
+    } else {
+      console.warn(`sqlite memory backend unavailable; skipped SQLite sync assertion: ${sqliteStatus.error}`);
+    }
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

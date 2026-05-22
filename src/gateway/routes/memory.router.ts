@@ -4,10 +4,10 @@ import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
 import {
-  getMemoryGraphSnapshot,
   readMemoryRecord,
   getRelatedMemory,
   refreshMemoryIndexFromAudit,
+  scheduleMemoryIndexRefresh,
 } from '../memory-index';
 import { getSqliteMemoryStatus } from '../memory-index/sqlite-store.js';
 import { buildMemoryNoteDocument, parseMemoryNoteDocument, type MemoryNoteAttachment } from '../memory-index/memory-note.js';
@@ -47,6 +47,25 @@ function readIndexStore(workspacePath: string): StoreData {
     return JSON.parse(fs.readFileSync(storePath, 'utf-8')) as StoreData;
   } catch {
     return { records: {}, chunks: {} };
+  }
+}
+
+function readCachedGraphSnapshot(workspacePath: string) {
+  const graphPath = path.join(workspacePath, 'audit', '_index', 'memory', 'graph.json');
+  if (!fs.existsSync(graphPath)) {
+    return { generatedAt: new Date(0).toISOString(), nodeCount: 0, edgeCount: 0, nodes: [], edges: [] };
+  }
+  try {
+    const graph = JSON.parse(fs.readFileSync(graphPath, 'utf-8'));
+    return {
+      generatedAt: String(graph?.generatedAt || new Date(0).toISOString()),
+      nodeCount: Number(graph?.nodeCount || 0),
+      edgeCount: Number(graph?.edgeCount || 0),
+      nodes: Array.isArray(graph?.nodes) ? graph.nodes : [],
+      edges: Array.isArray(graph?.edges) ? graph.edges : [],
+    };
+  } catch {
+    return { generatedAt: new Date(0).toISOString(), nodeCount: 0, edgeCount: 0, nodes: [], edges: [] };
   }
 }
 
@@ -125,8 +144,9 @@ function readMemoryNoteMetadata(workspacePath: string, sourcePath: string) {
 router.get('/api/memory/graph', (_req: Request, res: Response) => {
   try {
     const workspacePath = getWorkspacePath();
-    const graph = getMemoryGraphSnapshot(workspacePath);
-    const store = readIndexStore(workspacePath);
+    scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
+    const graph = readCachedGraphSnapshot(workspacePath);
+    const store = graph.nodes.length <= 500 ? readIndexStore(workspacePath) : { records: {}, chunks: {} };
     const degree = new Map<string, number>();
     for (const edge of graph.edges || []) {
       degree.set(edge.from, (degree.get(edge.from) || 0) + 1);
@@ -279,7 +299,7 @@ router.post('/api/memory/create', (req: Request, res: Response) => {
       body: content,
     }), 'utf-8');
 
-    refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500 });
+    refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, syncSqlite: true });
     const store = readIndexStore(workspacePath);
     const record = Object.values(store.records || {}).find((item) => item.sourcePath === sourcePath) || null;
 
@@ -300,7 +320,7 @@ router.post('/api/memory/create', (req: Request, res: Response) => {
 router.post('/api/memory/refresh', (_req: Request, res: Response) => {
   try {
     const workspacePath = getWorkspacePath();
-    const result = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500 });
+    const result = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, syncSqlite: true });
     res.json({ success: true, ...result, sqlite: getSqliteMemoryStatus(workspacePath) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to refresh memory index' });

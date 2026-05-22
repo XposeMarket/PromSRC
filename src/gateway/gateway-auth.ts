@@ -69,6 +69,7 @@ export function isGatewayAuthEnabled(): boolean {
 export function isTrustedGatewayOrigin(origin: string | undefined | null): boolean {
   const normalizedOrigin = String(origin || '').trim();
   if (!normalizedOrigin) return true;
+  if (normalizedOrigin === 'null' || normalizedOrigin.toLowerCase().startsWith('file://')) return true;
   try {
     const url = new URL(normalizedOrigin);
     const host = String(url.hostname || '').trim().toLowerCase();
@@ -103,11 +104,57 @@ function extractGatewayToken(req: GatewayRequestLike, allowQueryToken = false): 
   return '';
 }
 
+function isPublicAccountAuthRoute(req: GatewayRequestLike): boolean {
+  const method = String((req as any).method || '').trim().toUpperCase();
+  let pathname = '';
+  try {
+    const host = getHeaderValue(req.headers, 'host') || 'localhost';
+    pathname = new URL(String(req.url || ''), `http://${host}`).pathname;
+  } catch {
+    pathname = String(req.url || '').split('?', 1)[0];
+  }
+  if (method === 'GET') {
+    return pathname === '/api/account/config' || pathname === '/api/account/status';
+  }
+  if (method === 'POST') {
+    return pathname === '/api/account/login' || pathname === '/api/account/login/password';
+  }
+  return false;
+}
+
 export function evaluateGatewayRequest(
   req: GatewayRequestLike,
   opts?: { allowQueryToken?: boolean },
 ): { ok: true } | { ok: false; status: number; message: string } {
   if (!isGatewayAuthEnabled()) return { ok: true };
+  if (isPublicAccountAuthRoute(req)) return { ok: true };
+
+  // A paired mobile device counts as authenticated — its token is opaque,
+  // single-tenant, and revocable from the desktop pairing panel. Verified
+  // BEFORE the configured gateway token so paired devices work over LAN
+  // regardless of whether gateway.auth.token is set.
+  const pairingHeader = getHeaderValue(req.headers, 'x-pairing-token');
+  const pairingQuery  = (() => {
+    if (opts?.allowQueryToken === false) return '';
+    try {
+      const url = (req as any).url || '';
+      const host = getHeaderValue(req.headers, 'host') || 'localhost';
+      const parsed = new URL(url, `http://${host}`);
+      return String(parsed.searchParams.get('pt') || '').trim();
+    } catch { return ''; }
+  })();
+  const pairingToken = pairingHeader || pairingQuery;
+  if (pairingToken) {
+    try {
+      // Lazy require to avoid a circular import (pairing-store → config).
+      const { verifyDeviceToken } = require('./pairing/pairing-store');
+      const device = verifyDeviceToken(pairingToken);
+      if (device) return { ok: true };
+      return { ok: false, status: 401, message: 'Unauthorized: paired device token invalid or revoked.' };
+    } catch (err) {
+      // Fall through to other auth methods if the pairing store isn't loaded.
+    }
+  }
 
   const configuredToken = resolveGatewayAuthToken();
   if (configuredToken) {
@@ -148,7 +195,7 @@ export function buildGatewayCorsOptions(): CorsOptions {
       callback(null, isTrustedGatewayOrigin(origin));
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token', 'X-Pairing-Token'],
     optionsSuccessStatus: 204,
   };
 }

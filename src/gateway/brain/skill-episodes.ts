@@ -59,14 +59,19 @@ export interface SkillGardenerCandidate {
   touchedPaths: string[];
   outcomeHints: string[];
   evidence: string[];
-  userFacingOffer?: string;
+  businessContext?: BusinessWorkflowContext;
+}
+
+export interface BusinessWorkflowContext {
+  detected: boolean;
+  workflowKind?: 'lead_gen' | 'outreach' | 'quote' | 'invoice' | 'social' | 'ops' | 'client_delivery' | 'vendor_research' | 'project_management' | 'other';
+  reason?: string;
 }
 
 export interface SkillGardenerRecordResult {
   skillEpisodeCount: number;
   workflowEpisodeRecorded: boolean;
   candidates: SkillGardenerCandidate[];
-  offerText?: string;
 }
 
 const MUTATION_TOOL_NAMES = new Set([
@@ -192,6 +197,25 @@ function inferOutcomeHints(toolResults: SkillEpisodeToolResult[], finalResponse:
   return Array.from(hints);
 }
 
+function inferBusinessWorkflowContext(request: string, finalResponse: string, toolSequence: string[]): BusinessWorkflowContext | undefined {
+  const text = `${request}\n${finalResponse}\n${toolSequence.join(' ')}`.toLowerCase();
+  const checks: Array<[BusinessWorkflowContext['workflowKind'], RegExp, string]> = [
+    ['lead_gen', /\b(lead|prospect|qualif|google maps|local business|business audit)\b/, 'lead/prospect discovery or qualification signal'],
+    ['outreach', /\b(outreach|cold email|follow.?up|dm|proposal|pitch|packet)\b/, 'outreach, follow-up, proposal, or pitch workflow signal'],
+    ['quote', /\b(quote|estimate|pricing|proposal draft)\b/, 'quote/estimate workflow signal'],
+    ['invoice', /\b(invoice|payment|billing|past due|receipt)\b/, 'invoice/payment workflow signal'],
+    ['social', /\b(social|content calendar|post|x\/twitter|instagram|linkedin|tiktok)\b/, 'social/content workflow signal'],
+    ['vendor_research', /\b(vendor|supplier|parts|tool|saas|provider)\b/, 'vendor/tool/supplier research signal'],
+    ['client_delivery', /\b(client|customer|deliverable|onboarding|handoff)\b/, 'client delivery or onboarding signal'],
+    ['project_management', /\b(project|milestone|deadline|status report|blocker)\b/, 'project management signal'],
+    ['ops', /\b(operations|crm|contract|revenue|sales|business)\b/, 'general business operations signal'],
+  ];
+  for (const [workflowKind, pattern, reason] of checks) {
+    if (pattern.test(text)) return { detected: true, workflowKind, reason };
+  }
+  return undefined;
+}
+
 function buildEpisodeContext(input: SkillEpisodeInput): {
   day: string;
   now: string;
@@ -274,6 +298,7 @@ function recordSkillReadEpisodes(input: SkillEpisodeInput, ctx: NonNullable<Retu
       errors: ctx.errors,
       touchedPaths: ctx.touchedPaths,
       outcomeHints: ctx.outcomeHints,
+      businessContext: inferBusinessWorkflowContext(input.request, input.finalResponse, ctx.toolSequence),
     });
   }
 
@@ -311,6 +336,7 @@ function recordWorkflowEpisode(input: SkillEpisodeInput, ctx: NonNullable<Return
     errors: ctx.errors,
     touchedPaths: ctx.touchedPaths,
     outcomeHints: ctx.outcomeHints,
+    businessContext: inferBusinessWorkflowContext(input.request, input.finalResponse, ctx.toolSequence),
   }]);
   return true;
 }
@@ -368,6 +394,7 @@ function inferCandidates(input: SkillEpisodeInput, ctx: NonNullable<ReturnType<t
   const hasSkillList = ctx.toolSequence.includes('skill_list');
   const skillReadIds = Array.from(new Set(ctx.skillReads.map(({ tr }) => getSkillIdFromArgs(tr.args)).filter(Boolean)));
   const completed = ctx.outcomeHints.includes('completed_signal');
+  const businessContext = inferBusinessWorkflowContext(input.request, input.finalResponse, ctx.toolSequence);
   const hadErrors = ctx.errors.length > 0 || ctx.outcomeHints.includes('blocked_or_failed_signal');
   const hadWorkflowTools = ctx.outcomeHints.some((hint) => (
     hint === 'browser_workflow' ||
@@ -396,7 +423,6 @@ function inferCandidates(input: SkillEpisodeInput, ctx: NonNullable<ReturnType<t
         skillId,
         reason: `Skill "${skillId}" helped complete a reusable workflow with concrete tool choreography.`,
         suggestedAction: `Consider adding a compact example, checklist, or template resource to ${skillId} that captures the successful sequence and any useful constraints.`,
-        userFacingOffer: `This run produced a reusable pattern. I can add it as an example/template resource on the "${skillId}" skill so Prometheus reuses it next time.`,
       }));
     }
   }
@@ -418,7 +444,20 @@ function inferCandidates(input: SkillEpisodeInput, ctx: NonNullable<ReturnType<t
       risk: 'medium',
       reason: 'A multi-tool workflow completed without an active skill, suggesting a reusable playbook may be missing.',
       suggestedAction: 'Draft a new bundled skill proposal with triggers, required tools, permissions, and a SKILL.md outline based on this run.',
-      userFacingOffer: 'This workflow looks reusable. I can turn it into a new skill so Prometheus has the playbook ready next time.',
+    }));
+  }
+
+  if (businessContext?.detected && completed && hadWorkflowTools) {
+    candidates.push(makeCandidate(input, ctx, {
+      type: skillReadIds.length ? 'add_resource_or_template' : 'create_new_skill_candidate',
+      confidence: confidenceFor(ctx, 'high'),
+      risk: 'medium',
+      skillId: skillReadIds[0],
+      reason: `Business workflow detected (${businessContext.workflowKind || 'other'}): ${businessContext.reason || 'reusable business process signal'}.`,
+      suggestedAction: skillReadIds.length
+        ? `Consider adding a business workflow example/template to ${skillReadIds[0]} so Prometheus can repeat this operating pattern for the user's business.`
+        : 'Consider a new business workflow skill proposal with triggers, permissions, approval boundaries, templates, and entity/BUSINESS.md routing guidance.',
+      businessContext,
     }));
   }
 
@@ -443,31 +482,10 @@ function inferCandidates(input: SkillEpisodeInput, ctx: NonNullable<ReturnType<t
 function recordLiveCandidates(input: SkillEpisodeInput, ctx: NonNullable<ReturnType<typeof buildEpisodeContext>>): SkillGardenerCandidate[] {
   const candidates = inferCandidates(input, ctx);
   if (!candidates.length) return [];
-  const canOffer =
-    String(input.executionMode || 'interactive') === 'interactive' &&
-    !/\b(hit max steps|safety boundary|stopped|aborted|failed|error|blocked|unable)\b/i.test(input.finalResponse);
-  let offered = false;
-  const candidatesToWrite = candidates.map((candidate) => {
-    if (
-      canOffer &&
-      !offered &&
-      candidate.userFacingOffer &&
-      candidate.confidence !== 'low'
-    ) {
-      offered = true;
-      return { ...candidate, status: 'offered_to_user' as const };
-    }
-    return candidate;
-  });
-  const actionable = candidatesToWrite.filter((candidate) => candidate.type !== 'no_action_but_record_episode');
+  const actionable = candidates.filter((candidate) => candidate.type !== 'no_action_but_record_episode');
   const outPath = path.join(input.workspacePath, 'Brain', 'skill-gardener', ctx.day, 'live-candidates.jsonl');
-  appendJsonl(outPath, candidatesToWrite);
+  appendJsonl(outPath, candidates);
   return actionable;
-}
-
-function chooseOfferText(input: SkillEpisodeInput, candidates: SkillGardenerCandidate[]): string | undefined {
-  const offer = candidates.find((candidate) => candidate.status === 'offered_to_user' && candidate.userFacingOffer);
-  return offer?.userFacingOffer;
 }
 
 export function recordSkillGardenerTurn(input: SkillEpisodeInput): SkillGardenerRecordResult {
@@ -486,7 +504,6 @@ export function recordSkillGardenerTurn(input: SkillEpisodeInput): SkillGardener
       skillEpisodeCount,
       workflowEpisodeRecorded,
       candidates,
-      offerText: chooseOfferText(input, candidates),
     };
   } catch (err: any) {
     console.warn('[BrainSkillGardener] Failed to record live skill signal:', err?.message || err);

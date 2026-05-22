@@ -71,12 +71,19 @@ export async function renderHyperframesWithProducer(input: HyperframesProducerRe
 
   const entryFile = 'index.html';
   const entryPath = path.join(projectDir, entryFile);
+  // @hyperframes/producer waits for the composition page to expose window.__hf.
+  // Prometheus-authored clips may only register timelines/seek handlers, so add
+  // the HF runtime plus producer bridge explicitly while keeping the source HTML
+  // itself canonical in the editor/project metadata.
   fs.writeFileSync(entryPath, wrapForIframePreview(normalized, { includeProducerBridge: true }), 'utf8');
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
   const producer = await dynamicImport('@hyperframes/producer');
+  const fps = input.fps || 30;
   const job = producer.createRenderJob({
-    fps: input.fps || 30,
+    inputPath: entryFile,
+    outputPath,
+    fps: { num: fps, den: 1 },
     quality: input.quality || 'standard',
     format: input.format || 'mp4',
     workers: Math.max(1, Math.min(4, Math.round(Number(input.workers) || 1))),

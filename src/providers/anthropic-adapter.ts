@@ -568,7 +568,7 @@ export class AnthropicAdapter implements LLMProvider {
         const text = await response.text().catch(() => '');
         throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 500)}`);
       }
-      return this.parseStreamingResponse(response, options.onToken, options.onThinking);
+      return this.parseStreamingResponse(response, model, options);
     }
 
     const response = await fetch(this.getMessagesEndpoint(), {
@@ -589,7 +589,7 @@ export class AnthropicAdapter implements LLMProvider {
 
   // ─── Parse Anthropic streaming SSE response ──────────────────────────────────
 
-  private async parseStreamingResponse(response: Response, onToken: (chunk: string) => void, onThinking?: (chunk: string) => void): Promise<ChatResult> {
+  private async parseStreamingResponse(response: Response, model: string, options: ChatOptions): Promise<ChatResult> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body from Anthropic streaming endpoint');
 
@@ -642,6 +642,9 @@ export class AnthropicAdapter implements LLMProvider {
                 name: block.name,
                 inputJson: '',
               };
+              if (block.type === 'tool_use') {
+                options.onModelEvent?.({ type: 'tool_call_start', id: block.id || `tool_${idx}`, name: block.name || '', nativeType: 'content_block_start.tool_use', provider: this.id, model });
+              }
             }
 
             if (type === 'content_block_delta') {
@@ -649,13 +652,23 @@ export class AnthropicAdapter implements LLMProvider {
               const delta = event.delta || {};
               if (delta.type === 'text_delta') {
                 textContent += delta.text || '';
-                onToken(delta.text || '');
+                options.onToken?.(delta.text || '');
+                if (delta.text) options.onModelEvent?.({ type: 'assistant_delta', text: delta.text, nativeType: 'content_block_delta.text_delta', provider: this.id, model });
 	              } else if (delta.type === 'thinking_delta') {
 	                const thinkDelta = delta.thinking || '';
 	                thinking += thinkDelta;
-	                if (thinkDelta) onThinking?.(thinkDelta);
+	                if (thinkDelta) {
+	                  options.onThinking?.(thinkDelta);
+	                  options.onModelEvent?.({ type: 'reasoning_delta', text: thinkDelta, nativeType: 'content_block_delta.thinking_delta', provider: this.id, model });
+	                }
 	              } else if (delta.type === 'input_json_delta') {
-                if (blocks[idx]) blocks[idx].inputJson += delta.partial_json || '';
+                if (blocks[idx]) {
+                  const part = delta.partial_json || '';
+                  blocks[idx].inputJson += part;
+                  if (part && blocks[idx].type === 'tool_use') {
+                    options.onModelEvent?.({ type: 'tool_call_delta', id: blocks[idx].id || `tool_${idx}`, name: blocks[idx].name || '', argumentsDelta: part, nativeType: 'content_block_delta.input_json_delta', provider: this.id, model });
+                  }
+                }
               }
             }
 
@@ -672,6 +685,15 @@ export class AnthropicAdapter implements LLMProvider {
                     name:      block.name || '',
                     arguments: JSON.stringify(parsedInput),
                   },
+                });
+                options.onModelEvent?.({
+                  type: 'tool_call_done',
+                  id: block.id || `call_${Date.now()}`,
+                  name: block.name || '',
+                  arguments: JSON.stringify(parsedInput),
+                  nativeType: 'content_block_stop.tool_use',
+                  provider: this.id,
+                  model,
                 });
               }
             }

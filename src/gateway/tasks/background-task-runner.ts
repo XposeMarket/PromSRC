@@ -67,6 +67,11 @@ import {
 	} from '../comms/telegram-tool-log';
 import { buildObsoleteBrandBlockMessage, containsObsoleteProductBrand } from '../scheduled-output-guard';
 import { appendSubagentChatMessage } from '../agents-runtime/subagent-chat-store';
+import {
+  finishLiveRuntime,
+  registerLiveRuntime,
+  updateLiveRuntimeCheckpoint,
+} from '../live-runtime-registry';
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 const pauseRequests = new Set<string>();
@@ -403,6 +408,7 @@ export class BackgroundTaskRunner {
     sendMessage?: (chatId: number, text: string) => Promise<void>;
   } | null;
   private openingAction: string | undefined;
+  private runtimeId: string | undefined;
 
   constructor(
     taskId: string,
@@ -509,6 +515,19 @@ export class BackgroundTaskRunner {
 
     activeRunners.add(taskId);
     pauseRequests.delete(taskId);
+    const runtimeId = registerLiveRuntime({
+      kind: task.scheduleId || task.taskKind === 'scheduled' ? 'scheduled_task' : task.parentTaskId || task.subagentProfile || task.teamSubagent ? 'subagent' : 'background_task',
+      label: task.title || 'Background task',
+      sessionId: task.sessionId,
+      taskId,
+      teamId: task.teamSubagent?.teamId,
+      agentId: task.teamSubagent?.agentId,
+      scheduleId: task.scheduleId,
+      source: task.channel,
+      detail: String(task.prompt || task.title || '').slice(0, 500),
+      recoveryPolicy: 'resume',
+    });
+    this.runtimeId = runtimeId;
 
     // ── Mandatory write_note step ─────────────────────────────────────────────
     // Every background task gets a final "Log completion" step appended at start.
@@ -528,7 +547,8 @@ export class BackgroundTaskRunner {
         description:
           'Log completion: call write_note with a full summary of what was done in this task — ' +
           'what changed, what was created or modified, key results, and any important findings. ' +
-          'Tag it "task_complete". Then write your final response to the user summarizing the outcome.',
+          'Tag it "task_complete"; that note completes the task, so do not call step_complete afterward. ' +
+          'Then write your final response to the user summarizing the outcome.',
         notes: 'write_note_completion',
       }]);
       appendJournal(taskId, { type: 'status_push', content: 'Appended mandatory write_note completion step.' });
@@ -563,6 +583,8 @@ export class BackgroundTaskRunner {
         await this._run();
       }
     } finally {
+      finishLiveRuntime(runtimeId);
+      this.runtimeId = undefined;
       activeRunners.delete(taskId);
       pauseRequests.delete(taskId);
       taskAbortSignals.delete(taskId);
@@ -590,6 +612,9 @@ export class BackgroundTaskRunner {
 	        isDevSrcSelfEditRepairTask(task)
 	          ? `- This is a repair-only run. Do NOT continue the original feature work in this task.`
 	          : `- Do NOT create a new proposal during this run.`,
+            isDevSrcSelfEditTask(task)
+              ? `- This is an isolated code_change sandbox. After approved src/web-ui/mobile edits are complete, run the canonical sandbox verification command with run_command. Do not call prom_apply_dev_changes inside the sandbox; any live sync/build/restart/reload must happen from the live repo after verified promotion.`
+              : '',
 		        `- Execute each step directly with tools; after finishing a step, call step_complete(note: "what you did").`,
 		        `- Do NOT call declare_plan again.`,
 		        `- If blocked, state the blocker and best next action concisely.`,
@@ -657,8 +682,9 @@ export class BackgroundTaskRunner {
       `- After completing ALL tool calls for a step, call step_complete(note: "what you did").`,
       `- Do NOT call declare_plan again — your plan is already set.`,
       `- The FINAL step in every plan is "Log completion". In that step you MUST call write_note`,
-      `  (tag: "task_complete") with a full rundown of what was done, then write your summary`,
-      `  response to the user as plain text. That text becomes the final message delivered to chat.`,
+      `  (tag: "task_complete") with a full rundown of what was done. That note completes the task;`,
+      `  do not call step_complete afterward. Then write your summary response as plain text.`,
+      `  That text becomes the final message delivered to chat.`,
       `- If blocked, say what is blocking you and stop.`,
       `You are running autonomously.${teamSubagentNote}${profileNote}${blockedStateNote}${latestPauseAnalysis}${latestResumeBrief}${resumeNote}${xLoginGuidance}`,
       `[/BACKGROUND TASK CONTEXT]`,
@@ -1151,7 +1177,7 @@ export class BackgroundTaskRunner {
       });
       await this._pauseForAssistance(
         task,
-        'Sandboxed src proposal reached the end without a verified build. Run npm run build successfully inside the isolated workspace before promotion.',
+        `Sandboxed src proposal reached the end without a verified build. Run ${String(proposalExecution.buildVerifiedCommand || 'the canonical build command')} successfully inside the isolated workspace before promotion.`,
         `Sandbox workspace: ${proposalExecution.projectRoot || task.agentWorkspace || '(unknown)'}`,
         { pauseReason: 'recovering_from_build_error' },
       );
@@ -1509,6 +1535,15 @@ export class BackgroundTaskRunner {
     taskAbortSignals.set(taskId, abortSignal);  // Store so requestPause can access it
 
     const sendSSE = (event: string, data: any) => {
+      if (this.runtimeId) {
+        updateLiveRuntimeCheckpoint(this.runtimeId, {
+          event,
+          message: data?.message ? String(data.message).slice(0, 1000) : undefined,
+          toolName: data?.action ? String(data.action) : undefined,
+          result: data?.result ? String(data.result).slice(0, 1000) : undefined,
+          currentStepIndex: loadTask(taskId)?.currentStepIndex,
+        });
+      }
       this._broadcast('task_stream_event', { taskId, eventType: event, data });
       if (event === 'tool_call') {
         this._broadcast('task_panel_update', { taskId });
@@ -1990,9 +2025,7 @@ export class BackgroundTaskRunner {
         ? (this.openingAction
             ? `[Resuming task from heartbeat. Opening action: ${this.openingAction}]\n\n${task.prompt}`
             : task.prompt)
-        : stallNudgeMessage
-          ? stallNudgeMessage
-          : isWriteNoteStep
+        : isWriteNoteStep
             ? [
                 `Continue task: ${liveTask.title}`,
                 ``,
@@ -2014,6 +2047,8 @@ export class BackgroundTaskRunner {
                       `   Make it clear and complete — this goes directly to chat.`,
                     ]),
               ].filter(Boolean).join('\n')
+          : stallNudgeMessage
+            ? stallNudgeMessage
             : [
                 `Continue task: ${liveTask.title}`,
                 ``,

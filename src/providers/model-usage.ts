@@ -111,17 +111,35 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
   }
 }
 
+let _usageReadCachePath = '';
+let _usageReadCacheMtimeMs = 0;
+let _usageReadCacheSize = 0;
+let _usageReadCacheEvents: ModelUsageEvent[] = [];
+
 export function readModelUsageEvents(): ModelUsageEvent[] {
   try {
     const filePath = usageLogPath();
-    if (!fs.existsSync(filePath)) return [];
-    return fs.readFileSync(filePath, 'utf-8')
+    let st: fs.Stats;
+    try { st = fs.statSync(filePath); } catch { return []; }
+    if (
+      filePath === _usageReadCachePath
+      && st.mtimeMs === _usageReadCacheMtimeMs
+      && st.size === _usageReadCacheSize
+    ) {
+      return _usageReadCacheEvents;
+    }
+    const events = fs.readFileSync(filePath, 'utf-8')
       .split('\n')
       .filter((line) => line.trim())
       .map((line) => {
         try { return JSON.parse(line) as ModelUsageEvent; } catch { return null; }
       })
       .filter((event): event is ModelUsageEvent => !!event);
+    _usageReadCachePath = filePath;
+    _usageReadCacheMtimeMs = st.mtimeMs;
+    _usageReadCacheSize = st.size;
+    _usageReadCacheEvents = events;
+    return events;
   } catch {
     return [];
   }

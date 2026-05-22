@@ -1,4 +1,5 @@
 import { getConfig } from '../../config/config.js';
+import { getValidXAIRuntimeCredentials, isXAIConnected } from '../../auth/xai-oauth.js';
 import type {
   VideoGenerationProvider,
   VideoGenerationResolvedRequest,
@@ -45,29 +46,47 @@ function getXAIVideoProviderConfig(): Record<string, unknown> {
 function getApiBase(): string {
   const videoProviderCfg = getXAIVideoProviderConfig();
   const llmProviderCfg = getXAIProviderConfig();
-  const configured = String(videoProviderCfg.endpoint || llmProviderCfg.endpoint || '').trim();
+  const configured = String(
+    videoProviderCfg.endpoint
+    || llmProviderCfg.endpoint
+    || process.env.PROMETHEUS_XAI_BASE_URL
+    || process.env.XAI_BASE_URL
+    || process.env.HERMES_XAI_BASE_URL
+    || '',
+  ).trim();
   return (configured || DEFAULT_ENDPOINT).replace(/\/+$/, '');
-}
-
-function getGenerationsEndpoint(): string {
-  return `${getApiBase()}/videos/generations`;
-}
-
-function getEditsEndpoint(): string {
-  return `${getApiBase()}/videos/edits`;
-}
-
-function getExtensionsEndpoint(): string {
-  return `${getApiBase()}/videos/extensions`;
-}
-
-function getStatusEndpoint(requestId: string): string {
-  return `${getApiBase()}/videos/${encodeURIComponent(requestId)}`;
 }
 
 function getApiKey(): string | undefined {
   const providerCfg = getXAIProviderConfig();
   return resolveSecretReference(providerCfg.api_key) || process.env.XAI_API_KEY;
+}
+
+function getConfiguredAuthMode(): string {
+  const providerCfg = getXAIProviderConfig();
+  const explicit = String(providerCfg.auth_mode || '').trim();
+  if (explicit) return explicit;
+  return isXAIConnected(getConfigDir()) ? 'oauth' : 'api_key';
+}
+
+function getConfigDir(): string {
+  return getConfig().getConfigDir();
+}
+
+async function getBearerToken(): Promise<string | undefined> {
+  if (getConfiguredAuthMode() === 'oauth') {
+    const creds = await getValidXAIRuntimeCredentials(getConfigDir());
+    return creds.api_key;
+  }
+  return getApiKey();
+}
+
+async function getRequestRuntime(): Promise<{ bearerToken?: string; baseUrl: string }> {
+  if (getConfiguredAuthMode() === 'oauth') {
+    const creds = await getValidXAIRuntimeCredentials(getConfigDir());
+    return { bearerToken: creds.api_key, baseUrl: creds.base_url };
+  }
+  return { bearerToken: await getBearerToken(), baseUrl: getApiBase() };
 }
 
 function resolveDefaultModel(): string {
@@ -78,6 +97,22 @@ function resolveDefaultModel(): string {
 
 function buildMediaObject(url: string): { url: string } {
   return { url };
+}
+
+function buildGenerationsEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/videos/generations`;
+}
+
+function buildEditsEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/videos/edits`;
+}
+
+function buildExtensionsEndpoint(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/videos/extensions`;
+}
+
+function buildStatusEndpoint(baseUrl: string, requestId: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}/videos/${encodeURIComponent(requestId)}`;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -93,7 +128,11 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    return Boolean(getApiKey());
+    try {
+      return Boolean(await getBearerToken());
+    } catch {
+      return false;
+    }
   }
 
   resolveModel(requestedModel?: string): string {
@@ -103,7 +142,8 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
   async generate(request: VideoGenerationResolvedRequest): Promise<VideoGenerationResult> {
     const prompt = String(request.prompt || '').trim();
     const model = this.resolveModel(request.model);
-    const apiKey = getApiKey();
+    const runtime = await getRequestRuntime().catch(() => ({ bearerToken: undefined, baseUrl: getApiBase() }));
+    const token = runtime.bearerToken;
     const aspectRatio = XAI_ASPECT_RATIO_BY_PROMETHEUS[request.aspect_ratio] || '16:9';
 
     if (!prompt) {
@@ -118,14 +158,14 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
       });
     }
 
-    if (!apiKey) {
+    if (!token) {
       return buildVideoGenerationError({
         provider: this.id,
         model,
         prompt,
         mode: request.mode,
         aspectRatio: request.aspect_ratio,
-        error: 'XAI_API_KEY is not configured for Grok Imagine video generation.',
+        error: 'xAI credentials are not configured for Grok Imagine video generation. Add XAI_API_KEY or connect xAI OAuth in Settings -> Models.',
         errorType: 'auth_required',
       });
     }
@@ -133,13 +173,13 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
     try {
       const headers = {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${token}`,
       };
       const body: Record<string, unknown> = {
         model,
         prompt,
       };
-      let startEndpoint = getGenerationsEndpoint();
+      let startEndpoint = buildGenerationsEndpoint(runtime.baseUrl);
 
       if (request.mode === 'edit' || request.mode === 'extend') {
         if (!request.video) {
@@ -155,7 +195,7 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
         }
         const videoInput = await resolveVideoInput(request.video);
         body.video = buildMediaObject(videoInput.url);
-        startEndpoint = request.mode === 'edit' ? getEditsEndpoint() : getExtensionsEndpoint();
+        startEndpoint = request.mode === 'edit' ? buildEditsEndpoint(runtime.baseUrl) : buildExtensionsEndpoint(runtime.baseUrl);
         if (request.mode === 'extend') {
           body.duration = Math.max(2, Math.min(10, request.duration));
         }
@@ -241,10 +281,10 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
 
       while (Date.now() < deadline) {
         await sleep(request.poll_interval_ms);
-        const statusResponse = await fetch(getStatusEndpoint(requestId), {
+        const statusResponse = await fetch(buildStatusEndpoint(runtime.baseUrl, requestId), {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${token}`,
           },
           signal: AbortSignal.timeout(60_000),
         });

@@ -69,6 +69,7 @@ export interface CoordinatorConversationOptions {
   replyTargetId?: string;
   replyTargetLabel?: string;
   attachments?: Array<{ base64: string; mimeType: string; name: string }>;
+  suppressOriginatingSessionProgress?: boolean;
 }
 
 export interface CoordinatorConversationResult {
@@ -611,16 +612,16 @@ export async function runCoordinatorConversation(
           if (toolName === 'dispatch_team_agent' || toolName === 'request_team_member_turn') {
             hadTeamActivity = true;
           }
-          // Forward to process log
-          if (toolName) {
+          // Forward to the originating chat only for foreground team-manager work.
+          if (!options.suppressOriginatingSessionProgress && toolName) {
             const argsPreview = data.args ? ' ' + JSON.stringify(data.args).slice(0, 100) : '';
             bfn({ type: 'coordinator_progress', sessionId: originatingSession, teamId, message: `${toolName}${argsPreview}` });
           }
-        } else if (event === 'tool_result' && data?.action) {
+        } else if (!options.suppressOriginatingSessionProgress && event === 'tool_result' && data?.action) {
           const ok = !data.error;
           const preview = String(data.result || '').slice(0, 120);
           bfn({ type: 'coordinator_progress', sessionId: originatingSession, teamId, message: `${data.action} ${ok ? '✓' : '✗'}${preview ? ' — ' + preview : ''}` });
-        } else if (event === 'info' && data?.message) {
+        } else if (!options.suppressOriginatingSessionProgress && event === 'info' && data?.message) {
           bfn({ type: 'coordinator_progress', sessionId: originatingSession, teamId, message: String(data.message).slice(0, 150) });
         }
       };
@@ -872,15 +873,15 @@ export async function runCoordinatorConversationDetailed(
             if (toolName === 'dispatch_team_agent' || toolName === 'request_team_member_turn') {
               hadTeamActivity = true;
             }
-            if (toolName) {
+            if (!options.suppressOriginatingSessionProgress && toolName) {
               const argsPreview = data.args ? ' ' + JSON.stringify(data.args).slice(0, 100) : '';
               bfn({ type: 'coordinator_progress', sessionId: originatingSession, teamId, message: `${toolName}${argsPreview}` });
             }
-          } else if (event === 'tool_result' && data?.action) {
+          } else if (!options.suppressOriginatingSessionProgress && event === 'tool_result' && data?.action) {
             const ok = !data.error;
             const preview = String(data.result || '').slice(0, 120);
             bfn({ type: 'coordinator_progress', sessionId: originatingSession, teamId, message: `${data.action} ${ok ? '[ok]' : '[x]'}${preview ? ' - ' + preview : ''}` });
-          } else if (event === 'info' && data?.message) {
+          } else if (!options.suppressOriginatingSessionProgress && event === 'info' && data?.message) {
             bfn({ type: 'coordinator_progress', sessionId: originatingSession, teamId, message: String(data.message).slice(0, 150) });
           }
         };

@@ -13,6 +13,8 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config.js';
 import { ToolResult } from '../types.js';
+import { getSharedToolExecutionContext } from './execution-context.js';
+import { formatIntradayNoteSourceInline, inferIntradayNoteSource } from '../gateway/intraday-note-source.js';
 
 export async function executeWriteNote(args: {
   content: string;
@@ -45,7 +47,8 @@ export async function executeWriteNote(args: {
     });
 
     const tagStr = tag ? ` [${tag}]` : '';
-    const entry = `[${ts}]${tagStr} ${content}\n`;
+    const source = inferIntradayNoteSource(getSharedToolExecutionContext().sessionId, args);
+    const entry = `[${ts}]${tagStr} ${formatIntradayNoteSourceInline(source)} ${content}\n`;
 
     fs.appendFileSync(notesPath, entry, 'utf-8');
 
@@ -56,6 +59,7 @@ export async function executeWriteNote(args: {
         file: `memory/${today}-intraday-notes.md`,
         tag: tag || undefined,
         timestamp: ts,
+        source,
       },
     };
   } catch (err: any) {

@@ -13,6 +13,7 @@ import { OpenAICodexAdapter } from './openai-codex-adapter';
 import { AnthropicAdapter } from './anthropic-adapter';
 import { PerplexityAdapter } from './perplexity-adapter';
 import { GeminiAdapter } from './gemini-adapter';
+import { getValidXAIToken, isXAIConnected } from '../auth/xai-oauth';
 import {
   getProviderDefaultConfig,
   getProviderDescriptor,
@@ -126,17 +127,27 @@ function buildProvider(id: ProviderID, providers: any): LLMProvider {
 
     case 'providers/openai-compat-adapter': {
       const authType = descriptor.setup?.authType || 'none';
-      const apiKey = authType === 'api_key'
-        ? requireApiKey(id, cfg)
-        : resolveSecretKey(readStringSetting(cfg, 'api_key'));
+      const rawProviderCfg = providers?.[id] && typeof providers[id] === 'object' && !Array.isArray(providers[id])
+        ? providers[id]
+        : {};
+      const explicitAuthMode = readStringSetting(rawProviderCfg, 'auth_mode');
+      const authMode = explicitAuthMode || readStringSetting(cfg, 'auth_mode') || 'api_key';
+      const useXaiOAuth = id === 'xai' && (authMode === 'oauth' || (!explicitAuthMode && isXAIConnected(getConfigDir())));
+      const apiKey = useXaiOAuth
+        ? undefined
+        : authType === 'api_key'
+          ? requireApiKey(id, cfg)
+          : resolveSecretKey(readStringSetting(cfg, 'api_key'));
       const endpoint = readStringSetting(cfg, 'endpoint') || runtime.endpoint || 'http://localhost:11434';
       return new OpenAICompatAdapter({
         endpoint,
         apiKey,
+        getToken: useXaiOAuth ? () => getValidXAIToken(getConfigDir()) : undefined,
         providerId: id,
         chatCompletionsPath: runtime.chatCompletionsPath,
         modelsPath: runtime.modelsPath,
         defaultHeaders: runtime.defaultHeaders,
+        authLabel: useXaiOAuth ? 'xAI OAuth' : (authType === 'api_key' ? 'API key' : undefined),
         staticModels: runtime.staticModels,
         supportsReasoningEffort: runtime.supportsReasoningEffort,
       });

@@ -722,7 +722,11 @@ wsEventBus.on('tasks_update', () => {
 });
 wsEventBus.on('task_running', (msg) => {
   if (window.currentMode === 'schedule') refreshSchedules();
-  if (typeof window.addProcessEntry === 'function') window.addProcessEntry('info', `Task running: ${msg.jobName}`);
+  const eventSessionId = String(msg.sessionId || '').trim();
+  const activeSessionId = String(window.activeChatSessionId || '').trim();
+  if (eventSessionId && eventSessionId === activeSessionId && typeof window.addProcessEntry === 'function') {
+    window.addProcessEntry('info', `Task running: ${msg.jobName}`, { actor: 'Background Task' });
+  }
 });
 wsEventBus.on('task_done', (msg) => {
   if (window.currentMode === 'schedule') refreshSchedules();

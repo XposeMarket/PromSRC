@@ -14,7 +14,6 @@ import path from 'path';
 import fs from 'fs';
 import { getConfig } from '../../config/config';
 import { getAgentById } from '../../config/config';
-import { spawnAgent } from '../../agents/spawner';
 import { detectGpu, logGpuStatus } from '../gpu-detector';
 import { getMCPManager } from '../mcp-manager';
 import { hookBus } from '../hooks';
@@ -47,13 +46,13 @@ import {
 import { setWorkspace } from '../session';
 import { recordAgentRun } from '../../scheduler';
 import { broadcastWS, broadcastTeamEvent } from '../comms/broadcaster';
-import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { setBackgroundAgentDeps } from '../tasks/task-runner';
 import { listPendingStartupNotifications, markStartupNotificationDelivered } from '../lifecycle';
+import { recoverInterruptedRuntimes } from '../runtime-recovery';
 import { startAuditMaterializer } from '../audit/materializer';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { markProviderStatus, markProviderStatusChecking, resolveProviderStatus } from '../provider-status';
 import { getProvider } from '../../providers/factory';
+import type { spawnAgent as SpawnAgentFn } from '../../agents/spawner';
 
 const STARTUP_PROFILE = process.env.PROMETHEUS_STARTUP_PROFILE === '1';
 let startupT0 = 0;
@@ -200,6 +199,14 @@ function yieldStartup(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+const spawnAgentLazy: typeof SpawnAgentFn = (...args) => {
+  const { spawnAgent } = require('../../agents/spawner.js') as typeof import('../../agents/spawner');
+  return spawnAgent(...args);
+};
+
+const getBackgroundTaskRunner = (): typeof import('../tasks/background-task-runner')['BackgroundTaskRunner'] =>
+  require('../tasks/background-task-runner').BackgroundTaskRunner;
+
 // ─── Main startup function ────────────────────────────────────────────────────
 
 export async function runStartup(deps: StartupDeps): Promise<void> {
@@ -266,6 +273,21 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   }
   await yieldStartup();
 
+  try {
+    const { launchBackgroundTaskRunner } = require('../tasks/task-router') as typeof import('../tasks/task-router');
+    const recovery = recoverInterruptedRuntimes({
+      launchBackgroundTaskRunner,
+      notify: (message) => console.log(`[RuntimeRecovery] ${message}`),
+    });
+    if (recovery.inspected > 0) {
+      console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), preserved ${recovery.interruptedChats.length} chat checkpoint(s).`);
+    }
+  } catch (err: any) {
+    console.warn('[RuntimeRecovery] Startup recovery failed:', err?.message || err);
+  }
+  startupMark('runtime recovery complete');
+  await yieldStartup();
+
   // Auto-connect enabled MCP servers after the gateway is already responsive.
   // Network handshakes and broken credentials should not hold the startup UI hostage.
   const mcpStartupTimer = setTimeout(() => {
@@ -281,6 +303,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
 
   // Wire handleChat into background agent executor so spawned bg agents run full tool loop
   try {
+    const { setBackgroundAgentDeps } = require('../tasks/task-runner') as typeof import('../tasks/task-runner');
     setBackgroundAgentDeps({ handleChat, broadcastWS });
   } catch (e: any) {
     console.warn('[BackgroundAgent] Could not wire background agent deps:', e?.message);
@@ -304,7 +327,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       listManagedTeams,
       broadcast: broadcastWS,
       cronScheduler,
-      spawnAgent,
+      spawnAgent: spawnAgentLazy,
       listTeamContextReferences,
       addTeamContextReference,
       updateTeamContextReference,
@@ -428,7 +451,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       getManagedTeam,
       listManagedTeams,
       handleManagerConversation,
-      spawnAgent,
+      spawnAgent: spawnAgentLazy,
       applyTeamChange: applyTeamChangeViaTelegram,
       rejectTeamChange: (teamId: string, changeId: string) => {
         const change = rejectTeamChange(teamId, changeId);
@@ -456,7 +479,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     console.warn('[Telegram] Could not inject team deps:', e.message);
   }
 
-  // Wire repair proposal hook so propose_repair sends Telegram buttons automatically
+  // Wire repair proposal hook so pending repairs can send Telegram buttons automatically
   if (!isPublicDistributionBuild()) {
     try {
       const { setRepairProposalHook } = require('../../tools/self-repair.js');
@@ -476,7 +499,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
           );
         }
       });
-      console.log('[SelfRepair] Telegram button hook wired — propose_repair will send ✅/❌ buttons.');
+      console.log('[SelfRepair] Telegram button hook wired — pending repairs will send ✅/❌ buttons.');
     } catch (e: any) {
       console.warn('[SelfRepair] Could not wire repair proposal hook:', e.message);
     }
@@ -613,6 +636,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
           teamName,
         });
 
+        const BackgroundTaskRunner = getBackgroundTaskRunner();
         const runner = new BackgroundTaskRunner(task.id, handleChat, makeTaskBroadcast, telegramChannel);
         runner.start().catch((err: any) => {
           console.error(`[TeamCoordinator] Goal-complete analysis task failed to start for ${teamId}:`, err?.message || err);
@@ -708,10 +732,22 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       }
     }
   }).catch((err: any) => console.error('[Telegram] Start failed:', err.message));
-  const telegramStartDelayMs = Math.max(0, Number(process.env.PROMETHEUS_TELEGRAM_STARTUP_DELAY_MS ?? 5 * 60_000));
+  const hasPendingTelegramRestartNotification = (() => {
+    try {
+      return listPendingStartupNotifications().some((n) =>
+        n.source === 'hot_restart' && n.telegram?.enabled && !n.delivered?.telegram,
+      );
+    } catch {
+      return false;
+    }
+  })();
+  const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
+  const shouldStartTelegramImmediately = isHotRestartBoot || hasPendingTelegramRestartNotification;
+  const configuredTelegramStartDelayMs = Math.max(0, Number(process.env.PROMETHEUS_TELEGRAM_STARTUP_DELAY_MS ?? 5 * 60_000));
+  const telegramStartDelayMs = shouldStartTelegramImmediately ? 0 : configuredTelegramStartDelayMs;
   const telegramStartTimer = setTimeout(startTelegram, telegramStartDelayMs);
   if (typeof (telegramStartTimer as any).unref === 'function') (telegramStartTimer as any).unref();
-  startupMark('telegram startup deferred');
+  startupMark(telegramStartDelayMs > 0 ? `telegram startup deferred ${telegramStartDelayMs}ms` : 'telegram startup scheduled immediately');
   await yieldStartup();
 
   const bootWorkspace = getConfig().getWorkspacePath() || (getConfig().getConfig() as any).workspace?.path || '';

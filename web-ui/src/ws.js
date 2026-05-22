@@ -54,9 +54,18 @@ export const wsEventBus = {
 
 // ─── WebSocket Connection ──────────────────────────────────────
 
-export function connectWS() {
+function buildWsUrl() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  window.ws = new WebSocket(`${proto}://${location.host}/ws`);
+  const url = new URL(`${proto}://${location.host}/ws`);
+  try {
+    const token = localStorage.getItem('pm_device_token');
+    if (token) url.searchParams.set('pt', token);
+  } catch {}
+  return url.toString();
+}
+
+export function connectWS() {
+  window.ws = new WebSocket(buildWsUrl());
 
   window.ws.onopen = () => {
     wsEventBus._dispatch({ type: 'ws:open', timestamp: Date.now() });
@@ -74,6 +83,21 @@ export function connectWS() {
   window.ws.onclose = () => setTimeout(connectWS, 2000);
   window.ws.onerror = () => window.ws.close();
 }
+
+wsEventBus.on('dev_reload_requested', (msg) => {
+  if (msg?.target && msg.target !== 'desktop') return;
+  if (location.hash && String(location.hash).startsWith('#mobile')) return;
+  const id = String(msg?.timestamp || msg?.reason || Date.now());
+  const key = `prom_dev_reload_${id}`;
+  try {
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+  } catch {}
+  const delayMs = Number.isFinite(Number(msg?.delayMs)) ? Math.max(250, Number(msg.delayMs)) : 900;
+  setTimeout(() => {
+    try { location.reload(); } catch {}
+  }, delayMs);
+});
 
 export function wsSend(msg) {
   if (window.ws && window.ws.readyState === WebSocket.OPEN) {

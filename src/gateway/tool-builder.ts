@@ -72,6 +72,9 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
   file_ops: 'workspace_write',
   files: 'workspace_write',
   workspace_write: 'workspace_write',
+  shell: 'workspace_write',
+  commands: 'workspace_write',
+  run_commands: 'workspace_write',
   memory: 'advanced_memory',
   advanced_memory: 'advanced_memory',
   media: 'media_assets',
@@ -115,8 +118,10 @@ const TEAM_OPS_TOOL_NAMES = new Set([
   // deploy_analysis_team intentionally excluded — user-facing tool, must always be available
 ]);
 
-// schedule_job + parse_schedule_pattern are CORE — always injected so cron/heartbeat/subagent
-// sessions can reschedule and manage jobs without needing category activation.
+// schedule_job is core so cron/heartbeat/subagent sessions can reschedule and
+// manage jobs without needing category activation. Natural-language/friendly
+// schedule parsing is handled inside schedule_job; parse_schedule_pattern is
+// intentionally not exposed as a model-facing helper.
 // background_spawn/status/progress/join are also CORE — always injected.
 
 const SOURCE_WRITE_TOOL_NAMES = new Set([
@@ -179,6 +184,17 @@ const FILE_OPS_TOOL_NAMES = new Set([
   'find_references',
 ]);
 
+const COMMAND_RUNNER_TOOL_NAMES = new Set([
+  'terminal',
+  'run_command',
+  'start_process',
+  'process_status',
+  'process_log',
+  'process_wait',
+  'process_kill',
+  'process_submit',
+]);
+
 const MEMORY_TOOL_NAMES = new Set([
   'memory_read_record',
   'memory_search_project',
@@ -217,14 +233,38 @@ const MEDIA_QUALITY_TOOL_NAMES = new Set([
   'video_check_caption_timing',
 ]);
 
+const CREATIVE_VIDEO_QA_TOOL_NAMES = new Set([
+  'video_analyze_frame',
+  'video_analyze_timeline',
+  'video_check_keyframes',
+  'video_extract_clip_frames',
+  'video_analyze_imported_video',
+]);
+
+const HYPERFRAMES_TOOL_NAMES = new Set([
+  'hyperframes_browse_catalog',
+  'hyperframes_insert_clip',
+  'hyperframes_apply_patch',
+  'hyperframes_set_text',
+  'hyperframes_set_color',
+  'hyperframes_set_timing',
+  'hyperframes_set_variable',
+  'hyperframes_set_asset',
+  'hyperframes_add_animation',
+  'hyperframes_lint',
+  'hyperframes_qa',
+  'hyperframes_materialize',
+  'hyperframes_export',
+]);
+
 const AUTOMATION_TOOL_NAMES = new Set([
-  'schedule_job',
   'schedule_job_detail',
   'schedule_job_history',
   'schedule_job_log_search',
   'schedule_job_outputs',
   'schedule_job_patch',
   'schedule_job_stuck_control',
+  'automation_dashboard',
 ]);
 
 const CORE_CREATIVE_CONTROL_TOOL_NAMES = new Set([
@@ -259,6 +299,7 @@ function isSavedCompositeToolName(name: string): boolean {
 export function getToolCategory(name: string): InternalToolCategory | null {
   // Keep these always available as core runtime tools.
   if (name === 'browser_send_to_telegram') return null;
+  if (name === 'delivery_send' || name === 'delivery_send_screenshot') return null;
   if (name === 'connector_list') return null; // core tool — always available
   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return null;
   if (name === 'save_site_shortcut') return 'browser_automation';
@@ -266,14 +307,18 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   if (name.startsWith('browser_')) return 'browser_automation';
   if (name.startsWith('desktop_')) return 'desktop_automation';
   if (name.startsWith('connector_')) return 'external_apps';
+  if (name.startsWith('x_api_')) return 'external_apps';
   if (name.startsWith('mcp__')) return 'mcp_server_tools';
   if (name.startsWith('vercel_')) return 'integration_admin';
   if (TEAM_OPS_TOOL_NAMES.has(name)) return 'agents_and_teams';
   if (DEV_ONLY_SOURCE_READ_TOOL_NAMES.has(name)) return 'prometheus_source_read';
   if (SOURCE_WRITE_TOOL_NAMES.has(name)) return 'prometheus_source_write';
+  if (COMMAND_RUNNER_TOOL_NAMES.has(name)) return 'workspace_write';
   if (FILE_OPS_TOOL_NAMES.has(name)) return 'workspace_write';
   if (MEMORY_TOOL_NAMES.has(name)) return 'advanced_memory';
   if (MEDIA_TOOL_NAMES.has(name)) return 'media_assets';
+  if (CREATIVE_VIDEO_QA_TOOL_NAMES.has(name)) return 'creative_mode';
+  if (HYPERFRAMES_TOOL_NAMES.has(name)) return 'creative_mode';
   if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return 'media_quality';
   if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
   if (name.startsWith('creative_')) return 'creative_mode';
@@ -291,6 +336,42 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   const toolDefs = [
     // ── File, Web, and Memory tools ──────────────────────────────────────────
     ...getFileWebMemoryTools(),
+    {
+      type: 'function',
+      function: {
+        name: 'delivery_send',
+        description:
+          'Send a message, file, or image to the user through a universal delivery channel. Prefer target="origin" unless the user explicitly names a destination. Origin means where the user contacted Prometheus from, not where Prometheus is running; Prometheus still runs on the local computer and desktop/browser tasks remain available. For screenshots, prefer delivery_send_screenshot.',
+        parameters: {
+          type: 'object', required: [],
+          properties: {
+            text: { type: 'string', description: 'Text message to deliver.' },
+            target: { type: 'string', enum: ['origin', 'telegram', 'mobile', 'web', 'discord', 'whatsapp', 'terminal', 'all'], description: 'Destination. Default origin.' },
+            attachmentPath: { type: 'string', description: 'Optional workspace-relative or absolute file path to deliver.' },
+            imageBase64: { type: 'string', description: 'Optional base64 image payload to deliver.' },
+            mimeType: { type: 'string', description: 'Mime type for imageBase64 or attachment, e.g. image/png.' },
+            caption: { type: 'string', description: 'Caption for images/files. Defaults to text.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delivery_send_screenshot',
+        description:
+          'Capture or reuse a desktop/browser screenshot and deliver it through the origin-aware delivery router. Prefer target="origin" unless the user explicitly names a destination. Using mobile/Telegram as the origin does not mean desktop capture is unavailable; Prometheus still captures from the local computer.',
+        parameters: {
+          type: 'object', required: [],
+          properties: {
+            source: { type: 'string', enum: ['desktop_new', 'desktop_last', 'browser_new', 'browser_last', 'file'], description: 'Screenshot source. Default desktop_new.' },
+            target: { type: 'string', enum: ['origin', 'telegram', 'mobile', 'web', 'discord', 'whatsapp', 'terminal', 'all'], description: 'Destination. Default origin.' },
+            caption: { type: 'string', description: 'Caption for the screenshot.' },
+            path: { type: 'string', description: 'Required when source=file. Workspace-relative or absolute image path.' },
+          },
+        },
+      },
+    },
     // ── Telegram proactive push (works from any session) ───────────────────
     {
       type: 'function',
@@ -313,6 +394,27 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     {
       type: 'function',
       function: {
+        name: 'terminal',
+        description: 'Unified terminal command tool. Runs bounded commands with captured output by default, and starts supervised background runs for servers/watchers when mode="background". On Windows, shell="powershell" is first-class for PowerShell commands; shell="cmd" is available for cmd semantics. Use pty:true for interactive CLIs, auth flows, REPLs, and terminal UIs.',
+        parameters: {
+          type: 'object', required: ['command'],
+          properties: {
+            command: { type: 'string', description: 'Command to run.' },
+            cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute path inside it.' },
+            mode: { type: 'string', enum: ['auto', 'foreground', 'background'], description: 'auto chooses foreground unless the command looks like a server/watcher. Default auto.' },
+            shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use. On Windows, choose powershell for PowerShell commands. Default auto.' },
+            pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
+            timeoutMs: { type: 'number', description: 'Foreground timeout in milliseconds.' },
+            noOutputTimeoutMs: { type: 'number', description: 'Kill if no output arrives within this many milliseconds.' },
+            title: { type: 'string', description: 'Optional human-readable title for UI command cards.' },
+            stdin: { type: 'boolean', description: 'Keep stdin open so process_submit can answer prompts.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'run_command',
         description: 'Run shell commands or open apps. Dev CLI commands (git, npm, node, python, etc.) run CAPTURED by default — output is returned inline, no new window. Pass visible:true only if the user explicitly needs to see a terminal window. For GUI apps (notepad, code, explorer) a visible window opens automatically. NEVER use for Chrome/Edge — use browser_open instead. **GIT BEST PRACTICES FOR PROMETHEUS**: (1) For submodule (workspace/xposemarket-site), ALWAYS use full path: `git -C workspace/xposemarket-site status` NOT `cd xposemarket-site` which fails with "path not found". (2) Use `git -C <path>` pattern for reliable automation. (3) Initialize submodules: `git submodule update --init --recursive`.',
         parameters: {
@@ -320,6 +422,9 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           properties: {
             command: { type: 'string', description: 'Examples: "notepad", "git init", "npm install", "npm run build", "git push origin main", "code D:\\project", "git -C workspace/xposemarket-site status", "git status". **CRITICAL FOR GIT**: (1) Submodule at workspace/xposemarket-site — NEVER use `cd xposemarket-site` alone. Use `git -C workspace/xposemarket-site status` instead. (2) Do NOT use "chrome" or "msedge" — use browser_open instead.' },
             cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute path inside it. Use this for repo folders with spaces, e.g. "Prometheus Website/prometheus-site".' },
+            shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use. On Windows, use powershell for PowerShell-native commands.' },
+            pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
+            timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Default 120000.' },
             visible: { type: 'boolean', description: 'If true, opens a visible terminal window instead of capturing output. Default: false (captured).' },
           },
         },
@@ -336,6 +441,8 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           properties: {
             command: { type: 'string', description: 'Command to start, e.g. "npm run dev" or "python server.py".' },
             cwd: { type: 'string', description: 'Optional working directory relative to active workspace, or absolute path inside allowed paths.' },
+            shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use. Default auto.' },
+            pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
             title: { type: 'string', description: 'Optional human-readable title for UI command cards.' },
             stdin: { type: 'boolean', description: 'If true, keep stdin open so process_submit can answer prompts.' },
             noOutputTimeoutMs: { type: 'number', description: 'Optional no-output timeout in milliseconds.' },
@@ -470,7 +577,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     function: {
       name: 'connector_list',
       description:
-        'List all available connectors (Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, Google Analytics) and their connection status. ' +
+        'List all available connectors (Gmail, GitHub, Slack, Notion, Google Drive, Reddit, HubSpot, Salesforce, Stripe, Google Analytics, Obsidian, X/Twitter, xAI/Grok when configured) and their connection status. ' +
         'Shows which connectors are connected and what tools are available for each. ' +
         'Use this before activating the external_apps category to check what\'s available.',
       parameters: { type: 'object', required: [], properties: {} },
@@ -480,7 +587,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // ── Connector tools (activated via connectors category) ───────────────────
   try {
     ensurePrometheusExtensionRuntimeLoaded();
-    toolDefs.push(...getExtensionRuntimeRegistry().listToolDefinitions());
+    toolDefs.push(...getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions());
   } catch { /* connector defs may not load in all build targets */ }
 
   // ── Inject MCP tools from connected servers ────────────────────────────────

@@ -35,6 +35,15 @@ export interface ToolCall {
   };
 }
 
+export type ModelStreamEvent =
+  | { type: 'assistant_delta'; text: string; nativeType?: string; provider?: string; model?: string }
+  | { type: 'reasoning_delta'; text: string; summary?: boolean; nativeType?: string; provider?: string; model?: string }
+  | { type: 'reasoning_done'; text?: string; summary?: boolean; nativeType?: string; provider?: string; model?: string }
+  | { type: 'tool_call_start'; id: string; name: string; nativeType?: string; provider?: string; model?: string }
+  | { type: 'tool_call_delta'; id: string; name?: string; argumentsDelta: string; nativeType?: string; provider?: string; model?: string }
+  | { type: 'tool_call_done'; id: string; name: string; arguments: string; nativeType?: string; provider?: string; model?: string }
+  | { type: 'provider_event'; nativeType: string; data?: unknown; provider?: string; model?: string };
+
 export interface ChatOptions {
   temperature?: number;
   max_tokens?: number;
@@ -47,6 +56,8 @@ export interface ChatOptions {
   onThinking?: (chunk: string) => void;
   /** Called with provider-visible reasoning summary deltas as they stream. */
   onReasoningSummary?: (chunk: string) => void;
+  /** Provider-normalized stream events for future UI/runtime lanes. */
+  onModelEvent?: (event: ModelStreamEvent) => void;
   /** Cancels the provider request when the owning chat turn is stopped. */
   abortSignal?: AbortSignal;
   /** When true, strip [TODAY_NOTES] intraday context from system prompt (used after switch_model to reduce context). */

@@ -29,6 +29,7 @@ export interface ApprovalRecord {
   /** The tool that is waiting for approval */
   toolName: string;
   toolArgs: Record<string, any>;
+  approvalKind?: 'command' | 'tool' | 'dev_source_edit' | 'final_action';
   /** Human-readable description of what will happen */
   action: string;
   reason?: string;
@@ -38,11 +39,83 @@ export interface ApprovalRecord {
   policyTier: 'propose' | 'commit';
   riskScore: number;
   affectedSystems: string[];
+  devSourceEdit?: {
+    devEditId?: string;
+    allowedFiles: string[];
+    verificationCommand?: string;
+    verificationProfile?: 'backend_build' | 'webui_sync_check' | 'full_build' | 'none';
+    reason?: string;
+    planHash?: string;
+    plan?: {
+      userRequest?: string;
+      reasoning?: string;
+      evidence?: Array<{ file: string; lines?: string; finding: string }>;
+      currentState?: string;
+      fix?: string;
+      steps?: string[];
+      verification?: string[];
+      expectedWorkflow?: string[];
+      completionNoteTag?: string;
+    };
+    expiresAt?: number;
+  };
+  finalAction?: {
+    actionKind: string;
+    targetLabel: string;
+    summary: string;
+    surface?: string;
+    nextToolName?: string;
+    nextToolArgs?: Record<string, any>;
+    screenshotId?: string;
+    expiresAt?: number;
+  };
   /** ISO timestamp */
   createdAt: string;
   status: 'pending' | 'approved' | 'rejected';
   resolvedAt?: string;
   resolvedBy?: string;
+}
+
+function truncateApprovalValue(value: any, max = 4000): any {
+  if (value == null) return value;
+  if (typeof value === 'string') return value.length > max ? `${value.slice(0, max)}...` : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.slice(0, 40).map((item) => truncateApprovalValue(item, Math.floor(max / 2)));
+  if (typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [key, item] of Object.entries(value).slice(0, 80)) {
+      out[key] = truncateApprovalValue(item, Math.floor(max / 2));
+    }
+    return out;
+  }
+  return String(value);
+}
+
+export function serializeApprovalForClient(record: ApprovalRecord): Record<string, any> {
+  return {
+    id: record.id,
+    sessionId: record.sessionId,
+    sourceSessionId: record.sessionId,
+    taskId: record.taskId,
+    agentId: record.agentId,
+    originType: record.originType,
+    originLabel: record.originLabel,
+    toolName: record.toolName,
+    toolArgs: truncateApprovalValue(record.toolArgs || {}),
+    approvalKind: record.approvalKind,
+    action: record.action,
+    summary: record.action,
+    reason: record.reason,
+    policyTier: record.policyTier,
+    riskScore: record.riskScore,
+    affectedSystems: Array.isArray(record.affectedSystems) ? record.affectedSystems : [],
+    devSourceEdit: record.devSourceEdit ? truncateApprovalValue(record.devSourceEdit) : undefined,
+    finalAction: record.finalAction ? truncateApprovalValue(record.finalAction) : undefined,
+    createdAt: record.createdAt,
+    status: record.status,
+    resolvedAt: record.resolvedAt,
+    resolvedBy: record.resolvedBy,
+  };
 }
 
 /**

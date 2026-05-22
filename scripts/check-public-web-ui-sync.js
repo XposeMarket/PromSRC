@@ -9,6 +9,33 @@ const SRC_WEB_UI = path.join(ROOT, 'web-ui');
 const SRC_WEB_UI_SRC = path.join(SRC_WEB_UI, 'src');
 const OUT_ROOT = path.join(ROOT, 'generated', 'public-web-ui');
 const OUT_STATIC = path.join(OUT_ROOT, 'static');
+const GENERATED_VENDOR_FILES = [
+  'vendor/codemirror/codemirror.min.css',
+  'vendor/codemirror/theme/material-darker.min.css',
+  'vendor/codemirror/codemirror.min.js',
+  'vendor/codemirror/mode/javascript/javascript.min.js',
+  'vendor/codemirror/mode/xml/xml.min.js',
+  'vendor/codemirror/mode/css/css.min.js',
+  'vendor/codemirror/mode/htmlmixed/htmlmixed.min.js',
+  'vendor/codemirror/mode/markdown/markdown.min.js',
+  'vendor/codemirror/mode/python/python.min.js',
+  'vendor/marked/marked.min.js',
+  'vendor/fabric/fabric.min.js',
+  'vendor/gif/gif.js',
+  'vendor/gif/gif.worker.js',
+  'vendor/iconify/iconify.min.js',
+  'vendor/lottie-player/lottie-player.js',
+  'vendor/chart/chart.umd.js',
+  'vendor/mermaid/mermaid.min.js',
+  'static/fonts/manrope-400.woff2',
+  'static/fonts/manrope-500.woff2',
+  'static/fonts/manrope-600.woff2',
+  'static/fonts/manrope-700.woff2',
+  'static/fonts/manrope-800.woff2',
+  'static/fonts/ibm-plex-mono-400.woff2',
+  'static/fonts/ibm-plex-mono-500.woff2',
+  'static/fonts/ibm-plex-mono-600.woff2',
+];
 
 const failures = [];
 
@@ -79,6 +106,25 @@ function verifyGeneratedWebUiIsCurrent() {
     const relative = path.relative(SRC_WEB_UI_SRC, sourcePath);
     const generatedPath = path.join(OUT_STATIC, relative);
     expectedFiles.add(toPosix(path.join('static', relative)));
+    if (toPosix(relative) === 'styles/fonts.css') continue;
+    compareBuffer(sourcePath, generatedPath, fs.readFileSync(sourcePath));
+  }
+
+  for (const relative of GENERATED_VENDOR_FILES) {
+    expectedFiles.add(relative);
+    const generatedPath = path.join(OUT_ROOT, relative);
+    if (!fs.existsSync(generatedPath)) {
+      fail(`Missing generated vendor file: ${relative}`);
+    }
+  }
+
+  // PWA assets that live at the site root, not under static/.
+  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'service-worker.js'];
+  for (const name of ROOT_LEVEL_FILES) {
+    const sourcePath = path.join(SRC_WEB_UI, name);
+    if (!fs.existsSync(sourcePath)) continue;
+    const generatedPath = path.join(OUT_ROOT, name);
+    expectedFiles.add(name);
     compareBuffer(sourcePath, generatedPath, fs.readFileSync(sourcePath));
   }
 

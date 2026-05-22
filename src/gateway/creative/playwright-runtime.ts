@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { resolveBundledPlaywrightChromium } from '../../runtime/dependencies';
 
 export function describePlaywrightBrowserRemediation(err?: any): string {
   const detail = err?.message ? ` Original error: ${String(err.message).split(/\r?\n/)[0]}` : '';
@@ -63,7 +64,7 @@ function findSystemChromeExecutable(): string | null {
 }
 
 export function getFallbackBrowserExecutable(): string | null {
-  return findPlaywrightChromiumExecutable() || findSystemChromeExecutable();
+  return resolveBundledPlaywrightChromium() || findPlaywrightChromiumExecutable() || findSystemChromeExecutable();
 }
 
 export async function launchCreativeChromium(playwright: any, options: any = {}): Promise<any> {

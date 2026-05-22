@@ -543,10 +543,17 @@ export function getAgentTeamScheduleTools(): any[] {
             instruction_prompt: { type: 'string', description: 'REQUIRED for create/update. This is the ONLY instruction the agent receives when the job fires — it must be fully self-contained. Include: who the agent is, the exact step-by-step actions to take (with tool names where relevant), any constraints, and what success looks like. Do NOT write a label or summary — write executable instructions as if briefing a fresh agent with zero context.' },
             schedule: {
               type: 'object',
+              description: 'Recurring/one-shot schedule. You may provide raw cron/run_at, or friendly fields equivalent to the web UI: {kind:"recurring", repeat:"daily|weekday|weekend", time:"09:00"}, {days_of_week:["monday","wednesday"], time:"14:30"}, {every_hours:6}, {every_days:2, time:"09:00"}, or {text:"weekdays at 9am"}.',
               properties: {
                 kind: { type: 'string', description: 'recurring or one_shot' },
                 cron: { type: 'string', description: 'Cron expression for recurring jobs' },
                 run_at: { type: 'string', description: 'ISO timestamp for one-shot jobs' },
+                text: { type: 'string', description: 'Natural language schedule, e.g. "weekdays at 9am" or "Mon/Wed/Fri at 14:30".' },
+                repeat: { type: 'string', description: 'Friendly recurrence preset: daily, weekday, weekend, weekly.' },
+                time: { type: 'string', description: 'Local time for daily/day-of-week repeats, HH:MM or 12-hour format.' },
+                days_of_week: { type: 'array', items: { type: 'string' }, description: 'Days to run: monday/tuesday/... or sun/mon/...; use for custom day sets.' },
+                every_hours: { type: 'number', description: 'Run every N hours. Compiles to cron minute */N hour pattern.' },
+                every_days: { type: 'number', description: 'Run every N days at time. Compiles to cron day-of-month interval.' },
               },
             },
             timezone: { type: 'string', description: 'IANA timezone (e.g. America/New_York)' },
@@ -562,21 +569,6 @@ export function getAgentTeamScheduleTools(): any[] {
             team_id: { type: 'string', description: 'Optional: managed team ID. When set, the scheduled run wakes that team manager first; the manager derives the run from team goal/memory and dispatches agents accordingly.' },
             confirm: { type: 'boolean', description: 'Must be true for create/update/delete actions' },
             limit: { type: 'number', description: 'Optional max jobs returned for list' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'parse_schedule_pattern',
-        description: 'Parse natural language schedule patterns to cron expressions. Use before creating schedules to convert user language like "daily at 3:13pm" to proper cron syntax.',
-        parameters: {
-          type: 'object',
-          required: ['text'],
-          properties: {
-            text: { type: 'string', description: 'Natural language pattern, e.g. "daily at 3:13pm", "every weekday at 9am", "weekly on monday"' },
-            timezone: { type: 'string', description: 'Optional IANA timezone (e.g. America/New_York). Defaults to UTC.' },
           },
         },
       },

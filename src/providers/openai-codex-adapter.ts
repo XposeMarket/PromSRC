@@ -289,6 +289,9 @@ export class OpenAICodexAdapter implements LLMProvider {
           body.reasoning = { effort, summary: 'auto' };
         }
       }
+      if (process.env.PROMETHEUS_DEBUG_REASONING === '1') {
+        console.log(`[openai_codex] reasoning ${body.reasoning ? `enabled effort=${body.reasoning.effort} summary=${body.reasoning.summary}` : 'disabled'} think=${String(options?.think)} configured=${configuredEffort || '(none)'}`);
+      }
       if (Array.isArray(options?.tools) && options!.tools!.length) {
         body.tools = options!.tools.map((t: any) => ({
           type: 'function',
@@ -322,7 +325,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
         }
 
-        return await this.parseSSEStream(response, options?.onToken, options?.onThinking, options?.onReasoningSummary, resetIdleTimer);
+        return await this.parseSSEStream(response, model, options, resetIdleTimer);
       } catch (err: any) {
         if (controller.signal.aborted || err?.name === 'AbortError') {
           throw new Error(abortReason || 'openai_codex request aborted');
@@ -339,9 +342,8 @@ export class OpenAICodexAdapter implements LLMProvider {
 
 	  private async parseSSEStream(
 	    response: Response,
-	    onToken?: (chunk: string) => void,
-	    onThinking?: (chunk: string) => void,
-	    onReasoningSummary?: (chunk: string) => void,
+	    model: string,
+	    options?: ChatOptions,
 	    onActivity?: () => void,
 	  ): Promise<ChatResult> {
     const reader = response.body?.getReader();
@@ -397,30 +399,42 @@ export class OpenAICodexAdapter implements LLMProvider {
             // Accumulate text deltas
 	            if (type === 'response.output_text.delta') {
 	              finalContent += event.delta || '';
-	              onToken?.(event.delta || '');
+	              options?.onToken?.(event.delta || '');
+	              if (event.delta) options?.onModelEvent?.({ type: 'assistant_delta', text: event.delta, nativeType: type, provider: this.id, model });
 	            }
 
 	            if (
 	              type === 'response.reasoning_summary_text.delta'
+	              || type === 'response.reasoning_summary.delta'
 	              || type === 'response.reasoning_text.delta'
+	              || type === 'response.reasoning.delta'
 	            ) {
 	              const delta = event.delta || event.text || '';
 	              if (delta) {
 	                thinking += delta;
-	                if (type === 'response.reasoning_summary_text.delta') onReasoningSummary?.(delta);
-	                else onThinking?.(delta);
+	                const isSummary = type === 'response.reasoning_summary_text.delta' || type === 'response.reasoning_summary.delta';
+	                if (isSummary) options?.onReasoningSummary?.(delta);
+	                else options?.onThinking?.(delta);
+	                options?.onModelEvent?.({ type: 'reasoning_delta', text: delta, summary: isSummary, nativeType: type, provider: this.id, model });
 	              }
 	            }
 
 	            if (
 	              type === 'response.reasoning_summary_text.done'
+	              || type === 'response.reasoning_summary.done'
+	              || type === 'response.reasoning_summary_part.done'
 	              || type === 'response.reasoning_text.done'
+	              || type === 'response.reasoning.done'
 	            ) {
-	              const text = event.text || '';
+	              const text = event.text || event.part?.text || '';
 	              if (text && !thinking.includes(text)) {
 	                thinking += (thinking ? '\n\n' : '') + text;
-	                if (type === 'response.reasoning_summary_text.done') onReasoningSummary?.(text);
-	                else onThinking?.(text);
+	                const isSummary = type === 'response.reasoning_summary_text.done'
+	                  || type === 'response.reasoning_summary.done'
+	                  || type === 'response.reasoning_summary_part.done';
+	                if (isSummary) options?.onReasoningSummary?.(text);
+	                else options?.onThinking?.(text);
+	                options?.onModelEvent?.({ type: 'reasoning_done', text, summary: isSummary, nativeType: type, provider: this.id, model });
 	              }
 	            }
 
@@ -437,12 +451,29 @@ export class OpenAICodexAdapter implements LLMProvider {
 	              };
 	              toolCalls.push(tc);
 	              rememberToolCall(tc, event.item, event.output_index);
+	              options?.onModelEvent?.({ type: 'tool_call_start', id: tc.id, name: tc.function.name, nativeType: type, provider: this.id, model });
 	            }
 	
 	            // Accumulate function call argument deltas
 	            if (type === 'response.function_call_arguments.delta') {
 	              const tc = findToolCallForEvent(event);
-	              if (tc) tc.function.arguments += event.delta || '';
+	              if (tc) {
+	                const delta = event.delta || '';
+	                tc.function.arguments += delta;
+	                if (delta) options?.onModelEvent?.({ type: 'tool_call_delta', id: tc.id, name: tc.function.name, argumentsDelta: delta, nativeType: type, provider: this.id, model });
+	              }
+	            }
+
+	            if (type === 'response.output_item.done' && event.item?.type === 'reasoning') {
+	              const summary = Array.isArray(event.item.summary) ? event.item.summary.map((s: any) => s.text || '').join('\n\n') : '';
+	              const reasonText = Array.isArray(event.item.content) ? event.item.content.map((s: any) => s.text || '').join('\n\n') : '';
+	              const merged = summary || reasonText;
+	              if (merged && !thinking.includes(merged)) {
+	                thinking += (thinking ? '\n\n' : '') + merged;
+	                if (summary) options?.onReasoningSummary?.(merged);
+	                else options?.onThinking?.(merged);
+	                options?.onModelEvent?.({ type: 'reasoning_done', text: merged, summary: !!summary, nativeType: type, provider: this.id, model });
+	              }
 	            }
 
 	            if (
@@ -454,6 +485,7 @@ export class OpenAICodexAdapter implements LLMProvider {
 	                tc.function.name = event.item.name || tc.function.name;
 	                tc.function.arguments = event.item.arguments || event.arguments || tc.function.arguments;
 	                rememberToolCall(tc, event.item, event.output_index);
+	                options?.onModelEvent?.({ type: 'tool_call_done', id: tc.id, name: tc.function.name, arguments: tc.function.arguments, nativeType: type, provider: this.id, model });
 	              }
 	            }
 	
@@ -462,12 +494,23 @@ export class OpenAICodexAdapter implements LLMProvider {
               usage = parseUsage(event.response?.usage);
               const outputs = event.response?.output || [];
               for (const item of outputs) {
-                if (item.type === 'message') {
-                  finalContent = (item.content || [])
-                    .filter((c: any) => c.type === 'output_text')
-                    .map((c: any) => c.text || '')
-                    .join('');
-                }
+	                if (item.type === 'message') {
+	                  finalContent = (item.content || [])
+	                    .filter((c: any) => c.type === 'output_text')
+	                    .map((c: any) => c.text || '')
+	                    .join('');
+	                }
+	                if (item.type === 'reasoning') {
+	                  const summary = Array.isArray(item.summary) ? item.summary.map((s: any) => s.text || '').join('\n\n') : '';
+	                  const reasonText = Array.isArray(item.content) ? item.content.map((s: any) => s.text || '').join('\n\n') : '';
+	                  const merged = summary || reasonText;
+	                  if (merged && !thinking.includes(merged)) {
+	                    thinking += (thinking ? '\n\n' : '') + merged;
+	                    if (summary) options?.onReasoningSummary?.(merged);
+	                    else options?.onThinking?.(merged);
+	                    options?.onModelEvent?.({ type: 'reasoning_done', text: merged, summary: !!summary, nativeType: 'response.completed', provider: this.id, model });
+	                  }
+	                }
 	                if (item.type === 'function_call') {
 	                  // Prefer the complete snapshot over accumulated deltas
 	                  const existing = toolCallByCallId.get(String(item.call_id || '').trim())

@@ -1,0 +1,53 @@
+{
+  "name": "Prometheus",
+  "short_name": "Prometheus",
+  "id": "/?source=pwa#mobile/chat",
+  "start_url": "/?source=pwa#mobile/chat",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f1e6",
+  "theme_color": "#ea6a1f",
+  "description": "Prometheus mobile — your remote control, approval center, and field companion.",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/assets/Prometheus.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/Prometheus.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/Prometheus.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Main Chat",
+      "short_name": "Chat",
+      "url": "/?source=pwa#mobile/chat",
+      "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Schedule",
+      "short_name": "Schedule",
+      "url": "/?source=pwa#mobile/schedule",
+      "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Teams",
+      "short_name": "Teams",
+      "url": "/?source=pwa#mobile/teams",
+      "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import { stdin as input, stdout as output } from 'process';
 import { getConfig } from '../config/config';
 import { getDatabase } from '../db/database';
 import { getOllamaClient } from '../agents/ollama-client';
+import * as ui from './ui.js';
 // AgentOrchestrator removed — legacy pipeline superseded by reactor + multi-agent orchestration
 
 const program = new Command();
@@ -68,13 +69,14 @@ function runCapture(command: string, cwd: string, timeoutMs: number = 10000): { 
 }
 
 function runStep(label: string, command: string, cwd: string): boolean {
-  console.log(`[update] ${label}`);
+  ui.stepRunning(label);
   try {
     execSync(command, { cwd, stdio: 'inherit' });
+    ui.step(label, true);
     return true;
   } catch (err: any) {
-    console.error(`[update] Step failed: ${label}`);
-    if (err?.message) console.error(`[update] ${err.message}`);
+    ui.step(label, false);
+    if (err?.message) ui.error(err.message);
     return false;
   }
 }
@@ -82,6 +84,14 @@ function runStep(label: string, command: string, cwd: string): boolean {
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+const GATEWAY_STARTUP_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_STARTUP_TIMEOUT_MS, 180_000);
+const GATEWAY_START_ATTEMPTS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_START_ATTEMPTS, 3);
 
 function gatewaySupervisorEnabled(): boolean {
   return process.env.PROMETHEUS_SUPERVISOR === '1'
@@ -115,7 +125,7 @@ function killGatewayChild(child: ChildProcess): void {
   }, 2500).unref?.();
 }
 
-async function checkGatewayHealth(timeoutMs = 2500): Promise<boolean> {
+async function checkGatewayHealth(timeoutMs = 8000): Promise<boolean> {
   try {
     const res = await fetch('http://127.0.0.1:18789/api/health', {
       signal: AbortSignal.timeout(timeoutMs),
@@ -155,10 +165,27 @@ function shouldDeferGatewayRestart(status: GatewayRuntimeStatus | null): boolean
 
 function getGatewayPortOwnerPids(port = 18789): number[] {
   if (process.platform === 'win32') {
+    const parseNetstatOwners = (out: string): number[] => Array.from(new Set(
+      out
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.includes(`:${port}`) && /\sLISTENING\s/i.test(line))
+        .map((line) => Number(line.split(/\s+/).pop()))
+        .filter(pid => Number.isFinite(pid) && pid > 0),
+    ));
+    try {
+      const out = execSync('netstat -ano -p tcp', {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 5000,
+      });
+      const pids = parseNetstatOwners(out);
+      if (pids.length > 0) return pids;
+    } catch {}
     try {
       const out = execSync(
         `powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess"`,
-        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 },
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 },
       );
       return Array.from(new Set(
         out
@@ -209,7 +236,11 @@ async function clearUnhealthyGatewayPort(exemptPids: number[] = []): Promise<voi
   if (owners.length === 0) return;
   console.error(`[GatewaySupervisor] Port 18789 is held by an unhealthy gateway process (${owners.join(', ')}). Terminating it before restart...`);
   for (const pid of owners) killPidTree(pid);
-  await sleep(1500);
+  for (let i = 0; i < 20; i++) {
+    await sleep(250);
+    const remaining = getGatewayPortOwnerPids().filter(pid => !exempt.has(pid));
+    if (remaining.length === 0) return;
+  }
 }
 
 async function ensureGatewayForCli(): Promise<boolean> {
@@ -279,11 +310,32 @@ async function waitForGatewayHealthAndNotify(
   child: ChildProcess,
   notifyServerReady: (opts: any) => void,
   capture: (line: string) => void,
+  readCapturedLogs?: () => string[],
 ): Promise<void> {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 180_000) {
+  let spawnError: Error | null = null;
+  child.once('error', (err) => {
+    spawnError = err;
+    capture(`[Gateway] Child process error: ${err.message}`);
+  });
+  const printFailureLogs = (reason: string) => {
+    const logs = readCapturedLogs?.() || [];
+    const recent = logs.slice(-80);
+    if (recent.length > 0) {
+      process.stderr.write(`\n[Gateway] Startup failed: ${reason}\n`);
+      process.stderr.write('[Gateway] Recent startup logs:\n');
+      for (const line of recent) process.stderr.write(`  ${line}\n`);
+      process.stderr.write('\n');
+    }
+  };
+  while (Date.now() - startedAt < GATEWAY_STARTUP_TIMEOUT_MS) {
+    if (spawnError) {
+      printFailureLogs((spawnError as Error).message);
+      throw spawnError;
+    }
     if (child.exitCode !== null) {
       capture(`[Gateway] Child exited before becoming ready (code=${child.exitCode}).`);
+      printFailureLogs(`child exited with code ${child.exitCode}`);
       throw new Error('Gateway child exited before becoming ready');
     }
     if (await checkGatewayHealth(10_000)) {
@@ -292,23 +344,26 @@ async function waitForGatewayHealthAndNotify(
     }
     await sleep(500);
   }
-  capture('[Gateway] Still waiting for /api/health after 180s.');
-  throw new Error('Gateway did not become healthy within 180s');
+  const seconds = Math.round(GATEWAY_STARTUP_TIMEOUT_MS / 1000);
+  capture(`[Gateway] Still waiting for /api/health after ${seconds}s.`);
+  printFailureLogs(`health timed out after ${seconds}s`);
+  throw new Error(`Gateway did not become healthy within ${seconds}s`);
 }
 
 async function runMissionThroughGateway(mission: string): Promise<void> {
   const ready = await ensureGatewayForCli();
   if (!ready) {
-    console.error('Gateway did not become ready at http://127.0.0.1:18789');
+    ui.error('Gateway did not become ready at http://127.0.0.1:18789');
     process.exitCode = 1;
     return;
   }
 
   const sessionId = `cli_${Date.now()}`;
-  console.log(`Prometheus Agent`);
-  console.log(`Mission: ${mission}`);
-  console.log(`Session: ${sessionId}`);
-  console.log(`UI: http://127.0.0.1:18789\n`);
+  ui.header('Prometheus Agent');
+  ui.label('Mission', mission);
+  ui.label('Session', sessionId);
+  ui.label('UI', 'http://127.0.0.1:18789');
+  ui.blank();
 
   const res = await fetch('http://127.0.0.1:18789/api/chat', {
     method: 'POST',
@@ -317,12 +372,19 @@ async function runMissionThroughGateway(mission: string): Promise<void> {
       sessionId,
       message: mission,
       callerContext: '[CLI MISSION] Started from `prometheus agent`; treat this as a real coding/workspace task and use tools as needed.',
+      origin: {
+        channel: 'terminal',
+        surface: 'terminal',
+        device: 'computer',
+        label: 'CLI',
+        source: 'prometheus_agent_cli',
+      },
     }),
   } as any);
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    console.error(`Gateway request failed (${res.status}): ${text}`);
+    ui.error(`Gateway request failed (${res.status}): ${text}`);
     process.exitCode = 1;
     return;
   }
@@ -347,15 +409,16 @@ async function runMissionThroughGateway(mission: string): Promise<void> {
         finalText = String(data.text || '');
       } else if (event === 'progress_state' && Array.isArray(data?.items)) {
         const active = data.items.find((item: any) => item?.status === 'in_progress');
-        if (active?.text) console.log(`[progress] ${active.text}`);
+        if (active?.text) ui.info(active.text);
       } else if (event === 'error') {
-        console.error(`[error] ${data?.message || 'Unknown error'}`);
+        ui.error(data?.message || 'Unknown error');
       }
     }
   }
   if (finalText) {
-    console.log('\nFinal:\n');
-    console.log(finalText);
+    ui.blank();
+    ui.divider();
+    process.stdout.write(finalText + '\n');
   }
 }
 
@@ -641,11 +704,13 @@ function writeUpdateCache(ctx: UpdateContext, result: UpdateCheckResult): void {
 }
 
 function printUpdateCheck(result: UpdateCheckResult): void {
-  console.log(`[update] ${result.message}`);
-  if (result.latestVersion) {
-    console.log(`[update] Current: ${result.currentVersion} | Latest: ${result.latestVersion}`);
+  if (result.available) {
+    ui.warn(result.message);
+    ui.label('Current', result.currentVersion);
+    if (result.latestVersion) ui.label('Latest', result.latestVersion);
   } else {
-    console.log(`[update] Current: ${result.currentVersion}`);
+    ui.success(result.message);
+    ui.label('Version', result.currentVersion);
   }
 }
 
@@ -711,8 +776,8 @@ function maybeNotifyUpdate(): void {
   }
 
   if (result.available) {
-    console.log(`[Update] ${result.message}`);
-    console.log('[Update] Run `prometheus update` to install.');
+    ui.warn(result.message);
+    ui.hint('Run `prometheus update` to install.');
   }
 }
 
@@ -721,20 +786,20 @@ program
   .command('onboard')
   .description('Setup Prometheus for first-time use')
   .action(async () => {
-    console.log('Welcome to Prometheus!\n');
+    ui.header('Prometheus Setup');
     const config = getConfig();
     config.ensureDirectories();
     config.saveConfig();
-    console.log('Created configuration directories');
-    console.log(`  Config:    ${config.getConfigDir()}`);
-    console.log(`  Workspace: ${config.getWorkspacePath()}`);
+    ui.success('Configuration directories created');
+    ui.label('Config', config.getConfigDir());
+    ui.label('Workspace', config.getWorkspacePath());
     getDatabase();
-    console.log('Initialized job database\n');
-    console.log('Prometheus is ready!');
-    console.log('\nNext steps:');
-    console.log('  1. Start the gateway:  prom');
-    console.log('  2. Open browser:       http://localhost:18789');
-    console.log('  3. Go to Settings -> Models to configure your LLM provider');
+    ui.success('Job database initialized');
+    ui.header('Next Steps');
+    ui.info('1. Start the gateway:  prom');
+    ui.info('2. Open browser:       http://localhost:18789');
+    ui.info('3. Go to Settings → Models to configure your LLM provider');
+    ui.blank();
   });
 
 // ---- GATEWAY ----
@@ -770,27 +835,51 @@ gateway
     }
 
     // ── Phase 1: suppress logs + start animated loading screen ───────────────
-    const { suppressStartupLogs, runLoadingScreen, notifyServerReady, captureStartupLog } = require('../gateway/terminal-ui');
+    const { suppressStartupLogs, runLoadingScreen, notifyServerReady, captureStartupLog, getStartupLogs } = require('../gateway/terminal-ui');
     suppressStartupLogs();
 
     const loading = runLoadingScreen();
 
-    await clearUnhealthyGatewayPort();
     const gatewayEntry = resolveGatewayEntryForTerminal();
-    captureStartupLog(`[Gateway] Starting child process: ${gatewayEntry}`);
-    const child = spawn(process.execPath, [...process.execArgv, gatewayEntry], {
-      cwd: resolveInstallRoot(),
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    appendStreamToStartupLog(child.stdout, captureStartupLog);
-    appendStreamToStartupLog(child.stderr, captureStartupLog);
-    child.on('exit', (code, signal) => {
-      captureStartupLog(`[Gateway] Child exited: ${signal || code}`);
-    });
+    let lastStartupError: unknown = null;
+    for (let attempt = 1; attempt <= GATEWAY_START_ATTEMPTS; attempt++) {
+      await clearUnhealthyGatewayPort();
+      const suffix = GATEWAY_START_ATTEMPTS > 1 ? ` (attempt ${attempt}/${GATEWAY_START_ATTEMPTS})` : '';
+      captureStartupLog(`[Gateway] Starting child process${suffix}: ${gatewayEntry}`);
+      const child = spawn(process.execPath, [...process.execArgv, gatewayEntry], {
+        cwd: resolveInstallRoot(),
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      appendStreamToStartupLog(child.stdout, captureStartupLog);
+      appendStreamToStartupLog(child.stderr, captureStartupLog);
+      child.on('exit', (code, signal) => {
+        captureStartupLog(`[Gateway] Child exited: ${signal || code}`);
+      });
 
-    await waitForGatewayHealthAndNotify(child, notifyServerReady, captureStartupLog);
+      try {
+        await waitForGatewayHealthAndNotify(child, notifyServerReady, captureStartupLog, getStartupLogs);
+        lastStartupError = null;
+        break;
+      } catch (err: any) {
+        lastStartupError = err;
+        if (await checkGatewayHealth(1500)) {
+          captureStartupLog('[Gateway] Health became available after startup error; continuing with the healthy gateway.');
+          notifyServerReady(buildTerminalStatusBoard());
+          lastStartupError = null;
+          break;
+        }
+        captureStartupLog(`[Gateway] Startup attempt ${attempt} failed: ${err?.message || err}`);
+        killGatewayChild(child);
+        await clearUnhealthyGatewayPort(child.pid ? [child.pid] : []);
+        if (attempt < GATEWAY_START_ATTEMPTS) {
+          await sleep(Math.min(5_000, 1000 + attempt * 750));
+        }
+      }
+    }
+
+    if (lastStartupError) throw lastStartupError;
 
     // Run the loading screen — it blocks until server is ready, then shows
     // Phase 2 (status board) and Phase 3 (interactive menu) automatically.
@@ -801,14 +890,18 @@ gateway
   .command('status')
   .description('Check gateway status')
   .action(async () => {
+    ui.header('Gateway Status');
     try {
-      const res = await fetch('http://localhost:18789/api/status');
+      const res  = await fetch('http://localhost:18789/api/status');
       const data = await res.json() as any;
-      console.log('Gateway: Online');
-      console.log(`Model:   ${data.currentModel || 'unknown'}`);
+      ui.statusRow('Gateway', 'Online  http://localhost:18789', 'ok');
+      ui.statusRow('Model',   data.currentModel || 'unknown',  'ok');
+      if (data.provider) ui.statusRow('Provider', data.provider, 'ok');
     } catch {
-      console.log('Gateway: Offline (run: prom gateway start)');
+      ui.statusRow('Gateway', 'Offline', 'error');
+      ui.hint('Run: prom gateway start');
     }
+    ui.blank();
   });
 
 // ---- AGENT ----
@@ -827,72 +920,137 @@ jobs
   .command('list')
   .description('List all jobs')
   .action(() => {
-    const db = getDatabase();
+    const db   = getDatabase();
     const list = db.listJobs();
-    if (list.length === 0) { console.log('No jobs found'); return; }
-    list.forEach(j => {
-      console.log(`[${j.status.padEnd(12)}] ${j.id.slice(0, 8)}  ${j.title}`);
-    });
+    if (list.length === 0) { ui.info('No jobs found'); return; }
+
+    // Color-code status
+    const C_S: Record<string, string> = {
+      completed: '\x1b[38;2;107;203;119m',
+      running:   '\x1b[38;2;255;180;50m',
+      failed:    '\x1b[91m',
+      pending:   '\x1b[90m',
+    };
+    const colorStatus = (s: string) => {
+      const color = C_S[s.toLowerCase()] ?? '\x1b[90m';
+      return `${color}${s}\x1b[0m`;
+    };
+
+    ui.header(`Jobs  (${list.length})`);
+    ui.table(
+      list.map(j => [
+        j.id.slice(0, 8),
+        colorStatus(j.status),
+        j.title || '(untitled)',
+      ]),
+      ['ID', 'Status', 'Title'],
+    );
+    ui.blank();
   });
 
 jobs
   .command('show <id>')
   .description('Show job details')
   .action((id: string) => {
-    const db = getDatabase();
+    const db  = getDatabase();
     const job = db.getJob(id);
-    if (!job) { console.log('Job not found'); return; }
-    console.log(`ID:     ${job.id}`);
-    console.log(`Title:  ${job.title}`);
-    console.log(`Status: ${job.status}`);
+    if (!job) { ui.error('Job not found'); return; }
+
+    ui.header('Job Details');
+    ui.label('ID',     job.id);
+    ui.label('Title',  job.title || '(untitled)');
+    ui.label('Status', job.status);
+
     const tasks = db.listTasksForJob(id);
-    console.log(`\nTasks (${tasks.length}):`);
-    tasks.forEach((t: any) => console.log(`  [${t.status}] ${t.title}`));
+    if (tasks.length) {
+      ui.header(`Tasks  (${tasks.length})`);
+      ui.table(
+        (tasks as any[]).map((t: any) => [t.status || '?', t.title || '(untitled)']),
+        ['Status', 'Title'],
+      );
+    }
+    ui.blank();
   });
 
 // ---- MODEL ----
 const model = program.command('model').description('Manage models');
 
 model.command('list').action(async () => {
+  ui.header('Available Models');
   const models = await getOllamaClient().listModels();
   if (models.length === 0) {
-    console.log('No models found (check your provider is running)');
+    ui.warn('No models found — check your provider is running');
     return;
   }
-  console.log('Available models:');
-  models.forEach(m => console.log(`  - ${m}`));
+  models.forEach(m => ui.info(m));
+  ui.blank();
 });
 
 model.command('set <n>').action((name: string) => {
   const cfg = getConfig();
-  const c = cfg.getConfig();
+  const c   = cfg.getConfig();
   cfg.updateConfig({ ...c, models: { ...c.models, primary: name, roles: { manager: name, executor: name, verifier: name } } });
-  console.log(`Model set to: ${name}`);
+  ui.success(`Model set to: ${name}`);
+  ui.hint('Restart the gateway to apply the change.');
+  ui.blank();
 });
 
 // ---- DOCTOR ----
 program.command('doctor').action(async () => {
-  console.log('Prometheus Health Check\n');
-  const cfg = getConfig().getConfig() as any;
+  ui.header('Prometheus Health Check');
+
+  const cfg      = getConfig().getConfig() as any;
   const provider = cfg.llm?.provider || 'ollama';
-  console.log(`Provider:  ${provider}`);
-  const ollama = getOllamaClient();
+  ui.statusRow('Provider', provider, 'ok');
+
+  // Backend / model connectivity
+  const ollama    = getOllamaClient();
   const connected = await ollama.testConnection();
-  console.log(`Backend:   ${connected ? 'Online' : 'Offline'}`);
+  ui.statusRow('Backend', connected ? 'Online' : 'Offline', connected ? 'ok' : 'error');
   if (connected) {
     const models = await ollama.listModels();
-    console.log(`Models:    ${models.length} available`);
+    ui.statusRow('Models', `${models.length} available`, models.length > 0 ? 'ok' : 'warn');
   }
-  const db = getDatabase();
+
+  // Database
+  const db       = getDatabase();
   const jobCount = db.listJobs().length;
-  console.log(`Database:  ${jobCount} jobs stored`);
-  console.log(`Workspace: ${getConfig().getWorkspacePath()}`);
+  ui.statusRow('Database', `${jobCount} job${jobCount === 1 ? '' : 's'} stored`, 'ok');
+
+  // Workspace
+  ui.statusRow('Workspace', getConfig().getWorkspacePath(), 'ok');
+
+  // Gateway
+  let gatewayModel = '';
   try {
-    await fetch('http://localhost:18789/api/status');
-    console.log(`Gateway:   Online -> http://localhost:18789`);
+    const res  = await fetch('http://localhost:18789/api/status', { signal: AbortSignal.timeout(2000) } as any);
+    const data = await res.json() as any;
+    gatewayModel = data?.currentModel ? `  (${data.currentModel})` : '';
+    ui.statusRow('Gateway', `Online  http://localhost:18789${gatewayModel}`, 'ok');
   } catch {
-    console.log(`Gateway:   Offline (run: prom gateway start)`);
+    ui.statusRow('Gateway', 'Offline', 'error');
+    ui.hint('Run: prom gateway start');
   }
+
+  // Update check
+  try {
+    const ctx   = resolveUpdateContext();
+    const cache = readUpdateCache();
+    const fresh = cache
+      && (Date.now() - cache.checkedAt) < UPDATE_CACHE_TTL_MS
+      && cache.mode === ctx.mode;
+    const result = fresh ? cache.result : checkForUpdates(ctx, false);
+    if (result.available) {
+      ui.statusRow('Updates', result.message, 'update');
+      ui.hint('Run: prometheus update');
+    } else {
+      ui.statusRow('Updates', `Up to date  (v${ctx.currentVersion})`, 'ok');
+    }
+  } catch {
+    ui.statusRow('Updates', 'Could not check', 'warn');
+  }
+
+  ui.blank();
 });
 
 // ---- UPDATE ----
@@ -904,7 +1062,7 @@ program
   .action(async (mode: string | undefined, options: { yes?: boolean; force?: boolean }) => {
     const actionMode = String(mode || 'apply').toLowerCase();
     if (actionMode !== 'check' && actionMode !== 'apply') {
-      console.error(`[update] Unknown mode "${actionMode}". Use "check" or "apply".`);
+      ui.error(`Unknown mode "${actionMode}". Use "check" or "apply".`);
       process.exitCode = 1;
       return;
     }
@@ -919,13 +1077,14 @@ program
     }
 
     if (!check.available) {
-      console.log('[update] Prometheus is already up to date.');
+      ui.success('Prometheus is already up to date.');
+      ui.blank();
       return;
     }
 
     const confirmed = await confirmUpdate(Boolean(options.yes));
     if (!confirmed) {
-      console.log('[update] Update canceled.');
+      ui.info('Update canceled.');
       return;
     }
 
@@ -935,7 +1094,7 @@ program
     } else if (ctx.mode === 'npm') {
       ok = applyNpmUpdate(ctx, check);
     } else {
-      console.error('[update] Unknown install mode. Run manual repo update commands.');
+      ui.error('Unknown install mode. Run manual repo update commands.');
       process.exitCode = 1;
       return;
     }
@@ -945,8 +1104,9 @@ program
       return;
     }
 
-    console.log('[update] Update complete.');
-    console.log('[update] Restart any running Prometheus gateway process.');
+    ui.success('Update complete.');
+    ui.hint('Restart any running Prometheus gateway process.');
+    ui.blank();
   });
 
 // Default: calling `prom` with no arguments starts the gateway (like `prom gateway start`)

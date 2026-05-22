@@ -1,6 +1,8 @@
 import { ToolResult } from '../types.js';
 import { getProcessSupervisor } from '../gateway/process/supervisor.js';
 import { validateShellRequest } from './shell.js';
+import { runTerminal } from '../gateway/terminal-service.js';
+import type { ProcessShell } from '../gateway/process/types.js';
 
 function ok(data: any, stdout?: string): ToolResult {
   return { success: true, data, stdout };
@@ -18,15 +20,18 @@ export const runCommandTool = {
   execute: async (args: any): Promise<ToolResult> => {
     const validation = validateShellRequest({ command: args.command, cwd: args.cwd });
     if (!validation.ok) return validation.result;
-    const run = await getProcessSupervisor().spawn({
+    const result = await runTerminal({
       command: validation.command,
       cwd: validation.cwd,
       mode: 'foreground',
+      shell: args.shell ? String(args.shell) as ProcessShell : 'auto',
+      pty: args.pty === true,
       timeoutMs: args.timeoutMs == null ? 120000 : Number(args.timeoutMs),
       noOutputTimeoutMs: args.noOutputTimeoutMs == null ? undefined : Number(args.noOutputTimeoutMs),
       title: args.title ? String(args.title) : undefined,
     });
-    const exit = await run.wait();
+    const run = result.run;
+    const exit = result.exit || await run.wait();
     const text = [exit.stdout, exit.stderr].filter(Boolean).join('\n').trim();
     return {
       success: exit.exitCode === 0,
@@ -51,14 +56,17 @@ export const startProcessTool = {
   execute: async (args: any): Promise<ToolResult> => {
     const validation = validateShellRequest({ command: args.command, cwd: args.cwd });
     if (!validation.ok) return validation.result;
-    const run = await getProcessSupervisor().spawn({
+    const result = await runTerminal({
       command: validation.command,
       cwd: validation.cwd,
       mode: 'background',
+      shell: args.shell ? String(args.shell) as ProcessShell : 'auto',
+      pty: args.pty === true,
       title: args.title ? String(args.title) : undefined,
       noOutputTimeoutMs: args.noOutputTimeoutMs == null ? undefined : Number(args.noOutputTimeoutMs),
-      stdinMode: args.stdin === true ? 'pipe' : 'ignore',
+      stdin: args.stdin === true,
     });
+    const run = result.run;
     return ok({ runId: run.runId, run: run.record }, `Started ${run.runId}`);
   },
 };

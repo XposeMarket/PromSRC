@@ -48,6 +48,8 @@ function normalizeCredentialInfo(item) {
           label: field.label,
           placeholder: field.placeholder || '',
           secret: !!field.secret,
+          required: field.required !== false,
+          help: field.help || '',
         }))
       : [],
     docsUrl: item?.setup?.docsUrl || item?.docsUrl || '',
@@ -398,6 +400,11 @@ function renderConnectorActions(connector, isConnected) {
   const el = document.getElementById('cv-actions');
   if (!el) return;
 
+  if (connector.id === 'x') {
+    renderXConnectorActions(connector, isConnected);
+    return;
+  }
+
   if (connector.id === 'obsidian') {
     renderObsidianConnectorActions(connector, isConnected);
     if (!obsidianConnectorState.loading) loadObsidianConnectorState().catch(() => {});
@@ -486,6 +493,122 @@ function renderConnectorActions(connector, isConnected) {
   }
 
   el.innerHTML = '<div style="font-size:12px;color:var(--muted)">No setup flow is available for this connector yet.</div>';
+}
+
+function renderXConnectorActions(connector, isConnected) {
+  const el = document.getElementById('cv-actions');
+  if (!el) return;
+  const tokenSource = connector.state?.tokenSource || connectorStatuses.x?.tokenSource || connectionsState.x?.authType || '';
+  const hasAppCredentials = !!connector.state?.hasCredentials || !!connectorStatuses.x?.hasCredentials;
+  const sourceLabel = tokenSource === 'x_api_oauth'
+    ? (connector.state?.username ? `X OAuth @${connector.state.username}` : 'X OAuth user context')
+    : tokenSource === 'xurl'
+      ? (connector.state?.username ? `xurl @${connector.state.username}` : 'xurl OAuth user context')
+    : tokenSource === 'browser_session'
+      ? 'Browser session'
+      : hasAppCredentials
+        ? 'App credentials saved'
+        : 'Not connected';
+
+  el.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:7px">
+        <div style="font-size:12px;font-weight:700;color:var(--text)">X API credentials</div>
+        <div style="font-size:11.5px;color:var(--muted);line-height:1.55">
+          Status: <strong style="color:${isConnected ? 'var(--ok)' : 'var(--muted)'}">${escHtml(sourceLabel)}</strong>.
+          X API tools require X OAuth 2.0 user context. xAI/Grok Settings remain separate for models, x_search, TTS, and STT.
+        </div>
+        ${connector.state?.redirectUri ? `<div style="font-size:11px;color:var(--muted);line-height:1.5">Redirect URI: <code style="font-size:10.5px">${escHtml(connector.state.redirectUri)}</code></div>` : ''}
+      </div>
+      <button class="cv-btn-connect" onclick="startXurlSetup('x')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+        Run xurl Setup
+      </button>
+      <button class="cv-btn-connect" onclick="startOAuthFlow('x')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+        Built-in OAuth Fallback
+      </button>
+      <button class="cv-btn-connect" onclick="renderCredentialForm('x')" style="background:#111827">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 2l-2 2"/><path d="M7.5 20.5l-5-5 12-12 5 5z"/><path d="M16 5l3 3"/></svg>
+        ${hasAppCredentials ? 'Update X App Credentials' : 'Add X App Credentials'}
+      </button>
+      ${connector.browserUrl ? `<button class="cv-btn-connect" onclick="startBrowserLogin('x')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line)">
+        Open X Browser Login
+      </button>` : ''}
+      ${(isConnected || hasAppCredentials) ? `<button class="cv-btn-disconnect" onclick="disconnectConnector('x')">Disconnect X API</button>` : ''}
+      <div id="browser-login-instructions-x" style="display:none;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px;font-size:12.5px;color:var(--text);line-height:1.7">
+        Log in to X in the Prometheus browser window, then come back and verify the browser session.
+      </div>
+      <button class="cv-btn-connect" id="btn-verify-login-x" style="display:none;background:var(--ok)" onclick="verifyBrowserLogin('x')">Verify Browser Login</button>
+      <div id="verify-status-x" style="font-size:11px;color:var(--muted);text-align:center;display:none"></div>
+    </div>
+  `;
+}
+
+async function startXurlSetup(id) {
+  const connector = getConnectorById(id);
+  if (!connector || id !== 'x') return;
+  const hasAppCredentials = !!connector.state?.hasCredentials || !!connectorStatuses.x?.hasCredentials;
+  if (!hasAppCredentials) {
+    renderCredentialForm('x', null, 'Save the X OAuth 2.0 Client ID/Secret first, then Prometheus can run xurl setup.');
+    return;
+  }
+
+  const el = document.getElementById('cv-actions');
+  if (el) {
+    el.innerHTML = `
+      <div style="background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:13px;font-weight:700;color:var(--text)">Running xurl setup...</div>
+        <div id="xurl-setup-status" style="font-size:11.5px;color:var(--muted);line-height:1.6">Starting xurl commands. Approve the browser login when it opens.</div>
+        <pre id="xurl-setup-output" style="margin:0;white-space:pre-wrap;font-size:10.5px;line-height:1.45;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:180px;overflow:auto"></pre>
+      </div>
+    `;
+  }
+
+  try {
+    const res = await api(ENDPOINTS.CONNECTIONS_XURL_SETUP, {
+      method: 'POST',
+      body: JSON.stringify({ id: 'x', appName: 'prometheus' }),
+    });
+    renderXurlSetupState(res?.state || res);
+    pollXurlSetup();
+  } catch (e) {
+    renderCredentialForm('x', null, e.message);
+  }
+}
+
+function renderXurlSetupState(state) {
+  const status = document.getElementById('xurl-setup-status');
+  const output = document.getElementById('xurl-setup-output');
+  if (status) {
+    status.style.color = state?.success === false ? 'var(--err)' : state?.success ? 'var(--ok)' : 'var(--muted)';
+    status.textContent = state?.pending
+      ? (state.step || 'Running xurl setup...')
+      : state?.success
+        ? `xurl connected${state.username ? ` as @${state.username}` : ''}.`
+        : (state?.error || 'xurl setup failed.');
+  }
+  if (output) {
+    output.textContent = Array.isArray(state?.output) ? state.output.join('\n\n') : '';
+  }
+}
+
+async function pollXurlSetup() {
+  try {
+    const state = await api(ENDPOINTS.CONNECTIONS_XURL_POLL);
+    renderXurlSetupState(state);
+    if (state?.pending) {
+      setTimeout(pollXurlSetup, 2000);
+      return;
+    }
+    if (state?.success) {
+      await loadConnectionsState();
+      openConnectorView('x');
+      showToast('X connected', 'xurl authenticated and verified the X account.', 'success');
+    }
+  } catch (e) {
+    renderXurlSetupState({ pending: false, success: false, error: e.message, output: [] });
+  }
 }
 
 async function startOAuthFlow(id) {
@@ -589,12 +712,15 @@ function renderCredentialForm(id, connectorOverride = null, errorMsg = '') {
             onblur="this.style.borderColor='var(--line)'"
             onkeydown="if(event.key==='Enter')saveConnectorCredentials('${id}')"
           />
+          ${field.help ? `<div style="font-size:10.8px;color:var(--muted);line-height:1.45">${escHtml(field.help)}</div>` : ''}
         </div>
       `,
     )
     .join('');
 
-  const primaryLabel = isApiKey ? `Save ${connector.name} Credentials` : 'Save and Authorize';
+  const primaryLabel = connector.id === 'x'
+    ? 'Save X App and Authorize'
+    : isApiKey ? `Save ${connector.name} Credentials` : 'Save and Authorize';
   const docsLink = info.docsUrl
     ? `
         <a href="${info.docsUrl}" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--brand);text-decoration:none;display:inline-flex;align-items:center;gap:4px">
@@ -609,6 +735,7 @@ function renderCredentialForm(id, connectorOverride = null, errorMsg = '') {
       <div style="display:flex;flex-direction:column;gap:4px">
         <div style="font-size:13px;font-weight:700;color:var(--text)">Enter ${escHtml(connector.name)} credentials</div>
         ${info.docsHint ? `<div style="font-size:11.5px;color:var(--muted);line-height:1.6">${escHtml(info.docsHint)}</div>` : ''}
+        ${connector.id === 'x' ? `<div style="font-size:11.5px;color:var(--muted);line-height:1.6;background:rgba(255,106,0,.08);border:1px solid rgba(255,106,0,.18);border-radius:8px;padding:9px 11px">Use the OAuth 2.0 Client ID from X Developer Portal, not the API Key / Consumer Key. Add <code style="font-size:10.5px">http://localhost:8080/callback</code> to the app callback URLs, or enter the exact callback you configured below.</div>` : ''}
         ${docsLink}
       </div>
       ${errorMsg ? `<div style="font-size:12px;color:var(--err);background:rgba(224,109,109,.1);border:1px solid rgba(224,109,109,.25);border-radius:7px;padding:9px 12px">${escHtml(errorMsg)}</div>` : ''}
@@ -638,7 +765,12 @@ async function saveConnectorCredentials(id) {
   info.fields.forEach((field) => {
     const inputEl = document.getElementById(`cred-input-${id}-${field.key}`);
     const value = inputEl?.value?.trim() || '';
+    const optional = field.required === false || (id === 'x' && field.key === 'bearerToken');
     if (!value) {
+      if (optional) {
+        body[field.key] = '';
+        return;
+      }
       if (inputEl) inputEl.style.borderColor = 'var(--err)';
       valid = false;
       return;
@@ -697,6 +829,13 @@ async function saveConnectorCredentials(id) {
         statusEl.style.color = 'var(--err)';
       }
     }
+    return;
+  }
+
+  if (id === 'x') {
+    if (statusEl) statusEl.textContent = 'Credentials saved. Running xurl setup...';
+    await loadConnectionsState();
+    startXurlSetup('x');
     return;
   }
 
@@ -928,6 +1067,9 @@ window.closeConnectorView = closeConnectorView;
 window.renderConnectorActions = renderConnectorActions;
 window.renderCredentialForm = renderCredentialForm;
 window.saveConnectorCredentials = saveConnectorCredentials;
+window.startXurlSetup = startXurlSetup;
+window.renderXurlSetupState = renderXurlSetupState;
+window.pollXurlSetup = pollXurlSetup;
 window.startOAuthFlow = startOAuthFlow;
 window.renderOAuthWaiting = renderOAuthWaiting;
 window.renderOAuthManualFallback = renderOAuthManualFallback;

@@ -222,10 +222,23 @@ export const PrometheusConfigSchema = z.object({
   gateway: z.object({
     port: z.number().int().min(1).max(65535),
     host: z.string(),
+    https: z.object({
+      enabled: z.boolean(),
+      port: z.number().int().min(1).max(65535),
+      pfxPath: z.string().optional(),
+      passphrase: z.string().optional(),
+      keyPath: z.string().optional(),
+      certPath: z.string().optional(),
+    }).optional(),
     auth: z.object({
       enabled: z.boolean(),
       token:   z.string().optional(),
     }),
+    remoteAccess: z.object({
+      enabled:   z.boolean(),
+      mode:      z.enum(['tailscale-funnel', 'custom']),
+      publicUrl: z.string(),
+    }).optional(),
   }),
 
   ollama: z.object({
@@ -318,6 +331,12 @@ export const PrometheusConfigSchema = z.object({
     provider:        z.string(),
     path:            z.string(),
     embedding_model: z.string(),
+    embeddings: z.object({
+      provider: z.string().optional(),
+      auto_backfill: z.boolean().optional(),
+      auto_backfill_limit: z.number().int().min(0).max(2000).optional(),
+      providers: z.record(z.record(z.unknown())).optional(),
+    }).optional(),
   }),
 
   memory_options: z.object({
@@ -342,10 +361,11 @@ export const PrometheusConfigSchema = z.object({
     maxMessages:            z.number().int().optional(),
     compactionThreshold:    z.number().min(0).max(1).optional(),
     memoryFlushThreshold:   z.number().min(0).max(1).optional(),
+    compactionMinMessages:  z.number().int().min(2).max(120).optional(),
     rollingCompactionEnabled: z.boolean().optional(),
     rollingCompactionMessageCount: z.number().int().min(10).max(120).optional(),
     rollingCompactionToolTurns: z.number().int().min(1).max(12).optional(),
-    rollingCompactionSummaryMaxWords: z.number().int().min(80).max(500).optional(),
+    rollingCompactionSummaryMaxWords: z.number().int().min(80).max(1500).optional(),
     rollingCompactionModel: z.string().optional(),
     mainChatGoals: z.object({
       enabled: z.boolean().optional(),
@@ -403,6 +423,10 @@ export const PrometheusConfigSchema = z.object({
   agent_builder: z.object({
     enabled: z.boolean(),
     url:     z.string().optional(),
+  }).optional(),
+
+  creative_editor: z.object({
+    enabled: z.boolean().optional(),
   }).optional(),
 });
 

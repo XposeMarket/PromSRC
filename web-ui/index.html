@@ -4,26 +4,66 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Prometheus</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
+<link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
+<link rel="stylesheet" href="vendor/codemirror/theme/material-darker.min.css">
+<script>
+  (() => {
+    const loadExternalScript = (src, attrs = {}) => new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      Object.entries(attrs).forEach(([key, value]) => script.setAttribute(key, value));
+      script.onload = () => resolve({ src, ok: true });
+      script.onerror = () => resolve({ src, ok: false });
+      document.head.appendChild(script);
+    });
+    const codeMirrorReady = loadExternalScript('vendor/codemirror/codemirror.min.js')
+      .then(() => Promise.all([
+        'xml',
+        'css',
+        'javascript',
+        'htmlmixed',
+        'python',
+        'markdown',
+      ].map((mode) => loadExternalScript(`vendor/codemirror/mode/${mode}/${mode}.min.js`))));
+    window.__PROM_EXTERNAL_LIBS_READY = Promise.allSettled([
+      codeMirrorReady,
+      loadExternalScript('vendor/marked/marked.min.js'),
+      loadExternalScript('vendor/fabric/fabric.min.js'),
+      loadExternalScript('vendor/gif/gif.js'),
+      loadExternalScript('vendor/iconify/iconify.min.js'),
+      loadExternalScript('vendor/lottie-player/lottie-player.js'),
+    ]);
+  })();
+</script>
 <!-- F2: External CSS (replaces inline <style> block) -->
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="src/styles/fonts.css">
 <link rel="stylesheet" href="src/styles/base.css">
 <link rel="stylesheet" href="src/styles/components.css">
 <link rel="stylesheet" href="src/styles/pages.css">
 <link rel="stylesheet" href="src/styles/projects.css">
 <link rel="stylesheet" href="src/styles/hub.css">
+<link rel="stylesheet" href="src/styles/mobile.css">
+
+<!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#ea6a1f" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1d150e" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<meta name="application-name" content="Prometheus">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- iOS Add to Home Screen support -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Prometheus">
+<link rel="apple-touch-icon" href="/assets/Prometheus.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/Prometheus.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/assets/Prometheus.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/assets/Prometheus.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/assets/Prometheus.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/assets/Prometheus.png">
+<link rel="shortcut icon" href="/assets/Prometheus.png">
 <script>
   (() => {
     const params = new URLSearchParams(window.location.search || '');
@@ -58,9 +98,33 @@
     };
   })();
 </script>
-<script src="https://unpkg.com/@lottiefiles/lottie-player@2/dist/lottie-player.js"></script>
 </head>
 <body class="auth-pending">
+<script>
+  (() => {
+    try {
+      const hash = String(window.location.hash || '').replace(/^#/, '');
+      const path = String(window.location.pathname || '');
+      const params = new URLSearchParams(window.location.search || '');
+      const shouldBootMobile =
+        hash.startsWith('mobile') ||
+        path === '/mobile' ||
+        path.startsWith('/mobile/') ||
+        !!params.get('pair') ||
+        params.get('source') === 'pwa' ||
+        localStorage.getItem('pm_force_mobile') === '1' ||
+        !!localStorage.getItem('pm_device_token');
+
+      if (shouldBootMobile) {
+        document.body.classList.add('pm-mobile-active');
+        document.body.classList.remove('auth-pending');
+        if (hash.startsWith('mobile') || params.get('pair') || params.get('source') === 'pwa') {
+          localStorage.setItem('pm_force_mobile', '1');
+        }
+      }
+    } catch {}
+  })();
+</script>
 
 <style>
   body.creative-render-worker {
@@ -1823,7 +1887,7 @@
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><polygon points="8,1 10,6 15,6 11,9.5 12.5,14.5 8,11.5 3.5,14.5 5,9.5 1,6 6,6"/></svg>
         </div>
         <span>Proposals</span>
-        <span id="proposals-badge" style="display:none;position:absolute;top:6px;right:8px;min-width:16px;height:16px;border-radius:8px;background:#e05c5c;color:#fff;font-size:9px;font-weight:700;line-height:16px;text-align:center;padding:0 3px"></span>
+        <span id="proposals-badge" style="display:none;position:absolute;top:0px;right:2px;min-width:16px;height:16px;border-radius:8px;background:#e05c5c;color:#fff;font-size:9px;font-weight:700;line-height:16px;text-align:center;padding:0 3px"></span>
       </div>
 
       <!-- More popover: Audit + Memory + Connections -->
@@ -2065,7 +2129,8 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
         <button class="chat-voice-btn" id="chat-voice-btn" type="button" onclick="toggleVoiceDictation()" title="Dictate message" aria-label="Dictate message">
-          <iconify-icon icon="solar:microphone-3-bold-duotone" width="16" height="16"></iconify-icon>
+          <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+          <svg class="voice-btn-icon voice-btn-icon-wave" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M4 10v4"/><path d="M8 7v10"/><path d="M12 4v16"/><path d="M16 7v10"/><path d="M20 10v4"/></svg>
         </button>
         <button id="chat-command-chip" class="chat-command-chip" type="button" style="display:none" onclick="clearActiveSlashCommand()" title="Clear command"></button>
         <textarea
@@ -2074,64 +2139,40 @@
           rows="1"
           autocomplete="off"
         ></textarea>
-        <button class="chat-voice-btn" id="chat-realtime-voice-btn" type="button" onclick="toggleRealtimeVoiceReplies()" title="OpenAI Realtime replies" aria-label="OpenAI Realtime replies">
-          <iconify-icon icon="solar:soundwave-bold-duotone" width="17" height="17"></iconify-icon>
-        </button>
         <button class="send-btn" id="send-btn" onclick="handleSendStop()" title="Send">
           <svg id="send-icon" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
           <svg id="stop-icon" width="13" height="13" viewBox="0 0 14 14" fill="currentColor" style="display:none"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>
         </button>
         <audio id="realtime-voice-audio" autoplay style="display:none"></audio>
       </div>
-      <!-- Bottom row: hint left, context button right -->
+      <!-- Bottom row: hint left -->
       <div class="agent-toggle" style="margin-bottom:0;margin-top:6px">
         <div class="chat-hint" style="margin:0;flex:1">
-          <button id="model-switcher-btn" onclick="toggleModelSwitcher()" style="background:none;border:none;padding:0;cursor:pointer;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Switch model">
-            <span id="chat-model-name">your model</span>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-          </button>
-          <span style="color:var(--muted)"> via <span id="chat-provider-name">Prometheus</span></span>
           <span id="token-count-badge" style="margin-left:8px;color:var(--muted);font-size:10px"></span>
           <span id="queued-prompts-indicator" style="display:none;margin-left:8px;color:var(--brand);font-weight:700"></span>
-          <span class="voice-provider-controls" id="voice-provider-controls" hidden>
-            <label>Mic <select id="voice-stt-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
-            <label>Speak <select id="voice-tts-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
+          <span class="voice-provider-controls unified-voice-provider-controls" id="voice-provider-controls" hidden>
+            <label>Mode <select id="voice-mode-provider" onchange="onVoiceModeChanged()"><option value="default">Default</option><option value="openai_realtime">OpenAI Realtime</option><option value="xai">xAI / Grok</option></select></label>
+            <label id="voice-mic-provider-label" hidden>Mic <select id="voice-stt-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
+            <label id="voice-speak-provider-label" hidden>Speak <select id="voice-tts-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
             <label id="voice-output-voice-label" hidden>Voice <select id="voice-output-voice" onchange="onVoiceProviderChanged()"><option value="">Default</option></select></label>
-          </span>
-          <span class="voice-provider-controls realtime-voice-provider-controls" id="realtime-voice-provider-controls" hidden>
-            <label>Voice <select id="realtime-voice-select" onchange="onRealtimeVoiceChanged()"><option value="marin">Marin</option></select></label>
+            <label id="realtime-voice-label" hidden>Voice <select id="realtime-voice-select" onchange="onRealtimeVoiceChanged()"><option value="marin">Marin</option></select></label>
+            <label id="voice-speed-label">Speed <select id="realtime-voice-speed-select" onchange="onRealtimeVoiceSpeedChanged()"><option value="1.1">1.1x</option></select></label>
+            <label id="voice-narration-label">Narration <select id="realtime-narration-mode-select" onchange="onRealtimeNarrationModeChanged()"><option value="quiet">Quiet</option><option value="milestones">Milestones</option></select></label>
+            <label id="realtime-listen-label">Realtime permissions <select id="realtime-listen-mode-select" onchange="onRealtimeListenModeChanged()"><option value="auto_send">Always listening</option><option value="confirm_send">Listen, don't send</option><option value="hold_space">Hold Space to talk</option></select></label>
             <span class="realtime-wake-gate-status" id="realtime-wake-gate-status" hidden></span>
           </span>
         </div>
-        <!-- Model switcher popover -->
-        <div id="model-switcher-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);left:16px;background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 4px 20px rgba(16,32,64,0.13);padding:10px;z-index:100;min-width:220px">
-          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Switch Model</div>
-          <div id="model-switcher-list" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto"></div>
-        </div>
-        <div class="agent-toggle-right" style="display:flex;align-items:center;gap:6px">
-          <button class="quick-mode-btn" id="context-pin-btn" onclick="toggleContextPinMode()" title="Pin messages to context">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
-            <span id="context-pin-label">Context</span>
+        <div class="chat-model-switcher-wrap">
+          <button id="model-switcher-btn" onclick="toggleModelSwitcher()" style="background:none;border:none;padding:0;cursor:pointer;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Switch model">
+            <span id="chat-model-name">your model</span>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            <span style="color:var(--muted)">via <span id="chat-provider-name">Prometheus</span></span>
           </button>
-          <div class="quick-mode-popover" id="context-pin-popover" style="width:280px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div class="quick-mode-title" style="margin:0">Pin Messages to Context</div>
-              <span id="context-pin-count" style="font-size:11px;color:var(--muted);font-weight:700">0/3 selected</span>
-            </div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">Click messages in chat to pin them. Pinned messages are re-injected into context with each request.</div>
-            <div id="context-pin-list" style="max-height:200px;overflow-y:auto;margin-bottom:8px"></div>
-            <div style="display:flex;justify-content:flex-end;gap:6px">
-              <button class="skill-mini-btn" onclick="cancelContextPin()" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                Cancel
-              </button>
-              <button class="skill-mini-btn enabled" onclick="confirmContextPin()" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-                Done
-              </button>
-            </div>
+          <!-- Model switcher popover -->
+          <div id="model-switcher-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);right:0;background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 4px 20px rgba(16,32,64,0.13);padding:10px;z-index:100;min-width:220px">
+            <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Switch Model</div>
+            <div id="model-switcher-list" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto"></div>
           </div>
-          <div class="quick-mode-popover" id="quick-mode-popover" style="display:none"></div>
         </div>
       </div>
     </div>
@@ -2381,6 +2422,21 @@
         </div>
       </div>
     </div>
+
+    <section class="hub-section hub-curator-section">
+      <div class="hub-curator-header">
+        <div>
+          <div class="hub-section-title">Skill Curator Review</div>
+          <div class="hub-curator-subtitle" id="hub-curator-subtitle">Pending Brain skill suggestions</div>
+        </div>
+        <div class="hub-curator-actions">
+          <button class="hub-viewall-btn" id="hub-curator-run-btn" type="button">Run curator</button>
+          <button class="hub-viewall-btn" id="hub-curator-refresh-btn" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="hub-curator-summary" id="hub-curator-summary"></div>
+      <div class="hub-curator-list" id="hub-curator-list"></div>
+    </section>
   </div>
 </div>
 
@@ -2779,13 +2835,12 @@
         </div>
         <div id="canvas-browser-shell" style="display:none;flex:1;min-height:0;overflow:hidden;background:linear-gradient(180deg,rgba(56,189,248,0.08),rgba(14,165,233,0.03));">
           <div style="display:flex;flex-direction:column;height:100%;min-height:0">
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.14)">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.14)">
               <div style="min-width:0">
-                <div id="browser-canvas-title" style="font-size:11px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#f0f9ff">Live Browser</div>
-                <div id="browser-canvas-subtitle" style="font-size:11px;color:#b6c8d6;line-height:1.6;margin-top:2px">Waiting for browser activity in this chat</div>
-                <div id="browser-canvas-agent-tabs" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px"></div>
+                <div id="browser-canvas-title" style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#f0f9ff">Live Browser</div>
+                <div id="browser-canvas-subtitle" style="font-size:10px;color:#b6c8d6;line-height:1.5;margin-top:1px">Waiting for browser activity in this chat</div>
+                <div id="browser-canvas-agent-tabs" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
               </div>
-              <button onclick="showCanvasFilesSurface()" style="display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#e8e6e1;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;flex-shrink:0"><iconify-icon icon="solar:sidebar-code-bold-duotone" width="14" height="14"></iconify-icon>Files</button>
             </div>
             <div style="display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,0.95fr);gap:14px;padding:16px;flex:1;min-height:0">
               <div style="min-height:0;border:1px solid rgba(148,163,184,0.24);border-radius:8px;overflow:hidden;background:rgba(2,6,23,0.5);display:flex;flex-direction:column">
@@ -2816,8 +2871,9 @@
                   </div>
                   <div style="position:relative;width:fit-content;max-width:100%;margin:0 auto">
                     <img id="browser-canvas-frame" alt="Browser frame" style="display:block;max-width:100%;height:auto;border-radius:12px;border:1px solid rgba(148,163,184,0.18);box-shadow:0 18px 40px rgba(2,6,23,0.38);cursor:crosshair" onclick="inspectBrowserCanvasPoint(event)" onload="handleBrowserCanvasFrameLoad()">
-                    <div id="browser-canvas-selection-box" style="display:none;position:absolute;border:2px solid #38bdf8;border-radius:10px;box-shadow:0 0 0 9999px rgba(15,23,42,0.15)"></div>
-                    <div id="browser-canvas-click-highlight" style="display:none;position:absolute;border:2px solid rgba(251,191,36,0.95);border-radius:10px;box-shadow:0 0 0 1px rgba(253,224,71,0.3),0 12px 28px rgba(245,158,11,0.18);pointer-events:none;opacity:0;transform:scale(1);transition:opacity 180ms ease,transform 180ms ease"></div>
+                    <div id="browser-canvas-selection-box" style="display:none;position:absolute;border:2px solid #38bdf8;border-radius:10px;box-shadow:0 0 0 9999px rgba(15,23,42,0.15);pointer-events:none;z-index:6"></div>
+                    <div id="browser-canvas-hover-box" style="display:none;position:absolute;border:1.5px dashed rgba(56,189,248,0.85);border-radius:8px;background:rgba(56,189,248,0.08);pointer-events:none;z-index:5;transition:left 90ms ease,top 90ms ease,width 90ms ease,height 90ms ease"></div>
+                    <div id="browser-canvas-click-highlight" style="display:none;position:absolute;border:2px solid rgba(251,191,36,0.95);border-radius:10px;box-shadow:0 0 0 1px rgba(253,224,71,0.3),0 12px 28px rgba(245,158,11,0.18);pointer-events:none;opacity:0;transform:scale(1);transition:opacity 180ms ease,transform 180ms ease;z-index:7"></div>
                     <div id="browser-canvas-agent-cursor" style="display:none;position:absolute;left:0;top:0;pointer-events:none;z-index:8;opacity:0;transform:translate(-2px,-1px);transition:left 140ms ease-out,top 140ms ease-out,opacity 180ms ease">
                       <div style="position:relative;width:0;height:0">
                         <div style="width:0;height:0;border-left:10px solid #f8fafc;border-top:7px solid transparent;border-bottom:7px solid transparent;filter:drop-shadow(0 2px 5px rgba(2,6,23,0.55));transform:rotate(42deg);transform-origin:left center"></div>
@@ -3127,6 +3183,10 @@
 	      <button id="settings-tab-shortcuts" class="sidebar-action" onclick="setSettingsTab('shortcuts')" style="display:flex;align-items:center;gap:6px">
 	        <span id="settings-shortcuts-tab-icon" style="display:inline-flex" aria-hidden="true"></span>
 	        <span>Shortcuts</span>
+	      </button>
+	      <button id="settings-tab-pairing" class="sidebar-action" onclick="setSettingsTab('pairing')" style="display:flex;align-items:center;gap:6px">
+	        <span>Pairing</span>
+	        <span id="settings-pairing-pending-badge" style="display:none;margin-left:auto;background:#ea6a1f;color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;">0</span>
 	      </button>
     </div>
 
@@ -3844,10 +3904,8 @@
             </div>
           </div>
           <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
-          <button onclick="saveBrainModelConfig()" class="btn" style="width:100%;margin-bottom:12px">Save Brain Models</button>
 
           <div id="amd-status" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
-	          <button onclick="saveAgentModelDefaults()" class="btn" style="width:100%">Save Agent Model Defaults</button>
 	          <div style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
 
             <div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff">
@@ -3870,7 +3928,7 @@
                 </div>
                 <div>
                   <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Summary word cap</label>
-                  <input id="settings-rolling-compaction-words" type="number" min="80" max="500" value="220" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px;font-size:12px" />
+                  <input id="settings-rolling-compaction-words" type="number" min="80" max="1500" value="900" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px;font-size:12px" />
                 </div>
                 <div>
                   <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Compactor model override (optional)</label>
@@ -4348,6 +4406,106 @@
       </div>
     </div>
 
+    <!-- Pairing Panel -->
+    <div id="settings-panel-pairing" style="display:none;padding:14px 16px">
+
+      <!-- Remote Access (Tailscale Funnel) -->
+      <div style="border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <div class="right-section-title" style="margin:0;flex:1">Remote access</div>
+          <span id="pairing-remote-status-pill" style="font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Off</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:10px">
+          Off by default — local Wi-Fi pairing still works exactly as before. Turn this on to make the QR code encode a public HTTPS URL (e.g. a Tailscale Funnel address) so phones can pair from cellular or any other network. Desktop approval is still required for every new device.
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start">
+          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fafafa">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--text);cursor:pointer">
+              <input type="checkbox" id="pairing-remote-enabled" />
+              <span>Enable remote access</span>
+            </label>
+            <div style="margin-top:10px">
+              <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Mode</div>
+              <select id="pairing-remote-mode" class="btn btn-sm" style="width:100%;background:#fff;border:1px solid var(--line);color:var(--text);padding:6px 8px;border-radius:8px">
+                <option value="tailscale-funnel">Tailscale Funnel</option>
+                <option value="custom">Custom HTTPS URL</option>
+              </select>
+            </div>
+            <div style="margin-top:10px">
+              <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Public URL</div>
+              <input type="text" id="pairing-remote-url" placeholder="https://your-machine.tail1234.ts.net" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px" />
+              <div id="pairing-remote-url-hint" style="margin-top:4px;font-size:11px;color:var(--muted);line-height:1.45">Paste the HTTPS address Tailscale assigned your machine.</div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button id="pairing-remote-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;flex:1">Save</button>
+              <button id="pairing-remote-detect-btn" class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)">Detect Tailscale</button>
+            </div>
+            <div id="pairing-remote-msg" style="margin-top:8px;font-size:11px;color:var(--muted);line-height:1.45"></div>
+          </div>
+
+          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fafafa">
+            <div style="font-size:12px;font-weight:800;color:var(--text);margin-bottom:6px">Tailscale status</div>
+            <div id="pairing-ts-status" style="font-size:12px;color:var(--muted);line-height:1.55">Click <strong>Detect Tailscale</strong> to check installation, login, and Funnel state.</div>
+            <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:var(--muted);line-height:1.55">
+              <strong>One-time setup</strong>:<br>
+              1. Install Tailscale from <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">tailscale.com</span> and sign in.<br>
+              2. In a terminal, run:
+              <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px 8px;word-break:break-all"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></div>
+              3. Click <strong>Detect Tailscale</strong>, accept the suggested URL, save, then generate a new QR.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start">
+
+        <!-- LEFT: QR + status -->
+        <div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:#fff;text-align:center">
+          <div class="right-section-title" style="margin-bottom:10px;text-align:left">Pair a phone</div>
+          <div id="pairing-qr-wrap" style="display:flex;align-items:center;justify-content:center;background:#f7f1e6;border-radius:12px;padding:14px;min-height:280px">
+            <div style="color:var(--muted);font-size:12px">Loading QR…</div>
+          </div>
+          <div id="pairing-qr-meta" style="margin-top:10px;font-size:12px;color:var(--muted);line-height:1.5"></div>
+          <div style="display:flex;gap:8px;margin-top:10px;justify-content:center">
+            <button id="pairing-regen-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none">↻ New QR</button>
+            <button id="pairing-copy-link-btn" class="btn btn-sm" style="background:var(--panel-2);border:1px solid var(--line);color:var(--muted)">Copy link</button>
+          </div>
+          <div style="margin-top:12px;font-size:11px;color:var(--muted);line-height:1.55;text-align:left;border-top:1px solid var(--line);padding-top:10px">
+            Scan this QR with your phone's camera. After it opens, you'll see an approval prompt below.
+            <br><strong>QR codes expire in 5 minutes.</strong> Generate a new one anytime.
+          </div>
+        </div>
+
+        <!-- RIGHT: pending + devices -->
+        <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+          <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <div class="right-section-title" style="margin:0;flex:1">Awaiting approval</div>
+              <span id="pairing-pending-count" style="font-size:11px;font-weight:800;background:#fff1e3;color:#c0541a;padding:2px 8px;border-radius:999px">0</span>
+            </div>
+            <div id="pairing-pending-list" style="display:flex;flex-direction:column;gap:8px">
+              <div style="color:var(--muted);font-size:12px;font-style:italic">No incoming pairing requests.</div>
+            </div>
+          </div>
+          <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <div class="right-section-title" style="margin:0;flex:1">Trusted devices</div>
+              <span id="pairing-device-count" style="font-size:11px;font-weight:800;background:#eaf2ff;color:#0d4faf;padding:2px 8px;border-radius:999px">0</span>
+            </div>
+            <div id="pairing-device-list" style="display:flex;flex-direction:column;gap:8px">
+              <div style="color:var(--muted);font-size:12px;font-style:italic">No devices paired yet.</div>
+            </div>
+            <div style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.55;border-top:1px solid var(--line);padding-top:8px">
+              <strong>Disable</strong> instantly revokes a device's access without forgetting it — re-enable anytime.
+              <strong>Remove</strong> deletes it; the user will have to re-scan a QR.
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);position:sticky;bottom:0;background:#fff;z-index:2">
       <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line)" onclick="closeSettings()">Cancel</button>
       <button id="settings-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;min-width:80px" onclick="saveSettings()">Save</button>
@@ -4358,7 +4516,7 @@
 <script>
 // ═══ CHAT PAGE — EXTRACTED to src/pages/ChatPage.js (F3f) ═══
 // Sessions, sendChat, renderChatMessages, process log, progress panel,
-// agent execution, canvas, file upload, context pinning (~2,421 lines)
+// agent execution, canvas, file upload (~2,421 lines)
 
 
 // ─── Global state (shared with modules via window.*) ──────────────────────
@@ -4406,8 +4564,6 @@ let heartbeatSettingsLoaded = false;
 let heartbeatSettingsCache = { enabled: true, interval_minutes: 30, model: '', review_teams_after_run: false, instructions: '', path: '' };
 let lastHeartbeat = { state: 'idle', level: '', current_step: '-', retry_count: 0, format_violation_count: 0, message: '' };
 let lastHeartbeatLogSignature = '';
-let contextPinMode = false;
-let contextPinnedIndices = [];
 
 // ─── Expose inline globals on window for ES modules ──────────────────────
 // Modules (ChatPage.js, etc.) read these via window.*
@@ -4430,7 +4586,6 @@ window.selectedAgentId = selectedAgentId; window.agentMdEditor = agentMdEditor;
 window.teamsData = teamsData; window.heartbeatEditor = heartbeatEditor; window.heartbeatSettingsLoaded = heartbeatSettingsLoaded;
 window.heartbeatSettingsCache = heartbeatSettingsCache; window.lastHeartbeat = lastHeartbeat;
 window.lastHeartbeatLogSignature = lastHeartbeatLogSignature;
-window.contextPinMode = contextPinMode; window.contextPinnedIndices = contextPinnedIndices;
 window.CHAT_SESSIONS_KEY = CHAT_SESSIONS_KEY; window.AGENT_SESSION_KEY = AGENT_SESSION_KEY;
 window.THEME_KEY = THEME_KEY; window.MAX_QUEUED_PROMPTS = MAX_QUEUED_PROMPTS;
 window.AGENT_STATUS = AGENT_STATUS;
@@ -4599,8 +4754,10 @@ const CHANNEL_ICONS = {
   discord:  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="9" cy="10" r="1" fill="currentColor"/><circle cx="15" cy="10" r="1" fill="currentColor"/></svg>`,
   whatsapp: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
   terminal: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  mobile:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>`,
 };
 const CHANNEL_DEFS = [
+  { key: 'mobile',    label: 'Mobile',    icon: CHANNEL_ICONS.mobile,    color: '#EA6A1F', desc: 'Chats from the mobile app' },
   { key: 'telegram',  label: 'Telegram',  icon: CHANNEL_ICONS.telegram,  color: '#229ED9', desc: 'Chats via Telegram bot' },
   { key: 'discord',   label: 'Discord',   icon: CHANNEL_ICONS.discord,   color: '#5865F2', desc: 'Chats via Discord bot' },
   { key: 'whatsapp',  label: 'WhatsApp',  icon: CHANNEL_ICONS.whatsapp,  color: '#25D366', desc: 'Chats via WhatsApp' },
@@ -4608,17 +4765,31 @@ const CHANNEL_DEFS = [
 ];
 
 function _getSessionChannel(s) {
+  const direct = String(s.channel || '').toLowerCase();
+  if (direct === 'telegram') return 'telegram';
+  if (direct === 'discord')  return 'discord';
+  if (direct === 'whatsapp') return 'whatsapp';
+  if (direct === 'terminal') return 'terminal';
+  if (direct === 'mobile')   return 'mobile';
   const src = String(s.source || '').toLowerCase();
   if (src === 'telegram') return 'telegram';
   if (src === 'discord')  return 'discord';
   if (src === 'whatsapp') return 'whatsapp';
   if (src === 'terminal') return 'terminal';
+  if (src === 'mobile')   return 'mobile';
+  const id = String(s.id || '').toLowerCase();
+  if (id.startsWith('telegram_')) return 'telegram';
+  if (id.startsWith('discord_')) return 'discord';
+  if (id.startsWith('whatsapp_')) return 'whatsapp';
+  if (id.startsWith('cli_')) return 'terminal';
+  if (id.startsWith('mobile_')) return 'mobile';
   if (s.automated) {
     const ch = String((s.history || [])[0]?.channel || '').toLowerCase();
     if (ch === 'telegram') return 'telegram';
     if (ch === 'discord')  return 'discord';
     if (ch === 'whatsapp') return 'whatsapp';
     if (ch === 'terminal') return 'terminal';
+    if (ch === 'mobile')   return 'mobile';
   }
   return null;
 }
@@ -4691,6 +4862,19 @@ function _renderChannelHub() {
     const alreadyCounted = (window.chatSessions || []).some(s => s.id === ts.id);
     if (!alreadyCounted) counts['terminal']++;
   });
+  (window.mobileSessions || []).forEach(ms => {
+    const alreadyCounted = (window.chatSessions || []).some(s => s.id === ms.id);
+    if (!alreadyCounted) counts['mobile']++;
+  });
+  ['telegram', 'discord', 'whatsapp'].forEach(channelKey => {
+    const sourceSessions = (window.channelSessionsByChannel && window.channelSessionsByChannel[channelKey])
+      || window[`${channelKey}Sessions`]
+      || [];
+    sourceSessions.forEach(cs => {
+      const alreadyCounted = (window.chatSessions || []).some(s => s.id === cs.id);
+      if (!alreadyCounted) counts[channelKey]++;
+    });
+  });
 
   el.innerHTML = CHANNEL_DEFS.map(c => {
     const count   = counts[c.key] || 0;
@@ -4733,10 +4917,12 @@ function _renderChannelDrill(channelKey) {
     .filter(s => _getSessionChannel(s) === channelKey)
     .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
 
-  // For terminal: also include server sessions not yet in chatSessions
+  // For server-backed channels: include sessions not yet in chatSessions
   let serverOnly = [];
-  if (channelKey === 'terminal') {
-    serverOnly = (window.terminalSessions || []).filter(
+  if (channelKey === 'terminal' || channelKey === 'mobile' || channelKey === 'telegram' || channelKey === 'discord' || channelKey === 'whatsapp') {
+    const sourceSessions = (window.channelSessionsByChannel && window.channelSessionsByChannel[channelKey])
+      || (channelKey === 'mobile' ? (window.mobileSessions || []) : (channelKey === 'terminal' ? (window.terminalSessions || []) : (window[`${channelKey}Sessions`] || [])));
+    serverOnly = sourceSessions.filter(
       ts => !sessions.some(s => s.id === ts.id)
     );
   }
@@ -4790,7 +4976,7 @@ function _renderChannelDrill(channelKey) {
     const isPinned = _pinnedChats.includes(s.id);
     const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
     return `
-<div class="job-item channel-chat-item${isActive ? ' active' : ''}${isPinned ? ' pinned-chat' : ''} session-terminal" onclick="openTerminalSession('${s.id}')">
+<div class="job-item channel-chat-item${isActive ? ' active' : ''}${isPinned ? ' pinned-chat' : ''} session-terminal" onclick="openTerminalSession('${s.id}', '${channelKey}')">
   <button class="chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
@@ -4947,7 +5133,10 @@ function renderSessionsList() {
   const el = document.getElementById('jobs-list');
   const allSessions = (window.chatSessions || []);
   const pinnedChannelSessions = allSessions.filter(s => _isChannelSession(s) && _pinnedChats.includes(s.id));
-  const pinnedTerminalSessions = (window.terminalSessions || [])
+  const channelSummaryLists = ['terminal', 'mobile', 'telegram', 'discord', 'whatsapp']
+    .flatMap(channel => ((window.channelSessionsByChannel && window.channelSessionsByChannel[channel]) || window[`${channel}Sessions`] || [])
+      .map(ts => ({ ...ts, source: ts.channel || channel })));
+  const pinnedServerChannelSessions = channelSummaryLists
     .filter(ts => _pinnedChats.includes(ts.id) && !allSessions.some(s => s.id === ts.id))
     .map(ts => ({
       id: ts.id,
@@ -4955,7 +5144,7 @@ function renderSessionsList() {
       history: Array.isArray(ts.history) ? ts.history : [],
       createdAt: ts.createdAt || ts.lastActiveAt || Date.now(),
       updatedAt: ts.lastActiveAt || ts.createdAt || Date.now(),
-      source: 'terminal',
+      source: ts.source || ts.channel || 'terminal',
       _serverOnlyTerminal: true,
     }));
   const webSessions = allSessions.filter(s => !_isChannelSession(s));
@@ -4969,7 +5158,7 @@ function renderSessionsList() {
         .filter(s => s && !allSessions.some(existing => String(existing.id) === String(s.id)))
     : [];
 
-  if (!webSessions.length && !pinnedChannelSessions.length && !pinnedTerminalSessions.length && !searchOnlySessions.length) {
+  if (!webSessions.length && !pinnedChannelSessions.length && !pinnedServerChannelSessions.length && !searchOnlySessions.length) {
     el.innerHTML = '<div class="empty-state">No chats yet.<br>Start a new conversation.</div>';
     return;
   }
@@ -4978,7 +5167,7 @@ function renderSessionsList() {
     ...webSessions,
     ...pinnedChannelSessions,
     ...searchedChannelSessions,
-    ...pinnedTerminalSessions,
+    ...pinnedServerChannelSessions,
     ...searchOnlySessions,
   ].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
   if (_sessionSearchQuery) {
@@ -5535,7 +5724,9 @@ function renderApprovalCard(p) {
 async function loadSessionApprovals() {
   const list = document.getElementById('session-approvals-list');
   const badge = document.getElementById('session-approvals-badge');
+  const section = document.getElementById('session-approvals-section');
   if (!list) return;
+  if (section) section.style.display = 'none';
   const currentSessionId = window.activeChatSessionId || '';
   try {
     // Fetch pending approvals and proposals — both filtered to this chat session
@@ -5569,6 +5760,20 @@ async function loadSessionApprovals() {
     }));
 
     const all = [...approvalItems, ...proposalItems];
+    const inlineStreamOwnsApprovals = Boolean(
+      currentSessionId
+      && window._sessionThinking?.[currentSessionId]
+      && approvalItems.length
+    );
+    if (inlineStreamOwnsApprovals) {
+      if (section) section.style.display = 'none';
+      list.innerHTML = '';
+      if (badge) {
+        badge.style.display = 'inline-block';
+        badge.textContent = String(all.length);
+      }
+      return;
+    }
 
     if (!all.length) {
       list.innerHTML = '<div style="font-size:11px;color:var(--muted);text-align:center;padding:12px 0;opacity:0.6">No pending actions</div>';
@@ -5612,7 +5817,7 @@ async function loadSystemStats() {
   if (systemStatsFetchInFlight) return;
   systemStatsFetchInFlight = true;
   try {
-    const stats = await api('/api/system-stats', { timeoutMs: 2500 });
+    const stats = await api('/api/system-stats', { timeoutMs: 10000 });
     const cpu = stats?.system?.cpu_percent;
     const ram = stats?.system?.memory_percent;
     const gpu = stats?.gpu?.gpu_util_percent;
@@ -5686,7 +5891,7 @@ async function checkStatus() {
   if (statusFetchInFlight) return;
   statusFetchInFlight = true;
   try {
-    const status = await api('/api/status', { timeoutMs: 2500 });
+    const status = await api('/api/status', { timeoutMs: 10000 });
     const provider = status.provider || 'ollama';
     const providerLabel = PROVIDER_LABELS[provider] || provider;
     const isCloud = provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic' || provider === 'perplexity' || provider === 'gemini';
@@ -5852,7 +6057,6 @@ async function refreshAll() {
   if (typeof loadSearchSettingsSummary === 'function') loadSearchSettingsSummary();
   if (typeof refreshHeartbeatSummary === 'function') refreshHeartbeatSummary();
   if (typeof renderProgressPanel === 'function') renderProgressPanel();
-  if (typeof checkPendingProposalsBadge === 'function') checkPendingProposalsBadge();
 }
 
 // checkPendingProposalsBadge — EXTRACTED to src/pages/ProposalsPage.js (F3b)
@@ -6182,6 +6386,22 @@ function stopGeneration() {
   if (ctrl) {
     ctrl.abort();
   }
+  try {
+    const abortPromise = typeof window.requestGatewayMainChatAbort === 'function'
+      ? window.requestGatewayMainChatAbort(activeId, 'desktop_stop_button')
+      : (typeof window.api === 'function'
+        ? window.api('/api/mobile/commands/stop-now', {
+            method: 'POST',
+            body: { sessionId: activeId, source: 'desktop_stop_button' },
+            timeoutMs: 15000,
+          })
+        : null);
+    if (abortPromise && typeof abortPromise.catch === 'function') {
+      abortPromise.catch((err) => console.warn('[chat] Gateway abort request failed:', err));
+    }
+  } catch (err) {
+    console.warn('[chat] Gateway abort request failed:', err);
+  }
   // Keep the active thinking bubble mounted until the SSE reader observes the
   // abort and persists the interrupted turn. Anthropic can take longer than
   // OpenAI to close the stream, so eager cleanup makes the bubble/log vanish.
@@ -6245,20 +6465,6 @@ function toggleTheme() {
 }
 
 // ---- Boot ----
-document.addEventListener('click', (e) => {
-  const pop = document.getElementById('quick-mode-popover');
-  const btn = document.getElementById('quick-mode-btn');
-  if (!pop || !btn) return;
-  if (!pop.contains(e.target) && !btn.contains(e.target)) pop.classList.remove('open');
-  // Also close context pin popover
-  const pinPop = document.getElementById('context-pin-popover');
-  const pinBtn = document.getElementById('context-pin-btn');
-  if (pinPop && pinBtn && !pinPop.contains(e.target) && !pinBtn.contains(e.target)) {
-    // Don't close if in pin mode and clicking on messages
-    if (contextPinMode && e.target.closest && e.target.closest('.msg')) return;
-  }
-});
-
 // --- SCHEDULER MANAGEMENT — EXTRACTED to src/pages/SchedulePage.js (F3c) ---
 // Functions: refreshSchedules, renderScheduleList, _resolveSchedulePattern,
 //   onScheduleOccurrenceChange, addScheduleRefLink, _renderScheduleRefChips,
@@ -6267,6 +6473,28 @@ document.addEventListener('click', (e) => {
 //   deleteSchedule, toggleSchedulePause, runScheduleNow
 
 // Boot sequence — deferred to wait for ES modules to load
+window.setupChatMessageScrollbarFade = window.setupChatMessageScrollbarFade || function setupChatMessageScrollbarFadeFallback() {
+  const messages = document.getElementById('chat-messages');
+  if (!messages || messages.dataset.scrollbarFadeBound === '1') return;
+  messages.dataset.scrollbarFadeBound = '1';
+  let fadeTimer = null;
+  const hideSoon = (delay = 560) => {
+    if (fadeTimer) clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => {
+      messages.classList.remove('chat-scroller-active');
+      fadeTimer = null;
+    }, delay);
+  };
+  const reveal = () => {
+    messages.classList.add('chat-scroller-active');
+    hideSoon();
+  };
+  messages.addEventListener('scroll', reveal, { passive: true });
+  messages.addEventListener('wheel', reveal, { passive: true });
+  messages.addEventListener('touchmove', reveal, { passive: true });
+  messages.addEventListener('pointerdown', reveal);
+};
+
 window.addEventListener('DOMContentLoaded', () => {
   // Delay to ensure all <script type="module"> have executed and registered window.* exports
   setTimeout(() => {
@@ -6279,7 +6507,6 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!isRenderWorker && typeof updateHeartbeatUI === 'function') updateHeartbeatUI();
     if (!isRenderWorker) connectWS();
     if (!isRenderWorker && typeof refreshAll === 'function') refreshAll();
-    if (!isRenderWorker && typeof updateQuickModeUI === 'function') updateQuickModeUI();
     if (!isRenderWorker && typeof updateQueuedPromptUI === 'function') updateQueuedPromptUI();
     if (!isRenderWorker) setInterval(checkStatus, 10000);
     if (!isRenderWorker) setInterval(loadSystemStats, 3000);
@@ -6288,6 +6515,7 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!isRenderWorker) window.useAgentMode = true;
     if (typeof canvasInitDrop === 'function') canvasInitDrop();
     if (typeof chatFileUploadInit === 'function') chatFileUploadInit();
+    if (typeof setupChatMessageScrollbarFade === 'function') setupChatMessageScrollbarFade();
   }, 200);
 });
 // --- Integrations Tab ---------------------------------------------------------
@@ -6630,5 +6858,83 @@ let _errBackdrop = null;
 </script>
 
 </div><!-- end .app -->
+
+<!-- Prometheus Mobile (hash-routed, activates on #mobile/*) -->
+<div id="mobile-root" hidden></div>
+<script>
+  (() => {
+    if (!document.body.classList.contains('pm-mobile-active')) return;
+    const root = document.getElementById('mobile-root');
+    if (!root) return;
+    root.hidden = false;
+    if (!root.innerHTML.trim()) {
+      root.innerHTML = '<div class="pm-mobile-boot-screen"><div class="pm-mobile-boot-mark">P</div><div>Loading Prometheus Mobile...</div></div>';
+    }
+  })();
+</script>
+<script type="module" src="src/mobile/mobile-router.js?v=xaitts8"></script>
+<script>
+  // ── Prometheus Mobile: PWA bootstrap ──
+  // 1. Capture beforeinstallprompt early so we can offer "Install" from the drawer.
+  // 2. Register the service worker on secure contexts (browser PWA install needs it).
+  // Bails silently in Electron — SW would conflict with the desktop shell's auth flow.
+  (() => {
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      window.__pmDeferredInstall = e;
+      window.dispatchEvent(new Event('pm-install-available'));
+    });
+    window.addEventListener('appinstalled', () => {
+      window.__pmDeferredInstall = null;
+    });
+
+    if (!('serviceWorker' in navigator)) return;
+    const isSecure = window.isSecureContext
+      || ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
+    if (!isSecure) return;
+    if (window.navigator.userAgent.includes('Electron')) return;
+
+    // Auto-reload once when the SW finishes installing a new version, so a
+    // rebuild + gateway restart never leaves the device on stale assets.
+    let _swReloadGuard = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_swReloadGuard) return;
+      _swReloadGuard = true;
+      try { window.location.reload(); } catch {}
+    });
+
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('/service-worker.js', { scope: '/' })
+        .then((reg) => {
+          // If a new SW is already waiting (rebuild happened while page was open),
+          // tell it to take over immediately. The controllerchange listener above
+          // then triggers a single reload.
+          if (reg.waiting) reg.waiting.postMessage('pm-skip-waiting');
+          reg.addEventListener('updatefound', () => {
+            const sw = reg.installing;
+            if (!sw) return;
+            sw.addEventListener('statechange', () => {
+              if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+                sw.postMessage('pm-skip-waiting');
+              }
+            });
+          });
+        })
+        .catch((err) => console.warn('[pm-pwa] service worker registration failed:', err));
+    });
+
+    // Panic button: any code can call window.pmPurgeCaches() to force the SW
+    // to wipe its caches and reload. Surfaced in the mobile More page.
+    window.pmPurgeCaches = async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration('/');
+        if (reg && reg.active) reg.active.postMessage('pm-purge-caches');
+      } catch {}
+      try { localStorage.removeItem('pm_force_mobile'); } catch {}
+      setTimeout(() => window.location.reload(), 400);
+    };
+  })();
+</script>
 </body>
 </html>

@@ -115,7 +115,7 @@ export const readSourceTool = {
   name: 'read_source',
   description:
     'Read a Prometheus source file (READ-ONLY, src/ only). ' +
-    'WHEN TO USE: Only when diagnosing a Prometheus error or planning a src/ change, and only after reading workspace/SELF.md first. ' +
+    'WHEN TO USE: Only when diagnosing a Prometheus error or planning a src/ change, and only after reading workspace-root SELF.md with read_file("SELF.md") first. ' +
     'DO NOT call this for general workspace file requests, user file tasks, or anything unrelated to Prometheus source code. ' +
     'Paths are relative to src/ e.g. "gateway/server-v2.ts". Returns numbered lines. Use start_line + num_lines to paginate.',
   execute: executeReadSource,
@@ -210,7 +210,7 @@ export const listSourceTool = {
   name: 'list_source',
   description:
     'List files and directories inside the Prometheus src/ folder (READ-ONLY, src/ only). ' +
-    'WHEN TO USE: Only when diagnosing a Prometheus error or planning a src/ change, and only after reading workspace/SELF.md first. ' +
+    'WHEN TO USE: Only when diagnosing a Prometheus error or planning a src/ change, and only after reading workspace-root SELF.md with read_file("SELF.md") first. ' +
     'DO NOT call this for general workspace file requests or anything unrelated to Prometheus source code.',
   execute: executeListSource,
   schema: {

@@ -331,10 +331,12 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   const manifestPath = path.join(rootDir, 'skill.json');
   const nativeManifest = readManifest(manifestPath);
   const overlayPath = getSkillOverlayPath(rootDir, fallbackId || path.basename(rootDir));
-  const overlayManifest = nativeManifest ? null : readManifest(overlayPath);
-  const manifestRaw = nativeManifest || overlayManifest;
+  const overlayManifest = readManifest(overlayPath);
+  const manifestRaw = nativeManifest && overlayManifest
+    ? { ...nativeManifest, ...overlayManifest }
+    : nativeManifest || overlayManifest;
   const manifestSource: LoadedSkillPackage['manifestSource'] = nativeManifest
-    ? 'native'
+    ? overlayManifest ? 'overlay' : 'native'
     : overlayManifest
       ? 'overlay'
       : 'frontmatter';

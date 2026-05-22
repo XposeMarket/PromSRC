@@ -39,7 +39,6 @@ import {
   saveManagedTeam,
   type ManagedTeam,
 } from '../teams/managed-teams';
-import { runTeamAgentViaChat } from '../teams/team-dispatch-runtime';
 import { handleManagerConversationDetailed, triggerManagerReview } from '../teams/team-manager-runner';
 import { broadcastTeamEvent } from '../comms/broadcaster';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
@@ -167,6 +166,10 @@ const TASK_TERMINAL_STATUSES = new Set(['complete', 'failed', 'needs_assistance'
 const RUN_HISTORY_COMPACTION_DELAY_MS = 15 * 1000;
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const runTeamAgentViaChatLazy: typeof import('../teams/team-dispatch-runtime')['runTeamAgentViaChat'] = (...args) => {
+  const { runTeamAgentViaChat } = require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
+  return runTeamAgentViaChat(...args);
+};
 
 function sanitizeAgentIdForSession(agentId: string): string {
   return String(agentId || '').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || 'agent';
@@ -588,6 +591,7 @@ interface SchedulerDeps {
   broadcast: (data: object) => void; // WebSocket broadcast to all clients
   deliverTelegram?: (text: string) => Promise<void>; // optional telegram delivery
   getMainSessionId?: () => string;
+  getIsModelBusy?: () => boolean;
   getAvailableToolNames?: () => string[];
   injectSystemEvent?: (sessionId: string, text: string, job: CronJob) => void;
   // NEW: spawn a proper BackgroundTask instead of raw handleChat
@@ -863,10 +867,39 @@ export class CronScheduler {
 
   start(): void {
     if (this.tickInterval) return;
+    this.rollOverdueJobsForwardOnStart();
     // Tick every 10 seconds for better cron accuracy
     // 60s intervals could miss a 1-minute cron window; 10s ensures we catch every due job
     this.tickInterval = setInterval(() => this.tick(), 10 * 1000);
     console.log('[CronScheduler] Started — ticking every 10s for accurate cron execution');
+  }
+
+  private rollOverdueJobsForwardOnStart(): void {
+    if (process.env.PROMETHEUS_CRON_CATCH_UP_ON_STARTUP === '1') return;
+    const now = new Date();
+    let changed = false;
+    for (const job of this.store.jobs) {
+      if (
+        !job.enabled ||
+        job.type === 'heartbeat' ||
+        job.type === 'one-shot' ||
+        job.status === 'paused' ||
+        job.status === 'completed' ||
+        !job.nextRun
+      ) {
+        continue;
+      }
+      const nextRunTime = new Date(job.nextRun).getTime();
+      if (!Number.isFinite(nextRunTime) || nextRunTime > now.getTime()) continue;
+      job.nextRun = applyDeterministicStagger(
+        getNextRun(job.schedule, now, job.tz).toISOString(),
+        job.id,
+        job.schedule,
+      );
+      console.log(`[CronScheduler] Skipped missed startup run for "${job.name}" -> next ${job.nextRun}`);
+      changed = true;
+    }
+    if (changed) this.saveStore();
   }
 
   stop(): void {
@@ -924,6 +957,11 @@ export class CronScheduler {
       .sort((a, b) => a.priority - b.priority);
 
     if (overdue.length === 0) return;
+
+    if (this.deps.getIsModelBusy?.()) {
+      console.log('[CronScheduler] Tick - foreground model is busy; deferring scheduled job start.');
+      return;
+    }
 
     const job = overdue[0];
     console.log(`[CronScheduler] Tick — running job "${job.name}"`);
@@ -1118,6 +1156,7 @@ export class CronScheduler {
             managerPrompt,
             broadcastTeamEvent,
             true,
+            { suppressOriginatingSessionProgress: true },
           );
           const reason = String(managerResult?.reason || 'completed');
           const turns = Number(managerResult?.turns || 0);
@@ -1160,7 +1199,7 @@ export class CronScheduler {
           let stepCount = 1;
 
           if (teamId) {
-            const teamResult = await runTeamAgentViaChat(
+            const teamResult = await runTeamAgentViaChatLazy(
               teamSubagentId,
               effectivePrompt,
               teamId,

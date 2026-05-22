@@ -1,4 +1,5 @@
 import { getExtensionRuntimeRegistry } from './runtime-registry.js';
+import { loadManifestRuntimeExtensions } from './runtime-loader.js';
 
 function matchesPattern(value: string, pattern: string): boolean {
   if (pattern === value || pattern === '*') return true;
@@ -40,6 +41,7 @@ export function planExtensionActivation(params: {
   capability?: string;
   connectedOnly?: boolean;
 }): ExtensionActivationPlan {
+  loadManifestRuntimeExtensions();
   const registry = getExtensionRuntimeRegistry();
   const entries: ExtensionActivationPlanEntry[] = [];
 

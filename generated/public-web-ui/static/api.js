@@ -31,7 +31,8 @@ function buildApiCandidateUrls(path) {
 
     try {
       const currentOrigin = String(window.location?.origin || '').replace(/\/$/, '');
-      if (currentOrigin !== LOCAL_GATEWAY_ORIGIN) pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
+      const currentProtocol = String(window.location?.protocol || '').toLowerCase();
+      if (currentProtocol !== 'https:' && currentOrigin !== LOCAL_GATEWAY_ORIGIN) pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
     } catch {
       pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
     }
@@ -71,10 +72,18 @@ export async function api(path, opts = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      // Attach the paired-device token if the mobile UI has one stored.
+      // Desktop loaders never set this, so the header is omitted there.
+      let pairingHeader = {};
+      try {
+        const tok = localStorage.getItem('pm_device_token');
+        if (tok) pairingHeader = { 'X-Pairing-Token': tok };
+      } catch {}
+      const mergedHeaders = { 'Content-Type': 'application/json', ...pairingHeader, ...(fetchOpts.headers || {}) };
       const r = await fetch(candidates[index], {
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
         ...fetchOpts,
+        headers: mergedHeaders,
+        signal: controller.signal,
       });
       if (!r.ok) {
         const body = await r.text().catch(() => '');
@@ -115,6 +124,7 @@ export const ENDPOINTS = {
   processRun: (id) => `/api/processes/${encodeURIComponent(id)}`,
   processRunLog: (id) => `/api/processes/${encodeURIComponent(id)}/log`,
   processRunAction: (id, action) => `/api/processes/${encodeURIComponent(id)}/${action}`,
+  processRunRerun: (id) => `/api/processes/${encodeURIComponent(id)}/rerun`,
 
   // Coding workspace
   CODING_SESSION: '/api/coding/session',
@@ -200,6 +210,8 @@ export const ENDPOINTS = {
   CONNECTIONS_DISCONNECT: '/api/connections/disconnect',
   CONNECTIONS_OAUTH_START: '/api/connections/oauth/start',
   CONNECTIONS_OAUTH_POLL: '/api/connections/oauth/poll',
+  CONNECTIONS_XURL_SETUP: '/api/connections/xurl/setup',
+  CONNECTIONS_XURL_POLL: '/api/connections/xurl/poll',
   CONNECTIONS_BROWSER_OPEN: '/api/connections/browser-open',
   CONNECTIONS_BROWSER_VERIFY: '/api/connections/browser-verify',
   CONNECTIONS_ACTIVITY: '/api/connections/activity',

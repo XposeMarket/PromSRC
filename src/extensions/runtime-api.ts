@@ -119,6 +119,7 @@ export interface PrometheusExtensionRuntimeRecord {
 
 export interface PrometheusExtensionApi {
   registerTool(tool: PrometheusExtensionTool): void;
+  unregisterTool(name: string): void;
   registerConnector(connector: PrometheusConnectorRuntime): void;
   registerProvider(provider: PrometheusProviderRuntime): void;
   registerMcpPreset(preset: PrometheusMcpPresetRuntime): void;
@@ -133,7 +134,7 @@ export interface PrometheusExtensionDefinition {
   activation?: PrometheusExtensionActivation;
   contracts?: PrometheusExtensionContracts;
   trustLevel?: PrometheusExtensionTrustLevel;
-  register(api: PrometheusExtensionApi): void | Promise<void>;
+  register(api: PrometheusExtensionApi): void;
 }
 
 export function definePrometheusExtension(

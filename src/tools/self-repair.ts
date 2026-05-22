@@ -3,7 +3,7 @@
  *
  * Flow:
  *   1. AI analyzes an error using read_source + list_source
- *   2. AI calls propose_repair() with error context + a unified diff patch
+ *   2. A repair proposal is created with error context + a unified diff patch
  *   3. The patch is stored in .prometheus/pending-repairs/<id>.json
  *   4. A formatted proposal is returned (Telegram sends it to the user)
  *   5. User replies /approve <id> or /reject <id> in Telegram
@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto';
 import { ToolResult } from '../types.js';
 
 // ─── Repair Proposal Hook ─────────────────────────────────────────────────────
-// server-v2 sets this callback at startup so propose_repair can trigger
+// server-v2 sets this callback at startup so repair proposals can trigger
 // the Telegram button send without importing TelegramChannel directly.
 // This keeps the tool layer free of gateway dependencies.
 type RepairProposalHook = (repairId: string) => void;
@@ -113,7 +113,7 @@ export function deletePendingRepair(id: string): boolean {
   return true;
 }
 
-// ─── propose_repair tool ──────────────────────────────────────────────────────
+// ─── Legacy Repair Proposal Helpers ───────────────────────────────────────────
 
 export interface ProposeRepairArgs {
   error_summary: string;     // 1-2 sentence error description
@@ -247,44 +247,6 @@ export function getRepairButtonPayload(repair: PendingRepair): {
   };
 }
 
-export const proposeRepairTool = {
-  name: 'propose_repair',
-  description:
-    '[DEPRECATED — prefer write_proposal with requires_src_edit: true for new src changes. ' +
-    'Use propose_repair only for emergency single-file patches via git apply.] ' +
-    'Propose a src/ code change (repair or new feature). ' +
-    'BEFORE calling this you MUST: (1) read workspace/SELF.md, (2) read the relevant src/ file(s) via read_source, ' +
-    '(3) write a full CHANGE PLAN to chat (what/why/risks/affected files), THEN call this tool. ' +
-    'The patch is stored pending and sent to the user with ✅ Approve / ❌ Reject buttons. ' +
-    'The patch is NEVER applied automatically — user approval is mandatory. ' +
-    'Pass the full change_plan text you already wrote to chat — it will be shown alongside the buttons.',
-  execute: executeProposeRepair,
-  schema: {
-    error_summary: 'string (required) — 1-2 sentence description of the problem or feature request',
-    root_cause: 'string (required) — technical explanation of the cause or motivation',
-    affected_file: 'string (required) — file path relative to src/, e.g. "gateway/telegram-channel.ts"',
-    affected_lines: 'string (required) — human-readable line range, e.g. "lines 45-52"',
-    fix_description: 'string (required) — plain English description of what the change does',
-    change_plan: 'string (required) — the full change plan you already wrote to chat (what/why/risks/affected files)',
-    patch: 'string (required) — unified diff patch in git format (paths relative to project root)',
-    task_id: 'string (optional) — ID of the background task that encountered the error',
-  },
-  jsonSchema: {
-    type: 'object',
-    required: ['error_summary', 'root_cause', 'affected_file', 'affected_lines', 'fix_description', 'change_plan', 'patch'],
-    properties: {
-      error_summary: { type: 'string' },
-      root_cause: { type: 'string' },
-      affected_file: { type: 'string' },
-      affected_lines: { type: 'string' },
-      fix_description: { type: 'string' },
-      change_plan: { type: 'string' },
-      patch: { type: 'string' },
-      task_id: { type: 'string' },
-    },
-    additionalProperties: false,
-  },
-};
 
 // ─── Apply + Build (called by Telegram /approve handler) ─────────────────────
 

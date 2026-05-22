@@ -1,6 +1,7 @@
 import { getConfig } from '../config/config.js';
 import { isConnected as isAnthropicConnected } from '../auth/anthropic-oauth.js';
 import { isConnected as isOpenAIConnected } from '../auth/openai-oauth.js';
+import { getXApiOAuthStatus } from '../auth/x-api-oauth.js';
 import {
   getVercelCredentials,
   loadSavedConnections,
@@ -67,6 +68,28 @@ function buildConnectorState(
           : undefined,
       vaultCount: bridge.vaults.length,
       enabledVaultCount: connectedVaults.length,
+    };
+  }
+
+  if (descriptor.id === 'x') {
+    const configManager = getConfig();
+    const status = getXApiOAuthStatus(configManager.getConfigDir());
+    return {
+      connected: status.connected,
+      hasCredentials: status.credentialsConfigured || status.connected,
+      available: true,
+      authType: 'oauth',
+      tokenSource: status.tokenSource,
+      username: status.username,
+      user_id: status.user_id,
+      refreshAvailable: status.refresh_available,
+      redirectUri: status.redirect_uri,
+      connectedAt:
+        typeof (saved as { connectedAt?: number }).connectedAt === 'number'
+          ? (saved as { connectedAt?: number }).connectedAt
+          : status.connected
+            ? Date.now()
+            : undefined,
     };
   }
 

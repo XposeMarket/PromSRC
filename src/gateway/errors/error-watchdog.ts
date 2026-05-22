@@ -289,7 +289,7 @@ export function markRepairProposed(errorFingerprint: string, repairId: string): 
 
 /**
  * Build a self-repair trigger prompt for auto-escalation cases.
- * This prompt is sent to handleChat to trigger the read_source + propose_repair flow.
+ * This prompt is sent to handleChat to trigger the source-inspection + proposal flow.
  */
 export function buildSelfRepairTriggerPrompt(
   errorText: string,
@@ -312,7 +312,7 @@ ${errorText.slice(0, 600)}
 Your job:
 1. Use read_source to read the relevant file(s) near the error location
 2. Identify the root cause of the bug
-3. Use propose_repair to generate a patch and send it for approval
+3. Use write_proposal with execution_mode="code_change" and type="src_edit" to send a repair proposal for approval
 
 Do NOT just describe the error. Use the tools to actually look at the code and propose a fix.
 After proposing the repair, summarize what you found and what the fix does.`;

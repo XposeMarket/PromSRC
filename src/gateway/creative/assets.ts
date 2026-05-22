@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { resolveRuntimeBinary } from '../../runtime/dependencies';
 
 const execFileAsync = promisify(execFile);
 
@@ -221,7 +222,7 @@ function readImageDimensions(absPath: string, mimeType: string): { width: number
 
 async function probeMedia(absPath: string): Promise<Record<string, any> | null> {
   try {
-    const { stdout } = await execFileAsync('ffprobe', [
+    const { stdout } = await execFileAsync(resolveRuntimeBinary('ffprobe', { allowPathFallback: true }), [
       '-v', 'error',
       '-print_format', 'json',
       '-show_streams',
@@ -248,7 +249,7 @@ async function createVideoThumbnail(storage: CreativeAssetStorage, absPath: stri
   const thumbDir = path.join(getCreativeAssetsDir(storage), 'thumbs');
   const thumbnailAbsPath = path.join(thumbDir, `${id}.jpg`);
   try {
-    await execFileAsync('ffmpeg', [
+    await execFileAsync(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), [
       '-y',
       '-ss', '00:00:00.500',
       '-i', absPath,

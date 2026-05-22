@@ -160,6 +160,7 @@ function formatFriendlyToolAction(toolNameRaw: string, args: any = {}): string {
     upload_image: withSubject('Uploading Image'),
     fetch_image: withSubject('Fetching Image', pickArg(args, ['url', 'path'])),
     view_connections: 'Viewing Connections...',
+    prom_apply_dev_changes: 'Applying Dev Changes...',
     gateway_restart: 'Restarting Gateway...',
     time_now: 'Checking Time...',
     task_control: withSubject('Managing Task', pickArg(args, ['action', 'task_id', 'id'])),

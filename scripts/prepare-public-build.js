@@ -57,6 +57,59 @@ function copyRecursive(src, dest, options = {}) {
   copyFileForPublicBuild(src, dest, options);
 }
 
+function copyVendorFile(srcRel, destRel) {
+  const src = path.join(ROOT, srcRel);
+  if (!fs.existsSync(src)) {
+    throw new Error(`[prepare-public-build] Missing vendor source: ${srcRel}`);
+  }
+  copyFileForPublicBuild(src, path.join(OUT_ROOT, 'vendor', destRel));
+}
+
+function writeLocalFontCss() {
+  const fontsDir = path.join(OUT_STATIC, 'fonts');
+  mkdirp(fontsDir);
+  const fonts = [
+    ['@fontsource/manrope/files/manrope-latin-400-normal.woff2', 'manrope-400.woff2', 'Manrope', 400],
+    ['@fontsource/manrope/files/manrope-latin-500-normal.woff2', 'manrope-500.woff2', 'Manrope', 500],
+    ['@fontsource/manrope/files/manrope-latin-600-normal.woff2', 'manrope-600.woff2', 'Manrope', 600],
+    ['@fontsource/manrope/files/manrope-latin-700-normal.woff2', 'manrope-700.woff2', 'Manrope', 700],
+    ['@fontsource/manrope/files/manrope-latin-800-normal.woff2', 'manrope-800.woff2', 'Manrope', 800],
+    ['@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2', 'ibm-plex-mono-400.woff2', 'IBM Plex Mono', 400],
+    ['@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2', 'ibm-plex-mono-500.woff2', 'IBM Plex Mono', 500],
+    ['@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-600-normal.woff2', 'ibm-plex-mono-600.woff2', 'IBM Plex Mono', 600],
+  ];
+  const declarations = [];
+  for (const [srcRel, filename, family, weight] of fonts) {
+    const src = path.join(ROOT, 'node_modules', srcRel);
+    if (!fs.existsSync(src)) {
+      throw new Error(`[prepare-public-build] Missing font source: node_modules/${srcRel}`);
+    }
+    fs.copyFileSync(src, path.join(fontsDir, filename));
+    declarations.push(
+      `@font-face{font-family:'${family}';font-style:normal;font-weight:${weight};font-display:swap;src:url('./fonts/${filename}') format('woff2');}`,
+    );
+  }
+  fs.writeFileSync(path.join(OUT_STATIC, 'styles', 'fonts.css'), `${declarations.join('\n')}\n`, 'utf-8');
+}
+
+function copyPublicWebVendorAssets() {
+  copyVendorFile('node_modules/codemirror/lib/codemirror.css', 'codemirror/codemirror.min.css');
+  copyVendorFile('node_modules/codemirror/theme/material-darker.css', 'codemirror/theme/material-darker.min.css');
+  copyVendorFile('node_modules/codemirror/lib/codemirror.js', 'codemirror/codemirror.min.js');
+  for (const mode of ['javascript', 'xml', 'css', 'htmlmixed', 'markdown', 'python']) {
+    copyVendorFile(`node_modules/codemirror/mode/${mode}/${mode}.js`, `codemirror/mode/${mode}/${mode}.min.js`);
+  }
+  copyVendorFile('node_modules/marked/marked.min.js', 'marked/marked.min.js');
+  copyVendorFile('web-ui/vendor/fabric/fabric.min.js', 'fabric/fabric.min.js');
+  copyVendorFile('node_modules/gif.js/dist/gif.js', 'gif/gif.js');
+  copyVendorFile('node_modules/gif.js/dist/gif.worker.js', 'gif/gif.worker.js');
+  copyVendorFile('node_modules/@iconify/iconify/dist/iconify.min.js', 'iconify/iconify.min.js');
+  copyVendorFile('node_modules/@lottiefiles/lottie-player/dist/lottie-player.js', 'lottie-player/lottie-player.js');
+  copyVendorFile('node_modules/chart.js/dist/chart.umd.js', 'chart/chart.umd.js');
+  copyVendorFile('node_modules/mermaid/dist/mermaid.min.js', 'mermaid/mermaid.min.js');
+  writeLocalFontCss();
+}
+
 // Skills that are internal/dev-only and should NOT be shipped to public users
 const SKILLS_EXCLUDE = new Set([
   'json-and-config-surgery',
@@ -125,6 +178,7 @@ function buildPublicWebUi() {
 
   fs.writeFileSync(path.join(OUT_ROOT, 'index.html'), html, 'utf-8');
   copyRecursive(path.join(SRC_WEB_UI, 'src'), OUT_STATIC);
+  copyPublicWebVendorAssets();
 
   // Root-level web-ui files that must be served at the site root (PWA contract).
   // The service worker must be at "/" to claim scope "/"; the manifest must be

@@ -33,10 +33,12 @@ import {
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
 import { broadcastWS } from './comms/broadcaster';
+import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
 
 type PwBrowser = any;
 type PwContext = any;
 type PwPage = any;
+export type BrowserProfileKind = 'prometheus' | 'user';
 
 interface BrowserSession {
   sessionId: string;
@@ -47,6 +49,8 @@ interface BrowserSession {
   isolated: boolean;
   debugPort?: number;
   profileDir?: string;
+  profileKind: BrowserProfileKind;
+  browserTarget: BrowserProfileKind;
   lastSnapshot: string;
   lastSnapshotAt: number;  // epoch ms when lastSnapshot was captured; 0 = never
   lastPageUrl: string;
@@ -118,6 +122,9 @@ export interface BrowserSessionInfo {
   originLabel?: string;
   debugPort?: number;
   profileDir?: string;
+  profileKind?: BrowserProfileKind;
+  browserTarget?: BrowserProfileKind;
+  profileLabel?: string;
   mode?: BrowserInteractionMode;
   captured?: boolean;
   controlOwner?: BrowserInteractionState['controlOwner'];
@@ -274,6 +281,7 @@ const BROWSER_TOOL_DEFAULT_OBSERVE_MODE: Record<string, BrowserObserveMode> = {
   browser_upload_file: 'screenshot',
   browser_press_key: 'none',
   browser_key: 'none',
+  browser_type: 'snapshot',
   browser_drag: 'delta',
   browser_click_and_download: 'delta',
   browser_scroll_collect: 'delta',
@@ -609,6 +617,8 @@ function shouldUseCompactObservation(mode: BrowserObserveMode): boolean {
 // ─── Session Management ────────────────────────────────────────────────────────
 
 const sessions: Map<string, BrowserSession> = new Map();
+const mainBrowserTargetPreferences: Map<string, BrowserProfileKind> = new Map();
+const mainBrowserProfileDirectoryPreferences: Map<string, string> = new Map();
 const browserSessionMetadata: Map<string, BrowserSessionMetadata> = new Map();
 const browserInteractionStates: Map<string, BrowserInteractionState> = new Map();
 const browserControlWaiters: Map<string, Array<() => void>> = new Map();
@@ -1248,6 +1258,75 @@ function getBrowserViewportSize(session: BrowserSession): { width: number; heigh
   };
 }
 
+interface BrowserPageGeometry {
+  viewportWidth: number;
+  viewportHeight: number;
+  scrollX: number;
+  scrollY: number;
+  devicePixelRatio: number;
+  bitmapWidth: number;
+  bitmapHeight: number;
+  capturedAt: number;
+}
+
+const browserGeometryCache = new Map<string, BrowserPageGeometry>();
+
+async function readBrowserPageGeometry(
+  sessionId: string,
+  options: { maxAgeMs?: number } = {},
+): Promise<BrowserPageGeometry> {
+  const resolved = resolveSessionId(sessionId);
+  const session = sessions.get(resolved);
+  const fallbackViewport = session ? getBrowserViewportSize(session) : { width: 1280, height: 720 };
+  const fallback: BrowserPageGeometry = {
+    viewportWidth: fallbackViewport.width,
+    viewportHeight: fallbackViewport.height,
+    scrollX: 0,
+    scrollY: 0,
+    devicePixelRatio: 1,
+    bitmapWidth: fallbackViewport.width,
+    bitmapHeight: fallbackViewport.height,
+    capturedAt: 0,
+  };
+  if (!session) return fallback;
+  const cached = browserGeometryCache.get(resolved);
+  const maxAge = Number(options.maxAgeMs ?? 250);
+  if (cached && (Date.now() - cached.capturedAt) < maxAge) return cached;
+  try {
+    const geom = await session.page.evaluate(() => {
+      const w: any = (globalThis as any);
+      return {
+        viewportWidth: Math.round(Number(w?.innerWidth || 0)),
+        viewportHeight: Math.round(Number(w?.innerHeight || 0)),
+        scrollX: Math.round(Number(w?.scrollX || w?.pageXOffset || 0)),
+        scrollY: Math.round(Number(w?.scrollY || w?.pageYOffset || 0)),
+        devicePixelRatio: Number(w?.devicePixelRatio || 1) || 1,
+      };
+    });
+    const vw = Number(geom?.viewportWidth) || fallback.viewportWidth;
+    const vh = Number(geom?.viewportHeight) || fallback.viewportHeight;
+    const dpr = Number(geom?.devicePixelRatio) || 1;
+    const next: BrowserPageGeometry = {
+      viewportWidth: vw,
+      viewportHeight: vh,
+      scrollX: Math.max(0, Number(geom?.scrollX) || 0),
+      scrollY: Math.max(0, Number(geom?.scrollY) || 0),
+      devicePixelRatio: dpr,
+      bitmapWidth: Math.max(1, Math.round(vw * dpr)),
+      bitmapHeight: Math.max(1, Math.round(vh * dpr)),
+      capturedAt: Date.now(),
+    };
+    browserGeometryCache.set(resolved, next);
+    return next;
+  } catch {
+    return cached || fallback;
+  }
+}
+
+function invalidateBrowserGeometryCache(sessionId: string): void {
+  try { browserGeometryCache.delete(resolveSessionId(sessionId)); } catch {}
+}
+
 function clearBrowserLiveStreamLease(stream: BrowserLiveStreamState | null | undefined): void {
   if (!stream?.leaseTimer) return;
   try { clearTimeout(stream.leaseTimer); } catch {}
@@ -1305,6 +1384,7 @@ async function emitBrowserLiveFrame(
   width: number,
   height: number,
   frameFormat: 'jpeg' | 'png',
+  geometry?: BrowserPageGeometry | null,
 ): Promise<void> {
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
@@ -1312,6 +1392,8 @@ async function emitBrowserLiveFrame(
   const stream = browserLiveStreams.get(resolved);
   if (stream) stream.lastFrameAt = Date.now();
   const interactionState = getOrCreateBrowserInteractionState(resolved);
+  const geom = geometry || await readBrowserPageGeometry(resolved, { maxAgeMs: 500 }).catch(() => null);
+  const liveSelection = await readBrowserLiveSelectionBounds(resolved).catch(() => null);
   broadcastWS({
     type: 'browser:frame',
     sessionId: resolved,
@@ -1327,6 +1409,14 @@ async function emitBrowserLiveFrame(
     frameWidth: width,
     frameHeight: height,
     frameFormat,
+    bitmapWidth: Number(geom?.bitmapWidth || width || 0),
+    bitmapHeight: Number(geom?.bitmapHeight || height || 0),
+    viewportWidth: Number(geom?.viewportWidth || width || 0),
+    viewportHeight: Number(geom?.viewportHeight || height || 0),
+    scrollX: Number(geom?.scrollX || 0),
+    scrollY: Number(geom?.scrollY || 0),
+    devicePixelRatio: Number(geom?.devicePixelRatio || 1),
+    liveSelection,
     timestamp: Date.now(),
     ...buildBrowserSessionMetadataPayload(resolved),
   });
@@ -1469,7 +1559,8 @@ async function startBrowserSnapshotStreamLoop(
           quality: current.focus === 'interactive' ? 54 : 66,
           fullPage: false,
         });
-        await emitBrowserLiveFrame(resolved, 'snapshot', buf.toString('base64'), viewport.width, viewport.height, 'jpeg');
+        const geom = await readBrowserPageGeometry(resolved, { maxAgeMs: 400 }).catch(() => null);
+        await emitBrowserLiveFrame(resolved, 'snapshot', buf.toString('base64'), viewport.width, viewport.height, 'jpeg', geom);
       } catch (err: any) {
         const message = String(err?.message || err || '').toLowerCase();
         if (message.includes('closed') || message.includes('target page') || message.includes('context')) {
@@ -1510,14 +1601,33 @@ async function tryStartBrowserCDPStream(
         return;
       }
       void cdp.send('Page.screencastFrameAck', { sessionId: payload?.sessionId }).catch(() => {});
-      void emitBrowserLiveFrame(
-        resolved,
-        'cdp',
-        shotData,
-        viewport.width,
-        viewport.height,
-        'jpeg',
-      );
+      // CDP includes per-frame metadata: deviceWidth/Height (CSS-px viewport), pageScaleFactor,
+      // and scrollOffsetX/Y. Prefer these over a cached page.evaluate when present.
+      const meta = payload?.metadata || {};
+      const cdpGeom: BrowserPageGeometry | null = (Number(meta?.deviceWidth) > 0 && Number(meta?.deviceHeight) > 0)
+        ? {
+            viewportWidth: Math.round(Number(meta.deviceWidth) || viewport.width),
+            viewportHeight: Math.round(Number(meta.deviceHeight) || viewport.height),
+            scrollX: Math.max(0, Math.round(Number(meta?.scrollOffsetX) || 0)),
+            scrollY: Math.max(0, Math.round(Number(meta?.scrollOffsetY) || 0)),
+            devicePixelRatio: Number(meta?.pageScaleFactor) || 1,
+            bitmapWidth: Math.max(1, Math.round((Number(meta.deviceWidth) || viewport.width) * (Number(meta?.pageScaleFactor) || 1))),
+            bitmapHeight: Math.max(1, Math.round((Number(meta.deviceHeight) || viewport.height) * (Number(meta?.pageScaleFactor) || 1))),
+            capturedAt: Date.now(),
+          }
+        : null;
+      void (async () => {
+        const geom = cdpGeom || await readBrowserPageGeometry(resolved, { maxAgeMs: 500 }).catch(() => null);
+        await emitBrowserLiveFrame(
+          resolved,
+          'cdp',
+          shotData,
+          viewport.width,
+          viewport.height,
+          'jpeg',
+          geom,
+        );
+      })().catch(() => {});
     };
     stream.transport = 'cdp';
     stream.status = 'Live CDP stream active.';
@@ -1695,6 +1805,71 @@ export async function browserReopenSession(
   return getBrowserNamedElementsForSession(resolved, restoreHint);
 }
 
+export async function browserDoctor(sessionId: string): Promise<string> {
+  const lines: string[] = ['Browser doctor:'];
+  const ok = (label: string, detail: string) => lines.push(`PASS ${label}: ${detail}`);
+  const warn = (label: string, detail: string) => lines.push(`WARN ${label}: ${detail}`);
+  const fail = (label: string, detail: string) => lines.push(`FAIL ${label}: ${detail}`);
+
+  try {
+    await import('playwright');
+    ok('Playwright install', 'module is importable');
+  } catch (err: any) {
+    fail('Playwright install', err?.message || String(err));
+  }
+
+  const resolved = resolveSessionId(sessionId);
+  const session = sessions.get(resolved);
+  if (!session) {
+    warn('Session', 'no active browser session; call browser_open to create one');
+    return lines.join('\n');
+  }
+
+  ok('Session', `active id=${resolved}, url=${session.page.url() || '(blank)'}`);
+  ok('Browser profile target', `${getBrowserProfileLabel(session.profileKind)} (${session.browserTarget})`);
+  if (session.profileDir) {
+    const exists = fs.existsSync(session.profileDir);
+    (exists ? ok : warn)('Chrome profile', `${session.profileDir}${exists ? '' : ' (missing on disk)'}`);
+  } else {
+    warn('Chrome profile', session.isolated ? 'isolated session has no profileDir metadata' : 'attached/browser session has no profileDir metadata');
+  }
+
+  if (session.debugPort) ok('CDP port', `configured on ${session.debugPort}`);
+  else warn('CDP port', 'no debugPort metadata on this session');
+
+  try {
+    const cdp = await session.context.newCDPSession(session.page);
+    const version = await cdp.send('Browser.getVersion').catch(() => null);
+    await cdp.detach().catch(() => null);
+    ok('CDP reachability', version?.product ? String(version.product) : 'CDP session opened');
+  } catch (err: any) {
+    fail('CDP reachability', err?.message || String(err));
+  }
+
+  try {
+    const viewport = session.page.viewportSize() || { width: 0, height: 0 };
+    const buf: Buffer = await session.page.screenshot({ type: 'png', fullPage: false, timeout: 5000 });
+    const normalized = await normalizeScreenshotBuffer(buf, {
+      maxSide: Number(process.env.PROMETHEUS_BROWSER_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 1800),
+      maxBytes: Number(process.env.PROMETHEUS_BROWSER_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 4 * 1024 * 1024),
+      preferJpeg: true,
+    });
+    ok(
+      'Screenshot budget',
+      `${viewport.width}x${viewport.height}, raw=${Math.round(buf.byteLength / 1024)}KB, transport=${normalized.width}x${normalized.height} ${normalized.mimeType} ${Math.round(normalized.bytes / 1024)}KB`,
+    );
+  } catch (err: any) {
+    fail('Screenshot budget', err?.message || String(err));
+  }
+
+  const ageMs = session.lastSnapshotAt ? Date.now() - session.lastSnapshotAt : Infinity;
+  if (!session.lastSnapshot) warn('Snapshot cache', 'no cached DOM snapshot yet');
+  else if (ageMs > 30_000) warn('Snapshot cache', `last snapshot is ${Math.round(ageMs / 1000)}s old`);
+  else ok('Snapshot cache', `fresh (${Math.round(ageMs / 1000)}s old)`);
+
+  return lines.join('\n');
+}
+
 export async function stopBrowserLiveStream(
   sessionId: string,
   reason: string = 'Live browser stream stopped.',
@@ -1730,13 +1905,27 @@ export async function stopBrowserLiveStream(
 // ─── Browser Vision Screenshot Cache ─────────────────────────────────────────
 // Stores the last browser_vision_screenshot result per session so chat.router.ts
 // can inject it as a role:'user' vision message (OpenAI doesn't support images in tool messages).
-const _lastBrowserScreenshot: Map<string, { base64: string; width: number; height: number; ts: number }> = new Map();
+export interface BrowserVisionScreenshotCacheEntry {
+  base64: string;
+  width: number;
+  height: number;
+  mimeType?: 'image/png' | 'image/jpeg';
+  viewportWidth?: number;
+  viewportHeight?: number;
+  coordinateScale?: { x: number; y: number };
+  normalized?: boolean;
+  originalBytes?: number;
+  bytes?: number;
+  ts?: number;
+}
 
-export function setLastBrowserScreenshot(sessionId: string, data: { base64: string; width: number; height: number }): void {
+const _lastBrowserScreenshot: Map<string, BrowserVisionScreenshotCacheEntry & { ts: number }> = new Map();
+
+export function setLastBrowserScreenshot(sessionId: string, data: BrowserVisionScreenshotCacheEntry): void {
   _lastBrowserScreenshot.set(sessionId, { ...data, ts: Date.now() });
 }
 
-export function getLastBrowserScreenshot(sessionId: string): { base64: string; width: number; height: number } | null {
+export function getLastBrowserScreenshot(sessionId: string): BrowserVisionScreenshotCacheEntry | null {
   const entry = _lastBrowserScreenshot.get(sessionId);
   if (!entry) return null;
   // Expire after 60 seconds — stale screenshots are useless
@@ -1744,7 +1933,8 @@ export function getLastBrowserScreenshot(sessionId: string): { base64: string; w
     _lastBrowserScreenshot.delete(sessionId);
     return null;
   }
-  return { base64: entry.base64, width: entry.width, height: entry.height };
+  const { ts, ...rest } = entry;
+  return rest;
 }
 
 export function clearLastBrowserScreenshot(sessionId: string): void {
@@ -1884,6 +2074,36 @@ function getMainChromeDebugPort(): number {
   return Number(process.env.CHROME_DEBUG_PORT || '9222');
 }
 
+function getUserChromeDebugPort(): number {
+  return Number(process.env.USER_CHROME_DEBUG_PORT || process.env.CHROME_USER_DEBUG_PORT || '9223');
+}
+
+function normalizeBrowserProfileKind(value: unknown): BrowserProfileKind {
+  const raw = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (['user', 'user_chrome', 'current', 'current_chrome', 'real', 'real_profile'].includes(raw)) return 'user';
+  return 'prometheus';
+}
+
+function getBrowserProfileLabel(kind: BrowserProfileKind): string {
+  return kind === 'user' ? 'user Chrome profile' : 'Prometheus browser profile';
+}
+
+function getMainBrowserTarget(sessionId: string): BrowserProfileKind {
+  const resolved = resolveSessionId(sessionId);
+  return mainBrowserTargetPreferences.get(resolved)
+    || normalizeBrowserProfileKind(process.env.PROMETHEUS_MAIN_BROWSER_TARGET || 'prometheus');
+}
+
+function normalizeChromeProfileDirectory(value: unknown): string {
+  return String(value || '').trim().replace(/[\\/:*?"<>|]/g, '').slice(0, 80);
+}
+
+function getUserChromeProfileDirectory(sessionId: string): string {
+  const resolved = resolveSessionId(sessionId);
+  return mainBrowserProfileDirectoryPreferences.get(resolved)
+    || normalizeChromeProfileDirectory(process.env.USER_CHROME_PROFILE_DIRECTORY || process.env.CHROME_USER_PROFILE_DIRECTORY || '');
+}
+
 function stableBrowserHash(value: string): number {
   let hash = 0;
   for (let i = 0; i < value.length; i++) {
@@ -1978,20 +2198,27 @@ async function connectOrLaunchPersistentChrome(
   pw: any,
   sessionId: string,
   metadata: BrowserSessionMetadata,
-): Promise<{ browser: any; debugPort: number; profileDir: string; ownsBrowser: boolean }> {
+): Promise<{ browser: any; debugPort: number; profileDir: string; ownsBrowser: boolean; profileKind: BrowserProfileKind; browserTarget: BrowserProfileKind }> {
   const identity = getStableBrowserIdentity(sessionId, metadata);
+  const mainTarget = metadata.ownerType === 'main' ? getMainBrowserTarget(sessionId) : 'prometheus';
   const debugPort = metadata.ownerType === 'main'
-    ? getMainChromeDebugPort()
+    ? (mainTarget === 'user' ? getUserChromeDebugPort() : getMainChromeDebugPort())
     : getPersistentBrowserPort(identity);
   const profileDir = metadata.ownerType === 'main'
-    ? (process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile'))
+    ? (mainTarget === 'user'
+      ? getRealChromeProfileDir()
+      : (process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')))
     : resolvePersistentBrowserProfileDir(identity, sessionId, metadata);
+  const profileKind: BrowserProfileKind = metadata.ownerType === 'main' ? mainTarget : 'prometheus';
+  const chromeProfileDirectory = metadata.ownerType === 'main' && mainTarget === 'user'
+    ? getUserChromeProfileDirectory(sessionId)
+    : '';
 
   if (await isPortOpen(debugPort)) {
     try {
       const browser = await pw.chromium.connectOverCDP(`http://localhost:${debugPort}`);
-      console.log(`[Browser] Connected to Chrome on port ${debugPort} (${metadata.ownerType}, profile: ${profileDir})`);
-      return { browser, debugPort, profileDir, ownsBrowser: false };
+      console.log(`[Browser] Connected to Chrome on port ${debugPort} (${metadata.ownerType}, ${getBrowserProfileLabel(profileKind)}, profile: ${profileDir})`);
+      return { browser, debugPort, profileDir, ownsBrowser: false, profileKind, browserTarget: profileKind };
     } catch (e: any) {
       console.warn(`[Browser] Port ${debugPort} responded but CDP connect failed: ${e.message}`);
     }
@@ -2004,28 +2231,34 @@ async function connectOrLaunchPersistentChrome(
 
   if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
   const { spawn } = await import('child_process');
-  console.log(`[Browser] Launching Chrome with --remote-debugging-port=${debugPort} and profile ${profileDir}...`);
-  spawn(chromePath, [
+  console.log(`[Browser] Launching Chrome with --remote-debugging-port=${debugPort} and ${getBrowserProfileLabel(profileKind)} ${profileDir}...`);
+  const launchArgs = [
     `--remote-debugging-port=${debugPort}`,
     `--user-data-dir=${profileDir}`,
+    ...(chromeProfileDirectory ? [`--profile-directory=${chromeProfileDirectory}`] : []),
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-background-timer-throttling',
-  ], { detached: true, stdio: 'ignore' }).unref();
+  ];
+  spawn(chromePath, launchArgs, { detached: true, stdio: 'ignore' }).unref();
 
   for (let i = 0; i < 30; i++) {
     await new Promise(r => setTimeout(r, 500));
     if (!await isPortOpen(debugPort)) continue;
     try {
       const browser = await pw.chromium.connectOverCDP(`http://localhost:${debugPort}`);
-      console.log(`[Browser] Launched and connected to Chrome on port ${debugPort} (${metadata.ownerType})`);
-      return { browser, debugPort, profileDir, ownsBrowser: true };
+      console.log(`[Browser] Launched and connected to Chrome on port ${debugPort} (${metadata.ownerType}, ${getBrowserProfileLabel(profileKind)})`);
+      return { browser, debugPort, profileDir, ownsBrowser: true, profileKind, browserTarget: profileKind };
     } catch {
       // Chrome may expose /json/version a moment before CDP is ready.
     }
   }
 
-  throw new Error(`Chrome launched but did not respond on port ${debugPort} after 15s. Close the Chrome window using profile ${profileDir} and try again.`);
+  const profileHint = chromeProfileDirectory ? `, profile-directory ${chromeProfileDirectory}` : '';
+  throw new Error(
+    `Chrome launched but did not respond on port ${debugPort} after 15s using profile ${profileDir}${profileHint}. ` +
+    `If normal Chrome is already open with that user profile, close it first, then try again so Prometheus can launch a fresh debugger-enabled Chrome.`
+  );
 }
 
 async function isSessionAlive(session: BrowserSession): Promise<boolean> {
@@ -2102,6 +2335,8 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     isolated: metadata.ownerType !== 'main',
     debugPort: browserConnection.debugPort,
     profileDir: browserConnection.profileDir,
+    profileKind: browserConnection.profileKind,
+    browserTarget: browserConnection.browserTarget,
     lastSnapshot: '',
     lastSnapshotAt: 0,
     lastPageUrl: '',
@@ -2185,6 +2420,8 @@ async function replaceDetachedBrowserSession(parentSessionId: string, suffix: st
     isolated: parent.isolated === true,
     debugPort: parent.debugPort,
     profileDir: parent.profileDir,
+    profileKind: parent.profileKind,
+    browserTarget: parent.browserTarget,
     lastSnapshot: '',
     lastSnapshotAt: 0,
     lastPageUrl: '',
@@ -3377,9 +3614,451 @@ function buildBrowserElementSelector(parts: {
   return chain.join(' > ');
 }
 
+export interface BrowserSelectorPack {
+  css: string;
+  xpath: string;
+  testid: string;
+  role: string;
+  name: string;
+  text: string;
+  attrSelector: string;
+}
+
+function buildBrowserSelectorPack(parts: {
+  id?: string;
+  tagName?: string;
+  classList?: string[];
+  siblingIndex?: number;
+  parentChain?: Array<{ tagName?: string; id?: string; classList?: string[]; siblingIndex?: number }>;
+  xpath?: string;
+  testid?: string;
+  role?: string;
+  ariaLabel?: string;
+  name?: string;
+  placeholder?: string;
+  title?: string;
+  text?: string;
+}): BrowserSelectorPack {
+  const css = buildBrowserElementSelector(parts);
+  const tag = String(parts.tagName || '').toLowerCase();
+  const testid = String(parts.testid || '').trim();
+  const role = String(parts.role || '').trim().toLowerCase();
+  const ariaLabel = String(parts.ariaLabel || '').trim();
+  const name = String(parts.name || '').trim();
+  const placeholder = String(parts.placeholder || '').trim();
+  const title = String(parts.title || '').trim();
+  const accessibleName = ariaLabel || name || placeholder || title || '';
+  const rawText = String(parts.text || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const id = String(parts.id || '').trim();
+  let attrSelector = '';
+  if (testid) attrSelector = `${tag || '*'}[data-testid="${testid.replace(/"/g, '\\"')}"]`;
+  else if (id) attrSelector = `#${id}`;
+  else if (ariaLabel) attrSelector = `${tag || '*'}[aria-label="${ariaLabel.replace(/"/g, '\\"')}"]`;
+  else if (name && (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'button')) {
+    attrSelector = `${tag}[name="${name.replace(/"/g, '\\"')}"]`;
+  } else if (placeholder) attrSelector = `${tag || '*'}[placeholder="${placeholder.replace(/"/g, '\\"')}"]`;
+  return {
+    css,
+    xpath: String(parts.xpath || '').trim(),
+    testid,
+    role,
+    name: accessibleName,
+    text: rawText,
+    attrSelector,
+  };
+}
+
+const ATTR_SELECTOR_RX = /^[*a-z0-9_-]+\[[^\]]+\]$|^#[A-Za-z][\w-]*$/;
+
+async function resolveBrowserLocator(page: PwPage, pack: Partial<BrowserSelectorPack> | null | undefined): Promise<any | null> {
+  if (!pack) return null;
+  const tryLocator = (locator: any) => locator;
+  // Priority: testid attr selector → aria/name attr selector → role+name → css → xpath
+  if (pack.testid) {
+    try {
+      const loc = page.locator(`[data-testid="${pack.testid.replace(/"/g, '\\"')}"]`).first();
+      if (await loc.count().catch(() => 0)) return tryLocator(loc);
+    } catch {}
+  }
+  if (pack.attrSelector && ATTR_SELECTOR_RX.test(pack.attrSelector)) {
+    try {
+      const loc = page.locator(pack.attrSelector).first();
+      if (await loc.count().catch(() => 0)) return tryLocator(loc);
+    } catch {}
+  }
+  if (pack.role && pack.name) {
+    try {
+      const loc = (page as any).getByRole?.(pack.role, { name: pack.name, exact: false })?.first?.();
+      if (loc && await loc.count().catch(() => 0)) return tryLocator(loc);
+    } catch {}
+  }
+  if (pack.css) {
+    try {
+      const loc = page.locator(pack.css).first();
+      if (await loc.count().catch(() => 0)) return tryLocator(loc);
+    } catch {}
+  }
+  if (pack.xpath) {
+    try {
+      const xp = pack.xpath.startsWith('//') || pack.xpath.startsWith('xpath=')
+        ? pack.xpath
+        : `xpath=${pack.xpath}`;
+      const loc = page.locator(xp).first();
+      if (await loc.count().catch(() => 0)) return tryLocator(loc);
+    } catch {}
+  }
+  return null;
+}
+
+// Tracks the user-selected element per session so we can re-resolve its bounds
+// on every frame and keep the overlay glued to the element through scroll/layout shifts.
+interface BrowserLiveSelectionTracker {
+  pack: BrowserSelectorPack;
+  fingerprint: string;
+}
+const browserLiveSelectionTrackers = new Map<string, BrowserLiveSelectionTracker>();
+
+function setBrowserLiveSelectionTracker(sessionId: string, pack: BrowserSelectorPack | null): void {
+  const resolved = resolveSessionId(sessionId);
+  if (!pack) { browserLiveSelectionTrackers.delete(resolved); return; }
+  const fingerprint = `${pack.testid}|${pack.attrSelector}|${pack.role}|${pack.name}|${pack.css}|${pack.xpath}`;
+  browserLiveSelectionTrackers.set(resolved, { pack, fingerprint });
+}
+
+async function readBrowserLiveSelectionBounds(
+  sessionId: string,
+): Promise<null | { fingerprint: string; bounds: { x: number; y: number; width: number; height: number } }> {
+  const resolved = resolveSessionId(sessionId);
+  const tracker = browserLiveSelectionTrackers.get(resolved);
+  if (!tracker) return null;
+  const session = sessions.get(resolved);
+  if (!session) return null;
+  try {
+    const locator = await resolveBrowserLocator(session.page, tracker.pack);
+    if (!locator) return null;
+    const box = await locator.boundingBox().catch(() => null);
+    if (!box) return null;
+    return {
+      fingerprint: tracker.fingerprint,
+      bounds: {
+        x: Number(box.x) || 0,
+        y: Number(box.y) || 0,
+        width: Number(box.width) || 0,
+        height: Number(box.height) || 0,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function clearBrowserLiveSelectionTracker(sessionId: string): void {
+  setBrowserLiveSelectionTracker(sessionId, null);
+}
+
+export function setBrowserLiveSelectionFromPack(
+  sessionId: string,
+  pack: Partial<BrowserSelectorPack> | null,
+): BrowserSelectorPack | null {
+  if (!pack) { clearBrowserLiveSelectionTracker(sessionId); return null; }
+  const normalized: BrowserSelectorPack = {
+    css: String(pack.css || '').trim(),
+    xpath: String(pack.xpath || '').trim(),
+    testid: String(pack.testid || '').trim(),
+    role: String(pack.role || '').trim().toLowerCase(),
+    name: String(pack.name || '').trim(),
+    text: String(pack.text || '').trim(),
+    attrSelector: String(pack.attrSelector || '').trim(),
+  };
+  if (!normalized.css && !normalized.xpath && !normalized.testid && !normalized.attrSelector && !normalized.role) {
+    clearBrowserLiveSelectionTracker(sessionId);
+    return null;
+  }
+  setBrowserLiveSelectionTracker(sessionId, normalized);
+  return normalized;
+}
+
+export async function browserGetInteractableMap(
+  sessionId: string,
+  options: { limit?: number; includeStatic?: boolean } = {},
+): Promise<null | {
+  sessionId: string;
+  viewport: { width: number; height: number };
+  scroll: { x: number; y: number };
+  devicePixelRatio: number;
+  items: Array<{
+    selector: string;
+    pack: BrowserSelectorPack;
+    tagName: string;
+    role: string;
+    text: string;
+    bounds: { x: number; y: number; width: number; height: number };
+  }>;
+  capturedAt: number;
+}> {
+  const resolved = resolveSessionId(sessionId);
+  const session = sessions.get(resolved);
+  if (!session) return null;
+  const limit = Math.min(Math.max(Number(options.limit) || 240, 16), 600);
+  const includeStatic = options.includeStatic === true;
+  try {
+    const payload = await session.page.evaluate((cfg: { limit: number; includeStatic: boolean }) => {
+      const doc = (globalThis as any).document as any;
+      const win: any = (globalThis as any);
+      const viewportWidth = Math.round(Number(win.innerWidth || 0));
+      const viewportHeight = Math.round(Number(win.innerHeight || 0));
+      const dpr = Number(win.devicePixelRatio || 1) || 1;
+      const scrollX = Math.round(Number(win.scrollX || win.pageXOffset || 0));
+      const scrollY = Math.round(Number(win.scrollY || win.pageYOffset || 0));
+      const interactiveTags = new Set(['a', 'button', 'input', 'textarea', 'select', 'option', 'label', 'summary', 'details']);
+      const interactiveRoles = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem', 'slider']);
+      const candidates: any[] = Array.from(doc.querySelectorAll('*'));
+      const out: any[] = [];
+      const dedupe = new Set<string>();
+      const readText = (node: any) => String((node?.innerText || node?.textContent || '')).replace(/\s+/g, ' ').trim().slice(0, 80);
+      const readClassList = (node: any) => Array.from(node?.classList || []).map((v: any) => String(v || '').trim()).filter(Boolean).slice(0, 4);
+      const readSiblingIndex = (node: any) => {
+        const tagName = String(node?.tagName || '').toLowerCase();
+        if (!node?.parentElement || !tagName) return 0;
+        const siblings = Array.from(node.parentElement.children || []).filter((c: any) => String(c?.tagName || '').toLowerCase() === tagName);
+        const idx = siblings.indexOf(node);
+        return idx >= 0 ? idx + 1 : 0;
+      };
+      const buildXPath = (node: any) => {
+        if (!node || node.nodeType !== 1) return '';
+        const parts: string[] = [];
+        let cursor = node;
+        while (cursor && cursor.nodeType === 1 && parts.length < 12) {
+          const tag = String(cursor.tagName || '').toLowerCase();
+          if (!tag) break;
+          if (cursor.id) { parts.unshift(`${tag}[@id="${cursor.id}"]`); break; }
+          let nth = 1;
+          let sib = cursor.previousElementSibling;
+          while (sib) {
+            if (String(sib.tagName || '').toLowerCase() === tag) nth += 1;
+            sib = sib.previousElementSibling;
+          }
+          parts.unshift(`${tag}[${nth}]`);
+          cursor = cursor.parentElement;
+          if (!cursor || String(cursor.tagName || '').toLowerCase() === 'html') break;
+        }
+        return parts.length ? `//${parts.join('/')}` : '';
+      };
+      const buildSelectorParts = (node: any) => {
+        const tagName = String(node?.tagName || '').toLowerCase();
+        const id = String(node?.id || '').trim();
+        const classList = readClassList(node);
+        const siblingIndex = readSiblingIndex(node);
+        const parentChain: any[] = [];
+        let parentCursor = node.parentElement;
+        while (parentCursor && parentChain.length < 4) {
+          const pTag = String(parentCursor.tagName || '').toLowerCase();
+          if (!pTag || pTag === 'body' || pTag === 'html') break;
+          parentChain.unshift({
+            tagName: pTag,
+            id: String(parentCursor.id || '').trim(),
+            classList: readClassList(parentCursor),
+            siblingIndex: readSiblingIndex(parentCursor),
+          });
+          if (parentCursor.id) break;
+          parentCursor = parentCursor.parentElement;
+        }
+        return { tagName, id, classList, siblingIndex, parentChain };
+      };
+      for (const node of candidates) {
+        if (out.length >= cfg.limit) break;
+        const tag = String(node?.tagName || '').toLowerCase();
+        if (!tag) continue;
+        const role = String(node?.getAttribute?.('role') || '').trim().toLowerCase();
+        const isInteractive = interactiveTags.has(tag) || interactiveRoles.has(role) || node?.isContentEditable === true || (tag === 'div' && node?.onclick);
+        if (!isInteractive && !cfg.includeStatic) continue;
+        const rect = node.getBoundingClientRect();
+        const w = Math.round(Number(rect?.width || 0));
+        const h = Math.round(Number(rect?.height || 0));
+        if (w < 6 || h < 6) continue;
+        if (rect.bottom < 0 || rect.right < 0 || rect.left > viewportWidth || rect.top > viewportHeight) continue;
+        const style = win.getComputedStyle ? win.getComputedStyle(node) : null;
+        if (style && (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity || '1') < 0.05)) continue;
+        const parts = buildSelectorParts(node);
+        const fingerprint = `${tag}|${parts.id}|${(parts.classList || []).join('.')}|${Math.round(rect.left)},${Math.round(rect.top)},${w},${h}`;
+        if (dedupe.has(fingerprint)) continue;
+        dedupe.add(fingerprint);
+        const testid = String(node?.getAttribute?.('data-testid') || '').trim();
+        const ariaLabel = String(node?.getAttribute?.('aria-label') || '').trim();
+        const placeholder = String(node?.getAttribute?.('placeholder') || '').trim();
+        const title = String(node?.getAttribute?.('title') || '').trim();
+        const name = String(node?.getAttribute?.('name') || '').trim();
+        const text = readText(node);
+        out.push({
+          parts,
+          xpath: buildXPath(node),
+          testid,
+          role,
+          ariaLabel,
+          placeholder,
+          title,
+          name,
+          text,
+          tagName: tag,
+          bounds: {
+            x: Number(rect.left) || 0,
+            y: Number(rect.top) || 0,
+            width: Number(rect.width) || 0,
+            height: Number(rect.height) || 0,
+          },
+        });
+      }
+      return {
+        viewport: { width: viewportWidth, height: viewportHeight },
+        scroll: { x: scrollX, y: scrollY },
+        devicePixelRatio: dpr,
+        raw: out,
+      };
+    }, { limit, includeStatic });
+    if (!payload) return null;
+    const items = (Array.isArray(payload.raw) ? payload.raw : []).map((entry: any) => {
+      const pack = buildBrowserSelectorPack({
+        ...entry.parts,
+        xpath: entry.xpath,
+        testid: entry.testid,
+        role: entry.role,
+        ariaLabel: entry.ariaLabel,
+        name: entry.name,
+        placeholder: entry.placeholder,
+        title: entry.title,
+        text: entry.text,
+      });
+      return {
+        selector: pack.css,
+        pack,
+        tagName: String(entry.tagName || ''),
+        role: String(entry.role || ''),
+        text: String(entry.text || ''),
+        bounds: entry.bounds,
+      };
+    });
+    return {
+      sessionId: resolved,
+      viewport: payload.viewport,
+      scroll: payload.scroll,
+      devicePixelRatio: payload.devicePixelRatio,
+      items,
+      capturedAt: Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function browserWorkspaceRoot(): string {
   const globalWorkspace = getConfig().getConfig().workspace.path;
   return getActiveWorkspace(globalWorkspace);
+}
+
+export async function browserSetProfileTarget(
+  sessionId: string,
+  target: unknown,
+  options?: { closeExisting?: boolean; profileDirectory?: unknown },
+): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const metadata = getBrowserSessionMetadata(resolved);
+  if (metadata.ownerType !== 'main') {
+    return 'ERROR: browser profile target selection is only available in main chat sessions. Subagents keep isolated Prometheus browser profiles.';
+  }
+  const nextTarget = normalizeBrowserProfileKind(target);
+  const profileDirectory = normalizeChromeProfileDirectory(options?.profileDirectory);
+  const currentTarget = getMainBrowserTarget(resolved);
+  mainBrowserTargetPreferences.set(resolved, nextTarget);
+  if (profileDirectory) mainBrowserProfileDirectoryPreferences.set(resolved, profileDirectory);
+  const existing = sessions.get(resolved);
+  if (existing && existing.browserTarget !== nextTarget && options?.closeExisting !== false) {
+    await stopBrowserLiveStream(resolved, `Browser profile target changed to ${getBrowserProfileLabel(nextTarget)}.`).catch(() => {});
+    sessions.delete(resolved);
+    try { await existing.page.close(); } catch {}
+    try { await existing.browser.close(); } catch {}
+  }
+  const active = sessions.get(resolved);
+  return [
+    `Browser target set to ${getBrowserProfileLabel(nextTarget)}.`,
+    nextTarget === 'user'
+      ? `User Chrome target uses CDP port ${getUserChromeDebugPort()} and user data dir ${getRealChromeProfileDir()}${getUserChromeProfileDirectory(resolved) ? `, Chrome profile "${getUserChromeProfileDirectory(resolved)}"` : ''}. If Chrome is already running normally with that profile, close it first so Prometheus can launch a fresh debugger-enabled Chrome.`
+      : `Prometheus target uses CDP port ${getMainChromeDebugPort()} and profile ${process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')}.`,
+    active
+      ? `Current active session already uses ${getBrowserProfileLabel(active.profileKind)}.`
+      : (currentTarget !== nextTarget ? 'The next browser_open will create a fresh browser session for this target.' : 'No active browser session is open yet.'),
+  ].join('\n');
+}
+
+function formatBrowserTabs(session: BrowserSession): string {
+  const pages = session.context.pages();
+  if (!pages.length) return 'No tabs are open in this browser context.';
+  const lines = pages.map((page: any, index: number) => {
+    const active = page === session.page ? '*' : ' ';
+    const title = String(session.lastPageTitle && page === session.page ? session.lastPageTitle : '').trim();
+    const url = String(page.url?.() || '').trim();
+    return `${active} [${index}] ${title || '(untitled)'} ${url}`;
+  });
+  return [
+    `Browser tabs for ${getBrowserProfileLabel(session.profileKind)} (${pages.length}):`,
+    ...lines,
+  ].join('\n');
+}
+
+export async function browserListTabs(sessionId: string): Promise<string> {
+  const session = sessions.get(resolveSessionId(sessionId));
+  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  return formatBrowserTabs(session);
+}
+
+export async function browserSelectTab(sessionId: string, index: number): Promise<string> {
+  const session = sessions.get(resolveSessionId(sessionId));
+  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  const pages = session.context.pages();
+  const idx = Math.max(0, Math.min(pages.length - 1, Number(index)));
+  const page = pages[idx];
+  if (!page) return `ERROR: No browser tab at index ${index}.`;
+  session.page = page;
+  await syncPageMetadata(session).catch(() => {});
+  await Promise.resolve(page.bringToFront?.()).catch(() => {});
+  persistBrowserSessionRecord(session);
+  return `Selected browser tab [${idx}] in ${getBrowserProfileLabel(session.profileKind)}.\n${formatBrowserTabs(session)}`;
+}
+
+export async function browserNewTab(sessionId: string, url?: string): Promise<string> {
+  const session = await getOrCreateSession(resolveSessionId(sessionId));
+  const page = await session.context.newPage();
+  session.page = page;
+  const targetUrl = String(url || '').trim();
+  if (targetUrl) {
+    const normalizedUrl = /^[a-z][a-z0-9+.-]*:/i.test(targetUrl) ? targetUrl : `https://${targetUrl}`;
+    await page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+  }
+  await syncPageMetadata(session).catch(() => {});
+  persistBrowserSessionRecord(session);
+  return `Opened new browser tab in ${getBrowserProfileLabel(session.profileKind)}.\n${formatBrowserTabs(session)}`;
+}
+
+export async function browserCloseTab(sessionId: string, index?: number): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const session = sessions.get(resolved);
+  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  const pages = session.context.pages();
+  const idx = index == null ? pages.indexOf(session.page) : Math.max(0, Math.min(pages.length - 1, Number(index)));
+  const page = pages[idx];
+  if (!page) return `ERROR: No browser tab at index ${index}.`;
+  await page.close().catch(() => {});
+  const remaining = session.context.pages();
+  if (!remaining.length) {
+    sessions.delete(resolved);
+    await stopBrowserLiveStream(resolved, 'Live browser stream stopped because the last browser tab closed.').catch(() => {});
+    try { await session.browser.close(); } catch {}
+    return 'Closed the last browser tab; browser session is now inactive.';
+  }
+  session.page = remaining[Math.max(0, Math.min(idx, remaining.length - 1))];
+  await syncPageMetadata(session).catch(() => {});
+  persistBrowserSessionRecord(session);
+  return `Closed browser tab [${idx}].\n${formatBrowserTabs(session)}`;
 }
 
 function sanitizeDownloadFilename(input: string): string {
@@ -3459,7 +4138,7 @@ function toUploadPaths(filePath?: string, filePaths?: string[]): string[] {
 export async function browserOpen(
   sessionId: string,
   url: string,
-  options?: { observe?: BrowserObserveMode },
+  options?: { observe?: BrowserObserveMode; target?: BrowserProfileKind | string; profileDirectory?: unknown },
 ): Promise<string> {
   // ── URL sanity guard ──────────────────────────────────────────────────────
   // When called from inside the node_call<> VM sandbox the URL may arrive as
@@ -3472,6 +4151,13 @@ export async function browserOpen(
   }
 
   const resolvedSessionId = resolveSessionId(sessionId);
+  if (options?.target != null || options?.profileDirectory != null) {
+    const targetResult = await browserSetProfileTarget(resolvedSessionId, options.target || getMainBrowserTarget(resolvedSessionId), {
+      closeExisting: true,
+      profileDirectory: options.profileDirectory,
+    });
+    if (targetResult.startsWith('ERROR')) return targetResult;
+  }
   let session: BrowserSession;
   try {
     session = await getOrCreateSession(resolvedSessionId);
@@ -3546,6 +4232,11 @@ export async function browserNavigateControl(
   active: boolean;
   url: string;
   title: string;
+  browserTarget: BrowserProfileKind;
+  profileKind: BrowserProfileKind;
+  profileLabel: string;
+  profileDir: string;
+  debugPort: number;
   mode: BrowserInteractionMode;
   captured: boolean;
   controlOwner: 'agent' | 'user';
@@ -3600,6 +4291,11 @@ export async function browserNavigateControl(
     active: true,
     url: String(meta?.url || session.page.url() || ''),
     title: String(meta?.title || await session.page.title().catch(() => '') || ''),
+    browserTarget: session.browserTarget,
+    profileKind: session.profileKind,
+    profileLabel: getBrowserProfileLabel(session.profileKind),
+    profileDir: session.profileDir || '',
+    debugPort: Number(session.debugPort || 0),
     mode: interactionState.mode,
     captured: interactionState.captured,
     controlOwner: interactionState.controlOwner,
@@ -4111,20 +4807,33 @@ export async function browserPressKey(
  * Unlike browserFill (which needs a @ref), this just sends keystrokes — works for
  * contenteditable divs (e.g. X/Twitter compose box) where fill by ref often fails.
  */
-export async function browserType(sessionId: string, text: string): Promise<string> {
+export async function browserType(
+  sessionId: string,
+  text: string,
+  options?: { observe?: BrowserObserveMode },
+): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_type');
+    const compactBefore = shouldUseCompactObservation(observeMode)
+      ? await captureCompactBrowserState(session.page)
+      : null;
     const cursorPoint = await resolveActiveElementViewportCenter(session.page).catch(() => null);
     await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'type', phase: 'start', label: `Typing ${String(text || '').length} characters` });
     await session.page.keyboard.type(String(text || ''), { delay: 25 });
     await session.page.waitForTimeout(400);
     await emitBrowserAgentCursor(sessionId, { ...(cursorPoint || {}), kind: 'type', phase: 'end', label: `Typed ${String(text || '').length} characters` });
-    const snapshot = await takeSnapshot(session.page);
-    session.lastSnapshot = snapshot;
-    session.lastSnapshotAt = Date.now();
-    const count = parseSnapshotElementCount(snapshot);
-    return attachShortcutsContext(`Typed ${String(text).length} chars into focused element. Snapshot refreshed (${count} elements).`, session.page.url(), sessionId);
+    if (shouldReturnSnapshot(observeMode)) {
+      const snapshot = await takeSnapshot(session.page);
+      rememberSnapshot(session, snapshot);
+      const count = parseSnapshotElementCount(snapshot);
+      return attachShortcutsContext(`Typed ${String(text).length} chars into focused element. Snapshot refreshed (${count} elements).`, session.page.url(), sessionId);
+    }
+    if (compactBefore) {
+      return buildCompactBrowserObservation(session, `Typed ${String(text).length} chars into focused element.`, compactBefore);
+    }
+    return buildMinimalBrowserAck(session, `Typed ${String(text).length} chars into focused element.`);
   } catch (err: any) {
     return `ERROR: browser_type failed: ${err.message}`;
   }
@@ -4949,12 +5658,40 @@ export function getBrowserToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'browser_doctor',
+        description:
+          'Diagnose Prometheus browser automation health: Playwright availability, active session/profile state, CDP reachability, screenshot transport budget, and stale snapshot cache. Read-only except for a tiny screenshot probe.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_set_profile_target',
+        description:
+          'Main chat only: choose which Chrome profile future browser tools use. Default is target="prometheus" (Prometheus-owned debug profile on CHROME_DEBUG_PORT, normally 9222). target="user_chrome" attaches to Chrome on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT (default 9223) when present, or launches a fresh debugger-enabled Chrome using the user Chrome data dir. If normal Chrome is already open with that profile, the fresh launch may fail until Chrome is closed. Subagents cannot use this and remain isolated.',
+        parameters: {
+          type: 'object',
+          required: ['target'],
+          properties: {
+            target: { type: 'string', enum: ['prometheus', 'user_chrome'], description: 'prometheus = isolated Prometheus profile; user_chrome = user Chrome profile on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT, default 9223.' },
+            profile_directory: { type: 'string', description: 'Optional Chrome profile directory inside User Data, such as "Default" or "Profile 1", used when launching user_chrome fresh.' },
+            close_existing: { type: 'boolean', description: 'Close/recreate the current main browser session if it is using a different target. Default true.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'browser_open',
-        description: 'Open a URL in a Playwright-controlled Chrome browser (NOT your regular Chrome or Edge). This is the ONLY correct way to open URLs for browser automation — NEVER use run_command to open chrome/edge, as those windows are invisible to all other browser tools. Always use browser_open first to establish a session before using browser_snapshot, browser_click, etc. Returns a compact ack unless you request observe="snapshot". Do NOT call browser_open again for a different URL within the same site — use browser_click on the link @ref instead. For searches, build a direct search URL (e.g. github.com/search?q=query). Elements marked [INPUT] can be filled. If element count looks low, call browser_wait with observe="snapshot" to let JS finish loading and expose refs.',
+        description: 'Open a URL in a Playwright-controlled Chrome browser. Defaults to the Prometheus-owned debug profile. Use target="user_chrome" when the user wants their Chrome profile: Prometheus will attach to a CDP-enabled user Chrome if available, or launch a fresh debugger-enabled Chrome using the user Chrome data dir. If normal Chrome is already open with that profile, ask the user to close it or use desktop tools for the visible window. This is the ONLY correct way to open URLs for browser automation — NEVER use run_command to open chrome/edge, as those windows are invisible to all other browser tools. Always use browser_open first to establish a session before using browser_snapshot, browser_click, etc. Default observe="screenshot" so navigation gives visual context; request observe="snapshot" when you need DOM refs in the tool result, or observe="compact"/"none" when speed matters. Do NOT call browser_open again for a different URL within the same site — use browser_click on the link @ref instead. For searches, build a direct search URL (e.g. github.com/search?q=query). Elements marked [INPUT] can be filled. If element count looks low, call browser_wait with observe="snapshot" to let JS finish loading and expose refs.',
         parameters: {
           type: 'object', required: ['url'],
           properties: {
             url: { type: 'string', description: 'Full URL to navigate to. For searches, build the search URL directly.' },
+            target: { type: 'string', enum: ['prometheus', 'user_chrome'], description: 'Optional main-chat-only browser profile target. Defaults to prometheus. Subagents ignore this and stay isolated.' },
+            profile_directory: { type: 'string', description: 'Optional Chrome profile directory inside User Data, such as "Default" or "Profile 1", used with target="user_chrome".' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: screenshot for navigation.' },
           },
         },
@@ -4976,6 +5713,48 @@ export function getBrowserToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'browser_list_tabs',
+        description: 'List tabs/pages in the current Prometheus-controlled browser context and identify the active tab.',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_select_tab',
+        description: 'Switch the active automation target to an existing browser tab by index from browser_list_tabs.',
+        parameters: {
+          type: 'object',
+          required: ['index'],
+          properties: { index: { type: 'number', description: 'Tab index from browser_list_tabs.' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_new_tab',
+        description: 'Open a new tab in the current browser context and optionally navigate it to a URL.',
+        parameters: {
+          type: 'object',
+          properties: { url: { type: 'string', description: 'Optional URL to open in the new tab.' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'browser_close_tab',
+        description: 'Close a browser tab by index, or the active tab if index is omitted.',
+        parameters: {
+          type: 'object',
+          properties: { index: { type: 'number', description: 'Optional tab index from browser_list_tabs. Defaults to the active tab.' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'browser_click',
         description: 'Click a page element by its @ref number or by a saved named element for the current site. Use element when Teach mode has already saved names like "tweet composer" or "post button". Use observe="compact" for a small orientation summary, or observe="snapshot" when you need fresh refs. Do not reflexively call browser_snapshot again unless you specifically need a new @ref map after the UI changes.',
         parameters: {
@@ -4984,7 +5763,9 @@ export function getBrowserToolDefinitions(): any[] {
             ref: { type: 'number', description: '@ref number from the most recent snapshot' },
             element: { type: 'string', description: 'Saved named element for the current site, such as "tweet composer" or "post button".' },
             selector: { type: 'string', description: 'CSS selector for a taught target when you have not promoted it to a saved named element yet.' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this click triggers a final post/send/publish/purchase/delete/submit action.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: delta for medium-risk clicks.' },
+            capture_after: { type: 'boolean', description: 'Shortcut for observe="snapshot" after the click when you need fresh refs immediately.' },
           },
         },
       },
@@ -5002,6 +5783,7 @@ export function getBrowserToolDefinitions(): any[] {
             selector: { type: 'string', description: 'CSS selector for a taught input target when you have not promoted it to a saved named element yet.' },
             text: { type: 'string', description: 'Text to type into the field' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: delta for text input.' },
+            capture_after: { type: 'boolean', description: 'Shortcut for observe="snapshot" after filling when you need fresh refs immediately.' },
           },
         },
       },
@@ -5040,6 +5822,7 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object', required: ['key'],
           properties: {
             key: { type: 'string', description: 'Key name: Enter, Tab, Escape, ArrowDown, ArrowUp, Space' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for deterministic keypresses.' },
           },
         },
@@ -5054,6 +5837,7 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object', required: ['key'],
           properties: {
             key: { type: 'string', description: 'Key name: Enter, Tab, Escape, ArrowDown, ArrowUp, Space, etc.' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for deterministic keypresses.' },
           },
         },
@@ -5071,6 +5855,8 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object', required: ['text'],
           properties: {
             text: { type: 'string', description: 'Text to type into the focused element.' },
+            observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Default: snapshot for raw typing so the changed focused element is visible.' },
+            capture_after: { type: 'boolean', description: 'Shortcut for observe="snapshot" after typing when you need fresh refs immediately.' },
           },
         },
       },
@@ -5120,6 +5906,7 @@ export function getBrowserToolDefinitions(): any[] {
             direction: { type: 'string', enum: ['down', 'up'], description: 'Scroll direction' },
             multiplier: { type: 'number', description: 'Viewport height multiplier. Use 1.75 for X/Twitter, 1.0 for most sites. Range: 0.5–4.0.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for scrolling.' },
+            capture_after: { type: 'boolean', description: 'Shortcut for observe="snapshot" after scrolling when you need newly visible refs immediately.' },
           },
         },
       },
@@ -5172,6 +5959,7 @@ export function getBrowserToolDefinitions(): any[] {
             to_y: { type: 'number', description: 'Viewport end Y when dragging by coordinates.' },
             steps: { type: 'number', description: 'Interpolation steps for smoother dragging (default 20).' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: delta for drag interactions.' },
+            capture_after: { type: 'boolean', description: 'Shortcut for observe="snapshot" after dragging when you need fresh refs immediately.' },
           },
         },
       },
@@ -5331,6 +6119,7 @@ export function getBrowserToolDefinitions(): any[] {
               type: 'string',
               description: 'JavaScript to execute in the page. Top-level await works. Return a value with `return expr`. Example: `return document.title`',
             },
+            observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Default: screenshot because JS can mutate page state.' },
           },
         },
       },
@@ -5691,17 +6480,37 @@ export { INTERACTIVE_SELECTOR };
  * Wraps in an async IIFE so top-level await works. Result is JSON-serialized.
  * Playwright's page.evaluate() passes a serializable return value back to Node.
  */
-export async function browserRunJs(sessionId: string, code: string): Promise<string> {
+export async function browserRunJs(
+  sessionId: string,
+  code: string,
+  options?: { observe?: BrowserObserveMode },
+): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (!code || !code.trim()) return 'ERROR: code parameter is required.';
   try {
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_run_js');
+    const compactBefore = shouldUseCompactObservation(observeMode)
+      ? await captureCompactBrowserState(session.page)
+      : null;
     // Wrap in async IIFE so `await` works at top level
     const wrapped = `(async () => { ${code} })()`;
     const result = await session.page.evaluate(wrapped);
-    if (result === undefined || result === null) return 'JS executed successfully (returned: null/undefined).';
-    if (typeof result === 'object') return JSON.stringify(result, null, 2);
-    return String(result);
+    const resultText = result === undefined || result === null
+      ? 'JS executed successfully (returned: null/undefined).'
+      : (typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result));
+    if (shouldReturnSnapshot(observeMode)) {
+      const snapshot = await takeSnapshot(session.page);
+      rememberSnapshot(session, snapshot);
+      return attachShortcutsContext(`${resultText}\n\nSnapshot refreshed (${parseSnapshotElementCount(snapshot)} elements):\n\n${snapshot}`, session.page.url(), sessionId);
+    }
+    if (compactBefore) {
+      return `${resultText}\n\n${await buildCompactBrowserObservation(session, 'browser_run_js completed.', compactBefore)}`;
+    }
+    if (observeMode === 'screenshot') {
+      await browserVisionScreenshot(sessionId).catch(() => null);
+    }
+    return resultText;
   } catch (err: any) {
     return `ERROR: JS execution failed: ${err.message}`;
   }
@@ -5993,16 +6802,39 @@ export async function browserVisionScreenshot(sessionId: string): Promise<{
   base64: string;
   width: number;
   height: number;
+  mimeType?: 'image/png' | 'image/jpeg';
+  viewportWidth?: number;
+  viewportHeight?: number;
+  coordinateScale?: { x: number; y: number };
+  normalized?: boolean;
 } | null> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return null;
   try {
-    const buf: Buffer = await session.page.screenshot({ type: 'png', fullPage: false });
     const viewport = session.page.viewportSize() || { width: 1280, height: 720 };
+    const buf: Buffer = await session.page.screenshot({ type: 'png', fullPage: false });
+    const normalized = await normalizeScreenshotBuffer(buf, {
+      maxSide: Number(process.env.PROMETHEUS_BROWSER_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 1800),
+      maxBytes: Number(process.env.PROMETHEUS_BROWSER_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 4 * 1024 * 1024),
+      preferJpeg: true,
+    }).catch(() => null);
+    const finalBuffer = normalized?.buffer || buf;
+    const finalWidth = normalized?.width || viewport.width;
+    const finalHeight = normalized?.height || viewport.height;
     const out = {
-      base64: buf.toString('base64'),
-      width: viewport.width,
-      height: viewport.height,
+      base64: finalBuffer.toString('base64'),
+      width: finalWidth,
+      height: finalHeight,
+      mimeType: normalized?.mimeType || 'image/png' as const,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      coordinateScale: {
+        x: viewport.width / Math.max(1, finalWidth),
+        y: viewport.height / Math.max(1, finalHeight),
+      },
+      normalized: normalized?.normalized === true,
+      originalBytes: normalized?.originalBytes || buf.byteLength,
+      bytes: normalized?.bytes || finalBuffer.byteLength,
     };
     // Keep the latest browser screenshot available for primary vision injection.
     setLastBrowserScreenshot(sessionId, out);
@@ -6029,16 +6861,37 @@ export async function browserSendToTelegram(
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
   try {
-    const buf: Buffer = await session.page.screenshot({ type: 'png', fullPage: false });
     const viewport = session.page.viewportSize() || { width: 1280, height: 720 };
+    const buf: Buffer = await session.page.screenshot({ type: 'png', fullPage: false });
+    const normalized = await normalizeScreenshotBuffer(buf, {
+      maxSide: Number(process.env.PROMETHEUS_BROWSER_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 1800),
+      maxBytes: Number(process.env.PROMETHEUS_BROWSER_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 4 * 1024 * 1024),
+      preferJpeg: true,
+    }).catch(() => null);
+    const finalBuffer = normalized?.buffer || buf;
+    const finalWidth = normalized?.width || viewport.width;
+    const finalHeight = normalized?.height || viewport.height;
     // Also expose this screenshot to the model so it's not "send-only".
     setLastBrowserScreenshot(sessionId, {
-      base64: buf.toString('base64'),
-      width: viewport.width,
-      height: viewport.height,
+      base64: finalBuffer.toString('base64'),
+      width: finalWidth,
+      height: finalHeight,
+      mimeType: normalized?.mimeType || 'image/png',
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      coordinateScale: {
+        x: viewport.width / Math.max(1, finalWidth),
+        y: viewport.height / Math.max(1, finalHeight),
+      },
+      normalized: normalized?.normalized === true,
+      originalBytes: normalized?.originalBytes || buf.byteLength,
+      bytes: normalized?.bytes || finalBuffer.byteLength,
     });
-    await telegramChannel.sendPhotoToAllowed(buf, caption);
-    return `Browser screenshot sent to Telegram (${viewport.width}x${viewport.height}). Caption: "${caption}"`;
+    await telegramChannel.sendPhotoToAllowed(finalBuffer, caption);
+    const normalizedNote = normalized?.normalized
+      ? ` normalized to ${finalWidth}x${finalHeight} ${normalized.mimeType} for transport`
+      : ' original resolution';
+    return `Browser screenshot sent to Telegram (${viewport.width}x${viewport.height} viewport;${normalizedNote}). Caption: "${caption}"`;
   } catch (err: any) {
     return `ERROR: Failed to send browser screenshot to Telegram: ${err?.message || err}`;
   }
@@ -6058,12 +6911,17 @@ export async function browserVisionClick(
 ): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
-  const px = Math.round(Number(x) || 0);
-  const py = Math.round(Number(y) || 0);
+  let px = Math.round(Number(x) || 0);
+  let py = Math.round(Number(y) || 0);
   if (!Number.isFinite(px) || !Number.isFinite(py)) {
     return 'ERROR: x and y must be valid numbers.';
   }
   try {
+    const lastShot = getLastBrowserScreenshot(sessionId);
+    if (lastShot?.normalized === true && lastShot.coordinateScale) {
+      px = Math.round(px * lastShot.coordinateScale.x);
+      py = Math.round(py * lastShot.coordinateScale.y);
+    }
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_vision_click');
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
@@ -6102,13 +6960,18 @@ export async function browserVisionType(
 ): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
-  const px = Math.round(Number(x) || 0);
-  const py = Math.round(Number(y) || 0);
+  let px = Math.round(Number(x) || 0);
+  let py = Math.round(Number(y) || 0);
   if (!Number.isFinite(px) || !Number.isFinite(py)) {
     return 'ERROR: x and y must be valid numbers.';
   }
   const payload = String(text || '');
   try {
+    const lastShot = getLastBrowserScreenshot(sessionId);
+    if (lastShot?.normalized === true && lastShot.coordinateScale) {
+      px = Math.round(px * lastShot.coordinateScale.x);
+      py = Math.round(py * lastShot.coordinateScale.y);
+    }
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_vision_type');
     const compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
@@ -6536,6 +7399,9 @@ export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
       active: false,
       sessionId: resolved,
       originLabel,
+      browserTarget: metadata.ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus',
+      profileKind: metadata.ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus',
+      profileLabel: getBrowserProfileLabel(metadata.ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus'),
       mode: interactionState?.mode,
       captured: interactionState?.captured,
       controlOwner: interactionState?.controlOwner,
@@ -6558,6 +7424,9 @@ export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
       title,
       debugPort: session.debugPort,
       profileDir: session.profileDir,
+      profileKind: session.profileKind,
+      browserTarget: session.browserTarget,
+      profileLabel: getBrowserProfileLabel(session.profileKind),
       mode: interactionState?.mode,
       captured: interactionState?.captured,
       controlOwner: interactionState?.controlOwner,
@@ -6575,6 +7444,9 @@ export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
       originLabel,
       debugPort: session.debugPort,
       profileDir: session.profileDir,
+      profileKind: session.profileKind,
+      browserTarget: session.browserTarget,
+      profileLabel: getBrowserProfileLabel(session.profileKind),
       mode: interactionState?.mode,
       captured: interactionState?.captured,
       controlOwner: interactionState?.controlOwner,
@@ -6613,6 +7485,9 @@ export function listBrowserSessions(): BrowserSessionListEntry[] {
       updatedAt: metadata.updatedAt || session.createdAt || 0,
       debugPort: session.debugPort,
       profileDir: session.profileDir,
+      profileKind: session.profileKind,
+      browserTarget: session.browserTarget,
+      profileLabel: getBrowserProfileLabel(session.profileKind),
     });
   }
   return entries.sort((a, b) => {
@@ -6996,14 +7871,17 @@ export async function browserInspectPoint(
   sessionId: string,
   x: number,
   y: number,
+  options: { trackSelection?: boolean } = {},
 ): Promise<null | {
   sessionId: string;
   url: string;
   title: string;
   selector: string;
+  pack: BrowserSelectorPack;
   tagName: string;
   id: string;
   classList: string[];
+  role: string;
   text: string;
   htmlSnippet: string;
   bounds: { x: number; y: number; width: number; height: number };
@@ -7057,7 +7935,7 @@ export async function browserInspectPoint(
       const noisyLeafTags = new Set(['path', 'svg', 'use', 'g', 'circle', 'rect', 'polygon', 'span', 'strong', 'em', 'b', 'i', 'small', 'time']);
       const isReasonableBox = (node: any, rawRect: { width: number; height: number }) => {
         const rect = readRect(node);
-        if (rect.width < 18 || rect.height < 14) return false;
+        if (rect.width < 8 || rect.height < 8) return false;
         if (rect.width > viewportWidth * 0.94 || rect.height > viewportHeight * 0.72) return false;
         const rawArea = Math.max(1, rawRect.width * rawRect.height);
         const area = rect.width * rect.height;
@@ -7110,16 +7988,44 @@ export async function browserInspectPoint(
       }
       const current = readNode(el);
       const text = String((el.innerText || el.textContent || '')).replace(/\s+/g, ' ').trim().slice(0, 240);
+      const elRole = readRole(el);
+      const buildXPath = (node: any) => {
+        if (!node || node.nodeType !== 1) return '';
+        const parts: string[] = [];
+        let cursor = node;
+        while (cursor && cursor.nodeType === 1 && parts.length < 12) {
+          const tag = String(cursor.tagName || '').toLowerCase();
+          if (!tag) break;
+          if (cursor.id) { parts.unshift(`${tag}[@id="${cursor.id}"]`); break; }
+          let nth = 1;
+          let sib = cursor.previousElementSibling;
+          while (sib) {
+            if (String(sib.tagName || '').toLowerCase() === tag) nth += 1;
+            sib = sib.previousElementSibling;
+          }
+          parts.unshift(`${tag}[${nth}]`);
+          cursor = cursor.parentElement;
+          if (!cursor || String(cursor.tagName || '').toLowerCase() === 'html') break;
+        }
+        return parts.length ? `//${parts.join('/')}` : '';
+      };
       return {
         ...current,
         parentChain,
         text,
         htmlSnippet: String(el.outerHTML || '').slice(0, 800),
+        role: elRole,
+        testid: String(el.getAttribute?.('data-testid') || '').trim(),
+        ariaLabel: String(el.getAttribute?.('aria-label') || '').trim(),
+        name: String(el.getAttribute?.('name') || '').trim(),
+        placeholder: String(el.getAttribute?.('placeholder') || '').trim(),
+        title: String(el.getAttribute?.('title') || '').trim(),
+        xpath: buildXPath(el),
         bounds: {
-          x: Math.round(rect.left),
-          y: Math.round(rect.top),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
+          x: Number(rect.left) || 0,
+          y: Number(rect.top) || 0,
+          width: Number(rect.width) || 0,
+          height: Number(rect.height) || 0,
         },
         viewport: {
           width: viewportWidth,
@@ -7128,15 +8034,30 @@ export async function browserInspectPoint(
       };
     }, { x: px, y: py });
     if (!inspected || !inspected.tagName) return null;
-    const selector = buildBrowserElementSelector(inspected);
+    const pack = buildBrowserSelectorPack({
+      ...inspected,
+      xpath: inspected.xpath,
+      testid: inspected.testid,
+      role: inspected.role,
+      ariaLabel: inspected.ariaLabel,
+      name: inspected.name,
+      placeholder: inspected.placeholder,
+      title: inspected.title,
+      text: inspected.text,
+    });
+    if (options.trackSelection) {
+      setBrowserLiveSelectionTracker(resolved, pack);
+    }
     return {
       sessionId: resolved,
       url: String(session.page.url() || ''),
       title: String((await session.page.title().catch(() => '')) || ''),
-      selector,
+      selector: pack.css,
+      pack,
       tagName: String(inspected.tagName || ''),
       id: String(inspected.id || ''),
       classList: Array.isArray(inspected.classList) ? inspected.classList : [],
+      role: String(inspected.role || ''),
       text: String(inspected.text || ''),
       htmlSnippet: String(inspected.htmlSnippet || ''),
       bounds: inspected.bounds,
@@ -7166,6 +8087,7 @@ export interface PreviewChunk {
   base64: string;      // PNG encoded as base64
   width: number;
   height: number;      // actual height of this chunk (last chunk may be smaller)
+  mimeType?: 'image/png' | 'image/jpeg';
 }
 
 /**
@@ -7233,6 +8155,12 @@ export async function browserPreviewScreenshot(
       await page.setViewportSize({ width: viewportWidth, height: thisChunkHeight });
 
       const buf: Buffer = await page.screenshot({ type: 'png' });
+      const normalized = await normalizeScreenshotBuffer(buf, {
+        maxSide: Number(process.env.PROMETHEUS_PREVIEW_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 1800),
+        maxBytes: Number(process.env.PROMETHEUS_PREVIEW_SCREENSHOT_MAX_BYTES || process.env.PROMETHEUS_SCREENSHOT_MAX_BYTES || 4 * 1024 * 1024),
+        preferJpeg: true,
+      }).catch(() => null);
+      const finalBuffer = normalized?.buffer || buf;
 
       // Restore viewport for next iteration
       await page.setViewportSize({ width: viewportWidth, height: safeChunkHeight });
@@ -7240,9 +8168,10 @@ export async function browserPreviewScreenshot(
       chunks.push({
         index: i,
         total: totalChunks,
-        base64: buf.toString('base64'),
-        width: viewportWidth,
-        height: thisChunkHeight,
+        base64: finalBuffer.toString('base64'),
+        width: normalized?.width || viewportWidth,
+        height: normalized?.height || thisChunkHeight,
+        mimeType: normalized?.mimeType || 'image/png',
       });
     }
 

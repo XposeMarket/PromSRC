@@ -7,18 +7,31 @@ const AUDIT_PAGE_SIZE = 100;
 const _expandedRuns = new Set();
 let _proposalStats = { approved: 0, rejected: 0, pending: 0 };
 
+function toTitleCase(s) {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function inferRunKind(sessionId, agentId) {
   const sid = String(sessionId || '');
   const aid = String(agentId || '');
-  if (sid.startsWith('team_dispatch_')) return 'Team Dispatch';
-  if (sid.startsWith('team_coord_')) return 'Team Coordinator';
-  if (sid.startsWith('meta_coordinator_')) return 'Meta Coordinator';
-  if (sid.startsWith('proposal_')) return 'Proposal Executor';
+  if (sid.startsWith('team_dispatch_')) {
+    const raw = sid.replace(/^team_dispatch_/, '').replace(/_\d+$/, '');
+    return `Subagent: ${toTitleCase(raw)}`;
+  }
+  if (sid.startsWith('team_coord_')) {
+    const raw = sid.replace(/^team_coord_/, '').replace(/_\d+$/, '');
+    return `${toTitleCase(raw)} Team Manager`;
+  }
+  if (sid.startsWith('meta_coordinator_')) {
+    const raw = sid.replace(/^meta_coordinator_/, '').replace(/_\d+$/, '');
+    return `${toTitleCase(raw)} Meta Coordinator`;
+  }
+  if (sid.startsWith('proposal_')) return 'Proposal';
   if (sid.startsWith('cron_job_') || sid.startsWith('schedule_')) return 'Scheduled Task';
   if (sid.startsWith('task_') || sid.startsWith('bg_')) return 'Background Task';
   if (aid === 'scheduled_task') return 'Scheduled Task';
   if (aid === 'background_task') return 'Background Task';
-  if (aid === 'team_coordinator') return 'Team Coordinator';
+  if (aid === 'team_coordinator') return 'Team Manager';
   if (aid === 'meta_coordinator') return 'Meta Coordinator';
   return 'Agent Run';
 }
@@ -208,8 +221,8 @@ function renderAuditTable() {
         <div style="font-size:9px;opacity:0.7">${escHtml(dateStr)}</div>
       </td>
       <td style="padding:7px 12px;font-size:11px;color:var(--text);max-width:240px">
-        <div style="font-weight:700">${escHtml(run.agentId || 'unknown')}</div>
-        <div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(run.kind)} • ${escHtml(run.sessionId || run.key)}</div>
+        <div style="font-weight:700">${escHtml(run.kind)}</div>
+        <div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(run.sessionId || run.key)}">${escHtml(run.sessionId || run.key)}</div>
       </td>
       <td style="padding:7px 12px;white-space:nowrap">
         <span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:999px;text-transform:uppercase;letter-spacing:0.05em;${style}">${escHtml(runStatus)}</span>

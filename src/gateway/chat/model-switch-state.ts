@@ -17,6 +17,7 @@ export interface TurnModelOverride {
   providerId: string;   // e.g. 'anthropic', 'openai_codex'
   model: string;        // e.g. 'claude-haiku-4-5-20251001'
   reason: string;       // shown to user in UI badge + logs
+  tier?: 'low' | 'medium';
 }
 
 const _overrides = new Map<string, TurnModelOverride>();

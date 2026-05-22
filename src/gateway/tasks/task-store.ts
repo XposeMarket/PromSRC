@@ -64,8 +64,10 @@ export type PauseReason =
   | 'error'
   | 'max_steps'
   | 'interrupted_by_schedule'
+  | 'gateway_restart'
   | 'awaiting_user_input'  // task paused because it needs clarification from the user
   | 'awaiting_command_approval'  // task is waiting on a run_command approval card
+  | 'awaiting_final_action_approval'  // task is waiting before an irreversible UI action
   | 'recovering_from_build_error'  // agent is recovering from a build error
   | 'blocked_on_repair';  // waiting for a linked repair proposal/task to finish
 

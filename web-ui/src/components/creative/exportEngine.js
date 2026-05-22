@@ -46,7 +46,7 @@ export function createCreativeExportEngine(deps = {}) {
       label: 'GIF',
       GifCtor,
       mimeType: 'image/gif',
-      workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js',
+      workerScript: '/vendor/gif/gif.worker.js',
     };
   }
 

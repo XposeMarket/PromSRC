@@ -16,7 +16,7 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
-import { getActivatedToolCategories, getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
+import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -522,7 +522,7 @@ function createBackgroundPrompt(prompt: string): any[] {
       role: 'system',
       content:
         'You are executing a one-time ephemeral background task in parallel with the main chat. ' +
-        'You inherit the main chat session tool categories and can request additional categories when needed. ' +
+        'You start with core tools and can request additional categories when needed. ' +
         'Complete your task efficiently and report the outcome.',
     },
     {
@@ -562,10 +562,10 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       const sessionId = runtimeSessionId;
       const { spawnerSessionId } = record;
       try {
-        const inheritedCategories = spawnerSessionId
-          ? Array.from(getActivatedToolCategories(spawnerSessionId))
-          : [];
-        setActivatedToolCategories(sessionId, inheritedCategories);
+        // Background agents get a fresh tool surface. They should not inherit
+        // every category the foreground chat has opened during the session,
+        // because that bloats native tool schemas for the entire background run.
+        setActivatedToolCategories(sessionId, []);
         if (spawnerSessionId) {
           const parentWorkspace = getWorkspace(spawnerSessionId);
           if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);

@@ -4,6 +4,7 @@ import {
   createJinaEmbeddingProvider,
   createLmStudioEmbeddingProvider,
   createOllamaEmbeddingProvider,
+  createOpenAiCodexOAuthEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
 } from './http-providers';
@@ -15,6 +16,7 @@ export function listMemoryEmbeddingProviders(): MemoryEmbeddingProvider[] {
   if (!cachedProviders) {
     cachedProviders = [
       createOpenAiEmbeddingProvider(),
+      createOpenAiCodexOAuthEmbeddingProvider(),
       createOllamaEmbeddingProvider(),
       createLmStudioEmbeddingProvider(),
       createVoyageEmbeddingProvider(),
@@ -29,7 +31,7 @@ export function resetMemoryEmbeddingProvidersForTests(): void {
   cachedProviders = null;
 }
 
-function preference(): MemoryEmbeddingPreference {
+export function getMemoryEmbeddingPreference(): MemoryEmbeddingPreference {
   const data = getConfig().getConfig() as any;
   return String(data.memory?.embeddings?.provider || process.env.PROMETHEUS_MEMORY_EMBEDDING_PROVIDER || 'auto') as MemoryEmbeddingPreference;
 }
@@ -59,6 +61,7 @@ function orderedProviders(preferred: MemoryEmbeddingPreference): MemoryEmbedding
   }
   return [
     ...providers.filter(provider => provider.id === 'openai'),
+    ...providers.filter(provider => provider.id === 'openai_codex_oauth'),
     ...providers.filter(provider => provider.id === 'ollama'),
     ...providers.filter(provider => provider.id === 'lmstudio'),
     ...providers.filter(provider => provider.id === 'voyage'),
@@ -68,7 +71,7 @@ function orderedProviders(preferred: MemoryEmbeddingPreference): MemoryEmbedding
 }
 
 export async function getActiveMemoryEmbeddingProvider(requested?: MemoryEmbeddingPreference): Promise<MemoryEmbeddingProvider> {
-  const pref = requested || preference();
+  const pref = requested || getMemoryEmbeddingPreference();
   const failures: string[] = [];
   for (const provider of orderedProviders(pref)) {
     try {
@@ -86,12 +89,41 @@ export async function getActiveMemoryEmbeddingProvider(requested?: MemoryEmbeddi
   return hashMemoryEmbeddingProvider;
 }
 
+export async function getAutomaticMemoryEmbeddingProvider(requested?: MemoryEmbeddingPreference): Promise<MemoryEmbeddingProvider | null> {
+  const pref = requested || getMemoryEmbeddingPreference();
+  if (pref === 'hash') return null;
+
+  const explicitProvider = pref && !['auto', 'local-first', 'cloud'].includes(String(pref));
+  const providers = listMemoryEmbeddingProviders();
+  const connectedOpenAiCandidates = [
+    ...providers.filter(provider => provider.id === 'openai'),
+    ...providers.filter(provider => provider.id === 'openai_codex_oauth'),
+  ];
+  const candidates = explicitProvider || pref === 'cloud'
+    ? orderedProviders(pref).filter(provider => provider.id !== 'hash')
+    : [
+      ...connectedOpenAiCandidates,
+      ...providers.filter(provider => provider.local && provider.id !== 'hash'),
+    ];
+
+  for (const provider of candidates) {
+    try {
+      const status = await provider.status();
+      if (status.ok) return provider;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
 export async function getMemoryEmbeddingStatus(): Promise<{
   preference: MemoryEmbeddingPreference;
   active: string;
+  automatic: string | null;
   providers: MemoryEmbeddingProviderStatus[];
 }> {
-  const pref = preference();
+  const pref = getMemoryEmbeddingPreference();
   const providers = await Promise.all(listMemoryEmbeddingProviders().map(async (provider) => {
     try {
       return await provider.status();
@@ -106,5 +138,6 @@ export async function getMemoryEmbeddingStatus(): Promise<{
     }
   }));
   const active = await getActiveMemoryEmbeddingProvider(pref);
-  return { preference: pref, active: active.id, providers };
+  const automatic = await getAutomaticMemoryEmbeddingProvider(pref);
+  return { preference: pref, active: active.id, automatic: automatic?.id || null, providers };
 }

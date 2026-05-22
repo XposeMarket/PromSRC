@@ -53,6 +53,8 @@ export const desktopScreenshotTool: Tool = {
     properties: {
       capture: { type: 'string', enum: ['all', 'primary'], description: 'Virtual desktop vs primary only' },
       monitor_index: { type: 'integer', description: '0-based display to capture (overrides capture)' },
+      mode: { type: 'string', enum: ['normal', 'som'], description: 'Use som to overlay numbered UI Automation elements and enable desktop_click(element=N).' },
+      som: { type: 'boolean', description: 'Alias for mode="som".' },
     },
     additionalProperties: false,
   },
@@ -61,6 +63,25 @@ export const desktopScreenshotTool: Tool = {
       const { desktopScreenshot, parseDesktopScreenshotToolArgs } = await dt();
       const opts = parseDesktopScreenshotToolArgs(args);
       return ok(await desktopScreenshot(DESKTOP_SESSION, opts));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopDoctorTool: Tool = {
+  name: 'desktop_doctor',
+  description: 'Diagnose Windows desktop automation health: monitors/DPI, screenshot budget, OCR, UI Automation, active window, and stale screenshot state.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  },
+  execute: async (): Promise<ToolResult> => {
+    try {
+      const { desktopDoctor } = await dt();
+      return ok(await desktopDoctor(DESKTOP_SESSION));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -108,6 +129,8 @@ export const desktopWindowScreenshotTool: Tool = {
       active: { type: 'boolean' },
       focus_first: { type: 'boolean' },
       padding: { type: 'number' },
+      mode: { type: 'string', enum: ['normal', 'som'] },
+      som: { type: 'boolean' },
     },
     additionalProperties: false,
   },
@@ -121,6 +144,8 @@ export const desktopWindowScreenshotTool: Tool = {
           active: args?.active === true,
           focus_first: args?.focus_first === true,
           padding: args?.padding == null ? undefined : Number(args.padding),
+          mode: String(args?.mode || '').toLowerCase() === 'som' || args?.som === true ? 'som' : 'normal',
+          som: args?.som === true || String(args?.mode || '').toLowerCase() === 'som',
         }),
       );
     } catch (e: any) {
@@ -184,6 +209,7 @@ export const desktopClickTool: Tool = {
   schema: {
     x: 'Target X coordinate in the chosen coordinate space',
     y: 'Target Y coordinate in the chosen coordinate space',
+    element: 'Numbered UI element from a SOM screenshot. Requires screenshot_id.',
     button: 'Mouse button: left or right (default left)',
     double_click: 'true to double-click instead of single-click',
     verify: 'Verification mode: off | auto | strict',
@@ -196,10 +222,10 @@ export const desktopClickTool: Tool = {
   },
   jsonSchema: {
     type: 'object',
-    required: ['x', 'y'],
     properties: {
-      x: { type: 'number', description: 'Required X coordinate for the mouse click' },
-      y: { type: 'number', description: 'Required Y coordinate for the mouse click' },
+      x: { type: 'number', description: 'X coordinate for the mouse click. Omit when using element.' },
+      y: { type: 'number', description: 'Y coordinate for the mouse click. Omit when using element.' },
+      element: { type: 'number', description: 'Numbered UI element from desktop_screenshot(mode="som") or desktop_window_screenshot(mode="som"). Requires screenshot_id.' },
       button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button (default left)' },
       double_click: { type: 'boolean', description: 'Double-click flag' },
       modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Rare. Only use when the user explicitly wants a modified click like Shift+click or Ctrl+click' },
@@ -219,6 +245,7 @@ export const desktopClickTool: Tool = {
       const resolved = await mod.resolveDesktopActionPoint(DESKTOP_SESSION, {
         x: Number(args?.x),
         y: Number(args?.y),
+        element: args?.element == null ? undefined : Number(args.element),
         coordinate_space: args?.coordinate_space,
         screenshot_id: args?.screenshot_id == null ? undefined : String(args.screenshot_id),
         window_name: args?.window_name == null ? undefined : String(args.window_name),
@@ -909,6 +936,7 @@ export const desktopBackgroundCommandTool: Tool = {
 
 export const allDesktopTools: Tool[] = [
   // Core (Phase 2)
+  desktopDoctorTool,
   desktopScreenshotTool,
   desktopGetMonitorsTool,
   desktopWindowScreenshotTool,

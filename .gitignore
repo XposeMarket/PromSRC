@@ -10,6 +10,10 @@
 .localclaw/credentials/
 .localclaw/vault/
 /.prometheus/
+/.prometheus-dev-*/
+/.agents/
+/.claude/
+/Brain/
 
 # --- RUNTIME DATA ---
 .localclaw/sessions/
@@ -27,9 +31,9 @@
 .localclaw/cron/runs/
 
 # --- WORKSPACE RUNTIME FILES ---
-# Keep: SOUL.md, SELF.md, IDENTITY.md, USER.md, MEMORY.md, AGENTS.md, TOOLS.md, BOOT.md, README.md
-# These are default templates that ship with Prometheus; new users need them.
-# Ignore: daily memory logs, tool audit log, heartbeat, and any AI-generated scratch files.
+# Existing tracked workspace templates are handled explicitly when staging.
+# New workspace content is local runtime/private state and must not enter source.
+workspace/
 workspace/memory/
 workspace/.prometheus/
 workspace/audit/
@@ -74,6 +78,8 @@ tmp_payload.json
 mnt/
 /.claude/settings.local.json
 /.vscode/settings.json
+/.npmrc
+/.gateway-*.cjs
 /.pip-cache/
 /.pip-tmp/
 /.tmp-py/
@@ -104,6 +110,17 @@ fix_log_line.py
 /test-ollama.mjs
 /check-build.bat
 /start-gateway.bat
+/HEARTBEAT.md
+/PROMETHEUS_HTML_MOTION_BACKEND_HANDOFF.md
+/PROMETHEUS_VIDEO_CREATIVE_UPGRADE_PLAN.md
+/Prometheus_Team_Room_Refinement_Plan.md
+/prometheus_creative_suite_plan.md
+/hook-library.skill
+/-Context
+/*.docx
+/*.mp4
+/*.png
+/eng.traineddata
 
 # --- LOCAL BINARY / MODEL ARTIFACTS ---
 /bin/ffmpeg/

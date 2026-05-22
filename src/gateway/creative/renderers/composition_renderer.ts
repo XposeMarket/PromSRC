@@ -24,6 +24,7 @@ import {
   type CreativeAudioTrack,
 } from '../contracts';
 import { launchCreativeChromium } from '../playwright-runtime';
+import { wrapForIframePreview } from '../hyperframes-bridge';
 
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 
@@ -105,6 +106,9 @@ async function renderClipFrames(
   if (clip.lane === 'remotion') {
     return renderRemotionFrames(clip, comp, workspacePath, outDir, frameCount, fps, onProgress);
   }
+  if (clip.lane === 'hyperframes') {
+    return renderHyperframesFrames(clip, comp, workspacePath, outDir, frameCount, fps, onProgress);
+  }
   throw new Error(`Unknown clip lane: ${(clip as any).lane}`);
 }
 
@@ -133,7 +137,7 @@ async function renderHtmlMotionFrames(
     const frameDurationMs = 1000 / fps;
     for (let frame = 0; frame < frameCount; frame++) {
       const localTimeMs = clip.trimStartMs + frame * frameDurationMs;
-      await page.evaluate((timeMs: number) => {
+      await page.evaluate(async (timeMs: number) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const w: any = globalThis;
         const timeSeconds = timeMs / 1000;
@@ -152,7 +156,24 @@ async function renderHtmlMotionFrames(
         };
         w.__PROMETHEUS_HTML_MOTION_TIME_MS__ = timeMs;
         w.__PROMETHEUS_HTML_MOTION_TIME_SECONDS__ = timeSeconds;
+        let handled = false;
+        try {
+          if (typeof w.__promSeek === 'function') {
+            const result = w.__promSeek(timeMs);
+            if (result && typeof result.then === 'function') await result;
+            handled = true;
+          } else if (w.__hf && typeof w.__hf.seek === 'function') {
+            const result = w.__hf.seek(timeSeconds);
+            if (result && typeof result.then === 'function') await result;
+            handled = true;
+          }
+        } catch {}
         w.dispatchEvent(new CustomEvent('prometheus-html-motion-seek', { detail: { timeMs, timeSeconds } }));
+        try {
+          if (w.__promLastSeekPromise && typeof w.__promLastSeekPromise.then === 'function') {
+            await w.__promLastSeekPromise;
+          }
+        } catch {}
         try { w.postMessage({ source: 'hf-parent', action: 'seek', payload: { timeMs } }, '*'); } catch {}
         seekTimelines();
       }, localTimeMs);
@@ -174,6 +195,109 @@ async function renderHtmlMotionFrames(
           resolve(null);
         });
       }), localTimeMs);
+      const filename = `frame_${String(frame + 1).padStart(6, '0')}.png`;
+      await page.screenshot({ path: path.join(outDir, filename), type: 'png', animations: 'disabled', caret: 'hide', timeout: 45_000 });
+      if (onProgress && frame % Math.max(1, Math.floor(frameCount / 20)) === 0) {
+        onProgress({ phase: 'frames', clipId: clip.id, ratio: frame / frameCount });
+      }
+    }
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+  return frameCount;
+}
+
+function ensureInside(basePath: string, targetPath: string): void {
+  const base = path.resolve(basePath);
+  const target = path.resolve(targetPath);
+  const rel = path.relative(base, target);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Path escapes composition workspace: ${target}`);
+  }
+}
+
+function resolveHyperframesSourceHtml(clip: CreativeClip, workspacePath: string): string {
+  if (clip.source.kind !== 'hyperframes') throw new Error('hyperframes lane requires hyperframes source');
+  if (typeof clip.source.html === 'string' && clip.source.html.trim()) {
+    return clip.source.html;
+  }
+  const projectPath = String(clip.source.projectPath || '').trim();
+  if (!projectPath) throw new Error('HyperFrames clip requires source.html or source.projectPath');
+  const absProjectPath = path.isAbsolute(projectPath) ? path.resolve(projectPath) : path.resolve(workspacePath, projectPath);
+  ensureInside(workspacePath, absProjectPath);
+  const entryFile = String(clip.source.entryFile || 'index.html').trim() || 'index.html';
+  const entryPath = path.resolve(absProjectPath, entryFile);
+  ensureInside(absProjectPath, entryPath);
+  if (!fs.existsSync(entryPath)) throw new Error(`HyperFrames entry file not found: ${entryPath}`);
+  return fs.readFileSync(entryPath, 'utf8');
+}
+
+async function seekHyperframesPage(page: any, timeMs: number): Promise<void> {
+  await page.evaluate((ms: number) => {
+    const w: any = globalThis;
+    const seconds = ms / 1000;
+    w.__PROMETHEUS_HTML_MOTION_TIME_MS__ = ms;
+    w.__PROMETHEUS_HTML_MOTION_TIME_SECONDS__ = seconds;
+    try {
+      if (w.__hf && typeof w.__hf.seek === 'function') {
+        w.__hf.seek(seconds);
+      }
+    } catch {}
+    try {
+      w.dispatchEvent(new CustomEvent('hf-seek', { detail: { time: seconds, timeMs: ms } }));
+    } catch {}
+    try {
+      w.dispatchEvent(new CustomEvent('prometheus-html-motion-seek', { detail: { timeMs: ms, timeSeconds: seconds } }));
+    } catch {}
+    try {
+      const timelines = w.__timelines || {};
+      Object.keys(timelines).forEach((key) => {
+        const timeline = timelines[key];
+        if (!timeline) return;
+        if (typeof timeline.seek === 'function') timeline.seek(seconds, false);
+        else if (typeof timeline.totalTime === 'function') timeline.totalTime(seconds, false);
+        else if (typeof timeline.time === 'function') timeline.time(seconds, false);
+      });
+    } catch {}
+  }, timeMs);
+  await page.evaluate((ms: number) => new Promise((resolve: any) => {
+    const w: any = globalThis;
+    const seconds = ms / 1000;
+    w.requestAnimationFrame(() => {
+      try {
+        if (w.__hf && typeof w.__hf.seek === 'function') w.__hf.seek(seconds);
+      } catch {}
+      resolve(null);
+    });
+  }), timeMs);
+}
+
+async function renderHyperframesFrames(
+  clip: CreativeClip,
+  comp: CreativeComposition,
+  workspacePath: string,
+  outDir: string,
+  frameCount: number,
+  fps: number,
+  onProgress?: RenderProgress,
+): Promise<number> {
+  const html = resolveHyperframesSourceHtml(clip, workspacePath);
+  const entryPath = path.join(outDir, 'hyperframes-entry.html');
+  fs.writeFileSync(entryPath, wrapForIframePreview(html), 'utf8');
+
+  const playwright = require('playwright');
+  const browser = await launchCreativeChromium(playwright);
+  try {
+    const context = await browser.newContext({ viewport: { width: comp.width, height: comp.height } });
+    const page = await context.newPage();
+    await page.goto(`file://${entryPath.replace(/\\/g, '/')}`);
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => undefined);
+
+    const frameDurationMs = 1000 / fps;
+    for (let frame = 0; frame < frameCount; frame++) {
+      const localTimeMs = clip.trimStartMs + frame * frameDurationMs;
+      await seekHyperframesPage(page, localTimeMs);
       const filename = `frame_${String(frame + 1).padStart(6, '0')}.png`;
       await page.screenshot({ path: path.join(outDir, filename), type: 'png', animations: 'disabled', caret: 'hide', timeout: 45_000 });
       if (onProgress && frame % Math.max(1, Math.floor(frameCount / 20)) === 0) {

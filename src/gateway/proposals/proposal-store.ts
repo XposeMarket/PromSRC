@@ -239,6 +239,13 @@ export function validateSrcProposalDetails(details: string, affectedFiles: Propo
   return missing;
 }
 
+function hasSourceReadEvidence(text: string): boolean {
+  return (
+    /\b(read_source|grep_source|source_stats|read_webui_source|grep_webui_source|webui_source_stats|read_prom_file|grep_prom|prom_file_stats)\b/.test(text)
+    || /\bsource[-\s]?read evidence\b/.test(text)
+  );
+}
+
 function validateSrcProposalReadiness(partial: Pick<Proposal, 'type' | 'details' | 'affectedFiles' | 'executorPrompt' | 'riskTier' | 'sourcePipeline'>): string[] {
   const affectedFiles = partial.affectedFiles || [];
   if (!hasSrcAffectedFiles(affectedFiles)) return [];
@@ -262,7 +269,7 @@ function validateSrcProposalReadiness(partial: Pick<Proposal, 'type' | 'details'
   // Build-failure repair proposals are generated from compiler output after an
   // approved task is already blocked, so they may not have a fresh read_source
   // citation. Normal src proposals must prove the plan came from current code.
-  if (!isBuildRepair && !/read_source|grep_source|source_stats|read_webui_source|read_prom_file/.test(`${detailsText}\n${executorText}`)) {
+  if (!isBuildRepair && !hasSourceReadEvidence(`${detailsText}\n${executorText}`)) {
     missing.push('source-read evidence');
   }
 

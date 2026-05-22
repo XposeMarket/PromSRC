@@ -722,6 +722,8 @@ export function normalizeForHyperframes(html: string): string {
     'data-composition-duration': trimNumber(durationSeconds),
     'data-composition-width': String(width),
     'data-composition-height': String(height),
+    'data-width': String(width),
+    'data-height': String(height),
   });
   source = upsertAttrsById(source, 'stage', {
     'data-composition-id': compositionId,

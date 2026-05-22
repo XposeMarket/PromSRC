@@ -15,7 +15,7 @@ import { triggerManagerReview } from '../teams/team-manager-runner';
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
 
-let _isModelBusy = false;
+let _modelBusyCount = 0;
 let _lastMainSessionId = 'default';
 let _runtimeHeartbeatTimer: NodeJS.Timeout | null = null;
 
@@ -27,16 +27,17 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       pid: process.pid,
       timestamp: Date.now(),
       reason,
-      modelBusy: _isModelBusy,
+      modelBusy: _modelBusyCount > 0,
+      modelBusyCount: _modelBusyCount,
       lastMainSessionId: _lastMainSessionId,
     }), 'utf-8');
   } catch {}
 }
 
-export function isModelBusy(): boolean { return _isModelBusy; }
+export function isModelBusy(): boolean { return _modelBusyCount > 0; }
 export function setModelBusy(v: boolean): void {
-  _isModelBusy = v;
-  writeRuntimeStatus(v ? 'model_busy' : 'model_idle');
+  _modelBusyCount = v ? _modelBusyCount + 1 : Math.max(0, _modelBusyCount - 1);
+  writeRuntimeStatus(_modelBusyCount > 0 ? 'model_busy' : 'model_idle');
 }
 export function getLastMainSessionId(): string { return _lastMainSessionId; }
 export function setLastMainSessionId(v: string): void {
@@ -58,12 +59,7 @@ export function startRuntimeHeartbeat(): void {
 // a new session, so Telegram always continues the most recent conversation.
 
 const _telegramSessionBridge = new Map<number, string>(); // telegramUserId → sessionId
-const _sessionChannelHints = new Map<string, {
-  channel: 'terminal' | 'telegram' | 'web' | 'discord' | 'whatsapp';
-  chatId?: number;
-  userId?: number;
-  timestamp: number;
-}>();
+const _sessionChannelHints = new Map<string, SessionChannelHint & { timestamp: number }>();
 
 /** Record that `sessionId` just sent an outbound Telegram message to `telegramUserId`. */
 export function linkTelegramSession(telegramUserId: number, sessionId: string): void {
@@ -81,9 +77,16 @@ export function unlinkTelegramSession(telegramUserId: number): void {
   _telegramSessionBridge.delete(telegramUserId);
 }
 
+export type SessionChannelHint = {
+  channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp';
+  chatId?: number;
+  userId?: number;
+  timestamp?: number;
+};
+
 export function setSessionChannelHint(
   sessionId: string,
-  hint: { channel: 'terminal' | 'telegram' | 'web' | 'discord' | 'whatsapp'; chatId?: number; userId?: number; timestamp?: number },
+  hint: SessionChannelHint,
 ): void {
   const sid = String(sessionId || '').trim();
   if (!sid) return;
@@ -95,12 +98,7 @@ export function setSessionChannelHint(
   });
 }
 
-export function getSessionChannelHint(sessionId: string): {
-  channel: 'terminal' | 'telegram' | 'web' | 'discord' | 'whatsapp';
-  chatId?: number;
-  userId?: number;
-  timestamp: number;
-} | null {
+export function getSessionChannelHint(sessionId: string): (SessionChannelHint & { timestamp: number }) | null {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
   return _sessionChannelHints.get(sid) || null;
@@ -109,24 +107,31 @@ export function getSessionChannelHint(sessionId: string): {
 // ─── WebSocket Broadcast ───────────────────────────────────────────────────────
 
 export let wss: WebSocketServer | undefined;
-export function setWss(instance: WebSocketServer): void { wss = instance; }
+const wssInstances = new Set<WebSocketServer>();
+export function setWss(instance: WebSocketServer): void {
+  wss = instance;
+  wssInstances.add(instance);
+  instance.on('close', () => wssInstances.delete(instance));
+}
 
 export function getWebSocketClientCount(): number {
-  if (!wss) return 0;
   let count = 0;
-  wss.clients.forEach((client: any) => {
-    if (client.readyState === 1) count += 1;
+  wssInstances.forEach((server) => {
+    server.clients.forEach((client: any) => {
+      if (client.readyState === 1) count += 1;
+    });
   });
   return count;
 }
 
 export function broadcastWS(data: object): void {
-  if (!wss) return;
   const msg = JSON.stringify(data);
-  wss.clients.forEach((client: any) => {
-    if (client.readyState === 1) {
-      try { client.send(msg); } catch {}
-    }
+  wssInstances.forEach((server) => {
+    server.clients.forEach((client: any) => {
+      if (client.readyState === 1) {
+        try { client.send(msg); } catch {}
+      }
+    });
   });
 }
 

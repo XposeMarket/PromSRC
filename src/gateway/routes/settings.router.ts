@@ -26,6 +26,20 @@ const isConnected = (...args: any[]) => require('../../auth/openai-oauth').isCon
 const clearTokens = (...args: any[]) => require('../../auth/openai-oauth').clearTokens(...args);
 const loadTokens = (...args: any[]) => require('../../auth/openai-oauth').loadTokens(...args);
 const exchangeManualCodeFromPending = (...args: any[]) => require('../../auth/openai-oauth').exchangeManualCodeFromPending(...args);
+const startXAIOAuthFlowBackground = (...args: any[]) => require('../../auth/xai-oauth').startXAIOAuthFlowBackground(...args);
+const pollXAIOAuthBackground = () => require('../../auth/xai-oauth').pollXAIOAuthBackground();
+const isXAIConnected = (...args: any[]) => require('../../auth/xai-oauth').isXAIConnected(...args);
+const clearXAITokens = (...args: any[]) => require('../../auth/xai-oauth').clearXAITokens(...args);
+const loadXAITokens = (...args: any[]) => require('../../auth/xai-oauth').loadXAITokens(...args);
+const completeXAIOAuthWithCode = (...args: any[]) => require('../../auth/xai-oauth').completeXAIOAuthWithCode(...args);
+const saveXApiCredentials = (...args: any[]) => require('../../auth/x-api-oauth').saveXApiCredentials(...args);
+const startXApiOAuthFlowBackground = (...args: any[]) => require('../../auth/x-api-oauth').startXApiOAuthFlowBackground(...args);
+const pollXApiOAuthBackground = () => require('../../auth/x-api-oauth').pollXApiOAuthBackground();
+const getXApiOAuthStatus = (...args: any[]) => require('../../auth/x-api-oauth').getXApiOAuthStatus(...args);
+const clearXApiTokens = (...args: any[]) => require('../../auth/x-api-oauth').clearXApiTokens(...args);
+const clearXApiCredentials = (...args: any[]) => require('../../auth/x-api-oauth').clearXApiCredentials(...args);
+const completeXApiOAuthWithCode = (...args: any[]) => require('../../auth/x-api-oauth').completeXApiOAuthWithCode(...args);
+const refreshXAITools = () => require('../../extensions/xai-extension-adapter').refreshXAITools();
 // Anthropic auth (setup-token flow)
 const anthropicIsConnected = (...args: any[]) => require('../../auth/anthropic-oauth').isConnected(...args);
 const anthropicLoadTokens  = (...args: any[]) => require('../../auth/anthropic-oauth').loadTokens(...args);
@@ -42,10 +56,31 @@ import {
 import { appendAuditEntry } from '../audit-log';
 import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth';
 import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
+import { getLastMainSessionId } from '../comms/broadcaster';
 
 export const router = Router();
 
 const CONFIG_DIR_PATH = getConfig().getConfigDir();
+
+function setXAIAuthModeOAuth(): void {
+  const configManager = getConfig();
+  const current = configManager.getConfig() as any;
+  const llm = current.llm || {};
+  const providers = llm.providers || {};
+  configManager.updateConfig({
+    llm: {
+      ...llm,
+      providers: {
+        ...providers,
+        xai: {
+          ...(providers.xai || {}),
+          auth_mode: 'oauth',
+        },
+      },
+    },
+  } as any);
+  resetProvider();
+}
 
 function normalizePathForCompare(p: string): string {
   const resolved = path.resolve(String(p || ''));
@@ -128,6 +163,7 @@ router.get('/api/credentials/status', (_req, res) => {
 const PROVIDER_OAUTH_VAULT_KEYS: Record<string, string[]> = {
   openai_codex: ['openai.oauth_tokens'],
   anthropic: ['anthropic.oauth_tokens'],
+  xai: ['xai.oauth_tokens'],
 };
 
 function hasSavedProviderSecretConfig(providerConfig: any, field: string): boolean {
@@ -319,10 +355,11 @@ function getSessionDefaults() {
     maxMessages: 120,
     compactionThreshold: 0.7,
     memoryFlushThreshold: 0.75,
+    compactionMinMessages: 20,
     rollingCompactionEnabled: true,
     rollingCompactionMessageCount: 20,
     rollingCompactionToolTurns: 5,
-    rollingCompactionSummaryMaxWords: 220,
+    rollingCompactionSummaryMaxWords: 900,
     rollingCompactionModel: '',
   };
 }
@@ -339,6 +376,13 @@ function toBoundedFloat(value: any, min: number, max: number, fallback: number):
   return Math.max(min, Math.min(max, n));
 }
 
+router.get('/api/settings/features', (_req, res) => {
+  const cfg = (getConfig().getConfig() as any);
+  res.json({
+    creativeEditorEnabled: cfg?.creative_editor?.enabled === true,
+  });
+});
+
 router.get('/api/settings/session', (_req, res) => {
   const cfg = (getConfig().getConfig() as any).session || {};
   const d = getSessionDefaults();
@@ -348,10 +392,11 @@ router.get('/api/settings/session', (_req, res) => {
       maxMessages: toBoundedInt(cfg.maxMessages, 20, 500, d.maxMessages),
       compactionThreshold: toBoundedFloat(cfg.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
       memoryFlushThreshold: toBoundedFloat(cfg.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
+      compactionMinMessages: toBoundedInt(cfg.compactionMinMessages ?? cfg.rollingCompactionMessageCount, 2, 120, d.compactionMinMessages),
       rollingCompactionEnabled: cfg.rollingCompactionEnabled !== false,
       rollingCompactionMessageCount: toBoundedInt(cfg.rollingCompactionMessageCount, 10, 120, d.rollingCompactionMessageCount),
       rollingCompactionToolTurns: toBoundedInt(cfg.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
-      rollingCompactionSummaryMaxWords: toBoundedInt(cfg.rollingCompactionSummaryMaxWords, 80, 500, d.rollingCompactionSummaryMaxWords),
+      rollingCompactionSummaryMaxWords: toBoundedInt(cfg.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
       rollingCompactionModel: String(cfg.rollingCompactionModel || '').trim(),
     },
   });
@@ -370,6 +415,12 @@ router.post('/api/settings/session', (req, res) => {
       maxMessages: toBoundedInt(body.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
       compactionThreshold: toBoundedFloat(body.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
       memoryFlushThreshold: toBoundedFloat(body.memoryFlushThreshold ?? existing.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
+      compactionMinMessages: toBoundedInt(
+        body.compactionMinMessages ?? existing.compactionMinMessages ?? body.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount,
+        2,
+        80,
+        d.compactionMinMessages,
+      ),
       rollingCompactionEnabled: body.rollingCompactionEnabled !== undefined
         ? !!body.rollingCompactionEnabled
         : (existing.rollingCompactionEnabled !== false),
@@ -387,8 +438,8 @@ router.post('/api/settings/session', (req, res) => {
       ),
       rollingCompactionSummaryMaxWords: toBoundedInt(
         body.rollingCompactionSummaryMaxWords ?? existing.rollingCompactionSummaryMaxWords,
-        80,
-        500,
+        120,
+        1500,
         d.rollingCompactionSummaryMaxWords,
       ),
       rollingCompactionModel: String(body.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
@@ -938,6 +989,15 @@ function resolveApprovalRequest(req: any, res: any, decision: 'approved' | 'reje
     res.status(409).json({ success: false, error: `Approval already ${approval.status}` });
     return;
   }
+  if (requestedDecision === 'approved' && grantScope && (
+    approval.approvalKind === 'dev_source_edit'
+    || approval.toolName === 'request_dev_source_edit'
+    || approval.approvalKind === 'final_action'
+    || approval.toolName === 'request_final_action_approval'
+  )) {
+    res.status(400).json({ success: false, error: 'One-shot approvals cannot be saved as session or always permissions.' });
+    return;
+  }
   const resolved = queue.resolve(req.params.id, requestedDecision === 'approved', resolvedBy);
   if (!resolved) {
     res.status(409).json({ success: false, error: 'Approval could not be resolved' });
@@ -1001,6 +1061,59 @@ router.post('/api/approvals/:id/approve', requireGatewayAuth, (req, res) => {
 router.post('/api/approvals/:id/deny', requireGatewayAuth, (req, res) => {
   req.body = { ...(req.body || {}), decision: 'rejected' };
   resolveApprovalRequest(req, res, 'rejected', 'web');
+});
+
+// ─── Lifecycle / Restart ──────────────────────────────────────────────────────────
+
+router.post('/api/lifecycle/restart', requireGatewayAuth, (req, res) => {
+  const rebuild = req.body?.rebuild === true;
+  const requestedSessionId = String(
+    req.body?.previousSessionId
+      || req.body?.sessionId
+      || req.headers['x-prometheus-session-id']
+      || req.headers['x-session-id']
+      || '',
+  ).trim();
+  const origin = req.body?.origin && typeof req.body.origin === 'object' ? req.body.origin : {};
+  const rawChannel = String(origin.channel || req.body?.originChannel || '').trim().toLowerCase();
+  const originChannel = rawChannel === 'mobile'
+    || rawChannel === 'web'
+    || rawChannel === 'telegram'
+    || rawChannel === 'discord'
+    || rawChannel === 'whatsapp'
+    ? rawChannel as any
+    : requestedSessionId.startsWith('mobile_') || requestedSessionId === 'mobile_default' || !!req.headers['x-pairing-token'] ? 'mobile'
+      : requestedSessionId.startsWith('telegram_') ? 'telegram'
+        : requestedSessionId ? 'web'
+          : 'unknown';
+  const lastMainSessionId = String(getLastMainSessionId?.() || '').trim();
+  const previousSessionId = requestedSessionId
+    || lastMainSessionId
+    || (originChannel === 'mobile' ? 'mobile_default' : undefined);
+  res.json({ ok: true, rebuild, message: rebuild ? 'Full rebuild + restart initiated.' : 'Quick restart initiated.' });
+  setTimeout(async () => {
+    try {
+      const restartContext = {
+        reason: 'manual' as const,
+        timestamp: Date.now(),
+        previousSessionId,
+        originChannel,
+        title: originChannel === 'mobile' ? 'Mobile quick restart' : 'Manual gateway restart',
+        summary: previousSessionId
+          ? `Manual restart requested from ${originChannel} session ${previousSessionId}.`
+          : `Manual restart requested from ${originChannel}.`,
+      };
+      if (rebuild) {
+        const { buildAndRestart } = await import('../lifecycle.js');
+        await buildAndRestart(restartContext);
+      } else {
+        const { gracefulRestart } = await import('../lifecycle.js');
+        await gracefulRestart(restartContext);
+      }
+    } catch (e) {
+      console.error('[lifecycle] restart error:', e);
+    }
+  }, 300);
 });
 
 // ─── Memory API (stub) ───────────────────────────────────────────────────────────
@@ -1099,6 +1212,25 @@ function preserveMaskedProviderSecrets(nextLlm: any, currentLlm: any): any {
   return out;
 }
 
+function mergeProviderConfigs(currentProviders: any, nextProviders: any): any {
+  const out: Record<string, any> = { ...(currentProviders || {}) };
+  const incoming = nextProviders && typeof nextProviders === 'object' ? nextProviders : {};
+  for (const [providerId, providerConfig] of Object.entries(incoming)) {
+    if (providerConfig && typeof providerConfig === 'object' && !Array.isArray(providerConfig)) {
+      const currentProvider = out[providerId] && typeof out[providerId] === 'object' && !Array.isArray(out[providerId])
+        ? out[providerId]
+        : {};
+      out[providerId] = {
+        ...currentProvider,
+        ...(providerConfig as any),
+      };
+    } else {
+      out[providerId] = providerConfig;
+    }
+  }
+  return out;
+}
+
 // HIGH-02 fix: redact all api_key / token fields before sending to the UI.
 // Vault references ("vault:...") and env references ("env:...") are also masked
 // so neither the vault key name nor the env var name leaks to the browser.
@@ -1140,10 +1272,7 @@ router.post('/api/settings/provider', (req, res) => {
     const mergedLlm = {
       ...current,
       ...llm,
-      providers: {
-        ...(current.providers || {}),
-        ...(llm.providers || {}),
-      },
+      providers: mergeProviderConfigs(current.providers || {}, llm.providers || {}),
     };
     const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
     const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
@@ -1166,6 +1295,7 @@ router.post('/api/settings/provider', (req, res) => {
       : {};
     configManager.updateConfig({ llm: mergedLlm, ...legacyModelSync, ...legacyOllamaSync } as any);
     resetProvider();
+    refreshXAITools();
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -1249,10 +1379,7 @@ router.post('/api/settings/bulk', (req, res) => {
       const mergedLlm = {
         ...currentLlm,
         ...llm,
-        providers: {
-          ...(currentLlm.providers || {}),
-          ...(llm.providers || {}),
-        },
+        providers: mergeProviderConfigs(currentLlm.providers || {}, llm.providers || {}),
       };
       updates.llm = mergedLlm;
       const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
@@ -1279,16 +1406,18 @@ router.post('/api/settings/bulk', (req, res) => {
         maxMessages: toBoundedInt(s.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
         compactionThreshold: toBoundedFloat(s.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
         memoryFlushThreshold: toBoundedFloat(s.memoryFlushThreshold ?? existing.memoryFlushThreshold, 0.5, 0.98, d.memoryFlushThreshold),
+        compactionMinMessages: toBoundedInt(s.compactionMinMessages ?? existing.compactionMinMessages ?? s.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount, 2, 120, d.compactionMinMessages),
         rollingCompactionEnabled: s.rollingCompactionEnabled !== undefined ? !!s.rollingCompactionEnabled : (existing.rollingCompactionEnabled !== false),
         rollingCompactionMessageCount: toBoundedInt(s.rollingCompactionMessageCount ?? existing.rollingCompactionMessageCount, 10, 120, d.rollingCompactionMessageCount),
         rollingCompactionToolTurns: toBoundedInt(s.rollingCompactionToolTurns ?? existing.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
-        rollingCompactionSummaryMaxWords: toBoundedInt(s.rollingCompactionSummaryMaxWords ?? existing.rollingCompactionSummaryMaxWords, 80, 500, d.rollingCompactionSummaryMaxWords),
+        rollingCompactionSummaryMaxWords: toBoundedInt(s.rollingCompactionSummaryMaxWords ?? existing.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
         rollingCompactionModel: String(s.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
       };
     }
 
     configManager.updateConfig(updates as any);
     if (providerChanged) resetProvider();
+    if (providerChanged) refreshXAITools();
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -1357,6 +1486,126 @@ router.post('/api/auth/openai/manual', async (req, res) => {
 router.post('/api/auth/openai/disconnect', (_req, res) => {
   const configDir = CONFIG_DIR_PATH;
   clearTokens(configDir);
+  res.json({ success: true });
+});
+
+// xAI Grok OAuth: account/subscription auth. xAI still enforces account tier
+// and quota server-side; Prometheus only stores and forwards the bearer token.
+router.get('/api/auth/xai/status', (_req, res) => {
+  const configDir = CONFIG_DIR_PATH;
+  const connected = isXAIConnected(configDir);
+  const tokens = connected ? loadXAITokens(configDir) : null;
+  const providerCfg = ((getConfig().getConfig() as any)?.llm?.providers?.xai || {}) as Record<string, any>;
+  const hasApiKey = !!(getConfig().resolveSecret(providerCfg.api_key) || process.env.XAI_API_KEY);
+  res.json({
+    connected: connected || hasApiKey,
+    oauthConnected: connected,
+    apiKeyConnected: hasApiKey,
+    expires_at: tokens?.expires_at || null,
+    refresh_available: !!tokens?.refresh_token,
+    auth: connected ? 'oauth' : hasApiKey ? 'api_key' : 'none',
+    tokenSource: connected ? 'xai_oauth' : hasApiKey ? 'xai_api_key' : undefined,
+  });
+});
+
+router.post('/api/auth/xai/start', async (_req, res) => {
+  try {
+    const result = await startXAIOAuthFlowBackground(CONFIG_DIR_PATH);
+    res.json(result);
+  } catch (err: any) {
+    res.json({ error: err.message });
+  }
+});
+
+router.get('/api/auth/xai/poll', (_req, res) => {
+  try {
+    const result = pollXAIOAuthBackground();
+    if ((result as any)?.done && (result as any)?.success) {
+      setXAIAuthModeOAuth();
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.json({ done: false, error: err.message });
+  }
+});
+
+router.post('/api/auth/xai/manual', async (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim();
+    const result = await completeXAIOAuthWithCode(CONFIG_DIR_PATH, code);
+    if (result?.success) {
+      setXAIAuthModeOAuth();
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+router.post('/api/auth/xai/disconnect', (_req, res) => {
+  clearXAITokens(CONFIG_DIR_PATH);
+  res.json({ success: true });
+});
+
+// Official X API OAuth 2.0 PKCE flow (xurl/Hermes-style). This is for
+// api.twitter.com/2 and is intentionally separate from xAI Grok OAuth.
+router.get('/api/auth/x-api/status', (_req, res) => {
+  res.json({ success: true, ...getXApiOAuthStatus(CONFIG_DIR_PATH) });
+});
+
+router.post('/api/auth/x-api/credentials', (req, res) => {
+  try {
+    const credentials = saveXApiCredentials(CONFIG_DIR_PATH, {
+      clientId: req.body?.clientId,
+      clientSecret: req.body?.clientSecret,
+      bearerToken: req.body?.bearerToken,
+      redirectUri: req.body?.redirectUri,
+      scopes: req.body?.scopes,
+    });
+    res.json({
+      success: true,
+      redirect_uri: credentials.redirect_uri,
+      scopes: credentials.scopes,
+    });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/api/auth/x-api/start', async (_req, res) => {
+  try {
+    const result = await startXApiOAuthFlowBackground(CONFIG_DIR_PATH);
+    res.json(result);
+  } catch (err: any) {
+    res.json({ error: err.message });
+  }
+});
+
+router.get('/api/auth/x-api/poll', (_req, res) => {
+  try {
+    const result = pollXApiOAuthBackground();
+    if ((result as any)?.done) refreshXAITools();
+    res.json(result);
+  } catch (err: any) {
+    res.json({ done: false, error: err.message });
+  }
+});
+
+router.post('/api/auth/x-api/manual', async (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim();
+    const result = await completeXApiOAuthWithCode(CONFIG_DIR_PATH, code);
+    if (result?.success) refreshXAITools();
+    res.json(result);
+  } catch (err: any) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
+router.post('/api/auth/x-api/disconnect', (req, res) => {
+  clearXApiTokens(CONFIG_DIR_PATH);
+  if (req.body?.clearCredentials === true) clearXApiCredentials(CONFIG_DIR_PATH);
+  refreshXAITools();
   res.json({ success: true });
 });
 

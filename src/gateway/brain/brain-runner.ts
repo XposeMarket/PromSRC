@@ -558,9 +558,10 @@ export class BrainRunner {
 	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
       try {
         activateToolCategory(sessionId, 'file_ops');
+        const businessCandidatesFile = path.posix.join('Brain', 'business-candidates', dateStr, 'candidates.jsonl');
         setSessionMutationScope(sessionId, {
-	        allowedFiles: [workspaceOutFile],
-	        allowedDirs: [path.posix.dirname(workspaceOutFile)],
+	        allowedFiles: [workspaceOutFile, businessCandidatesFile],
+	        allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(businessCandidatesFile)],
 	      });
 	      const result = await this.deps.handleChat(
 	        prompt,
@@ -568,7 +569,7 @@ export class BrainRunner {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe only — no memory writes, no proposals.`,
+        `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe, write the thought file, and apply low-risk existing-skill maintenance only. No memory writes, proposals, or new skill creation.`,
         thoughtModelOverride,
         'cron',
         [
@@ -583,9 +584,16 @@ export class BrainRunner {
           'create_file',
           'write_file',
 	          'replace_lines',
-	          'find_replace',
+          'find_replace',
           'insert_after',
           'delete_lines',
+          'skill_list',
+          'skill_read',
+          'skill_inspect',
+          'skill_resource_list',
+          'skill_resource_read',
+          'skill_manifest_write',
+          'skill_resource_write',
         ],
       );
       resultText = abortSignal.aborted
@@ -727,8 +735,8 @@ export class BrainRunner {
 	      activateToolCategory(sessionId, 'file_ops');
 	      activateToolCategory(sessionId, 'source_read');
 	      setSessionMutationScope(sessionId, {
-	        allowedFiles: [workspaceOutFile, workspaceProposalsFile],
-	        allowedDirs: [path.posix.dirname(workspaceOutFile)],
+	        allowedFiles: [workspaceOutFile, workspaceProposalsFile, 'BUSINESS.md'],
+	        allowedDirs: [path.posix.dirname(workspaceOutFile), 'entities', path.posix.join('Brain', 'business-reconciliation', dateStr)],
 	      });
 	      const result = await this.deps.handleChat(
 	        prompt,
@@ -756,6 +764,10 @@ export class BrainRunner {
           'delete_lines',
           'memory_browse',
           'memory_write',
+          'list_entities',
+          'read_entity',
+          'write_entity',
+          'append_entity_event',
           'list_source',
           'source_stats',
           'read_source',
@@ -805,17 +817,65 @@ export class BrainRunner {
       persistToolLog(sessionId, toolLogLines.join('\n'));
     }
 
-    const proposalsFilePath = path.join(getBrainDir(), 'proposals.md');
-    const dreamExists = fs.existsSync(absOutFile);
-    const proposalsExists = fs.existsSync(proposalsFilePath);
-    const dreamStats = dreamExists ? fs.statSync(absOutFile) : null;
-    const proposalStats = proposalsExists ? fs.statSync(proposalsFilePath) : null;
-    const artifactsFresh = !!dreamStats && !!proposalStats
-      && dreamStats.size > 0
-      && proposalStats.size > 0
-      && dreamStats.mtimeMs >= (runStartedAt - 5000)
-      && proposalStats.mtimeMs >= (runStartedAt - 5000);
     const runFailed = /^error:/i.test(String(resultText || '').trim());
+    const proposalsFilePath = path.join(getBrainDir(), 'proposals.md');
+    const artifactRecoveryNotes: string[] = [];
+    const artifactFresh = (filePath: string): boolean => {
+      try {
+        if (!fs.existsSync(filePath)) return false;
+        const st = fs.statSync(filePath);
+        return st.size > 0 && st.mtimeMs >= (runStartedAt - 5000);
+      } catch {
+        return false;
+      }
+    };
+
+    if (!runFailed && !artifactFresh(absOutFile) && String(resultText || '').trim()) {
+      try {
+        fs.mkdirSync(path.dirname(absOutFile), { recursive: true });
+        fs.writeFileSync(absOutFile, [
+          `# Dream - ${dateStr}`,
+          `_Generated: ${fmtLocal(new Date())}_`,
+          '',
+          '## Artifact Recovery Note',
+          'The model-backed Dream run returned a response but did not write a fresh dream artifact. Prometheus recovered by saving the assistant response here instead of marking the whole Dream failed.',
+          '',
+          '## Recovered Dream Response',
+          String(resultText || '').trim(),
+          '',
+        ].join('\n'), 'utf-8');
+        artifactRecoveryNotes.push(`Recovered missing/stale dream artifact: ${outFile}`);
+      } catch (err: any) {
+        console.warn('[BrainRunner] Failed to recover dream artifact:', err?.message || err);
+      }
+    }
+
+    if (!runFailed && artifactFresh(absOutFile) && !artifactFresh(proposalsFilePath)) {
+      try {
+        fs.mkdirSync(path.dirname(proposalsFilePath), { recursive: true });
+        fs.writeFileSync(proposalsFilePath, [
+          `# Brain Proposals - ${dateStr}`,
+          `_Generated: ${fmtLocal(new Date())}_`,
+          '',
+          '## Artifact Recovery Note',
+          'The Dream run completed but did not write a fresh `Brain/proposals.md`. Prometheus recovered this lightweight morning summary so the Dream is not treated as failed solely because the proposals artifact was missing or stale.',
+          '',
+          '## Dream Artifact',
+          `- ${workspaceOutFile}`,
+          '',
+          '## Proposals',
+          '- None recovered from this run. See the Dream artifact above for the full synthesis and any deferred ideas.',
+          '',
+        ].join('\n'), 'utf-8');
+        artifactRecoveryNotes.push('Recovered missing/stale Brain/proposals.md with a lightweight fallback summary.');
+      } catch (err: any) {
+        console.warn('[BrainRunner] Failed to recover proposals artifact:', err?.message || err);
+      }
+    }
+
+    const dreamFresh = artifactFresh(absOutFile);
+    const proposalsFresh = artifactFresh(proposalsFilePath);
+    const artifactsFresh = dreamFresh && proposalsFresh;
     const success = artifactsFresh && !runFailed;
 
 	    const state = loadLatestState();
@@ -825,7 +885,7 @@ export class BrainRunner {
 	      state.lastDreamCompletedAt = new Date().toISOString();
 	      state.lastDreamAttemptDate = dateStr;
 	      state.lastDreamStatus = 'success';
-	      state.lastDreamError = null;
+	      state.lastDreamError = artifactRecoveryNotes.length ? artifactRecoveryNotes.join(' ') : null;
 	      saveLatestState(state);
 
       const daily = loadDailyStatus(dateStr);
@@ -838,13 +898,14 @@ export class BrainRunner {
           const curator = runSkillCurator({
             workspacePath: this.deps.workspacePath,
             skillsManager: this.deps.skillsManager,
-            mode: 'pending',
+            mode: 'auto-safe',
           });
           this.deps.broadcast({
             type: 'skill_curator_done',
             date: dateStr,
             runId: curator.runId,
             suggestions: curator.suggestions.length,
+            auditedChanges: curator.auditedChanges.length,
             quarantined: curator.quarantined.length,
             reportPath: curator.reportPath,
           });
@@ -856,7 +917,10 @@ export class BrainRunner {
       state.lastDreamStatus = 'failed';
       state.lastDreamError = runFailed
         ? String(resultText).slice(0, 500)
-        : `Expected dream artifacts missing/stale: ${outFile}, proposals.md`;
+        : `Expected dream artifacts missing/stale after recovery attempts: ${[
+          dreamFresh ? null : outFile,
+          proposalsFresh ? null : 'proposals.md',
+        ].filter(Boolean).join(', ') || '(unknown)'}`;
       saveLatestState(state);
     }
 
@@ -865,9 +929,10 @@ export class BrainRunner {
       type: 'brain_dream_done',
       date: dateStr,
       file: outFile,
-      summary: resultText.slice(0, 600),
+      summary: `${artifactRecoveryNotes.length ? `[Recovered artifacts: ${artifactRecoveryNotes.join(' ')}]\n` : ''}${resultText.slice(0, 600)}`,
       success,
       error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
+      recoveredArtifacts: artifactRecoveryNotes,
     });
 
     if (success) {
@@ -938,7 +1003,11 @@ export class BrainRunner {
       activateToolCategory(sessionId, 'file_ops');
       setSessionMutationScope(sessionId, {
         allowedFiles: [workspaceOutFile, 'USER.md', 'SOUL.md', 'MEMORY.md'],
-        allowedDirs: [path.posix.dirname(workspaceOutFile)],
+        allowedDirs: [
+          path.posix.dirname(workspaceOutFile),
+          'skills',
+          path.posix.join('Brain', 'skill-curator'),
+        ],
       });
       const result = await this.deps.handleChat(
         prompt,
@@ -946,7 +1015,7 @@ export class BrainRunner {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Automated Brain Dream cleanup for ${dateStr}. Second pass only: remove or dedupe stale/redundant memory text. No additions, no proposals.`,
+        `CONTEXT: Automated Brain Dream cleanup for ${dateStr}. Second pass only: remove/dedupe stale memory text and audit recent low-risk skill-curator updates. No new memories, no proposals, no new skills.`,
         dreamModelOverride,
         'cron',
         [
@@ -965,6 +1034,13 @@ export class BrainRunner {
           'insert_after',
           'delete_lines',
           'memory_browse',
+          'skill_curator',
+          'skill_read',
+          'skill_inspect',
+          'skill_resource_list',
+          'skill_resource_read',
+          'skill_resource_write',
+          'skill_resource_delete',
         ],
       );
       resultText = abortSignal.aborted
@@ -1062,6 +1138,7 @@ export class BrainRunner {
     // Workspace-relative paths (relative to workspacePath) so the file tools resolve them correctly.
     // Do NOT use absolute Windows paths here — the agent strips the drive prefix and creates doubled dirs.
     const thoughtsDirRel  = path.join('Brain', 'thoughts', dateStr);
+    const businessCandidatesDirRel = path.join('Brain', 'business-candidates', dateStr);
     const memNotesFileRel = path.join('memory', `${dateStr}-intraday-notes.md`);
     const auditDirRel     = 'audit';
     // outFile received here is already absolute — derive the workspace-relative version for the prompt
@@ -1070,7 +1147,7 @@ export class BrainRunner {
     return `You are Prometheus, running an automated Brain Thought analysis.
 
 ════════════════════════════════════════════════════════════
-BRAIN THOUGHT ${thoughtNumber} — Observation Only
+BRAIN THOUGHT ${thoughtNumber} — Observation + Existing Skill Maintenance
 Window:  ${wsStart} → ${wsEnd}
 Date:    ${dateStr}
 Output:  ${outFileRel}   ← path is RELATIVE to workspace root (use as-is with file tools)
@@ -1084,8 +1161,11 @@ Do NOT prepend "workspace/" or any drive letter — the tools resolve relative p
 STRICT RULES — do not violate under any circumstances:
 • DO NOT write to USER.md, SOUL.md, or any memory files
 • DO NOT call write_proposal or create any proposals
-• DO NOT update cron jobs, skills, configs, or team state
-• Your ONLY permitted file write is the thought output file listed above
+• DO NOT create new skills directly
+• DO NOT update cron jobs, configs, or team state
+• Your direct file writes are limited to the thought output file listed above
+• You may update existing skills only through skill_manifest_write or skill_resource_write, after reading/inspecting the existing skill
+• Existing-skill updates must be low-risk, additive or narrowly corrective, evidence-backed, and recorded with appliedBy="brain_thought", evidence, reason, and changeType metadata
 
 ════════════════════════════════════════════════════════════
 STEP 1 — SCAN AUDIT WINDOW
@@ -1095,12 +1175,12 @@ Scan the audit directory for activity between ${wsStart} and ${wsEnd}.
 Audit root: ${auditDirRel}
 
 Priority scan order (read in this order, respect the caps):
-  1. ${auditDirRel}/chats/sessions/     — chat session snapshots (max 8 most recent)
-  2. ${auditDirRel}/tasks/              — task state snapshots (max 15 files)
-  3. ${auditDirRel}/cron/runs/          — JSONL run history files (filter by timestamp)
-  4. ${auditDirRel}/teams/              — team activity logs (if present)
-  5. ${auditDirRel}/proposals/          — proposal state changes (if present)
-  6. ${memNotesFileRel}  — today's intraday notes (if file exists)
+  1. ${memNotesFileRel}  — today's intraday notes (if file exists)
+  2. ${auditDirRel}/chats/sessions/     — chat session snapshots (max 8 most recent)
+  3. ${auditDirRel}/tasks/              — task state snapshots (max 15 files)
+  4. ${auditDirRel}/cron/runs/          — JSONL run history files (filter by timestamp)
+  5. ${auditDirRel}/teams/              — team activity logs (if present)
+  6. ${auditDirRel}/proposals/          — proposal state changes (if present)
 
 Selective reading strategy:
   • List each directory first, identify files by modification time if available
@@ -1135,12 +1215,20 @@ B. BEHAVIOR QUALITY
 C. MEMORY CANDIDATES
    Items that might be worthy of USER.md, SOUL.md, or MEMORY.md — the Dream will evaluate before any writes.
    Only flag if durable (not one-off noise) and not clearly already captured.
+   Future Behavior Memory Test:
+   A memory is only useful if it changes future behavior. For every candidate, answer:
+   1. What future situation should trigger recall?
+   2. What should Prometheus do differently because of it?
+   3. Where is the best home: USER.md, SOUL.md, MEMORY.md, BUSINESS.md, entity file, skill, proposal, or nowhere?
+   4. What would make this stale or wrong later?
+   If you cannot answer these, do not write it as memory.
    Format each as a table row with: Item | Target file | Confidence | Evidence
 
 D. IMPROVEMENT CANDIDATES
    Items that might be worthy of proposals — the Dream will evaluate before submitting.
-   Format each as: Issue | Proposal type | Confidence | Evidence
+   Format each as: Issue | Proposal type | Suggested execution mode | Confidence | Evidence
    Proposal types: prompt_mutation / skill_evolution / src_edit / config_change / feature_addition / task_trigger / general
+   Execution modes: code_change for Prometheus src/ or web-ui/ edits only; action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note.
 
 E. WINDOW VERDICT
    - Active: yes / no
@@ -1152,6 +1240,7 @@ STEP 3 — WRITE THE THOUGHT FILE
 ════════════════════════════════════════════════════════════
 
 Create the output directory if needed: ${thoughtsDirRel}
+If business candidates exist, create the candidate directory if needed: ${businessCandidatesDirRel}
 Write the thought file to: ${outFileRel}
 
 Use EXACTLY this structure:
@@ -1184,9 +1273,9 @@ _Generated: ${nowStr}_
 _(Leave table with a single dash row if nothing found.)_
 
 ## D. Improvement Candidates
-| Issue | Proposal Type | Confidence | Evidence |
-|-------|--------------|-----------|---------|
-| ...   | prompt_mutation | high/medium/low | [ref] |
+| Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
+|-------|---------------|--------------------------|------------|---------|
+| ...   | prompt_mutation / skill_evolution / src_edit / task_trigger / general | code_change / action / review / none | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
@@ -1284,6 +1373,18 @@ Memory write gate — ALL 4 conditions must be true before writing:
   3. EVIDENCED — either repeated signal (2+ thoughts) OR single verified strong signal
   4. ACTIONABLE — changes specific future behavior in a concrete way
 
+Future Behavior Memory Test:
+A memory is only useful if it changes future behavior. For every candidate, answer:
+1. What future situation should trigger recall?
+2. What should Prometheus do differently because of it?
+3. Where is the best home: USER.md, SOUL.md, MEMORY.md, BUSINESS.md, entity file, skill, proposal, or nowhere?
+4. What would make this stale or wrong later?
+If you cannot answer these, do not write it as memory.
+
+Contradiction and duplication check:
+Before writing memory, search existing USER.md, SOUL.md, MEMORY.md, BUSINESS.md, and relevant entity files for contradiction, duplication, or older wording.
+If new evidence conflicts with old memory, preserve both only if the distinction matters; otherwise update the older one.
+
 If 0 items pass all 4 gates: write nothing to memory. This is normal.
 
 For items that pass:
@@ -1302,14 +1403,14 @@ Proposal quality gate — ALL 4 conditions must be true:
   1. CONCRETE — specific file, job, skill, or behavior to change (not vague)
   2. EVIDENCED — clear citation from a thought file or verified audit reference
   3. NOT DUPLICATE — no semantically equivalent proposal already in pending/ or proposals.md
-  4. EXECUTOR-READY — executorPrompt has enough detail to implement without guesswork
+  4. EXECUTOR-READY — executor_prompt has enough detail to implement without guesswork
 
 Available proposal types:
   prompt_mutation    — improve a specific cron job prompt (cite job name)
   skill_evolution    — add or update a skill file (specify file path + proposed content)
   src_edit           — source code change (cite specific file + describe change precisely)
   config_change      — cron schedule, settings.json, or config file change
-  feature_addition   — new capability (include full design in executorPrompt)
+  feature_addition   — new capability (include full design in executor_prompt)
   memory_update      — workspace file change (not USER.md/SOUL.md/MEMORY.md — those are Phase 3)
   task_trigger       — start or schedule a bounded one-shot action, team run, verification, or investigation
   general            — anything that doesn't fit above
@@ -1319,11 +1420,18 @@ Execution modes (required for executable proposals):
   action             - approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
   review             - read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
 
+Proposal routing rule:
+  - type describes the proposal category shown to Raul.
+  - execution_mode controls how the approved executor behaves.
+  - Do not use src_edit unless execution_mode=code_change and the proposal truly edits Prometheus source code.
+  - task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
+  - task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
+
 Operational proposal rules:
   - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
   - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
-  - For task_trigger proposals, affected_files are resource references or expected artifact locations, not a per-file edit plan.
-  - Keep executorPrompt action-shaped: inspect necessary state, perform the approved action exactly once, verify the result, write a note, and complete.
+  - For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file edit plan.
+  - Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
   - Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
   - Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
 
@@ -1334,18 +1442,19 @@ Source-code proposal rules:
       * Use source_stats before reading large or unfamiliar files.
       * Use read_source on every affected src/ file and cite the lines or symbols you inspected.
       * For web-ui code, use webui_source_stats, read_webui_source, and grep_webui_source.
+  - Do not create automatic code_change proposals for scripts/, electron/, .prometheus/, dist/, build/, or other project-root paths. Defer them or use a non-code action/review proposal unless Raul explicitly asks for that broader manual work.
   - Do NOT rely only on audit notes or thought summaries for src_edit proposals. The proposal must be based on the actual current source.
-  - The details field for any proposal touching src/ MUST include these exact markdown headings:
+  - The details field for any proposal touching src/ or web-ui/ MUST include these exact markdown headings:
       ## Why this change
       ## Exact source edits
       ## Deterministic behavior after patch
       ## Acceptance tests
       ## Risks and compatibility
   - In "Exact source edits", name the files, functions/classes/handlers, and current behavior you verified from read_source.
-  - In "Acceptance tests", include the build/test command that should verify the edit, usually npm run build for TypeScript source changes.
-  - Set requires_build=true for TypeScript/backend src edits unless there is a specific reason no build is needed.
+  - In "Acceptance tests", include the safe verification profile/command that should verify the edit. Prefer verification_profile=backend_build for backend-only quick dev edits, verification_profile=webui_sync_check for web-ui edits, and full_build only when full-app behavior needs it. For proposal code_change execution, the executor verifies inside the isolated sandbox with the canonical build command; quick live dev edits finalize through prom_apply_dev_changes.
+  - Set requires_build=true for TypeScript/backend src edits and web-ui source edits unless there is a specific reason no build is needed.
   - Include execution_steps with the exact approved implementation/verification checklist. The executor will use these steps instead of inventing a fresh plan.
-  - Make executorPrompt source-aware: instruct the approved executor to read affected files with read_source/read_webui_source first, then edit with the matching source write tools.
+  - Set executor_prompt, not executorPrompt. Make it source-aware: instruct the approved executor to read affected files with read_source/read_webui_source first, then edit with the matching source write tools.
 
 Risk tier rules:
   - Every src_edit proposal MUST set risk_tier to either low or high.
@@ -1357,9 +1466,9 @@ Risk tier rules:
   - If unsure, choose high. Do not hardcode a model name unless executor_provider_id/executor_model is explicitly justified.
 
 For each proposal passing the gate:
-  - For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files[] as resource refs, execution_steps, executorPrompt, and requires_build=false.
-  - For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files[] as evidence/resource refs, execution_steps, executorPrompt, and requires_build=false.
-  - For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files[], execution_steps, executorPrompt, risk_tier
+  - For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files[] as resource refs, execution_steps, executor_prompt, and requires_build=false.
+  - For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files[] as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false.
+  - For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files[], execution_steps, executor_prompt, risk_tier, and requires_build=true when build verification is needed.
   - Save the returned proposal ID for the output files
 
 If 0 proposals pass the gate: note this in the dream file. This is normal.
@@ -1453,6 +1562,8 @@ After all writes: print a plain-text summary of what was done tonight (memory up
     const wsEnd = fmtUtc(windowEnd);
     const nowStr = fmtLocal(new Date());
     const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
+    const businessCandidatesDirRel = path.join('Brain', 'business-candidates', dateStr);
+    const businessCandidatesFileRel = path.join(businessCandidatesDirRel, 'candidates.jsonl');
     const skillEpisodesDirRel = path.join('Brain', 'skill-episodes', dateStr);
     const skillGardenerDirRel = path.join('Brain', 'skill-gardener', dateStr);
     const memNotesFileRel = path.join('memory', `${dateStr}-intraday-notes.md`);
@@ -1474,8 +1585,12 @@ Do not prepend "workspace/" or any drive letter.
 STRICT RULES:
 - Do not write to USER.md, SOUL.md, or any memory files
 - Do not call write_proposal or create any proposals
-- Do not update cron jobs, skills, configs, or team state
-- Your only permitted file write is the thought output file listed above
+- Do not create new skills directly
+- Do not update cron jobs, configs, or team state
+- Your direct file writes are limited to the thought output file listed above and ${businessCandidatesFileRel} when business candidates exist
+- You may update an existing skill only through skill_manifest_write or skill_resource_write, after reading/inspecting that existing skill
+- Existing-skill updates must be low-risk, additive or narrowly corrective, evidence-backed, and scoped to triggers, metadata, SKILL.md guidance, examples, templates, schemas, or other skill resources
+- When calling skill_manifest_write or skill_resource_write, include changeType, evidence, appliedBy="brain_thought", and reason so Dream can audit the skill change ledger
 
 PRIMARY PURPOSE:
 You are not just auditing for mistakes. You are acting like a proactive second brain. You are trying to notice:
@@ -1483,6 +1598,7 @@ You are not just auditing for mistakes. You are acting like a proactive second b
 - unfinished feature ideas the user mentioned but did not complete
 - new agents, subagents, teams, or workspace surfaces that now deserve follow-up work
 - latent opportunities where Prometheus could proactively help tomorrow, across any context: business, marketing, websites, apps, notifications, communications, code, research, content, or operations
+- business operating signals that should become structured company/entity memory later: people, leads, clients, projects, vendors, social accounts, offers, policies, deadlines, outreach, payments, meetings, and other business events
 - concrete next-step proposals the Dream could investigate into executor-ready plans
 - "the user would probably appreciate if I got ahead on this" moments, even when they were not phrased as explicit tasks
 - useful wonderings: thoughtful "I wonder if..." observations that may be seeds for future help, not only defects
@@ -1493,15 +1609,15 @@ Scan the audit directory for activity between ${wsStart} and ${wsEnd}.
 Audit root: ${auditDirRel}
 
 Priority scan order:
-1. ${auditDirRel}/chats/sessions/ - chat session snapshots
-2. ${auditDirRel}/chats/transcripts/ - inspect transcripts for sessions that look feature-oriented, planning-heavy, or unfinished
-3. ${auditDirRel}/tasks/ - task state snapshots
-4. ${auditDirRel}/cron/runs/ - JSONL run history files filtered by timestamp
-5. ${auditDirRel}/teams/ - team activity logs, new subagents, and manager outputs if present
-6. ${auditDirRel}/proposals/ - proposal state changes if present
-7. ${skillEpisodesDirRel}/episodes.jsonl - structured skill-use episodes if present
-8. ${skillGardenerDirRel}/live-candidates.jsonl and workflow-episodes.jsonl - live skill gardener candidates captured during chat, if present
-9. ${memNotesFileRel} - today's intraday notes if the file exists
+1. ${memNotesFileRel} - today's intraday notes if the file exists
+2. ${auditDirRel}/chats/sessions/ - chat session snapshots
+3. ${auditDirRel}/chats/transcripts/ - inspect transcripts for sessions that look feature-oriented, planning-heavy, or unfinished
+4. ${auditDirRel}/tasks/ - task state snapshots
+5. ${auditDirRel}/cron/runs/ - JSONL run history files filtered by timestamp
+6. ${auditDirRel}/teams/ - team activity logs, new subagents, and manager outputs if present
+7. ${auditDirRel}/proposals/ - proposal state changes if present
+8. ${skillEpisodesDirRel}/episodes.jsonl - structured skill-use episodes if present
+9. ${skillGardenerDirRel}/live-candidates.jsonl and workflow-episodes.jsonl - live skill gardener candidates captured during chat, if present
 
 Selective reading strategy:
 - List each directory first and identify the files that matter
@@ -1537,25 +1653,53 @@ C. Skill And Workflow Signals
 - Procedural "do this next time" learnings belong here, not in memory candidates
 - Format as: Skill/Workflow | Signal | Possible Action | Confidence | Evidence
 
-D. Memory Candidates
+C2. Existing Skill Maintenance
+- For high-confidence, low-risk updates to an existing skill, call skill_read first, then skill_inspect or skill_resource_list/read if useful
+- Apply the update during this Thought with skill_manifest_write or skill_resource_write only when the current skill clearly benefits from observed session evidence
+- Prefer small additions: one missing trigger, one troubleshooting guardrail, one compact example, one template/resource, or one corrected tool-order note
+- Preserve imported/upstream-managed skills by using overlays or additive resources where possible
+- Never split, delete, radically rewrite, or create skills in Thought
+- If a new skill is warranted, record it as an Improvement Candidate for Dream instead of creating it
+- After any skill write, verify with skill_read or skill_inspect
+- In the thought file, explain exactly what you changed, why, and cite the session/transcript/skill episode/live candidate evidence so Dream can review it later
+
+D. Business Candidates
+- Business facts/events that may belong in BUSINESS.md or workspace/entities/*
+- Use BUSINESS.md only for company-level identity, offers, policies, approval rules, priorities, and broad operating context
+- Use entity files for clients/prospects, contacts/people, projects, vendors/tools, and social accounts
+- Thought does not update BUSINESS.md or entity files. It only records candidates for Dream reconciliation.
+- For high/medium confidence candidates, also write JSONL rows to ${businessCandidatesFileRel}. Use one JSON object per line with:
+  {"timestamp":"ISO","date":"${dateStr}","source":"thought:${outFileRel}","confidence":"high|medium|low","action":"create_entity|update_entity|append_event|update_business_profile|suggest_skill","entityType":"client|project|vendor|contact|social","entityId":"slug-if-known","displayName":"Name if known","summary":"concise business fact or event","evidence":["path:line or transcript ref"],"sensitivity":"normal|private|external_action"}
+- Do not write low-confidence rows to JSONL unless they are important enough for Dream to review; keep weak hunches only in the thought markdown.
+- Format as: Candidate | Destination | Action | Confidence | Evidence
+
+E. Memory Candidates
 - Items that might be worthy of USER.md, SOUL.md, or MEMORY.md
 - Only flag if durable and not clearly already captured
 - Exclude procedural workflow instructions, skill usage improvements, tool-order recipes, and "when doing X, do Y" notes unless they are truly global operating rules
+- Future Behavior Memory Test:
+  A memory is only useful if it changes future behavior. For every candidate, answer:
+  1. What future situation should trigger recall?
+  2. What should Prometheus do differently because of it?
+  3. Where is the best home: USER.md, SOUL.md, MEMORY.md, BUSINESS.md, entity file, skill, proposal, or nowhere?
+  4. What would make this stale or wrong later?
+  If you cannot answer these, do not write it as memory.
 - Format as a table row: Item | Target file | Confidence | Evidence
 
-E. Opportunity Seeds
+F. Opportunity Seeds
 - Capture unfinished or proactive opportunities the Dream should investigate
 - This is the most important section when the user talked about something but did not finish it
 - Include repeated manual workflows, partial feature ideas, new agents/subagents/teams created but not yet deployed, placeholder-heavy or underused workspace surfaces, business/marketing/product ideas, notification follow-ups, and concrete "Prometheus should probably help with this next" openings
 - Prefer seeds that can become proposals, skills, composite tools, browser/desktop taught workflows, scheduled monitors, or one-shot task triggers
 - Format as: Seed | Why it matters | Suggested scouting surface | Confidence | Evidence
 
-F. Improvement Candidates
+G. Improvement Candidates
 - Items that might be worthy of proposals
-- Format as: Issue | Proposal type | Confidence | Evidence
+- Format as: Issue | Proposal type | Suggested execution mode | Confidence | Evidence
 - Proposal types: prompt_mutation / skill_evolution / src_edit / config_change / feature_addition / task_trigger / general
+- Execution modes: code_change for Prometheus src/ or web-ui/ edits only; action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note
 
-G. Window Verdict
+H. Window Verdict
 - Active: yes / no
 - Signal quality: high / medium / low / none
 - Summary: short narrative brain note, 2-4 paragraphs. Put the real summary at the top of the final file, before section A.
@@ -1598,28 +1742,46 @@ _Generated: ${nowStr}_
 
 _(Leave table with a single dash row if nothing found.)_
 
-## D. Memory Candidates
-| Item | Target | Confidence | Evidence |
-|------|--------|-----------|---------|
-| ...  | USER.md or SOUL.md or MEMORY.md | high/medium/low | [file ref] |
+## C2. Existing Skill Maintenance
+**Applied during this Thought:**
+- [skill id] | [change made] | why: [reason] | evidence: [refs] | verification: [skill_read/skill_inspect result summary]
+
+**Deferred for Dream review:**
+- [skill/workflow] | [why deferred: new skill / too risky / insufficient evidence] | evidence: [refs]
+
+_(Write "none" under either list if nothing belongs there.)_
+
+## D. Business Candidates
+| Candidate | Destination | Action | Confidence | Evidence |
+|-----------|-------------|--------|-----------|---------|
+| ... | BUSINESS.md or entities/[type]/[id].md | create_entity / update_entity / append_event / update_business_profile / suggest_skill | high/medium/low | [file ref] |
+
+**Business candidate JSONL:** ${businessCandidatesFileRel} written / not needed
 
 _(Leave table with a single dash row if nothing found.)_
 
-## E. Opportunity Seeds
+## E. Memory Candidates
+| Item | Target | Recall Trigger | Future Behavior | Staleness Risk | Confidence | Evidence |
+|------|--------|----------------|-----------------|----------------|-----------|---------|
+| ...  | USER.md or SOUL.md or MEMORY.md | [when this should be recalled] | [what Prometheus should do differently] | [what could make it wrong/stale] | high/medium/low | [file ref] |
+
+_(Leave table with a single dash row if nothing found.)_
+
+## F. Opportunity Seeds
 | Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
 |------|----------------|----------------------------|-----------|---------|
 | ...  | [why Dream should care tomorrow] | [src/... or web-ui/... or teams/... or workspace path] | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
-## F. Improvement Candidates
-| Issue | Proposal Type | Confidence | Evidence |
-|-------|--------------|-----------|---------|
-| ...   | prompt_mutation | high/medium/low | [ref] |
+## G. Improvement Candidates
+| Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
+|-------|---------------|--------------------------|------------|---------|
+| ...   | prompt_mutation / skill_evolution / src_edit / task_trigger / general | code_change / action / review / none | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
-## G. Window Verdict
+## H. Window Verdict
 **Active:** yes/no
 **Signal quality:** high/medium/low/none
 **Summary:** [1-2 sentence factual recap; the richer narrative belongs in the top Summary section]
@@ -1642,9 +1804,9 @@ After the file is written: confirm the write succeeded and stop. Do not do anyth
     const memoryMdFileRel = 'MEMORY.md';
     const latestDreamDirRel = path.join('Brain', 'dreams', dateStr);
 
-    return `You are Prometheus, running the second Brain Dream pass: the memory solidifier.
+    return `You are Prometheus, running the second Brain Dream pass: the memory solidifier and skill curator critic.
 
-BRAIN DREAM CLEANUP - Memory Solidifier
+BRAIN DREAM CLEANUP - Memory Solidifier + Skill Curator Critic
 Date: ${dateStr}
 Time: ${nowStr}
 Output: ${outFileRel}
@@ -1657,11 +1819,15 @@ Do not prepend "workspace/" or any drive letter.
 STRICT RULES:
 - This pass runs after the nightly dream has already updated memory.
 - Do not create proposals.
+- Do not create new skills.
 - Do not add new memories, new facts, new preferences, or new sections to USER.md, SOUL.md, or MEMORY.md.
 - You may only remove, lightly merge, or dedupe text that is clearly redundant, stale, contradictory, or unimportant after the latest dream.
 - If the memory is already good, make no memory edits. This is a successful outcome.
 - When uncertain, preserve the memory. It is better to leave a duplicate than erase something important.
-- Your only required write is the cleanup report at ${outFileRel}. Memory edits are optional and conservative.
+- You may audit recent Brain Skill Curator suggestions and auto-applied low-risk skill resources.
+- You may reject weak pending curator suggestions, delete/revert clearly bad auto-applied curator resources, or refine an auto-applied resource only when the fix is obvious and strictly improves the same lesson.
+- Do not rewrite SKILL.md, archive/merge/delete skills, or make broad skill changes in cleanup.
+- Your only required write is the cleanup report at ${outFileRel}. Memory and skill cleanup edits are optional and conservative.
 
 STEP 1 - READ CURRENT MEMORY
 Read:
@@ -1671,22 +1837,59 @@ Read:
 
 Also list and read the latest main dream artifact in ${latestDreamDirRel} so you understand what was just added or updated.
 
-STEP 2 - LIGHT DEDUPE / CLEANUP REVIEW
+STEP 2 - LIGHT MEMORY DEDUPE / CLEANUP REVIEW
 Look only for:
 - exact or near-exact duplicate bullets
 - obsolete wording directly contradicted by newer memory nearby
 - tiny one-off details that slipped into durable memory and are not useful weeks from now
 - duplicated operational rules where one clearer version can safely remain
+- memories that no longer pass the Future Behavior Memory Test because they do not change future behavior, have no clear recall trigger, belong in a skill/proposal/entity instead, or became stale/wrong
+- USER.md, SOUL.md, MEMORY.md, BUSINESS.md, or entity-file wording that conflicts with newer evidence; preserve both only if the distinction matters, otherwise keep or update the newer/more accurate version
 
 Do not perform broad rewrites. Do not polish prose for style alone. Do not compress nuanced memories into vague summaries.
 
-STEP 3 - OPTIONAL EDITS
+STEP 3 - SKILL CURATOR CRITIC REVIEW
+Run:
+- skill_curator action=status
+
+Review the current skill curator queue, daily skill-change audit, and recent applied suggestions. Focus on suggestions created/applied by the Brain Skill Curator plus review-only audit items for normal Prometheus/Thought/Dream skill changes, especially:
+- lessonType=recovery, style_pattern, component_recipe, workflow_recipe, trigger_patch, instruction_patch
+- status=applied or pending
+- autoApplyEligible=true
+- autoDecisionReason indicating automatic application or legacy rejection
+- review_only items for new skills, direct Prometheus/manual edits, destructive deletes, missing evidence, or broad SKILL.md rewrites
+
+For every reviewed curator item, judge it as one of:
+- accept: useful, specific, routed to the right skill, evidence-backed
+- reject: pending item is weak, generic, transcript-like, not actionable, or not routed to the right skill
+- revert: applied item pollutes the skill, duplicates existing guidance, is too broad, or maps the wrong failure to the wrong behavior
+- refine: applied item is directionally useful but needs a clearer future trigger, learned behavior, avoid note, or narrower wording
+- needs_review: potentially high-risk, uncertain, broad rewrite, archive/merge/new-skill candidate, or anything you cannot safely judge
+
+Quality gate for curator lessons:
+1. FUTURE BEHAVIOR - it says what Prometheus should do differently next time
+2. FUTURE TRIGGER - it says when to use the lesson
+3. RIGHT SKILL - it belongs in the target skill, not just the skill that happened to be read
+4. EVIDENCED - it cites Brain/audit/session evidence or a concrete observed failure/recovery
+5. NOT RAW LOG - it is not mainly a request excerpt, outcome excerpt, or tool list
+6. SAFE SCOPE - it is additive or narrowly corrective; no broad rewrites here
+
+Allowed skill critic actions:
+- To inspect: skill_read, skill_inspect, skill_resource_list, skill_resource_read
+- To reject a bad pending item: skill_curator action=reject id=<suggestion id>
+- To revert a bad applied resource: skill_resource_delete id=<skill id> path=<resource path>, then skill_curator action=reject id=<suggestion id>
+- To refine an applied resource: skill_resource_read, then skill_resource_write to the same path with clearer content and the same lesson scope
+
+Do not apply pending high-risk suggestions. Do not create a new skill. Do not delete anything except an auto-applied curator resource that clearly fails the quality gate.
+
+STEP 4 - OPTIONAL MEMORY/SKILL EDITS
 If and only if an edit is clearly safe:
 - Use replace_lines, find_replace, or delete_lines surgically.
 - Prefer removing the weaker duplicate and keeping the more specific, more recent, or more actionable version.
 - Do not use insert_after unless it is only to repair formatting after removing text.
+- For skill resources, prefer skill_resource_delete for a bad auto-applied resource or skill_resource_write to refine the same resource path.
 
-STEP 4 - WRITE CLEANUP REPORT
+STEP 5 - WRITE CLEANUP REPORT
 Create directory ${dreamsDirRel} if needed.
 Write ${outFileRel} with this structure:
 
@@ -1703,6 +1906,13 @@ _Generated: ${nowStr}_
 | USER.md / SOUL.md / MEMORY.md | removed/deduped/none | [why this was safe] |
 
 _(If no edits: "None - memory already looked solid enough to preserve as-is.")_
+
+## Skill Curator Critic
+| Suggestion | Skill | Decision | Action Taken | Reason |
+|------------|-------|----------|--------------|--------|
+| sc_... / title | skill-id | accept/reject/revert/refine/needs_review | none / rejected / deleted resource / rewrote resource | [quality-gate reason] |
+
+_(If no curator items needed action: "Reviewed curator state; no skill cleanup needed.")_
 
 ## Preserved On Purpose
 - [Any duplicate-looking or messy item you intentionally kept because it may still matter, or "None noted."]
@@ -1721,6 +1931,9 @@ After writing the cleanup report, print a plain-text summary and stop.
     const { dateStr, thoughtCount, outFile } = opts;
     const nowStr = fmtLocal(new Date());
     const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
+    const businessCandidatesDirRel = path.join('Brain', 'business-candidates', dateStr);
+    const businessCandidatesFileRel = path.join(businessCandidatesDirRel, 'candidates.jsonl');
+    const businessReconciliationDirRel = path.join('Brain', 'business-reconciliation', dateStr);
     const skillEpisodesDirRel = path.join('Brain', 'skill-episodes', dateStr);
     const skillGardenerDirRel = path.join('Brain', 'skill-gardener', dateStr);
     const dreamsDirRel = path.join('Brain', 'dreams', dateStr);
@@ -1749,7 +1962,7 @@ All paths in this prompt are relative to the workspace root.
 Pass them directly to file tools without modification.
 Do not prepend "workspace/" or any drive letter.
 
-You have 7 phases tonight. Execute them in order.
+You have 8 phases tonight. Execute them in order.
 
 OPERATING POSTURE:
 Act like the user's proactive second brain. The best dream is not just "what failed today"; it notices what the user is trying to become faster at, what they repeated manually, where they are building momentum, and what they would likely appreciate waking up to as approval-ready help. Look across all contexts: business, marketing, websites, apps, notifications, email/follow-up, code, content, research, operations, and personal workflow.
@@ -1765,11 +1978,16 @@ Also load for context:
 - ${userMdFileRel}
 - ${soulMdFileRel}
 - ${memoryMdFileRel}
+- BUSINESS.md
 - ${proposalsFileRel}
+
+List workspace/entities if present. Use list_entities to summarize existing clients, contacts, projects, vendors, and social accounts. Read only the entity files that are relevant to business candidates, current tasks, or repeated business workflows.
+
+List ${businessCandidatesDirRel}. If ${businessCandidatesFileRel} exists, read it. This is the structured Business Brain evidence captured by Thought: candidate people, leads/clients, projects, vendors, social accounts, company profile updates, business events, and business workflow skill opportunities.
 
 List ${skillEpisodesDirRel}. If ${skillEpisodesDirRel}/episodes.jsonl exists, read it. This is the structured skill gardener evidence for the target date: skills read, request excerpts, tool sequences, final responses, errors, touched paths, and outcome hints.
 
-List ${skillGardenerDirRel}. If live-candidates.jsonl or workflow-episodes.jsonl exists, read them. These are always-on skill gardener signals captured during normal chat: reusable workflows, candidate skill updates, candidate resources/templates, missing trigger signals, user-facing offers, lifecycle status, confidence, risk, and evidence.
+List ${skillGardenerDirRel}. If live-candidates.jsonl or workflow-episodes.jsonl exists, read them. These are always-on skill gardener signals captured during normal chat: reusable workflows, candidate skill updates, candidate resources/templates, missing trigger signals, lifecycle status, confidence, risk, and evidence.
 
 List ${pendingPropsDirRel} to see what formal proposals are currently pending approval.
 You also have prom-root read tools tonight. Use them when the best evidence lives outside plain workspace surfaces:
@@ -1786,7 +2004,7 @@ If no thought files exist in ${thoughtsDirRel}:
 
 PHASE 2 - CROSS-EXAMINE HIGH-CONFIDENCE ITEMS
 
-For any item marked high confidence in sections C, D, E, or F of any thought:
+For any item marked high confidence in sections C, D, E, F, or G of any thought, plus any high-confidence row in ${businessCandidatesFileRel}:
 - Read the cited evidence file or session from ${auditDirRel}
 - Verify the finding is real and accurately described
 - If evidence does not support the claim, downgrade or discard it
@@ -1798,9 +2016,49 @@ Medium and low confidence items:
 
 When a verified opportunity seed points to a partially-finished idea or a newly-created but idle agent, subagent, or workspace surface, treat that as a first-class signal, not a side note.
 
-PHASE 3 - SKILL GARDENER REVIEW
+PHASE 3 - BUSINESS RECONCILIATION
+
+Use BUSINESS.md, list_entities/read_entity, and ${businessCandidatesFileRel} to reconcile business operating memory.
+
+Business routing:
+- BUSINESS.md is the generic per-user business profile. It should contain company-level identity, offers, services/products, policies, approval thresholds, priorities, team/tool/vendor overview, and important dates.
+- workspace/entities/clients stores clients, prospects, accounts, companies, and organizations the business deals with.
+- workspace/entities/contacts stores people.
+- workspace/entities/projects stores workstreams, engagements, campaigns, deliverables, and internal business projects.
+- workspace/entities/vendors stores tools, suppliers, SaaS, contractors, APIs, and service providers.
+- workspace/entities/social stores social accounts/platform strategies/results.
+
+Reconciliation gate:
+1. HIGH CONFIDENCE - clear source evidence from thoughts, transcript, team/task logs, or candidates JSONL
+2. NON-SENSITIVE - not a raw credential, private secret, medical/legal/financial secret, or uncertain personal detail
+3. NOT DUPLICATE - not already present in equivalent form in BUSINESS.md or the entity file
+4. RIGHT HOME - company-level facts go to BUSINESS.md; object/history facts go to entity files
+
+Actions:
+- For high-confidence entity events, call append_entity_event(type,id,event,display_name,source,confidence).
+- For high-confidence new entities with enough identity context, create them via append_entity_event first; this safely starts from the template and records the event.
+- For durable company-level facts, update BUSINESS.md surgically with file tools.
+- For ambiguous, private, external-action, or low/medium-confidence candidates, do not write. Record them under "Business Updates Needing Review" or "Deferred Ideas".
+- For repeatable business workflows, route them to Skill Gardener review as business workflow skill signals rather than memory pollution.
+
+Write a short reconciliation report to ${businessReconciliationDirRel}/report.md if any business candidates were reviewed. Use mkdir/write_file. Include applied updates, skipped candidates, and entity files touched.
+
+PHASE 4 - SKILL GARDENER REVIEW
 
 Use the thought Skill And Workflow Signals, ${skillEpisodesDirRel}/episodes.jsonl, and ${skillGardenerDirRel}/live-candidates.jsonl + workflow-episodes.jsonl to decide whether today's work should improve existing skills or create new ones.
+
+Business workflow skill lane:
+- Treat repeated business workflows as first-class skill candidates: lead qualification, prospect research, outreach packet creation, quote/invoice/follow-up drafting, customer support handling, vendor research, project status reporting, social planning, content calendar work, website audits, CRM hygiene, and industry-specific operating workflows.
+- Decide whether the workflow should update an existing generic skill, add a reusable resource/template, or become a new business workflow skill proposal.
+- Keep entity facts in entities/BUSINESS.md and procedural "how to do this workflow" knowledge in skills.
+
+Thoughts may already have applied low-risk existing-skill maintenance. Treat those edits as first-class items to audit:
+- Read each Thought's "Existing Skill Maintenance" section
+- For every skill changed by a Thought, call skill_read or skill_inspect and review recent change history
+- Accept the Thought's update by keeping it as-is only if it is useful, scoped, evidenced, and not redundant
+- Modify/refine the skill if the Thought update is helpful but too broad, unclear, misplaced, or missing important constraints
+- Remove or supersede the update only when it pollutes the skill, duplicates existing guidance, or does not help future workflows
+- Record the audit decision in the Dream output as accepted, modified, removed/superseded, or deferred, with evidence
 
 For each skill episode:
 - Identify the skillId, requestExcerpt, toolSequence, finalResponseExcerpt, errors, touchedPaths, and outcomeHints
@@ -1812,7 +2070,7 @@ For each skill episode:
 - Aggregate repeated candidate signals across today's thoughts and episodes. Stronger signals include repeated use across days, explicit user correction, positive user feedback, skill was read but ignored, skill caused wrong tool order, skill trigger matched too broadly, or skill_list found a relevant skill but no skill_read followed.
 
 For each live candidate:
-- Identify type, status, confidence, risk, suggestedAction, userFacingOffer, toolSequence, outcomeHints, and evidence
+- Identify type, status, confidence, risk, suggestedAction, toolSequence, outcomeHints, and evidence
 - Treat update_existing_skill, add_resource_or_template, and add_trigger as candidate existing-skill maintenance
 - Treat create_new_skill_candidate as a possible new skill proposal, but verify against existing skills first
 - Treat no_action_but_record_episode as raw evidence only unless repeated patterns make it stronger
@@ -1855,10 +2113,12 @@ For a new skill proposal:
 - affected_files should reference "skill:<new-skill-id>/SKILL.md" and any planned resources
 - details should include the proposed id, name, description, triggers, categories, permissions, required tools, and a draft SKILL.md outline
 - prefer skill_create_bundle when resources, examples, schemas, or templates would help; use skill_create only for a simple one-file playbook
+- New skill creation is Dream-only and proposal-based: automatically write a skill_evolution proposal when the proposal quality gate passes
+- Do not wait for separate user approval to file the proposal; approval is only required later to execute/create the proposed new skill
 
 Do not create new skills directly. New skill creation must go through a skill_evolution proposal and wait for approval.
 
-PHASE 4 - INCUBATE OPPORTUNITY SEEDS
+PHASE 5 - INCUBATE OPPORTUNITY SEEDS
 
 For each verified high-confidence opportunity seed:
 - Scout the suggested surface directly before deciding what to propose
@@ -1889,13 +2149,25 @@ Incubation heuristics:
 
 Do not hallucinate work. Every incubated proposal still needs concrete evidence from current files, skill episodes, or audit history.
 
-PHASE 5 - MEMORY UPDATES
+PHASE 6 - MEMORY UPDATES
 
 Memory write gate - all 4 conditions must be true:
 1. DURABLE - the fact will still matter weeks from now
 2. NEW - it is not already present in equivalent meaning in USER.md, SOUL.md, or MEMORY.md
 3. EVIDENCED - repeated signal or one strongly verified signal
 4. ACTIONABLE - it should concretely change future behavior
+
+Future Behavior Memory Test:
+A memory is only useful if it changes future behavior. For every candidate, answer:
+1. What future situation should trigger recall?
+2. What should Prometheus do differently because of it?
+3. Where is the best home: USER.md, SOUL.md, MEMORY.md, BUSINESS.md, entity file, skill, proposal, or nowhere?
+4. What would make this stale or wrong later?
+If you cannot answer these, do not write it as memory.
+
+Contradiction and duplication check:
+Before writing memory, search existing USER.md, SOUL.md, MEMORY.md, BUSINESS.md, and relevant entity files for contradiction, duplication, or older wording.
+If new evidence conflicts with old memory, preserve both only if the distinction matters; otherwise update the older one.
 
 If nothing passes, write nothing to memory.
 
@@ -1910,7 +2182,7 @@ For items that do pass:
 - Edit MEMORY.md for durable long-term context and decisions
 - Be surgical and record each write in the dream output under "Memory Updates Applied"
 
-PHASE 6 - PROPOSALS
+PHASE 7 - PROPOSALS
 
 Proposal quality gate - all 4 conditions must be true:
 1. CONCRETE - specific file, job, skill, agent, or behavior to change
@@ -1949,11 +2221,18 @@ Execution modes (required for executable proposals):
 - action: approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
 - review: read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
 
+Proposal routing rule:
+- type describes the proposal category shown to Raul.
+- execution_mode controls how the approved executor behaves.
+- Do not use src_edit unless execution_mode=code_change and the proposal truly edits Prometheus source code.
+- task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
+- task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
+
 Operational proposal rules:
   - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
   - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
-- For task_trigger proposals, affected_files are resource references or expected artifact locations, not a per-file edit plan.
-- Keep executor_prompt action-shaped: inspect necessary state, perform the approved action exactly once, verify the result, write a note, and complete.
+- For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file edit plan.
+- Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
 - Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
 - Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
 
@@ -1970,20 +2249,20 @@ Source-code proposal rules:
   - Use grep_source or list_source to locate relevant files when the path is uncertain
   - Use source_stats before reading large or unfamiliar files
   - Use read_source on every affected src/ file and cite the functions, classes, handlers, constants, or line ranges you inspected
-- For web-ui code, use the web-ui source tools
-- For scripts/, electron/, .prometheus/, and other allowlisted project-root files, use prom-root read tools before proposing
+- For web-ui code, use webui_source_stats, read_webui_source, and grep_webui_source
+- Do not create automatic code_change proposals for scripts/, electron/, .prometheus/, dist/, build/, or other project-root paths. Defer them or use a non-code action/review proposal unless Raul explicitly asks for that broader manual work.
 - Do not rely only on thought summaries for source-edit proposals; base them on actual current files
-- Any proposal touching src/ must include these exact markdown headings in details:
+- Any proposal touching src/ or web-ui/ must include these exact markdown headings in details:
   ## Why this change
   ## Exact source edits
   ## Deterministic behavior after patch
   ## Acceptance tests
   ## Risks and compatibility
 - In "Exact source edits", include an ordered implementation plan with the exact files and symbols to edit, the current behavior observed from read_source, and the intended replacement behavior.
-- In "Acceptance tests", include the build/test command that should verify the edit, usually npm run build for TypeScript source changes.
-- Set requires_build=true for TypeScript/backend src edits unless there is a specific reason no build is needed.
+- In "Acceptance tests", include the safe verification profile/command that should verify the edit. Prefer verification_profile=backend_build for backend-only quick dev edits, verification_profile=webui_sync_check for web-ui edits, and full_build only when full-app behavior needs it. For proposal code_change execution, the executor verifies inside the isolated sandbox with the canonical build command; quick live dev edits finalize through prom_apply_dev_changes.
+- Set requires_build=true for TypeScript/backend src edits and web-ui source edits unless there is a specific reason no build is needed.
 - Include execution_steps with the exact approved implementation/verification checklist. The executor will use these steps instead of inventing a fresh plan.
-- Set executor_prompt, not executorPrompt. The executor_prompt must restate the ordered plan and instruct the approved executor to read the affected files with read_source/read_webui_source/read_prom_file first, then apply only the approved edits.
+- Set executor_prompt, not executorPrompt. The executor_prompt must restate the ordered plan and instruct the approved executor to read the affected files with read_source/read_webui_source first, then apply only the approved edits.
 - If the needed src files or exact edit points are not known after inspection, do not create the proposal. Record it as deferred with "needs source scouting" instead.
 
 Risk tier rules:
@@ -1995,15 +2274,15 @@ Risk tier rules:
 For each proposal passing the gate:
 - For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files as resource refs, execution_steps, executor_prompt, and requires_build=false
 - For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false
-- For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files, execution_steps, executor_prompt, risk_tier
+- For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files, execution_steps, executor_prompt, risk_tier, and requires_build=true when build verification is needed
 - Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
 - Save the returned proposal ID for the output files
 
 If zero proposals pass the gate, note that in the dream file.
 
-PHASE 7 - WRITE OUTPUTS
+PHASE 8 - WRITE OUTPUTS
 
-7a. Create directory ${dreamsDirRel} if needed.
+8a. Create directory ${dreamsDirRel} if needed.
 Write ${outFileRel} with this structure. Use \`mkdir\` for the directory and \`write_file\` for the markdown artifact:
 
 ---
@@ -2015,11 +2294,23 @@ _Thoughts synthesized: N_
 [3-5 short paragraphs written like a thoughtful day-story rather than a report stub. Put the real summary first: what the day felt like, what moved, what dragged, what Prometheus noticed about the user's momentum, and what proactive openings seem worth waking up to. Include 1-3 grounded "I wonder if..." observations. The wonder can be small or unrelated to proposals, but it should feel like the brain is actually thinking. Do not change any other section formatting.]
 
 ## Memory Updates Applied
-| Item | File | Change Made | Evidence |
-|------|------|------------|---------|
-| [item] | USER.md / SOUL.md / MEMORY.md | [what was added or updated] | [thought ref] |
+| Item | File | Recall Trigger | Future Behavior | Staleness Risk | Change Made | Evidence |
+|------|------|----------------|-----------------|----------------|-------------|---------|
+| [item] | USER.md / SOUL.md / MEMORY.md | [when this should be recalled] | [what Prometheus should do differently] | [what could make it wrong/stale] | [what was added or updated] | [thought ref] |
 
 _(If none: "None - no items passed the memory gate tonight.")_
+
+## Business Reconciliation
+| Candidate | Destination | Change Made | Evidence |
+|-----------|-------------|-------------|---------|
+| [item] | BUSINESS.md or entities/[type]/[id].md | updated / appended event / skipped | [thought/candidate/audit ref] |
+
+**Business report:** ${businessReconciliationDirRel}/report.md written / not needed
+
+## Business Updates Needing Review
+| Candidate | Reason Review Is Needed | Suggested Destination | Evidence |
+|-----------|-------------------------|-----------------------|---------|
+| [item or None] | ambiguous / sensitive / low confidence / duplicate risk | BUSINESS.md or entity path | [ref] |
 
 ## Proposals Generated
 | # | Type | Title | Priority | ID |
@@ -2033,10 +2324,15 @@ _(If none: "None - no items passed the proposal gate tonight.")_
 |----------------|----------|-------------------------|---------|
 | [skill id or new workflow] | [skill episode/thought/audit ref] | yes/no/not applicable | auto-updated / proposed new skill / deferred / no change |
 
+## Thought Skill Updates Audited
+| Skill | Thought Change | Dream Decision | Evidence |
+|-------|----------------|----------------|---------|
+| [skill id or None] | [what Thought wrote] | accepted / modified / removed-superseded / deferred | [thought + skill ledger refs] |
+
 ## Skill Updates Applied
 | Skill | Resource/Manifest | Change Made | Evidence |
 |-------|-------------------|-------------|---------|
-| [skill id] | SKILL.md / skill.json overlay / resource path | [what was updated] | [skill episode/thought/audit ref] |
+| [skill id] | SKILL.md / skill.json overlay / resource path | [what Dream updated or what Thought update was accepted] | [skill episode/thought/audit ref] |
 
 _(If none: "None - no existing skills needed automatic evolution tonight.")_
 
@@ -2054,7 +2350,7 @@ _(If none: "None - no existing skills needed automatic evolution tonight.")_
 - [specific things to monitor in the next day's thoughts]
 ---
 
-7b. Rewrite ${proposalsFileRel} completely. This file is not just a proposal ledger anymore; it is the user's morning-readable, full post-day Dream summary after memory updates, skill gardener review, investigation/incubation, and proposal generation are complete. Use \`write_file\` so the existing file is replaced in full.
+8b. Rewrite ${proposalsFileRel} completely. This file is not just a proposal ledger anymore; it is the user's morning-readable, full post-day Dream summary after memory updates, business reconciliation, skill gardener review, investigation/incubation, and proposal generation are complete. Use \`write_file\` so the existing file is replaced in full.
 
 ---
 # Brain Daily Summary - ${dateStr}
@@ -2072,20 +2368,35 @@ _Dream Source: ${outFileRel}_
 ## What The Dream Verified
 - [High-confidence item]: checked [surface/evidence], concluded [result]
 
+## Business Reconciliation
+| Candidate | Destination | Change Made | Evidence |
+|-----------|-------------|-------------|---------|
+| [item or None] | BUSINESS.md or entities/[type]/[id].md | updated / appended event / skipped | [thought/candidate/audit ref] |
+
+## Business Updates Needing Review
+| Candidate | Reason Review Is Needed | Suggested Destination | Evidence |
+|-----------|-------------------------|-----------------------|---------|
+| [item or None] | ambiguous / sensitive / low confidence / duplicate risk | BUSINESS.md or entity path | [ref] |
+
 ## Skill Gardener Review
 | Skill/Workflow | Evidence | What The Dream Learned | Outcome |
 |----------------|----------|------------------------|---------|
 | [skill id or workflow] | [skill episode/thought/audit ref] | [skill gap, no-op, or new skill opportunity] | auto-updated / proposed new skill / deferred / no change |
 
+## Thought Skill Updates Audited
+| Skill | Thought Change | Dream Decision | Evidence |
+|-------|----------------|----------------|---------|
+| [skill id or None] | [what Thought wrote] | accepted / modified / removed-superseded / deferred | [thought + skill ledger refs] |
+
 ## Skill Updates Applied
 | Skill | Resource/Manifest | Change Made | Evidence |
 |-------|-------------------|-------------|---------|
-| [skill id or None] | SKILL.md / skill.json overlay / resource path | [what changed or why nothing changed] | [skill episode/thought/audit ref] |
+| [skill id or None] | SKILL.md / skill.json overlay / resource path | [what Dream changed or what Thought update was accepted] | [skill episode/thought/audit ref] |
 
 ## Memory Updates Applied
-| Item | File | Change Made | Evidence |
-|------|------|------------|---------|
-| [item or None] | USER.md / SOUL.md / MEMORY.md | [what changed or why nothing changed] | [thought/audit ref] |
+| Item | File | Recall Trigger | Future Behavior | Staleness Risk | Change Made | Evidence |
+|------|------|----------------|-----------------|----------------|-------------|---------|
+| [item or None] | USER.md / SOUL.md / MEMORY.md | [when this should be recalled] | [what Prometheus should do differently] | [what could make it wrong/stale] | [what changed or why nothing changed] | [thought/audit ref] |
 
 ## Opportunity Incubation
 | Seed | Surfaces Inspected | What The Dream Learned | Outcome |
@@ -2117,6 +2428,8 @@ _(Repeat for each proposal. If none: write "No proposals generated tonight - all
 ## Run Accounting
 - Thoughts synthesized: N
 - Skill episodes reviewed: N
+- Business candidates reviewed: N
+- Business/entity updates applied: N
 - Memory updates applied: N
 - Opportunity seeds incubated: N
 - Proposals generated: N (High: N, Medium: N, Low: N)
