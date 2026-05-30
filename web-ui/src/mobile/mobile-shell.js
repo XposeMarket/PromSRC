@@ -1,5 +1,6 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
+import { timeAgo } from '../utils.js';
 
 // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
 export const ICONS = {
@@ -67,6 +68,98 @@ let _drawerSearchTimer = null;
 let _drawerSearchSeq = 0;
 const PM_DRAWER_STATE_KEY = 'pm_mobile_drawer_sessions_view';
 const PM_THEME_KEY = 'prometheus_theme';
+const PM_DRAWER_SESSION_PAGE_SIZE = 20;
+const _drawerSessionPaging = {
+  mobile: { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false },
+  channels: {},
+};
+
+function _newDrawerPageState() {
+  return { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false, pending: null };
+}
+
+function _drawerPageStateFor(channel = 'mobile') {
+  const key = String(channel || 'mobile');
+  if (key === 'mobile') return _drawerSessionPaging.mobile;
+  if (!_drawerSessionPaging.channels[key]) _drawerSessionPaging.channels[key] = _newDrawerPageState();
+  return _drawerSessionPaging.channels[key];
+}
+
+function _resetDrawerPageState(channel = '') {
+  if (!channel) {
+    _drawerSessionPaging.mobile = _newDrawerPageState();
+    _drawerSessionPaging.channels = {};
+    return;
+  }
+  if (channel === 'mobile') _drawerSessionPaging.mobile = _newDrawerPageState();
+  else delete _drawerSessionPaging.channels[channel];
+}
+
+export function invalidateMobileDrawerSessions(channel = '') {
+  _resetDrawerPageState(channel);
+}
+
+function _currentDrawerSessionChannel() {
+  const state = _loadDrawerState();
+  if (state.view !== 'channelChats') return 'mobile';
+  const channel = String(state.channel || '').trim();
+  return channel || 'mobile';
+}
+
+
+async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset = false } = {}) {
+  const state = _drawerPageStateFor(channel);
+  if (state.loading) return state.pending || state;
+  if (!reset && state.initialized && !state.hasMore) return state;
+  state.loading = true;
+  state.error = '';
+  const offset = reset ? 0 : (state.initialized ? state.offset : 0);
+  state.pending = (async () => {
+    try {
+      const loader = typeof loadSessions?.loadPage === 'function'
+        ? loadSessions.loadPage
+        : null;
+      let page;
+      if (loader) {
+        page = await loader({ channel, limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
+      } else if (typeof loadSessions === 'function') {
+        const data = await loadSessions({ channel, limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
+        const list = channel === 'mobile'
+          ? (Array.isArray(data?.mobile) ? data.mobile : [])
+          : (Array.isArray(data?.channels) ? (data.channels.find((c) => c.key === channel)?.sessions || []) : []);
+        page = { sessions: list, total: list.length, offset, hasMore: false };
+      } else {
+        page = { sessions: [], total: 0, offset, hasMore: false };
+      }
+
+      const incoming = Array.isArray(page?.sessions) ? page.sessions : [];
+      const seen = new Set(reset ? [] : state.sessions.map((s) => String(s?.id || '')));
+      const merged = reset ? [] : state.sessions.slice();
+      for (const session of incoming) {
+        const id = String(session?.id || '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        merged.push(session);
+      }
+      state.sessions = merged;
+      state.total = Math.max(merged.length, Math.floor(Number(page?.total || merged.length) || merged.length));
+      state.offset = Math.max(0, Math.floor(Number(page?.offset || offset) || offset)) + incoming.length;
+      state.hasMore = page?.hasMore === true || state.offset < state.total;
+      state.initialized = true;
+    } catch (err) {
+      console.warn('[mobile drawer] Failed to load session page', { channel, offset, err });
+      state.error = err?.message || 'Could not load sessions.';
+      state.initialized = true;
+      state.hasMore = false;
+    } finally {
+      state.loading = false;
+      state.pending = null;
+    }
+    return state;
+  })();
+  return state.pending;
+}
+
 
 function _getTheme() {
   const current = document.documentElement.getAttribute('data-theme');
@@ -137,6 +230,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         ${_searchIcon()}
         <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
       </label>
+      <div class="pm-drawer-top-actions">
+        <button class="pm-drawer-new-chat" type="button" data-mobile-new-chat aria-label="New chat">
+          <span class="pm-icon">${ICONS.plus}</span>
+          <span>New chat</span>
+        </button>
+      </div>
       <nav class="pm-drawer-list">
         ${mobileDrawerItems.map(it => `
           <button class="pm-drawer-item" data-route="${it.route}">
@@ -169,13 +268,22 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       if (typeof onNavigate === 'function') onNavigate(route);
     });
   });
+  _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {
+    closeDrawer();
+    Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
+      .then(() => {
+        _saveDrawerState({ view: 'mobile', channel: '' });
+        _resetDrawerPageState('mobile');
+      })
+      .catch(() => {});
+  });
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
-    _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions });
+    _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
   });
   _applyMobileTheme(_getTheme());
-  _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions });
+  _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
 
   document.addEventListener('keydown', _escHandler, { passive: true });
   _renderInstallSlot();
@@ -203,25 +311,24 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   return { app, page, tabbar };
 }
 
-async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions }) {
+async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
   const head = _drawerEl?.querySelector('#pm-drawer-session-head');
   const sessionList = _drawerEl?.querySelector('#pm-mobile-session-list');
   if (!head || !sessionList || typeof loadSessions !== 'function') return;
   if (_drawerSearch) {
-    _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions });
+    _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
   }
   try {
-    const rawData = await loadSessions();
-    const data = typeof window.enrichMobileSessionGroupsForDrawer === 'function'
-      ? await window.enrichMobileSessionGroupsForDrawer(async () => rawData)
-      : rawData;
-    const mobile = Array.isArray(data?.mobile) ? data.mobile : [];
+    const drawerState = _loadDrawerState();
+    let data = await loadSessions({ channel: _currentDrawerSessionChannel(), limit: PM_DRAWER_SESSION_PAGE_SIZE, offset: 0 });
+    data = typeof window.enrichMobileSessionGroupsForDrawer === 'function'
+      ? await window.enrichMobileSessionGroupsForDrawer(async () => data)
+      : data;
     const channels = Array.isArray(data?.channels) ? data.channels : [];
-    const state = _loadDrawerState();
-    const selectedChannel = channels.find((c) => c.key === state.channel) || channels[0] || null;
+    const selectedChannel = channels.find((c) => c.key === drawerState.channel) || channels[0] || null;
 
-    if (state.view === 'channels') {
+    if (drawerState.view === 'channels') {
       head.innerHTML = `
         <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
         <div class="pm-drawer-section-title">Channels</div>
@@ -229,64 +336,117 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
       sessionList.innerHTML = channels.length
         ? channels.map((c) => _channelButtonHtml(c)).join('')
         : '<div class="pm-session-empty">No channels yet.</div>';
-    } else if (state.view === 'channelChats' && selectedChannel) {
+    } else if (drawerState.view === 'channelChats' && selectedChannel) {
+      if (!_drawerPageStateFor(selectedChannel.key).initialized) {
+        await _loadDrawerSessionPage({ channel: selectedChannel.key, loadSessions });
+      }
+      const pageState = _drawerPageStateFor(selectedChannel.key);
+      const channelLabel = selectedChannel.label || selectedChannel.key;
       head.innerHTML = `
         <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
-        <div class="pm-drawer-section-title">${escapeHtml(selectedChannel.label)}</div>
+        <div class="pm-drawer-section-title">${escapeHtml(channelLabel)}</div>
       `;
-      const sessions = Array.isArray(selectedChannel.sessions) ? selectedChannel.sessions : [];
-      sessionList.innerHTML = sessions.length
-        ? sessions.map((s) => _sessionButtonHtml(s)).join('')
-        : `<div class="pm-session-empty">No ${escapeHtml(selectedChannel.label)} chats yet.</div>`;
+      sessionList.innerHTML = _sessionPageHtml(pageState, `No ${escapeHtml(channelLabel)} chats yet.`);
+      _wireDrawerInfiniteScroll({ channel: selectedChannel.key, loadSessions, onOpenSession, searchSessions, onNewChat });
     } else {
+      if (!_drawerPageStateFor('mobile').initialized) {
+        await _loadDrawerSessionPage({ channel: 'mobile', loadSessions });
+      }
+      const pageState = _drawerPageStateFor('mobile');
       head.innerHTML = `
         <div class="pm-drawer-section-title">Sessions</div>
-        <button class="pm-session-row pm-session-new" type="button" data-mobile-new-chat>
-          <span class="pm-icon">${ICONS.plus}</span>
-          <span class="pm-flex">New chat</span>
-        </button>
         <button class="pm-session-row pm-channel-entry" type="button" data-drawer-view="channels">
-          <span class="pm-icon">${ICONS.chat}</span>
+          <span class="pm-icon pm-channel-entry-icon">${ICONS.layers || ICONS.chat}</span>
           <span class="pm-flex">Channels</span>
           <span class="pm-chev">${ICONS.chev}</span>
         </button>
       `;
-      sessionList.innerHTML = mobile.length
-        ? mobile.map((s) => _sessionButtonHtml(s)).join('')
-        : '<div class="pm-session-empty">No mobile chats yet.</div>';
+      sessionList.innerHTML = _sessionPageHtml(pageState, 'No mobile chats yet.');
+      _wireDrawerInfiniteScroll({ channel: 'mobile', loadSessions, onOpenSession, searchSessions, onNewChat });
     }
 
-    _drawerEl.querySelectorAll('[data-drawer-view]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const view = btn.getAttribute('data-drawer-view') || 'mobile';
-        _saveDrawerState({ view, channel: view === 'channelChats' ? _loadDrawerState().channel : '' });
-        _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions });
-      });
-    });
-    _drawerEl.querySelectorAll('[data-channel-key]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        _saveDrawerState({ view: 'channelChats', channel: btn.getAttribute('data-channel-key') || '' });
-        _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions });
-      });
-    });
-    _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {
-      closeDrawer();
-      if (typeof onNewChat === 'function') onNewChat();
-    });
-    _drawerEl.querySelectorAll('[data-session-id]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const sessionId = btn.getAttribute('data-session-id');
-        closeDrawer();
-        if (typeof onOpenSession === 'function') onOpenSession(sessionId);
-      });
-    });
+    _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
   } catch {
     if (head) head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
     sessionList.innerHTML = '<div class="pm-session-empty">Could not load sessions.</div>';
   }
 }
 
-function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions }) {
+function _sessionPageHtml(pageState, emptyText) {
+  const sessions = Array.isArray(pageState?.sessions) ? pageState.sessions : [];
+  if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
+  if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
+  if (!sessions.length) return `<div class="pm-session-empty">${emptyText}</div>`;
+  return [
+    sessions.map((s) => _sessionButtonHtml(s)).join(''),
+    pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',
+    pageState?.hasMore ? '<button class="pm-session-load-more" type="button" data-session-load-more>Load more chats</button>' : '',
+    pageState?.loading ? '<div class="pm-session-empty pm-session-loading">Loading more...</div>' : '',
+  ].filter(Boolean).join('');
+}
+
+function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
+  _drawerEl.querySelectorAll('[data-drawer-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const view = btn.getAttribute('data-drawer-view') || 'mobile';
+      _saveDrawerState({ view, channel: view === 'channelChats' ? _loadDrawerState().channel : '' });
+      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
+    });
+  });
+  _drawerEl.querySelectorAll('[data-channel-key]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _saveDrawerState({ view: 'channelChats', channel: btn.getAttribute('data-channel-key') || '' });
+      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
+    });
+  });
+  _drawerEl.querySelector('[data-session-load-more]')?.addEventListener('click', () => _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat }));
+  _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {
+    closeDrawer();
+    Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
+      .then(() => {
+        _saveDrawerState({ view: 'mobile', channel: '' });
+        _resetDrawerPageState('mobile');
+      })
+      .catch(() => {});
+  });
+  _drawerEl.querySelectorAll('[data-session-id]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const sessionId = btn.getAttribute('data-session-id');
+      closeDrawer();
+      if (typeof onOpenSession === 'function') onOpenSession(sessionId);
+    });
+  });
+}
+
+async function _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat } = {}) {
+  const channel = _currentDrawerSessionChannel();
+  const pageState = _drawerPageStateFor(channel);
+  if (pageState.loading || !pageState.hasMore) return;
+  _renderVisibleDrawerSessionPage(channel);
+  await _loadDrawerSessionPage({ channel, loadSessions });
+  _renderVisibleDrawerSessionPage(channel);
+  _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
+}
+
+function _renderVisibleDrawerSessionPage(channel) {
+  const sessionList = _drawerEl?.querySelector('#pm-mobile-session-list');
+  if (!sessionList) return;
+  const pageState = _drawerPageStateFor(channel);
+  const label = channel === 'mobile' ? 'mobile' : channel;
+  sessionList.innerHTML = _sessionPageHtml(pageState, channel === 'mobile' ? 'No mobile chats yet.' : `No ${escapeHtml(label)} chats yet.`);
+}
+
+function _wireDrawerInfiniteScroll({ channel, loadSessions, onOpenSession, searchSessions, onNewChat }) {
+  if (!_drawerEl) return;
+  _drawerEl.onscroll = () => {
+    if (_drawerSearch) return;
+    if (_currentDrawerSessionChannel() !== channel) return;
+    const nearBottom = _drawerEl.scrollTop + _drawerEl.clientHeight >= _drawerEl.scrollHeight - 96;
+    if (nearBottom) _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat });
+  };
+}
+
+function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
   const nav = _drawerEl?.querySelector('.pm-drawer-list');
   const sessions = _drawerEl?.querySelector('#pm-drawer-sessions');
   const results = _drawerEl?.querySelector('#pm-drawer-search-results');
@@ -299,9 +459,11 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions 
     sessions.hidden = false;
     results.hidden = true;
     list.innerHTML = '';
-    _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions });
+    _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
   }
+
+  if (_drawerEl) _drawerEl.onscroll = null;
 
   nav.hidden = true;
   sessions.hidden = true;
@@ -373,6 +535,7 @@ function _channelButtonHtml(channel) {
   const key = String(channel?.key || '');
   const label = String(channel?.label || key || 'Channel');
   const sessions = Array.isArray(channel?.sessions) ? channel.sessions : [];
+  const total = Math.max(sessions.length, Math.floor(Number(channel?.total || 0) || 0));
   const workingCount = sessions.filter((s) => s?.activeRun === true).length;
   const unreadCount = sessions.filter((s) => s?.mobileUnread === true && s?.activeRun !== true).length;
   const channelStateClass = workingCount ? ' is-working' : (unreadCount ? ' is-unread' : '');
@@ -380,10 +543,11 @@ function _channelButtonHtml(channel) {
     ? `<span class="pm-session-state">${workingCount === 1 ? 'Working' : `${workingCount} working`}</span>`
     : (unreadCount ? `<span class="pm-session-state">${unreadCount === 1 ? 'Unread' : `${unreadCount} unread`}</span>` : '');
   const iconSvg = key === 'web' ? ICONS.monitor : key === 'terminal' ? ICONS.clipboard : ICONS.chat;
+  const countLabel = total ? `${total} chat${total === 1 ? '' : 's'}` : 'Open chats';
   return `
     <button class="pm-channel-card${channelStateClass}" type="button" data-channel-key="${escapeHtml(key)}" data-channel-state="${workingCount ? 'working' : (unreadCount ? 'unread' : 'idle')}">
       <span class="pm-channel-icon">${iconSvg}</span>
-      <span class="pm-flex"><strong>${escapeHtml(label)}</strong><em>${sessions.length} chat${sessions.length === 1 ? '' : 's'}</em></span>
+      <span class="pm-flex"><strong>${escapeHtml(label)}</strong><em>${escapeHtml(countLabel)}</em></span>
       ${channelStateLabel}
       <span class="pm-chev">${ICONS.chev}</span>
     </button>
@@ -393,11 +557,15 @@ function _channelButtonHtml(channel) {
 function _sessionButtonHtml(session) {
   const title = String(session?.title || session?.id || 'New chat');
   const preview = String(session?.preview || '').trim();
+  const lastMessageAt = Number(session?.lastMessageAt || session?.lastActiveAt || 0);
   const state = _sessionStateMeta(session);
   return `
     <button class="pm-session-row${state.stateClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}">
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
-      <span class="pm-session-preview">${escapeHtml(preview || _formatSessionDate(session.lastActiveAt))}</span>
+      <span class="pm-session-meta-row">
+        <span class="pm-session-preview">${escapeHtml(preview || 'No messages yet')}</span>
+        <span class="pm-session-time">${escapeHtml(lastMessageAt ? timeAgo(lastMessageAt) : _formatSessionDate(session.createdAt))}</span>
+      </span>
     </button>
   `;
 }
@@ -480,6 +648,7 @@ export function closeDrawer() {
   if (!_drawerEl || !_scrimEl) return;
   _drawerEl.classList.remove('open');
   _scrimEl.classList.remove('open');
+  setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), 0);
 }
 
 export function renderMobileHeader({ title, online = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {
@@ -610,6 +779,7 @@ export function initMobileCanvasSheet() {
           id: `cs${Date.now()}`,
           name: String(file.name || 'File'),
           kind: String(file.kind || 'file'),
+          path: String(file.path || ''),
           src,
           download: String(file.download || src),
         });
@@ -665,18 +835,21 @@ export function initMobileCanvasSheet() {
 
       if (!tab) {
         bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">No file open</div>';
+        resetCanvasZoom(bodyEl);
         return;
       }
 
       if (tab.kind === 'image') {
-        bodyEl.innerHTML = `<img src="${escapeHtml(tab.src)}" alt="${escapeHtml(tab.name)}">`;
+        bodyEl.innerHTML = canvasZoomHtml(`<img src="${escapeHtml(tab.src)}" alt="${escapeHtml(tab.name)}">`);
       } else if (tab.kind === 'video') {
-        bodyEl.innerHTML = `<video src="${escapeHtml(tab.src)}" controls playsinline></video>`;
+        bodyEl.innerHTML = canvasZoomHtml(`<video src="${escapeHtml(tab.src)}" controls playsinline></video>`);
       } else if (tab.kind === 'audio') {
         bodyEl.innerHTML = `<audio src="${escapeHtml(tab.src)}" controls></audio>`;
+        resetCanvasZoom(bodyEl);
       } else {
-        bodyEl.innerHTML = `<iframe src="${escapeHtml(tab.src)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+        bodyEl.innerHTML = canvasZoomHtml(`<iframe src="${escapeHtml(tab.src)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`);
       }
+      initCanvasZoom(bodyEl);
     },
   };
 
@@ -704,11 +877,13 @@ export function initMobileCanvasSheet() {
       const chunks = Array.isArray(r?.chunks) ? r.chunks : [];
       if (!chunks.length) throw new Error('No preview generated');
       // Show all chunks stacked vertically as images
-      bodyEl.innerHTML = `<div style="width:100%;height:100%;overflow-y:auto;overflow-x:hidden;">${
+      bodyEl.innerHTML = canvasZoomHtml(`<div class="pm-canvas-preview-stack">${
         chunks.map(c => `<img src="data:image/png;base64,${c.base64}" style="width:100%;display:block;" alt="Preview">`).join('')
-      }</div>`;
+      }</div>`);
+      initCanvasZoom(bodyEl);
     } catch (err) {
       bodyEl.innerHTML = `<div class="pm-canvas-sheet-empty">Preview failed: ${escapeHtml(String(err?.message || err))}</div>`;
+      resetCanvasZoom(bodyEl);
     } finally {
       btn.disabled = false;
       btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12s1.5-3 4-3 4 3 4 3-1.5 3-4 3-4-3-4-3z"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg> Preview`;
@@ -748,6 +923,179 @@ export function initMobileCanvasSheet() {
   });
 
   window.__pmCanvasSheet = api;
+}
+
+function canvasZoomHtml(innerHtml) {
+  return `
+    <div class="pm-canvas-zoom-viewport" data-canvas-zoom-viewport>
+      <div class="pm-canvas-zoom-content" data-canvas-zoom-content>${innerHtml}</div>
+    </div>
+  `;
+}
+
+function resetCanvasZoom(root) {
+  if (!root) return;
+  root.__pmCanvasZoomCleanup?.();
+  root.__pmCanvasZoomCleanup = null;
+}
+
+function initCanvasZoom(root) {
+  resetCanvasZoom(root);
+  const viewport = root?.querySelector?.('[data-canvas-zoom-viewport]');
+  const content = root?.querySelector?.('[data-canvas-zoom-content]');
+  if (!viewport || !content) return;
+
+  const state = {
+    pointers: new Map(),
+    scale: 1,
+    minScale: 1,
+    maxScale: 5,
+    x: 0,
+    y: 0,
+    lastTapAt: 0,
+    startScale: 1,
+    startDistance: 0,
+    startCenter: null,
+    startX: 0,
+    startY: 0,
+  };
+
+  const apply = () => {
+    content.style.transform = `translate3d(${state.x}px, ${state.y}px, 0) scale(${state.scale})`;
+    viewport.classList.toggle('is-zoomed', state.scale > 1.01);
+  };
+
+  const clamp = () => {
+    state.scale = Math.min(state.maxScale, Math.max(state.minScale, state.scale));
+    if (state.scale <= 1.01) {
+      state.scale = 1;
+      state.x = 0;
+      state.y = 0;
+      return;
+    }
+    const rect = viewport.getBoundingClientRect();
+    const maxX = Math.max(0, (rect.width * state.scale - rect.width) / 2);
+    const maxY = Math.max(0, (rect.height * state.scale - rect.height) / 2);
+    state.x = Math.min(maxX, Math.max(-maxX, state.x));
+    state.y = Math.min(maxY, Math.max(-maxY, state.y));
+  };
+
+  const setScaleAt = (nextScale, clientX, clientY) => {
+    const rect = viewport.getBoundingClientRect();
+    const prevScale = state.scale || 1;
+    const clampedScale = Math.min(state.maxScale, Math.max(state.minScale, nextScale));
+    const originX = clientX - rect.left - rect.width / 2 - state.x;
+    const originY = clientY - rect.top - rect.height / 2 - state.y;
+    state.x -= originX * (clampedScale / prevScale - 1);
+    state.y -= originY * (clampedScale / prevScale - 1);
+    state.scale = clampedScale;
+    clamp();
+    apply();
+  };
+
+  const pointers = () => Array.from(state.pointers.values());
+  const distance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const center = (a, b) => ({ clientX: (a.clientX + b.clientX) / 2, clientY: (a.clientY + b.clientY) / 2 });
+
+  const onPointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    state.pointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    viewport.setPointerCapture?.(event.pointerId);
+    const pts = pointers();
+    if (pts.length === 1) {
+      state.startX = state.x;
+      state.startY = state.y;
+      state.startCenter = pts[0];
+    } else if (pts.length === 2) {
+      state.startScale = state.scale;
+      state.startDistance = distance(pts[0], pts[1]) || 1;
+      state.startCenter = center(pts[0], pts[1]);
+      state.startX = state.x;
+      state.startY = state.y;
+    }
+  };
+
+  const onPointerMove = (event) => {
+    if (!state.pointers.has(event.pointerId)) return;
+    state.pointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    const pts = pointers();
+    if (pts.length === 1 && state.scale > 1.01 && state.startCenter) {
+      event.preventDefault();
+      state.x = state.startX + (pts[0].clientX - state.startCenter.clientX);
+      state.y = state.startY + (pts[0].clientY - state.startCenter.clientY);
+      clamp();
+      apply();
+    } else if (pts.length >= 2) {
+      event.preventDefault();
+      const currentDistance = distance(pts[0], pts[1]) || state.startDistance || 1;
+      const currentCenter = center(pts[0], pts[1]);
+      state.scale = state.startScale * (currentDistance / (state.startDistance || currentDistance));
+      state.x = state.startX + (currentCenter.clientX - state.startCenter.clientX);
+      state.y = state.startY + (currentCenter.clientY - state.startCenter.clientY);
+      clamp();
+      apply();
+    }
+  };
+
+  const onPointerEnd = (event) => {
+    state.pointers.delete(event.pointerId);
+    const pts = pointers();
+    if (pts.length === 1) {
+      state.startX = state.x;
+      state.startY = state.y;
+      state.startCenter = pts[0];
+    } else if (!pts.length) {
+      clamp();
+      apply();
+    }
+  };
+
+  const onDoubleTap = (event) => {
+    const now = Date.now();
+    if (now - state.lastTapAt < 280) {
+      event.preventDefault();
+      if (state.scale > 1.01) {
+        state.scale = 1;
+        state.x = 0;
+        state.y = 0;
+        apply();
+      } else {
+        setScaleAt(2.25, event.clientX, event.clientY);
+      }
+      state.lastTapAt = 0;
+      return;
+    }
+    state.lastTapAt = now;
+  };
+
+  const onWheel = (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    setScaleAt(state.scale * (event.deltaY > 0 ? 0.9 : 1.1), event.clientX, event.clientY);
+  };
+  const onResize = () => {
+    clamp();
+    apply();
+  };
+
+  viewport.addEventListener('pointerdown', onPointerDown);
+  viewport.addEventListener('pointermove', onPointerMove);
+  viewport.addEventListener('pointerup', onPointerEnd);
+  viewport.addEventListener('pointercancel', onPointerEnd);
+  viewport.addEventListener('click', onDoubleTap, true);
+  viewport.addEventListener('wheel', onWheel, { passive: false });
+  window.addEventListener('resize', onResize);
+  apply();
+
+  root.__pmCanvasZoomCleanup = () => {
+    viewport.removeEventListener('pointerdown', onPointerDown);
+    viewport.removeEventListener('pointermove', onPointerMove);
+    viewport.removeEventListener('pointerup', onPointerEnd);
+    viewport.removeEventListener('pointercancel', onPointerEnd);
+    viewport.removeEventListener('click', onDoubleTap, true);
+    viewport.removeEventListener('wheel', onWheel);
+    window.removeEventListener('resize', onResize);
+  };
 }
 
 export function wireHeaderActions(pageEl, { onLeft, onSettings, onBack, onNewChat }) {

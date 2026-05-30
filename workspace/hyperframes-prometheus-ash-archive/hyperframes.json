@@ -1,0 +1,9 @@
+{
+  "version": "0.6.20",
+  "name": "hyperframes-prometheus-ash-archive",
+  "entry": "index.html",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "duration": 44
+}

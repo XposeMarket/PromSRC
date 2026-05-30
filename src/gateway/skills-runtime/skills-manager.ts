@@ -831,17 +831,8 @@ export class SkillsManager {
     const all = this.getAll();
     if (!all.length) return 'No skills installed.';
     return all.map(s => {
-      const parts = [
-        `${s.id}`,
-        s.kind === 'bundle' ? `v${s.version} [bundle: ${s.resources.length} resources]` : '[simple]',
-        s.requiredTools.length ? `[tools: ${s.requiredTools.join(',')}]` : '',
-        s.toolBinding?.recommendedToolCategories?.length ? `[tool-cats: ${s.toolBinding.recommendedToolCategories.join(',')}]` : '',
-        s.assignment?.preferredAgent ? `[agent: ${s.assignment.preferredAgent}]` : '',
-        s.eligibility.status !== 'ready' ? `[${s.eligibility.status}: ${s.eligibility.reasons.join('; ').slice(0, 120)}]` : '',
-        s.triggers.length ? `[triggers: ${s.triggers.join(',')}]` : '',
-        `- ${s.description.slice(0, 100) || '(no description)'}`,
-      ].filter(Boolean);
-      return parts.join(' ');
+      const status = s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
+      return `${s.id}${status} - ${s.description || '(no description)'}`;
     }).join('\n');
   }
 

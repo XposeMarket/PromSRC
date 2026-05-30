@@ -179,6 +179,60 @@ export async function createVoiceInterruptionEvent(payload = {}) {
   });
 }
 
+// Streaming variant: POSTs with { stream: true } and consumes the SSE response,
+// invoking onChunk(text) per sentence as the model generates the spokenReply.
+// Returns a promise resolving with the full result payload from the `done` event.
+export async function streamVoiceAgentInputMobile(payload = {}, onChunk) {
+  const token = getDeviceToken();
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+  });
+  if (token) headers.set('X-Pairing-Token', token);
+  const body = JSON.stringify({
+    ...(payload || {}),
+    transcript: String(payload?.userInterruptionTranscript || payload?.transcript || '').trim(),
+    source: String(payload?.source || 'mobile_voice_agent'),
+    stream: true,
+  });
+  const res = await fetch(_buildUrl('/api/voice-agent/input'), { method: 'POST', headers, body });
+  if (res.status === 401 && token) {
+    clearDeviceToken();
+    window.dispatchEvent(new Event('pm-device-revoked'));
+    throw new Error('HTTP 401');
+  }
+  if (!res.ok || !res.body) throw new Error(`Voice agent stream failed (${res.status})`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buf = '';
+  let finalResult = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const rawEvent = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const dataLine = rawEvent.split('\n').find((l) => l.startsWith('data:'));
+      if (!dataLine) continue;
+      const json = dataLine.slice(5).trim();
+      if (!json) continue;
+      let p = null;
+      try { p = JSON.parse(json); } catch { continue; }
+      if (!p || typeof p !== 'object') continue;
+      if (p.type === 'chunk' && p.text) {
+        try { onChunk?.(String(p.text)); } catch {}
+      } else if (p.type === 'done') {
+        finalResult = p.result || null;
+      } else if (p.type === 'error') {
+        throw new Error(String(p.error || 'voice-agent stream error'));
+      }
+    }
+  }
+  return finalResult || {};
+}
+
 /* ---------------- helpers ---------------- */
 
 function fmtDate(value) {
@@ -898,6 +952,7 @@ function _normalizeSessionSummary(s) {
     preview: String(s?.preview || s?.title || '').trim(),
     messageCount: Number(s?.messageCount || 0),
     createdAt: Number(s?.createdAt || Date.now()),
+    lastMessageAt: Number(s?.lastMessageAt || s?.lastActiveAt || s?.updatedAt || s?.createdAt || Date.now()),
     lastActiveAt: Number(s?.lastActiveAt || s?.updatedAt || Date.now()),
     lastAssistantAt: Number(s?.lastAssistantAt || 0) || null,
     mobileLastReadAt: Number(s?.mobileLastReadAt || 0) || null,
@@ -915,26 +970,66 @@ export async function createMobileChatSession(sessionId, { title = 'New Chat' } 
   });
 }
 
-export async function loadMobileSessionGroups() {
-  const r = await mfetch('/api/sessions').catch(() => ({ sessions: [] }));
+const MOBILE_SESSION_PAGE_SIZE = 20;
+const MOBILE_SESSION_CHANNELS = [
+  { key: 'web', label: 'Computer' },
+  { key: 'telegram', label: 'Telegram' },
+  { key: 'discord', label: 'Discord' },
+  { key: 'whatsapp', label: 'WhatsApp' },
+  { key: 'terminal', label: 'CLI' },
+];
+
+function _normalizeSessionPageResponse(r, { channel = '', limit = MOBILE_SESSION_PAGE_SIZE, offset = 0 } = {}) {
   const sessions = Array.isArray(r?.sessions) ? r.sessions.map(_normalizeSessionSummary).filter(s => s.id) : [];
-  const byChannel = new Map();
-  for (const s of sessions) {
-    if (!byChannel.has(s.channel)) byChannel.set(s.channel, []);
-    byChannel.get(s.channel).push(s);
-  }
-  for (const list of byChannel.values()) list.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  const safeLimit = Math.max(1, Math.floor(Number(r?.limit || limit) || limit));
+  const safeOffset = Math.max(0, Math.floor(Number(r?.offset || offset) || offset));
+  const total = Math.max(safeOffset + sessions.length, Math.floor(Number(r?.total || sessions.length) || sessions.length));
   return {
-    mobile: byChannel.get('mobile') || [],
-    channels: [
-      { key: 'web', label: 'Computer', sessions: byChannel.get('web') || [] },
-      { key: 'telegram', label: 'Telegram', sessions: byChannel.get('telegram') || [] },
-      { key: 'discord', label: 'Discord', sessions: byChannel.get('discord') || [] },
-      { key: 'whatsapp', label: 'WhatsApp', sessions: byChannel.get('whatsapp') || [] },
-      { key: 'terminal', label: 'CLI', sessions: byChannel.get('terminal') || [] },
-    ],
+    channel: String(channel || '').trim(),
+    sessions,
+    total,
+    limit: safeLimit,
+    offset: safeOffset,
+    hasMore: r?.hasMore === true || safeOffset + sessions.length < total,
   };
 }
+
+export async function loadMobileSessionPage({ channel = 'mobile', limit = MOBILE_SESSION_PAGE_SIZE, offset = 0 } = {}) {
+  const requestedChannel = String(channel || 'mobile');
+  const requestedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || MOBILE_SESSION_PAGE_SIZE)));
+  const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  const params = new URLSearchParams({
+    channel: requestedChannel,
+    limit: String(requestedLimit),
+    offset: String(requestedOffset),
+  });
+  const r = await mfetch(`/api/sessions?${params.toString()}`);
+  return _normalizeSessionPageResponse(r, { channel: requestedChannel, limit: requestedLimit, offset: requestedOffset });
+}
+
+export async function loadMobileSessionGroups(options = {}) {
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(options.limit) || MOBILE_SESSION_PAGE_SIZE)));
+  const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
+  const channel = String(options.channel || 'mobile');
+  const page = await loadMobileSessionPage({ channel, limit, offset });
+  return {
+    mobile: channel === 'mobile' ? page.sessions : [],
+    mobilePage: channel === 'mobile' ? page : _normalizeSessionPageResponse(null, { channel: 'mobile', limit, offset: 0 }),
+    channels: MOBILE_SESSION_CHANNELS.map((entry) => ({
+      ...entry,
+      sessions: entry.key === channel ? page.sessions : [],
+      total: entry.key === channel ? page.total : 0,
+      hasMore: entry.key === channel ? page.hasMore : false,
+      limit,
+      offset: entry.key === channel ? page.offset : 0,
+    })),
+    pageSize: limit,
+    activePage: page,
+    activeChannel: channel,
+  };
+}
+loadMobileSessionGroups.loadPage = loadMobileSessionPage;
+
 
 export async function searchMobileChatSessions(query, { limit = 100 } = {}) {
   const q = String(query || '').trim();
@@ -967,7 +1062,7 @@ export async function loadLatestUsableSession() {
     .filter(s => s.channel !== 'system')
     .filter(s => !/^(brain_|subagent_chat_|cron_|task_|auto_)/i.test(s.id))
     .filter(s => Number(s.messageCount || 0) > 0)
-    .sort((a, b) => Number(b.lastActiveAt || 0) - Number(a.lastActiveAt || 0))[0] || null;
+    .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || 0))[0] || null;
 }
 
 export async function loadMobileChatSession(sessionId) {

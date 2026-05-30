@@ -9,6 +9,10 @@
  * B6 Refactor: handleChat + /api/chat + /api/status extracted to routes/chat.router.ts
  */
 
+// MUST be first: synchronously consumes the master key handed over stdin by the
+// Electron main process, before any vault access or config side effects run.
+import '../security/vault-key-bootstrap.js';
+
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -650,6 +654,7 @@ startupMark('heartbeat agents registered');
 
 // ─── B6: Wire chat router ──────────────────────────────────────────────────────
 initChatRouterLazy({ cronScheduler, telegramChannel, skillsManager });
+initTaskRouter({ handleChat, telegramChannel, makeBroadcastForTask, cronScheduler });
 startupMark('chat router init deferred');
 
 const mainChatTimerRunner = new MainChatTimerRunner({
@@ -728,6 +733,16 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
     orchestration: null,
     chatRouter: getChatRouterWarmupStatus(),
   });
+});
+
+app.post('/api/internal/shutdown', (req, res) => {
+  const addr = req.socket.remoteAddress || '';
+  if (addr !== '127.0.0.1' && addr !== '::1' && addr !== '::ffff:127.0.0.1') {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  res.json({ ok: true });
+  setImmediate(() => gracefulShutdown('SIGTERM'));
 });
 
 // ─── Router Registrations ────────────────────────────────────────────────────

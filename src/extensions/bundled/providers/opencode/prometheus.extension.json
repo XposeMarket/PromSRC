@@ -12,7 +12,7 @@
     "options": {
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
-      "staticModels": ["claude-opus-4-6", "claude-sonnet-4-6", "gpt-5.4", "gpt-5.3-codex", "gemini-3-flash", "glm-5", "kimi-k2.5"],
+      "staticModels": ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "gpt-5.4", "gpt-5.3-codex", "gemini-3-flash", "glm-5", "kimi-k2.5"],
       "supportsLiveModelDiscovery": true
     }
   },
@@ -42,7 +42,7 @@
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "claude-opus-4-6"
+        "placeholder": "claude-opus-4-8"
       },
       {
         "key": "endpoint",
@@ -55,7 +55,7 @@
   "config": {
     "defaults": {
       "endpoint": "https://opencode.ai/zen/v1",
-      "model": "claude-opus-4-6"
+      "model": "claude-opus-4-8"
     },
     "schema": {
       "api_key": "string",

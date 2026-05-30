@@ -123,6 +123,7 @@ function collectMirrorFiles(configDir: string, workspacePath: string): MirrorFil
   };
 
   pushDir(path.join(configDir, 'sessions'), 'chats/sessions', 'chats');
+  pushDir(path.join(configDir, 'tool-observations'), 'chats/tool-observations', 'chats');
   pushDir(path.join(configDir, 'projects'), 'projects/state', 'projects');
   pushDir(path.join(configDir, 'tasks'), 'tasks/state', 'tasks');
   pushDir(path.join(workspacePath, 'proposals'), 'proposals/state', 'proposals');

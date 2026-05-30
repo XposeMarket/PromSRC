@@ -85,6 +85,25 @@ function buildWebPayload(payload: DeliveryPayload, target: DeliveryTarget): Reco
   };
 }
 
+function buildVisionInjectedPayload(payload: DeliveryPayload): Record<string, any> | null {
+  const imageBase64 = payload.imageBase64 || (payload.imageBuffer ? payload.imageBuffer.toString('base64') : '');
+  if (!imageBase64) return null;
+  const mimeType = payload.mimeType || 'image/jpeg';
+  const fileName = String(payload.fileName || '').toLowerCase();
+  const sourceText = String(payload.source || '').toLowerCase();
+  const source = fileName.includes('browser') || sourceText.includes('browser') ? 'browser' : 'desktop';
+  return {
+    type: 'vision_injected',
+    source,
+    tool: payload.source || 'delivery_send_screenshot',
+    preview: {
+      dataUrl: `data:${mimeType};base64,${imageBase64}`,
+      mimeType,
+    },
+    timestamp: Date.now(),
+  };
+}
+
 async function deliverTelegram(payload: DeliveryPayload, deps: DeliveryDeps): Promise<string> {
   const telegram = deps.telegramChannel;
   if (!telegram) return 'telegram unavailable';
@@ -152,6 +171,8 @@ export async function deliverToTargets(payload: DeliveryPayload, deps: DeliveryD
       } else if (t === 'web' || t === 'mobile' || t === 'terminal') {
         const event = buildWebPayload({ ...payload, sessionId, text: hasText ? payload.text : textForTextOnlyChannels }, t);
         (deps.broadcastWS || broadcastWS)(event);
+        const visionEvent = buildVisionInjectedPayload({ ...payload, sessionId });
+        if (visionEvent) (deps.broadcastWS || broadcastWS)({ ...visionEvent, target: t, sessionId });
         delivered.push(`${t} websocket`);
       }
     } catch (err: any) {

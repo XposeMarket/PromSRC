@@ -2,6 +2,7 @@
 // Teams, Schedules, Team Workspace routes
 import { Router } from 'express';
 import { getBrainRunnerInstance } from '../brain/brain-runner';
+import { getBrainDir } from '../brain/brain-state';
 import { getConfig, getAgentById } from '../../config/config';
 import { broadcastTeamEvent, addTeamSseClient, removeTeamSseClient } from '../comms/broadcaster';
 import {
@@ -1814,6 +1815,220 @@ router.post('/api/schedules/:id/run', (req: any, res: any) => {
 
 // ─── Brain API ─────────────────────────────────────────────────────────────────
 
+type BrainPulseCard = {
+  title: string;
+  body: string;
+  prompt: string;
+  kind: 'authored' | 'wonder' | 'opportunity' | 'improvement';
+  source: string;
+  sourcePath: string;
+};
+
+function cleanBrainPulseText(value: unknown, maxLength = 140): string {
+  const text = String(value || '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length <= maxLength) return text;
+  const clipped = text.slice(0, Math.max(0, maxLength - 3)).trimEnd();
+  return `${clipped}...`;
+}
+
+function splitBrainMarkdownRow(line: string): string[] {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return [];
+  return trimmed
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cleanBrainPulseText(cell, 220));
+}
+
+function extractBrainThoughtSection(markdown: string, headingPattern: RegExp): string {
+  const heading = markdown.match(headingPattern);
+  if (!heading || heading.index === undefined) return '';
+  const start = heading.index + heading[0].length;
+  const rest = markdown.slice(start);
+  const next = rest.search(/\n##\s+/);
+  return next >= 0 ? rest.slice(0, next) : rest;
+}
+
+function normalizeAuthoredBrainPulseCard(card: unknown, source: string, sourcePath: string): BrainPulseCard | null {
+  if (!card || typeof card !== 'object') return null;
+  const raw = card as Record<string, unknown>;
+  const title = cleanBrainPulseText(raw.title, 52);
+  const body = cleanBrainPulseText(raw.body, 130);
+  const prompt = cleanBrainPulseText(raw.prompt, 520);
+  if (!title || !body || !prompt) return null;
+  return {
+    title,
+    body,
+    prompt,
+    kind: 'authored',
+    source,
+    sourcePath,
+  };
+}
+
+function extractAuthoredBrainPulseCardsFromThought(file: string, markdown: string): BrainPulseCard[] {
+  const { source, sourcePath } = makeBrainPulseSource(file);
+  const section = extractBrainThoughtSection(markdown, /\n##\s+Pulse Cards\b[^\n]*\n/i);
+  if (!section) return [];
+
+  const fenced = section.match(/```json\s*([\s\S]*?)```/i) || section.match(/```\s*([\s\S]*?)```/i);
+  const rawJson = fenced?.[1]?.trim() || section.trim();
+  if (!rawJson) return [];
+
+  try {
+    const parsed = JSON.parse(rawJson);
+    const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.cards) ? parsed.cards : [];
+    return values
+      .map((card: unknown) => normalizeAuthoredBrainPulseCard(card, source, sourcePath))
+      .filter((card: BrainPulseCard | null): card is BrainPulseCard => !!card)
+      .slice(0, 3);
+  } catch {
+    return [];
+  }
+}
+
+function listRecentBrainThoughtFiles(limit = 8): string[] {
+  const thoughtsDir = path.join(getBrainDir(), 'thoughts');
+  if (!fs.existsSync(thoughtsDir)) return [];
+
+  const files: Array<{ file: string; sortKey: string }> = [];
+  for (const dateEntry of fs.readdirSync(thoughtsDir, { withFileTypes: true })) {
+    if (!dateEntry.isDirectory()) continue;
+    const dateDir = path.join(thoughtsDir, dateEntry.name);
+    for (const thoughtEntry of fs.readdirSync(dateDir, { withFileTypes: true })) {
+      if (!thoughtEntry.isFile() || !thoughtEntry.name.endsWith('-thought.md')) continue;
+      const file = path.join(dateDir, thoughtEntry.name);
+      files.push({ file, sortKey: `${dateEntry.name}/${thoughtEntry.name}` });
+    }
+  }
+
+  return files
+    .sort((a, b) => b.sortKey.localeCompare(a.sortKey))
+    .slice(0, limit)
+    .map((entry) => entry.file);
+}
+
+function makeBrainPulseSource(file: string): { source: string; sourcePath: string } {
+  const brainDir = getBrainDir();
+  const sourcePath = path.relative(brainDir, file).replace(/\\/g, '/');
+  const source = sourcePath.replace(/^thoughts\//, '').replace(/-thought\.md$/, '');
+  return { source, sourcePath };
+}
+
+function extractBrainPulseCardsFromThought(file: string, markdown: string): BrainPulseCard[] {
+  const { source, sourcePath } = makeBrainPulseSource(file);
+  const cards: BrainPulseCard[] = [];
+  const joinPrompt = (prefix: string, detail: string): string => {
+    const cleaned = cleanBrainPulseText(detail, 260);
+    const separator = /[.!?]$/.test(prefix.trim()) ? ' ' : '. ';
+    return `${prefix.trim()}${separator}${cleaned}`;
+  };
+
+  const opportunitySection = extractBrainThoughtSection(markdown, /\n##\s+F\.\s+Opportunity Seeds\b[^\n]*\n/i);
+  for (const row of opportunitySection.split(/\r?\n/).map(splitBrainMarkdownRow)) {
+    if (row.length < 2 || /^seed$/i.test(row[0]) || /^-+$/.test(row.join(''))) continue;
+    const fullTitle = cleanBrainPulseText(row[0], 140);
+    const title = cleanBrainPulseText(fullTitle, 46);
+    const body = cleanBrainPulseText(row[1], 116);
+    if (!title || !body) continue;
+    cards.push({
+      title,
+      body,
+      prompt: `${joinPrompt(`Let's revisit this recent Prometheus thread: ${fullTitle}`, row[1])} First verify what exists now, then suggest the smallest useful next step.`,
+      kind: 'opportunity',
+      source,
+      sourcePath,
+    });
+  }
+
+  const improvementSection = extractBrainThoughtSection(markdown, /\n##\s+G\.\s+Improvement Candidates\b[^\n]*\n/i);
+  for (const row of improvementSection.split(/\r?\n/).map(splitBrainMarkdownRow)) {
+    if (row.length < 3 || /^issue$/i.test(row[0]) || /^-+$/.test(row.join(''))) continue;
+    const fullTitle = cleanBrainPulseText(row[0], 140);
+    const title = cleanBrainPulseText(fullTitle, 46);
+    const body = cleanBrainPulseText(`${row[1]} - ${row[2]}`, 116);
+    if (!title || !body) continue;
+    cards.push({
+      title,
+      body,
+      prompt: `Let's take a closer look at ${fullTitle}${/[.!?]$/.test(fullTitle) ? '' : '.'} Check the current state, then propose the smallest useful next action.`,
+      kind: 'improvement',
+      source,
+      sourcePath,
+    });
+  }
+
+  const summary = extractBrainThoughtSection(markdown, /\n##\s+Summary\b[^\n]*\n/i);
+  const wonderMatches = summary
+    .split(/(?=I wonder\s+(?:if|whether|how|what|why|where|when)\s+)/i)
+    .map((part) => part.trim())
+    .filter((part) => /^I wonder\s+(?:if|whether|how|what|why|where|when)\s+/i.test(part))
+    .map((part) => part.split(/\n\s*\n/)[0]);
+  for (const match of wonderMatches) {
+    const body = cleanBrainPulseText(match.replace(/^I wonder\s+/i, ''), 116);
+    if (!body) continue;
+    cards.push({
+      title: 'Dig Into a Recent Thread',
+      body,
+      prompt: `Let's dig deeper into this recent Prometheus thread: ${cleanBrainPulseText(match.replace(/^I wonder\s+/i, ''), 260)} Start by checking the current project context, then suggest the best concrete next step.`,
+      kind: 'wonder',
+      source,
+      sourcePath,
+    });
+  }
+
+  return cards;
+}
+
+export function getBrainPulseCards(limit = 3): BrainPulseCard[] {
+  const recentFiles = listRecentBrainThoughtFiles(8);
+  const seen = new Set<string>();
+  const cards: BrainPulseCard[] = [];
+
+  for (const file of recentFiles) {
+    let markdown = '';
+    try {
+      markdown = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const authoredCards = extractAuthoredBrainPulseCardsFromThought(file, markdown);
+    if (authoredCards.length) {
+      for (const card of authoredCards) {
+        const key = `${card.title}:${card.body}:${card.prompt}`.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cards.push(card);
+        if (cards.length >= limit) return cards;
+      }
+    }
+  }
+
+  for (const file of recentFiles) {
+    let markdown = '';
+    try {
+      markdown = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const card of extractBrainPulseCardsFromThought(file, markdown)) {
+      const key = `${card.kind}:${card.title}:${card.body}`.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cards.push(card);
+      if (cards.length >= limit) return cards;
+    }
+  }
+  return cards;
+}
+
 router.get('/api/brain/status', (_req: any, res: any) => {
   const runner = getBrainRunnerInstance();
   if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
@@ -1824,6 +2039,14 @@ router.get('/api/brain/status', (_req: any, res: any) => {
     thoughtModel: status.thoughtModel || '',
     dreamModel: status.dreamModel || '',
   });
+});
+
+router.get('/api/brain/pulse-cards', (_req: any, res: any) => {
+  try {
+    res.json({ success: true, cards: getBrainPulseCards(3) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load Brain pulse cards' });
+  }
 });
 
 router.patch('/api/brain/config', (req: any, res: any) => {

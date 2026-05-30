@@ -4,7 +4,7 @@ import { getOllamaClient } from '../agents/ollama-client';
 import {
   archiveMainChatGoal,
   getMainChatGoal,
-  getRecentToolLog,
+  getRecentToolObservationsForContext,
   getSession,
   listMainChatGoalRecords,
   setMainChatGoal,
@@ -316,7 +316,7 @@ export async function maybeSummarizeMainChatGoal(sessionId: string): Promise<Mai
     ? Math.max(0, Math.floor(Number(current.lastSummaryMessageIndex)))
     : 0;
   const recentMessages = (session.history || []).slice(start).slice(-Math.max(10, policy.summaryEveryTurns * 2 + 4));
-  const toolLog = getRecentToolLog(sessionId, Math.max(3, policy.summaryEveryTurns), 2500);
+  const toolLog = getRecentToolObservationsForContext(sessionId, Math.max(3, policy.summaryEveryTurns), 2500);
   const prompt = [
     'Create an active-goal progress ledger for a nonstop main-chat goal loop.',
     `Target length: <= ${policy.summaryMaxWords} words.`,
@@ -346,7 +346,7 @@ export async function maybeSummarizeMainChatGoal(sessionId: string): Promise<Mai
     '[RECENT_GOAL_MESSAGES]',
     formatGoalMessages(recentMessages) || '(none)',
     '',
-    '[RECENT_TOOL_LOGS]',
+    '[RECENT_TOOL_OBSERVATIONS]',
     toolLog || '(none)',
   ].join('\n');
 

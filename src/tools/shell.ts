@@ -6,6 +6,32 @@ import { getActiveAllowedWorkspaces, getActiveWorkspace } from './workspace-cont
 import { getProcessSupervisor } from '../gateway/process/supervisor.js';
 import { runTerminal } from '../gateway/terminal-service.js';
 import type { ProcessShell } from '../gateway/process/types.js';
+import { isSessionAllowedPath } from '../gateway/path-permissions.js';
+import { getSharedToolExecutionContext } from './execution-context.js';
+
+/**
+ * Commands that are trusted in lite mode and bypass per-command approval.
+ * These are all read-only or workspace-scoped write operations with minimal risk.
+ */
+export const TRUSTED_DEV_COMMANDS: string[] = [
+  // git reads
+  'git status', 'git log', 'git diff', 'git branch', 'git show', 'git fetch', 'git stash list',
+  'git stash show',
+  // git workspace writes (low risk, workspace-scoped)
+  'git add', 'git commit', 'git stash',
+  // package managers
+  'npm', 'npx', 'pnpm', 'yarn', 'bun',
+  // node execution
+  'node',
+  // typescript / linting
+  'tsc', 'eslint', 'prettier',
+  // basic inspection
+  'where', 'echo', 'type ', 'dir',
+];
+
+export function commandMatchesTrustedDev(command: string): boolean {
+  return commandMatchesAllowlist(command, TRUSTED_DEV_COMMANDS);
+}
 
 export interface ShellToolArgs {
   command: string;
@@ -59,6 +85,28 @@ function containsOutOfScopeAbsPath(command: string, allowedPaths: string[]): boo
   return false;
 }
 
+/**
+ * Returns true if `command` matches any entry in `patterns`.
+ * Supports: exact match, prefix match ("npm" matches "npm install"),
+ * and glob suffix ("npm *" or "npm*" matches any npm command).
+ * Case-insensitive on all platforms.
+ */
+export function commandMatchesAllowlist(command: string, patterns: string[]): boolean {
+  const cmd = command.trim().toLowerCase();
+  for (const raw of patterns) {
+    const p = raw.trim().toLowerCase();
+    if (!p) continue;
+    if (p.endsWith('*')) {
+      // "npm *" → prefix is "npm ", "npm*" → prefix is "npm"
+      const prefix = p.endsWith(' *') ? p.slice(0, -1) : p.slice(0, -1);
+      if (cmd.startsWith(prefix)) return true;
+    } else if (cmd === p || cmd.startsWith(p + ' ') || cmd.startsWith(p + '\t')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function validateShellRequest(args: ShellToolArgs): { ok: true; cwd: string; command: string } | { ok: false; result: ToolResult } {
   const config = getConfig().getConfig();
   const permissions = config.tools.permissions.shell;
@@ -72,13 +120,15 @@ export function validateShellRequest(args: ShellToolArgs): { ok: true; cwd: stri
 
   // ── FIX HIGH-05: use proper path confinement (not startsWith) ──────────────
   if (permissions.workspace_only) {
-    if (!isPathInsideAnyDir(allowedPaths, cwd)) {
-      log.warn('[shell] Blocked: cwd outside workspace:', cwd);
+    const { sessionId } = getSharedToolExecutionContext();
+    if (!isPathInsideAnyDir(allowedPaths, cwd) && !isSessionAllowedPath(sessionId, cwd)) {
+      log.warn('[shell] Path approval needed: cwd outside workspace:', cwd);
       return {
         ok: false,
         result: {
           success: false,
-          error: `Security: Command execution outside allowed paths is not allowed. Allowed: ${allowedPaths.join(', ')}, Requested: ${cwd}`
+          error: `Path "${cwd}" is outside the allowed workspace paths.`,
+          data: { _needsPathApproval: true, requestedPath: cwd },
         }
       };
     }
@@ -120,6 +170,12 @@ export function validateShellRequest(args: ShellToolArgs): { ok: true; cwd: stri
         };
       }
     }
+  }
+
+  // ── Config allowed_commands: bypass blocked-pattern + dangerous-command checks ──
+  const allowedCmds: string[] = (permissions as any).allowed_commands ?? [];
+  if (allowedCmds.length > 0 && commandMatchesAllowlist(args.command, allowedCmds)) {
+    return { ok: true, cwd, command: args.command };
   }
 
   // Check config-defined blocked patterns

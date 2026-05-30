@@ -28,6 +28,7 @@ export interface XAITokens {
   access_token: string;
   refresh_token: string;
   expires_at: number;
+  refresh_token_expires_at?: number;
   id_token?: string;
   token_type?: string;
   token_endpoint?: string;
@@ -142,9 +143,16 @@ export async function refreshXAITokens(configDir: string): Promise<XAITokens> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    if (res.status === 400 || res.status === 401) {
+      // Refresh token has expired or been revoked — clear stale session so UI
+      // shows disconnected rather than a forever-broken "connected" state.
+      clearXAITokens(configDir);
+      throw new Error(`xAI OAuth session expired (${res.status}). Please reconnect xAI in Settings → Models.`);
+    }
     throw new Error(`xAI token refresh failed (${res.status}): ${text.slice(0, 300)}`);
   }
   const data = await res.json() as any;
+  const rtExpiresIn = Number(data.refresh_token_expires_in || 0);
   const tokens: XAITokens = {
     access_token: String(data.access_token || existing.access_token),
     refresh_token: String(data.refresh_token || existing.refresh_token),
@@ -153,6 +161,7 @@ export async function refreshXAITokens(configDir: string): Promise<XAITokens> {
     token_endpoint: tokenEndpoint,
     base_url: existing.base_url || DEFAULT_BASE_URL,
     expires_at: Date.now() + Number(data.expires_in || 3600) * 1000,
+    refresh_token_expires_at: rtExpiresIn > 0 ? Date.now() + rtExpiresIn * 1000 : existing.refresh_token_expires_at,
   };
   saveTokens(configDir, tokens);
   return tokens;
@@ -162,10 +171,13 @@ export async function getValidXAIToken(configDir: string): Promise<string> {
   let tokens = loadXAITokens(configDir);
   if (!tokens) throw new Error('xAI OAuth is not connected. Connect xAI in Settings -> Models.');
   const expiresAt = Number(tokens.expires_at || 0);
-  const shouldRefresh = expiresAt
+  const refreshExpiresAt = Number(tokens.refresh_token_expires_at || 0);
+  // Proactively refresh if the refresh token itself expires within 30 minutes.
+  const refreshTokenNearExpiry = refreshExpiresAt > 0 && Date.now() > refreshExpiresAt - 30 * 60 * 1000;
+  const accessTokenNearExpiry = expiresAt
     ? Date.now() > expiresAt - 2 * 60 * 1000
     : accessTokenIsExpiring(tokens.access_token, 2 * 60 * 1000);
-  if (shouldRefresh) {
+  if (accessTokenNearExpiry || refreshTokenNearExpiry) {
     tokens = await refreshXAITokens(configDir);
   }
   return tokens.access_token;
@@ -201,6 +213,7 @@ async function exchangeAuthorizationCode(configDir: string, code: string, redire
   }
   const data = await tokenRes.json() as any;
   if (!data?.access_token || !data?.refresh_token) throw new Error('xAI OAuth response missing access or refresh token.');
+  const rtExpiresIn = Number(data.refresh_token_expires_in || 0);
   saveTokens(configDir, {
     access_token: String(data.access_token),
     refresh_token: String(data.refresh_token),
@@ -209,6 +222,7 @@ async function exchangeAuthorizationCode(configDir: string, code: string, redire
     token_endpoint: flow.tokenEndpoint,
     base_url: DEFAULT_BASE_URL,
     expires_at: Date.now() + Number(data.expires_in || 3600) * 1000,
+    refresh_token_expires_at: rtExpiresIn > 0 ? Date.now() + rtExpiresIn * 1000 : undefined,
   });
 }
 
@@ -311,4 +325,37 @@ export async function startXAIOAuthFlowBackground(configDir: string): Promise<{ 
 
 export function pollXAIOAuthBackground(): BgOAuthResult {
   return _bgResult;
+}
+
+// Keep-alive: runs every 30 minutes while the server is up to silently rotate
+// the access token (and refresh token, if xAI rotates on refresh) before the
+// refresh token's own TTL expires. Without this, a ~36-hour gap in usage lets
+// the refresh token expire and forces the user to re-authenticate.
+const KEEPALIVE_INTERVAL_MS = 30 * 60 * 1000;
+let _keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+export function startXAITokenKeepAlive(configDir: string): void {
+  if (_keepAliveTimer) return;
+  _keepAliveTimer = setInterval(async () => {
+    const tokens = loadXAITokens(configDir);
+    if (!tokens) return;
+    try {
+      await refreshXAITokens(configDir);
+      log.security('[xai-oauth] Keep-alive token refresh succeeded');
+    } catch (err: any) {
+      // refreshXAITokens already clears stale tokens on 4xx, so just log.
+      log.security(`[xai-oauth] Keep-alive refresh failed: ${err?.message}`);
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+  // Unref so the timer doesn't prevent clean process exit.
+  if (typeof _keepAliveTimer === 'object' && (_keepAliveTimer as any)?.unref) {
+    (_keepAliveTimer as any).unref();
+  }
+}
+
+export function stopXAITokenKeepAlive(): void {
+  if (_keepAliveTimer) {
+    clearInterval(_keepAliveTimer);
+    _keepAliveTimer = null;
+  }
 }

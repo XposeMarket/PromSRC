@@ -19,6 +19,11 @@
       "path": "notes/github-token-cli-auth-safety-2026-05-16.md",
       "type": "doc",
       "description": "GitHub PAT and CLI auth safety guardrail for repo-access setup workflows."
+    },
+    {
+      "path": "notes/xurl-oauth-client-secret-2026-05-22.md",
+      "type": "doc",
+      "description": "Guardrail for X/xurl OAuth setup workflows involving Client ID/Secret and connector distinction."
     }
   ]
 }

@@ -1,0 +1,3 @@
+[Startup/TailscaleFunnel] Failed to enable funnel: sending serve config: updating config: listener already exists for port 443
+[FunnelWatchdog] Failed to enable funnel: sending serve config: updating config: listener already exists for port 443
+[FunnelWatchdog] Failed to enable funnel: sending serve config: updating config: listener already exists for port 443

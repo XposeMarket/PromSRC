@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "browse-sh-web-skills",
+  "name": "Browse.sh Web Skills Adapter",
+  "description": "Use this skill when Raul asks Prometheus to look into Browse.sh, Browserbase browse CLI skills, open web catalog skills, or when a browser/web automation task could benefit from importing a site-specific Browse.sh skill. Triggers on: browse.sh, browse CLI, Browserbase skills, web skill catalog, import browse skill, site automation skill, use browse.sh for this site, browse skills add, safe-browser, browserbase skill, and open web catalog. This skill helps Prometheus decide when Browse.sh is useful, how to research/import a matching skill, and how to adapt the skill into Prometheus-native browser automation instead of blindly replacing Prometheus browser tools.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "browse.sh",
+    "browse CLI",
+    "browserbase skills",
+    "web skill catalog",
+    "import browse skill",
+    "site automation skill",
+    "use browse.sh",
+    "browse skills add",
+    "safe-browser",
+    "browserbase skill",
+    "open web catalog",
+    "site-specific browser skill",
+    "web automation skill catalog"
+  ],
+  "categories": [
+    "browser",
+    "web-research",
+    "skills",
+    "automation"
+  ],
+  "requiredTools": [
+    "web",
+    "browser_automation",
+    "skills"
+  ],
+  "permissions": {
+    "browser": true,
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/browse-sh-overview.md",
+      "type": "reference",
+      "description": "Initial Browse.sh and Browserbase Browse CLI overview gathered from browse.sh, Browserbase docs, and browserbase/skills README."
+    },
+    {
+      "path": "references/browse-sh-amazon-search-products.md",
+      "type": "reference",
+      "description": "Amazon product search/extraction playbook from Browse.sh, adapted to Prometheus-native browser_extract_structured/browser tools. Triggers: amazon, amazon product search, search Amazon, Amazon toothbrush, Amazon products, Amazon scraping, product card extraction, shopping search."
+    },
+    {
+      "path": "references/resource-triggering-design-note.md",
+      "type": "doc",
+      "description": "Design note recommending first-class trigger metadata and auto-injection for skill resources/templates/examples."
+    }
+  ]
+}

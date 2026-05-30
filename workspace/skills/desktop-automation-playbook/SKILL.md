@@ -2,8 +2,8 @@
 name: Desktop Automation Playbook
 description: Current operating guide for Prometheus desktop automation on Windows. Covers screenshot-first execution, window targeting, UI Automation, precise clicking, scrolling, typing, verification, macros, and when to use desktop tools versus browser or shell tools.
 emoji: 🖥️
-version: 4.3.0
-triggers: desktop, desktop_screenshot, desktop_window_screenshot, desktop_window_control, desktop_click, desktop_drag, desktop_scroll, desktop_type, desktop_type_raw, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_accessibility_tree, desktop_get_window_text, desktop_get_monitors, desktop_find_installed_app, desktop_list_installed_apps, desktop_launch_app, desktop_send_to_telegram, desktop_wait_for_change, desktop_pixel_watch, desktop_record_macro, desktop_replay_macro, click screen, type into app, open app, find installed app, launch app by app_id, automate desktop, GUI automation, windows automation, mouse click, screenshot anchored click, coordinate_space, maximize window, restore window, minimize window
+version: 4.4.0
+triggers: desktop, desktop_screenshot, desktop_window_screenshot, desktop_window_control, desktop_click, desktop_drag, desktop_scroll, desktop_type, desktop_type_raw, desktop_press_key, desktop_find_window, desktop_focus_window, desktop_get_accessibility_tree, desktop_get_window_text, desktop_get_monitors, desktop_find_installed_app, desktop_list_installed_apps, desktop_launch_app, desktop_send_to_telegram, desktop_wait_for_change, desktop_pixel_watch, desktop_record_macro, desktop_replay_macro, desktop_list_apps, desktop_list_windows, desktop_get_window_state, desktop_window_click, desktop_window_type, desktop_window_press_key, desktop_window_scroll, desktop_window_drag, window_id, window-scoped, canonical window model, click screen, type into app, open app, find installed app, launch app by app_id, automate desktop, GUI automation, windows automation, mouse click, screenshot anchored click, coordinate_space, maximize window, restore window, minimize window
 ---
 
 # Desktop Automation Playbook
@@ -15,6 +15,18 @@ This skill is for **native Windows app interaction** and any UI that must be con
 ---
 
 ## Core operating doctrine
+
+### 0) Prefer the canonical window model for app targeting
+Prometheus exposes a Codex-style app/window/state model. When you are acting on a **specific app window**, prefer it over title-matching and raw coordinates:
+
+1. `desktop_list_windows()` (or `desktop_list_apps()`) → returns each open window with a stable `window_id` (`win_<HWND>`), `app_id`, `title`, `bounds`, `monitor_index`, and `is_active`.
+2. `desktop_get_window_state({ window_id })` → one snapshot: metadata + optional screenshot (with a reusable `screenshot_id`) + optional accessibility text (`include_text:true`).
+3. Act with the **window-scoped input tools**, which resolve + restore + focus that exact window first, then act in **window-space coordinates** (top-left of the window is `0,0`):
+   - `desktop_window_click`, `desktop_window_type`, `desktop_window_press_key`, `desktop_window_scroll`, `desktop_window_drag`.
+
+Why this is better: a `window_id` is an exact handle, so input cannot land on the wrong window after focus changes. The older coordinate tools (`desktop_click`, `desktop_type`, …) remain fully valid for screenshot-anchored, monitor, and virtual-space work; use whichever is clearer for the task.
+
+Selector precedence for window-scoped tools: `window_id` (best) → `window_handle` → `app_id` → `title` (least precise). With no selector, `desktop_get_window_state` snapshots the active window.
 
 ### 1) Observe before acting
 For desktop work, the default loop is:
@@ -67,6 +79,18 @@ Do not use desktop clicks to operate a website unless browser automation is unav
 
 ## Full desktop tool map
 
+### Canonical app / window / state model
+- `desktop_list_apps(filter?, include_windows?)` — installed + running apps; running apps first, each with their open windows (`window_id`, `handle`, `bounds`, `is_active`) and a stable `app_id`
+- `desktop_list_windows(app_id?, process_name?, title?)` — flat list of open windows with `window_id`, `app_id`, `process_name`, `title`, `bounds`, `monitor_index`, `is_active`
+- `desktop_get_window_state(window_id? | window_handle? | app_id? | title?, include_screenshot?, include_text?, focus_first?)` — one canonical snapshot of a window: metadata + optional screenshot (`screenshot_id` reusable with `coordinate_space:"capture"|"window"`) + optional accessibility tree
+
+### Window-scoped input (resolve + focus an exact window, then act)
+- `desktop_window_click(window_id? | window_handle? | app_id? | title?, x, y, coordinate_space?, screenshot_id?, button?, double_click?, modifier?, verify?)` — coordinates default to window-space
+- `desktop_window_type(window_id? | …, text, raw?)` — focuses the window, then types (clipboard paste, or `raw:true` for per-key)
+- `desktop_window_press_key(window_id? | …, key)` — focuses the window, then presses a key/combo
+- `desktop_window_scroll(window_id? | …, direction, amount?, x?, y?, coordinate_space?, screenshot_id?)` — focuses the window, then scrolls
+- `desktop_window_drag(window_id? | …, from_x, from_y, to_x, to_y, steps?, coordinate_space?, screenshot_id?)` — focuses the window, then drags
+
 ### Orientation and capture
 - `desktop_get_monitors()` — list connected monitors, bounds, and virtual desktop coordinates
 - `desktop_screenshot(...)` — capture all monitors, primary monitor, a specific monitor, or a cropped region
@@ -116,6 +140,14 @@ Do not use desktop clicks to operate a website unless browser automation is unav
 ---
 
 ## Standard workflows
+
+### A0. Window-scoped interaction (preferred for a known app window)
+1. `desktop_list_windows()` (or `desktop_list_apps()` if you also need launch info) → pick the target's `window_id`
+2. `desktop_get_window_state({ window_id, include_screenshot:true })` → ground on the snapshot; add `include_text:true` when you need precise control names/bounds
+3. act with `desktop_window_click` / `desktop_window_type` / `desktop_window_press_key` / `desktop_window_scroll` using that `window_id` — these focus the window for you, and clicks/scrolls default to window-space coordinates
+4. verify with another `desktop_get_window_state({ window_id })` (or a screenshot) when the result is ambiguous
+
+This path avoids title collisions and stale-focus mistakes because every action is bound to an exact window handle. Fall back to the coordinate tools below when you are working across the whole desktop, a popup outside the window, or a point chosen from a full-desktop screenshot.
 
 ### A. Native app interaction
 1. `desktop_find_window` or `desktop_launch_app`
@@ -182,6 +214,26 @@ Never click sidebars, title bars, close buttons, chat history, or composer areas
 ---
 
 ## When to use each tool
+
+### `desktop_list_apps` / `desktop_list_windows`
+Use to discover targets in the canonical model and obtain a stable `window_id`.
+- `desktop_list_apps` when you also care about app identity / launch (`app_id`) or which apps are running vs installed.
+- `desktop_list_windows` when you just need the open windows and their `window_id`s, optionally filtered by `app_id`, `process_name`, or `title`.
+
+Prefer these over `desktop_find_window` when you intend to follow up with window-scoped input, because they return the `window_id`/`handle` those tools consume.
+
+### `desktop_get_window_state`
+Use as the single grounding snapshot before window-scoped actions. Resolve by `window_id` (preferred), `window_handle`, `app_id`, or `title`.
+- `include_screenshot:true` (default) attaches a window image and a reusable `screenshot_id`.
+- `include_text:true` adds the UI Automation accessibility tree for precise control names/bounds.
+- `focus_first:false` (default) inspects passively; pass `focus_first:true` only when you want to foreground it during capture.
+
+It is a point-in-time snapshot, not a live view — re-snapshot after actions that change the UI.
+
+### `desktop_window_click` / `desktop_window_type` / `desktop_window_press_key` / `desktop_window_scroll` / `desktop_window_drag`
+Use whenever you know which window to act on. They resolve the window (`window_id` preferred), restore it if minimized, focus it, then act. Coordinates default to **window-space** (window top-left = `0,0`); pass `coordinate_space:"capture"` + `screenshot_id` to use image pixels from a `desktop_get_window_state`/`desktop_window_screenshot` capture.
+
+Prefer these over the global `desktop_click`/`desktop_type`/`desktop_press_key` when targeting a specific app, because they cannot land on the wrong window after a focus change. For final post/send/publish/purchase/submit actions, still obtain and pass `final_action_approval_id` (supported on `desktop_window_click` and `desktop_window_press_key`).
 
 ### `desktop_get_monitors`
 Use first when:
@@ -423,6 +475,9 @@ Do not rely on macros for fragile, constantly changing UIs unless you also verif
 ## Desktop vs browser vs shell
 | Situation | Best tool / workflow |
 |---|---|
+| Discover open windows + stable IDs | `desktop_list_windows` (or `desktop_list_apps`) → `window_id` |
+| Snapshot one known window | `desktop_get_window_state({ window_id, include_screenshot:true })` |
+| Click/type in a specific app window | `desktop_window_click` / `desktop_window_type` / `desktop_window_press_key` with `window_id` (window-space) |
 | Need one app clearly | `desktop_window_screenshot` |
 | Need current/focused app | `desktop_window_screenshot({ active:true })` |
 | Need whole desktop context | `desktop_get_monitors` → `desktop_screenshot` |
@@ -465,6 +520,8 @@ If it is shell work, use `run_command` instead of clicking around a terminal.
 - Defaulting to raw virtual coordinates when screenshot/window/monitor coordinate spaces are safer
 - Using `monitor_relative:true` in new guidance instead of explicit `coordinate_space:"monitor"`
 - Using browser tools for native app dialogs or desktop tools for normal web flows when the other surface is clearly better
+- Title-matching and raw coordinates to act on a known app window instead of resolving a `window_id` and using the `desktop_window_*` tools, which focus the exact window and use window-space coordinates
+- Re-using a `desktop_get_window_state` snapshot after the UI changed — it is a point-in-time snapshot, so re-capture before relying on it again
 
 ---
 | Situation | Best tool / workflow |
@@ -496,4 +553,4 @@ Desktop automation should be driven by what is **currently visible and verifiabl
 
 Observe → anchor → act → verify.
 
-Use screenshots for visual truth, accessibility/tree tools for precision, window text extraction for reliable reading, and macro tools only for stable repeated flows. Prefer deterministic waiting and explicit focus over guessing.
+When acting on a specific app window, resolve a `window_id` (`desktop_list_windows` → `desktop_get_window_state`) and use the `desktop_window_*` tools so input is bound to an exact window. Use screenshots for visual truth, accessibility/tree tools for precision, window text extraction for reliable reading, and macro tools only for stable repeated flows. Prefer deterministic waiting and explicit focus over guessing.

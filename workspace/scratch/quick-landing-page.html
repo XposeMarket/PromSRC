@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quick Landing Page</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      color: #111;
+    }
+    main {
+      max-width: 640px;
+      padding: 48px 24px;
+      text-align: center;
+    }
+    h1 {
+      font-size: clamp(36px, 8vw, 72px);
+      margin: 0 0 12px;
+      letter-spacing: -0.04em;
+    }
+    p {
+      font-size: 20px;
+      line-height: 1.45;
+      margin: 0 0 28px;
+      color: #444;
+    }
+    button {
+      display: inline-block;
+      padding: 12px 18px;
+      border: 1px solid #111;
+      color: #111;
+      background: transparent;
+      text-decoration: none;
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+      transition: transform 160ms ease, background 160ms ease, color 160ms ease;
+    }
+    button:hover {
+      background: #111;
+      color: #fff;
+      transform: translateY(-2px);
+    }
+    .confetti {
+      position: fixed;
+      top: -12px;
+      width: 10px;
+      height: 16px;
+      border-radius: 2px;
+      pointer-events: none;
+      animation: fall 900ms ease-out forwards;
+    }
+    @keyframes fall {
+      to {
+        transform: translate(var(--drift), 105vh) rotate(720deg);
+        opacity: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Test Landing Page</h1>
+    <p>A plain one-shot page for testing Prometheus UI components.</p>
+    <button id="partyButton" type="button">Launch confetti</button>
+  </main>
+  <script>
+    const button = document.getElementById("partyButton");
+    const colors = ["#ff4757", "#ffa502", "#2ed573", "#1e90ff", "#5352ed", "#ff6b81"];
+
+    button.addEventListener("click", () => {
+      for (let i = 0; i < 70; i += 1) {
+        const piece = document.createElement("span");
+        piece.className = "confetti";
+        piece.style.left = `${Math.random() * 100}vw`;
+        piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+        piece.style.animationDelay = `${Math.random() * 220}ms`;
+        piece.style.setProperty("--drift", `${(Math.random() - 0.5) * 240}px`);
+        document.body.appendChild(piece);
+        piece.addEventListener("animationend", () => piece.remove());
+      }
+    });
+  </script>
+</body>
+</html>

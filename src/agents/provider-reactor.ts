@@ -14,9 +14,12 @@ import {
   appendModelUsageEvent,
   estimateMessagesTokens,
   estimateTextTokens,
+  estimateToolSchemaTokens,
   normalizeUsage,
 } from '../providers/model-usage';
 import type { AgentRole } from '../types';
+
+type ProviderThinkMode = boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 
 // Minimal interface Reactor actually needs from OllamaClient
 export interface ReactorClient {
@@ -29,7 +32,7 @@ export interface ReactorClient {
       system?: string;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      think?: ProviderThinkMode;
       usageContext?: { sessionId?: string; agentId?: string };
     },
     maxRetries?: number,
@@ -42,7 +45,7 @@ export interface ReactorClient {
       temperature?: number;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      think?: ProviderThinkMode;
       tools?: any[];
       model?: string;
       usageContext?: { sessionId?: string; agentId?: string };
@@ -72,7 +75,7 @@ export class ProviderReactorClient implements ReactorClient {
       system?: string;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      think?: ProviderThinkMode;
       usageContext?: { sessionId?: string; agentId?: string };
     },
     maxRetries: number = 3,
@@ -121,7 +124,7 @@ export class ProviderReactorClient implements ReactorClient {
       temperature?: number;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      think?: ProviderThinkMode;
       tools?: any[];
       model?: string;
       usageContext?: { sessionId?: string; agentId?: string };
@@ -136,8 +139,11 @@ export class ProviderReactorClient implements ReactorClient {
       tools: options?.tools,
       think: options?.think,
     });
+    const estimatedMessageInputTokens = estimateMessagesTokens(messages);
+    const estimatedToolSchemaTokens = estimateToolSchemaTokens(options?.tools);
+    const estimatedProviderInputTokens = estimatedMessageInputTokens + estimatedToolSchemaTokens;
     const usage = normalizeUsage(result.usage, {
-      inputTokens: estimateMessagesTokens(messages),
+      inputTokens: estimatedProviderInputTokens,
       outputTokens: estimateMessagesTokens([result.message]) + estimateTextTokens(result.thinking),
     });
     appendModelUsageEvent({
@@ -147,6 +153,9 @@ export class ProviderReactorClient implements ReactorClient {
       sessionId: options?.usageContext?.sessionId,
       agentId: options?.usageContext?.agentId,
       ...usage,
+      estimatedMessageInputTokens,
+      estimatedToolSchemaTokens,
+      estimatedProviderInputTokens,
       durationMs: Date.now() - startedAt,
     });
     return { message: result.message, thinking: result.thinking };

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "resources": [
+    {
+      "path": "examples/design-operating-system-research-2026-05-10.md",
+      "type": "example",
+      "description": "Example pattern for researching external design/UI systems and mapping them into Prometheus-native design workflows."
+    },
+    {
+      "path": "notes/provider-selection-2026-05-08.md",
+      "type": "doc",
+      "description": "Provider selection follow-up note: corrects Google site: testing, documents provider-selectable web_search tools, and explains Google 403 interpretation."
+    },
+    {
+      "path": "notes/search-provider-health-2026-05-22.md",
+      "type": "doc",
+      "description": "Dated provider-health snapshot: normal web search/fetch works; Google API key missing; xAI Live Search deprecated."
+    },
+    {
+      "path": "notes/tinyfish-websearch-test-2026-05-08.md",
+      "type": "doc",
+      "description": "Live TinyFish web_search test notes and comparison against earlier Tavily/Brave behavior plus Google-provider caveats."
+    },
+    {
+      "path": "notes/product-carousel-routing-2026-05-23.md",
+      "type": "doc",
+      "description": "Routing note: use show_product_carousel for curated shopping/product research results.",
+      "triggers": [
+        "product carousel",
+        "product recommendations",
+        "shopping research",
+        "find products",
+        "Amazon products",
+        "show products"
+      ],
+      "autoInject": true,
+      "injectMode": "summary_then_content",
+      "maxInjectChars": 2500
+    }
+  ],
+  "id": "web-researcher"
+}

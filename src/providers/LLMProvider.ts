@@ -13,6 +13,18 @@ export type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } };
 
+/**
+ * Internal sentinel inserted by prompt-context.ts between the STABLE (cacheable)
+ * prefix of the system prompt and the VOLATILE (per-turn) tail. Adapters use it
+ * to place provider cache breakpoints (Anthropic) or simply to keep the stable
+ * prefix byte-identical across turns (OpenAI / xAI / Codex auto-caching).
+ *
+ * It MUST never reach a model: the Anthropic adapter consumes it via
+ * splitOnCacheMarker(); all other adapters strip it via stripCacheMarker().
+ * The token is deliberately unusual so it can't collide with real prompt text.
+ */
+export const PROMPT_CACHE_MARKER = '\n␞<<<PROMETHEUS_PROMPT_CACHE_BREAKPOINT>>>␞\n';
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   /**
@@ -49,7 +61,7 @@ export interface ChatOptions {
   max_tokens?: number;
   num_ctx?: number;
   tools?: any[];
-  think?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
   /** Called with each text token as it streams from the model. */
   onToken?: (chunk: string) => void;
   /** Called with provider-visible reasoning/thinking deltas as they stream. */
@@ -70,7 +82,7 @@ export interface GenerateOptions {
   num_ctx?: number;
   format?: 'json';
   system?: string;
-  think?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
 export interface ModelUsage {
@@ -101,6 +113,10 @@ export interface ModelInfo {
   parameter_size?: string;
   family?: string;
   modified_at?: string;
+  contextWindowTokens?: number;
+  maxOutputTokens?: number;
+  tokenizer?: string;
+  supportsReasoningTokens?: boolean;
 }
 
 export interface LLMProvider {

@@ -476,6 +476,12 @@ async function bgtRefreshOpenPanel() {
   const body = document.getElementById('bgt-panel-body');
   if (!body) return;
 
+  // Preserve collapse state before re-render
+  const wsBodyEl = document.getElementById('coding-workspace-body');
+  const prBodyEl = document.getElementById('process-runs-body');
+  const wsExpanded = wsBodyEl ? wsBodyEl.style.display !== 'none' : false;
+  const prExpanded = prBodyEl ? prBodyEl.style.display !== 'none' : false;
+
   const plan = task.plan || [];
   const journal = task.journal || [];
   const progressItems = getTaskProgressItems(task);
@@ -633,8 +639,11 @@ async function bgtRefreshOpenPanel() {
 
     <!-- Coding workspace -->
     <div id="coding-workspace-section">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Coding Workspace</div>
-      ${renderCodingWorkspacePanel(bgtCodingWorkspace)}
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleCodingWorkspace()">
+        <span>Coding Workspace</span>
+        <span id="coding-workspace-toggle" style="margin-left:auto;font-size:10px">▼ show</span>
+      </div>
+      <div id="coding-workspace-body" style="display:none">${renderCodingWorkspacePanel(bgtCodingWorkspace)}</div>
     </div>
 
     <!-- Manager/Worker status indicator (only shown when manager is active) -->
@@ -646,11 +655,12 @@ async function bgtRefreshOpenPanel() {
 
     <!-- Supervised command runs -->
     <div id="process-runs-section">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:8px">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleCommandRuns()">
         <span>Command Runs</span>
-        <span style="font-weight:400;opacity:0.6">${bgtRecentProcessRuns.length ? `${bgtRecentProcessRuns.length} recent` : ''}</span>
+        <span id="process-runs-count" style="font-weight:400;opacity:0.6">${bgtRecentProcessRuns.length ? `${bgtRecentProcessRuns.length} recent` : ''}</span>
+        <span id="process-runs-toggle" style="margin-left:auto;font-size:10px">▼ show</span>
       </div>
-      <div id="process-runs-body" class="process-runs-list">${renderProcessRunsHTML(bgtRecentProcessRuns)}</div>
+      <div id="process-runs-body" class="process-runs-list" style="display:none">${renderProcessRunsHTML(bgtRecentProcessRuns)}</div>
     </div>
 
     <!-- Evidence Bus panel (collapsible) -->
@@ -678,6 +688,20 @@ async function bgtRefreshOpenPanel() {
       <button onclick="bgtDeleteTask('${escHtml(task.id)}')" style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">Remove</button>
     </div>` : ''}
   `;
+
+  // Restore collapse state for coding workspace and command runs
+  const wsBodyNew = document.getElementById('coding-workspace-body');
+  const wsToggleNew = document.getElementById('coding-workspace-toggle');
+  if (wsBodyNew && wsExpanded) {
+    wsBodyNew.style.display = 'block';
+    if (wsToggleNew) wsToggleNew.textContent = '▲ hide';
+  }
+  const prBodyNew = document.getElementById('process-runs-body');
+  const prToggleNew = document.getElementById('process-runs-toggle');
+  if (prBodyNew && prExpanded) {
+    prBodyNew.style.display = 'block';
+    if (prToggleNew) prToggleNew.textContent = '▲ hide';
+  }
 
   // Auto-expand evidence bus for cron tasks (they always write notes) or if entries already exist
   if (task.scheduleId) {
@@ -836,6 +860,24 @@ async function bgtDeleteTask(taskId, status) {
 
 // --- Toast notification -------------------------------------------------------
 // -- Evidence Bus UI helpers ------------------------------------------------------------------
+
+function toggleCodingWorkspace() {
+  const body = document.getElementById('coding-workspace-body');
+  const toggle = document.getElementById('coding-workspace-toggle');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  if (toggle) toggle.textContent = isHidden ? '▲ hide' : '▼ show';
+}
+
+function toggleCommandRuns() {
+  const body = document.getElementById('process-runs-body');
+  const toggle = document.getElementById('process-runs-toggle');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  if (toggle) toggle.textContent = isHidden ? '▲ hide' : '▼ show';
+}
 
 function toggleEvidenceBus() {
   const body = document.getElementById('evidence-bus-body');
@@ -1228,6 +1270,8 @@ window.bgtSendReply = bgtSendReply;
 window.bgtChatSend = bgtChatSend;
 window.bgtDeleteTask = bgtDeleteTask;
 window.toggleEvidenceBus = toggleEvidenceBus;
+window.toggleCodingWorkspace = toggleCodingWorkspace;
+window.toggleCommandRuns = toggleCommandRuns;
 window.loadEvidenceBusEntries = loadEvidenceBusEntries;
 window.appendEvidenceBusEntry = appendEvidenceBusEntry;
 window.updateManagerStatusBar = updateManagerStatusBar;

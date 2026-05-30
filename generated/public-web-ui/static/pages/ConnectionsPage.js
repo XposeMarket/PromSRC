@@ -520,13 +520,13 @@ function renderXConnectorActions(connector, isConnected) {
         </div>
         ${connector.state?.redirectUri ? `<div style="font-size:11px;color:var(--muted);line-height:1.5">Redirect URI: <code style="font-size:10.5px">${escHtml(connector.state.redirectUri)}</code></div>` : ''}
       </div>
-      <button class="cv-btn-connect" onclick="startXurlSetup('x')">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
-        Run xurl Setup
-      </button>
-      <button class="cv-btn-connect" onclick="startOAuthFlow('x')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line)">
+      <button class="cv-btn-connect" onclick="startOAuthFlow('x')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
-        Built-in OAuth Fallback
+        Connect with X OAuth
+      </button>
+      <button class="cv-btn-connect" onclick="startXurlSetup('x')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg>
+        Advanced: xurl Setup
       </button>
       <button class="cv-btn-connect" onclick="renderCredentialForm('x')" style="background:#111827">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 2l-2 2"/><path d="M7.5 20.5l-5-5 12-12 5 5z"/><path d="M16 5l3 3"/></svg>

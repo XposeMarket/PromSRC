@@ -1,4 +1,5 @@
 import {
+  isRuntimeRecoverableAfterRestart,
   listDurableRuntimes,
   listInterruptedRuntimes,
   markActiveRuntimesInterrupted,
@@ -13,7 +14,8 @@ import {
   updateTaskStatus,
   type TaskRecord,
 } from './tasks/task-store';
-import { addMessage, flushSession, getHistory } from './session';
+import { collectTurnFileChangesFromProcessEntries } from './file-change-summary';
+import { addMessage, flushSession, getHistory, getWorkspace } from './session';
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
@@ -74,6 +76,8 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
       return `[${type}]${toolName ? ` ${toolName}:` : ''} ${text}`.trim();
     }).join('\n')
     : undefined;
+  const workspacePath = getWorkspace(runtime.sessionId) || process.cwd();
+  const fileChanges = collectTurnFileChangesFromProcessEntries(processEntries, workspacePath);
   addMessage(runtime.sessionId, {
     role: 'assistant',
     content,
@@ -82,6 +86,7 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
     channelLabel: runtime.source || 'system',
     processEntries: processEntries.length ? processEntries : undefined,
     toolLog,
+    fileChanges: fileChanges || undefined,
   }, {
     disableCompactionCheck: true,
     disableMemoryFlushCheck: true,
@@ -166,7 +171,7 @@ export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs
   const cutoff = Math.max(Date.now() - Math.max(60_000, maxAgeMs), Number(sinceMs || 0));
   const runtimes = listDurableRuntimes()
     .filter((runtime) => runtime.kind === 'main_chat')
-    .filter((runtime) => runtime.status === 'interrupted')
+    .filter((runtime) => isRuntimeRecoverableAfterRestart(runtime))
     .filter((runtime) => !!runtime.sessionId)
     .filter((runtime) => runtimeTimestamp(runtime) >= cutoff)
     .sort((a, b) => runtimeTimestamp(b) - runtimeTimestamp(a));
@@ -212,7 +217,7 @@ export function listHotRestartMainChatRecoveries(maxAgeMs = 30 * 60_000, sinceMs
 export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs = 0): string {
   const cutoff = Math.max(Date.now() - Math.max(60_000, maxAgeMs), Number(sinceMs || 0));
   const runtimes = listDurableRuntimes()
-    .filter((runtime) => runtime.status === 'interrupted')
+    .filter((runtime) => isRuntimeRecoverableAfterRestart(runtime))
     .filter((runtime) => runtimeTimestamp(runtime) >= cutoff)
     .sort((a, b) => runtimeTimestamp(b) - runtimeTimestamp(a));
 

@@ -162,8 +162,93 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   }
   if (lang === 'svg') {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>${sharedStyles}body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:8px}svg{max-width:100%;height:auto}<\/style>
-<\/head><body>${code}<\/body><\/html>`;
+<style>${sharedStyles}html,body{height:100%}body{padding:0}.sv-shell{position:relative;min-height:280px;height:100%;overflow:hidden;background:transparent}.sv-viewport{position:absolute;inset:0;cursor:grab;touch-action:none;user-select:none}.sv-viewport.dragging{cursor:grabbing}.sv-stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}.sv-stage svg{max-width:none!important;height:auto;display:block}.sv-controls{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}.sv-shell:hover .sv-controls,.sv-shell:focus-within .sv-controls{opacity:1;transform:translateY(0);pointer-events:auto}.sv-btn{border:1px solid ${mermaidControlsBorder};background:${mermaidControlsBg};color:${mermaidControlsText};border-radius:8px;padding:4px 9px;font-weight:700;font-size:12px;line-height:1;cursor:pointer;backdrop-filter:blur(2px)}.sv-btn:hover{filter:brightness(1.08)}.sv-hint{position:absolute;left:10px;bottom:10px;font-size:11px;color:${mermaidControlsText};opacity:0;transform:translateY(4px);background:${mermaidControlsBg};border:1px solid ${mermaidControlsBorder};border-radius:999px;padding:4px 9px;pointer-events:none;transition:opacity .2s ease,transform .2s ease}.sv-shell:hover .sv-hint,.sv-shell:focus-within .sv-hint{opacity:.82;transform:translateY(0)}<\/style>
+<\/head><body>
+<div class="sv-shell">
+  <div class="sv-controls">
+    <button class="sv-btn" id="sv-out" type="button">-<\/button>
+    <button class="sv-btn" id="sv-in" type="button">+<\/button>
+    <button class="sv-btn" id="sv-reset" type="button">Reset<\/button>
+  <\/div>
+  <div class="sv-viewport" id="sv-vp">
+    <div class="sv-stage" id="sv-stage">${code}<\/div>
+  <\/div>
+  <div class="sv-hint">Pinch to zoom · Drag to pan<\/div>
+<\/div>
+<script>
+(function(){
+  const viewport=document.getElementById('sv-vp');
+  const stage=document.getElementById('sv-stage');
+  const clamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
+  let scale=1,tx=0,ty=0,minScale=0.2,maxScale=8;
+
+  function applyTransform(){stage.style.transform='translate('+tx+'px,'+ty+'px) scale('+scale+')';}
+
+  function svgBounds(){
+    const svg=stage.querySelector('svg');
+    if(!svg)return null;
+    const w=Number(svg.getAttribute('width'))||(svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal.width:0)||svg.getBoundingClientRect().width;
+    const h=Number(svg.getAttribute('height'))||(svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal.height:0)||svg.getBoundingClientRect().height;
+    if(!Number.isFinite(w)||!Number.isFinite(h)||w<=0||h<=0)return null;
+    return{width:w,height:h};
+  }
+
+  function fitToViewport(){
+    const b=svgBounds();if(!b)return;
+    const vw=Math.max(1,viewport.clientWidth),vh=Math.max(1,viewport.clientHeight),pad=28;
+    const fit=Math.min((vw-pad)/b.width,(vh-pad)/b.height);
+    scale=clamp(Number.isFinite(fit)&&fit>0?fit:1,0.15,2.4);
+    minScale=Math.max(0.1,scale*0.35);maxScale=Math.max(2.5,scale*12);
+    tx=(vw-b.width*scale)/2;ty=(vh-b.height*scale)/2;applyTransform();
+  }
+
+  function zoomAt(ns,cx,cy){
+    const ts=clamp(ns,minScale,maxScale);
+    if(Math.abs(ts-scale)<0.0001)return;
+    const r=viewport.getBoundingClientRect();
+    const ox=cx-r.left,oy=cy-r.top;
+    const wx=(ox-tx)/scale,wy=(oy-ty)/scale;
+    scale=ts;tx=ox-wx*scale;ty=oy-wy*scale;applyTransform();
+  }
+
+  viewport.addEventListener('wheel',(e)=>{e.preventDefault();zoomAt(scale*(e.deltaY>0?0.9:1.1),e.clientX,e.clientY);},{passive:false});
+
+  const ptrs=new Map();let lpd=0,lpmx=0,lpmy=0;
+  viewport.addEventListener('pointerdown',(e)=>{
+    ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});viewport.setPointerCapture(e.pointerId);
+    if(ptrs.size===1)viewport.classList.add('dragging');
+    if(ptrs.size===2){
+      viewport.classList.remove('dragging');
+      const[a,b]=[...ptrs.values()];const dx=b.x-a.x,dy=b.y-a.y;
+      lpd=Math.sqrt(dx*dx+dy*dy);lpmx=(a.x+b.x)/2;lpmy=(a.y+b.y)/2;
+    }
+  });
+  viewport.addEventListener('pointermove',(e)=>{
+    if(!ptrs.has(e.pointerId))return;
+    const old=ptrs.get(e.pointerId);ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(ptrs.size===2){
+      const[a,b]=[...ptrs.values()];const dx=b.x-a.x,dy=b.y-a.y;
+      const d=Math.sqrt(dx*dx+dy*dy),mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+      if(lpd>0){zoomAt(scale*(d/lpd),mx,my);tx+=mx-lpmx;ty+=my-lpmy;applyTransform();}
+      lpd=d;lpmx=mx;lpmy=my;
+    }else if(ptrs.size===1){tx+=e.clientX-old.x;ty+=e.clientY-old.y;applyTransform();}
+  });
+  function onUp(e){
+    ptrs.delete(e.pointerId);
+    if(viewport.hasPointerCapture(e.pointerId))viewport.releasePointerCapture(e.pointerId);
+    if(ptrs.size===0)viewport.classList.remove('dragging');
+    if(ptrs.size<2)lpd=0;
+  }
+  viewport.addEventListener('pointerup',onUp);viewport.addEventListener('pointercancel',onUp);
+
+  document.getElementById('sv-in').addEventListener('click',()=>{const r=viewport.getBoundingClientRect();zoomAt(scale*1.18,r.left+r.width/2,r.top+r.height/2);});
+  document.getElementById('sv-out').addEventListener('click',()=>{const r=viewport.getBoundingClientRect();zoomAt(scale/1.18,r.left+r.width/2,r.top+r.height/2);});
+  document.getElementById('sv-reset').addEventListener('click',fitToViewport);
+  window.addEventListener('resize',fitToViewport);
+  requestAnimationFrame(()=>{fitToViewport();setTimeout(fitToViewport,80);});
+})();
+<\/script>
+<\/body><\/html>`;
   }
   if (lang === 'mermaid') {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
@@ -181,7 +266,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
       <div class="mermaid" id="mm-graph">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}<\/div>
     <\/div>
   <\/div>
-  <div class="mm-hint">Scroll to zoom. Drag to pan.<\/div>
+  <div class="mm-hint">Pinch to zoom · Drag to pan<\/div>
 <\/div>
 <script>
 (function(){
@@ -197,11 +282,6 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   let ty = 0;
   let minScale = 0.2;
   let maxScale = 8;
-  let dragging = false;
-  let dragPointerId = null;
-  let lastX = 0;
-  let lastY = 0;
-
   function applyTransform() {
     stage.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
   }
@@ -250,36 +330,46 @@ export function buildVisualSrcdoc(lang, code, isDark) {
     zoomAt(scale * direction, event.clientX, event.clientY);
   }, { passive: false });
 
+  // Multi-pointer: 1-finger pan + 2-finger pinch-to-zoom (works on both touch and mouse)
+  const ptrs = new Map();
+  let lpd = 0, lpmx = 0, lpmy = 0;
+
   viewport.addEventListener('pointerdown', (event) => {
-    dragging = true;
-    dragPointerId = event.pointerId;
-    lastX = event.clientX;
-    lastY = event.clientY;
-    viewport.classList.add('dragging');
+    ptrs.set(event.pointerId, { x: event.clientX, y: event.clientY });
     viewport.setPointerCapture(event.pointerId);
+    if (ptrs.size === 1) viewport.classList.add('dragging');
+    if (ptrs.size === 2) {
+      viewport.classList.remove('dragging');
+      const [a, b] = [...ptrs.values()];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      lpd = Math.sqrt(dx * dx + dy * dy);
+      lpmx = (a.x + b.x) / 2; lpmy = (a.y + b.y) / 2;
+    }
   });
 
   viewport.addEventListener('pointermove', (event) => {
-    if (!dragging || event.pointerId !== dragPointerId) return;
-    const dx = event.clientX - lastX;
-    const dy = event.clientY - lastY;
-    tx += dx;
-    ty += dy;
-    lastX = event.clientX;
-    lastY = event.clientY;
-    applyTransform();
+    if (!ptrs.has(event.pointerId)) return;
+    const old = ptrs.get(event.pointerId);
+    ptrs.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (lpd > 0) { zoomAt(scale * (d / lpd), mx, my); tx += mx - lpmx; ty += my - lpmy; applyTransform(); }
+      lpd = d; lpmx = mx; lpmy = my;
+    } else if (ptrs.size === 1) {
+      tx += event.clientX - old.x; ty += event.clientY - old.y; applyTransform();
+    }
   });
 
-  function stopDragging(event) {
-    if (event.pointerId !== dragPointerId) return;
-    dragging = false;
-    dragPointerId = null;
-    viewport.classList.remove('dragging');
+  function onPointerUp(event) {
+    ptrs.delete(event.pointerId);
     if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    if (ptrs.size === 0) viewport.classList.remove('dragging');
+    if (ptrs.size < 2) lpd = 0;
   }
-
-  viewport.addEventListener('pointerup', stopDragging);
-  viewport.addEventListener('pointercancel', stopDragging);
+  viewport.addEventListener('pointerup', onPointerUp);
+  viewport.addEventListener('pointercancel', onPointerUp);
 
   zoomInBtn.addEventListener('click', () => {
     const rect = viewport.getBoundingClientRect();
@@ -376,25 +466,72 @@ export function buildVisualIframe(lang, code) {
 <\/div>`;
 }
 
+// ─── Partial Visual (streaming in-progress) ──────────────────
+
+function buildPartialVisual(lang, partialCode) {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+  // HTML is browser-forgiving — render partial code live for piece-by-piece effect
+  if (lang === 'html' && partialCode.trim().length > 10) {
+    const srcdoc = buildVisualSrcdoc(lang, partialCode, isDark);
+    const encoded = srcdoc.replace(/"/g, '&quot;');
+    const overlayBg = isDark ? 'rgba(18,25,38,0.80)' : 'rgba(248,250,252,0.82)';
+    const overlayText = isDark ? '#94a3b8' : '#64748b';
+    return `<div class="visual-block" style="margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line);position:relative">
+  <style>@keyframes vis-blink{0%,100%{opacity:.25}50%{opacity:1}}</style>
+  <iframe srcdoc="${encoded}" sandbox="allow-scripts allow-same-origin" style="width:100%;min-height:280px;border:none;display:block;background:transparent" loading="eager"></iframe>
+  <div style="position:absolute;top:8px;right:8px;background:${overlayBg};border:1px solid rgba(99,102,241,.35);border-radius:6px;padding:3px 10px;font-size:10px;color:${overlayText};font-family:sans-serif;display:flex;align-items:center;gap:6px;backdrop-filter:blur(4px);pointer-events:none">
+    <span style="width:6px;height:6px;border-radius:50%;background:#6366f1;display:inline-block;animation:vis-blink .75s ease-in-out infinite"></span>Building…
+  </div>
+</div>`;
+  }
+
+  // mermaid / chart / svg — partial syntax errors badly, show a spinner skeleton instead
+  const bg = isDark ? 'rgba(30,41,59,0.8)' : '#f8fafc';
+  const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  const textColor = isDark ? '#94a3b8' : '#64748b';
+  const labels = { mermaid: 'diagram', chart: 'chart', svg: 'graphic', html: 'visual' };
+  const label = labels[lang] || 'visual';
+  return `<div class="visual-block" style="margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid ${border};background:${bg};min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">
+  <style>@keyframes vis-spin{to{transform:rotate(360deg)}}@keyframes vis-bar{0%,100%{transform:scaleX(.3)}50%{transform:scaleX(1)}}</style>
+  <div style="width:32px;height:32px;border-radius:50%;border:2px solid rgba(99,102,241,.2);border-top-color:#6366f1;animation:vis-spin .8s linear infinite"></div>
+  <div style="color:${textColor};font-size:12px;font-family:sans-serif">Building ${label}…</div>
+  <div style="width:120px;height:3px;background:rgba(99,102,241,.15);border-radius:99px;overflow:hidden"><div style="height:100%;background:#6366f1;border-radius:99px;transform-origin:left;animation:vis-bar 1.2s ease-in-out infinite"></div></div>
+</div>`;
+}
+
 // ─── Markdown Renderer ────────────────────────────────────────
 
 export function renderMd(text) {
   if (!text) return '';
   try {
     const visuals = [];
+
+    // Match COMPLETE fenced visual blocks
     const FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*?)```/g;
-    const withPlaceholders = String(text).replace(FENCE_RE, (_, lang, code) => {
+    let withPlaceholders = String(text).replace(FENCE_RE, (_, lang, code) => {
       const idx = visuals.length;
-      visuals.push({ lang: lang.toLowerCase(), code: code.trim() });
+      visuals.push({ lang: lang.toLowerCase(), code: code.trim(), partial: false });
       return `\x00VISUAL_${idx}\x00`;
     });
+
+    // Detect a trailing INCOMPLETE (streaming) code block — no closing fence yet.
+    // Replace it with a placeholder so raw code is never shown to the user.
+    const OPEN_FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*)$/;
+    const openMatch = withPlaceholders.match(OPEN_FENCE_RE);
+    if (openMatch) {
+      const idx = visuals.length;
+      visuals.push({ lang: openMatch[1].toLowerCase(), code: openMatch[2], partial: true });
+      withPlaceholders = withPlaceholders.slice(0, openMatch.index) + `\x00VISUAL_${idx}\x00`;
+    }
 
     let html = marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false });
 
     if (visuals.length) {
       html = html.replace(/\x00VISUAL_(\d+)\x00/g, (_, i) => {
         const v = visuals[+i];
-        return v ? buildVisualIframe(v.lang, v.code) : '';
+        if (!v) return '';
+        return v.partial ? buildPartialVisual(v.lang, v.code) : buildVisualIframe(v.lang, v.code);
       });
       html = html.replace(/<p>\s*(<div class="visual-block"[\s\S]*?<\/div>)\s*<\/p>/g, '$1');
     }

@@ -7,11 +7,32 @@ import fs from 'fs';
 import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
 import { getConfig } from '../config/config';
-import { getActivatedSkillIds, getActivatedToolCategories, isBusinessContextEnabled } from './session';
+import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCategories, isBusinessContextEnabled } from './session';
 import { searchMemoryIndex } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
 import { loadSoul } from '../config/soul-loader';
+import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
+
+// ─── Prompt-cache assembly ─────────────────────────────────────────────────────
+// Splits the system prompt into a STABLE (cacheable) prefix and a VOLATILE
+// (per-turn) tail, joined by PROMPT_CACHE_MARKER. The content is identical to the
+// old flat ordering — only volatile fragments (today's notes, retrieved memory,
+// CIS/skill turn context) are moved AFTER the stable bulk so providers can cache
+// the prefix. Adapters consume/strip the marker; it never reaches a model.
+function assembleContext(
+  stableParts: Array<string | undefined | null | false>,
+  volatileParts: Array<string | undefined | null | false>,
+): string {
+  const stable = stableParts.filter(Boolean) as string[];
+  const volatile = volatileParts.filter(Boolean) as string[];
+  const stableStr = stable.join('\n\n');
+  const volatileStr = volatile.join('\n\n');
+  if (!stableStr && !volatileStr) return '';
+  if (!stableStr) return '\n\n' + volatileStr;
+  if (!volatileStr) return '\n\n' + stableStr;
+  return '\n\n' + stableStr + PROMPT_CACHE_MARKER + volatileStr;
+}
 
 // ─── Intraday notes processor ────────────────────────────────────────────────────
 // Parses raw intraday file content into capped-length entries for context injection.
@@ -908,40 +929,22 @@ function buildActiveSkillsContext(sessionId: string, skillsManager: SkillsManage
   const skillIds = Array.from(getActivatedSkillIds(sessionId));
   if (!skillIds.length) return '';
 
-  const blocks: string[] = [];
+  const lines: string[] = ['[ACTIVE_SKILLS]'];
   for (const skillId of skillIds) {
     const skill = skillsManager.get(skillId);
     if (!skill) continue;
-    let content = '';
-    try {
-      content = stripSkillEmojiFrontmatter(fs.readFileSync(skill.filePath, 'utf-8'));
-    } catch {
-      content = skill.instructions || '';
+    lines.push(`Recently used: ${skill.id}.`);
+    if (skill.description) lines.push(`Skill Description: ${skill.description}`);
+    if (skill.kind === 'bundle') {
+      const readResources = getActivatedSkillResources(sessionId, skillId);
+      if (readResources.length) {
+        lines.push(`Resources read: ${readResources.join(', ')}.`);
+      }
     }
-    const resources = Array.isArray(skill.resources) && skill.resources.length
-      ? [
-        '',
-        'Resources available via skill_resource_read:',
-        ...skill.resources.slice(0, 24).map((r: any) => `- ${r.path}${r.description ? ` - ${r.description}` : ''}`),
-      ].join('\n')
-      : '';
-    const header = [
-      `### ${skill.name || skill.id} (${skill.id})`,
-      skill.description ? `Description: ${skill.description}` : '',
-      Array.isArray(skill.requiredTools) && skill.requiredTools.length ? `Required tools: ${skill.requiredTools.join(', ')}` : '',
-    ].filter(Boolean).join('\n');
-    const block = `${header}\n\n${String(content || '').trim()}${resources}`.trim();
-    if (!block) continue;
-    blocks.push(block);
+    lines.push(`Re-read with skill_read("${skill.id}") if you need the full instructions.`);
   }
 
-  if (!blocks.length) return '';
-  return [
-    '[ACTIVE_SKILLS]',
-    'These skills were already read in this chat session. Treat the full skill text below as active instructions on every turn. Do not call skill_read for them again unless the user asks to refresh/check the skill, or you need a specific bundled resource.',
-    '',
-    blocks.join('\n\n'),
-  ].join('\n');
+  return lines.join('\n');
 }
 
 // ─── buildPersonalityContext ──────────────────────────────────────────────────────
@@ -989,18 +992,18 @@ export async function buildPersonalityContext(
         else activatedCatsTeach.add(ec);
       }
     }
-    const parts = [
-      user ? `[USER]\n${user}` : '',
-      soul ? `[SOUL]\n${soul}` : '',
-      buildToolsContext(activatedCatsTeach),
-    ].filter(Boolean);
     const skillCtxTeach = skillsManager.buildTurnContext(messageText);
-    if (skillCtxTeach) parts.push(skillCtxTeach);
     const activeSkillCtxTeach = buildActiveSkillsContext(sessionId, skillsManager);
-    if (activeSkillCtxTeach) parts.push(activeSkillCtxTeach);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+    return assembleContext(
+      [
+        user ? `[USER]\n${user}` : '',
+        soul ? `[SOUL]\n${soul}` : '',
+        buildToolsContext(activatedCatsTeach),
+      ],
+      [skillCtxTeach, activeSkillCtxTeach],
+    );
   }
 
   const allowLongTermSearch = executionMode === 'interactive' || executionMode === 'background_agent';
@@ -1044,28 +1047,31 @@ export async function buildPersonalityContext(
     const referenceHint = isPublicDistributionBuild()
       ? ''
       : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map. The Voice Agent has direct voice-system notes below and should dispatch to the worker if it needs to read more files.`;
-    const parts = [
-      configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
-      user ? `[USER]\n${user}` : '',
-      soul ? `[SOUL]\n${soul}` : '',
-      business ? `[BUSINESS]\n${business}` : '',
-      cisContext,
-      memory ? `[MEMORY]\n${memory}` : '',
-      retrievedMemoryCtx,
-      projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
-      intradayNotes ? `[TODAY_NOTES - read-only working context]\n${intradayNotes}` : '',
-      boot ? `[BOOT_MD - operational startup/workspace guidance, read-only]\n${boot}` : '',
-      selfIndex ? `[SELF_INDEX]\n${selfIndex}` : '',
-      voiceSelf ? `[SELF_VOICE_SECTION]\n${voiceSelf}` : '',
-      referenceHint,
-    ].filter(Boolean);
     const skillCtx = skillsManager.buildTurnContext(messageText);
-    if (skillCtx) parts.push(skillCtx);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    if (activeSkillCtx) parts.push(activeSkillCtx);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+    return assembleContext(
+      [
+        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
+        user ? `[USER]\n${user}` : '',
+        soul ? `[SOUL]\n${soul}` : '',
+        business ? `[BUSINESS]\n${business}` : '',
+        memory ? `[MEMORY]\n${memory}` : '',
+        projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
+        boot ? `[BOOT_MD - operational startup/workspace guidance, read-only]\n${boot}` : '',
+        selfIndex ? `[SELF_INDEX]\n${selfIndex}` : '',
+        voiceSelf ? `[SELF_VOICE_SECTION]\n${voiceSelf}` : '',
+      ],
+      [
+        cisContext,
+        retrievedMemoryCtx,
+        intradayNotes ? `[TODAY_NOTES - read-only working context]\n${intradayNotes}` : '',
+        referenceHint,
+        skillCtx,
+        activeSkillCtx,
+      ],
+    );
   }
 
   if (profile === 'switch_model') {
@@ -1083,23 +1089,21 @@ export async function buildPersonalityContext(
         else activatedCatsSwitch.add(ec);
       }
     }
-    const parts = [
-      configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
-      user ? `[USER]\n${user}` : '',
-      soul ? `[SOUL]\n${soul}` : '',
-      business ? `[BUSINESS]\n${business}` : '',
-      cisContext,
-      memory ? `[MEMORY]\n${memory}` : '',
-      retrievedMemoryCtx,
-      buildToolsContext(activatedCatsSwitch),
-    ].filter(Boolean);
     const skillCtx = skillsManager.buildTurnContext(messageText);
-    if (skillCtx) parts.push(skillCtx);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    if (activeSkillCtx) parts.push(activeSkillCtx);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+    return assembleContext(
+      [
+        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
+        user ? `[USER]\n${user}` : '',
+        soul ? `[SOUL]\n${soul}` : '',
+        business ? `[BUSINESS]\n${business}` : '',
+        memory ? `[MEMORY]\n${memory}` : '',
+        buildToolsContext(activatedCatsSwitch),
+      ],
+      [cisContext, retrievedMemoryCtx, skillCtx, activeSkillCtx],
+    );
   }
   // ── Path T: team subagents — lean prompt, team memory only ─────────────────
   if (executionMode === 'team_subagent') {
@@ -1119,20 +1123,19 @@ export async function buildPersonalityContext(
         else activatedCatsTeam.add(ec);
       }
     }
-    const parts = [
-      user ? `[USER]\n${user}` : '',
-      soul ? `[SOUL]\n${soul}` : '',
-      memory ? `[MEMORY]\n${memory}` : '',
-      business ? `[BUSINESS]\n${business}` : '',
-      cisContext,
-      buildToolsContext(activatedCatsTeam),
-    ].filter(Boolean);
     const skillCtx = skillsManager.buildTurnContext(messageText);
-    if (skillCtx) parts.push(skillCtx);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    if (activeSkillCtx) parts.push(activeSkillCtx);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+    return assembleContext(
+      [
+        user ? `[USER]\n${user}` : '',
+        soul ? `[SOUL]\n${soul}` : '',
+        memory ? `[MEMORY]\n${memory}` : '',
+        business ? `[BUSINESS]\n${business}` : '',
+        buildToolsContext(activatedCatsTeam),
+      ],
+      [cisContext, skillCtx, activeSkillCtx],
+    );
   }
 
   // ── Path B: autonomous execution — full prompt, no changes ─────────────────
@@ -1140,11 +1143,10 @@ export async function buildPersonalityContext(
   if (isAutonomous) {
     const isProposalExecution = executionMode === 'proposal_execution';
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    const soul = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'SOUL.md');
-    // Proposal execution still needs durable operational runbooks, especially
-    // source/mobile build-sync rules. Keep the cap modest so execution stays
-    // focused on the approved proposal instead of broad continuity.
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', isProposalExecution ? 12000 : 8000);
+    const soul = isProposalExecution ? configSoul : loadFullMemoryProfile(workspacePath, 'SOUL.md');
+    // Proposal executors get only the approved task context plus the configured
+    // Prometheus soul. Workspace MEMORY.md is intentionally excluded here.
+    const memory = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000);
     // USER.md intentionally excluded from background tasks — user preferences are
     // not relevant to focused task execution and waste token budget.
     // AGENTS.md intentionally excluded from autonomous path — background tasks,
@@ -1176,22 +1178,25 @@ export async function buildPersonalityContext(
       }
     }
     const toolsBlockAuto = buildToolsContext(activatedCatsAuto);
-    const parts = [
-      business ? `[BUSINESS]\n${business}` : '',
-      cisContext,
-      soul ? `[SOUL]\n${soul}` : '',
-      memory ? `[MEMORY]\n${memory}` : '',
-      projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
-      toolsBlockAuto,
-      intradayNotes ? `[TODAY_NOTES]\n${intradayNotes}` : '',
-    ].filter(Boolean);
     // Autonomous agents: same hint + pinned skills as interactive chat.
     const skillCtx = skillsManager.buildTurnContext(messageText);
-    if (skillCtx) parts.push(skillCtx);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    if (activeSkillCtx) parts.push(activeSkillCtx);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+    return assembleContext(
+      [
+        business ? `[BUSINESS]\n${business}` : '',
+        soul ? `${isProposalExecution ? '[PROMETHEUS_SOUL]' : '[SOUL]'}\n${soul}` : '',
+        memory ? `[MEMORY]\n${memory}` : '',
+        projectContextBlock ? `[PROJECT_CONTEXT]\n${projectContextBlock}` : '',
+        toolsBlockAuto,
+      ],
+      [
+        cisContext,
+        intradayNotes ? `[TODAY_NOTES]\n${intradayNotes}` : '',
+        skillCtx,
+        activeSkillCtx,
+      ],
+    );
   }
 
   // ── Path A: interactive chat — tiered ─────────────────────────────────────
@@ -1222,25 +1227,28 @@ export async function buildPersonalityContext(
         else activatedCatsT1.add(ec);
       }
     }
-    const parts = [
-      configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
-      user ? `[USER]\n${user}` : '',
-      soulT1 ? `[SOUL]\n${soulT1}` : '',
-      business ? `[BUSINESS]\n${business}` : '',
-      cisContext,
-      memory ? `[MEMORY]\n${memory}` : '',
-      retrievedMemoryCtx,
-      projectContextBlockT1 ? `[PROJECT_CONTEXT]\n${projectContextBlockT1}` : '',
-      intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
-      buildToolsContext(activatedCatsT1),
-    ].filter(Boolean);
     // First turn: still get the skills hint + any pinned skills.
     const skillCtxT1 = skillsManager.buildTurnContext(messageText);
-    if (skillCtxT1) parts.push(skillCtxT1);
     const activeSkillCtxT1 = buildActiveSkillsContext(sessionId, skillsManager);
-    if (activeSkillCtxT1) parts.push(activeSkillCtxT1);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+    return assembleContext(
+      [
+        configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
+        user ? `[USER]\n${user}` : '',
+        soulT1 ? `[SOUL]\n${soulT1}` : '',
+        business ? `[BUSINESS]\n${business}` : '',
+        memory ? `[MEMORY]\n${memory}` : '',
+        projectContextBlockT1 ? `[PROJECT_CONTEXT]\n${projectContextBlockT1}` : '',
+        buildToolsContext(activatedCatsT1),
+      ],
+      [
+        cisContext,
+        retrievedMemoryCtx,
+        intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
+        skillCtxT1,
+        activeSkillCtxT1,
+      ],
+    );
   }
 
   // ── Tier 2 / 3: subsequent messages ───────────────────────────────────────
@@ -1273,26 +1281,28 @@ export async function buildPersonalityContext(
     ? ''
     : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use read_file('self/index.md'). Follow its links to focused self/* subsystem files as needed.`;
 
-  const parts = [
-    configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
-    user ? `[USER]\n${user}` : '',
-    soul ? `[SOUL]\n${soul}` : '',
-    business ? `[BUSINESS]\n${business}` : '',
-    cisContext,
-    memory ? `[MEMORY]\n${memory}` : '',
-    retrievedMemoryCtx,
-    projectContextBlockT2 ? `[PROJECT_CONTEXT]\n${projectContextBlockT2}` : '',
-    intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
-    toolsBlock,
-    referenceHint,
-  ].filter(Boolean);
-
   // Skills: one-liner hint + any pinned skills injected in full.
   const skillCtx = skillsManager.buildTurnContext(messageText);
-  if (skillCtx) parts.push(skillCtx);
   const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-  if (activeSkillCtx) parts.push(activeSkillCtx);
 
   await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-  return parts.length > 0 ? '\n\n' + parts.join('\n\n') : '';
+  return assembleContext(
+    [
+      configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
+      user ? `[USER]\n${user}` : '',
+      soul ? `[SOUL]\n${soul}` : '',
+      business ? `[BUSINESS]\n${business}` : '',
+      memory ? `[MEMORY]\n${memory}` : '',
+      projectContextBlockT2 ? `[PROJECT_CONTEXT]\n${projectContextBlockT2}` : '',
+      toolsBlock,
+    ],
+    [
+      cisContext,
+      retrievedMemoryCtx,
+      intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
+      referenceHint,
+      skillCtx,
+      activeSkillCtx,
+    ],
+  );
 }

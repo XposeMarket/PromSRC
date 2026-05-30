@@ -1,0 +1,13 @@
+{
+  "skillId": "desktop-automation-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-05-29T16:49:01.312Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\desktop-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "examples/claude-terminal-input-targeting-2026-05-29.md"
+  ],
+  "hash": "0e8ae01f1e1c7ee2"
+}

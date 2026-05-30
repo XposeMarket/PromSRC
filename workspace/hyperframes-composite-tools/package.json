@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "lint": "npx hyperframes lint",
+    "validate": "npx hyperframes validate",
+    "inspect": "npx hyperframes inspect",
+    "render": "npx hyperframes render --output final.mp4 --fps 30 --quality standard"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

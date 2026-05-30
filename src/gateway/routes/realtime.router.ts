@@ -10,6 +10,8 @@ const DEFAULT_REALTIME_VOICE = 'marin';
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = 'gpt-realtime-whisper';
 const REALTIME_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
 const REALTIME_INSTRUCTIONS_MAX_CHARS = Number(process.env.OPENAI_REALTIME_INSTRUCTIONS_MAX_CHARS || 18000);
+const REALTIME_CONTEXT_PACK_CACHE_TTL_MS = Math.max(5_000, Number(process.env.OPENAI_REALTIME_CONTEXT_PACK_CACHE_TTL_MS || 60_000) || 60_000);
+let realtimeContextPackCache: { instructions: string; builtAt: number; workspacePath: string } | null = null;
 
 function resolveRealtimeSecret(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim() : '';
@@ -122,6 +124,14 @@ function buildSkillCatalogDigest(maxChars = 4500): string {
 function buildRealtimeContextPack(): string {
   const cfg = getConfig();
   const workspacePath = cfg.getWorkspacePath();
+  const now = Date.now();
+  if (
+    realtimeContextPackCache
+    && realtimeContextPackCache.workspacePath === workspacePath
+    && now - realtimeContextPackCache.builtAt < REALTIME_CONTEXT_PACK_CACHE_TTL_MS
+  ) {
+    return realtimeContextPackCache.instructions;
+  }
   const canonicalRuntime = buildSystemPrompt({
     workspacePath,
     promptMode: 'full',
@@ -148,7 +158,7 @@ function buildRealtimeContextPack(): string {
     '- Preserve Prometheus tone: warm, direct, technically sharp, playful when natural, and deeply aligned with Raul.',
   ].join('\n');
 
-  return [
+  const instructions = [
     '# Prometheus Realtime Context Pack',
     bridgeContract,
     voicePresenceRules,
@@ -159,6 +169,8 @@ function buildRealtimeContextPack(): string {
     '## Current Project',
     `Workspace: ${workspacePath}`,
   ].filter(Boolean).join('\n\n---\n\n');
+  realtimeContextPackCache = { instructions, builtAt: now, workspacePath };
+  return instructions;
 }
 
 router.get('/api/realtime/status', (_req, res) => {

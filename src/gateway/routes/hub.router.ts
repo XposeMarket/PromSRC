@@ -591,11 +591,25 @@ router.get('/api/hub/skills/:id/content', (req: Request, res: Response) => {
         eligibility: skill.eligibility,
         assignment: skill.assignment,
         toolBinding: skill.toolBinding,
+        kind: skill.kind,
+        resources: skill.resources,
         recentChanges: _sm.listChangeLedger(skill.id, 12),
         filePath: skill.filePath,
         content,
       },
     });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+router.get('/api/hub/skills/:id/resources/content', (req: Request, res: Response) => {
+  try {
+    if (!_sm) { res.status(500).json({ success: false, error: 'skills manager not initialized' }); return; }
+    const relPath = String(req.query.path || '');
+    const result = _sm.readResource(req.params.id, relPath, 120_000);
+    if (!result.ok) { res.status(400).json({ success: false, error: result.error }); return; }
+    res.json({ success: true, resource: result });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }

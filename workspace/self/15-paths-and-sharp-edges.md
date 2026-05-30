@@ -16,6 +16,8 @@
 - Proposal sandboxes: `.prometheus/proposal-workspaces/<proposalId>/repo`
 - Audit transcripts: `workspace/audit/chats/transcripts/`
 - Audit compactions: `workspace/audit/chats/compactions/`
+- Tool observation JSONL: `<configDir>/tool-observations/<sessionId>.jsonl`
+- Raw oversized tool observation payloads: `<configDir>/tool-observations/raw/<sessionId>/<toolObservationId>.txt`
 - Memory index: `workspace/audit/_index/memory/`
 - Obsidian bridge config: `<configDir>/obsidian-bridge.json`
 - Obsidian sync manifest: `<configDir>/obsidian-bridge-manifest.json`
@@ -103,10 +105,21 @@
 - If generated-video overlay/composite export freezes on one scene, treat it as a compositor bug and preserve the verified stitched cut; do not ship a frozen base video merely because overlays/audio rendered
 - Audio-only finishing for a verified MP4 should stream-copy video and mux audio inside Creative tools; shell FFmpeg is an emergency diagnostic path, not the product workflow
 - managed processes are persisted and WebSocket-broadcast, so command UI state should be debugged through `src/gateway/process/` as well as shell tools
+- run-command Windows system-control expansion is intentional but still gated: tokens such as `powercfg`, `taskkill`, `winget`, service/task mutators, display/settings launchers, clipboard commands, and `reg` can be allowed to reach policy, but must still pass approval/path/audit/hard-deny checks before execution
+- do not treat terminal `approval_mode: "lite"` as broad shell trust; lite reduces approval friction only after other gates and must not bypass token allowlists, path scope, native-file-tool bypass guards, audit logging, or `tool-deny-policy.ts`
+- `allowed_windows_read_commands`, `allowed_windows_system_commands`, and `allowed_custom_commands` are for deliberate operator-configured expansion; destructive operations such as shutdown/restart/logoff, disk formatting/partitioning, forceful data deletion, and hibernation toggles should remain hard-denied or require a stronger explicit final-action path
+- future Jarvis-style local-control features should graduate from raw command tokens into typed tools with validation, preview/approval text, execution, readback verification, and audit artifacts
+
 - onboarding reset/redo paths are account-scoped and guarded; memory seeding should use dry-run plus approved paths when the user needs review
 - `deploy_analysis_team` and `present_file` descriptions are not fully aligned yet
+- prompt context now uses `[RECENT_TOOL_OBSERVATIONS]`; do not revive multiple block names like `[RECENT_TOOL_LOG]` or `[RECENT_TOOL_LOGS]` in new injection paths
+- current-turn tool results remain raw/live for workflow correctness; observation previews are for subsequent-turn context, compaction, boot context, goal runner context, and Brain loops
+- context-window numbers in the chat UI are estimates from `model-context.ts`, not exact billable provider usage
+- if a model's context window looks wrong, check provider metadata and config overrides before changing the known table; some modern models can be 400k or 1m context and should not be guessed down to 128k
+- mid-workflow compaction should behave like an internal pause/resume tool event: working turn pauses, compactor produces a summary, summary is injected/rebased, then execution continues
+- `resultRawRef` in tool observations is archival unless a retrieval tool is added; do not assume the model can open raw refs by itself
 
 ## 31) Maintenance Rule
 
-If Prometheus gains or loses modes, tools, providers, connectors, account gates, proposal repair behavior, approval behavior, or memory/index layers, update this file only after reading the exact source files that implement the change.
+If Prometheus gains or loses modes, tools, providers, connectors, account gates, proposal repair behavior, approval behavior, context/compaction behavior, tool observation behavior, frontend context indicators, or memory/index layers, update this file only after reading the exact source files that implement the change.
 Do not refresh this file from memory, from UI copy alone, or from older workspace notes.

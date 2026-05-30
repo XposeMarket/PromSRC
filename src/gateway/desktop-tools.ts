@@ -839,6 +839,20 @@ export async function desktopDoctor(sessionId: string): Promise<string> {
     fail('UI Automation', err?.message || String(err));
   }
 
+  try {
+    const backend = resolveDesktopCaptureBackend();
+    (backend.active === 'graphics_capture' ? ok : warn)('Capture backend', `${backend.active} (requested=${backend.requested}). ${backend.reason}`);
+  } catch (err: any) {
+    warn('Capture backend', err?.message || String(err));
+  }
+
+  try {
+    const toolNames = getDesktopToolNames();
+    ok('Tool registry', `${toolNames.length} desktop tool definitions exposed; canonical model + window-scoped input available`);
+  } catch (err: any) {
+    warn('Tool registry', err?.message || String(err));
+  }
+
   const packet = getDesktopAdvisorPacket(sessionId);
   if (!packet) {
     warn('Tool session', 'no desktop screenshot packet cached yet');
@@ -2882,7 +2896,7 @@ public class WinFGHelper {
 `;
 
   try {
-    const out = await runPowerShell(script, { timeoutMs: 20000 });
+    const out = await runPowerShell(script, { timeoutMs: 20000, sta: true });
     if (!out || !out.trim()) return 'ERROR: Accessibility tree returned empty output.';
     if (out.startsWith('ERROR:')) return out.trim();
     return out.trim().slice(0, 20000);
@@ -3483,11 +3497,18 @@ export async function desktopGetWindowText(windowName?: string): Promise<string>
   const script = `
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class WinFGHelperGWT {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+}
+"@ -ErrorAction SilentlyContinue
 try {
   $root = [System.Windows.Automation.AutomationElement]::RootElement
-  $cond = if ('${query}') {
+  $cond = if ('${psSingleQuote(query)}') {
     [System.Windows.Automation.PropertyCondition]::new(
-      [System.Windows.Automation.AutomationElement]::NameProperty, '${query}',
+      [System.Windows.Automation.AutomationElement]::NameProperty, '${psSingleQuote(query)}',
       [System.Windows.Automation.PropertyConditionFlags]::IgnoreCase
     )
   } else {
@@ -3495,9 +3516,9 @@ try {
   }
   $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
   $target = if ($wins.Count -gt 0) { $wins[0] } else {
-    # Fall back to foreground window
-    $hnd = (Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1).MainWindowHandle
-    if ($hnd) { [System.Windows.Automation.AutomationElement]::FromHandle($hnd) } else { $null }
+    # Fall back to actual foreground window via Win32
+    $fgHwnd = [WinFGHelperGWT]::GetForegroundWindow()
+    if ($fgHwnd -ne [IntPtr]::Zero) { [System.Windows.Automation.AutomationElement]::FromHandle($fgHwnd) } else { $null }
   }
   if (-not $target) { Write-Output 'ERROR: No window found.'; exit 0 }
   $title = $target.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty)
@@ -3524,7 +3545,7 @@ try {
 }
 `;
   try {
-    const out = await runPowerShell(script, { timeoutMs: 10000 });
+    const out = await runPowerShell(script, { timeoutMs: 10000, sta: true });
     const text = String(out || '').trim();
     if (!text) return 'No text content found in window.';
     return text.slice(0, 8000);
@@ -3707,6 +3728,534 @@ export {
   desktopBackgroundPrepareSandbox,
   desktopBackgroundStatus,
 };
+
+// ════════════════════════════════════════════════════════════════════════════
+// Canonical desktop state model (Codex-style app / window / state abstraction)
+//
+// This layer gives Prometheus one coherent object model on top of the existing
+// PowerShell internals: a stable window id, an app grouping, and a window-state
+// snapshot that ties together screenshot, bounds, and accessibility text. New
+// window-scoped input tools (desktop_window_click, etc.) resolve a window from
+// this model before acting, so the LLM can target an exact window handle rather
+// than juggling screenshot ids, coordinates, and title matching.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Canonical capture backend identifiers. */
+export type DesktopCaptureBackend = 'graphics_capture' | 'copy_from_screen' | 'window_crop';
+
+/**
+ * Resolve the configured capture backend. Windows.Graphics.Capture is the
+ * long-term goal (it can capture occluded windows); until a native helper is
+ * installed we always fall back to the stable CopyFromScreen path. The env var
+ * lets operators force a backend for diagnostics.
+ */
+export function resolveDesktopCaptureBackend(): { requested: DesktopCaptureBackend | 'auto'; active: DesktopCaptureBackend; reason: string } {
+  const raw = String(process.env.PROMETHEUS_DESKTOP_CAPTURE_BACKEND || 'auto').trim().toLowerCase();
+  const requested: DesktopCaptureBackend | 'auto' =
+    raw === 'graphics_capture' || raw === 'copy_from_screen' || raw === 'window_crop' ? raw : 'auto';
+  // Windows.Graphics.Capture helper is not yet bundled; only CopyFromScreen and
+  // its window_crop variant are wired up today.
+  if (requested === 'graphics_capture') {
+    return {
+      requested,
+      active: 'copy_from_screen',
+      reason: 'graphics_capture requested but the Windows.Graphics.Capture helper is not installed; using copy_from_screen fallback.',
+    };
+  }
+  return {
+    requested,
+    active: 'copy_from_screen',
+    reason: requested === 'auto'
+      ? 'auto resolved to copy_from_screen (Windows.Graphics.Capture helper not installed).'
+      : `${requested} active.`,
+  };
+}
+
+export interface DesktopWindowState {
+  windowId: string;
+  handle: number;
+  appId: string;
+  processName: string;
+  pid: number;
+  title: string;
+  bounds: { left: number; top: number; width: number; height: number };
+  monitorIndex?: number;
+  isActive: boolean;
+}
+
+export interface DesktopAppState {
+  appId: string;
+  displayName: string;
+  processName?: string;
+  executablePath?: string;
+  isRunning: boolean;
+  windows: DesktopWindowState[];
+}
+
+/** Stable window id derived from the HWND. Persists while the window is open. */
+function windowIdForHandle(handle: number): string {
+  return `win_${Math.floor(Number(handle) || 0)}`;
+}
+
+function parseWindowId(windowId?: string | null): number | null {
+  const m = String(windowId || '').trim().match(/^win_(\d+)$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  return Number.isFinite(h) && h > 0 ? h : null;
+}
+
+/** Stable app id for a running process group. */
+function appIdForProcess(processName: string): string {
+  return `proc:${String(processName || 'unknown').toLowerCase()}`;
+}
+
+function toDesktopWindowState(w: DesktopWindowInfo, activeHandle: number): DesktopWindowState {
+  const handle = normalizedWindowHandle(w);
+  return {
+    windowId: windowIdForHandle(handle),
+    handle,
+    appId: appIdForProcess(w.processName),
+    processName: w.processName,
+    pid: Number(w.pid) || 0,
+    title: w.title,
+    bounds: {
+      left: Number(w.left) || 0,
+      top: Number(w.top) || 0,
+      width: Number(w.width) || 0,
+      height: Number(w.height) || 0,
+    },
+    monitorIndex: w.monitorIndex,
+    isActive: handle > 0 && handle === activeHandle,
+  };
+}
+
+/** List currently open windows in the canonical model. */
+export async function desktopListWindowStates(): Promise<DesktopWindowState[]> {
+  ensureWindows();
+  const ctx = await gatherDesktopContextInternal();
+  const activeHandle = normalizedWindowHandle(ctx.activeWindow);
+  return ctx.windows.map((w) => toDesktopWindowState(w, activeHandle));
+}
+
+/**
+ * Resolve a canonical window target from any of the supported selectors.
+ * Preference order: window_id / window_handle (exact) → app_id → title.
+ */
+export async function resolveCanonicalWindow(
+  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string; active?: boolean },
+): Promise<{ ok: true; window: DesktopWindowInfo; hint?: string } | { ok: false; message: string }> {
+  ensureWindows();
+  const ctx = await gatherDesktopContextInternal();
+  const windows = ctx.windows;
+  const byHandle = (h: number) => windows.find((w) => normalizedWindowHandle(w) === Math.floor(h)) || null;
+
+  const explicitHandle = Number(selector.window_handle);
+  const idHandle = parseWindowId(selector.window_id);
+  const handle = Number.isFinite(explicitHandle) && explicitHandle > 0
+    ? Math.floor(explicitHandle)
+    : (idHandle ?? 0);
+
+  if (handle > 0) {
+    const w = byHandle(handle);
+    if (w) return { ok: true, window: w };
+    return { ok: false, message: `No open window for ${selector.window_id ? `window_id="${selector.window_id}"` : `window_handle=${handle}`}. Capture a fresh desktop_get_window_state or desktop_list_windows.` };
+  }
+
+  if (selector.app_id) {
+    const appId = String(selector.app_id).trim().toLowerCase();
+    const matches = windows.filter((w) => appIdForProcess(w.processName) === appId);
+    if (matches.length === 1) return { ok: true, window: matches[0] };
+    if (matches.length > 1) {
+      const active = matches.find((w) => normalizedWindowHandle(w) === normalizedWindowHandle(ctx.activeWindow));
+      return {
+        ok: true,
+        window: active || matches[0],
+        hint: `app_id "${selector.app_id}" has ${matches.length} windows; targeting ${shortWindowLabel(active || matches[0])}. Pass window_id for an exact window.`,
+      };
+    }
+    return { ok: false, message: `No open window for app_id "${selector.app_id}".` };
+  }
+
+  if (selector.title) {
+    const matches = findWindowsByName(windows, String(selector.title));
+    if (matches.length >= 1) {
+      return {
+        ok: true,
+        window: matches[0],
+        hint: matches.length > 1
+          ? `${matches.length} windows match "${selector.title}"; targeting ${shortWindowLabel(matches[0])}. Pass window_id (from desktop_list_windows) for deterministic targeting.`
+          : `Resolved by title; prefer window_id from desktop_list_windows for deterministic targeting.`,
+      };
+    }
+    return { ok: false, message: `No open window matching title "${selector.title}".` };
+  }
+
+  if (selector.active === true && ctx.activeWindow) {
+    return { ok: true, window: ctx.activeWindow };
+  }
+
+  return { ok: false, message: 'Provide window_id, window_handle, app_id, or title to identify the window.' };
+}
+
+/**
+ * desktop_list_apps — installed + running apps with their open windows, in the
+ * canonical model. Running apps are grouped by process; not-running installed
+ * apps come from the installed-apps inventory.
+ */
+export async function desktopListApps(
+  filter: string = '',
+  includeWindows: boolean = true,
+): Promise<string> {
+  ensureWindows();
+  const ctx = await gatherDesktopContextInternal();
+  const activeHandle = normalizedWindowHandle(ctx.activeWindow);
+  const clean = String(filter || '').trim().toLowerCase();
+
+  // Group running windows by process.
+  const runningByApp = new Map<string, DesktopAppState>();
+  for (const w of ctx.windows) {
+    const appId = appIdForProcess(w.processName);
+    let app = runningByApp.get(appId);
+    if (!app) {
+      app = { appId, displayName: w.processName, processName: w.processName, isRunning: true, windows: [] };
+      runningByApp.set(appId, app);
+    }
+    app.windows.push(toDesktopWindowState(w, activeHandle));
+  }
+
+  // Merge installed-app inventory for richer display names / not-running apps.
+  const apps: DesktopAppState[] = [];
+  try {
+    const inventory = await getInstalledAppsInventory({ refresh: false });
+    const runningProcs = new Set(Array.from(runningByApp.keys()));
+    for (const rec of inventory.apps) {
+      const matchedRunning = rec.processNameHints
+        .map((h) => appIdForProcess(h))
+        .find((id) => runningProcs.has(id));
+      if (matchedRunning) {
+        const app = runningByApp.get(matchedRunning)!;
+        app.displayName = rec.displayName || app.displayName;
+        app.executablePath = rec.executablePath;
+        // Use the stable installed-app id when known.
+        app.appId = rec.id;
+      } else {
+        apps.push({
+          appId: rec.id,
+          displayName: rec.displayName,
+          executablePath: rec.executablePath,
+          isRunning: false,
+          windows: [],
+        });
+      }
+    }
+  } catch {
+    /* inventory optional */
+  }
+  apps.push(...runningByApp.values());
+
+  let filtered = apps;
+  if (clean) {
+    filtered = apps.filter((a) =>
+      a.displayName.toLowerCase().includes(clean) ||
+      (a.processName || '').toLowerCase().includes(clean) ||
+      a.windows.some((w) => w.title.toLowerCase().includes(clean)),
+    );
+  }
+  // Running apps first, then alphabetical.
+  filtered.sort((a, b) => (Number(b.isRunning) - Number(a.isRunning)) || a.displayName.localeCompare(b.displayName));
+  const shown = filtered.slice(0, 120);
+
+  const payload = shown.map((a) => ({
+    app_id: a.appId,
+    display_name: a.displayName,
+    process_name: a.processName,
+    executable_path: a.executablePath,
+    is_running: a.isRunning,
+    ...(includeWindows
+      ? {
+          windows: a.windows.map((w) => ({
+            window_id: w.windowId,
+            handle: w.handle,
+            title: w.title,
+            bounds: w.bounds,
+            monitor_index: w.monitorIndex,
+            is_active: w.isActive,
+          })),
+        }
+      : { window_count: a.windows.length }),
+  }));
+
+  return [
+    `Apps (${shown.length}${filtered.length > shown.length ? ` of ${filtered.length}` : ''}; running first). Pass app_id to desktop_launch_app or window_id to desktop_get_window_state / desktop_window_click.`,
+    JSON.stringify(payload, null, 2),
+  ].join('\n');
+}
+
+/** desktop_list_windows — flat list of open windows in the canonical model. */
+export async function desktopListWindowsCanonical(
+  selector: { app_id?: string; process_name?: string; title?: string } = {},
+): Promise<string> {
+  const states = await desktopListWindowStates();
+  let filtered = states;
+  if (selector.app_id) {
+    const id = String(selector.app_id).trim().toLowerCase();
+    filtered = filtered.filter((w) => w.appId.toLowerCase() === id || appIdForProcess(w.processName) === id);
+  }
+  if (selector.process_name) {
+    const p = String(selector.process_name).trim().toLowerCase();
+    filtered = filtered.filter((w) => w.processName.toLowerCase().includes(p));
+  }
+  if (selector.title) {
+    const t = String(selector.title).trim().toLowerCase();
+    filtered = filtered.filter((w) => w.title.toLowerCase().includes(t));
+  }
+  if (!filtered.length) return 'No open windows matched.';
+  const payload = filtered.map((w) => ({
+    window_id: w.windowId,
+    handle: w.handle,
+    app_id: w.appId,
+    process_name: w.processName,
+    pid: w.pid,
+    title: w.title,
+    bounds: w.bounds,
+    monitor_index: w.monitorIndex,
+    is_active: w.isActive,
+  }));
+  return [
+    `Open windows (${filtered.length}). Use window_id with desktop_get_window_state / desktop_window_click / desktop_window_type.`,
+    JSON.stringify(payload, null, 2),
+  ].join('\n');
+}
+
+/**
+ * desktop_get_window_state — canonical point-in-time snapshot of one window:
+ * resolved window metadata, an optional screenshot (reusing the window crop
+ * path and its screenshot_id), and optional accessibility text. This is the
+ * single object the LLM should reason over before window-scoped actions.
+ */
+export async function desktopGetWindowState(
+  sessionId: string,
+  input: {
+    window_id?: string;
+    window_handle?: number;
+    app_id?: string;
+    title?: string;
+    include_screenshot?: boolean;
+    include_text?: boolean;
+    focus_first?: boolean;
+  },
+): Promise<string> {
+  ensureWindows();
+  const resolved = await resolveCanonicalWindow({
+    window_id: input.window_id,
+    window_handle: input.window_handle,
+    app_id: input.app_id,
+    title: input.title,
+    active: !input.window_id && !input.window_handle && !input.app_id && !input.title,
+  });
+  if (!resolved.ok) return `ERROR: ${resolved.message}`;
+  const target = resolved.window;
+  const activeHandle = normalizedWindowHandle((await gatherDesktopContextInternal()).activeWindow);
+  const state = toDesktopWindowState(target, activeHandle);
+
+  const includeScreenshot = input.include_screenshot !== false;
+  const includeText = input.include_text === true;
+  const backend = resolveDesktopCaptureBackend();
+
+  let screenshotId: string | undefined;
+  let screenshotNote = '';
+  if (includeScreenshot) {
+    const shot = await desktopWindowScreenshot(sessionId, {
+      handle: target.handle,
+      name: target.title,
+      focus_first: input.focus_first === true,
+    }).catch((e: any) => `ERROR: ${e?.message || e}`);
+    const idMatch = String(shot).match(/Screenshot ID:\s*(ds_[^\s.]+)/);
+    if (idMatch) {
+      screenshotId = idMatch[1];
+      screenshotNote = `\n${shot}`;
+    } else {
+      screenshotNote = `\nScreenshot capture failed: ${String(shot).slice(0, 200)}`;
+    }
+  }
+
+  let accessibility: string | undefined;
+  if (includeText) {
+    const tree = await desktopGetAccessibilityTree(target.title, 5, 300).catch((e: any) => `ERROR: ${e?.message || e}`);
+    accessibility = String(tree);
+  }
+
+  const header = {
+    state_id: `ws_${state.windowId}_${Date.now().toString(36)}`,
+    window: {
+      window_id: state.windowId,
+      handle: state.handle,
+      app_id: state.appId,
+      process_name: state.processName,
+      pid: state.pid,
+      title: state.title,
+      bounds: state.bounds,
+      monitor_index: state.monitorIndex,
+      is_active: state.isActive,
+    },
+    screenshot_id: screenshotId,
+    capture_backend: backend.active,
+    captured_at: Date.now(),
+  };
+
+  return [
+    resolved.hint ? `Note: ${resolved.hint}` : '',
+    JSON.stringify(header, null, 2),
+    screenshotNote,
+    includeText ? `\nAccessibility tree:\n${accessibility}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+// ─── Window-scoped input (Phase 2) ──────────────────────────────────────────
+// Thin wrappers that resolve an exact window first (restoring + focusing it),
+// then delegate to the existing input primitives. They make the intended
+// "act on this window handle" model explicit and reject stale/foreign targets.
+
+async function prepareWindowForInput(
+  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+): Promise<{ ok: true; window: DesktopWindowInfo; hint?: string } | { ok: false; message: string }> {
+  const resolved = await resolveCanonicalWindow(selector);
+  if (!resolved.ok) return resolved;
+  // Restore-if-minimized + focus happens inside focusWindowHandle.
+  const focused = await focusWindowHandle(resolved.window.handle).catch(() => false);
+  if (!focused) {
+    return { ok: false, message: `Could not focus ${shortWindowLabel(resolved.window)} before input. Try desktop_get_window_state to confirm it is still open.` };
+  }
+  markDesktopStateChanged();
+  await new Promise((r) => setTimeout(r, 100));
+  return resolved;
+}
+
+export async function desktopWindowClick(
+  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  point: { x: number; y: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
+  options: { button?: 'left' | 'right'; double_click?: boolean; modifier?: 'shift' | 'ctrl' | 'alt'; verify?: DesktopVerificationMode } = {},
+  sessionId: string = '__reactor__',
+): Promise<string> {
+  const prep = await prepareWindowForInput(selector);
+  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const space = point.coordinate_space || 'window';
+  const resolvedPoint = await resolveDesktopActionPoint(sessionId, {
+    x: Number(point.x),
+    y: Number(point.y),
+    coordinate_space: space,
+    screenshot_id: point.screenshot_id,
+    window_handle: prep.window.handle,
+    window_name: prep.window.title,
+  }, 'desktop_window_click');
+  if (!resolvedPoint.ok) return `ERROR: ${resolvedPoint.message}`;
+  const result = await desktopClick(
+    resolvedPoint.point.x,
+    resolvedPoint.point.y,
+    options.button === 'right' ? 'right' : 'left',
+    options.double_click === true,
+    undefined,
+    options.modifier,
+    `${resolvedPoint.point.sourceNote} [${shortWindowLabel(prep.window)}]`,
+    { mode: options.verify, coordinateSpace: resolvedPoint.point.coordinateSpace },
+  );
+  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+}
+
+export async function desktopWindowType(
+  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  text: string,
+  raw: boolean = false,
+): Promise<string> {
+  const prep = await prepareWindowForInput(selector);
+  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const result = raw ? await desktopTypeRaw(String(text || '')) : await desktopType(String(text || ''));
+  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+}
+
+export async function desktopWindowPressKey(
+  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  key: string,
+): Promise<string> {
+  const prep = await prepareWindowForInput(selector);
+  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const result = await desktopPressKey(String(key || 'Enter'));
+  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+}
+
+export async function desktopWindowScroll(
+  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  args: { direction: 'up' | 'down' | 'left' | 'right'; amount?: number; x?: number; y?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
+  sessionId: string = '__reactor__',
+): Promise<string> {
+  const prep = await prepareWindowForInput(selector);
+  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const dir = args.direction;
+  const horizontal = dir === 'left' || dir === 'right';
+  let x: number | undefined;
+  let y: number | undefined;
+  let space: DesktopCoordinateSpace | undefined;
+  if (args.x !== undefined && args.y !== undefined) {
+    const resolvedPoint = await resolveDesktopActionPoint(sessionId, {
+      x: Number(args.x),
+      y: Number(args.y),
+      coordinate_space: args.coordinate_space || 'window',
+      screenshot_id: args.screenshot_id,
+      window_handle: prep.window.handle,
+      window_name: prep.window.title,
+    }, 'desktop_window_scroll');
+    if (!resolvedPoint.ok) return `ERROR: ${resolvedPoint.message}`;
+    x = resolvedPoint.point.x;
+    y = resolvedPoint.point.y;
+    space = resolvedPoint.point.coordinateSpace;
+  }
+  const result = await desktopScroll(
+    dir === 'up' || dir === 'left' ? dir : (dir === 'right' ? 'right' : 'down'),
+    Number(args.amount || 3),
+    x,
+    y,
+    horizontal,
+    undefined,
+    `[${shortWindowLabel(prep.window)}]`,
+    { coordinateSpace: space },
+  );
+  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+}
+
+export async function desktopWindowDrag(
+  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  args: { from_x: number; from_y: number; to_x: number; to_y: number; steps?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
+  sessionId: string = '__reactor__',
+): Promise<string> {
+  const prep = await prepareWindowForInput(selector);
+  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const shared = {
+    coordinate_space: args.coordinate_space || 'window' as DesktopCoordinateSpace,
+    screenshot_id: args.screenshot_id,
+    window_handle: prep.window.handle,
+    window_name: prep.window.title,
+  };
+  const from = await resolveDesktopActionPoint(sessionId, { x: Number(args.from_x), y: Number(args.from_y), ...shared }, 'desktop_window_drag.from');
+  if (!from.ok) return `ERROR: ${from.message}`;
+  const to = await resolveDesktopActionPoint(sessionId, { x: Number(args.to_x), y: Number(args.to_y), ...shared }, 'desktop_window_drag.to');
+  if (!to.ok) return `ERROR: ${to.message}`;
+  const result = await desktopDrag(
+    from.point.x, from.point.y, to.point.x, to.point.y,
+    Number(args.steps || 20), undefined,
+    `${from.point.sourceNote} -> ${to.point.sourceNote} [${shortWindowLabel(prep.window)}]`,
+    { coordinateSpace: from.point.coordinateSpace },
+  );
+  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+}
+
+/**
+ * Single source of truth for the desktop tool name set. Used by registry
+ * parity checks so the gateway definitions, the chat dispatch, and the
+ * ToolRegistry wrappers can never silently drift apart.
+ */
+export function getDesktopToolNames(): string[] {
+  return getDesktopToolDefinitions().map((d: any) => d?.function?.name).filter(Boolean);
+}
 
 export function getDesktopToolDefinitions(): any[] {
   return [
@@ -4331,6 +4880,175 @@ export function getDesktopToolDefinitions(): any[] {
         name: 'desktop_list_macros',
         description: 'List all saved desktop macros and their action counts.',
         parameters: { type: 'object', properties: {} },
+      },
+    },
+    // ─ Canonical app / window / state model (Phase 1) ────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_list_apps',
+        description:
+          'List installed and running apps in the canonical model. Running apps come first, each with their open windows (window_id, handle, bounds, is_active). Returns stable app_id values for desktop_launch_app and window_id values for desktop_get_window_state / desktop_window_click. Prefer this for app discovery.',
+        parameters: {
+          type: 'object',
+          properties: {
+            filter: { type: 'string', description: 'Optional substring filter across app names, processes, and window titles.' },
+            include_windows: { type: 'boolean', description: 'Include each app\'s open windows (default true). Set false for a lighter list.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_list_windows',
+        description:
+          'Flat list of currently open windows in the canonical model: window_id, handle, app_id, process_name, title, bounds, monitor_index, is_active. Use window_id with desktop_get_window_state and the desktop_window_* input tools for deterministic targeting.',
+        parameters: {
+          type: 'object',
+          properties: {
+            app_id: { type: 'string', description: 'Filter to one app_id (from desktop_list_apps).' },
+            process_name: { type: 'string', description: 'Filter by process name substring.' },
+            title: { type: 'string', description: 'Filter by window title substring.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_get_window_state',
+        description:
+          'Canonical point-in-time snapshot of one window: resolved metadata, an optional screenshot (with a screenshot_id reusable for coordinate_space="capture"/"window"), and optional accessibility text. Identify the window by window_id (preferred), window_handle, app_id, or title; with no selector it captures the active window. This is the object to reason over before window-scoped actions.',
+        parameters: {
+          type: 'object',
+          properties: {
+            window_id: { type: 'string', description: 'Stable window id (win_<handle>) from desktop_list_windows / desktop_list_apps.' },
+            window_handle: { type: 'number', description: 'Exact window handle (HWND).' },
+            app_id: { type: 'string', description: 'Target an app_id; resolves to its active/only window.' },
+            title: { type: 'string', description: 'Partial window title or process name.' },
+            include_screenshot: { type: 'boolean', description: 'Capture and attach a window screenshot (default true).' },
+            include_text: { type: 'boolean', description: 'Include the UI Automation accessibility tree (default false).' },
+            focus_first: { type: 'boolean', description: 'Focus the window before capture (default false; passive inspection).' },
+          },
+        },
+      },
+    },
+    // ─ Window-scoped input (Phase 2) ─────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_window_click',
+        description:
+          'Click inside a specific window identified by window_id (preferred), window_handle, app_id, or title. Restores + focuses the window first, then clicks. Coordinates default to window-space (top-left of the window is 0,0); pass coordinate_space + screenshot_id to use capture-space image pixels. Prefer this over desktop_click when you know the target window.',
+        parameters: {
+          type: 'object',
+          required: ['x', 'y'],
+          properties: {
+            window_id: { type: 'string', description: 'Stable window id (win_<handle>).' },
+            window_handle: { type: 'number', description: 'Exact window handle (HWND).' },
+            app_id: { type: 'string', description: 'Target app_id (resolves to its active/only window).' },
+            title: { type: 'string', description: 'Partial window title/process name (least precise).' },
+            x: { type: 'number', description: 'X coordinate (window-space by default).' },
+            y: { type: 'number', description: 'Y coordinate (window-space by default).' },
+            coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'], description: 'Defaults to window.' },
+            screenshot_id: { type: 'string', description: 'Required when coordinate_space="capture".' },
+            button: { type: 'string', enum: ['left', 'right'] },
+            double_click: { type: 'boolean' },
+            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+            verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id when this click is a final post/send/publish/purchase/delete/submit action.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_window_type',
+        description:
+          'Type text into a specific window identified by window_id (preferred), window_handle, app_id, or title. Focuses the window first, then types via clipboard paste (or raw key events when raw=true). Prefer over desktop_type when you know the target window.',
+        parameters: {
+          type: 'object',
+          required: ['text'],
+          properties: {
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            text: { type: 'string', description: 'Text to type.' },
+            raw: { type: 'boolean', description: 'Use raw character-by-character key events instead of clipboard paste.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_window_press_key',
+        description:
+          'Press a key/combo in a specific window identified by window_id (preferred), window_handle, app_id, or title. Focuses the window first. Examples: Enter, Escape, Ctrl+S, Alt+Tab.',
+        parameters: {
+          type: 'object',
+          required: ['key'],
+          properties: {
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            key: { type: 'string', description: 'Key or combo, e.g. Enter, Ctrl+C.' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id when this keypress is a final post/send/publish/purchase/delete/submit action.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_window_scroll',
+        description:
+          'Scroll inside a specific window identified by window_id (preferred), window_handle, app_id, or title. Focuses the window first. Provide x/y (window-space by default) to position the cursor over the scrollable pane before scrolling.',
+        parameters: {
+          type: 'object',
+          required: ['direction'],
+          properties: {
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+            amount: { type: 'number', description: 'Wheel ticks (default 3).' },
+            x: { type: 'number', description: 'Optional X to position cursor (window-space by default).' },
+            y: { type: 'number', description: 'Optional Y to position cursor (window-space by default).' },
+            coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'] },
+            screenshot_id: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_window_drag',
+        description:
+          'Drag between two points inside a specific window identified by window_id (preferred), window_handle, app_id, or title. Focuses the window first. Both endpoints default to window-space.',
+        parameters: {
+          type: 'object',
+          required: ['from_x', 'from_y', 'to_x', 'to_y'],
+          properties: {
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            from_x: { type: 'number' },
+            from_y: { type: 'number' },
+            to_x: { type: 'number' },
+            to_y: { type: 'number' },
+            steps: { type: 'number', description: 'Interpolation steps (default 20).' },
+            coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'] },
+            screenshot_id: { type: 'string' },
+          },
+        },
       },
     },
   ];

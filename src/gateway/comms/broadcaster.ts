@@ -15,8 +15,19 @@ import { triggerManagerReview } from '../teams/team-manager-runner';
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
 
+function readPersistedLastMainSessionId(): string {
+  try {
+    const p = path.join(getConfig().getConfigDir(), 'gateway-runtime-status.json');
+    if (!fs.existsSync(p)) return 'default';
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return String(parsed?.lastMainSessionId || '').trim() || 'default';
+  } catch {
+    return 'default';
+  }
+}
+
 let _modelBusyCount = 0;
-let _lastMainSessionId = 'default';
+let _lastMainSessionId = readPersistedLastMainSessionId();
 let _runtimeHeartbeatTimer: NodeJS.Timeout | null = null;
 
 function writeRuntimeStatus(reason = 'heartbeat'): void {

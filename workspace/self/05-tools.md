@@ -77,6 +77,36 @@ Executor routing facts from `src/gateway/agents-runtime/subagent-executor.ts`:
 - after policy/approval, `executeRegisteredCapabilityTool(...)` gets first chance to handle registered capability families
 - unhandled tools fall back to the direct switch handlers in `subagent-executor.ts`
 
+Tool observation/context facts:
+
+- `src/gateway/tool-observations.ts` is the canonical compact record layer for tool results used as future prompt context
+- the storage record is deliberately small: `id`, `sessionId`, `turnId`, `stepNum`, `toolName`, `category`, `status`, `argsPreview`, `resultPreview`, optional `resultRawRef`, `artifacts`, `pathsTouched`, `exitCode`, and `createdAt`
+- categories are inferred from tool name prefixes, including `shell_process`, `file`, `web`, `browser`, `desktop`, `memory`, `skill`, `media`, `agent_task`, `approval`, `connector`, `creative`, and `other`
+- args/results are scrubbed for secret-looking keys before preview formatting
+- huge results over roughly 6000 characters are written to a raw sidecar file and the observation gets a `tool-observation-raw:<session>/<file>` reference
+- `formatToolObservationsForContext(...)` ranks observations before injection: errors, approvals, file mutations, shell/process results, browser/desktop actions, artifacts, and raw refs receive extra priority
+- formatted observations use the `[RECENT_TOOL_OBSERVATIONS]` block name; avoid introducing new plural/singular variants
+- `session.ts` exposes `getRecentToolObservationsForContext(...)`, which reads the JSONL observation store and falls back to legacy `getRecentToolLog(...)` if no observations exist
+- `chat.router.ts` persists observations after tool turns with `persistToolResultsAsObservations(...)` and injects observation context into future model calls
+- `brain-runner.ts` has three tool-loop sites that now persist/format observations through the same helper instead of maintaining separate 8-result/80-arg/120-preview logic
+- `formatCompactionToolResults(...)` and rolling compaction now consume observation formatting rather than dumping raw tool result strings
+
+Important boundary:
+
+- observations are for saved/future context and compaction, not a replacement for the active tool-result message delivered inside the currently running model call
+- do not "optimize" current-turn browser/desktop/screenshot/approval result delivery by swapping it to observation previews unless active-turn compression is intentionally designed and tested
+- if a future model needs raw large output recovery, add an explicit retrieval mechanism before treating `resultRawRef` as model-readable
+
+
+Run-command/system-control policy facts to preserve:
+
+- `run_command`, `terminal`, and `start_process` remain `workspace_write` tools, but the command token policy now distinguishes base command tokens from Windows diagnostics/read-only tokens and Windows local-control tokens
+- token allowlists are assembled in `src/gateway/chat/chat-helpers.ts` from defaults plus config-backed arrays under `tools.permissions.shell.*`
+- config/schema/type support exists for `allowed_commands`, `allowed_windows_read_commands`, `allowed_windows_system_commands`, and `allowed_custom_commands`
+- local-control additions such as `powercfg` and `taskkill` are still commit-tier shell actions; allowing the token only permits them to reach normal policy/approval/audit, not to run silently
+- hard-deny policy remains separate in `src/gateway/tool-deny-policy.ts` and must continue blocking destructive or machine-interrupting patterns even if their leading token is otherwise allowed
+- when adding future computer-control capability, prefer typed capability executors or first-class tools that wrap validated command shapes instead of adding broad arbitrary shell access
+
 Registered capability executors currently live under `src/gateway/agents-runtime/capabilities/`:
 
 - `skillsCapabilityExecutor`
@@ -176,3 +206,33 @@ Current behavior:
 - `analyze_video` samples frames and can extract audio/transcripts when local tools are available
 - web/media execution is now handled by `webMediaCapabilityExecutor` before the fallback switch path
 - Image/video provider selection must not be tied to the current chat LLM provider. If the user is chatting with Grok, Claude, or another model, `generate_image` and `generate_video` should still be able to use any configured media endpoint whose credentials exist in config/vault/OAuth.
+
+## 12) Product Carousel
+
+`show_product_carousel` renders a horizontal scrollable product card UI in the chat — exactly like ChatGPT's product preview cards.
+
+**When to use:** Any time the user asks to find, compare, or show products from a website (Amazon, Best Buy, Google Shopping, etc.).
+
+**The correct workflow (always do this in order):**
+1. Use `browser_open` to navigate to the site/search results
+2. Use `browser_extract_structured`, `browser_scroll_collect_v2`, or `browser_run_js` to extract product data (title, price, rating, image URL, product URL)
+3. Curate: pick the 3–8 best/most relevant items — do NOT dump all results
+4. Call `show_product_carousel({ title: "...", items: [...] })` — the UI renders the cards automatically
+
+**Item fields:**
+- `title` (required), `productUrl` (required)
+- `price` — string like "$38.49"
+- `description` — one short line, e.g. "Top-rated for overall cleaning and durability."
+- `rating` — number 0–5
+- `reviews` — review count
+- `tag` — badge like "Best overall", "Best budget", "Editor's pick"
+- `imageUrl` — direct image URL from the page (preferred — use the product image src you find in the DOM)
+- `imagePath` — only if you downloaded the image to workspace with browser tools
+- `merchant` — "Amazon", "Best Buy", etc.
+
+**Important rules:**
+- Always call `show_product_carousel` AFTER doing your own extraction — the tool is just the display step
+- You decide the curation (which products, how many, what tags) — not the tool
+- `imageUrl` from the page is fine to pass directly; you do NOT need to download images unless the URL is behind auth
+- Keep descriptions short and factual — one line per card maximum
+- If the user says "show me X on Amazon" and you can browse, always use the carousel rather than a plain list

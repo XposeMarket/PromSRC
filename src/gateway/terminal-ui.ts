@@ -32,16 +32,19 @@ import { setSessionChannelHint } from './comms/broadcaster.js';
 // ─── Colors ──────────────────────────────────────────────────────────────────
 
 const C = {
-  reset:   '\x1b[0m',
-  bold:    '\x1b[1m',
-  dim:     '\x1b[2m',
-  orange:  '\x1b[38;2;255;159;67m',
-  yellow:  '\x1b[38;2;255;214;165m',
-  green:   '\x1b[38;2;107;203;119m',
-  white:   '\x1b[97m',
-  gray:    '\x1b[90m',
-  red:     '\x1b[91m',
-  amber:   '\x1b[38;2;255;180;50m',
+  reset:    '\x1b[0m',
+  bold:     '\x1b[1m',
+  dim:      '\x1b[2m',
+  orange:   '\x1b[38;2;255;159;67m',
+  yellow:   '\x1b[38;2;255;214;165m',
+  green:    '\x1b[38;2;107;203;119m',
+  white:    '\x1b[97m',
+  gray:     '\x1b[90m',
+  red:      '\x1b[91m',
+  amber:    '\x1b[38;2;255;180;50m',
+  silver:   '\x1b[38;2;210;210;210m',
+  lgray:    '\x1b[38;2;175;175;175m',
+  mgray:    '\x1b[38;2;130;130;130m',
 };
 const co    = (color: string, text: string) => `${color}${text}${C.reset}`;
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -53,10 +56,17 @@ const _origLog   = console.log;
 const _origWarn  = console.warn;
 const _origError = console.error;
 
+let _devlogLiveCb: ((line: string) => void) | null = null;
+
+export function setDevlogLiveCallback(cb: ((line: string) => void) | null): void {
+  _devlogLiveCb = cb;
+}
+
 export function suppressStartupLogs(): void {
   const intercept = (...args: any[]) => {
     const line = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
     _logBuffer.push(line);
+    _devlogLiveCb?.(line);
     if (line.includes('EADDRINUSE')) _origLog(line);
   };
   console.log   = intercept;
@@ -68,7 +78,15 @@ export function restoreConsole(): void { /* intentionally suppressed forever */ 
 export function getStartupLogs(): string[] { return [..._logBuffer]; }
 export function captureStartupLog(line: string): void {
   const text = String(line || '').trim();
-  if (text) _logBuffer.push(text);
+  if (text) {
+    _logBuffer.push(text);
+    _devlogLiveCb?.(text);
+  }
+}
+
+function isDevMode(): boolean {
+  try { return fs.existsSync(path.join(process.cwd(), 'src', 'gateway', 'terminal-ui.ts')); }
+  catch { return false; }
 }
 
 // ─── Server-ready signal ──────────────────────────────────────────────────────
@@ -125,10 +143,10 @@ const cols       = () => process.stdout.columns || 100;
 // ─── Torch frames ─────────────────────────────────────────────────────────────
 
 const FRAMES: string[][] = [
-  ['      )          ', '     ) \\         ', '   / ) (  \\      ', '   \\(_)/         ', '    ||| |        ', '   =======       ', '   |     |       '],
-  ['     (           ', '   ( ) )         ', '  ( \\(  /        ', '   \\(_)/         ', '    ||| |        ', '   =======       ', '   |     |       '],
-  ['    )  )         ', '   ( ) (         ', '  /  ) \\  )      ', '   \\(_)/         ', '    ||| |        ', '   =======       ', '   |     |       '],
-  ['     ) )         ', '    ( )(          ', '   / )(  \\       ', '   \\(_)/         ', '    ||| |        ', '   =======       ', '   |     |       '],
+  ['      )          ', '     ) \\         ', '   / ) (  \\      ', '   \\(_)/         ', '   ▐  |  ▌       ', '   ▐█████▌       ', '   ▐█████▌       '],
+  ['     (           ', '   ( ) )         ', '  ( \\(  /        ', '   \\(_)/         ', '   ▐  |  ▌       ', '   ▐█████▌       ', '   ▐█████▌       '],
+  ['    )  )         ', '   ( ) (         ', '  /  ) \\  )      ', '   \\(_)/         ', '   ▐  |  ▌       ', '   ▐█████▌       ', '   ▐█████▌       '],
+  ['     ) )         ', '    ( )(          ', '   / )(  \\       ', '   \\(_)/         ', '   ▐  |  ▌       ', '   ▐█████▌       ', '   ▐█████▌       '],
 ];
 
 let _frame = 0, _tick = 0;
@@ -136,7 +154,10 @@ let _torchTimer: ReturnType<typeof setInterval> | null = null;
 let _torchFn: (() => void) | null = null;
 
 function torchRow(row: string, ri: number, flicker: number): string {
-  if (ri >= 4) return co(C.orange, row);
+  if (ri >= 5) return `${C.mgray}${row}${C.reset}`;   // lighter body: medium grey
+  if (ri === 4) return `${C.lgray}${row}${C.reset}`;  // wick cap: light grey
+  if (ri === 3) return `${C.silver}${row}${C.reset}`; // bowl: silver/white
+  // ri 0-2: flame with flicker
   if (flicker > 0.7) return `\x1b[93m${row}${C.reset}`;
   if (flicker > 0.3) return co(C.amber, row);
   return co(C.orange, row);
@@ -178,6 +199,7 @@ function readName(workspace: string): string {
 // ─── Responsive box dimensions ────────────────────────────────────────────────
 
 let BOX_W    = 62;
+let BOX_LEFT = 2;
 const BOX_TOP_ROW = 2;
 const TORCH_H     = 7;
 let LEFT_W   = 26;
@@ -185,7 +207,9 @@ const DIV_COL     = 1;
 let RIGHT_W  = BOX_W - LEFT_W - DIV_COL;
 
 function refreshBoxDims(): void {
-  BOX_W   = Math.min(Math.max(50, cols() - 6), 110);
+  const termCols = cols();
+  BOX_W   = Math.min(Math.max(50, termCols - 6), 110);
+  BOX_LEFT = Math.max(2, Math.floor((termCols - BOX_W - 2) / 2));
   LEFT_W  = Math.min(26, Math.floor(BOX_W * 0.42));
   RIGHT_W = BOX_W - LEFT_W - DIV_COL;
 }
@@ -233,9 +257,9 @@ export async function runLoadingScreen(): Promise<void> {
   const boxRow = (screenRow: number, content: string) => {
     const vis = strip(content);
     const pad = Math.max(0, BOX_W - vis.length);
-    moveTo(screenRow, 1);
+    moveTo(screenRow, BOX_LEFT);
     eraseLine();
-    out(`${co(C.orange, '║')}${content}${' '.repeat(pad)}${co(C.orange, '║')}`);
+    out(`${co(C.orange, '│')}${content}${' '.repeat(pad)}${co(C.orange, '│')}`);
   };
 
   const render = () => {
@@ -253,8 +277,11 @@ export async function runLoadingScreen(): Promise<void> {
     const pct    = Math.floor(progress * 100);
     const spin   = co(C.yellow, SPARKLES[spinIdx % SPARKLES.length]);
 
-    moveTo(BOX_TOP_ROW, 1); eraseLine();
-    out(co(C.orange, '╔' + '═'.repeat(BOX_W) + '╗'));
+    moveTo(BOX_TOP_ROW, BOX_LEFT); eraseLine();
+    const _ltL = '─ Prometheus ─';
+    const _ltR = '─ Gateway: Starting... ─';
+    const _ltM = '─'.repeat(Math.max(0, BOX_W - _ltL.length - _ltR.length));
+    out(co(C.orange, '┌' + _ltL + _ltM + _ltR + '┐'));
 
     const torch = getTorch();
     for (let i = 0; i < TORCH_H; i++) {
@@ -263,8 +290,8 @@ export async function runLoadingScreen(): Promise<void> {
       boxRow(BOX_TOP_ROW + 1 + i, ` ${t}${' '.repeat(Math.max(0, BOX_W - 1 - vis.length))}`);
     }
 
-    moveTo(BOX_TOP_ROW + 1 + TORCH_H, 1); eraseLine();
-    out(co(C.orange, '╠' + '═'.repeat(BOX_W) + '╣'));
+    moveTo(BOX_TOP_ROW + 1 + TORCH_H, BOX_LEFT); eraseLine();
+    out(co(C.orange, '├' + '─'.repeat(BOX_W) + '┤'));
 
     const verText = ` ${spin} ${C.bold}${C.white}Prometheus Gateway v${packageJson.version}${C.reset}${C.gray} — initializing${C.reset}`;
     boxRow(BOX_TOP_ROW + 2 + TORCH_H, verText);
@@ -274,8 +301,8 @@ export async function runLoadingScreen(): Promise<void> {
     boxRow(BOX_TOP_ROW + 4 + TORCH_H, barText);
     boxRow(BOX_TOP_ROW + 5 + TORCH_H, ` ${co(C.gray, statusMessage)}`);
 
-    moveTo(BOX_TOP_ROW + 6 + TORCH_H, 1); eraseLine();
-    out(co(C.orange, '╚' + '═'.repeat(BOX_W) + '╝'));
+    moveTo(BOX_TOP_ROW + 6 + TORCH_H, BOX_LEFT); eraseLine();
+    out(co(C.orange, '└' + '─'.repeat(BOX_W) + '┘'));
   };
 
   render();
@@ -354,20 +381,25 @@ async function runWelcomePanel(opts: StatusBoardOptions): Promise<void> {
   };
 
   const drawPanel = () => {
-    moveTo(BOX_TOP_ROW, 1); eraseLine();
-    out(co(C.orange, '╔' + '─'.repeat(LEFT_W) + '┬' + '─'.repeat(RIGHT_W) + '╗'));
+    moveTo(BOX_TOP_ROW, BOX_LEFT); eraseLine();
+    {
+      const _wL   = '─ Prometheus ─';
+      const _wRvis = 21; // visible: '─ Gateway: ● Online ─' = 21 chars
+      const _wM   = '─'.repeat(Math.max(0, BOX_W - _wL.length - _wRvis));
+      out(co(C.orange, '┌' + _wL + _wM + '─ Gateway: ') + co(C.green, '●') + co(C.orange, ' Online ─┐'));
+    }
 
     for (let r = 0; r < CONTENT_ROWS; r++) {
-      moveTo(BOX_TOP_ROW + 1 + r, 1); eraseLine();
+      moveTo(BOX_TOP_ROW + 1 + r, BOX_LEFT); eraseLine();
       const lc    = leftCell(r);
       const rc    = rightCell(r);
       const lcVis = strip(lc);
       const lcPad = ' '.repeat(Math.max(0, LEFT_W - lcVis.length));
-      out(`${co(C.orange, '║')}${lc}${lcPad}${co(C.orange, '│')}${rc}${co(C.orange, '║')}`);
+      out(`${co(C.orange, '│')}${lc}${lcPad}${co(C.orange, '│')}${rc}${co(C.orange, '│')}`);
     }
 
-    moveTo(BOX_TOP_ROW + 1 + CONTENT_ROWS, 1); eraseLine();
-    out(co(C.orange, '╚' + '─'.repeat(LEFT_W) + '┴' + '─'.repeat(RIGHT_W) + '╝'));
+    moveTo(BOX_TOP_ROW + 1 + CONTENT_ROWS, BOX_LEFT); eraseLine();
+    out(co(C.orange, '└' + '─'.repeat(LEFT_W) + '┴' + '─'.repeat(RIGHT_W) + '┘'));
   };
 
   drawPanel();
@@ -380,8 +412,8 @@ async function runWelcomePanel(opts: StatusBoardOptions): Promise<void> {
       const lc    = ` ${t}${' '.repeat(Math.max(0, LEFT_W - 1 - vis.length))}`;
       const lcVis = strip(lc);
       const lcPad = ' '.repeat(Math.max(0, LEFT_W - lcVis.length));
-      moveTo(BOX_TOP_ROW + 1 + r, 1);
-      out(`${co(C.orange, '║')}${lc}${lcPad}${co(C.orange, '│')}`);
+      moveTo(BOX_TOP_ROW + 1 + r, BOX_LEFT);
+      out(`${co(C.orange, '│')}${lc}${lcPad}${co(C.orange, '│')}`);
     }
   });
 
@@ -404,6 +436,9 @@ const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '�
 let _spinTick    = 0;
 let _plan: PlanStep[] = [];
 let _planRendered = 0;
+let _linesAfterPlan = 0;
+let _planShownOnce = false;              // true after the initial plan board is printed
+let _planLastStatuses: string[] = [];    // per-step status at last onPlanUpdate render
 
 // ── History ───────────────────────────────────────────────────────────────────
 
@@ -493,8 +528,8 @@ function eraseInputBox(): void {
 
 function printPlan(): void {
   const rows: string[] = [];
-  rows.push(co(C.gray, '  ─── Plan ' + '─'.repeat(28)));
   for (const s of _plan) {
+    if (s.status === 'pending') continue; // don't show pending steps upfront
     const icon = s.status === 'done'    ? co(C.green,  '✓')
                : s.status === 'error'   ? co(C.red,    '✗')
                : s.status === 'running' ? co(C.orange, SPIN[_spinTick % SPIN.length])
@@ -502,14 +537,17 @@ function printPlan(): void {
     const label = s.status === 'running' ? co(C.white, s.label) : co(C.gray, s.label);
     rows.push(`  ${icon}  ${label}`);
   }
-  rows.push('');
+  if (rows.length) rows.push('');
   _planRendered = rows.length;
-  out(rows.join('\n') + '\n');
+  _linesAfterPlan = 0;
+  if (rows.length) out(rows.join('\n') + '\n');
 }
 
 function erasePlan(): void {
-  for (let i = 0; i < _planRendered; i++) out('\x1b[1A\x1b[2K');
+  const total = _planRendered + _linesAfterPlan;
+  for (let i = 0; i < total; i++) out('\x1b[1A\x1b[2K');
   _planRendered = 0;
+  _linesAfterPlan = 0;
 }
 
 function refreshPlan(): void {
@@ -575,7 +613,13 @@ function flushTableBuf(): void {
 
 function flushStreamRemainder(): void {
   if (_streamLine) {
-    out((_inCodeFence ? highlightCode(_streamLine, _codeFenceLang) : co(C.white, _streamLine)) + '\n');
+    if (_suppressChars) {
+      // Content was suppressed (code fence / table), not yet on screen — output it now
+      out((_inCodeFence ? highlightCode(_streamLine, _codeFenceLang) : co(C.white, _streamLine)) + '\n');
+    } else {
+      // Content was already printed char-by-char — just terminate the line
+      out('\n');
+    }
     _streamLine = '';
   }
   if (_inCodeFence) {
@@ -726,6 +770,19 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
   let   inFlight   = false;
   let   ctrlCCount = 0;
   let   ctrlCTimer: ReturnType<typeof setTimeout> | null = null;
+  let   devlogMode           = false;
+  let   queuedMessage        = '';   // message typed during in-flight, auto-loaded after response
+  let   inFlightTypingShown  = false; // one-shot "typing buffered" notice per turn
+  let   inFlightBoxActive    = false; // true while the buffered-input box is on screen during in-flight
+
+  // ── Approval dialog state ────────────────────────────────────────────────────
+  let approvalActive    = false;
+  let approvalSelected  = 0;
+  let approvalLines     = 0;
+  let approvalData: any = null;
+  let approvalOnDone: ((decision: string, scope?: string) => void) | null = null;
+  let approvalPollTimer: ReturnType<typeof setInterval> | null = null;
+  const approvalHandledIds = new Set<string>();
 
   // ── Input state ─────────────────────────────────────────────────────────────
   let lineBuffer       = '';   // current line being typed
@@ -771,6 +828,162 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.setEncoding('utf8');
+
+  // ── Approval helpers ──────────────────────────────────────────────────────────
+
+  function approvalCanSave(a: any): boolean {
+    const kind = String(a.approvalKind || '');
+    const tool = String(a.toolName || '');
+    return kind !== 'dev_source_edit' && kind !== 'final_action'
+      && tool !== 'request_dev_source_edit' && tool !== 'request_final_action_approval'
+      && !!a.commandPermissionCandidate;
+  }
+
+  function drawApprovalDialog(selected: number): number {
+    const a   = approvalData;
+    if (!a) return 0;
+    const W   = Math.min(66, cols() - 8);
+    const canSave = approvalCanSave(a);
+    const opts = canSave
+      ? ['Yes', "Yes, and don't ask again", 'No']
+      : ['Yes', 'No'];
+
+    const lines: string[] = [];
+    lines.push('');
+
+    const kindLabel: Record<string, string> = {
+      command:         'Shell command',
+      tool:            'Tool action',
+      dev_source_edit: 'Source code edit',
+      final_action:    'Final action',
+    };
+    lines.push(`  ${co(C.orange, kindLabel[String(a.approvalKind || '')] || String(a.toolName || 'Action'))}`);
+    lines.push('');
+
+    for (const l of String(a.action || a.summary || '').split('\n').slice(0, 6))
+      lines.push(`  ${co(C.white, l.slice(0, W))}`);
+
+    const reason = String(a.reason || '').trim();
+    if (reason) {
+      lines.push('');
+      for (const l of reason.split('\n').slice(0, 3))
+        if (l.trim()) lines.push(`  ${co(C.gray, l.slice(0, W))}`);
+    }
+
+    const risk     = Number(a.riskScore || 0);
+    const boundary = String(a.commandBoundary?.scope || (a.affectedSystems || [])[0] || '');
+    if (risk > 0 || boundary) {
+      const rColor = risk > 7 ? C.red : risk > 4 ? C.amber : C.gray;
+      const parts  = [];
+      if (risk > 0) parts.push(co(rColor, `Risk: ${risk}/10`));
+      if (boundary) parts.push(co(C.gray, boundary));
+      lines.push('');
+      lines.push('  ' + parts.join(co(C.gray, ' · ')));
+    }
+
+    lines.push('');
+    lines.push(`  ${co(C.white, 'Do you want to proceed?')}`);
+    opts.forEach((opt, i) => {
+      const active = i === selected;
+      lines.push(`  ${active ? co(C.orange, '❯') : ' '} ${active ? co(C.white, `${i + 1}. ${opt}`) : co(C.gray, `${i + 1}. ${opt}`)}`);
+    });
+    lines.push('');
+    lines.push(`  ${co(C.gray, '↑↓ navigate · Enter select · Esc to deny')}`);
+    lines.push('');
+
+    for (const l of lines) out(l + '\n');
+    return lines.length;
+  }
+
+  function redrawApprovalDialog(selected: number): void {
+    for (let i = 0; i < approvalLines; i++) out('\x1b[1A\x1b[2K');
+    approvalLines = drawApprovalDialog(selected);
+  }
+
+  function handleApprovalKey(key: string): void {
+    if (!approvalActive || !approvalData || !approvalOnDone) return;
+    const canSave  = approvalCanSave(approvalData);
+    const optCount = canSave ? 3 : 2;
+
+    if (key === '\x1b[A') {
+      approvalSelected = (approvalSelected - 1 + optCount) % optCount;
+      redrawApprovalDialog(approvalSelected);
+    } else if (key === '\x1b[B') {
+      approvalSelected = (approvalSelected + 1) % optCount;
+      redrawApprovalDialog(approvalSelected);
+    } else if (key === '1') { approvalSelected = 0; redrawApprovalDialog(0);
+    } else if (key === '2') { approvalSelected = 1; redrawApprovalDialog(1);
+    } else if (key === '3' && canSave) { approvalSelected = 2; redrawApprovalDialog(2);
+    } else if (key === '\r' || key === '\n') {
+      const sel = approvalSelected;
+      const done = approvalOnDone;
+      approvalActive = false; approvalData = null; approvalOnDone = null;
+      if (canSave) {
+        if (sel === 0)      done('approved');
+        else if (sel === 1) done('approved', 'always');
+        else                done('rejected');
+      } else {
+        done(sel === 0 ? 'approved' : 'rejected');
+      }
+    } else if (key === '\x1b' || key === '\x03') {
+      const done = approvalOnDone;
+      approvalActive = false; approvalData = null; approvalOnDone = null;
+      done('rejected');
+    }
+  }
+
+  function showApprovalInline(approval: any): void {
+    hideThinkingSpinner();
+    flushStreamRemainder();
+    approvalData     = approval;
+    approvalSelected = 0;
+    approvalActive   = true;
+    const hrWidth = Math.max(20, cols() - 4);
+    out(`\n${co(C.gray, '  ' + '─'.repeat(hrWidth))}\n`);
+    out(`  ${co(C.amber, '⚠')}  ${co(C.amber, 'Approval required — AI is paused')}\n`);
+    approvalLines = drawApprovalDialog(0);
+
+    approvalOnDone = async (decision: string, grantScope?: string) => {
+      const label = decision === 'approved'
+        ? co(C.green, '✓ Approved') + (grantScope === 'always' ? co(C.gray, ' — saved as always-allow') : '')
+        : co(C.red, '✗ Denied');
+      out(`  ${label}\n\n`);
+      try {
+        const body: any = { decision };
+        if (grantScope) body.grantScope = grantScope;
+        await httpPost(`${url}/api/approvals/${encodeURIComponent(approval.id)}`, body);
+      } catch (e: any) {
+        out(co(C.red, `  ✗ Could not send decision: ${e.message || e}\n`));
+      }
+    };
+  }
+
+  function startApprovalPoll(): void {
+    if (approvalPollTimer) return;
+    approvalPollTimer = setInterval(async () => {
+      if (!inFlight || approvalActive) return;
+      try {
+        const raw  = await httpGet(`${url}/api/approvals?status=pending`);
+        const data = JSON.parse(raw) as any;
+        const list: any[] = data.approvals || [];
+        const pending = list.find(a =>
+          !approvalHandledIds.has(String(a.id)) &&
+          (!a.sessionId || a.sessionId === sessionId || a.sourceSessionId === sessionId),
+        );
+        if (pending) {
+          approvalHandledIds.add(String(pending.id));
+          showApprovalInline(pending);
+        }
+      } catch { /* non-fatal */ }
+    }, 1500);
+    (approvalPollTimer as any).unref?.();
+  }
+
+  function stopApprovalPoll(): void {
+    if (approvalPollTimer) { clearInterval(approvalPollTimer); approvalPollTimer = null; }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const cleanup = () => {
     clearInterval(spinTimer);
@@ -1174,6 +1387,23 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
           break;
         }
 
+        case 'devlog': {
+          if (!isDevMode()) {
+            out(co(C.red, '  /devlog is only available in dev mode\n'));
+            break;
+          }
+          devlogMode = true;
+          const devLogs = getStartupLogs();
+          out('\n' + co(C.orange, '  ─── Startup Logs (full) ') + co(C.gray, '─'.repeat(21)) + '\n');
+          if (!devLogs.length) out(co(C.gray, '  (none captured)\n'));
+          else devLogs.forEach(l => out(co(C.gray, '  ' + l + '\n')));
+          out('\n');
+          out(co(C.yellow, '  ┌─ DEV LOG MODE ──────────────────────────────────────────┐') + '\n');
+          out(co(C.yellow, '  │  Every SSE event + gateway log printed during chat.     │') + '\n');
+          out(co(C.yellow, '  └──────────────────────────────────────────────────────────┘') + '\n\n');
+          break;
+        }
+
         case 'open': {
           const { exec } = require('child_process') as typeof import('child_process');
           const opener = process.platform === 'win32' ? 'start' : process.platform === 'darwin' ? 'open' : 'xdg-open';
@@ -1308,8 +1538,10 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
 
     // ── Chat request ──────────────────────────────────────────────────────────
     if (inFlight) {
-      out(co(C.gray, '  (request in progress — Ctrl+C to cancel)\n\n'));
-      drawInputBox(opts.model, lineBuffer, cursorPos, multiLinePending.length);
+      queuedMessage = text;
+      lineBuffer = ''; cursorPos = 0; multiLinePending = [];
+      inFlightTypingShown = false;
+      out(co(C.gray, '  ✉  Queued — will send after this response\n'));
       return;
     }
 
@@ -1319,10 +1551,14 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
     historySnap = '';
 
     inFlight = true;
+    startApprovalPoll();
     ctrlCCount = 0;
     abort = { aborted: false };
     _plan = [];
     _planRendered = 0;
+    _linesAfterPlan = 0;
+    _planShownOnce = false;
+    _planLastStatuses = [];
     resetStreamState();
 
     if (!sessionRegistered) {
@@ -1340,14 +1576,25 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
     }
     out(`\n  ${co(C.orange, 'Prometheus 🔥:')}\n`);
 
+    if (devlogMode) {
+      const hrFill = '─'.repeat(Math.max(0, cols() - 38));
+      out(co(C.gray, `  ─── TURN ${new Date().toISOString()} ${hrFill}\n`));
+      setDevlogLiveCallback(line => out(co(C.gray, `  [GW] ${line}\n`)));
+    }
+
     showThinkingSpinner();
 
     let responsePrinted = false;
     let responseAccum   = '';
 
     try {
+      const eraseInFlightBox = () => {
+        if (inFlightBoxActive) { eraseInputBox(); inFlightBoxActive = false; }
+      };
+
       await streamChat(url, sessionId, text, abort, {
         onToken: (tok) => {
+          eraseInFlightBox();
           if (!responsePrinted) {
             hideThinkingSpinner();
             responsePrinted = true;
@@ -1357,6 +1604,7 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
           for (const ch of tok) processStreamChar(ch);
         },
         onToolCall: (name, rawArgs) => {
+          eraseInFlightBox();
           hideThinkingSpinner();
           flushStreamRemainder();
           // Extract a meaningful detail snippet from raw args JSON
@@ -1364,23 +1612,39 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
           if (rawArgs) {
             try {
               const a = JSON.parse(rawArgs);
-              const info = a.path || a.file_path || a.url || a.query || a.command
-                        || a.selector || a.pattern || a.text || a.name || '';
-              if (info) detail = co(C.gray, ' — ' + String(info).replace(/\n/g, ' ').slice(0, 55));
+              const info = a.filename || a.path || a.file_path || a.url || a.query
+                        || a.command || a.selector || a.pattern || a.text || a.name || '';
+              if (info) detail = co(C.mgray, '(' + String(info).replace(/\n/g, ' ').slice(0, 60) + ')');
             } catch { /* ignore */ }
           }
-          out(`\n  ${co(C.gray, '⟳')} ${co(C.gray, prettify(name))}${detail}\n`);
+          out(`\n  ${co(C.orange, '●')} ${co(C.white, prettify(name))}${detail ? ' ' + detail : ''}\n`);
+          // Track lines appended below the plan so erasePlan reaches the right row
+          if (_planRendered > 0) _linesAfterPlan += 2; // leading \n + tool line
           resetStreamState();
         },
-        onToolResult: (name, isErr) => {
-          out('\x1b[1A\x1b[2K');
-          out(`  ${isErr ? co(C.red, '✗') : co(C.green, '✓')} ${co(C.gray, prettify(name))}\n`);
+        onToolResult: (_name, isErr, result) => {
+          eraseInFlightBox();
+          const icon    = isErr ? co(C.red, '✗') : co(C.green, '✓');
+          const snippet = result
+            ? co(C.mgray, ' ' + result.replace(/\n/g, ' ').replace(/\s+/g, ' ').slice(0, 72))
+            : '';
+          out(`  ${co(C.gray, '└')}  ${icon}${snippet}\n`);
         },
         onPlanUpdate: () => {
-          if (_planRendered > 0) erasePlan();
-          printPlan();
+          if (!_planShownOnce) {
+            // Print the plan board once as a persistent header
+            printPlan();
+            _planRendered = 0;       // prevent spinner from doing in-place refresh
+            _linesAfterPlan = 0;
+            _planShownOnce = true;
+            _planLastStatuses = _plan.map(s => s.status);
+            return;
+          }
+          // Suppress plan step labels — tool calls (● / L) convey the same info.
+          _planLastStatuses = _plan.map(s => s.status);
         },
         onFinal: (finalText) => {
+          eraseInFlightBox();
           if (!responsePrinted && finalText) {
             hideThinkingSpinner();
             responsePrinted = true;
@@ -1394,10 +1658,30 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
         },
         onDone: () => {},
         onError: (msg) => {
+          eraseInFlightBox();
           hideThinkingSpinner();
           flushStreamRemainder();
           out('\n' + co(C.red, `  ✗ ${msg}`) + '\n');
         },
+        onRawEvent: devlogMode ? (type, raw) => {
+          // Skip streaming-text events — they're already visible as flowing output
+          if (type === 'token' || type === 'model_stream_event') return;
+          const DEV_COLORS: Record<string, string> = {
+            tool_call:      '\x1b[38;2;100;180;255m',
+            tool_result:    C.green,
+            thinking_delta: '\x1b[35m',
+            progress_state: C.orange,
+            ui_preflight:   C.gray,
+            info:           C.gray,
+            final:          '\x1b[96m',
+            done:           '\x1b[96m',
+            error:          C.red,
+          };
+          const color   = DEV_COLORS[type] ?? C.gray;
+          const label   = `[${type.toUpperCase()}]`.padEnd(22);
+          const payload = ' ' + JSON.stringify(raw).slice(0, 240);
+          out(co(color, `\n  ${label}${payload}\n`));
+        } : undefined,
       });
     } catch (e: any) {
       hideThinkingSpinner();
@@ -1406,15 +1690,28 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
         out('\n' + co(C.red, `  Error: ${e.message || e}`) + '\n');
       }
     } finally {
+      stopApprovalPoll();
+      if (devlogMode) setDevlogLiveCallback(null);
       hideThinkingSpinner();
       flushStreamRemainder();
       resetStreamState();
       inFlight = false;
       if (responseAccum) _lastResponse = responseAccum; // save for Ctrl+Y
-      if (_planRendered > 0) erasePlan();
+      // Plan display stays on screen as permanent turn history — just reset state
       _plan = [];
+      _planRendered = 0;
+      _linesAfterPlan = 0;
+      _planShownOnce = false;
+      _planLastStatuses = [];
+      inFlightTypingShown = false;
+      inFlightBoxActive   = false;
       if (responsePrinted) out('\n');
       out('\n');
+      if (queuedMessage) {
+        lineBuffer = queuedMessage;
+        cursorPos = lineBuffer.length;
+        queuedMessage = '';
+      }
       drawInputBox(opts.model, lineBuffer, cursorPos, multiLinePending.length);
     }
   };
@@ -1424,16 +1721,28 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
   const onKey = (chunk: string | Buffer) => {
     const key = chunk.toString();
 
+    // ── Approval dialog takes priority ───────────────────────────────────────
+    if (approvalActive) {
+      handleApprovalKey(key);
+      return;
+    }
+
     // ── Ctrl+C ──────────────────────────────────────────────────────────────
     if (key === '\x03') {
       if (inFlight) {
         abort.aborted = true;
         inFlight = false;
+        stopApprovalPoll();
+        approvalActive = false; approvalData = null; approvalOnDone = null;
+        if (inFlightBoxActive) { eraseInputBox(); inFlightBoxActive = false; }
         hideThinkingSpinner();
         flushStreamRemainder();
         resetStreamState();
-        if (_planRendered > 0) erasePlan();
         _plan = [];
+        _planRendered = 0;
+        _linesAfterPlan = 0;
+        _planShownOnce = false;
+        _planLastStatuses = [];
         out('\n' + co(C.gray, '  Cancelled.\n\n'));
         drawInputBox(opts.model, lineBuffer, cursorPos, multiLinePending.length);
         return;
@@ -1468,6 +1777,47 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
       eraseInputBox();
       out(co(C.gray, '  Multiline cancelled.\n\n'));
       drawInputBox(opts.model, lineBuffer, cursorPos, 0);
+      return;
+    }
+
+    // ── In-flight: show buffered-input box, queue on Enter ───────────────────
+    if (inFlight) {
+      if (key === '\r' || key === '\n') {
+        const fullText = multiLinePending.length > 0
+          ? [...multiLinePending, lineBuffer].join('\n')
+          : lineBuffer;
+        if (fullText.trim()) {
+          if (inFlightBoxActive) { eraseInputBox(); inFlightBoxActive = false; }
+          queuedMessage = fullText.trim();
+          lineBuffer = ''; cursorPos = 0; multiLinePending = []; historyIdx = -1;
+          inFlightTypingShown = false;
+          out(co(C.gray, '\n  ✉  Queued — will send after this response\n'));
+        }
+        return;
+      }
+      if (key === '\x7f' || key === '\b') {
+        if (cursorPos > 0) {
+          lineBuffer = lineBuffer.slice(0, cursorPos - 1) + lineBuffer.slice(cursorPos);
+          cursorPos--; historyIdx = -1;
+          if (inFlightBoxActive) { eraseInputBox(); drawInputBox(opts.model, lineBuffer, cursorPos, 0); }
+        }
+        return;
+      }
+      if (key >= ' ') {
+        lineBuffer = lineBuffer.slice(0, cursorPos) + key + lineBuffer.slice(cursorPos);
+        cursorPos += key.length; historyIdx = -1;
+        if (!inFlightBoxActive) {
+          if (!inFlightTypingShown) {
+            out(co(C.gray, '\n  ⌨  Type your message below — Enter to queue\n'));
+            inFlightTypingShown = true;
+          }
+          drawInputBox(opts.model, lineBuffer, cursorPos, 0);
+          inFlightBoxActive = true;
+        } else {
+          eraseInputBox();
+          drawInputBox(opts.model, lineBuffer, cursorPos, 0);
+        }
+      }
       return;
     }
 
@@ -1841,11 +2191,12 @@ function startNotifListener(url: string): void {
 interface CB {
   onToken:      (tok: string) => void;
   onToolCall:   (name: string, args: string) => void;
-  onToolResult: (name: string, isErr: boolean) => void;
+  onToolResult: (name: string, isErr: boolean, result: string) => void;
   onPlanUpdate: () => void;
   onFinal:      (text: string) => void;
   onDone:       () => void;
   onError:      (msg: string) => void;
+  onRawEvent?:  (type: string, raw: Record<string, unknown>) => void;
 }
 
 function streamChat(
@@ -1894,6 +2245,8 @@ function streamChat(
           try { e = JSON.parse(dl.slice(5).trim()); } catch { continue; }
           if (!e?.type) continue;
 
+          cb.onRawEvent?.(e.type, e);
+
           switch (e.type) {
             case 'token': {
               const t = String(e.text || e.token || '');
@@ -1908,7 +2261,7 @@ function streamChat(
               break;
             }
             case 'tool_result': {
-              cb.onToolResult(String(e.action || ''), !!e.error);
+              cb.onToolResult(String(e.action || ''), !!e.error, String(e.result || ''));
               break;
             }
             case 'progress_state': {
@@ -1916,10 +2269,11 @@ function streamChat(
               if (items.length >= 1) {
                 _plan = items.map((it: any) => ({
                   id:     String(it.id || it.label || Math.random()),
-                  label:  String(it.label || it.title || it.name || 'Step'),
-                  status: it.status === 'done'    ? 'done'
-                        : it.status === 'running' ? 'running'
-                        : it.status === 'error'   ? 'error'
+                  label:  String(it.text || it.label || it.title || it.name || 'Step'),
+                  status: it.status === 'done'        ? 'done'
+                        : it.status === 'in_progress' ? 'running'
+                        : it.status === 'running'     ? 'running'
+                        : it.status === 'error'       ? 'error'
                         : 'pending',
                 }));
                 cb.onPlanUpdate();
@@ -3330,37 +3684,90 @@ function showHistorySearch(
 
 function prettify(name: string): string {
   const M: Record<string, string> = {
+    // File ops
     read_file:          'Reading file',
     create_file:        'Creating file',
     find_replace:       'Editing file',
     replace_lines:      'Editing file',
+    insert_after:       'Editing file',
+    delete_lines:       'Editing file',
+    apply_patch:        'Applying patch',
     delete_file:        'Deleting file',
     list_files:         'Listing files',
+    list_directory:     'Listing directory',
+    file_stats:         'File stats',
+    // Search
+    grep_file:          'Searching file',
+    grep_files:         'Searching files',
+    search_files:       'Searching files',
+    // Web
     web_search:         'Searching web',
     web_fetch:          'Fetching URL',
+    // Skills
+    skill_list:         'Searching skills',
+    skill_read:         'Reading skill',
+    skill_create:       'Creating skill',
+    // Memory
     memory_read:        'Reading memory',
     memory_write:       'Writing memory',
     memory_browse:      'Browsing memory',
-    write_note:         'Writing note',
+    memory_search:      'Searching memory',
+    memory_read_record: 'Reading memory',
+    // Shell / commands
     run_command:        'Running command',
+    shell:              'Running shell',
+    write_note:         'Writing note',
+    // Browser
     browser_open:       'Opening browser',
     browser_snapshot:   'Browser snapshot',
     browser_click:      'Browser click',
     browser_fill:       'Browser fill',
+    browser_type:       'Browser type',
+    browser_scroll:     'Browser scroll',
+    browser_run_js:     'Browser JS',
+    // Desktop
     desktop_screenshot: 'Desktop screenshot',
     desktop_click:      'Desktop click',
     desktop_type:       'Desktop type',
+    desktop_find_window:'Finding window',
+    desktop_launch_app: 'Launching app',
+    desktop_list_apps:      'Listing apps',
+    desktop_list_windows:   'Listing windows',
+    desktop_get_window_state:'Window state',
+    desktop_window_click:   'Window click',
+    desktop_window_type:    'Window type',
+    desktop_window_press_key:'Window key',
+    desktop_window_scroll:  'Window scroll',
+    desktop_window_drag:    'Window drag',
+    // Agents / orchestration
     declare_plan:       'Declaring plan',
     complete_plan_step: 'Completing step',
+    step_complete:      'Step complete',
     background_spawn:   'Spawning agent',
     background_status:  'Checking agents',
+    background_progress:'Agent progress',
+    background_join:    'Joining agent',
     background_wait:    'Waiting for agents',
+    dispatch_team_agent:'Dispatching agent',
+    talk_to_subagent:   'Talking to agent',
+    // Creative / media
+    generate_image:     'Generating image',
+    analyze_image:      'Analyzing image',
+    download_url:       'Downloading',
+    // System
     write_proposal:     'Writing proposal',
     task_control:       'Task control',
     schedule_job:       'Scheduling job',
     send_telegram:      'Sending Telegram',
+    switch_model:       'Switching model',
+    gateway_restart:    'Restarting gateway',
+    time_now:           'Checking time',
+    context_compaction: 'Compacting context',
   };
-  return M[name] ?? name.replace(/_/g, ' ');
+  const m = M[name];
+  if (m) return m;
+  // Generic fallback: snake_case → Title Case
+  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 // ─── Legacy exports ───────────────────────────────────────────────────────────

@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "id": "desktop-automation-playbook",
+  "name": "Desktop Automation Playbook",
+  "description": "Current operating guide for Prometheus desktop automation on Windows. Covers screenshot-first execution, window targeting, UI Automation availability fallbacks, precise clicking, scrolling, typing, app launch/recovery, verification, foreground/background limits, macros when available, and when to use desktop tools versus browser or shell tools.",
+  "version": "4.4.0",
+  "triggers": [
+    "desktop",
+    "desktop_screenshot",
+    "desktop_window_screenshot",
+    "desktop_window_control",
+    "desktop_click",
+    "desktop_drag",
+    "desktop_scroll",
+    "desktop_type",
+    "desktop_type_raw",
+    "desktop_press_key",
+    "desktop_find_window",
+    "desktop_focus_window",
+    "desktop_get_accessibility_tree",
+    "desktop_get_window_text",
+    "desktop_get_monitors",
+    "desktop_find_installed_app",
+    "desktop_list_installed_apps",
+    "desktop_launch_app",
+    "desktop_send_to_telegram",
+    "desktop_wait_for_change",
+    "desktop_pixel_watch",
+    "desktop_record_macro",
+    "desktop_replay_macro",
+    "click screen",
+    "type into app",
+    "open app",
+    "find installed app",
+    "launch app by app_id",
+    "automate desktop",
+    "GUI automation",
+    "windows automation",
+    "mouse click",
+    "screenshot anchored click",
+    "coordinate_space",
+    "maximize window",
+    "restore window",
+    "minimize window",
+    "desktop stress test",
+    "desktop tool test",
+    "File Explorer fallback",
+    "stale screenshot recovery",
+    "foreground-only desktop"
+  ],
+  "categories": [
+    "desktop",
+    "automation",
+    "windows",
+    "gui",
+    "playbook"
+  ],
+  "requiredTools": [
+    "desktop_automation"
+  ],
+  "permissions": {
+    "desktop": true,
+    "externalSideEffects": false,
+    "notes": "Foreground desktop tools move/focus/click/type on the user's real Windows desktop unless a background worker is configured. Avoid destructive app actions unless explicitly requested."
+  },
+  "resources": [
+    {
+      "path": "examples/desktop-stress-test-findings-2026-05-24.md",
+      "type": "example",
+      "description": "Real 2026-05-24 Windows desktop stress-test findings, recovery paths, and safe future recipe."
+    }
+  ]
+}

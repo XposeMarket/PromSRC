@@ -204,6 +204,7 @@ function setSettingsTab(tab) {
         });
         if (t === 'integrations') loadIntegrationsTab();
         if (t === 'credentials') loadCredentialsTab();
+        if (t === 'security') loadSecuritySettings();
         if (t === 'migration') loadMigrationPanel();
         if (t === 'shortcuts') loadShortcutsPanel();
         if (t === 'pairing')   loadPairingPanel();
@@ -271,6 +272,7 @@ async function loadHeartbeatSettings(showStatus = false) {
     window.heartbeatSettingsLoaded = true;
     applyHeartbeatSettingsToForm(window.heartbeatSettingsCache);
     updateBgtHeartbeatLabel();
+    loadSubagentHeartbeatList().catch(() => {});
     if (showStatus && statusEl) statusEl.textContent = 'Reloaded from server.';
   } catch (err) {
     if (statusEl) statusEl.textContent = `Failed to load: ${err.message}`;
@@ -321,6 +323,7 @@ async function saveHeartbeatSettings() {
     window.heartbeatSettingsLoaded = true;
     applyHeartbeatSettingsToForm(window.heartbeatSettingsCache);
     updateBgtHeartbeatLabel();
+    loadSubagentHeartbeatList().catch(() => {});
     if (statusEl) statusEl.textContent = 'Saved.';
     addProcessEntry('final', 'Heartbeat settings saved.');
   } catch (err) {
@@ -381,6 +384,7 @@ async function updateSubagentHb(agentId, partial) {
       body: JSON.stringify(partial),
     });
     addProcessEntry('info', `Heartbeat updated for "${agentId}".`);
+    loadSubagentHeartbeatList().catch(() => {});
   } catch (err) {
     addProcessEntry('error', `Heartbeat update failed: ${err.message}`);
   }
@@ -390,6 +394,7 @@ async function tickSubagentHb(agentId) {
   try {
     await api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}/tick`, { method: 'POST' });
     addProcessEntry('info', `Heartbeat tick triggered for "${agentId}".`);
+    loadSubagentHeartbeatList().catch(() => {});
   } catch (err) {
     addProcessEntry('error', `Tick failed: ${err.message}`);
   }
@@ -601,7 +606,7 @@ const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'ope
 const BUILTIN_STATIC_MODEL_FALLBACKS = {
   openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic: ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
@@ -1058,9 +1063,12 @@ async function loadModelSettings() {
     v('settings-openai-key',        pc.openai?.api_key);
     if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
     { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
+    { const s = document.getElementById('settings-openai-tool-choice'); if (s) s.value = pc.openai?.tool_choice || 'required'; }
     if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
     { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex?.reasoning_effort || ''; }
+    { const s = document.getElementById('settings-codex-tool-choice'); if (s) s.value = pc.openai_codex?.tool_choice || 'auto'; }
     if (pc.anthropic?.model) { const s = document.getElementById('settings-anthropic-model'); if (s) s.value = pc.anthropic.model; }
+    { const s = document.getElementById('settings-anthropic-effort'); if (s) s.value = pc.anthropic?.reasoning_effort || ''; }
     v('settings-perplexity-key',    pc.perplexity?.api_key);
     if (pc.perplexity?.model) { const s = document.getElementById('settings-perplexity-model'); if (s) s.value = pc.perplexity.model; }
     { const s = document.getElementById('settings-perplexity-effort'); if (s) s.value = pc.perplexity?.reasoning_effort || ''; }
@@ -1077,6 +1085,7 @@ async function loadModelSettings() {
         const sel = document.getElementById('settings-anthropic-thinking-budget');
         if (sel) sel.value = String(pc.anthropic.thinking_budget);
       }
+      syncAnthropicReasoningControls();
     }
 
     getProviderCatalogItems()
@@ -1122,9 +1131,145 @@ async function loadSessionCompactionSettings() {
     if (toolsEl) toolsEl.value = String(Number(s.rollingCompactionToolTurns) || 5);
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
+    renderContextBudgetSummary(s.contextProfile, s.contextBudget, s);
   } catch (e) {
     console.warn('loadSessionCompactionSettings error:', e);
   }
+}
+
+function formatTokenCount(n) {
+  const value = Number(n);
+  if (!Number.isFinite(value) || value <= 0) return 'unknown';
+  if (value >= 1000000) return `${(value / 1000000).toFixed(value >= 10000000 ? 0 : 1)}M`;
+  if (value >= 1000) return `${Math.round(value / 1000)}k`;
+  return String(Math.round(value));
+}
+
+function renderContextBudgetSummary(profile, budget, session) {
+  const wrap = document.getElementById('settings-context-budget-summary');
+  if (!wrap) return;
+  const p = profile || {};
+  const b = budget || {};
+  const enabled = session?.rollingCompactionEnabled !== false;
+  const sourceKey = String(p.source || '').trim();
+  const sourceLabels = {
+    provider_metadata: 'provider-reported metadata',
+    config_override: 'manual config override',
+    known_table: 'known model profile',
+    ollama_num_ctx: 'Ollama num_ctx',
+    fallback: 'fallback estimate',
+  };
+  const source = sourceLabels[sourceKey] || 'unknown estimate';
+  wrap.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Primary model</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text);overflow-wrap:anywhere;margin-top:3px">${escHtml(p.providerId || 'provider')}/${escHtml(p.model || 'model')}</div>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Context window</div>
+        <div style="font-size:13px;font-weight:800;color:var(--text);margin-top:3px">${escHtml(formatTokenCount(p.contextWindowTokens))} tokens</div>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Compaction trigger</div>
+        <div style="font-size:13px;font-weight:800;color:var(--text);margin-top:3px">${escHtml(formatTokenCount(b.compactionTriggerTokens))} input tokens</div>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Tool budget</div>
+        <div style="font-size:13px;font-weight:800;color:var(--text);margin-top:3px">${escHtml(formatTokenCount(b.toolContextBudgetTokens))} tokens</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);line-height:1.55;margin-top:10px">
+      ${enabled ? 'Prometheus automatically compacts between tool rounds when the active model approaches its usable input budget.' : 'Automatic context compaction is disabled.'}
+      Window source: ${escHtml(source)}. Token counts are estimated before each model call and calibrated by provider usage where available.
+    </div>
+  `;
+}
+
+function renderCommandPermissionGrants(grants) {
+  const el = document.getElementById('settings-command-permissions-list');
+  if (!el) return;
+  const always = (Array.isArray(grants) ? grants : []).filter(g => String(g.scope || '') === 'always' && String(g.toolName || '') === 'run_command');
+  if (!always.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:10px;border:1px dashed var(--line);border-radius:8px">No always-allowed commands yet.</div>';
+    return;
+  }
+  el.innerHTML = always.map((grant) => {
+    const created = grant.createdAt ? new Date(grant.createdAt).toLocaleString() : 'unknown';
+    const used = grant.lastUsedAt ? new Date(grant.lastUsedAt).toLocaleString() : 'never';
+    const command = grant.commandDisplay || grant.actionDisplay || grant.toolName || 'command';
+    const cwd = grant.cwdDisplay || grant.targetDisplay || '';
+    const boundary = grant.boundaryScope && grant.boundaryScope !== 'workspace' ? String(grant.boundaryScope).replace(/_/g, ' ') : '';
+    const externalPaths = Array.isArray(grant.externalPaths) ? grant.externalPaths.filter(Boolean) : [];
+    return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--panel-2)">
+      <div style="display:flex;align-items:flex-start;gap:10px;justify-content:space-between">
+        <div style="min-width:0;flex:1">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text);overflow-wrap:anywhere">${escHtml(command)}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:5px;overflow-wrap:anywhere">cwd: ${escHtml(cwd || '-')}</div>
+          ${boundary ? `<div style="font-size:11px;color:#9a5b00;margin-top:5px;overflow-wrap:anywhere">boundary: ${escHtml(boundary)}${externalPaths.length ? ` · ${escHtml(externalPaths.slice(0, 2).join(', '))}` : ''}</div>` : ''}
+          <div style="font-size:10.5px;color:var(--muted);margin-top:4px">created: ${escHtml(created)} · used: ${escHtml(used)} · ${Number(grant.useCount || 0)} use(s)</div>
+        </div>
+        <button class="btn btn-sm" onclick="revokeCommandPermission('${escHtml(grant.id)}')" style="background:#fff;color:#b91c1c;border:1px solid #fecaca;flex-shrink:0">Remove</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadSecuritySettings() {
+  const statusEl = document.getElementById('settings-security-status');
+  try {
+    if (statusEl) statusEl.textContent = 'Loading...';
+    const data = await api('/api/settings/security', { timeoutMs: 5000 });
+    const mode = data?.terminalPermissionMode === 'lite' ? 'lite' : 'default';
+    const defaultEl = document.getElementById('settings-terminal-permission-default');
+    const liteEl = document.getElementById('settings-terminal-permission-lite');
+    if (defaultEl) defaultEl.checked = mode === 'default';
+    if (liteEl) liteEl.checked = mode === 'lite';
+    const hardEl = document.getElementById('settings-hard-blocked-patterns');
+    if (hardEl) hardEl.textContent = (data?.hardBlockedPatterns || []).join(', ') || 'none configured';
+    renderCommandPermissionGrants(data?.commandPermissions || []);
+    if (statusEl) statusEl.textContent = '';
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Failed to load security settings: ${err.message}`;
+  }
+}
+
+function getTerminalPermissionModeFromUI() {
+  return document.getElementById('settings-terminal-permission-lite')?.checked ? 'lite' : 'default';
+}
+
+async function saveSecuritySettings({ showStatus = false } = {}) {
+  const statusEl = document.getElementById('settings-security-status');
+  try {
+    if (showStatus && statusEl) statusEl.textContent = 'Saving...';
+    const data = await api('/api/settings/security', {
+      method: 'POST',
+      body: JSON.stringify({ terminalPermissionMode: getTerminalPermissionModeFromUI() }),
+    });
+    if (!data?.success) throw new Error(data?.error || 'Failed to save security settings');
+    if (showStatus && statusEl) statusEl.textContent = 'Saved.';
+    return data;
+  } catch (err) {
+    if (showStatus && statusEl) statusEl.textContent = `Save failed: ${err.message}`;
+    throw err;
+  }
+}
+
+async function revokeCommandPermission(id) {
+  showConfirm(
+    'Prometheus will ask again the next time this exact command and cwd are used.',
+    async () => {
+      try {
+        await api(`/api/command-permissions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        addProcessEntry('info', 'Always-allowed command removed.');
+        await loadSecuritySettings();
+      } catch (err) {
+        addProcessEntry('error', `Could not remove command permission: ${err.message}`);
+      }
+    },
+    null,
+    { title: 'Remove this always-allowed command?', confirmText: 'Remove', danger: true },
+  );
 }
 
 async function refreshProviderModels(providerOverride) {
@@ -1237,18 +1382,25 @@ function buildProviderPayload(providerOverride) {
   providers.llama_cpp = { endpoint: document.getElementById('settings-llamacpp-endpoint')?.value || 'http://localhost:8080',  model: document.getElementById('settings-llamacpp-model')?.value  || '' };
   providers.lm_studio = { endpoint: document.getElementById('settings-lmstudio-endpoint')?.value || 'http://localhost:1234',  model: document.getElementById('settings-lmstudio-model')?.value   || '' };
   const openaiEffort = document.getElementById('settings-openai-effort')?.value || '';
+  const openaiToolChoice = document.getElementById('settings-openai-tool-choice')?.value || 'required';
   providers.openai    = { api_key:  document.getElementById('settings-openai-key')?.value         || '',                       model: document.getElementById('settings-openai-model')?.value      || 'gpt-4o' };
   if (openaiEffort) providers.openai.reasoning_effort = openaiEffort;
+  providers.openai.tool_choice = openaiToolChoice;
   const codexEffort = document.getElementById('settings-codex-effort')?.value || '';
+  const codexToolChoice = document.getElementById('settings-codex-tool-choice')?.value || 'auto';
   providers.openai_codex = { model: document.getElementById('settings-codex-model')?.value         || 'gpt-5.4-codex' };
   if (codexEffort) providers.openai_codex.reasoning_effort = codexEffort;
+  providers.openai_codex.tool_choice = codexToolChoice;
   const anthropicExtThinking = document.getElementById('settings-anthropic-extended-thinking')?.checked || false;
   const anthropicBudget = parseInt(document.getElementById('settings-anthropic-thinking-budget')?.value || '10000', 10);
+  const anthropicEffortEl = document.getElementById('settings-anthropic-effort');
+  const anthropicEffort = anthropicEffortEl?.disabled ? '' : (anthropicEffortEl?.value || '');
   providers.anthropic = {
     model: document.getElementById('settings-anthropic-model')?.value || 'claude-sonnet-4-6',
     extended_thinking: anthropicExtThinking,
     thinking_budget: anthropicBudget,
   };
+  if (anthropicEffort) providers.anthropic.reasoning_effort = anthropicEffort;
   const perplexityEffort = document.getElementById('settings-perplexity-effort')?.value || '';
   providers.perplexity = {
     api_key: document.getElementById('settings-perplexity-key')?.value || '',
@@ -1369,9 +1521,11 @@ async function refreshXaiStatus() {
       if (disc) disc.style.display = 'none';
       if (conn) conn.style.display = 'block';
       if (acct) {
-        const renews = data.expires_at ? ` Current access token auto-renews around ${new Date(data.expires_at).toLocaleString()}.` : '';
-        const refresh = data.refresh_available ? ' Refresh token stored for ongoing access.' : '';
-        acct.textContent = `xAI OAuth connected for Grok models/media tools.${refresh}${renews}`;
+        const renews = data.expires_at ? ` Access token renews around ${new Date(data.expires_at).toLocaleString()}.` : '';
+        const rtExp = data.refresh_token_expires_at
+          ? ` Session valid until ${new Date(data.refresh_token_expires_at).toLocaleString()} (auto-refreshed every 30 min).`
+          : data.refresh_available ? ' Refresh token stored; session kept alive automatically.' : '';
+        acct.textContent = `xAI OAuth connected for Grok models/media tools.${rtExp}${renews}`;
       }
     } else {
       if (disc) disc.style.display = 'block';
@@ -1658,9 +1812,42 @@ async function disconnectAnthropic() {
   addProcessEntry('info', 'Anthropic disconnected.');
 }
 
-function onAnthropicThinkingToggle(checked) {
+function isAnthropicAdaptiveThinkingModel(model) {
+  return /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(String(model || ''))
+    || /^claude-sonnet-4-6(?:\b|[-_])/.test(String(model || ''));
+}
+
+function supportsAnthropicEffort(model) {
+  return /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(String(model || ''))
+    || /^claude-sonnet-4-6(?:\b|[-_])/.test(String(model || ''))
+    || /^claude-mythos-preview(?:\b|[-_])/.test(String(model || ''));
+}
+
+function syncAnthropicReasoningControls() {
+  const model = document.getElementById('settings-anthropic-model')?.value || '';
+  const effort = document.getElementById('settings-anthropic-effort');
+  if (effort) {
+    effort.disabled = !!model && !supportsAnthropicEffort(model);
+    const xhighOption = Array.from(effort.options || []).find((opt) => opt.value === 'xhigh');
+    if (xhighOption) {
+      const supportsXHigh = /^claude-opus-4-(7|8)(?:\b|[-_])/.test(model);
+      xhighOption.disabled = !!model && !supportsXHigh;
+      if (xhighOption.disabled && effort.value === 'xhigh') effort.value = 'high';
+    }
+  }
   const row = document.getElementById('anthropic-thinking-budget-row');
-  if (row) row.style.display = checked ? 'block' : 'none';
+  const thinkingEnabled = !!document.getElementById('settings-anthropic-extended-thinking')?.checked;
+  if (row) {
+    row.style.display = thinkingEnabled && !isAnthropicAdaptiveThinkingModel(model) ? 'block' : 'none';
+  }
+}
+
+function onAnthropicThinkingToggle(_checked) {
+  syncAnthropicReasoningControls();
+}
+
+function onAnthropicModelChange() {
+  syncAnthropicReasoningControls();
 }
 
 // Legacy alias so any old references still work
@@ -2387,7 +2574,7 @@ async function loadAgentModelOptions(preserveSelected = false) {
   const STATIC_MODEL_FALLBACKS = {
     openai: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
     openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-    anthropic: ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    anthropic: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
   };
@@ -3012,6 +3199,9 @@ async function saveSettings() {
       rollingCompactionSummaryMaxWords: Number(document.getElementById('settings-rolling-compaction-words')?.value || 900),
       rollingCompactionModel: (document.getElementById('settings-rolling-compaction-model')?.value || '').trim(),
     };
+    const securityPayload = {
+      terminalPermissionMode: getTerminalPermissionModeFromUI(),
+    };
     await api('/api/settings/bulk', {
       method: 'POST',
       body: JSON.stringify({
@@ -3020,6 +3210,7 @@ async function saveSettings() {
         model: modelPayload,
         llm: providerPayload,
         session: sessionPayload,
+        security: securityPayload,
       }),
     });
     if (window.settingsTab === 'models' || window._agentModelDefaultsLoadedToUI || window._brainModelConfigLoadedToUI) {
@@ -3467,6 +3658,8 @@ window.deleteSiteShortcutUI = deleteSiteShortcutUI;
 window.connectAnthropic = connectAnthropic;
 window.disconnectAnthropic = disconnectAnthropic;
 window.onAnthropicThinkingToggle = onAnthropicThinkingToggle;
+window.onAnthropicModelChange = onAnthropicModelChange;
+window.syncAnthropicReasoningControls = syncAnthropicReasoningControls;
 window.disconnectCodex = disconnectCodex;
 window.disconnectMCPServer = disconnectMCPServer;
 window.editMCPServer = editMCPServer;
@@ -3507,7 +3700,7 @@ const AMD_SLOTS = {
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
@@ -3515,6 +3708,7 @@ const AMD_STATIC_MODELS = {
 const AMD_TEMPLATE_CACHE_KEY = 'prometheus_agent_model_default_templates_v1';
 let amdTemplatesCache = [];
 let amdActiveTemplateId = '';
+let amdDefaultTemplateId = '';
 
 async function amdProviderChange(slotId) {
   const provSel  = document.getElementById('amd-' + slotId + '-prov');
@@ -3570,10 +3764,20 @@ async function applyAgentModelDefaultsToForm(defaults = {}) {
     const hasProvider = slashIdx > 0;
     const prov = hasProvider ? String(val).slice(0, slashIdx) : '';
     const model = hasProvider ? String(val).slice(slashIdx + 1) : String(val);
-    if (prov && !isCredentialedModelProviderId(prov)) continue;
     const provSel  = document.getElementById('amd-' + slotId + '-prov');
     const modelSel = document.getElementById('amd-' + slotId + '-model');
-    if (provSel) provSel.value = prov;
+    if (provSel && prov) {
+      // Always populate the configured value even if the provider is not currently credentialed.
+      // Skipping here leaves the select empty, and a subsequent save would send an empty string
+      // which causes the server to delete the key from agent_model_defaults.
+      if (!Array.from(provSel.options).some(o => o.value === prov)) {
+        const opt = document.createElement('option');
+        opt.value = prov;
+        opt.textContent = prov;
+        provSel.appendChild(opt);
+      }
+      provSel.value = prov;
+    }
     if (prov && modelSel) {
       await amdProviderChange(slotId);
     }
@@ -3603,6 +3807,7 @@ function rememberAgentModelDefaultTemplates() {
   try {
     localStorage.setItem(AMD_TEMPLATE_CACHE_KEY, JSON.stringify({
       activeTemplateId: amdActiveTemplateId,
+      defaultTemplateId: amdDefaultTemplateId,
       templates: amdTemplatesCache,
     }));
   } catch {}
@@ -3617,8 +3822,10 @@ function setAgentModelTemplateStatus(type, text) {
 function updateAgentModelTemplateCache(data) {
   amdTemplatesCache = Array.isArray(data?.templates) ? data.templates : [];
   amdActiveTemplateId = String(data?.activeTemplateId || '');
+  if ('defaultTemplateId' in (data || {})) amdDefaultTemplateId = String(data.defaultTemplateId || '');
   rememberAgentModelDefaultTemplates();
   renderAgentModelDefaultTemplates();
+  updateApplyAsDefaultButtonState();
 }
 
 async function loadAgentModelDefaultTemplates() {
@@ -3630,7 +3837,9 @@ async function loadAgentModelDefaultTemplates() {
       const cached = JSON.parse(localStorage.getItem(AMD_TEMPLATE_CACHE_KEY) || '{}');
       amdTemplatesCache = Array.isArray(cached.templates) ? cached.templates : [];
       amdActiveTemplateId = String(cached.activeTemplateId || '');
+      amdDefaultTemplateId = String(cached.defaultTemplateId || '');
       renderAgentModelDefaultTemplates();
+      updateApplyAsDefaultButtonState();
     } catch {}
     console.warn('loadAgentModelDefaultTemplates error:', e);
   }
@@ -3641,12 +3850,14 @@ function onAgentModelTemplateSelect() {
   const nameInput = document.getElementById('amd-template-name');
   const selected = amdTemplatesCache.find((template) => template.id === select?.value);
   if (nameInput) nameInput.value = selected?.name || '';
+  updateApplyAsDefaultButtonState(select?.value || '');
 }
 
 async function loadAgentModelDefaults() {
   try {
     const data = await api('/api/settings/agent-model-defaults');
     await applyAgentModelDefaultsToForm(data?.defaults || {});
+    if (data?.defaultTemplateId !== undefined) amdDefaultTemplateId = String(data.defaultTemplateId || '');
     updateAgentModelTemplateCache(data);
     window._agentModelDefaultsLoadedToUI = true;
   } catch (e) { console.warn('loadAgentModelDefaults error:', e); }
@@ -3690,7 +3901,6 @@ async function saveAgentModelDefaultTemplate() {
   }
   if (status) status.textContent = 'Saving template...';
   try {
-    await saveModelTabLiveSettings({ showStatus: true });
     const selectedId = String(select?.value || '').trim();
     const data = await api('/api/settings/agent-model-default-templates', {
       method: 'POST',
@@ -3725,6 +3935,47 @@ async function applyAgentModelDefaultTemplate() {
     await loadAgentModelDefaultTemplates();
     setAgentModelTemplateStatus('success', `Applied "${data?.template?.name || id}".`);
     showToast('Model template applied', data?.template?.name || id, 'success', 4000);
+  } catch (e) {
+    setAgentModelTemplateStatus('error', e.message || String(e));
+  }
+}
+
+function updateApplyAsDefaultButtonState(selectedId) {
+  const btn = document.getElementById('amd-set-default-btn');
+  if (!btn) return;
+  const sel = selectedId !== undefined ? selectedId : document.getElementById('amd-template-select')?.value || '';
+  const isDefault = sel && sel === amdDefaultTemplateId;
+  if (isDefault) {
+    btn.textContent = 'Saved as Default ✓';
+    btn.style.background = 'var(--ok, #16a34a)';
+    btn.style.color = '#fff';
+    btn.style.border = '1px solid var(--ok, #16a34a)';
+  } else {
+    btn.textContent = 'Apply as Default';
+    btn.style.background = '#fff';
+    btn.style.color = 'var(--text)';
+    btn.style.border = '1px solid var(--line)';
+  }
+}
+
+async function applyAsDefaultTemplate() {
+  const select = document.getElementById('amd-template-select');
+  const id = String(select?.value || '').trim();
+  if (!id) {
+    setAgentModelTemplateStatus('error', 'Choose a template to set as default.');
+    return;
+  }
+  setAgentModelTemplateStatus('info', 'Setting as default...');
+  try {
+    const data = await api(`/api/settings/agent-model-default-templates/${encodeURIComponent(id)}/set-default`, {
+      method: 'POST',
+    });
+    amdDefaultTemplateId = String(data?.defaultTemplateId || data?.template?.id || id);
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {});
+    await loadAgentModelDefaultTemplates();
+    updateApplyAsDefaultButtonState(id);
+    setAgentModelTemplateStatus('success', `"${data?.template?.name || id}" set as startup default.`);
+    showToast('Default template set', data?.template?.name || id, 'success', 4000);
   } catch (e) {
     setAgentModelTemplateStatus('error', e.message || String(e));
   }
@@ -3768,7 +4019,7 @@ async function brainProviderChange(type) {
   try {
     let models = [];
     if (prov === 'anthropic') {
-      models = ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'];
+      models = ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'];
     } else if (prov === 'openai') {
       models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
       if (!models.length) models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
@@ -3917,6 +4168,7 @@ window.saveSelectedChannelSettings = saveSelectedChannelSettings;
 window.saveAgentModelDefaults = saveAgentModelDefaults;
 window.saveAgentModelDefaultTemplate = saveAgentModelDefaultTemplate;
 window.applyAgentModelDefaultTemplate = applyAgentModelDefaultTemplate;
+window.applyAsDefaultTemplate = applyAsDefaultTemplate;
 window.deleteAgentModelDefaultTemplate = deleteAgentModelDefaultTemplate;
 window.onAgentModelTemplateSelect = onAgentModelTemplateSelect;
 window.saveSettings = saveSettings;
@@ -3977,19 +4229,62 @@ async function loadPairingPanel() {
 // QR so phones can pair off-LAN. Local Wi-Fi pairing still works the same.
 
 let _remoteAccessLoaded = false;
+let _funnelStatusPollTimer = null;
 
-function _setRemoteStatusPill(active) {
+// Updates BOTH the top header pill (Funnel live/offline) and the right-panel
+// mini-pill, and shows/hides the Enable/Disable buttons based on real funnel state.
+function _applyFunnelLiveStatus(funnelActive) {
+  // Top header pill
   const pill = document.getElementById('pairing-remote-status-pill');
-  if (!pill) return;
-  if (active) {
-    pill.textContent = 'On';
-    pill.style.background = '#dcfce7';
-    pill.style.color = '#15803d';
-  } else {
-    pill.textContent = 'Off';
-    pill.style.background = '#eee';
-    pill.style.color = '#555';
+  if (pill) {
+    if (funnelActive) {
+      pill.textContent = 'Funnel live';
+      pill.style.background = '#dcfce7';
+      pill.style.color = '#15803d';
+    } else {
+      pill.textContent = 'Funnel offline';
+      pill.style.background = '#fff7ed';
+      pill.style.color = '#b45309';
+    }
   }
+  // Right-panel mini-pill
+  const livePill = document.getElementById('pairing-funnel-live-pill');
+  if (livePill) {
+    if (funnelActive) {
+      livePill.textContent = 'Live';
+      livePill.style.background = '#dcfce7';
+      livePill.style.color = '#15803d';
+    } else {
+      livePill.textContent = 'Offline';
+      livePill.style.background = '#fff7ed';
+      livePill.style.color = '#b45309';
+    }
+  }
+  // Show/hide action buttons
+  const enableBtn  = document.getElementById('pairing-funnel-enable-btn');
+  const disableBtn = document.getElementById('pairing-funnel-disable-btn');
+  if (enableBtn)  enableBtn.style.display  = funnelActive ? 'none' : '';
+  if (disableBtn) disableBtn.style.display = funnelActive ? '' : 'none';
+}
+
+// Poll actual funnel status from the server (fast endpoint, no full detect).
+async function _refreshFunnelLiveStatus() {
+  try {
+    const r = await api('/api/pairing/tailscale/funnel/status');
+    if (r?.success != null) _applyFunnelLiveStatus(!!r.funnelActive);
+  } catch {}
+}
+
+function _startFunnelStatusPoll() {
+  _stopFunnelStatusPoll();
+  _refreshFunnelLiveStatus();
+  _funnelStatusPollTimer = setInterval(() => {
+    if (window.settingsTab !== 'pairing') { _stopFunnelStatusPoll(); return; }
+    _refreshFunnelLiveStatus();
+  }, 30_000);
+}
+function _stopFunnelStatusPoll() {
+  if (_funnelStatusPollTimer) { clearInterval(_funnelStatusPollTimer); _funnelStatusPollTimer = null; }
 }
 
 async function loadRemoteAccessSettings() {
@@ -4002,7 +4297,6 @@ async function loadRemoteAccessSettings() {
     if (enabledEl) enabledEl.checked = !!ra.enabled;
     if (modeEl)    modeEl.value      = (ra.mode === 'custom') ? 'custom' : 'tailscale-funnel';
     if (urlEl)     urlEl.value       = String(ra.publicUrl || '');
-    _setRemoteStatusPill(!!ra.enabled && !!ra.valid);
     _remoteAccessLoaded = true;
   } catch (err) {
     const msg = document.getElementById('pairing-remote-msg');
@@ -4025,14 +4319,49 @@ async function _saveRemoteAccess() {
   try {
     const r = await api('/api/pairing/remote-access', { method: 'PUT', body: JSON.stringify(body) });
     if (!r?.success) throw new Error(r?.error || 'Failed to save');
-    const ra = r.remoteAccess || {};
-    _setRemoteStatusPill(!!ra.enabled && !!ra.valid);
-    if (msg) msg.innerHTML = `<span style="color:#15803d">Saved. Generate a new QR to use the ${ra.enabled ? 'public' : 'local'} URL.</span>`;
+    if (msg) msg.innerHTML = `<span style="color:#15803d">Saved. Generate a new QR to use the ${r.remoteAccess?.enabled ? 'public' : 'local'} URL.</span>`;
     refreshPairingQR().catch(() => {});
     showToast?.('Remote access updated', '', 'success');
   } catch (err) {
     if (msg) msg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Save failed')}</span>`;
     showToast?.('Save failed', String(err.message || err), 'error');
+  }
+}
+
+async function _enableFunnel() {
+  const funnelMsg = document.getElementById('pairing-funnel-msg');
+  const enableBtn = document.getElementById('pairing-funnel-enable-btn');
+  if (enableBtn) { enableBtn.disabled = true; enableBtn.textContent = 'Enabling…'; }
+  if (funnelMsg) funnelMsg.textContent = 'Running tailscale funnel command…';
+  try {
+    const r = await api('/api/pairing/tailscale/funnel/enable', { method: 'POST', body: '{}' });
+    if (!r?.success) throw new Error(r?.error || 'Failed to enable funnel');
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#15803d">Funnel enabled on port ${r.port}. ✓</span>`;
+    _applyFunnelLiveStatus(true);
+    showToast?.('Tailscale funnel enabled', '', 'success');
+  } catch (err) {
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Enable failed')}</span>`;
+    showToast?.('Funnel enable failed', String(err.message || err), 'error');
+  } finally {
+    if (enableBtn) { enableBtn.disabled = false; enableBtn.textContent = 'Enable Funnel'; }
+  }
+}
+
+async function _disableFunnel() {
+  const funnelMsg = document.getElementById('pairing-funnel-msg');
+  const disableBtn = document.getElementById('pairing-funnel-disable-btn');
+  if (disableBtn) { disableBtn.disabled = true; disableBtn.textContent = 'Disabling…'; }
+  if (funnelMsg) funnelMsg.textContent = 'Running tailscale funnel reset…';
+  try {
+    const r = await api('/api/pairing/tailscale/funnel/disable', { method: 'POST', body: '{}' });
+    if (!r?.success) throw new Error(r?.error || 'Failed to disable funnel');
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b45309">Funnel disabled.</span>`;
+    _applyFunnelLiveStatus(false);
+    showToast?.('Tailscale funnel disabled', '', 'success');
+  } catch (err) {
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Disable failed')}</span>`;
+  } finally {
+    if (disableBtn) { disableBtn.disabled = false; disableBtn.textContent = 'Disable Funnel'; }
   }
 }
 
@@ -4053,7 +4382,7 @@ async function _detectTailscale() {
     lines.push(`<div><strong>Logged in:</strong> ${r.loggedIn ? '<span style="color:#15803d">yes</span>' : '<span style="color:#b45309">no — run <span style="font-family:ui-monospace">tailscale up</span></span>'}</div>`);
     if (r.hostname) lines.push(`<div><strong>Hostname:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.hostname)}</span></div>`);
     if (r.suggestedUrl) lines.push(`<div><strong>Suggested URL:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.suggestedUrl)}</span></div>`);
-    lines.push(`<div><strong>Funnel:</strong> ${r.funnelActive ? `<span style="color:#15803d">active (ports: ${r.funnelPorts.join(', ')})</span>` : '<span style="color:#b45309">not active — run the command below</span>'}</div>`);
+    lines.push(`<div><strong>Funnel:</strong> ${r.funnelActive ? `<span style="color:#15803d">active (ports: ${r.funnelPorts.join(', ')})</span>` : '<span style="color:#b45309">not active</span>'}</div>`);
     if (r.suggestedUrl) {
       lines.push(`<div style="margin-top:8px"><button class="btn btn-sm" id="pairing-ts-apply-btn" style="background:#eaf2ff;border:1px solid #bdd3f6;color:#0d4faf">Use this URL</button></div>`);
     }
@@ -4062,6 +4391,7 @@ async function _detectTailscale() {
       try { return new URL(window.location.origin).port || '18789'; } catch { return '18789'; }
     })();
     if (cmd) cmd.textContent = `tailscale funnel ${port}`;
+    _applyFunnelLiveStatus(!!r.funnelActive);
     const apply = document.getElementById('pairing-ts-apply-btn');
     if (apply && r.suggestedUrl) {
       apply.addEventListener('click', () => {
@@ -4076,10 +4406,14 @@ async function _detectTailscale() {
 }
 
 function _wireRemoteAccessHandlers() {
-  const save   = document.getElementById('pairing-remote-save-btn');
-  const detect = document.getElementById('pairing-remote-detect-btn');
-  if (save   && !save.__wired)   { save.__wired   = true; save.addEventListener('click', _saveRemoteAccess); }
-  if (detect && !detect.__wired) { detect.__wired = true; detect.addEventListener('click', _detectTailscale); }
+  const save        = document.getElementById('pairing-remote-save-btn');
+  const detect      = document.getElementById('pairing-remote-detect-btn');
+  const enableBtn   = document.getElementById('pairing-funnel-enable-btn');
+  const disableBtn  = document.getElementById('pairing-funnel-disable-btn');
+  if (save       && !save.__wired)       { save.__wired       = true; save.addEventListener('click', _saveRemoteAccess); }
+  if (detect     && !detect.__wired)     { detect.__wired     = true; detect.addEventListener('click', _detectTailscale); }
+  if (enableBtn  && !enableBtn.__wired)  { enableBtn.__wired  = true; enableBtn.addEventListener('click', _enableFunnel); }
+  if (disableBtn && !disableBtn.__wired) { disableBtn.__wired = true; disableBtn.addEventListener('click', _disableFunnel); }
 }
 
 function _stopPairingPolling() {
@@ -4315,6 +4649,9 @@ function _bumpPairingBadge() {
 }
 
 window.loadPairingPanel = loadPairingPanel;
+window.loadSecuritySettings = loadSecuritySettings;
+window.revokeCommandPermission = revokeCommandPermission;
+window.saveSecuritySettings = saveSecuritySettings;
 window.setSettingsTab = setSettingsTab;
 window.showIntegMsg = showIntegMsg;
 window.showMCPAddForm = showMCPAddForm;

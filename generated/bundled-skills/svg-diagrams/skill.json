@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "name": "SVG Diagrams",
+  "description": "Render custom architecture diagrams, system maps, component layouts, technical illustrations, box-and-arrow diagrams, and precise-position visual explanations as inline fenced SVG blocks.",
+  "version": "1.0.0",
+  "triggers": [
+    "svg diagram",
+    "architecture diagram",
+    "system diagram",
+    "system map",
+    "component diagram",
+    "box and arrow",
+    "technical diagram",
+    "draw the architecture",
+    "map this system",
+    "service map",
+    "infrastructure diagram",
+    "custom diagram",
+    "relationship map",
+    "visual architecture",
+    "diagram with positions"
+  ],
+  "categories": [
+    "visualization",
+    "diagrams",
+    "architecture",
+    "technical-writing",
+    "interactive-output"
+  ],
+  "requiredTools": [
+    "skill_read"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "skill_read"
+    ],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [
+      "Read svg-diagrams.",
+      "Use SVG when precise spatial positioning or custom shapes are needed.",
+      "Output one fenced svg block containing raw responsive SVG."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "id": "svg-diagrams"
+}

@@ -12,7 +12,7 @@
     "options": {
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
-      "staticModels": ["moonshotai/kimi-k2.6", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "qwen/qwen3.6-plus", "openai/gpt-5.4", "google/gemini-3-flash-preview", "z-ai/glm-5.1", "x-ai/grok-4.20", "minimax/minimax-m2.7"],
+      "staticModels": ["moonshotai/kimi-k2.6", "anthropic/claude-opus-4.8", "anthropic/claude-opus-4.7", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "qwen/qwen3.6-plus", "openai/gpt-5.4", "google/gemini-3-flash-preview", "z-ai/glm-5.1", "x-ai/grok-4.20", "minimax/minimax-m2.7"],
       "supportsLiveModelDiscovery": true
     }
   },

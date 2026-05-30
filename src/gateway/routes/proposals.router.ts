@@ -112,6 +112,32 @@ function buildProposalMutationScope(proposal: any): { allowedFiles: string[]; al
 
 type ProposalExecutionLane = ApprovedProposalExecutionMode;
 
+export interface ApproveProposalActionOptions {
+  notes?: string;
+  dispatch?: {
+    channel?: 'web' | 'telegram';
+    telegramChatId?: number;
+  };
+}
+
+export interface ApproveProposalActionResult {
+  proposal: any;
+  dispatched: boolean;
+  taskId?: string;
+  sessionId?: string;
+}
+
+export function denyProposalAction(proposalId: string, notes?: string): any {
+  const proposal = denyProposal(proposalId, notes);
+  if (!proposal) {
+    const err: any = new Error('Proposal not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  _broadcastFn?.({ type: 'proposal_denied', proposalId: proposal.id, title: proposal.title });
+  return proposal;
+}
+
 function legacyInferProposalExecutionLane(proposal: any, opts: { touchesInternalCode: boolean; needsBuild: boolean }): ProposalExecutionLane {
   if (opts.touchesInternalCode || opts.needsBuild) return 'code_change';
   const type = String(proposal?.type || 'general').trim().toLowerCase();
@@ -424,55 +450,75 @@ router.patch('/api/proposals/:id', (req: Request, res: Response) => {
 // ── POST /api/proposals/:id/approve ──────────────────────────────────────────
 router.post('/api/proposals/:id/approve', async (req: Request, res: Response) => {
   try {
-    const existing = loadProposal(req.params.id);
-    if (!existing) {
-      return res.status(404).json({ success: false, error: 'Proposal not found' });
-    }
-    if (isPublicDistributionBuild() && proposalTouchesInternalCode(existing)) {
-      return res.status(403).json({
-        success: false,
-        error: 'Internal code proposals are not available in the public distribution build.',
-      });
-    }
-
     const notes = String(req.body?.notes || '').trim() || undefined;
-    const proposal = approveProposal(req.params.id, notes);
-    if (!proposal) {
-      return res.status(404).json({ success: false, error: 'Proposal not found' });
-    }
-
-    _broadcastFn?.({ type: 'proposal_approved', proposalId: proposal.id, title: proposal.title });
-    let dispatchResult: { taskId: string; sessionId: string } | null = null;
-
-    // Trigger if executorPrompt is set OR if proposal has affectedFiles + details (AI-generated proposals
-    // put the full implementation plan in `details` and don't set executorPrompt explicitly). Wait only
-    // until the executor task is created, so approval clicks cannot silently succeed without a real task.
-    const hasExecutionPlan = !!(proposal.executorPrompt || (proposal.affectedFiles?.length && proposal.details));
-    if (hasExecutionPlan) {
-      try {
-        dispatchResult = await dispatchApprovedProposal(proposal);
-      } catch (err: any) {
-        console.error(`[Proposals] Dispatch failed for ${proposal.id}:`, err?.message);
-        _broadcastFn?.({ type: 'proposal_dispatch_error', proposalId: proposal.id, error: err?.message });
-        return res.status(500).json({
-          success: false,
-          error: `Proposal approved, but executor dispatch failed: ${err?.message || 'Unknown error'}`,
-          proposal: loadProposal(proposal.id) || proposal,
-        });
-      }
-    }
+    const result = await approveProposalAction(req.params.id, { notes });
 
     res.json({
       success: true,
-      proposal: loadProposal(proposal.id) || proposal,
-      dispatched: Boolean(dispatchResult),
-      taskId: dispatchResult?.taskId,
-      sessionId: dispatchResult?.sessionId,
+      proposal: result.proposal,
+      dispatched: result.dispatched,
+      taskId: result.taskId,
+      sessionId: result.sessionId,
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err?.message || 'Failed to approve proposal' });
+    res.status(err?.statusCode || 500).json({
+      success: false,
+      error: err?.message || 'Failed to approve proposal',
+      proposal: err?.proposal,
+    });
   }
 });
+
+export async function approveProposalAction(
+  proposalId: string,
+  opts: ApproveProposalActionOptions = {},
+): Promise<ApproveProposalActionResult> {
+  const existing = loadProposal(proposalId);
+  if (!existing) {
+    const err: any = new Error('Proposal not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (isPublicDistributionBuild() && proposalTouchesInternalCode(existing)) {
+    const err: any = new Error('Internal code proposals are not available in the public distribution build.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const proposal = approveProposal(proposalId, opts.notes);
+  if (!proposal) {
+    const err: any = new Error('Proposal not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  _broadcastFn?.({ type: 'proposal_approved', proposalId: proposal.id, title: proposal.title });
+  let dispatchResult: { taskId: string; sessionId: string } | null = null;
+
+  // Trigger if executorPrompt is set OR if proposal has affectedFiles + details (AI-generated proposals
+  // put the full implementation plan in `details` and don't set executorPrompt explicitly). Wait only
+  // until the executor task is created, so approval clicks cannot silently succeed without a real task.
+  const hasExecutionPlan = !!(proposal.executorPrompt || (proposal.affectedFiles?.length && proposal.details));
+  if (hasExecutionPlan) {
+    try {
+      dispatchResult = await dispatchApprovedProposal(proposal, opts.dispatch);
+    } catch (err: any) {
+      console.error(`[Proposals] Dispatch failed for ${proposal.id}:`, err?.message);
+      _broadcastFn?.({ type: 'proposal_dispatch_error', proposalId: proposal.id, error: err?.message });
+      const wrapped: any = new Error(`Proposal approved, but executor dispatch failed: ${err?.message || 'Unknown error'}`);
+      wrapped.statusCode = 500;
+      wrapped.proposal = loadProposal(proposal.id) || proposal;
+      throw wrapped;
+    }
+  }
+
+  return {
+    proposal: loadProposal(proposal.id) || proposal,
+    dispatched: Boolean(dispatchResult),
+    taskId: dispatchResult?.taskId,
+    sessionId: dispatchResult?.sessionId,
+  };
+}
 
 /**
  * dispatchApprovedProposal — single canonical dispatch function.
@@ -497,7 +543,7 @@ export async function dispatchApprovedProposal(
     throw new Error('Team manager proposals cannot execute Prometheus internal source-code changes. Create dev src proposals from the main/dev agent path instead.');
   }
 
-  const { launchBackgroundTaskRunner } = await import('../tasks/task-router.js');
+  const { launchBackgroundTaskRunner } = await import('../tasks/task-router');
   const { createTask } = await import('../tasks/task-store.js');
   const {
     markProposalExecuting,
@@ -847,16 +893,11 @@ export async function dispatchApprovedProposal(
 router.post('/api/proposals/:id/deny', (req: Request, res: Response) => {
   try {
     const notes = String(req.body?.notes || '').trim() || undefined;
-    const proposal = denyProposal(req.params.id, notes);
-    if (!proposal) {
-      return res.status(404).json({ success: false, error: 'Proposal not found' });
-    }
-
-    _broadcastFn?.({ type: 'proposal_denied', proposalId: proposal.id, title: proposal.title });
+    const proposal = denyProposalAction(req.params.id, notes);
 
     res.json({ success: true, proposal });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err?.message || 'Failed to deny proposal' });
+    res.status(err?.statusCode || 500).json({ success: false, error: err?.message || 'Failed to deny proposal' });
   }
 });
 

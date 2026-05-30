@@ -45,7 +45,13 @@ type XurlSetupState =
 let xurlSetupState: XurlSetupState | null = null;
 
 function xurlBin(): string {
-  return process.platform === 'win32' ? 'xurl.cmd' : 'xurl';
+  if (process.platform === 'win32') {
+    // Prefer the local workspace binary if the global npm install is broken/missing.
+    const localBin = path.join(getConfig().getWorkspacePath(), 'tools', 'xurl-local', 'node_modules', '@xdevplatform', 'xurl', 'binary', 'xurl.exe');
+    if (fs.existsSync(localBin)) return localBin;
+    return 'xurl.cmd';
+  }
+  return 'xurl';
 }
 
 function npmBin(): string {

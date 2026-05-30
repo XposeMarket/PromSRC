@@ -42,7 +42,7 @@
   --sidebar-search-bg: rgba(255,255,255,0.07);
   --sidebar-seg-bg: rgba(255,255,255,0.07);
   --sidebar-seg-active: rgba(255,255,255,0.15);
-  --sidebar-w: 240px;
+  --sidebar-w: 280px;
   --right-w: 380px;
   --log-bg: #fbfdff;
   --log-text: #5f6f86;
@@ -296,6 +296,10 @@ body.right-canvas-open .page-title {
   z-index: 100;
 }
 
+.sidebar.is-resizing {
+  transition: none;
+}
+
 :root[data-theme="dark"] .sidebar,
 :root[data-theme="dark"] .topbar {
   overflow: hidden;
@@ -420,6 +424,27 @@ body.right-canvas-open .page-title {
 /* Show hamburger only when sidebar is not collapsed */
 .sidebar:not(.collapsed) #sidebarToggle {
   display: flex;
+}
+
+/* Sidebar drag-resize handle */
+.sidebar-resize-handle {
+  position: absolute !important;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 200 !important;
+  background: transparent;
+  transition: background 0.15s ease;
+  flex: 0 0 auto;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.dragging {
+  background: rgba(249,115,22,0.18);
+}
+.sidebar.collapsed .sidebar-resize-handle {
+  display: none;
 }
 
 /* Fixed top: logo + new chat + search */
@@ -1014,18 +1039,20 @@ main,
 }
 :root[data-theme="dark"] .queued-prompts-panel {
   background: linear-gradient(180deg, #2c3442, #272f3a);
+  box-shadow: 0 -6px 20px rgba(0,0,0,0.28);
 }
-:root[data-theme="dark"] .queued-item {
-  background: var(--panel);
-  border-color: var(--line);
-  color: var(--text);
-}
-:root[data-theme="dark"] .queued-item-btn,
+:root[data-theme="dark"] .queued-item { color: var(--text); }
+:root[data-theme="dark"] .queued-item:hover { background: rgba(255,255,255,0.04); }
+:root[data-theme="dark"] .queued-icon-btn:hover { background: rgba(255,255,255,0.08); color: #c8d4e8; }
 :root[data-theme="dark"] .queued-clear-btn {
-  background: var(--panel-2);
   border-color: var(--line);
-  color: var(--text);
+  color: var(--muted);
 }
+:root[data-theme="dark"] .queued-item-popover {
+  background: #2c3442;
+  border-color: var(--line);
+}
+:root[data-theme="dark"] .queued-popover-btn:hover { background: rgba(255,255,255,0.07); }
 :root[data-theme="dark"] .skill-card.enabled .skill-card-dot {
   background: #31b884;
   box-shadow: 0 0 0 3px rgba(49, 184, 132, 0.22);
@@ -1112,7 +1139,7 @@ main,
   position: fixed !important;
   top: 56px !important;
   bottom: 0 !important;
-  left: 288px !important;
+  left: var(--sidebar-w) !important;
   right: 0 !important;
   z-index: 5;
   background: #d8d6d2;

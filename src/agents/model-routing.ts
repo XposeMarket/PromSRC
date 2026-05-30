@@ -5,13 +5,42 @@ export type ProviderModelRef = {
   model: string;
 };
 
+const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+  'opus-4.8': 'claude-opus-4-8',
+  'opus-4-8': 'claude-opus-4-8',
+  'claude-opus-4.8': 'claude-opus-4-8',
+  'opus-4.7': 'claude-opus-4-7',
+  'opus-4-7': 'claude-opus-4-7',
+  'claude-opus-4.7': 'claude-opus-4-7',
+  'haiku-4.5': 'claude-haiku-4-5-20251001',
+  'haiku-4-5': 'claude-haiku-4-5-20251001',
+  'claude-haiku-4.5': 'claude-haiku-4-5-20251001',
+  'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
+  'sonnet-4.5': 'claude-sonnet-4-5-20250514',
+  'sonnet-4-5': 'claude-sonnet-4-5-20250514',
+  'claude-sonnet-4.5': 'claude-sonnet-4-5-20250514',
+  'claude-sonnet-4-5': 'claude-sonnet-4-5-20250514',
+};
+
+export function normalizeProviderModel(providerId: string, model: string): string {
+  const normalizedProviderId = String(providerId || '').trim().toLowerCase();
+  const rawModel = String(model || '').trim();
+  if (!rawModel) return rawModel;
+
+  if (normalizedProviderId === 'anthropic') {
+    return ANTHROPIC_MODEL_ALIASES[rawModel.toLowerCase()] || rawModel;
+  }
+
+  return rawModel;
+}
+
 export function parseProviderModelRef(ref?: string): ProviderModelRef | null {
   const raw = String(ref || '').trim();
   if (!raw || !raw.includes('/')) return null;
   const slashIdx = raw.indexOf('/');
   if (slashIdx <= 0) return null;
   const providerId = raw.slice(0, slashIdx).trim();
-  const model = raw.slice(slashIdx + 1).trim();
+  const model = normalizeProviderModel(providerId, raw.slice(slashIdx + 1).trim());
   if (!providerId || !model || !isKnownProviderId(providerId)) return null;
   return { providerId, model };
 }

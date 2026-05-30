@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "resources": [
+    {
+      "path": "references/browse-sh-amazon-search-products.md",
+      "type": "reference",
+      "description": "Amazon product search/extraction playbook adapted to Prometheus-native tools.",
+      "triggers": [
+        "amazon",
+        "amazon product search",
+        "search Amazon",
+        "Amazon toothbrush",
+        "Amazon products",
+        "product card extraction",
+        "shopping search",
+        "amazon carousel"
+      ],
+      "autoInject": true,
+      "injectMode": "summary_then_content",
+      "maxInjectChars": 4000
+    },
+    {
+      "path": "references/browse-sh-overview.md",
+      "type": "reference",
+      "description": "Initial Browse.sh and Browserbase Browse CLI overview gathered from browse.sh, Browserbase docs, and browserbase/skills README."
+    },
+    {
+      "path": "references/resource-triggering-design-note.md",
+      "type": "reference",
+      "description": "Design note recommending resource-level trigger injection for Browse.sh imported resources."
+    },
+    {
+      "path": "references/product-carousel-adaptation-2026-05-23.md",
+      "type": "reference",
+      "description": "How to convert Browse.sh shopping/product extraction knowledge into Prometheus product carousels.",
+      "triggers": [
+        "product carousel",
+        "shopping carousel",
+        "Amazon products",
+        "product extraction",
+        "show products"
+      ],
+      "autoInject": true,
+      "injectMode": "summary_then_content",
+      "maxInjectChars": 2500
+    }
+  ],
+  "id": "browse-sh-web-skills"
+}

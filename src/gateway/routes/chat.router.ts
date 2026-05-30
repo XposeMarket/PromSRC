@@ -14,6 +14,19 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { execFileSync } from 'child_process';
+
+// ── TEMP latency bisection probe ──────────────────────────────────────────
+let __htimeT0 = 0;
+function __htimeReset(): void { __htimeT0 = Date.now(); }
+function htime(label: string): void {
+  try {
+    if (!__htimeT0) return;
+    const line = `${new Date().toISOString()} +${String(Date.now() - __htimeT0).padStart(6)}ms ${label}\n`;
+    fs.appendFileSync(path.join(getConfig().getConfigDir(), 'logs', 'turn-timing.log'), line, 'utf-8');
+  } catch {}
+}
+// ──────────────────────────────────────────────────────────────────────────
 // WebSocketServer + WebSocket moved to core/server.ts (B3)
 import {
   getConfig,
@@ -22,12 +35,17 @@ import {
   ensureAgentWorkspace,
   resolveAgentWorkspace,
 } from '../../config/config';
+import { getValidToken as getOpenAiCodexToken, loadTokens as loadOpenAiCodexTokens } from '../../auth/openai-oauth.js';
+import { getValidXAIToken, isXAIConnected } from '../../auth/xai-oauth.js';
 import { getVault } from '../../security/vault';
 import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/meet-prompt';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
+import { readModelUsageEvents } from '../../providers/model-usage';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolLog, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, replaceHistory, touchSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, type TurnOrigin } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, replaceHistory, touchSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getSessionDisplayTitle, type TurnOrigin } from '../session';
+import { buildContextBudget, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
+import { createToolObservationsFromResults, formatToolObservationsForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -36,7 +54,7 @@ import { findProjectBySessionId, removeSessionFromProject } from '../projects/pr
 import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
-import { getVerificationFlowManager } from '../verification-flow';
+import { getVerificationFlowManager, getApprovalQueue } from '../verification-flow';
 import { getErrorAnalyzer } from '../errors/error-analyzer';
 import { getErrorHistory } from '../errors/error-history';
 import { getRetryStrategy } from '../retry-strategy';
@@ -80,7 +98,6 @@ import {
   getShortcutsForUrl,
 } from '../site-shortcuts';
 import {
-  desktopScreenshot,
   desktopFindWindow,
   desktopFocusWindow,
   desktopClick,
@@ -98,6 +115,7 @@ import {
   desktopWaitForChange,
   desktopDiffScreenshot,
   desktopScreenshotWithHistory,
+  parseDesktopScreenshotToolArgs,
   desktopGetActiveMonitorIndex,
   desktopGetMonitors,
   desktopGetMonitorsSummary,
@@ -118,6 +136,7 @@ import {
   setSchedulerRunAgentFn,
 } from '../../scheduler';
 import { TelegramChannel } from '../comms/telegram-channel';
+import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import { executeWebSearch, executeWebFetch } from '../../tools/web';
 import { executeWriteNote } from '../../tools/write-note';
 import { searchMemoryIndexAsync, readMemoryRecord } from '../memory-index/index';
@@ -311,6 +330,262 @@ function formatTurnOriginContext(origin: TurnOrigin, sessionId: string): string 
     'Use the origin only to adapt reply format and delivery assumptions, such as concise mobile responses or Telegram-friendly attachments.',
   ].filter(Boolean);
   return lines.join('\n');
+}
+
+type TurnFileChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
+
+type TurnFileChange = {
+  path: string;
+  displayPath: string;
+  status: TurnFileChangeStatus;
+  insertions: number;
+  deletions: number;
+  oldPath?: string;
+  diffPreview?: string;
+  binary?: boolean;
+};
+
+type TurnFileChanges = {
+  summary: {
+    fileCount: number;
+    insertions: number;
+    deletions: number;
+  };
+  files: TurnFileChange[];
+  generatedAt: number;
+};
+
+const FILE_MUTATION_TOOL_NAMES = new Set([
+  'create_file',
+  'write_file',
+  'replace_lines',
+  'insert_after',
+  'delete_lines',
+  'find_replace',
+  'rename_file',
+  'delete_file',
+  'copy_file',
+  'move_file',
+  'apply_patch',
+  'write_source',
+  'find_replace_source',
+  'replace_lines_source',
+  'insert_after_source',
+  'delete_lines_source',
+  'delete_source',
+  'write_webui_source',
+  'find_replace_webui_source',
+  'replace_lines_webui_source',
+  'insert_after_webui_source',
+  'delete_lines_webui_source',
+  'delete_webui_source',
+  'write_prom_file',
+  'find_replace_prom',
+  'replace_lines_prom',
+  'insert_after_prom',
+  'delete_lines_prom',
+  'delete_prom_file',
+  'skill_resource_write',
+  'skill_resource_delete',
+  'prom_apply_dev_changes',
+]);
+
+function isTurnFileMutationTool(toolName: string): boolean {
+  const name = String(toolName || '').trim();
+  if (!name) return false;
+  if (FILE_MUTATION_TOOL_NAMES.has(name)) return true;
+  if (/^(write|delete|find_replace|replace_lines|insert_after)_/.test(name) && /(source|webui|prom|file)$/.test(name)) return true;
+  return false;
+}
+
+function normalizeDisplayPath(filePath: string, workspacePath: string): string {
+  const value = String(filePath || '').trim();
+  if (!value) return '';
+  try {
+    const abs = path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspacePath, value);
+    const rel = path.relative(workspacePath, abs).replace(/\\/g, '/');
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+    return abs.replace(/\\/g, '/');
+  } catch {
+    return value.replace(/\\/g, '/');
+  }
+}
+
+function resolveTurnFilePath(rawPath: any, workspacePath: string): string {
+  const value = String(rawPath || '').trim();
+  if (!value || value === '.' || value === '/dev/null') return '';
+  try {
+    return path.resolve(path.isAbsolute(value) ? value : path.join(workspacePath, value));
+  } catch {
+    return '';
+  }
+}
+
+function extractPatchTargetPaths(patchText: string): string[] {
+  const paths = new Set<string>();
+  for (const rawLine of String(patchText || '').split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith('diff --git ')) {
+      const parts = line.split(/\s+/).slice(2, 4).map((part) => part.replace(/^"|"$/g, ''));
+      for (let item of parts) {
+        if (item.startsWith('a/') || item.startsWith('b/')) item = item.slice(2);
+        if (item && item !== '/dev/null') paths.add(item);
+      }
+    } else if (line.startsWith('+++ ') || line.startsWith('--- ')) {
+      let item = line.slice(4).trim().replace(/^"|"$/g, '').split(/\s+/)[0] || '';
+      if (item.startsWith('a/') || item.startsWith('b/')) item = item.slice(2);
+      if (item && item !== '/dev/null') paths.add(item);
+    } else if (line.startsWith('rename from ')) {
+      paths.add(line.slice('rename from '.length).trim());
+    } else if (line.startsWith('rename to ')) {
+      paths.add(line.slice('rename to '.length).trim());
+    }
+  }
+  return Array.from(paths);
+}
+
+function extractTouchedFilesFromToolResult(result: any, workspacePath: string): string[] {
+  const toolName = String(result?.name || result?.toolName || '').trim();
+  if (!isTurnFileMutationTool(toolName)) return [];
+  if (result?.error === true) return [];
+  const args = result?.args && typeof result.args === 'object' ? result.args : {};
+  const candidates: any[] = [];
+  for (const key of [
+    'path', 'file', 'filename', 'name', 'target', 'target_path', 'targetPath',
+    'old_path', 'oldPath', 'new_path', 'newPath', 'source', 'destination',
+    'files', 'allowedFiles', 'affected_files', 'affectedFiles', 'changed_files', 'changedFiles',
+  ]) {
+    if (args[key] != null) candidates.push(args[key]);
+  }
+  if (toolName.includes('webui_source')) {
+    candidates.push(...candidates.map((item) => {
+      const s = String(item || '').trim();
+      return s && !/^web-ui[\\/]/i.test(s) ? path.join('web-ui', s) : s;
+    }));
+  } else if (/_source$/.test(toolName) && !toolName.includes('webui')) {
+    candidates.push(...candidates.map((item) => {
+      const s = String(item || '').trim();
+      return s && !/^src[\\/]/i.test(s) ? path.join('src', s) : s;
+    }));
+  }
+  if (toolName === 'apply_patch' && typeof args.patch === 'string') {
+    candidates.push(...extractPatchTargetPaths(args.patch));
+  }
+  return Array.from(new Set(
+    candidates
+      .flatMap((item) => Array.isArray(item) ? item : [item])
+      .map((item) => resolveTurnFilePath(item, workspacePath))
+      .filter(Boolean),
+  ));
+}
+
+function runGitText(cwd: string, args: string[], maxBuffer = 2 * 1024 * 1024): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer,
+  } as any).toString();
+}
+
+function findGitRootForPath(filePath: string, workspacePath: string): string | null {
+  const cwd = fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()
+    ? filePath
+    : (fs.existsSync(filePath) ? path.dirname(filePath) : workspacePath);
+  try {
+    return path.resolve(runGitText(cwd, ['rev-parse', '--show-toplevel']).trim());
+  } catch {
+    try {
+      return path.resolve(runGitText(workspacePath, ['rev-parse', '--show-toplevel']).trim());
+    } catch {
+      return null;
+    }
+  }
+}
+
+function countTextFileLines(filePath: string): number {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > 1_000_000) return 0;
+    const content = fs.readFileSync(filePath, 'utf8');
+    if (content.includes('\0')) return 0;
+    return content.length ? content.split(/\r?\n/).length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function inferGitStatus(root: string, relPath: string, absPath: string): TurnFileChangeStatus {
+  try {
+    const status = runGitText(root, ['status', '--porcelain', '--', relPath]).trim();
+    if (/^R/.test(status)) return 'renamed';
+    if (/^\?\?/.test(status) || /^A/.test(status)) return 'added';
+    if (/^D|^.D/.test(status) || !fs.existsSync(absPath)) return 'deleted';
+  } catch {}
+  return fs.existsSync(absPath) ? 'modified' : 'deleted';
+}
+
+function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): TurnFileChanges | undefined {
+  const touched = Array.from(new Set(
+    (Array.isArray(toolResults) ? toolResults : [])
+      .flatMap((result) => extractTouchedFilesFromToolResult(result, workspacePath)),
+  ));
+  if (!touched.length) return undefined;
+
+  const changes: TurnFileChange[] = [];
+  for (const absPath of touched.slice(0, 80)) {
+    const gitRoot = findGitRootForPath(absPath, workspacePath);
+    let insertions = 0;
+    let deletions = 0;
+    let status: TurnFileChangeStatus = fs.existsSync(absPath) ? 'modified' : 'deleted';
+    let diffPreview = '';
+    let binary = false;
+
+    if (gitRoot) {
+      const relPath = path.relative(gitRoot, absPath).replace(/\\/g, '/');
+      status = inferGitStatus(gitRoot, relPath, absPath);
+      try {
+        const numstat = runGitText(gitRoot, ['diff', '--numstat', '--', relPath]).trim().split(/\r?\n/).filter(Boolean)[0] || '';
+        const parts = numstat.split(/\s+/);
+        if (parts[0] === '-' || parts[1] === '-') {
+          binary = true;
+        } else {
+          insertions = Math.max(0, Number(parts[0]) || 0);
+          deletions = Math.max(0, Number(parts[1]) || 0);
+        }
+      } catch {}
+      if (status === 'added' && insertions === 0 && deletions === 0 && fs.existsSync(absPath)) {
+        insertions = countTextFileLines(absPath);
+      }
+      try {
+        diffPreview = runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024).slice(0, 12000);
+      } catch {}
+    } else if (fs.existsSync(absPath)) {
+      insertions = countTextFileLines(absPath);
+      status = 'added';
+    }
+
+    if (insertions === 0 && deletions === 0 && !binary && status === 'modified' && !diffPreview) continue;
+    changes.push({
+      path: absPath,
+      displayPath: normalizeDisplayPath(absPath, workspacePath),
+      status,
+      insertions,
+      deletions,
+      diffPreview: diffPreview || undefined,
+      binary: binary || undefined,
+    });
+  }
+
+  if (!changes.length) return undefined;
+  const insertions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.insertions) || 0), 0);
+  const deletions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.deletions) || 0), 0);
+  return {
+    summary: { fileCount: changes.length, insertions, deletions },
+    files: changes,
+    generatedAt: Date.now(),
+  };
 }
 
 type MainChatStreamFrame = {
@@ -749,7 +1024,6 @@ import {
   isDesktopAutomationRequest,
   extractLikelyUrl,
   looksLikeSafetyRefusal,
-  looksLikeIntentOnlyReply,
   isContinuationCue,
   hasPendingExecutionIntent,
   isHardBlockerReply,
@@ -864,7 +1138,7 @@ export const router = express.Router();
 type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent';
 type ReasoningOptions = {
   enabled?: boolean;
-  level?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'extra_high';
+  level?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'extra_high' | 'max';
 };
 const ROLLING_COMPACTION_SUMMARY_PREFIX = '[Rolling context summary]';
 const LEGACY_COMPACTION_SUMMARY_PREFIX = '[Compacted context summary]';
@@ -942,10 +1216,12 @@ function extractLastCompactionSummary(history: Array<any>): string {
 function formatCompactionMessages(messages: Array<any>): string {
   const newestFirst = [...messages].reverse();
   return newestFirst.map((msg, idx) => {
-    const role = msg.role === 'assistant' ? 'assistant' : 'user';
+    const role = String(msg.role || 'unknown');
     const ts = Number(msg.timestamp);
     const stamp = Number.isFinite(ts) ? new Date(ts).toISOString() : 'unknown-time';
-    const body = String(msg.content || '').trim();
+    const body = Array.isArray(msg.content)
+      ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n').trim()
+      : String(msg.content || '').trim();
     return [
       `--- message ${idx + 1} ---`,
       `role: ${role}`,
@@ -974,6 +1250,19 @@ function formatCompactionToolLogs(messages: Array<any>, toolTurns: number): stri
   return logs.join('\n\n');
 }
 
+function formatCompactionToolResults(sessionId: string, toolResults: ToolResult[], maxResults: number): string {
+  const observations = createToolObservationsFromResults(
+    sessionId,
+    `compaction_${Date.now()}`,
+    Array.isArray(toolResults) ? toolResults.slice(-Math.max(1, maxResults)) : [],
+  );
+  return formatToolObservationsForContext(observations, {
+    includeHeader: false,
+    maxChars: 14000,
+    maxObservations: maxResults,
+  });
+}
+
 function formatCompactionArtifactPaths(sessionId: string): string {
   const cfg = getConfig();
   const workspacePath = cfg.getWorkspacePath();
@@ -986,6 +1275,29 @@ function formatCompactionArtifactPaths(sessionId: string): string {
     ['Compaction JSONL', path.join(workspacePath, 'audit', 'chats', 'compactions', `${sessionId}.jsonl`)],
   ];
   return paths.map(([label, filePath]) => `${label}: ${filePath}`).join('\n');
+}
+
+function boundCompactionSummaryWords(summaryText: string, maxWords: number): string {
+  const clean = String(summaryText || '').trim();
+  if (!clean) return '';
+  const limit = Number.isFinite(Number(maxWords))
+    ? Math.max(80, Math.min(1500, Math.floor(Number(maxWords))))
+    : 900;
+  let wordsSeen = 0;
+  const lines: string[] = [];
+  for (const line of clean.split(/\r?\n/)) {
+    const words = line.match(/\S+/g) || [];
+    if (wordsSeen + words.length <= limit) {
+      lines.push(line);
+      wordsSeen += words.length;
+      continue;
+    }
+    const remaining = limit - wordsSeen;
+    if (remaining > 0) lines.push(words.slice(0, remaining).join(' '));
+    lines.push('[...truncated to compaction word limit]');
+    break;
+  }
+  return lines.join('\n').trim();
 }
 
 function getRollingCompactionProgress(
@@ -1008,47 +1320,66 @@ function getRollingCompactionProgress(
 
 function buildFallbackCompactionSummary(previousSummary: string, recentWindow: Array<any>, maxWords: number): string {
   const lines: string[] = [];
-  if (previousSummary) {
-    lines.push('1. Primary Request and Intent:');
-    lines.push(previousSummary.replace(/\s+/g, ' ').trim().slice(0, 2400));
-  }
+  lines.push('1. Primary Request and Intent:');
+  lines.push(previousSummary ? previousSummary.replace(/\s+/g, ' ').trim().slice(0, 2400) : 'Unknown');
+  lines.push('2. Key Technical Concepts:');
+  lines.push('Unknown');
+  lines.push('3. Files and Code Sections:');
+  lines.push('Unknown');
+  lines.push('4. Errors, Fixes, and Test Results:');
+  lines.push('Unknown');
+  lines.push('5. Problem Solving and Decisions:');
+  lines.push('Unknown');
+  lines.push('6. Recent User Messages:');
   const newestFirst = [...recentWindow].reverse().slice(0, 10);
-  if (newestFirst.length > 0) lines.push('2. Recent Conversation Updates (newest first):');
   for (const msg of newestFirst) {
-    const role = msg.role === 'assistant' ? 'Assistant' : 'User';
-    const body = String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    const role = String(msg.role || 'unknown');
+    const rawContent = Array.isArray(msg.content)
+      ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join(' ')
+      : String(msg.content || '');
+    const body = rawContent.replace(/\s+/g, ' ').trim().slice(0, 240);
     if (body) lines.push(`- ${role}: ${body}`);
   }
-  lines.push('3. Continue From Here:');
-  lines.push('Resume directly from the latest user request. Do not recap this summary to the user unless they ask.');
-  const words = lines.join('\n').split(/\s+/).filter(Boolean);
-  return words.slice(0, Math.max(80, maxWords)).join(' ').trim();
+  if (newestFirst.length === 0) lines.push('None yet.');
+  lines.push('7. Pending Tasks:');
+  lines.push('Unknown');
+  lines.push('8. Current Work:');
+  lines.push('Continue from the latest available message and preserve user-owned changes.');
+  lines.push('9. Recovery Artifacts:');
+  lines.push('Unknown');
+  lines.push('10. Continue From Here:');
+  lines.push('Resume directly from the latest user request. Do not recap this summary to the user unless they ask. Prioritize the latest task and continue naturally as if no compaction happened.');
+  return boundCompactionSummaryWords(lines.join('\n'), maxWords);
 }
 
-async function maybeRunRollingCompaction(
-  sessionId: string,
-  incomingUserMsg: { role: 'user'; content: string; timestamp: number },
-  abortSignal?: { aborted: boolean; signal?: AbortSignal },
-): Promise<{ compacted: boolean; summaryText?: string; mode?: 'llm' | 'fallback' }> {
-  const policy = resolveRollingCompactionPolicy();
-  if (!policy.enabled) return { compacted: false };
-  const session = getSession(sessionId);
-  const { nonSummarySinceCheckpoint, candidateNonSummaryMessages } = getRollingCompactionProgress(session, incomingUserMsg);
-  if (nonSummarySinceCheckpoint < policy.messageCount) return { compacted: false };
+interface ContextCompactorRunInput {
+  sessionId: string;
+  strategy: 'rolling_window' | 'mid_workflow_token_budget';
+  targetLengthText: string;
+  maxWords: number;
+  previousSummary: string;
+  recentMessagesBlock: string;
+  recentToolLogsBlock: string;
+  artifactPathsBlock: string;
+  recentWindow: Array<any>;
+  numCtx: number;
+  numPredict: number;
+  model?: string;
+  abortSignal?: { aborted: boolean; signal?: AbortSignal };
+  recordMeta: Record<string, any>;
+}
 
-  const recentWindow = candidateNonSummaryMessages.slice(-policy.messageCount);
-  const previousSummary = String((session as any).latestContextSummary || '').trim()
-    || extractLastCompactionSummary(session.history || []);
-  const recentMessagesBlock = formatCompactionMessages(recentWindow);
-  const recentToolLogsBlock = formatCompactionToolLogs(recentWindow, policy.toolTurns);
-  const artifactPathsBlock = formatCompactionArtifactPaths(sessionId);
-
+function buildContextCompactionPrompt(input: ContextCompactorRunInput): string {
+  const modeDescription = input.strategy === 'mid_workflow_token_budget'
+    ? 'This compaction is happening mid-workflow between tool rounds because the active model context budget is near its limit.'
+    : 'This compaction is happening at a rolling conversation checkpoint after enough new messages accumulated.';
   const promptLines: string[] = [
     'Create a structured rolling resume packet for context compaction.',
-    `Target length: <= ${policy.summaryMaxWords} words.`,
+    `Target length: ${input.targetLengthText}.`,
+    modeDescription,
     'This summary will be injected into a future model context so it can continue the same work after older messages are dropped.',
     'Write it like a handoff/resume note, not like a user-facing recap.',
-    'Preserve concrete implementation state, decisions, file paths, function/class names, command/test results, blockers, user preferences, and the newest user request.',
+    'Preserve concrete implementation state, decisions, file paths, function/class names, command/test results, blockers, approvals/pending waits, user preferences, and the newest user request.',
     'Keep the order below and include every section. Use concise bullets under each section. If a section has no known details, write "Unknown" or "None yet."',
     'Do not invent details. Do not include generic advice. Output plain text only.',
     '',
@@ -1066,85 +1397,241 @@ async function maybeRunRollingCompaction(
     'In "Continue From Here", explicitly instruct the next assistant to resume directly, avoid recapping the summary to the user, prioritize the latest task, protect user-owned changes, and continue naturally as if no compaction happened.',
     '',
     '[PREVIOUS_SUMMARY]',
-    previousSummary || '(none)',
+    input.previousSummary || '(none)',
     '',
     '[RECOVERY_ARTIFACT_PATHS]',
-    artifactPathsBlock,
+    input.artifactPathsBlock || '(none)',
     '',
-    `[RECENT_MESSAGES newest->oldest, window=${policy.messageCount}]`,
-    recentMessagesBlock || '(none)',
+    '[RECENT_MESSAGES newest->oldest]',
+    input.recentMessagesBlock || '(none)',
     '',
-    `[RECENT_TOOL_LOGS newest->oldest, assistant_turns=${policy.toolTurns}]`,
-    recentToolLogsBlock || '(none)',
+    '[RECENT_TOOL_OBSERVATIONS newest->oldest]',
+    input.recentToolLogsBlock || '(none)',
   ];
+  return promptLines.join('\n');
+}
 
+async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ compacted: boolean; summaryText?: string; mode?: 'llm' | 'fallback' }> {
+  const session = getSession(input.sessionId);
+  const prompt = buildContextCompactionPrompt(input);
   try {
-    const ollama = getOllamaClient();
-    const compactResult = await ollama.chatWithThinking(
+    const compactResult = await getOllamaClient().chatWithThinking(
       [
         {
           role: 'system',
           content: 'You are ContextCompactor. You only produce a faithful rolling summary for context retention. No tools, no chatter.',
         },
-        {
-          role: 'user',
-          content: promptLines.join('\n'),
-        },
+        { role: 'user', content: prompt },
       ],
       'manager',
       {
         temperature: 0.1,
-        num_ctx: resolveCompactionNumCtx(),
-        num_predict: Math.max(900, Math.min(2600, Math.ceil(policy.summaryMaxWords * 1.8))),
-        ...(policy.model ? { model: policy.model } : {}),
-        usageContext: { sessionId, agentId: 'context_compactor' },
+        num_ctx: input.numCtx,
+        num_predict: input.numPredict,
+        ...(input.model ? { model: input.model } : {}),
+        usageContext: { sessionId: input.sessionId, agentId: 'context_compactor' },
       },
     );
 
-    if (abortSignal?.aborted) return { compacted: false };
+    if (input.abortSignal?.aborted) return { compacted: false };
 
     const rawSummary = String(compactResult?.message?.content || '');
-    const summary = String(stripExplicitThinkTags(rawSummary)?.cleaned || '').trim() || previousSummary;
-    const boundedSummary = summary.slice(0, 12000).trim();
+    const summary = String(stripExplicitThinkTags(rawSummary)?.cleaned || '').trim() || input.previousSummary;
+    const boundedSummary = boundCompactionSummaryWords(summary, input.maxWords).slice(0, 12000).trim();
     if (!boundedSummary) return { compacted: false };
 
-    recordSessionCompaction(
-      sessionId,
-      'rolling',
-      boundedSummary,
-      session.history.length,
-      {
-        strategy: 'rolling_window',
-        message_window: policy.messageCount,
-        tool_turn_window: policy.toolTurns,
-        summary_max_words: policy.summaryMaxWords,
-        mode: 'llm',
-      },
-    );
+    recordSessionCompaction(input.sessionId, 'rolling', boundedSummary, session.history.length, {
+      ...input.recordMeta,
+      strategy: input.strategy,
+      mode: 'llm',
+    });
     return { compacted: true, summaryText: boundedSummary, mode: 'llm' };
   } catch (err: any) {
-    console.warn('[v2] Rolling context compaction failed:', err?.message || err);
-    const fallbackSummary = buildFallbackCompactionSummary(previousSummary, recentWindow, policy.summaryMaxWords);
+    console.warn(`[v2] Context compaction failed (${input.strategy}):`, err?.message || err);
+    const fallbackSummary = buildFallbackCompactionSummary(input.previousSummary, input.recentWindow, input.maxWords);
     if (!fallbackSummary) return { compacted: false };
     try {
-      recordSessionCompaction(
-        sessionId,
-        'rolling',
-        fallbackSummary,
-        session.history.length,
-        {
-          strategy: 'rolling_window',
-          message_window: policy.messageCount,
-          tool_turn_window: policy.toolTurns,
-          summary_max_words: policy.summaryMaxWords,
-          mode: 'fallback',
-        },
-      );
+      recordSessionCompaction(input.sessionId, 'rolling', fallbackSummary, session.history.length, {
+        ...input.recordMeta,
+        strategy: input.strategy,
+        mode: 'fallback',
+      });
       return { compacted: true, summaryText: fallbackSummary, mode: 'fallback' };
     } catch (fallbackErr: any) {
-      console.warn('[v2] Rolling compaction fallback failed:', fallbackErr?.message || fallbackErr);
+      console.warn(`[v2] Context compaction fallback failed (${input.strategy}):`, fallbackErr?.message || fallbackErr);
       return { compacted: false };
     }
+  }
+}
+
+async function maybeRunRollingCompaction(
+  sessionId: string,
+  incomingUserMsg: { role: 'user'; content: string; timestamp: number },
+  abortSignal?: { aborted: boolean; signal?: AbortSignal },
+): Promise<{ compacted: boolean; summaryText?: string; mode?: 'llm' | 'fallback' }> {
+  const policy = resolveRollingCompactionPolicy();
+  if (!policy.enabled) return { compacted: false };
+  const session = getSession(sessionId);
+  const { nonSummarySinceCheckpoint, candidateNonSummaryMessages } = getRollingCompactionProgress(session, incomingUserMsg);
+  if (nonSummarySinceCheckpoint < policy.messageCount) return { compacted: false };
+
+  const recentWindow = candidateNonSummaryMessages.slice(-policy.messageCount);
+  const previousSummary = String((session as any).latestContextSummary || '').trim()
+    || extractLastCompactionSummary(session.history || []);
+  return runContextCompactor({
+    sessionId,
+    strategy: 'rolling_window',
+    targetLengthText: `<= ${policy.summaryMaxWords} words`,
+    maxWords: policy.summaryMaxWords,
+    previousSummary,
+    recentMessagesBlock: formatCompactionMessages(recentWindow),
+    recentToolLogsBlock: getRecentToolObservationsForContext(sessionId, policy.toolTurns, 12000)
+      || formatCompactionToolLogs(recentWindow, policy.toolTurns),
+    artifactPathsBlock: formatCompactionArtifactPaths(sessionId),
+    recentWindow,
+    numCtx: resolveCompactionNumCtx(),
+    numPredict: Math.max(900, Math.min(2600, Math.ceil(policy.summaryMaxWords * 1.8))),
+    model: policy.model || undefined,
+    abortSignal,
+    recordMeta: {
+      message_window: policy.messageCount,
+      tool_turn_window: policy.toolTurns,
+      summary_max_words: policy.summaryMaxWords,
+    },
+  });
+}
+
+async function maybeRunMidWorkflowCompaction(input: {
+  sessionId: string;
+  messages: Array<any>;
+  toolResults: ToolResult[];
+  sendSSE: (event: string, data: any) => void;
+  abortSignal?: { aborted: boolean; signal?: AbortSignal };
+  reasonHint?: string;
+}): Promise<{ compacted: boolean; summaryText?: string; projectedTokens: number; triggerTokens: number }> {
+  const cfg = (getConfig().getConfig() as any)?.session || {};
+  if (cfg?.rollingCompactionEnabled === false) return { compacted: false, projectedTokens: 0, triggerTokens: 0 };
+  const profile = resolveActiveModelContextProfile();
+  const budget = buildContextBudget(profile);
+  const projectedTokens = estimateMessagesTokensForModel(input.messages, profile);
+  const recentToolText = formatCompactionToolResults(input.sessionId, input.toolResults, 8);
+  const recentToolTokens = estimateTextTokensForModel(recentToolText, profile.tokenizer);
+  const shouldCompact = projectedTokens >= budget.compactionTriggerTokens
+    || recentToolTokens >= budget.toolContextBudgetTokens;
+  if (!shouldCompact) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
+
+  const reason = projectedTokens >= budget.compactionTriggerTokens
+    ? 'projected_context_over_budget'
+    : 'tool_context_over_budget';
+  input.sendSSE('tool_call', {
+    action: CONTEXT_COMPACTION_TOOL_NAME,
+    args: {
+      phase: 'start',
+      mode: 'mid_workflow',
+      reason: input.reasonHint || reason,
+      projected_tokens: projectedTokens,
+      trigger_tokens: budget.compactionTriggerTokens,
+      input_budget_tokens: budget.inputBudgetTokens,
+      context_window_tokens: profile.contextWindowTokens,
+      provider: profile.providerId,
+      model: profile.model,
+    },
+    synthetic: true,
+    actor: 'system',
+  });
+
+  const systemMessage = input.messages.find((m) => m?.role === 'system');
+  const nonSystemMessages = input.messages.filter((m) => m?.role !== 'system');
+  const recentWindow = nonSystemMessages.slice(-18);
+  const session = getSession(input.sessionId);
+  const previousSummary = String((session as any).latestContextSummary || '').trim()
+    || extractLastCompactionSummary(session.history || []);
+  const summaryMaxTokens = Math.max(700, Math.min(2400, budget.summaryBudgetTokens));
+  const summaryMaxWords = Math.max(220, Math.min(1500, Math.ceil(summaryMaxTokens / 1.3)));
+
+  try {
+    const compactorResult = await runContextCompactor({
+      sessionId: input.sessionId,
+      strategy: 'mid_workflow_token_budget',
+      targetLengthText: `about ${summaryMaxTokens} tokens or less`,
+      maxWords: summaryMaxWords,
+      previousSummary,
+      recentMessagesBlock: formatCompactionMessages(recentWindow),
+      recentToolLogsBlock: recentToolText,
+      artifactPathsBlock: formatCompactionArtifactPaths(input.sessionId),
+      recentWindow,
+      numCtx: Math.min(profile.contextWindowTokens, Math.max(4096, budget.inputBudgetTokens)),
+      numPredict: Math.max(900, Math.min(2600, Math.ceil(summaryMaxTokens * 1.2))),
+      model: String(cfg?.rollingCompactionModel || '').trim() || undefined,
+      abortSignal: input.abortSignal,
+      recordMeta: {
+        reason,
+        projected_tokens: projectedTokens,
+        trigger_tokens: budget.compactionTriggerTokens,
+        input_budget_tokens: budget.inputBudgetTokens,
+        context_window_tokens: profile.contextWindowTokens,
+        provider: profile.providerId,
+        model: profile.model,
+        tool_result_count: input.toolResults.length,
+        summary_max_words: summaryMaxWords,
+      },
+    });
+    if (!compactorResult.compacted || !compactorResult.summaryText) {
+      return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
+    }
+    const boundedSummary = compactorResult.summaryText;
+
+    input.messages.splice(0, input.messages.length);
+    if (systemMessage) input.messages.push(systemMessage);
+    input.messages.push({
+      role: 'assistant',
+      content: `[Rolling context summary]\n${boundedSummary}`,
+    });
+    input.messages.push({
+      role: 'user',
+      content: 'Context was compacted mid-workflow. Continue the active task directly from the summary above; do not recap the compaction to the user.',
+    });
+
+    const newProjectedTokens = estimateMessagesTokensForModel(input.messages, profile);
+    input.sendSSE('tool_result', {
+      action: CONTEXT_COMPACTION_TOOL_NAME,
+      result: `Thread compacted mid-workflow. Continuing with ${newProjectedTokens}/${budget.inputBudgetTokens} estimated input tokens.`,
+      error: false,
+      synthetic: true,
+      actor: 'system',
+      extra: {
+        phase: 'result',
+        status: 'compacted',
+        mode: 'mid_workflow',
+        summary_mode: compactorResult.mode || 'llm',
+        reason,
+        summary: boundedSummary,
+        projected_tokens_before: projectedTokens,
+        projected_tokens_after: newProjectedTokens,
+        input_budget_tokens: budget.inputBudgetTokens,
+        context_window_tokens: profile.contextWindowTokens,
+        provider: profile.providerId,
+        model: profile.model,
+      },
+    });
+    return { compacted: true, summaryText: boundedSummary, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
+  } catch (err: any) {
+    console.warn('[v2] Mid-workflow compaction failed:', err?.message || err);
+    input.sendSSE('tool_result', {
+      action: CONTEXT_COMPACTION_TOOL_NAME,
+      result: `Thread compaction failed; continuing with bounded context. ${String(err?.message || err || '').slice(0, 300)}`,
+      error: false,
+      synthetic: true,
+      actor: 'system',
+      extra: {
+        phase: 'result',
+        status: 'failed',
+        mode: 'mid_workflow',
+        projected_tokens: projectedTokens,
+        input_budget_tokens: budget.inputBudgetTokens,
+      },
+    });
+    return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
   }
 }
 
@@ -1189,20 +1676,21 @@ async function handleChat(
   const rawSendSSE = sendSSE;
   const callerContextText = String(callerContext || '');
   const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
-  const voiceNarrator = createVoiceNarrator(sessionId, message, (data) => {
+  const voiceNarrator = voiceAgentHandoffActive ? createVoiceNarrator(sessionId, message, (data) => {
     rawSendSSE('voice_milestone', data);
     mirrorSessionChatEvent(sessionId, 'voice_milestone', data, broadcastWS);
   }, abortSignal?.signal, {
     suppressTaskStartFallback: voiceAgentHandoffActive,
-  });
+  }) : null;
   sendSSE = (event: string, data: any) => {
     rawSendSSE(event, data);
     mirrorSessionChatEvent(sessionId, event, data, broadcastWS);
-    try { voiceNarrator.observe(event, data); } catch (err: any) {
+    try { voiceNarrator?.observe(event, data); } catch (err: any) {
       console.warn('[voice narrator] failed:', err?.message || err);
     }
   };
   sendSSE('ui_preflight', { message: 'Preparing Prometheus runtime...' });
+  __htimeReset(); htime('handleChat: after Preparing Prometheus runtime');
   const isHandleChatGoalContinuation = isMainChatGoalContinuation(message);
   const handleChatGoalPolicy = isHandleChatGoalContinuation ? resolveMainChatGoalPolicy() : null;
   const handleChatGoalExecutionPolicy = isHandleChatGoalContinuation ? {
@@ -1255,6 +1743,7 @@ async function handleChat(
     clearTaskRunBinding(sessionId, binding.taskId);
   };
   console.log(`[v2] SESSION: ${sessionId} | Workspace: ${workspacePath}`);
+  htime('after buildExecuteToolDeps/finalizeBoundTaskRun closures');
   const creativeMode = executionMode === 'interactive' ? getCreativeMode(sessionId) : null;
   const effectiveMaxToolRounds = resolveEffectiveMaxToolRounds(MAX_TOOL_ROUNDS, {
     creativeMode,
@@ -1262,9 +1751,11 @@ async function handleChat(
     message,
   });
   const activeHistoryMessageCount = resolveRollingCompactionPolicy().messageCount;
+  htime('before getHistoryForApiCall');
   const rawHistory = executionMode === 'cron'
     ? []
     : getHistoryForApiCall(sessionId, Math.ceil(activeHistoryMessageCount / 2), { maxMessages: activeHistoryMessageCount });
+  htime('after getHistoryForApiCall');
   const normalizedIncomingMessage = String(message || '').replace(/\s+/g, ' ').trim();
   // runInteractiveTurn persists the incoming user turn before calling handleChat.
   // Keep persisted storage unchanged, but avoid sending that same turn twice to the model.
@@ -1276,9 +1767,14 @@ async function handleChat(
   if (executionMode !== 'cron') {
     autoActivateToolCategories(sessionId, message, history.length);
   }
-  // Build compact tool log from last 3 assistant turns — injected into system prompt
-  // so the model always knows what it recently did even across the short history window.
-  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolLog(sessionId, 5);
+  // Build compact tool observations from recent assistant turns so the model
+  // knows what it recently did even across the short history window.
+  const activeContextProfile = resolveActiveModelContextProfile();
+  const activeContextBudget = buildContextBudget(activeContextProfile);
+  const recentToolLogMaxChars = Math.max(2500, Math.min(16000, activeContextBudget.toolContextBudgetTokens * 3));
+  htime('before getRecentToolObservationsForContext');
+  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 5, recentToolLogMaxChars);
+  htime('after getRecentToolObservationsForContext');
   const inferReferenceImageMimeType = (filePath: string): string => {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
@@ -1545,6 +2041,7 @@ async function handleChat(
   };
   let tools = buildCurrentTurnTools();
   const allToolResults: ToolResult[] = [];
+  let midWorkflowCompactionsThisTurn = 0;
   const turnCanvasFiles = new Set<string>();
   const finalizeSkillGardenerForTurn = (finalResponse: string): string => {
     recordSkillGardenerTurn({
@@ -1748,9 +2245,13 @@ async function handleChat(
     const model = String(generationOverride.model || modelOverride || providerCfgModel || getPrimaryModel() || '').trim();
     return resolvePrimaryModelCapabilities({ providerId, model });
   };
+  htime('before initial provider/model resolution');
   const initialGenerationOverride = resolveProviderModelOverride();
+  htime('after initial provider/model resolution');
   currentModelCapabilities = resolveCapabilitiesForGenerationOverride(initialGenerationOverride);
+  htime('before initial tool build');
   tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
+  htime('after initial tool build');
   const buildModelCapabilitySystemBlock = (): string => {
     const provider = currentModelCapabilities.provider || 'unknown';
     const model = currentModelCapabilities.model || 'unknown';
@@ -2011,6 +2512,7 @@ async function handleChat(
   );
   emitProgressState('reset');
 
+  htime('before preempt watchdog setup');
   // ── Preempt watchdog setup ─────────────────────────────────────────────────
   const rawCfgForPreempt = (getConfig().getConfig() as any);
   const primaryProvider = rawCfgForPreempt.llm?.provider || 'ollama';
@@ -2085,6 +2587,7 @@ async function handleChat(
   let browserVisionModeActive = false;
   const browserAdvisorCollectedFeed: Array<Record<string, any>> = [];
   const browserAdvisorSeenFeedKeys = new Set<string>();
+  htime('before orchestration config / fileop');
   const orchRuntimeCfg = getOrchestrationConfig();
   const fileOpSettings = resolveFileOpSettings(orchRuntimeCfg as any);
   const fileOpRouterEnabled =
@@ -2395,6 +2898,7 @@ async function handleChat(
   }
 
   const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
+  htime('reached Building model context');
   sendSSE('ui_preflight', { message: 'Building model context...' });
   const personalityCtx = await buildPersonalityContext(
     sessionId,
@@ -2410,6 +2914,7 @@ async function handleChat(
       ? { profile: 'teach_mode' }
       : (isLocalPrimary ? { profile: 'local_llm' } : undefined),
   );
+  htime('after buildPersonalityContext');
   let switchModelPersonalityCtx: string | null = null;
 
   // Inject active browser session state so LLM knows to reuse it instead of re-opening
@@ -3925,7 +4430,8 @@ RULES:
         role: 'system',
         content: `You are Prom. Execute desktop tool calls exactly as instructed by the advisor directive below.
 
-DESKTOP TOOLS: desktop_screenshot, desktop_get_monitors, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_scroll, desktop_wait, desktop_type, desktop_type_raw, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard
+DESKTOP TOOLS: desktop_list_apps, desktop_list_windows, desktop_get_window_state, desktop_screenshot, desktop_get_monitors, desktop_find_window, desktop_focus_window, desktop_click, desktop_drag, desktop_scroll, desktop_wait, desktop_type, desktop_type_raw, desktop_press_key, desktop_get_clipboard, desktop_set_clipboard, desktop_window_click, desktop_window_type, desktop_window_press_key, desktop_window_scroll, desktop_window_drag
+WINDOW-SCOPED MODEL: Prefer desktop_list_windows / desktop_get_window_state to resolve a stable window_id, then desktop_window_click / desktop_window_type / desktop_window_press_key (coordinates default to window-space) for deterministic targeting of a specific app window.
 
 RULES:
 1. Call exactly the tool and params the advisor specifies.
@@ -4299,7 +4805,7 @@ RULES:
 	        ? (reasoningOptions.level === 'extra_high' ? 'xhigh' : (reasoningOptions.level || 'low'))
 	        : undefined;
 	      const activeProviderForThinking = String(generationOverride.providerId || providerOverride || '').trim();
-	      const primaryThinkMode: boolean | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' | undefined =
+	      const primaryThinkMode: boolean | 'max' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' | undefined =
 	        requestedThinkMode
 	          || ((multiAgentActive && !isActiveAutomationOp)
 	            ? true
@@ -4321,10 +4827,8 @@ RULES:
                 sendSSE('info', { message: 'Grok greeting output was too long; trimming the response.' });
                 return;
               }
-              const paragraphs = streamedVisibleText
-                .split(/\n{2,}/)
-                .map(p => normalizeForDedup(p))
-                .filter(Boolean);
+              const rawParagraphs = streamedVisibleText.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+              const paragraphs = rawParagraphs.map(p => normalizeForDedup(p)).filter(Boolean);
               const tail = paragraphs.slice(-8);
               const uniqueTail = new Set(tail);
               if (tail.length >= 6 && uniqueTail.size <= 3) {
@@ -4333,8 +4837,31 @@ RULES:
                 sendSSE('info', { message: 'Grok output repetition detected; trimming the response.' });
                 return;
               }
+              if (isLikelyGrokInlineLoop(streamedVisibleText)) {
+                suppressRunawayStream = true;
+                console.warn('[v2] GROK INLINE LOOP GUARD: suppressing repeated parenthetical/text output');
+                sendSSE('info', { message: 'Grok inline repetition detected; trimming the response.' });
+                return;
+              }
+              // Short-phrase affirmation loop: Grok emits many unique but tiny fragments
+              // (e.g. "Yes.", "Done.", "(End.)", "👍") that evade the unique-set check above.
+              const rawTail = rawParagraphs.slice(-10);
+              if (rawTail.length >= 4) {
+                let consecutiveShort = 0;
+                let maxRun = 0;
+                for (const p of rawTail) {
+                  if (p.length < 40) { consecutiveShort++; maxRun = Math.max(maxRun, consecutiveShort); }
+                  else consecutiveShort = 0;
+                }
+                if (maxRun >= 3) {
+                  suppressRunawayStream = true;
+                  console.warn('[v2] GROK SHORT-PHRASE LOOP GUARD: affirmation loop detected');
+                  sendSSE('info', { message: 'Grok affirmation loop detected; trimming the response.' });
+                  return;
+                }
+              }
             }
-            if (streamedVisibleText.length > 8000) {
+            if (streamedVisibleText.length > 5000) {
               suppressRunawayStream = true;
               console.warn('[v2] GROK STREAM LENGTH GUARD: suppressing oversized model output');
               sendSSE('info', { message: 'Grok response is too long; trimming the output.' });
@@ -4658,23 +5185,6 @@ RULES:
         progressState.manualStepAdvance
         && progressState.items.length >= 2
         && getProgressRemaining() > 0;
-      const isExecutionTurn =
-        preflightRoute === 'primary_with_plan'
-        || allToolResults.length > 0
-        || isExecutionLikeRequest(message)
-        || pendingExecutionFromHistory;
-      const lastToolFailed = allToolResults.length > 0 && allToolResults[allToolResults.length - 1].error;
-      const shouldContinueInsteadOfFinalizing =
-        isExecutionTurn
-        && continuationNudges < MAX_CONTINUATION_NUDGES
-        && !hasConcreteCompletion(candidateText)
-        && !isHardBlockerReply(candidateText)
-        && (
-          looksLikeIntentOnlyReply(candidateText)
-          || (continuationCue && candidateText.length < 220)
-          || (lastToolFailed && looksLikeIntentOnlyReply(candidateText))
-        );
-
       const shouldForceBrowserRetry =
         orchestrationSkillEnabled
         && browserContinuationPending
@@ -4812,67 +5322,6 @@ RULES:
           role: 'user',
           content: `${preview}\nDo not stop. Call the next desktop tool now. If the UI likely changed or the outcome is ambiguous, use desktop_screenshot again.`,
         });
-        continue;
-      }
-
-      if (shouldContinueInsteadOfFinalizing) {
-        continuationNudges++;
-        const nudgeReason = lastToolFailed
-          ? 'last tool failed'
-          : 'intent-only response with no tool execution';
-        console.log(`[v2] ORCH POST-CHECK: forcing continuation (${continuationNudges}/${MAX_CONTINUATION_NUDGES}) — ${nudgeReason}`);
-        sendSSE('info', {
-          message: `Post-check: continuing (${continuationNudges}/${MAX_CONTINUATION_NUDGES}) — ${nudgeReason}.`,
-        });
-
-        // Build context-rich nudge: original request + what was done + what's next
-        const recentActions = allToolResults
-          .slice(-4)
-          .map((r, i) => {
-            const status = r.error ? '✗' : '✓';
-            const preview = String(r.result || '').slice(0, 120).replace(/\n/g, ' ');
-            return `  ${status} ${String(r.name || 'tool')}${
-              r.error ? ` — ERROR: ${preview}` : (preview ? ` — ${preview}` : '')
-            }`;
-          })
-          .join('\n');
-
-        // If there's a declared plan, include its current state
-        const planLines: string[] = [];
-        if (progressState.items.length >= 2) {
-          for (const item of progressState.items) {
-            const icon = item.status === 'done' ? '✓' : item.status === 'in_progress' ? '►' : item.status === 'failed' ? '✗' : ' ';
-            planLines.push(`  [${icon}] ${item.text}`);
-          }
-        }
-
-        const nudgeParts: string[] = [
-          `You described an intention but called no tools. You must act now.`,
-          ``,
-          `Original request: "${message.slice(0, 200)}"`,
-        ];
-        if (planLines.length > 0) {
-          nudgeParts.push(``, `Plan status:`, ...planLines);
-        }
-        if (recentActions) {
-          nudgeParts.push(``, `Last actions taken:`, recentActions);
-        }
-        if (lastToolFailed) {
-          nudgeParts.push(``, `Your last tool call FAILED. Inspect the error above, correct the parameters, and retry.`);
-        } else {
-          const nextStep = progressState.items.find(i => i.status === 'pending' || i.status === 'in_progress');
-          nudgeParts.push(
-            ``,
-            nextStep
-              ? `Next step: ${nextStep.text} — call the tool now.`
-              : `Call the next required tool now. Do not explain — execute.`,
-          );
-        }
-        if (executionMode === 'cron' || executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'background_agent' || executionMode === 'team_manager' || executionMode === 'team_subagent') {
-          nudgeParts.push(`Filesystem: list_directory(path="."), read_file, create_file, replace_lines, find_replace, mkdir. Never use path="".`);
-        }
-
-        messages.push({ role: 'user', content: nudgeParts.join('\n') });
         continue;
       }
 
@@ -5301,6 +5750,18 @@ RULES:
       const finalGeneratedImages = collectGeneratedMedia('image');
       const finalGeneratedVideos = collectGeneratedMedia('video');
       const finalCanvasFiles = Array.from(turnCanvasFiles);
+      const collectProductCarousel = (): { title: string; items: any[] } | undefined => {
+        for (const result of allToolResults as any[]) {
+          if (result?.name !== 'show_product_carousel') continue;
+          const sources = [result?.extra, result?.data, result].filter((s) => s && typeof s === 'object');
+          for (const source of sources) {
+            if (source?.productCarousel && typeof source.productCarousel === 'object') return source.productCarousel;
+          }
+        }
+        return undefined;
+      };
+      const finalProductCarousel = collectProductCarousel();
+      const finalFileChanges = collectTurnFileChanges(allToolResults as any[], workspacePath);
 
       const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(finalText);
       finalizeBoundTaskRun(/^\s*ERROR:/i.test(finalTextWithSkillOffer) ? 'failed' : 'complete', finalTextWithSkillOffer);
@@ -5313,6 +5774,8 @@ RULES:
         generatedImages: finalGeneratedImages.length > 0 ? finalGeneratedImages : undefined,
         generatedVideos: finalGeneratedVideos.length > 0 ? finalGeneratedVideos : undefined,
         canvasFiles: finalCanvasFiles.length > 0 ? finalCanvasFiles : undefined,
+        fileChanges: finalFileChanges,
+        productCarousel: finalProductCarousel || undefined,
       };
     }
 
@@ -6357,6 +6820,21 @@ RULES:
 
     finalizeProgressRound();
 
+    if (!sessionId.startsWith('subagent_') && midWorkflowCompactionsThisTurn < 3 && messages.length > 3) {
+      const midCompact = await maybeRunMidWorkflowCompaction({
+        sessionId,
+        messages,
+        toolResults: allToolResults,
+        sendSSE,
+        abortSignal,
+      });
+      if (midCompact.compacted) {
+        midWorkflowCompactionsThisTurn++;
+        sendSSE('info', { message: 'Context compacted. Continuing the active workflow...' });
+      }
+      if (abortSignal?.aborted) return { type: 'chat', text: '' };
+    }
+
     // ── Orchestration: auto-trigger check after each round
     const orchCfg = getOrchestrationConfig();
     if (orchestrationSkillEnabled && orchCfg?.enabled && !isBootStartupTurn) {
@@ -6483,7 +6961,28 @@ function trimGrokRunawayRepetition(text: string): string {
   const raw = String(text || '').replace(/\r\n/g, '\n').trim();
   if (!raw) return '';
 
+  const inlineLoopTrimmed = trimGrokInlineLoop(raw);
+  if (inlineLoopTrimmed && inlineLoopTrimmed.length < raw.length) return inlineLoopTrimmed;
+
   const paragraphs = raw.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+
+  // Short-phrase affirmation loop: find where substantive content gives way to tiny fragments.
+  // Grok often produces good content then devolves into "Yes.", "Done.", "(End.)", "👍" etc.
+  if (paragraphs.length >= 4) {
+    let consecutiveShort = 0;
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (paragraphs[i].length < 40) {
+        consecutiveShort++;
+        if (consecutiveShort >= 3 && i - consecutiveShort + 1 > 0) {
+          const trimmed = paragraphs.slice(0, i - consecutiveShort + 1).join('\n\n').trim();
+          if (trimmed) return trimmed;
+        }
+      } else {
+        consecutiveShort = 0;
+      }
+    }
+  }
+
   const kept: string[] = [];
   const seen = new Map<string, number>();
   for (const paragraph of paragraphs) {
@@ -6510,6 +7009,58 @@ function trimGrokRunawayRepetition(text: string): string {
     out.push(sentence);
   }
   return (out.length ? out.join(' ') : joined).trim();
+}
+
+function getParentheticalRuns(text: string): string[] {
+  const matches = String(text || '').matchAll(/\(([^()\n]{1,60})\)/g);
+  return [...matches]
+    .map((match) => normalizeForDedup(match[1] || ''))
+    .filter(Boolean);
+}
+
+function isLikelyGrokInlineLoop(text: string): boolean {
+  const tail = String(text || '').slice(-1800);
+  const parentheticalRuns = getParentheticalRuns(tail);
+  if (parentheticalRuns.length >= 24) {
+    const unique = new Set(parentheticalRuns);
+    if (unique.size <= 16 || unique.size / parentheticalRuns.length <= 0.65) return true;
+  }
+
+  const words = tail
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(w => w.length > 1);
+  if (words.length < 80) return false;
+  const grams: string[] = [];
+  for (let i = 0; i <= words.length - 3; i++) grams.push(words.slice(i, i + 3).join(' '));
+  if (grams.length < 50) return false;
+  const uniqueGrams = new Set(grams);
+  return uniqueGrams.size / grams.length <= 0.42;
+}
+
+function trimGrokInlineLoop(text: string): string {
+  const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!raw || !isLikelyGrokInlineLoop(raw)) return raw;
+
+  const matches = [...raw.matchAll(/\(([^()\n]{1,60})\)/g)];
+  if (matches.length < 24) return raw.slice(0, 1800).trim();
+
+  const seen = new Map<string, number>();
+  for (const match of matches) {
+    const norm = normalizeForDedup(match[1] || '');
+    if (!norm) continue;
+    const count = (seen.get(norm) || 0) + 1;
+    seen.set(norm, count);
+    if (count >= 3) {
+      const cutAt = typeof match.index === 'number' ? match.index : raw.length;
+      const trimmed = raw.slice(0, cutAt).trim();
+      return trimmed || raw.slice(0, 1800).trim();
+    }
+  }
+
+  return raw.slice(0, 1800).trim();
 }
 
 function shouldCheckBlockedTaskFollowup(message: string): boolean {
@@ -6631,6 +7182,23 @@ async function runInteractiveTurn(
   persistTurnOriginChannelHint(sessionId, turnOrigin);
   const existingMainChatStream = getMainChatStream(sessionId);
   const localMainChatStream = existingMainChatStream?.active ? null : beginMainChatStream(sessionId);
+  let localMainChatStreamCompleted = false;
+  const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any } | null | undefined): void => {
+    if (!localMainChatStream || localMainChatStreamCompleted) return;
+    localMainChatStreamCompleted = true;
+    appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, 'done', {
+      reply: String(result?.text || ''),
+      mode: String(result?.type || 'chat'),
+      sections: [{ type: result?.type === 'execute' ? 'tool_results' : 'text', content: String(result?.text || '') }],
+      thinking: result?.thinking,
+      results: result?.toolResults,
+      artifacts: result?.artifacts,
+      generatedImages: result?.generatedImages,
+      generatedVideos: result?.generatedVideos,
+      canvasFiles: result?.canvasFiles,
+      fileChanges: result?.fileChanges,
+    });
+  };
   const upstreamSendSSE = sendSSE;
   sendSSE = (event: string, data: any) => {
     if (localMainChatStream) {
@@ -6654,8 +7222,7 @@ async function runInteractiveTurn(
     clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId),
   });
   try {
-    const rollingCompactionPolicy = resolveRollingCompactionPolicy();
-    let rollingCompactionApplied = false;
+    const rollingCompactionApplied = false;
 
   if (!isSubagentChatSession && !isGoalContinuationTurn && /^\/goal(?:\s|$)/i.test(String(message || '').trim())) {
     const command = handleMainChatGoalCommand(sessionId, message);
@@ -6664,7 +7231,9 @@ async function runInteractiveTurn(
     addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now() }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     broadcastMainChatGoalState(sessionId, 'command', { goal: command.goal });
     if (command.shouldStartRunner) startMainChatGoalRunner(sessionId, 'goal_command');
-    return { type: 'chat', text: reply };
+    const commandResult = { type: 'chat' as const, text: reply };
+    completeLocalMainChatStream(commandResult);
+    return commandResult;
   }
 
   if (isSubagentChatSession) {
@@ -6673,78 +7242,21 @@ async function runInteractiveTurn(
     session.pendingMemoryFlush = false;
   }
 
-  if (!isSubagentChatSession && rollingCompactionPolicy.enabled) {
-    const currentSession = getSession(sessionId);
-    const { nonSummarySinceCheckpoint } = getRollingCompactionProgress(currentSession, userMsg);
-    const shouldAttemptRollingCompaction = nonSummarySinceCheckpoint >= rollingCompactionPolicy.messageCount;
-    if (shouldAttemptRollingCompaction) {
-      sendSSE('tool_call', {
-        action: CONTEXT_COMPACTION_TOOL_NAME,
-        args: {
-          phase: 'start',
-          threshold_messages: rollingCompactionPolicy.messageCount,
-          candidate_messages: nonSummarySinceCheckpoint,
-          tool_turn_window: rollingCompactionPolicy.toolTurns,
-          summary_max_words: rollingCompactionPolicy.summaryMaxWords,
-        },
-        synthetic: true,
-        actor: 'system',
-      });
-    }
-    const rollingResult = await maybeRunRollingCompaction(sessionId, userMsg, abortSignal);
-    if (rollingResult.compacted) {
-      rollingCompactionApplied = true;
-      const modeLabel = rollingResult.mode === 'fallback' ? 'fallback summary' : 'LLM summary';
-      const summaryText = String(rollingResult.summaryText || '').trim();
-      const summaryWordCount = summaryText ? summaryText.split(/\s+/).filter(Boolean).length : 0;
-      console.log(`[v2] Rolling context compaction applied for session ${sessionId} at ${rollingCompactionPolicy.messageCount} messages (${modeLabel}).`);
-      await maybeRefreshProjectLearning(sessionId, summaryText ? [summaryText] : undefined);
-      if (shouldAttemptRollingCompaction) {
-        sendSSE('tool_result', {
-          action: CONTEXT_COMPACTION_TOOL_NAME,
-          result: summaryText
-            ? `Thread compacted (${modeLabel}).\n\n${summaryText}`
-            : `Thread compacted (${modeLabel}).`,
-          error: false,
-          synthetic: true,
-          actor: 'system',
-          extra: {
-            phase: 'result',
-            status: 'compacted',
-            mode: modeLabel,
-            summary: summaryText,
-            summary_word_count: summaryWordCount,
-            message_window: rollingCompactionPolicy.messageCount,
-            tool_turn_window: rollingCompactionPolicy.toolTurns,
-            summary_max_words: rollingCompactionPolicy.summaryMaxWords,
-          },
-        });
-      }
-    } else if (shouldAttemptRollingCompaction) {
-      sendSSE('tool_result', {
-        action: CONTEXT_COMPACTION_TOOL_NAME,
-        result: 'Thread compaction skipped (continuing with normal flow).',
-        error: false,
-        synthetic: true,
-        actor: 'system',
-        extra: {
-          phase: 'result',
-          status: 'skipped',
-          message_window: rollingCompactionPolicy.messageCount,
-          tool_turn_window: rollingCompactionPolicy.toolTurns,
-          summary_max_words: rollingCompactionPolicy.summaryMaxWords,
-        },
-      });
-    }
-  }
+  // Legacy rolling message-count compaction is intentionally no longer triggered
+  // at turn start. Context compaction is now driven by provider-aware token/tool
+  // budgets inside the execution loop, so users do not see "every 20 messages"
+  // compaction attempts.
 
-  const addResult = addMessage(sessionId, userMsg, {
-    deferOnMemoryFlush: true,
-    deferOnCompaction: true,
-    disableCompactionCheck: rollingCompactionApplied || isSubagentChatSession,
-    disableMemoryFlushCheck: isSubagentChatSession,
-    maxMessages: isSubagentChatSession ? 120 : undefined,
-  });
+  const skipDuplicateVoiceWorkflowUser = hasRecentVoiceWorkflowUserMessage(sessionId, message);
+  const addResult: any = skipDuplicateVoiceWorkflowUser
+    ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
+    : addMessage(sessionId, userMsg, {
+        deferOnMemoryFlush: true,
+        deferOnCompaction: true,
+        disableCompactionCheck: rollingCompactionApplied || isSubagentChatSession,
+        disableMemoryFlushCheck: isSubagentChatSession,
+        maxMessages: isSubagentChatSession ? 120 : undefined,
+      });
 
   if (addResult.deferredForCompaction && addResult.compactionPrompt) {
     sendSSE('ui_preflight', { message: 'Compacting the thread before continuing...' });
@@ -6810,7 +7322,9 @@ async function runInteractiveTurn(
       addMessage(sessionId, { role: 'assistant', content: followupHandled, timestamp: Date.now() });
       await maybeRefreshProjectLearning(sessionId);
     }
-    return { type: 'chat', text: followupHandled };
+    const followupResult = { type: 'chat' as const, text: followupHandled };
+    completeLocalMainChatStream(followupResult);
+    return followupResult;
   }
 
   const pins = Array.isArray(pinnedMessages) ? pinnedMessages.slice(0, 3) : [];
@@ -6834,26 +7348,17 @@ async function runInteractiveTurn(
 	    callerOnToken,
 	  );
 
-  const toolLogLines = result.toolResults && result.toolResults.length > 0
-    ? result.toolResults.map((r, idx) => {
-        const ok = r.error ? 'error' : 'ok';
-        let args = '';
-        try {
-          args = JSON.stringify(r.args ?? {}, null, 2);
-        } catch {
-          args = String(r.args ?? '');
-        }
-        return [
-          `--- tool call ${idx + 1} ---`,
-          `name: ${r.name}`,
-          `status: ${ok}`,
-          'args:',
-          args,
-          'result:',
-          String(r.result || ''),
-        ].join('\n');
-      })
+  const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+  const toolObservations: ToolObservation[] = result.toolResults && result.toolResults.length > 0
+    ? persistToolResultsAsObservations(sessionId, turnObservationId, result.toolResults)
     : [];
+  const toolLogText = toolObservations.length > 0
+    ? formatToolObservationsForContext(toolObservations, { includeHeader: false, maxChars: 12000, maxObservations: 40 })
+    : '';
+  const resultFileChanges = result.fileChanges || collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
+  if (resultFileChanges && !result.fileChanges) {
+    (result as any).fileChanges = resultFileChanges;
+  }
   if (abortSignal?.aborted) {
     if (editRerunAbortResetSessions.has(String(sessionId || ''))) {
       return result;
@@ -6875,8 +7380,8 @@ async function runInteractiveTurn(
       '[Interrupted by user]',
       `In the middle of: ${workSummary}`,
       interruptedText || stepSummary,
-      toolLogLines.length > 0
-        ? `Recent tool/process context was preserved for continuation:\n${toolLogLines.join('\n')}`
+      toolLogText
+        ? `Recent tool/process context was preserved for continuation:\n${toolLogText}`
         : 'No tool calls had completed yet.',
       'When the user asks to continue, resume from this checkpoint instead of restarting from scratch.',
     ].filter(Boolean).join('\n\n');
@@ -6891,7 +7396,8 @@ async function runInteractiveTurn(
       role: 'assistant',
       content: visibleCheckpointText,
       timestamp: Date.now(),
-      toolLog: toolLogLines.join('\n\n') || checkpointPacket,
+      toolLog: toolLogText || checkpointPacket,
+      fileChanges: resultFileChanges || undefined,
       processEntries: [{
         ts: new Date().toLocaleTimeString(),
         type: 'warn',
@@ -6904,8 +7410,8 @@ async function runInteractiveTurn(
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
-    if (toolLogLines.length > 0) {
-      persistToolLog(sessionId, toolLogLines.join('\n\n'));
+    if (toolLogText) {
+      persistToolLog(sessionId, toolLogText);
     }
     if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
   } else {
@@ -6917,20 +7423,31 @@ async function runInteractiveTurn(
       generatedImages: Array.isArray(result.generatedImages) && result.generatedImages.length ? result.generatedImages : undefined,
       generatedVideos: Array.isArray(result.generatedVideos) && result.generatedVideos.length ? result.generatedVideos : undefined,
       canvasFiles: Array.isArray(result.canvasFiles) && result.canvasFiles.length ? result.canvasFiles : undefined,
-      toolLog: toolLogLines.length ? toolLogLines.join('\n\n') : undefined,
+      fileChanges: result.fileChanges || undefined,
+      productCarousel: result.productCarousel || undefined,
+      toolLog: toolLogText || undefined,
     }, {
       disableCompactionCheck: isSubagentChatSession,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
-    if (toolLogLines.length > 0) {
-      persistToolLog(sessionId, toolLogLines.join('\n\n'));
+    if (toolLogText) {
+      persistToolLog(sessionId, toolLogText);
     }
     if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId);
   }
 
+    completeLocalMainChatStream(result);
     return result;
   } finally {
+    if (localMainChatStream && !localMainChatStreamCompleted) {
+      appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, 'done', {
+        reply: '',
+        mode: 'chat',
+        sections: [],
+      });
+      localMainChatStreamCompleted = true;
+    }
     if (localMainChatStream) finishMainChatStream(sessionId, localMainChatStream.streamId);
   }
 }
@@ -7388,16 +7905,6 @@ function buildChatSteerContextBlock(event: RuntimeSteerEvent): string {
   ].filter(Boolean).join('\n');
 }
 
-function voiceInterruptionReply(intent: VoiceInterruptionIntent): string {
-  if (intent === 'cancel') return 'Got it. I am cancelling that.';
-  if (intent === 'pause') return 'Got it. I will pause the voice output.';
-  if (intent === 'question') return 'Got it. I will answer that in context.';
-  if (intent === 'continue') return '';
-  if (intent === 'course_correction') return 'Exactly. I will treat that as a correction and continue with the updated context.';
-  if (intent === 'unknown') return "I heard you interrupt, but I did not catch the correction clearly.";
-  return 'Got it. I will fold that into what I am doing.';
-}
-
 function appendVoiceInterruptionLog(event: any): void {
   try {
     const dir = path.join(getConfig().getConfigDir(), 'voice');
@@ -7762,6 +8269,106 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
   };
 }
 
+function getReusableVoiceContextPacket(sessionId: string, body: Record<string, any>, activeRuntime: any): Record<string, any> {
+  const provided = body?.contextPacket;
+  const sid = String(sessionId || 'default').trim() || 'default';
+  if (provided && typeof provided === 'object') {
+    const packetSessionId = String(provided.sessionId || '').trim();
+    const packetAgeMs = Date.now() - Number(provided.createdAt || 0);
+    const expectedRuntimeId = String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || activeRuntime?.id || '').trim();
+    const packetRuntimeId = String(provided.activeRun?.id || '').trim();
+    const packetMatchesRuntime = expectedRuntimeId ? packetRuntimeId === expectedRuntimeId : true;
+    if (
+      packetSessionId === sid
+      && Number.isFinite(packetAgeMs)
+      && packetAgeMs >= 0
+      && packetAgeMs <= 10_000
+      && packetMatchesRuntime
+    ) {
+      return provided;
+    }
+  }
+  return buildVoiceWorkerContextPacket(sid, {
+    ...body,
+    expectedRuntimeId: activeRuntime?.id || body.expectedRuntimeId || body.runtimeId || body.activeRunId,
+    originalUserPrompt: body.originalUserPrompt,
+  });
+}
+
+type VoiceAgentContextBlockCacheEntry = {
+  sessionId: string;
+  workspacePath: string;
+  historyLength: number;
+  contextBlock: string;
+  createdAt: number;
+};
+
+const VOICE_AGENT_CONTEXT_BLOCK_TTL_MS = 30_000;
+const voiceAgentContextBlockCache = new Map<string, VoiceAgentContextBlockCacheEntry>();
+const voiceAgentContextBlockPending = new Map<string, Promise<VoiceAgentContextBlockCacheEntry>>();
+
+function getVoiceAgentContextBlockCacheKey(sessionId: string): string {
+  return String(sessionId || 'default').trim() || 'default';
+}
+
+async function getVoiceAgentContextBlock(sessionId: string, transcript: string, options: Record<string, any> = {}): Promise<{ contextBlock: string; elapsedMs: number; cacheHit: boolean }> {
+  const sid = getVoiceAgentContextBlockCacheKey(sessionId);
+  const startedAt = Date.now();
+  const workspacePath = getConfig().getWorkspacePath();
+  const session = getSession(sid);
+  const history = Array.isArray(session?.history) ? session.history : [];
+  const historyLength = history.length;
+  const cached = voiceAgentContextBlockCache.get(sid);
+  const ageMs = cached ? Date.now() - Number(cached.createdAt || 0) : Number.POSITIVE_INFINITY;
+  if (
+    cached
+    && cached.workspacePath === workspacePath
+    && cached.historyLength === historyLength
+    && Number.isFinite(ageMs)
+    && ageMs >= 0
+    && ageMs <= VOICE_AGENT_CONTEXT_BLOCK_TTL_MS
+  ) {
+    return { contextBlock: cached.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: true };
+  }
+
+  const pending = voiceAgentContextBlockPending.get(sid);
+  if (pending) {
+    const entry = await pending;
+    if (entry.workspacePath === workspacePath && entry.historyLength === historyLength) {
+      return { contextBlock: entry.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: true };
+    }
+  }
+
+  const buildPromise = (async (): Promise<VoiceAgentContextBlockCacheEntry> => {
+    const contextBlock = await buildPersonalityContext(
+      sid,
+      workspacePath,
+      transcript,
+      'interactive',
+      historyLength,
+      _skillsManager,
+      undefined,
+      { profile: 'voice_agent' },
+    );
+    const entry = { sessionId: sid, workspacePath, historyLength, contextBlock, createdAt: Date.now() };
+    voiceAgentContextBlockCache.set(sid, entry);
+    return entry;
+  })();
+  voiceAgentContextBlockPending.set(sid, buildPromise);
+  try {
+    const entry = await buildPromise;
+    return { contextBlock: entry.contextBlock, elapsedMs: Date.now() - startedAt, cacheHit: false };
+  } finally {
+    if (voiceAgentContextBlockPending.get(sid) === buildPromise) voiceAgentContextBlockPending.delete(sid);
+  }
+}
+
+function prewarmVoiceAgentContextBlock(sessionId: string, transcript: string, options: Record<string, any> = {}): void {
+  getVoiceAgentContextBlock(sessionId, transcript, options).catch((err) => {
+    if (options.log !== false) console.warn('[voice-agent] context prewarm failed:', err?.message || err);
+  });
+}
+
 function isVoiceStatusQuestion(text: string): boolean {
   const value = String(text || '').toLowerCase();
   return /\b(what are you doing|what're you doing|what is happening|what's happening|status|where are we|where are you|what step|what stage|what did you do|what have you done|what do you see|what are you seeing|what's on screen|what is on screen)\b/.test(value);
@@ -7773,9 +8380,33 @@ function isVoiceWakeOrSmallTalk(text: string): boolean {
   if (/^(hey|hi|hello|yo|ok|okay)?\s*prometheus$/.test(value)) return true;
   if (/^(hey|hi|hello|yo)\s+prometheus\s+(are you there|you there|can you hear me|hello|hi|hey)?$/.test(value)) return true;
   if (/^(hey|hi|hello|yo|good morning|good afternoon|good evening|what's up|whats up|what is up|sup|you there|are you there|can you hear me|testing|test)$/.test(value)) return true;
+  if (/^(?:hey\s+)?prometheus\s+(?:how(?:'s|s| is)\s+it\s+going|how\s+are\s+you|what's\s+up|whats\s+up|what\s+is\s+up)$/.test(value)) return true;
+  if (/^(?:it'?s\s+)?(?:going\s+)?(?:pretty\s+)?(?:good|great|well|okay|ok|fine)(?:\s+so\s+far)?(?:\s+everything\s+(?:is\s+)?good)?$/.test(value)) return true;
   if (/^(thanks|thank you|cool|awesome|nice|perfect|great|sounds good|got it|okay|ok)$/.test(value)) return true;
   if (/^(what can you do|what do you do|who are you|what are you|tell me what you can do|help)$/.test(value)) return true;
   return false;
+}
+
+function deterministicVoiceSmallTalkReply(transcript: string, contextPacket: Record<string, any>): string {
+  const value = String(transcript || '').toLowerCase().replace(/[^\w\s']/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!value || !isVoiceWakeOrSmallTalk(value)) return '';
+  if (/\b(can you hear me|are you there|you there|testing|test)\b/.test(value)) {
+    return 'I can hear you. Voice mode is working.';
+  }
+  if (/\b(what can you do|what do you do|who are you|what are you|help)\b/.test(value)) {
+    return 'I can answer quickly here, steer active work, or hand bigger tasks to Prometheus.';
+  }
+  if (/\b(thanks|thank you)\b/.test(value)) return 'Anytime.';
+  if (/\b(cool|awesome|nice|perfect|great|sounds good|got it|okay|ok)\b/.test(value)) return 'Sounds good.';
+  if (/\b(how are you|how is it going|how s it going|how's it going|what's up|whats up|what is up|sup)\b/.test(value)) {
+    return contextPacket?.active
+      ? 'Going well. I am keeping the current run moving.'
+      : 'Going strong, keeping projects moving. What’s up with you?';
+  }
+  if (/^(?:it'?s\s+)?(?:going\s+)?(?:pretty\s+)?(?:good|great|well|okay|ok|fine)/.test(value)) {
+    return 'Glad it’s going well. Anything you want to tweak or dig into next?';
+  }
+  return contextPacket?.active ? 'I’m here, and the current run is still in view.' : 'I’m here.';
 }
 
 function isVoiceWorkerRequest(text: string): boolean {
@@ -7783,17 +8414,7 @@ function isVoiceWorkerRequest(text: string): boolean {
   if (!value) return false;
   if (value.length < 10 && !/\b(open|make|build|create|search|find|check|fix|run|send|write|edit|look up)\b/.test(value)) return false;
   if (/\b(can you hear me|are you there|what's up|whats up|what is up|how are you|thank you|thanks|what can you do|what do you do|who are you|what are you)\b/.test(value)) return false;
-  return /\b(open|make|build|create|generate|write|edit|update|change|fix|debug|test|run|execute|install|start|stop|restart|search|find|look up|research|analyze|inspect|check|review|read|summarize|compare|calculate|schedule|remind|send|email|message|post|tweet|download|upload|move|copy|delete|save|export|render|record|capture|screenshot|browse|click|type|fill|go to|navigate|use|turn on|turn off|set up|help me|can you|could you|please)\b/.test(value);
-}
-
-function voiceConversationalReply(text: string, contextPacket: Record<string, any>): string {
-  const value = String(text || '').toLowerCase().replace(/[^\w\s']/g, ' ').replace(/\s+/g, ' ').trim();
-  if (/\b(thanks|thank you)\b/.test(value)) return 'Of course.';
-  if (/\b(can you hear me|are you there|you there|testing|test)\b/.test(value)) return 'Yep, I can hear you.';
-  if (/\b(what can you do|what do you do|who are you|what are you)\b/.test(value)) return 'I can talk with you here, answer quick questions, and hand real work to Prometheus when you ask me to do something.';
-  if (/\b(how are you|what's up|whats up|what is up|sup)\b/.test(value)) return contextPacket.active ? 'I am here, and I am tracking the current work.' : 'I am here and ready.';
-  if (/prometheus/.test(value) || /^(hey|hi|hello|yo|good morning|good afternoon|good evening)/.test(value)) return contextPacket.active ? 'I am here, and I am tracking the current work.' : 'I am here.';
-  return 'I am here.';
+  return /\b(open|make|build|create|generate|write|edit|update|change|fix|debug|test|run|execute|install|start|stop|restart|search|find|look up|research|analyze|inspect|check|review|read|summarize|compare|calculate|schedule|remind|send|email|message|post|tweet|download|upload|move|copy|delete|save|export|render|record|capture|screenshot|browse|click|type|fill|go to|navigate|use|turn on|turn off|set up)\b/.test(value);
 }
 
 function decideVoiceAgentAction(transcript: string, classification: ReturnType<typeof classifyVoiceInterruption>, contextPacket: Record<string, any>): VoiceAgentAction {
@@ -7838,47 +8459,6 @@ function exactActiveWorkerVoiceCommand(value: string): '' | 'stop' | 'pause' | '
   return '';
 }
 
-function composeVoiceAgentReply(action: VoiceAgentAction, transcript: string, classification: ReturnType<typeof classifyVoiceInterruption>, contextPacket: Record<string, any>): string {
-  const intent = classification.intent;
-  const summary = compactVoiceText(contextPacket.summary || '', 900);
-  const activeTool = compactVoiceText(contextPacket.activeToolName || '', 100);
-  const activeLabel = compactVoiceText(contextPacket.activeToolLabel || '', 260);
-  const browser = contextPacket.observations?.browser;
-  const desktop = contextPacket.observations?.desktop;
-  if (action === 'no_reply') return '';
-  if (action === 'interrupt_worker') return contextPacket.active ? 'Got it. I am stopping the active Prometheus worker.' : 'Got it. I do not see an active worker to stop.';
-  if (intent === 'pause') return 'Got it. I will keep voice quiet for a moment while the worker continues.';
-  if (isVoiceWakeOrSmallTalk(transcript)) {
-    return voiceConversationalReply(transcript, contextPacket);
-  }
-  if (action === 'handoff_new_work') return 'Got it. I will hand that to Prometheus as a new request.';
-  if (!contextPacket.active && hasRecentVoiceAgentWorkerHandoff(String(contextPacket.sessionId || '').trim())) {
-    return voiceConversationalReply(transcript, contextPacket);
-  }
-  if (classification.intent === 'unknown') return 'I heard you, but I did not catch the correction clearly.';
-  if (action === 'steer_worker') {
-    const steer = compactVoiceText(transcript, 180);
-    return steer ? `Got it. I will steer the active run with: ${steer}` : 'Got it. I will steer the active run with that update.';
-  }
-  if (/\b(what do you see|what are you seeing|what's on screen|what is on screen)\b/i.test(transcript)) {
-    const pieces = [];
-    if (browser?.title || browser?.url || browser?.summary) {
-      pieces.push(`browser: ${compactVoiceText([browser.title, browser.url, browser.summary].filter(Boolean).join(' - '), 360)}`);
-    }
-    if (desktop?.activeWindow?.title || desktop?.summary) {
-      pieces.push(`desktop: ${compactVoiceText([desktop.activeWindow?.title, desktop.summary].filter(Boolean).join(' - '), 360)}`);
-    }
-    return pieces.length
-      ? `Right now I have this context: ${pieces.join('. ')}.`
-      : 'I do not have a fresh visual packet yet. The worker can capture one if you want it to inspect the screen.';
-  }
-  if (summary) return `Right now I am tracking this worker state. ${summary.replace(/\n+/g, ' ')}`;
-  if (activeTool || activeLabel) return `I am in the active worker now${activeTool ? `, around ${activeTool}` : ''}${activeLabel ? `: ${activeLabel}` : '.'}`;
-  return contextPacket.active
-    ? 'The worker is active, but I do not have a detailed status packet yet.'
-    : voiceConversationalReply(transcript, contextPacket);
-}
-
 function buildVoiceContextSummaryForSteer(contextPacket: Record<string, any>): string {
   return [
     contextPacket.currentGoal ? `Goal: ${compactVoiceText(contextPacket.currentGoal, 500)}` : '',
@@ -7897,6 +8477,7 @@ type VoiceAgentDecision = {
   workerInstruction?: string;
   needsWorkerResponse?: boolean;
   reason?: string;
+  runtimeDirectives?: Array<Record<string, any>>;
 };
 
 type VoiceAgentProcessEntry = {
@@ -7911,12 +8492,13 @@ function pushVoiceAgentProcessEntry(trace: VoiceAgentProcessEntry[] | undefined,
   if (!Array.isArray(trace)) return;
   const text = compactVoiceText(content, 900);
   if (!text) return;
+  const actor = type === 'user' ? 'User' : 'Voice Agent';
   const entry: VoiceAgentProcessEntry = {
     ts: new Date().toLocaleTimeString(),
     type,
     content: text,
-    actor: 'Voice Agent',
-    extra: { actor: 'Voice Agent', source: 'voice_agent', ...extra },
+    actor,
+    extra: { actor, source: type === 'user' ? 'user_voice' : 'voice_agent', ...extra },
   };
   const prev = trace[trace.length - 1];
   if (prev && prev.type === entry.type && prev.content === entry.content) return;
@@ -7946,6 +8528,56 @@ function broadcastVoiceAgentToolEvent(sessionId: string, event: 'tool_call' | 't
   });
 }
 
+// Last voice-agent screenshot preview per session. The realtime-tool HTTP endpoint
+// reads this so the mobile orb can overlay the capture directly from the response it
+// already awaits — independent of the broadcastWS relay reaching the mobile client.
+const lastVoiceScreenshotPreview = new Map<string, { dataUrl: string; mimeType: string; width?: number; height?: number; source: string; at: number }>();
+
+function takeLastVoiceScreenshotPreview(sessionId: string): { dataUrl: string; mimeType: string; width?: number; height?: number; source: string } | null {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const entry = lastVoiceScreenshotPreview.get(sid);
+  if (!entry) return null;
+  lastVoiceScreenshotPreview.delete(sid);
+  // Ignore stale captures (>30s) that weren't from this tool call.
+  if (Date.now() - entry.at > 30_000) return null;
+  const { dataUrl, mimeType, width, height, source } = entry;
+  return { dataUrl, mimeType, width, height, source };
+}
+
+function broadcastVoiceScreenshotPreview(
+  sessionId: string,
+  source: 'browser' | 'desktop',
+  tool: string,
+  shot: { base64?: string; mimeType?: string; width?: number; height?: number } | null | undefined,
+): void {
+  const sid = String(sessionId || '').trim();
+  const base64 = String(shot?.base64 || '').trim();
+  if (!sid || !base64) return;
+  const mimeType = String(shot?.mimeType || 'image/png').trim() || 'image/png';
+  lastVoiceScreenshotPreview.set(sid, {
+    dataUrl: `data:${mimeType};base64,${base64}`,
+    mimeType,
+    width: Number(shot?.width || 0) || undefined,
+    height: Number(shot?.height || 0) || undefined,
+    source,
+    at: Date.now(),
+  });
+  broadcastWS({
+    type: 'vision_injected',
+    sessionId: sid,
+    source,
+    tool,
+    preview: {
+      dataUrl: `data:${mimeType};base64,${base64}`,
+      mimeType,
+      width: Number(shot?.width || 0) || undefined,
+      height: Number(shot?.height || 0) || undefined,
+    },
+    timestamp: Date.now(),
+  });
+}
+
 async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, args: Record<string, any>, trace?: VoiceAgentProcessEntry[]): Promise<string> {
   const action = String(name || '').trim();
   const cleanArgs = args && typeof args === 'object' ? args : {};
@@ -7958,7 +8590,9 @@ async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, a
     result: summary.summary,
     error: !summary.ok,
   });
-  pushVoiceAgentProcessEntry(trace, summary.ok ? 'result' : 'error', `${friendlyVoiceToolName(action)} ${summary.ok ? 'complete' : 'failed'}${summary.summary ? ` => ${summary.summary}` : ''}`, { action, result: summary.summary, error: !summary.ok });
+  const parsedResult = parseVoiceToolResult(raw);
+  const runtimeDirective = voiceRuntimeDirectiveFromToolResult(parsedResult);
+  pushVoiceAgentProcessEntry(trace, summary.ok ? 'result' : 'error', `${friendlyVoiceToolName(action)} ${summary.ok ? 'complete' : 'failed'}${summary.summary ? ` => ${summary.summary}` : ''}`, { action, result: summary.summary, error: !summary.ok, ...(runtimeDirective ? { runtimeDirective } : {}) });
   return raw;
 }
 
@@ -7979,6 +8613,18 @@ function voiceToolResult(ok: boolean, summary: string, data: Record<string, any>
     summary: compactVoiceText(summary, 1200),
     ...data,
   }, null, 2);
+}
+
+function voiceRuntimeDirectiveFromToolResult(result: any): Record<string, any> | null {
+  if (!result?.runtimeAction) return null;
+  const directive: Record<string, any> = {
+    action: String(result.runtimeAction || ''),
+  };
+  const wakePhrase = cleanVoiceWakePhrase(result.wakePhrase);
+  if (wakePhrase) directive.wakePhrase = wakePhrase;
+  if (result.activateAfterReply === true || result.activate_after_reply === true) directive.activateAfterReply = true;
+  if (result.requiresWakePhrase === true || result.requires_wake_phrase === true) directive.requiresWakePhrase = true;
+  return directive.action ? directive : null;
 }
 
 function parseVoiceToolArgs(value: any): Record<string, any> {
@@ -8033,6 +8679,14 @@ function summarizeVoiceMemorySearch(raw: any): Record<string, any> {
   };
 }
 
+function cleanVoiceWakePhrase(value: unknown): string {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,.:;"'!?-]+|[\s,.:;"'!?-]+$/g, '')
+    .trim()
+    .slice(0, 80);
+}
+
 function buildVoiceToolDefinitions(): any[] {
   return [
     {
@@ -8072,13 +8726,58 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_write_note',
-        description: 'Fast voice wrapper around write_note. Use only when the user asks to remember, jot down, log, or save a short note.',
+        description: 'Fast voice wrapper around write_note. Use only when the user asks to remember, jot down, log, or save a short note. Never use this for runtime wake phrase, quiet mode, listening mode, voice provider, or other voice configuration changes; use a dedicated voice runtime tool or hand off to Worker.',
         parameters: {
           type: 'object',
           required: ['content'],
           properties: {
             content: { type: 'string' },
             tag: { type: 'string' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_set_wake_phrase',
+        description: 'Set the mobile voice runtime wake phrase for always-listening mode. Use when Raul asks to set/change/make his wake phrase or wake word. This is runtime voice configuration, not memory or notes.',
+        parameters: {
+          type: 'object',
+          required: ['phrase'],
+          properties: {
+            phrase: { type: 'string', description: 'The spoken phrase that should wake Prometheus, e.g. "hey Prometheus".' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_enter_quiet_mode',
+        description: 'Activate mobile quiet mode using the currently configured wake phrase. Use only when the user clearly asks Prometheus to be quiet, stop responding, sleep, or stop listening now. Do not use for mentions, examples, debugging, or questions about quiet mode.',
+        parameters: {
+          type: 'object',
+          properties: {
+            reason: { type: 'string', description: 'Brief reason/context for the quiet-mode request.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_set_quiet_until',
+        description: 'Set a wake phrase and then activate mobile quiet mode after Prometheus acknowledges. Use when the user says not to respond/speak/listen until or unless they say a specific phrase.',
+        parameters: {
+          type: 'object',
+          required: ['phrase'],
+          properties: {
+            phrase: { type: 'string', description: 'The spoken phrase that should wake Prometheus again.' },
+            reason: { type: 'string', description: 'Brief reason/context for entering quiet mode.' },
           },
           additionalProperties: false,
         },
@@ -8146,6 +8845,55 @@ function buildVoiceToolDefinitions(): any[] {
         },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_screenshot',
+        description: 'Capture the current Prometheus-controlled browser viewport from the voice layer. Use when Raul asks for a browser screenshot or quick visual browser check. Observation only: do not click, type, navigate, or control the browser.',
+        parameters: {
+          type: 'object',
+          properties: {
+            include_summary: { type: 'boolean', description: 'Whether to include brief screenshot metadata in the spoken reply.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_screenshot',
+        description: 'Capture a desktop screenshot from the voice layer. Use when Raul asks for a desktop screenshot or asks to visually check the computer. Observation only: do not click, type, scroll, or control the desktop.',
+        parameters: {
+          type: 'object',
+          properties: {
+            capture: { type: 'string', enum: ['all', 'primary'], description: 'Default all. Use primary if Raul asks for the main screen.' },
+            monitor_index: { type: 'number', description: 'Optional monitor index; overrides capture when provided.' },
+            include_summary: { type: 'boolean', description: 'Whether to include brief screenshot metadata in the spoken reply.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_send_screenshot',
+        description: 'Capture or reuse a browser/desktop screenshot and deliver it through the origin-aware delivery router. Use only when Raul asks to send, share, or show him a screenshot.',
+        parameters: {
+          type: 'object',
+          required: ['source'],
+          properties: {
+            source: { type: 'string', enum: ['desktop_new', 'desktop_last', 'browser_new', 'browser_last'] },
+            target: { type: 'string', enum: ['origin', 'mobile', 'telegram', 'web', 'all'], description: 'Default origin.' },
+            caption: { type: 'string' },
+            capture: { type: 'string', enum: ['all', 'primary'], description: 'Optional desktop capture mode when source is desktop_new.' },
+            monitor_index: { type: 'number', description: 'Optional desktop monitor index when source is desktop_new.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
   ];
 }
 
@@ -8176,9 +8924,36 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
     }
     if (name === 'voice_write_note') {
       const content = String(args.content || '').trim();
+      if (/\bwake\s+(?:phrase|word)\b/i.test(content)) {
+        return voiceToolResult(false, 'Wake phrase changes are runtime voice configuration. Use voice_set_wake_phrase instead of saving a note.', { runtimeAction: 'set_wake_phrase_required' });
+      }
       if (!content) return voiceToolResult(false, 'Note content is required.');
       const result = await executeWriteNote({ content, tag: String(args.tag || 'voice').trim() || 'voice' });
       return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Note failed.') : 'Note saved.', { file: result.data?.file, tag: result.data?.tag });
+    }
+    if (name === 'voice_set_wake_phrase') {
+      const phrase = cleanVoiceWakePhrase(args.phrase);
+      if (!phrase) return voiceToolResult(false, 'Wake phrase is required.');
+      return voiceToolResult(true, `Wake phrase set to "${phrase}".`, {
+        runtimeAction: 'set_wake_phrase',
+        wakePhrase: phrase,
+      });
+    }
+    if (name === 'voice_enter_quiet_mode') {
+      return voiceToolResult(true, 'Quiet mode will turn on after this acknowledgement, using the current wake phrase.', {
+        runtimeAction: 'enter_quiet_mode',
+        activateAfterReply: true,
+        requiresWakePhrase: true,
+      });
+    }
+    if (name === 'voice_set_quiet_until') {
+      const phrase = cleanVoiceWakePhrase(args.phrase);
+      if (!phrase) return voiceToolResult(false, 'Wake phrase is required before quiet mode can start.');
+      return voiceToolResult(true, `Quiet mode will turn on after this acknowledgement. Wake phrase set to "${phrase}".`, {
+        runtimeAction: 'set_quiet_until',
+        wakePhrase: phrase,
+        activateAfterReply: true,
+      });
     }
     if (name === 'voice_skill_lookup') {
       _skillsManager.scanSkills();
@@ -8283,6 +9058,43 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         return voiceToolResult(true, `Timer created for ${new Date(timer.dueAt).toLocaleString()}.`, { timer });
       }
     }
+    if (name === 'voice_browser_screenshot') {
+      const shot = await browserVisionScreenshot(sessionId);
+      if (!shot?.base64) return voiceToolResult(false, 'No active browser session to capture. Use the Worker if the browser needs to be opened first.');
+      broadcastVoiceScreenshotPreview(sessionId, 'browser', name, shot);
+      return voiceToolResult(true, `Captured browser screenshot${Number.isFinite(shot.width) && Number.isFinite(shot.height) ? ` (${shot.width}x${shot.height})` : ''}.`, {
+        width: shot.width,
+        height: shot.height,
+        mimeType: shot.mimeType,
+      });
+    }
+    if (name === 'voice_desktop_screenshot') {
+      const options = parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined);
+      const result = await desktopScreenshotWithHistory(sessionId, options);
+      const ok = !String(result || '').startsWith('ERROR');
+      const packet = getDesktopAdvisorPacket(sessionId);
+      if (ok && packet?.screenshotBase64) {
+        broadcastVoiceScreenshotPreview(sessionId, 'desktop', name, {
+          base64: packet.screenshotBase64,
+          mimeType: packet.screenshotMime || 'image/png',
+          width: packet.width,
+          height: packet.height,
+        });
+      }
+      return voiceToolResult(ok, ok ? 'Captured desktop screenshot.' : result, ok && packet ? {
+        screenshotId: packet.screenshotId,
+        width: packet.width,
+        height: packet.height,
+      } : {});
+    }
+    if (name === 'voice_send_screenshot') {
+      const delivered = await executeDeliverySendScreenshot({
+        ...args,
+        target: args?.target || 'origin',
+      }, workspacePath, { telegramChannel: _telegramChannel, broadcastWS }, sessionId);
+      return voiceToolResult(!delivered.error, delivered.result);
+    }
+
   } catch (err: any) {
     return voiceToolResult(false, `${friendlyVoiceToolName(name)} failed: ${String(err?.message || err)}`);
   }
@@ -8319,22 +9131,71 @@ function findVoiceToolFallbackRequest(transcript: string): { name: string; args:
   const text = String(transcript || '').trim();
   const lower = text.toLowerCase();
   if (!text) return null;
+  const wakePhraseMatch = text.match(/\b(?:set|change|make)\s+(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:to|as)\s+(.+)$/i)
+    || text.match(/\b(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:is|should\s+be)\s+(.+)$/i);
+  if (wakePhraseMatch) {
+    const phrase = cleanVoiceWakePhrase(wakePhraseMatch[1] || '');
+    if (phrase) return { name: 'voice_set_wake_phrase', args: { phrase } };
+  }
+  const quietUntilMatch = text.match(/\b(?:don't|do not|dont|stop|quit|avoid|hold off on|stay|remain|keep|be)\s+(?:talking|speaking|responding|answering|replying|listening|saying anything|active|awake|quiet)?[\s,]*(?:until|unless)\s+(?:i\s+)?(?:say|tell you|use)\s+(.+)$/i)
+    || text.match(/\b(?:be|go|stay|remain|keep)\s+quiet\s+(?:until|unless)\s+(?:i\s+)?(?:say|tell you|use)\s+(.+)$/i)
+    || text.match(/\b(?:don't|do not|dont)\s+say\s+anything\s+(?:until|unless)\s+(?:i\s+)?(?:say|tell you|use)\s+(.+)$/i);
+  if (quietUntilMatch) {
+    const phrase = cleanVoiceWakePhrase(quietUntilMatch[1] || '');
+    if (phrase) return { name: 'voice_set_quiet_until', args: { phrase } };
+  }
+  const mentionsQuietAsExample = /\b(?:if|when|example|debug|debugging|test|testing|phrase|called|means|about|talk(?:ing)? about|say(?:ing)? something like)\b/i.test(text);
+  const endsWithQuietRequest = /(?:^|(?:,|;|\band\b|\bthen\b)\s+)(?:now\s+)?(?:please\s+)?(?:prometheus\s+quiet|quiet\s+prometheus|prometheus\s+(?:be\s+quiet|go\s+quiet|sleep|stop\s+listening)|be\s+quiet|go\s+quiet|stay\s+quiet)$/i.test(lower);
+  if (endsWithQuietRequest && !mentionsQuietAsExample) {
+    return { name: 'voice_enter_quiet_mode', args: { reason: 'User asked Prometheus to go quiet at the end of a voice turn.' } };
+  }
+  const wantsSendScreenshot = /\b(send|share|show|deliver)\b/i.test(text) && /\b(screenshot|screen\s*shot|screen grab|screengrab|capture)\b/i.test(text);
+  const wantsScreenshot = /\b(screenshot|screen\s*shot|screen grab|screengrab|capture)\b/i.test(text);
+  if (wantsSendScreenshot || wantsScreenshot) {
+    const browser = /\b(browser|chrome|tab|page|website|site)\b/i.test(text);
+    const desktop = /\b(desktop|screen|monitor|computer|pc)\b/i.test(text) || !browser;
+    const source = browser ? (wantsSendScreenshot ? 'browser_new' : '') : (wantsSendScreenshot ? 'desktop_new' : '');
+    if (wantsSendScreenshot) {
+      return {
+        name: 'voice_send_screenshot',
+        args: {
+          source: source || (desktop ? 'desktop_new' : 'browser_new'),
+          target: /\btelegram\b/i.test(text) ? 'telegram' : /\bmobile|phone\b/i.test(text) ? 'mobile' : 'origin',
+          caption: browser ? 'Browser screenshot' : 'Desktop screenshot',
+        },
+      };
+    }
+    return browser
+      ? { name: 'voice_browser_screenshot', args: { include_summary: true } }
+      : { name: 'voice_desktop_screenshot', args: { capture: /\bprimary|main screen\b/i.test(text) ? 'primary' : 'all', include_summary: true } };
+  }
+
   const url = extractFirstVoiceUrl(text);
   if (url && /\b(fetch|read|open|summari[sz]e|check)\b/i.test(text)) {
     return { name: 'voice_web_fetch', args: { url, max_chars: 4000 } };
   }
-  if (/\b(?:web\s*)?search|look\s+up|latest|current|news|compare|search everywhere\b/i.test(text)) {
-    const mode = /\b(latest|current|today|news|compare|versus|vs|recent|breaking|search everywhere)\b/i.test(text) ? 'multi' : 'single';
+  // Web search — only match explicit imperative search phrases, never bare nouns like
+  // "current", "news", "latest" which appear in everyday conversation.
+  const searchVerbMatch = text.match(/\b(?:web\s+)?search\s+(?:the\s+(?:web|internet)\s+)?(?:for\s+)?(.+)$/i)
+    || text.match(/\blook\s+up\s+(.+)$/i)
+    || text.match(/\bgoogle\s+(.+)$/i)
+    || text.match(/\bsearch\s+(?:everywhere|the\s+(?:web|internet))\s+(?:for\s+)?(.+)$/i)
+    || text.match(/\bfind\s+(?:out\s+)?(?:info(?:rmation)?\s+(?:on|about)\s+|info\s+on\s+)(.+)$/i);
+  if (searchVerbMatch) {
+    const rawQuery = (searchVerbMatch[1] || text).trim();
+    const query = cleanVoiceSearchFallbackQuery(rawQuery);
+    const mode = /\b(compare|versus|vs|search everywhere)\b/i.test(text) ? 'multi' : 'single';
     return {
       name: 'voice_web_search',
       args: {
-        query: cleanVoiceSearchFallbackQuery(text),
+        query,
         mode,
         max_results: mode === 'multi' ? 5 : 3,
       },
     };
   }
   if (/\b(remember|jot|note|write down|log that|save a note|make a note)\b/i.test(text)) {
+    if (/\bwake\s+(?:phrase|word)\b/i.test(text)) return null;
     const content = text.replace(/^(?:prometheus[, ]*)?(?:please\s*)?(?:remember|jot down|make a note(?: that)?|write down|log that|save a note(?: that)?)\s*/i, '').trim();
     return { name: 'voice_write_note', args: { content: content || text, tag: 'voice' } };
   }
@@ -8365,75 +9226,6 @@ function findVoiceToolFallbackRequest(transcript: string): { name: string; args:
     };
   }
   return null;
-}
-
-function voiceToolFallbackReply(name: string, raw: any): VoiceAgentDecision {
-  const ok = raw?.ok !== false;
-  const summary = compactVoiceText(raw?.summary || '', 420);
-  const escalate = raw?.escalateToWorker === true;
-  if (escalate) {
-    return {
-      action: 'handoff_new_work',
-      spokenReply: summary || 'That one needs the Prometheus worker, so I am handing it off.',
-      workerInstruction: summary || '',
-      needsWorkerResponse: true,
-      reason: 'voice_tool_escalated',
-    };
-  }
-  if (name === 'voice_web_search') {
-    const first = Array.isArray(raw?.results) ? raw.results.find((row: any) => row?.title || row?.snippet || row?.url) : null;
-    const detail = first
-      ? `${first.title ? `${first.title}. ` : ''}${first.snippet || first.url || ''}`
-      : (raw?.stdout || summary || (ok ? 'The search ran, but it did not return a clean summary.' : 'The search did not complete.'));
-    return {
-      action: 'answer_now',
-      spokenReply: compactVoiceText(ok ? `I ran that from the voice layer. ${detail}` : `I tried the voice web search, but it failed: ${detail}`, 850),
-      needsWorkerResponse: false,
-      reason: 'voice_tool_fallback_web_search',
-    };
-  }
-  if (name === 'voice_web_fetch') {
-    const text = compactVoiceText(raw?.text || summary || '', 760);
-    return { action: 'answer_now', spokenReply: ok ? `I fetched it from the voice layer. ${text}` : `I tried to fetch that from voice, but it failed: ${text}`, needsWorkerResponse: false, reason: 'voice_tool_fallback_web_fetch' };
-  }
-  if (name === 'voice_write_note') {
-    return { action: 'answer_now', spokenReply: ok ? 'Done, I saved that note.' : `I tried to save the note, but it failed: ${summary}`, needsWorkerResponse: false, reason: 'voice_tool_fallback_note' };
-  }
-  if (name === 'voice_skill_lookup') {
-    const skills = Array.isArray(raw?.skills) ? raw.skills.slice(0, 3).map((skill: any) => skill?.name || skill?.id).filter(Boolean).join(', ') : '';
-    return { action: 'answer_now', spokenReply: skills ? `I found the most relevant skill guidance: ${skills}.` : (summary || 'I checked the voice skill lookup and did not find a strong match.'), needsWorkerResponse: false, reason: 'voice_tool_fallback_skill' };
-  }
-  if (name === 'voice_memory_search') {
-    const hits = Array.isArray(raw?.hits) ? raw.hits.slice(0, 3).map((hit: any) => hit?.title || hit?.why).filter(Boolean).join('; ') : '';
-    return { action: 'answer_now', spokenReply: hits ? `I found this in memory: ${compactVoiceText(hits, 760)}` : (summary || 'I checked memory and did not find a strong match.'), needsWorkerResponse: false, reason: 'voice_tool_fallback_memory' };
-  }
-  if (name === 'voice_timer') {
-    return { action: 'answer_now', spokenReply: summary || (ok ? 'Done, I set the timer.' : 'I tried to set the timer, but it failed.'), needsWorkerResponse: false, reason: 'voice_tool_fallback_timer' };
-  }
-  return { action: 'answer_now', spokenReply: summary || 'Done.', needsWorkerResponse: false, reason: 'voice_tool_fallback' };
-}
-
-function voiceDecisionLooksLikeOldToolRefusal(decision: VoiceAgentDecision): boolean {
-  const text = `${decision.spokenReply || ''} ${decision.reason || ''}`.toLowerCase();
-  return /\b(?:can't|cannot|can not)\s+(?:actually\s+)?(?:run|use|do|access)\s+(?:web\s*)?(?:search|tools?)\b/.test(text)
-    || /\btool access lives in (?:the )?prometheus worker\b/.test(text)
-    || /\b(?:web\s*)?search .* only .* worker\b/.test(text);
-}
-
-async function maybeApplyVoiceToolFallback(sessionId: string, transcript: string, decision: VoiceAgentDecision, trace?: VoiceAgentProcessEntry[]): Promise<VoiceAgentDecision> {
-  if (decision.action === 'interrupt_worker' || decision.action === 'steer_worker' || decision.action === 'no_reply') return decision;
-  const explicitNoWorker = /\b(?:don't|do not|dont)\s+(?:hand|send|pass)\s+(?:it\s+)?(?:off|over)?\s*(?:to\s+)?(?:the\s+)?worker\b/i.test(transcript)
-    || /\bwithout\s+(?:the\s+)?worker\b/i.test(transcript);
-  const shouldRescue = explicitNoWorker || voiceDecisionLooksLikeOldToolRefusal(decision);
-  if (!shouldRescue && decision.action !== 'handoff_new_work') return decision;
-  const fallback = findVoiceToolFallbackRequest(transcript);
-  if (!fallback) return decision;
-  const raw = parseVoiceToolResult(await executeVoiceAgentToolWithTrace(sessionId, fallback.name, fallback.args, trace));
-  const toolDecision = voiceToolFallbackReply(fallback.name, raw);
-  if (toolDecision.action === 'handoff_new_work') {
-    toolDecision.workerInstruction = compactVoiceText(`${transcript}\n\nVoice tool result: ${raw?.summary || ''}`, 1400);
-  }
-  return toolDecision;
 }
 
 function safeParseVoiceAgentJson(raw: string): any | null {
@@ -8473,8 +9265,8 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     'You have Prometheus\'s identity, memory, preferences, user knowledge, and current task context.',
     'You are the live voice layer and you MAY call the provided voice_* tools directly.',
     'The voice_* tools are safe wrappers around existing Prometheus tools. They are the only tools you may use from this layer.',
-    'Do not say web search, fetch, notes, memory search, skill lookup, or timers are only available to the Worker when a matching voice_* tool is provided.',
-    'Use voice tools for fast, low-risk, conversational support. If the request needs deeper research, browser/desktop interaction, files, coding, media analysis, account actions, approvals, or more than two tool calls, choose handoff_new_work or steer_worker instead.',
+    'Do not say web search, fetch, notes, memory search, skill lookup, timers, or screenshot capture/delivery are only available to the Worker when a matching voice_* tool is provided.',
+    'Use voice tools for fast, low-risk, conversational support. Screenshot voice tools are observation/delivery only: they may capture or send screenshots, but must not click, type, scroll, navigate, or control browser/desktop UI. If the request needs deeper research, browser/desktop control, files, coding, media analysis, account actions, approvals, or more than two tool calls, choose handoff_new_work or steer_worker instead.',
     '',
     'When the user asks something answerable from your context, answer directly.',
     'When the user requests work that can be handled by a voice_* tool, call that tool and answer_now from the result.',
@@ -8483,9 +9275,10 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '',
     'Hard boundary: never claim you used full Worker tools or changed files/accounts from the voice layer. You may truthfully say you searched, fetched, saved a note, checked memory, looked up skills, or set a timer when a voice_* tool result confirms it.',
     'Speak like Prometheus: warm, specific, alive, and context-aware. Avoid generic acknowledgements like "I\'ll get started on that" unless no better context exists.',
+    'For voice tests, first messages, and no-context check-ins, do not answer with generic "I am here" or "I\'m here" phrasing. Acknowledge what the user is testing or saying.',
     '',
-    'Return ONLY strict JSON with this schema:',
-    '{"action":"answer_now|steer_worker|interrupt_worker|handoff_new_work|no_reply","spokenReply":"string","workerInstruction":"string optional","needsWorkerResponse":false,"reason":"string optional"}',
+    'Return ONLY strict JSON. CRITICAL: The "spokenReply" field MUST be the FIRST field in your JSON output so audio playback can begin as you write. Do NOT output any other field before spokenReply. Use this exact field order:',
+    '{"spokenReply":"string","action":"answer_now|steer_worker|interrupt_worker|handoff_new_work|no_reply","workerInstruction":"string optional","needsWorkerResponse":false,"reason":"string optional"}',
     '',
     'Action rules:',
     '- answer_now: use when the user asks a status/context/question answerable from the injected context or from voice_* tool results. Do not dispatch the worker.',
@@ -8498,11 +9291,19 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '- voice_web_search: quick factual/current lookup. Use multi mode for latest/current/news/compare/sensitive/current events.',
     '- voice_web_fetch: one clean text URL only. Social/video/media/auth pages must be handed to Worker.',
     '- voice_write_note: only for explicit remember/jot/log/save-note requests.',
+    '- voice_set_wake_phrase: set/change the mobile voice runtime wake phrase. Never substitute voice_write_note or memory for wake phrase changes.',
+    '- voice_enter_quiet_mode: activate quiet mode with the current wake phrase when the user clearly asks Prometheus to be quiet, sleep, stop listening, or stop responding. If no wake phrase is set in [VOICE_RUNTIME], do not call it; tell the user to set a wake phrase first.',
+    '- voice_set_quiet_until: set the wake phrase and enter quiet mode when the user says not to speak/respond/listen until or unless they say a specific phrase.',
+    '- Quiet-mode intent must be a real instruction. Do not call quiet tools for mentions, examples, debugging, or questions about the words "quiet" or "Prometheus".',
+    '- When a quiet tool succeeds, give one natural acknowledgement in spokenReply. The runtime will activate quiet mode after the acknowledgement finishes.',
     '- voice_skill_lookup: use to orient yourself with available workflows; mention only a concise summary.',
     '- voice_memory_search: read-only recall for previous decisions, project history, preferences, and "what did we decide" questions.',
     '- voice_timer: create/list/cancel/reschedule one-shot timers. Timer execution itself happens later through the Worker.',
+    '- voice_browser_screenshot: capture the current browser viewport only. If no browser session exists or the user wants analysis/control, hand off to Worker.',
+    '- voice_desktop_screenshot: capture the desktop only. It is observation-only and must not be followed by direct desktop control from Voice.',
+    '- voice_send_screenshot: send a browser/desktop screenshot through the delivery router. Default target is origin; use Telegram/mobile only when the user names them or context clearly requires it.',
     '- Current time is injected. Do not call a tool just to know the time/date.',
-    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/skill/timer, prefer the matching voice_* tool.',
+    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/skill/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer the matching voice_* tool.',
     '- For a "test web search" request without a concrete query, run a tiny harmless search for "OpenAI Realtime API voice tools" and report that the smoke test worked.',
     '',
     '[CURRENT_TIME]',
@@ -8510,9 +9311,36 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '[/CURRENT_TIME]',
     '',
     contextBlock,
+    voiceRuntimeContextText(contextPacket.voiceRuntime ? contextPacket.voiceRuntime : ''),
     '',
     '[CURRENT_WORKER_CONTEXT_PACKET]',
     JSON.stringify(contextPacket, null, 2),
+    '[/CURRENT_WORKER_CONTEXT_PACKET]',
+  ].filter(Boolean).join('\n');
+}
+
+function buildVoiceAgentLightSystemPrompt(contextBlock: string, contextPacket: Record<string, any>): string {
+  return [
+    'You are Prometheus speaking through the user\'s voice interface.',
+    'Answer naturally and specifically in one or two short spoken sentences.',
+    'Do not use canned fallback phrases. Do not answer with generic "I am here" or "I\'m here" phrasing; respond to what the user actually said.',
+    'If the user asks for heavier work outside conversation, choose handoff_new_work and write a natural, specific acknowledgement in spokenReply.',
+    '',
+    'Return ONLY strict JSON. CRITICAL: The "spokenReply" field MUST be the FIRST field in your JSON output so audio playback can begin as you write. Do NOT output any other field before spokenReply. Use this exact field order:',
+    '{"spokenReply":"string","action":"answer_now|handoff_new_work|no_reply","workerInstruction":"string optional","needsWorkerResponse":false,"reason":"string optional"}',
+    '',
+    '[VOICE_CONTEXT]',
+    compactVoiceText(contextBlock, 1800),
+    '[/VOICE_CONTEXT]',
+    contextPacket.voiceRuntime ? `[VOICE_RUNTIME]\n${compactVoiceText(contextPacket.voiceRuntime, 300)}\n[/VOICE_RUNTIME]` : '',
+    '',
+    '[CURRENT_WORKER_CONTEXT_PACKET]',
+    JSON.stringify({
+      active: contextPacket.active === true,
+      summary: compactVoiceText(contextPacket.summary || '', 600),
+      currentGoal: compactVoiceText(contextPacket.currentGoal || '', 300),
+      currentPhase: compactVoiceText(contextPacket.currentPhase || '', 120),
+    }, null, 2),
     '[/CURRENT_WORKER_CONTEXT_PACKET]',
   ].filter(Boolean).join('\n');
 }
@@ -8522,13 +9350,532 @@ function buildVoiceAgentHandoffContext(decision: VoiceAgentDecision, contextPack
   return [
     '[VOICE_AGENT_HANDOFF]',
     `Voice action: ${decision.action}`,
-    decision.spokenReply ? `Spoken acknowledgement already given: ${decision.spokenReply}` : '',
+    decision.spokenReply ? `Spoken acknowledgement already given: ${decision.spokenReply}` : 'Spoken acknowledgement: none.',
     `Original voice transcript: ${compactVoiceText(transcript, 900)}`,
     decision.workerInstruction ? `Worker instruction: ${decision.workerInstruction}` : '',
     contextPacket?.summary ? `Voice context summary:\n${compactVoiceText(contextPacket.summary, 1200)}` : '',
     'Runtime instruction: Continue as the Prometheus worker. The Voice Agent has already acknowledged the user; do the actual work with tools if needed and avoid repeating the same generic acknowledgement.',
     '[/VOICE_AGENT_HANDOFF]',
   ].filter(Boolean).join('\n');
+}
+
+function voiceRuntimeContextText(value: any): string {
+  if (typeof value === 'string') return compactVoiceText(value, 300);
+  const runtime = value && typeof value === 'object' ? value : {};
+  const wakePhrase = cleanVoiceWakePhrase(runtime.wakePhrase || runtime.wake_phrase || '');
+  const gateActive = runtime.wakeGateActive === true || runtime.wake_gate_active === true;
+  if (!wakePhrase) return 'Mobile voice has no wake phrase set. Do not enter quiet mode until the user sets one, unless you set it with voice_set_quiet_until from the user\'s request.';
+  return `Mobile voice wake phrase is currently "${wakePhrase}". Quiet mode is ${gateActive ? 'active' : 'not active'}; setting the phrase alone may be acknowledged naturally, and quiet mode should only start through a quiet-mode tool or a strict local command.`;
+}
+
+function attachRuntimeProcessEntriesToLatestAssistant(sessionId: string, entries: Record<string, any>[]): void {
+  const sid = String(sessionId || '').trim();
+  const processEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  if (!sid || !processEntries.length) return;
+  try {
+    const session = getSession(sid);
+    const history = Array.isArray(session.history) ? session.history.slice() : [];
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const msg: any = history[i];
+      if (msg?.role !== 'assistant' && msg?.role !== 'ai') continue;
+      const existing = Array.isArray(msg.processEntries) ? msg.processEntries : [];
+      if (existing.length >= processEntries.length) return;
+      history[i] = {
+        ...msg,
+        processEntries,
+      };
+      replaceHistory(sid, history);
+      return;
+    }
+  } catch (err: any) {
+    console.warn('[main chat] failed to attach runtime process entries:', err?.message || err);
+  }
+}
+
+function historyMessageMergeKey(msg: any): string {
+  const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : msg?.role === 'user' ? 'user' : '';
+  const content = String(msg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (!role || !content) return '';
+  const eventId = String(msg?.voiceInterruptionEventId || msg?.eventId || '').trim();
+  if (eventId) return `${role}|event:${eventId}|${content}`;
+  return `${role}|${content}`;
+}
+
+function mergeHistoryWithExistingMessageMetadata(sessionId: string, incomingHistory: any[]): any[] {
+  const incoming = Array.isArray(incomingHistory) ? incomingHistory : [];
+  if (!incoming.length) return incoming;
+  try {
+    const existing = Array.isArray(getSession(sessionId).history) ? getSession(sessionId).history : [];
+    const byKey = new Map<string, any>();
+    for (const msg of existing) {
+      const key = historyMessageMergeKey(msg);
+      if (key && !byKey.has(key)) byKey.set(key, msg);
+    }
+    return incoming.map((raw) => {
+      if (!raw || typeof raw !== 'object') return raw;
+      const prior = byKey.get(historyMessageMergeKey(raw));
+      if (!prior || typeof prior !== 'object') return raw;
+      const next: any = { ...raw };
+      if (!Array.isArray(next.processEntries) && Array.isArray((prior as any).processEntries)) next.processEntries = (prior as any).processEntries;
+      if (!next.toolLog && (prior as any).toolLog) next.toolLog = (prior as any).toolLog;
+      if (!next.thinking && (prior as any).thinking) next.thinking = (prior as any).thinking;
+      return next;
+    });
+  } catch {
+    return incoming;
+  }
+}
+
+function sessionProcessLogFromHistory(session: any): any[] {
+  const out: any[] = [];
+  for (const msg of Array.isArray(session?.history) ? session.history : []) {
+    if (Array.isArray((msg as any)?.processEntries)) out.push(...(msg as any).processEntries);
+  }
+  return out.slice(-500);
+}
+
+function estimateJsonTokensForModel(value: unknown, profile: { tokenizer: any }): number {
+  try {
+    return estimateTextTokensForModel(JSON.stringify(value || null), profile.tokenizer);
+  } catch {
+    return estimateTextTokensForModel(String(value || ''), profile.tokenizer);
+  }
+}
+
+function safeTokenSessionFileName(sessionId: string): string {
+  return String(sessionId || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_') || 'unknown';
+}
+
+function estimateToolObservationRawTokens(sessionId: string, profile: { tokenizer: any }): { tokens: number; bytes: number; files: number } {
+  let tokens = 0;
+  let bytes = 0;
+  let files = 0;
+  try {
+    const dir = path.join(getConfig().getConfigDir(), 'tool-observations', 'raw', safeTokenSessionFileName(sessionId));
+    if (!fs.existsSync(dir)) return { tokens, bytes, files };
+    for (const name of fs.readdirSync(dir)) {
+      const full = path.join(dir, name);
+      let st: fs.Stats;
+      try { st = fs.statSync(full); } catch { continue; }
+      if (!st.isFile()) continue;
+      files += 1;
+      bytes += st.size;
+      try {
+        tokens += estimateTextTokensForModel(fs.readFileSync(full, 'utf-8'), profile.tokenizer);
+      } catch {
+        tokens += Math.ceil(st.size / 3.5);
+      }
+    }
+  } catch {}
+  return { tokens, bytes, files };
+}
+
+function estimateStoredThreadFootprint(sessionId: string, session: any, profile: { tokenizer: any }) {
+  const history = Array.isArray(session?.history) ? session.history : [];
+  let visibleChatTokens = 0;
+  let processEntryTokens = 0;
+  let legacyToolLogTokens = 0;
+  let attachmentMetadataTokens = 0;
+  for (const msg of history) {
+    visibleChatTokens += estimateTextTokensForModel(msg?.content || '', profile.tokenizer);
+    if (Array.isArray(msg?.processEntries)) processEntryTokens += estimateJsonTokensForModel(msg.processEntries, profile);
+    if (msg?.toolLog) legacyToolLogTokens += estimateTextTokensForModel(msg.toolLog, profile.tokenizer);
+    const attachmentBits = {
+      artifacts: msg?.artifacts,
+      generatedImages: msg?.generatedImages,
+      generatedVideos: msg?.generatedVideos,
+      attachmentPreviews: msg?.attachmentPreviews,
+      canvasFiles: msg?.canvasFiles,
+      fileChanges: msg?.fileChanges,
+      productCarousel: msg?.productCarousel,
+    };
+    attachmentMetadataTokens += estimateJsonTokensForModel(attachmentBits, profile);
+  }
+  const sessionJsonTokens = estimateJsonTokensForModel(session, profile);
+  const observations = readToolObservations(sessionId, 100000);
+  const toolObservationStoredTokens = estimateJsonTokensForModel(observations, profile);
+  const raw = estimateToolObservationRawTokens(sessionId, profile);
+  return {
+    visibleChatTokens,
+    processEntryTokens,
+    legacyToolLogTokens,
+    attachmentMetadataTokens,
+    sessionJsonTokens,
+    toolObservationStoredTokens,
+    rawToolResultTokens: raw.tokens,
+    rawToolResultBytes: raw.bytes,
+    rawToolResultFiles: raw.files,
+    fullStoredThreadTokens: sessionJsonTokens + toolObservationStoredTokens + raw.tokens,
+  };
+}
+
+function aggregateSessionModelUsage(sessionId: string) {
+  const events = readModelUsageEvents().filter((event) => String(event.sessionId || '') === sessionId);
+  const totals = {
+    calls: events.length,
+    providerReportedCalls: 0,
+    estimatedCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    estimatedMessageInputTokens: 0,
+    estimatedToolSchemaTokens: 0,
+    estimatedProviderInputTokens: 0,
+    lastCall: null as any,
+  };
+  for (const event of events) {
+    if (event.source === 'provider') totals.providerReportedCalls += 1;
+    else totals.estimatedCalls += 1;
+    totals.inputTokens += Number(event.inputTokens || 0);
+    totals.outputTokens += Number(event.outputTokens || 0);
+    totals.reasoningTokens += Number(event.reasoningTokens || 0);
+    totals.cacheReadTokens += Number(event.cacheReadTokens || 0);
+    totals.cacheWriteTokens += Number(event.cacheWriteTokens || 0);
+    totals.totalTokens += Number(event.totalTokens || 0);
+    totals.estimatedMessageInputTokens += Number((event as any).estimatedMessageInputTokens || 0);
+    totals.estimatedToolSchemaTokens += Number((event as any).estimatedToolSchemaTokens || 0);
+    totals.estimatedProviderInputTokens += Number((event as any).estimatedProviderInputTokens || 0);
+    totals.lastCall = event;
+  }
+  return totals;
+}
+
+function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voiceReply: string, action: string, eventId: string, processEntries: any[]): void {
+  const sid = String(sessionId || '').trim();
+  const userText = compactVoiceText(transcript || '', 1200);
+  const replyText = String(voiceReply || '').trim();
+  const id = String(eventId || '').trim();
+  if (!sid || !userText || !replyText) return;
+  try {
+    const session = getSession(sid);
+    const history = Array.isArray(session.history) ? session.history : [];
+    if (id && history.some((msg: any) => String(msg?.voiceInterruptionEventId || '') === id && String(msg?.content || '').trim() === replyText)) {
+      return;
+    }
+    const groupId = `voice_workflow_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`;
+    const now = Date.now();
+    addMessage(sid, {
+      role: 'user',
+      content: userText,
+      timestamp: now,
+      channel: 'voice',
+      channelLabel: 'voice',
+      workflowGroupId: groupId,
+      workflowPart: 'interruption',
+      workflowLabel: action === 'handoff_new_work' ? 'Voice request' : 'Voice interruption',
+      voiceInterruptionEventId: id || undefined,
+    } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    addMessage(sid, {
+      role: 'assistant',
+      content: replyText,
+      timestamp: now + 1,
+      source: 'voice_agent',
+      processEntries: Array.isArray(processEntries) ? processEntries : [],
+      workflowGroupId: groupId,
+      workflowPart: action === 'interrupt_worker' ? 'abort_response' : 'interruption_response',
+      workflowLabel: action === 'interrupt_worker' ? 'Abort response' : 'Interruption response',
+      voiceInterruptionEventId: id || undefined,
+    } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+  } catch (err: any) {
+    console.warn('[voice-agent] failed to persist visible voice turn:', err?.message || err);
+  }
+}
+
+function hasRecentVoiceWorkflowUserMessage(sessionId: string, message: string, maxAgeMs = 180000): boolean {
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!sessionId || !text) return false;
+  try {
+    const history = Array.isArray(getSession(sessionId).history) ? getSession(sessionId).history : [];
+    const now = Date.now();
+    return history.some((msg: any) => {
+      if (msg?.role !== 'user') return false;
+      if (!String(msg?.voiceInterruptionEventId || '').trim() && !String(msg?.workflowGroupId || '').trim()) return false;
+      if (String(msg?.content || '').replace(/\s+/g, ' ').trim() !== text) return false;
+      const ts = Number(msg?.timestamp || 0);
+      return !Number.isFinite(ts) || ts <= 0 || now - ts <= maxAgeMs;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function buildFastRouteSpokenReply(toolName: string, toolResult: any): string {
+  const ok = toolResult?.ok !== false;
+  const summary = compactVoiceText(toolResult?.summary || toolResult?.stdout || toolResult?.error || '', 600);
+  if (!ok) return `${friendlyVoiceToolName(toolName)} failed${summary ? `: ${summary}` : '.'}`;
+  switch (toolName) {
+    case 'voice_web_search': return summary ? `Here's what I found: ${summary}` : 'Search complete.';
+    case 'voice_web_fetch': return summary ? `Here's the content: ${summary}` : 'Fetched.';
+    case 'voice_memory_search': return summary ? `From memory: ${summary}` : 'Nothing found in memory.';
+    case 'voice_skill_lookup': return summary ? `Available workflows: ${summary}` : 'No matching skills found.';
+    case 'voice_write_note': return summary || 'Note saved.';
+    case 'voice_set_wake_phrase': return summary || 'Wake phrase updated.';
+    case 'voice_enter_quiet_mode': return summary || 'Quiet mode is ready.';
+    case 'voice_set_quiet_until': return summary || 'Quiet mode is ready.';
+    case 'voice_timer': return summary || 'Timer set.';
+    case 'voice_browser_screenshot': return summary || 'Browser screenshot captured.';
+    case 'voice_desktop_screenshot': return summary || 'Desktop captured.';
+    case 'voice_send_screenshot': return summary || 'Screenshot sent.';
+    default: return summary || `${friendlyVoiceToolName(toolName)} complete.`;
+  }
+}
+
+function getVoiceAgentSynthModel(): string | undefined {
+  try {
+    const raw = (getConfig() as any).getConfig() as any;
+    const configured = String(raw?.voice?.agent?.synth_model || raw?.agent_model_defaults?.voice_agent_synth || '').trim();
+    if (configured) return configured;
+    const active: string = String(raw?.llm?.provider || 'ollama').trim();
+    const miniDefaults: Record<string, string> = {
+      openai: 'gpt-4o-mini',
+      openai_codex: 'gpt-4o-mini',
+      anthropic: 'claude-haiku-4-5-20251001',
+      gemini: 'gemini-2.0-flash-lite',
+      xai: 'grok-3-mini-fast',
+    };
+    return miniDefaults[active];
+  } catch {
+    return undefined;
+  }
+}
+
+function buildDeterministicHandoffAck(transcript: string): string {
+  const text = String(transcript || '').trim().toLowerCase();
+  const verbGerunds: Array<[RegExp, string]> = [
+    [/\brun(ning)?\b/, 'Running that'],
+    [/\btest(ing)?\b/, 'Testing that'],
+    [/\bbuild(ing)?\b/, 'Building that'],
+    [/\bsearch(ing|ed)?\b/, 'Searching now'],
+    [/\bfind\b|\bfinding\b/, 'Finding that'],
+    [/\bwrit(e|ing)\b/, 'Writing that'],
+    [/\bedit(ing)?\b/, 'Editing that'],
+    [/\bfix(ing)?\b/, 'Fixing that'],
+    [/\bopen(ing)?\b/, 'Opening that'],
+    [/\bcreat(e|ing)\b/, 'Creating that'],
+    [/\bcheck(ing)?\b/, 'Checking that'],
+    [/\binstall(ing)?\b/, 'Installing that'],
+    [/\bgenerat(e|ing)\b/, 'Generating that'],
+    [/\banalyz(e|ing)\b/, 'Analyzing that'],
+    [/\bstart(ing)?\b/, 'Starting that'],
+    [/\bupdat(e|ing)\b/, 'Updating that'],
+    [/\bdebu(g|gging)\b/, 'Debugging that'],
+    [/\bsend(ing)?\b/, 'Sending that'],
+    [/\bdownload(ing)?\b/, 'Downloading that'],
+    [/\bnavigate|navigating\b/, 'Navigating there'],
+    [/\blaunch(ing)?\b/, 'Launching that'],
+    [/\bcompil(e|ing)\b/, 'Compiling that'],
+    [/\bdeploy(ing)?\b/, 'Deploying that'],
+    [/\bscreenshot\b/, 'Capturing that'],
+    [/\bremind(er)?\b|\btimer\b/, 'Setting that timer'],
+    [/\bremember\b|\bjot\b|\bnote\b/, 'Saving that note'],
+  ];
+  for (const [pattern, ack] of verbGerunds) {
+    if (pattern.test(text)) return `${ack} now.`;
+  }
+  return 'On it.';
+}
+
+// Plain-text streaming sentence flusher — feed raw token chunks, get sentence
+// callbacks. Used for synthesis passes that return plain text (not JSON-wrapped).
+function createPlainTextSentenceStreamer(onSentence: (text: string) => void) {
+  let pending = '';
+  let totalChars = 0;
+  const MAX_PENDING_NO_PUNCT = 140;
+  const SENTENCE_END_RE = /[.!?]["')\]]*\s|[.!?]["')\]]*$|;\s/;
+  function flush(final = false) {
+    if (!pending) return;
+    while (true) {
+      const m = pending.match(SENTENCE_END_RE);
+      if (!m) break;
+      const end = (m.index ?? 0) + m[0].length;
+      const sentence = pending.slice(0, end).trim();
+      pending = pending.slice(end);
+      if (sentence) onSentence(sentence);
+    }
+    if (!final && pending.length >= MAX_PENDING_NO_PUNCT) {
+      const lastSpace = pending.lastIndexOf(' ', MAX_PENDING_NO_PUNCT);
+      const cut = lastSpace > 40 ? lastSpace : MAX_PENDING_NO_PUNCT;
+      const sentence = pending.slice(0, cut).trim();
+      pending = pending.slice(cut).replace(/^\s+/, '');
+      if (sentence) onSentence(sentence);
+    }
+    if (final && pending.trim()) {
+      onSentence(pending.trim());
+      pending = '';
+    }
+  }
+  return {
+    feed(chunk: string) {
+      if (!chunk) return;
+      pending += chunk;
+      totalChars += chunk.length;
+      if (totalChars > 4000) { flush(true); return; }
+      flush(false);
+    },
+    finish() { flush(true); },
+  };
+}
+
+// Stream parser: extracts characters from the value of "spokenReply" in a JSON
+// object as model tokens arrive. Handles JSON string escapes and key variants.
+// Emits sentence-sized chunks to onSentence as they complete.
+function createSpokenReplyStreamer(onSentence: (text: string) => void) {
+  type State =
+    | 'find_key'
+    | 'after_key'
+    | 'expect_colon'
+    | 'expect_quote'
+    | 'in_value'
+    | 'in_value_escape'
+    | 'done';
+  let state: State = 'find_key';
+  let buf = '';                    // rolling buffer for key detection
+  let valueAccum = '';             // accumulated decoded characters of spokenReply
+  let pending = '';                // characters not yet emitted as a sentence
+  let totalChars = 0;
+  const KEY_PATTERNS = [/"spokenReply"\s*:/i, /"voiceReply"\s*:/i, /"spoken_reply"\s*:/i];
+  const MAX_PENDING_NO_PUNCT = 140;   // flush if too long without sentence-end
+  const SENTENCE_END_RE = /[.!?]["')\]]*\s|[.!?]["')\]]*$|;\s/;
+
+  function flushSentences(final = false) {
+    if (!pending) return;
+    while (true) {
+      const m = pending.match(SENTENCE_END_RE);
+      if (!m) break;
+      const end = (m.index ?? 0) + m[0].length;
+      const sentence = pending.slice(0, end).trim();
+      pending = pending.slice(end);
+      if (sentence) onSentence(sentence);
+    }
+    if (!final && pending.length >= MAX_PENDING_NO_PUNCT) {
+      // emit as a soft chunk at a space boundary if possible
+      const lastSpace = pending.lastIndexOf(' ', MAX_PENDING_NO_PUNCT);
+      const cut = lastSpace > 40 ? lastSpace : MAX_PENDING_NO_PUNCT;
+      const sentence = pending.slice(0, cut).trim();
+      pending = pending.slice(cut).replace(/^\s+/, '');
+      if (sentence) onSentence(sentence);
+    }
+    if (final && pending.trim()) {
+      onSentence(pending.trim());
+      pending = '';
+    }
+  }
+
+  function decodeEscape(ch: string): string {
+    switch (ch) {
+      case 'n': return '\n';
+      case 't': return '\t';
+      case 'r': return '';
+      case '"': return '"';
+      case '\\': return '\\';
+      case '/': return '/';
+      case 'b': return '';
+      case 'f': return '';
+      default: return ch;
+    }
+  }
+
+  function feedValueChar(ch: string) {
+    valueAccum += ch;
+    pending += ch;
+    totalChars += 1;
+    if (totalChars > 4000) {
+      // safety cap; stop accumulating
+      state = 'done';
+      flushSentences(true);
+      return;
+    }
+    flushSentences(false);
+  }
+
+  return {
+    feed(chunk: string) {
+      if (state === 'done' || !chunk) return;
+      let i = 0;
+      while (i < chunk.length) {
+        const ch = chunk[i];
+        if (state === 'find_key') {
+          buf += ch;
+          if (buf.length > 4096) buf = buf.slice(-2048);
+          for (const re of KEY_PATTERNS) {
+            const m = buf.match(re);
+            if (m) {
+              state = 'expect_quote';
+              buf = '';
+              break;
+            }
+          }
+          i++;
+          continue;
+        }
+        if (state === 'expect_quote') {
+          if (ch === '"') {
+            state = 'in_value';
+            i++;
+            continue;
+          }
+          if (/\s/.test(ch)) { i++; continue; }
+          // unexpected — bail
+          state = 'done';
+          flushSentences(true);
+          return;
+        }
+        if (state === 'in_value') {
+          if (ch === '\\') {
+            state = 'in_value_escape';
+            i++;
+            continue;
+          }
+          if (ch === '"') {
+            state = 'done';
+            flushSentences(true);
+            return;
+          }
+          feedValueChar(ch);
+          i++;
+          continue;
+        }
+        if (state === 'in_value_escape') {
+          if (ch === 'u') {
+            // unicode escape \uXXXX — consume 4 hex chars
+            const hex = chunk.slice(i + 1, i + 5);
+            if (hex.length === 4) {
+              try {
+                const code = parseInt(hex, 16);
+                if (!Number.isNaN(code)) feedValueChar(String.fromCharCode(code));
+              } catch {}
+              i += 5;
+            } else {
+              // need more data — break and wait for next feed
+              return;
+            }
+            state = 'in_value';
+            continue;
+          }
+          feedValueChar(decodeEscape(ch));
+          state = 'in_value';
+          i++;
+          continue;
+        }
+        i++;
+      }
+    },
+    finish() {
+      if (state !== 'done') {
+        state = 'done';
+        flushSentences(true);
+      }
+    },
+    getAccumulated(): string {
+      return valueAccum;
+    },
+    isComplete(): boolean {
+      return state === 'done';
+    },
+  };
 }
 
 async function callVoiceAgentDecisionModel(
@@ -8538,30 +9885,215 @@ async function callVoiceAgentDecisionModel(
   contextPacket: Record<string, any>,
   fallback: VoiceAgentDecision,
   trace?: VoiceAgentProcessEntry[],
+  onSpeechChunk?: (text: string) => void,
 ): Promise<VoiceAgentDecision> {
   try {
     const startedAt = Date.now();
-    const workspacePath = getConfig().getWorkspacePath();
-    const session = getSession(sessionId);
-    const history = Array.isArray(session?.history) ? session.history : [];
     const contextStartedAt = Date.now();
-    const contextBlock = await buildPersonalityContext(
-      sessionId,
-      workspacePath,
-      transcript,
-      'interactive',
-      history.length,
-      _skillsManager,
-      undefined,
-      { profile: 'voice_agent' },
-    );
-    const contextBuildMs = Date.now() - contextStartedAt;
-    pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: context build ${contextBuildMs}ms.`, {
-      stage: 'voice_context_build',
+    const contextBlockResult = await getVoiceAgentContextBlock(sessionId, transcript);
+    const contextBuildMs = contextBlockResult.elapsedMs || (Date.now() - contextStartedAt);
+    const contextBlock = contextBlockResult.contextBlock;
+    pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: context ${contextBlockResult.cacheHit ? 'cache hit' : 'build'} ${contextBuildMs}ms.`, {
+      stage: contextBlockResult.cacheHit ? 'voice_context_cache_hit' : 'voice_context_build',
       elapsedMs: contextBuildMs,
+      cacheHit: contextBlockResult.cacheHit,
       totalMs: Date.now() - startedAt,
     });
-    const system = buildVoiceAgentSystemPrompt(contextBlock, contextPacket);
+    const fallbackToolRequest = findVoiceToolFallbackRequest(transcript);
+    if (fallbackToolRequest?.name === 'voice_set_wake_phrase') {
+      const content = await executeVoiceAgentToolWithTrace(sessionId, fallbackToolRequest.name, fallbackToolRequest.args, trace);
+      const parsedTool = parseVoiceToolResult(content);
+      const phrase = cleanVoiceWakePhrase(parsedTool?.wakePhrase || fallbackToolRequest.args?.phrase || '');
+      const acknowledgementMessages = [
+        {
+          role: 'system',
+          content: [
+            'You are Prometheus speaking through the user\'s voice interface.',
+            'The user just set their wake phrase. Acknowledge naturally in one short spoken sentence.',
+            'Do not say you will remember it forever. Do not mention implementation details. Return only the sentence, no JSON.',
+          ].join('\n'),
+        },
+        { role: 'user', content: transcript },
+      ];
+      let spokenReply = phrase ? `Your wake phrase is now ${phrase}.` : 'Your wake phrase is updated.';
+      try {
+        const ackStartedAt = Date.now();
+        let streamedAck = false;
+        const ackStreamer = onSpeechChunk
+          ? createPlainTextSentenceStreamer((sentence) => {
+              streamedAck = true;
+              try { onSpeechChunk(sentence); } catch {}
+            })
+          : null;
+        const ack = await getOllamaClient().chatWithThinking(acknowledgementMessages, 'executor', {
+          temperature: 0.4,
+          num_ctx: 1024,
+          num_predict: 40,
+          think: 'none',
+          usageContext: { sessionId, agentId: 'voice_agent' },
+          onToken: ackStreamer ? ((chunk: string) => ackStreamer.feed(chunk)) : undefined,
+        } as any);
+        if (ackStreamer) ackStreamer.finish();
+        const modelAck = compactVoiceText(String(ack?.message?.content || '').replace(/^```[\s\S]*?```$/g, '').trim(), 180);
+        if (modelAck) spokenReply = modelAck;
+        if (onSpeechChunk && !streamedAck && spokenReply) {
+          try { onSpeechChunk(spokenReply); } catch {}
+        }
+        pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: wake phrase acknowledgement ${Date.now() - ackStartedAt}ms.`, {
+          stage: 'voice_wake_phrase_ack',
+          elapsedMs: Date.now() - ackStartedAt,
+          totalMs: Date.now() - startedAt,
+        });
+      } catch (err: any) {
+        pushVoiceAgentProcessEntry(trace, 'warn', `Wake phrase acknowledgement model failed: ${String(err?.message || err).slice(0, 180)}`, {
+          stage: 'voice_wake_phrase_ack_failed',
+          totalMs: Date.now() - startedAt,
+        });
+      }
+      return {
+        action: 'answer_now',
+        spokenReply,
+        workerInstruction: '',
+        needsWorkerResponse: false,
+        reason: 'voice_runtime_tool_fast_route:set_wake_phrase',
+        runtimeDirectives: phrase ? [{ action: 'set_wake_phrase', wakePhrase: phrase }] : [],
+      };
+    }
+    // Fast-route: transcript clearly matches a voice tool and no worker is active.
+    // Routing/decision model skipped entirely. Reply is built deterministically from
+    // the tool result — no synthesis model call (cloud models take 500–4000ms even
+    // with max_tokens=120; that defeats the purpose of fast-routing).
+    // When a worker IS active we keep the full model path so it can decide whether
+    // to answer, steer, or interrupt.
+    if (
+      fallbackToolRequest
+      && !classification.shouldAbortOriginalRun
+      && !classification.shouldPauseOriginalRun
+      && contextPacket.active !== true
+    ) {
+      const toolStartedAt = Date.now();
+      pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: deterministic tool fast-route ${fallbackToolRequest.name} — routing model skipped.`, {
+        stage: 'voice_fast_router',
+        route: `tool:${fallbackToolRequest.name}`,
+        totalMs: Date.now() - startedAt,
+      });
+      const raw = await executeVoiceAgentToolWithTrace(sessionId, fallbackToolRequest.name, fallbackToolRequest.args, trace);
+      const toolResult = parseVoiceToolResult(raw);
+      const runtimeDirective = voiceRuntimeDirectiveFromToolResult(toolResult);
+      const runtimeDirectives = runtimeDirective ? [runtimeDirective] : [];
+      pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: deterministic tool execute ${Date.now() - toolStartedAt}ms.`, {
+        stage: 'voice_fast_router_tool_done',
+        tool: fallbackToolRequest.name,
+        ok: toolResult?.ok !== false,
+        elapsedMs: Date.now() - toolStartedAt,
+        totalMs: Date.now() - startedAt,
+      });
+      // Synthesis pass: transcript + tool result → one spoken reply.
+      // Uses the fastest available model (mini/haiku tier), not the primary executor.
+      // No personality context, no tool defs, no JSON schema — tiny prompt, tiny output.
+      const fallbackSpokenReply = buildFastRouteSpokenReply(fallbackToolRequest.name, toolResult);
+      let spokenReply = fallbackSpokenReply;
+      try {
+        const synthStartedAt = Date.now();
+        const resultSummary = compactVoiceText(toolResult?.summary || toolResult?.stdout || toolResult?.error || '', 1200);
+        const synthMessages = [
+          {
+            role: 'system',
+            content: [
+              'You are Prometheus on voice. The user asked something and you already ran a tool to get the answer.',
+              'Write a single spoken reply (1-3 sentences max) that delivers the result naturally and conversationally.',
+              'Speak as Prometheus: warm, direct, specific. Do not use markdown or bullet characters.',
+              'Return only the spoken reply — no JSON, no labels, no meta-commentary.',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: [
+              `User said: "${compactVoiceText(transcript, 300)}"`,
+              '',
+              `Tool: ${friendlyVoiceToolName(fallbackToolRequest.name)}`,
+              `Result: ${toolResult?.ok !== false ? resultSummary || 'Complete.' : `Failed — ${resultSummary}`}`,
+            ].join('\n'),
+          },
+        ];
+        let firstSynthChunk = true;
+        let streamedAny = false;
+        const synthStreamer = onSpeechChunk
+          ? createPlainTextSentenceStreamer((sentence) => {
+              streamedAny = true;
+              if (firstSynthChunk) {
+                firstSynthChunk = false;
+                pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: first synth speech chunk ${Date.now() - synthStartedAt}ms.`, {
+                  stage: 'voice_fast_router_first_speech_chunk',
+                  elapsedMs: Date.now() - synthStartedAt,
+                  totalMs: Date.now() - startedAt,
+                });
+              }
+              try { onSpeechChunk(sentence); } catch {}
+            })
+          : null;
+        const synthResult = await getOllamaClient().chatWithThinking(synthMessages, 'executor', {
+          temperature: 0.3,
+          model: getVoiceAgentSynthModel(),
+          num_ctx: 1024,
+          num_predict: 120,
+          think: 'none',
+          usageContext: { sessionId, agentId: 'voice_agent' },
+          onToken: synthStreamer ? ((chunk: string) => synthStreamer.feed(chunk)) : undefined,
+        } as any);
+        if (synthStreamer) synthStreamer.finish();
+        const synthText = compactVoiceText(String(synthResult?.message?.content || '').trim(), 700);
+        if (synthText) spokenReply = synthText;
+        // If streaming didn't yield anything (provider doesn't support onToken),
+        // emit the final spokenReply as a single chunk so the client still speaks.
+        if (onSpeechChunk && !streamedAny && spokenReply) {
+          try { onSpeechChunk(spokenReply); } catch {}
+        }
+        pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: tool reply synthesis ${Date.now() - synthStartedAt}ms.`, {
+          stage: 'voice_fast_router_synthesis',
+          elapsedMs: Date.now() - synthStartedAt,
+          totalMs: Date.now() - startedAt,
+        });
+      } catch (err: any) {
+        pushVoiceAgentProcessEntry(trace, 'warn', `Tool reply synthesis failed, using fallback: ${String(err?.message || err).slice(0, 180)}`, {
+          stage: 'voice_fast_router_synthesis_failed',
+          totalMs: Date.now() - startedAt,
+        });
+      }
+      return {
+        action: 'answer_now',
+        spokenReply,
+        workerInstruction: '',
+        needsWorkerResponse: false,
+        reason: `deterministic_tool_fast_route:${fallbackToolRequest.name}`,
+        runtimeDirectives,
+      } as VoiceAgentDecision;
+    }
+    const smallTalkReply = deterministicVoiceSmallTalkReply(transcript, contextPacket);
+    if (smallTalkReply && fallback.action === 'answer_now' && !classification.shouldAbortOriginalRun && !classification.shouldPauseOriginalRun) {
+      pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: deterministic small-talk route ${Date.now() - startedAt}ms.`, {
+        stage: 'voice_fast_router',
+        route: 'small_talk',
+        elapsedMs: Date.now() - startedAt,
+      });
+      if (onSpeechChunk) { try { onSpeechChunk(smallTalkReply); } catch {} }
+      return {
+        action: 'answer_now',
+        spokenReply: smallTalkReply,
+        workerInstruction: '',
+        needsWorkerResponse: false,
+        reason: 'deterministic_small_talk',
+      };
+    }
+    const wantsVoiceTool = !!fallbackToolRequest;
+    const lightVoiceDecision = !wantsVoiceTool
+      && contextPacket.active !== true
+      && (fallback.action === 'answer_now' || fallback.action === 'handoff_new_work')
+      && !classification.shouldAbortOriginalRun
+      && !classification.shouldPauseOriginalRun;
+    const system = lightVoiceDecision
+      ? buildVoiceAgentLightSystemPrompt(contextBlock, contextPacket)
+      : buildVoiceAgentSystemPrompt(contextBlock, contextPacket);
     const user = [
       '[VOICE_TRANSCRIPT]',
       transcript || '(empty)',
@@ -8576,18 +10108,40 @@ async function callVoiceAgentDecisionModel(
       { role: 'user', content: user },
     ];
     let result: any = null;
-    const tools = buildVoiceToolDefinitions();
+    const tools = lightVoiceDecision ? [] : buildVoiceToolDefinitions();
     const decisionStartedAt = Date.now();
+    let modelStreamedAnySpeech = false;
     for (let i = 0; i < 3; i++) {
       const loopStartedAt = Date.now();
+      // Stream the spokenReply field directly to TTS as the model generates it.
+      // Only emit chunks on the final pass (no tool calls expected) — we don't
+      // know in advance, so instantiate a streamer fresh and rely on it producing
+      // no output when the model returns tool_calls.
+      let firstChunkLogged = false;
+      const streamer = onSpeechChunk
+        ? createSpokenReplyStreamer((sentence) => {
+            if (!firstChunkLogged) {
+              firstChunkLogged = true;
+              modelStreamedAnySpeech = true;
+              pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: first speech chunk ${Date.now() - decisionStartedAt}ms after decision start.`, {
+                stage: 'voice_model_first_speech_chunk',
+                elapsedMs: Date.now() - decisionStartedAt,
+                totalMs: Date.now() - startedAt,
+              });
+            }
+            try { onSpeechChunk(sentence); } catch {}
+          })
+        : null;
       result = await getOllamaClient().chatWithThinking(messages, 'executor', {
-        tools: i < 2 ? tools : undefined,
+        tools: !lightVoiceDecision && i < 2 ? tools : undefined,
         temperature: 0.2,
-        num_ctx: 8192,
-        num_predict: 900,
+        num_ctx: lightVoiceDecision ? 2048 : 4096,
+        num_predict: lightVoiceDecision ? 120 : 250,
         think: 'none',
         usageContext: { sessionId, agentId: 'voice_agent' },
-      });
+        onToken: streamer ? ((chunk: string) => streamer.feed(chunk)) : undefined,
+      } as any);
+      if (streamer) streamer.finish();
       pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: decision pass ${i + 1} ${Date.now() - loopStartedAt}ms.`, {
         stage: 'voice_model_decision',
         pass: i + 1,
@@ -8617,21 +10171,36 @@ async function callVoiceAgentDecisionModel(
     }
     const content = String(result?.message?.content || '').trim();
     const parsed = safeParseVoiceAgentJson(content);
-    if (!parsed) return await maybeApplyVoiceToolFallback(sessionId, transcript, fallback, trace);
+    if (!parsed) return fallback;
     const normalized = normalizeVoiceAgentDecision(parsed, fallback);
     if (classification.shouldAbortOriginalRun) normalized.action = 'interrupt_worker';
     if (classification.shouldPauseOriginalRun && normalized.action !== 'interrupt_worker') normalized.action = 'answer_now';
-    const finalDecision = await maybeApplyVoiceToolFallback(sessionId, transcript, normalized, trace);
+    if (normalized.action === 'handoff_new_work' && !String(normalized.spokenReply || '').trim()) {
+      normalized.spokenReply = buildDeterministicHandoffAck(transcript);
+      normalized.reason = `${normalized.reason || 'voice_handoff'};deterministic_ack_fallback`;
+      pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: handoff ack deterministic fallback (no repair pass).`, {
+        stage: 'voice_handoff_ack_deterministic',
+        ack: normalized.spokenReply,
+        totalMs: Date.now() - startedAt,
+      });
+    }
+    // If streaming did not produce any speech chunks during the decision pass
+    // (e.g., provider does not support onToken, or the model returned tool calls
+    // for the entire loop), emit the final spokenReply as a single chunk so the
+    // client still speaks. This is the safety net — streaming is the fast path.
+    if (onSpeechChunk && !modelStreamedAnySpeech && normalized.spokenReply) {
+      try { onSpeechChunk(normalized.spokenReply); } catch {}
+    }
     pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: model decision total ${Date.now() - decisionStartedAt}ms.`, {
       stage: 'voice_model_decision_total',
       elapsedMs: Date.now() - decisionStartedAt,
       totalMs: Date.now() - startedAt,
-      action: finalDecision.action,
+      action: normalized.action,
     });
-    return finalDecision;
+    return normalized;
   } catch (err: any) {
     console.warn('[voice-agent] model decision failed:', err?.message || err);
-    return await maybeApplyVoiceToolFallback(sessionId, transcript, fallback, trace);
+    return fallback;
   }
 }
 
@@ -8981,10 +10550,14 @@ router.post('/api/voice-agent/context', (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const originalUserPrompt = String(body.originalUserPrompt || body.transcript || body.userInterruptionTranscript || '').trim();
+    const contextPacket = buildVoiceWorkerContextPacket(sessionId, body);
+    prewarmVoiceAgentContextBlock(sessionId, originalUserPrompt, { source: body.source || 'voice_context_endpoint' });
     res.json({
       ok: true,
       success: true,
-      contextPacket: buildVoiceWorkerContextPacket(sessionId, body),
+      contextPacket,
+      prewarmed: true,
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
@@ -8994,10 +10567,15 @@ router.post('/api/voice-agent/context', (req, res) => {
 router.get('/api/voice-agent/context/:sessionId', (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || 'default').trim() || 'default';
+    const query = req.query as any;
+    const originalUserPrompt = String(query.originalUserPrompt || query.transcript || query.userInterruptionTranscript || '').trim();
+    const contextPacket = buildVoiceWorkerContextPacket(sessionId, query);
+    prewarmVoiceAgentContextBlock(sessionId, originalUserPrompt, { source: query.source || 'voice_context_endpoint' });
     res.json({
       ok: true,
       success: true,
-      contextPacket: buildVoiceWorkerContextPacket(sessionId, req.query as any),
+      contextPacket,
+      prewarmed: true,
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
@@ -9027,27 +10605,66 @@ router.post('/api/voice-agent/input', async (req, res) => {
   try {
     const requestStartedAt = Date.now();
     const body = req.body || {};
+    // Streaming mode: client sends { stream: true } and consumes SSE.
+    // Server emits one `chunk` event per sentence as the model generates the
+    // spokenReply, then a `done` event with the full result payload.
+    const streamMode = body.stream === true || body.stream === 'true'
+      || String(req.headers['accept'] || '').toLowerCase().includes('text/event-stream');
+    let chunkSeq = 0;
+    const emittedChunkTexts: string[] = [];
+    if (streamMode) {
+      res.status(200);
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      try { (res as any).flushHeaders?.(); } catch {}
+      // Heartbeat to keep the connection alive on proxies
+      const heartbeat = setInterval(() => {
+        try { res.write(': ping\n\n'); } catch {}
+      }, 15000);
+      res.on('close', () => clearInterval(heartbeat));
+      res.on('finish', () => clearInterval(heartbeat));
+    }
+    const writeSseEvent = (type: string, payload: Record<string, any>) => {
+      if (!streamMode) return;
+      try {
+        res.write(`data: ${JSON.stringify({ type, ...payload })}\n\n`);
+      } catch {}
+    };
+    const emitSpeechChunk = (text: string) => {
+      const trimmed = String(text || '').trim();
+      if (!trimmed) return;
+      chunkSeq += 1;
+      emittedChunkTexts.push(trimmed);
+      writeSseEvent('chunk', { seq: chunkSeq, text: trimmed });
+    };
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
     const transcript = String(body.transcript || body.userInterruptionTranscript || body.message || '').trim();
     const classification = classifyVoiceInterruption(transcript);
     const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
     const contextPacketStartedAt = Date.now();
-    const contextPacket = buildVoiceWorkerContextPacket(sessionId, {
-      ...body,
-      expectedRuntimeId: activeRuntime?.id || body.expectedRuntimeId || body.runtimeId || body.activeRunId,
-      originalUserPrompt: body.originalUserPrompt,
-    });
+    const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
+    const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
     const contextPacketMs = Date.now() - contextPacketStartedAt;
     const eventId = String(body.id || `voice_intr_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`);
     const fallbackAction = decideVoiceAgentAction(transcript, classification, contextPacket);
     const fallbackDecision: VoiceAgentDecision = {
       action: fallbackAction,
-      spokenReply: composeVoiceAgentReply(fallbackAction, transcript, classification, contextPacket),
+      spokenReply: '',
       workerInstruction: fallbackAction === 'handoff_new_work' || fallbackAction === 'steer_worker' ? transcript : '',
       needsWorkerResponse: classification.intent === 'question',
       reason: 'deterministic_fallback',
     };
+    if (voiceRuntimeContext) {
+      contextPacket.voiceRuntime = voiceRuntimeContext;
+    }
     const voiceProcessEntries: VoiceAgentProcessEntry[] = [];
+    pushVoiceAgentProcessEntry(voiceProcessEntries, 'user', `User: ${compactVoiceText(transcript, 900)}`, {
+      stage: 'voice_user_transcript',
+      transcript,
+      totalMs: Date.now() - requestStartedAt,
+    });
     pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', `Voice latency: worker packet ${contextPacketMs}ms.`, {
       stage: 'voice_worker_context_packet',
       elapsedMs: contextPacketMs,
@@ -9055,15 +10672,17 @@ router.post('/api/voice-agent/input', async (req, res) => {
     });
     const exactCommand = contextPacket.active ? exactActiveWorkerVoiceCommand(transcript) : '';
     let decision: VoiceAgentDecision;
+    let fastRouteReason = '';
     if (exactCommand) {
       const action: VoiceAgentAction = exactCommand === 'stop' ? 'interrupt_worker' : 'steer_worker';
       decision = {
         action,
-        spokenReply: exactCommand === 'stop' ? 'Stopping.' : '',
+        spokenReply: '',
         workerInstruction: transcript,
         needsWorkerResponse: exactCommand === 'status',
         reason: `exact_active_worker_voice_command:${exactCommand}`,
       };
+      fastRouteReason = `exact:${exactCommand}`;
       pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', `Voice latency: exact ${exactCommand} command routed without model.`, {
         stage: 'voice_fast_router',
         command: exactCommand,
@@ -9071,7 +10690,28 @@ router.post('/api/voice-agent/input', async (req, res) => {
         totalMs: Date.now() - requestStartedAt,
       });
     } else {
-      decision = await callVoiceAgentDecisionModel(sessionId, transcript, classification, contextPacket, fallbackDecision, voiceProcessEntries);
+      decision = await callVoiceAgentDecisionModel(
+        sessionId,
+        transcript,
+        classification,
+        contextPacket,
+        fallbackDecision,
+        voiceProcessEntries,
+        streamMode ? emitSpeechChunk : undefined,
+      );
+    }
+    if (decision.action === 'answer_now' && !String(decision.spokenReply || '').trim() && transcript) {
+      decision = {
+        ...decision,
+        action: 'handoff_new_work',
+        workerInstruction: decision.workerInstruction || transcript,
+        needsWorkerResponse: true,
+        reason: `${decision.reason || 'voice_agent_empty_answer'};empty_answer_handoff`,
+      };
+      pushVoiceAgentProcessEntry(voiceProcessEntries, 'warn', 'Voice Agent returned no spoken answer; handing off instead of using a fallback reply.', {
+        stage: 'voice_empty_answer_handoff',
+        totalMs: Date.now() - requestStartedAt,
+      });
     }
     const action = decision.action;
     if (action === 'handoff_new_work') {
@@ -9137,6 +10777,24 @@ router.post('/api/voice-agent/input', async (req, res) => {
       injectedContextText = buildVoiceAgentHandoffContext(decision, contextPacket, transcript);
     }
     const voiceReply = decision.spokenReply;
+    const rawRuntimeDirectives = [
+      ...(Array.isArray((decision as any)?.runtimeDirectives) ? (decision as any).runtimeDirectives : []),
+      ...voiceProcessEntries
+        .map((entry) => entry?.extra?.runtimeDirective)
+        .filter((directive: any) => directive && directive.action),
+    ];
+    const seenRuntimeDirectives = new Set<string>();
+    const runtimeDirectives = rawRuntimeDirectives.filter((directive: any) => {
+      const key = JSON.stringify({
+        action: String(directive?.action || ''),
+        wakePhrase: cleanVoiceWakePhrase(directive?.wakePhrase || ''),
+        activateAfterReply: directive?.activateAfterReply === true || directive?.activate_after_reply === true,
+        requiresWakePhrase: directive?.requiresWakePhrase === true || directive?.requires_wake_phrase === true,
+      });
+      if (seenRuntimeDirectives.has(key)) return false;
+      seenRuntimeDirectives.add(key);
+      return true;
+    });
     const storedEvent = { ...event, injectedContextText, status: steerApplied ? 'injected_into_runtime' : 'handled_by_voice_agent', action, voiceReply, decision, contextPacket, processEntries: voiceProcessEntries };
     const totalMs = Date.now() - requestStartedAt;
     pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', `Voice latency: input endpoint total ${totalMs}ms.`, {
@@ -9145,6 +10803,15 @@ router.post('/api/voice-agent/input', async (req, res) => {
       action,
       steerApplied,
     });
+    const isActualInterruption = !!(
+      activeRuntime?.id
+      || body.isStreamActive === true
+      || action === 'steer_worker'
+      || action === 'interrupt_worker'
+    );
+    if (action === 'handoff_new_work' && voiceReply) {
+      persistVoiceAgentVisibleTurn(sessionId, transcript, voiceReply, action, eventId, voiceProcessEntries);
+    }
     appendVoiceInterruptionLog(storedEvent);
     if (activeRuntime?.id) {
       updateLiveRuntimeCheckpoint(activeRuntime.id, {
@@ -9166,19 +10833,44 @@ router.post('/api/voice-agent/input', async (req, res) => {
         abortLiveRuntime(activeRuntime.id);
       }
     }
-    broadcastWS({
-      type: 'voice_interruption',
-      sessionId,
-      eventId,
-      intent: classification.intent,
-      action,
-      shouldAbortOriginalRun: action === 'interrupt_worker',
-      runtimeId: activeRuntime?.id || '',
-      steerApplied,
-      steerEventId,
-      voiceContextPacketId: contextPacket.id,
-    });
-    res.json({
+    if (isActualInterruption) {
+      broadcastWS({
+        type: 'voice_interruption',
+        isInterruption: true,
+        sessionId,
+        eventId,
+        intent: classification.intent,
+        action,
+        transcript,
+        currentUserPrompt: transcript,
+        userInterruptionTranscript: transcript,
+        voiceReply,
+        decision,
+        processEntries: voiceProcessEntries,
+        runtimeDirectives,
+        shouldAbortOriginalRun: action === 'interrupt_worker',
+        runtimeId: activeRuntime?.id || '',
+        steerApplied,
+        steerEventId,
+        voiceContextPacketId: contextPacket.id,
+      });
+    } else {
+      broadcastWS({
+        type: 'voice_agent_turn',
+        isInterruption: false,
+        sessionId,
+        eventId,
+        action,
+        transcript,
+        currentUserPrompt: transcript,
+        voiceReply,
+        decision,
+        processEntries: voiceProcessEntries,
+        runtimeDirectives,
+        voiceContextPacketId: contextPacket.id,
+      });
+    }
+    const responsePayload = {
       ok: true,
       success: true,
       eventId,
@@ -9190,16 +10882,536 @@ router.post('/api/voice-agent/input', async (req, res) => {
       contextPacket,
       decision,
       processEntries: voiceProcessEntries,
+      runtimeDirectives,
       timings: {
         totalMs,
         contextPacketMs,
-        fastRouted: !!exactCommand,
+        fastRouted: !!fastRouteReason,
+        fastRouteReason,
         fastCommand: exactCommand || '',
+        isActualInterruption,
       },
       injectedContextText,
       voiceReply,
       workerInstruction: decision.workerInstruction || '',
       activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
+      // When streaming, tell the client that the spoken reply has already been
+      // delivered as `chunk` SSE events so it should NOT re-speak voiceReply.
+      streamedSpeech: streamMode && emittedChunkTexts.length > 0,
+      streamedChunkCount: emittedChunkTexts.length,
+    };
+    if (streamMode) {
+      writeSseEvent('done', { result: responsePayload });
+      try { res.end(); } catch {}
+    } else {
+      res.json(responsePayload);
+    }
+  } catch (err: any) {
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+    } else {
+      try {
+        res.write(`data: ${JSON.stringify({ type: 'error', error: String(err?.message || err) })}\n\n`);
+        res.end();
+      } catch {}
+    }
+  }
+});
+
+// ============================================================================
+// REALTIME VOICE AGENT — full audio-in / audio-out via OpenAI Realtime API.
+// When voice mode is "openai_realtime" end-to-end, the browser opens a single
+// Realtime session whose system instructions and function tools come from
+// this bootstrap. The reasoning model is gpt-realtime (not the primary). All
+// voice_* tools route through /api/voice-agent/realtime-tool, and worker
+// handoff/steer/interrupt are signalled as function calls back to the browser.
+// ============================================================================
+
+const REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
+const DEFAULT_REALTIME_AGENT_MODEL = 'gpt-realtime';
+const DEFAULT_REALTIME_AGENT_VOICE = 'marin';
+const REALTIME_AGENT_INSTRUCTIONS_MAX = 18000;
+
+function getRealtimeAgentApiKey(): string {
+  const cfg = getConfig().getConfig() as any;
+  const providers = cfg?.llm?.providers && typeof cfg.llm.providers === 'object' ? cfg.llm.providers : {};
+  const openAiKey = typeof providers?.openai?.api_key === 'string'
+    ? String(getConfig().resolveSecret(providers.openai.api_key) || '').trim()
+    : '';
+  return String(
+    process.env.OPENAI_REALTIME_API_KEY
+    || process.env.OPENAI_API_KEY
+    || process.env.VOICE_TOOLS_OPENAI_KEY
+    || openAiKey
+    || ''
+  ).trim();
+}
+
+type RealtimeAgentAuthCandidate = { token: string; auth: 'api_key' | 'openai_codex_oauth' };
+
+// Resolve every usable OpenAI credential for the Realtime client_secret mint, in
+// priority order. This mirrors realtime.router's getRealtimeAuthCandidates so the
+// end-to-end agent authenticates the same way regular OpenAI STT/TTS (and Codex
+// OAuth image gen) does — a raw API key OR the connected Codex OAuth account.
+async function getRealtimeAgentAuthCandidates(): Promise<RealtimeAgentAuthCandidate[]> {
+  const candidates: RealtimeAgentAuthCandidate[] = [];
+  const apiKey = getRealtimeAgentApiKey();
+  if (apiKey) candidates.push({ token: apiKey, auth: 'api_key' });
+
+  try {
+    const configDir = getConfig().getConfigDir();
+    if (loadOpenAiCodexTokens(configDir) !== null) {
+      const token = await getOpenAiCodexToken(configDir);
+      if (token) candidates.push({ token, auth: 'openai_codex_oauth' });
+    }
+  } catch {
+    // Fall through — the caller reports when no usable auth was found.
+  }
+
+  return candidates;
+}
+
+function sanitizeRealtimeAgentVoice(value: unknown): string {
+  const voice = String(value || DEFAULT_REALTIME_AGENT_VOICE).trim();
+  return /^[a-zA-Z0-9._:-]+$/.test(voice) ? voice : DEFAULT_REALTIME_AGENT_VOICE;
+}
+
+function sanitizeRealtimeAgentModel(value: unknown): string {
+  const model = String(value || DEFAULT_REALTIME_AGENT_MODEL).trim();
+  return /^[a-zA-Z0-9._:-]+$/.test(model) ? model : DEFAULT_REALTIME_AGENT_MODEL;
+}
+
+function sanitizeRealtimeAgentSpeed(value: unknown): number {
+  const speed = Number(value || 1);
+  if (!Number.isFinite(speed)) return 1;
+  return Math.max(0.25, Math.min(1.5, Math.round(speed * 100) / 100));
+}
+
+function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTIONS_MAX): string {
+  const text = String(value || '').trim();
+  if (!text || text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 18)).trimEnd()}\n...[truncated]`;
+}
+
+// Convert the chat-completions style voice tool defs to OpenAI Realtime format,
+// and add Realtime-specific worker-control tools (dispatch/steer/interrupt)
+// that the model uses to signal the browser to do something outside the audio
+// loop. The browser receives these via response.function_call events.
+function buildRealtimeVoiceAgentTools(): any[] {
+  const chatTools = buildVoiceToolDefinitions();
+  const realtimeTools: any[] = chatTools.map((tool: any) => ({
+    type: 'function',
+    name: tool.function?.name || tool.name,
+    description: tool.function?.description || tool.description,
+    parameters: tool.function?.parameters || tool.parameters,
+  }));
+  realtimeTools.push({
+    type: 'function',
+    name: 'dispatch_prometheus_worker',
+    description: 'Hand off heavy work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, browser/desktop control, coding, multi-step research, account actions, or anything outside the voice_* tool set. CRITICAL: call this function IMMEDIATELY — do NOT speak an acknowledgement before calling it. Speaking "on it" / "I started that" WITHOUT emitting this function call does nothing and the work never runs. Emit the function call first; a short spoken confirmation is generated automatically once the tool result returns. Never claim the worker is running unless you actually called this function.',
+    parameters: {
+      type: 'object',
+      required: ['task'],
+      properties: {
+        task: { type: 'string', description: 'Natural-language description of what the worker should do. Include any constraints or details the user mentioned.' },
+        spoken_ack: { type: 'string', description: 'Optional. The exact ack you already spoke or are about to speak — included for logs.' },
+      },
+      additionalProperties: false,
+    },
+  });
+  realtimeTools.push({
+    type: 'function',
+    name: 'steer_active_worker',
+    description: 'Steer an active Prometheus worker run mid-execution. Use ONLY when the worker context shows a worker is currently active and the user is correcting/adjusting it. For abort intent, use interrupt_active_worker instead.',
+    parameters: {
+      type: 'object',
+      required: ['message'],
+      properties: {
+        message: { type: 'string', description: 'The steering message for the worker — the user\'s correction or new direction.' },
+      },
+      additionalProperties: false,
+    },
+  });
+  realtimeTools.push({
+    type: 'function',
+    name: 'interrupt_active_worker',
+    description: 'Abort the currently active Prometheus worker run. Use ONLY for explicit cancel/stop/abort intent from the user. Speak a short ack like "Stopping" first.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', description: 'Brief reason for the abort.' },
+      },
+      additionalProperties: false,
+    },
+  });
+  return realtimeTools;
+}
+
+function buildRealtimeVoiceAgentInstructions(args: {
+  contextBlock: string;
+  contextPacket: Record<string, any>;
+  voiceRuntime?: string;
+  wakePhrase?: string;
+}): string {
+  const lines = [
+    'You are Prometheus speaking through the user\'s voice interface in OpenAI Realtime mode.',
+    'You are the live conversational voice agent: small talk, status answers, fast voice_* tools, and worker hand-offs all flow through you. You ARE Prometheus on voice — speak with that identity.',
+    '',
+    'Personality: warm, direct, technically sharp, playful when natural, deeply aligned with Raul. Use his name when it fits. Avoid generic acknowledgements like "I am here" or "How can I help" — answer what he actually said.',
+    '',
+    'Response style: speak naturally and conversationally, as if on a phone call. Keep replies tight unless he wants depth. No bullet points or markdown — this is audio.',
+    '',
+    '## When to call which tool',
+    '- voice_web_search: quick factual/current lookup. Multi mode for latest/current/news/compare.',
+    '- voice_web_fetch: one clean text URL only. Social/video/auth pages must be dispatched to Worker.',
+    '- voice_write_note: only when Raul explicitly asks to remember/jot/note something.',
+    '- voice_set_wake_phrase: set/change the always-listening wake phrase.',
+    '- voice_enter_quiet_mode / voice_set_quiet_until: silence Prometheus when he asks for quiet.',
+    '- voice_skill_lookup: orient yourself with available workflows; mention only a concise summary.',
+    '- voice_memory_search: read-only recall for prior decisions, project history, preferences.',
+    '- voice_timer: create/list/cancel one-shot timers.',
+    '- voice_browser_screenshot / voice_desktop_screenshot / voice_send_screenshot: observation-only screenshots.',
+    '- dispatch_prometheus_worker: HAND OFF heavy work — code, file ops, browser/desktop control, multi-step, deep research, anything outside voice_*. Call this function IMMEDIATELY without speaking first; the confirmation is spoken after the tool result. Do NOT speak an ack before the call.',
+    '- steer_active_worker / interrupt_active_worker: ONLY when a worker run is currently active (check the worker context below).',
+    '',
+    '## Routing decisions you make implicitly',
+    '- If Raul asks something answerable from your context (status, memory, identity, recall) — answer directly, no tool.',
+    '- If Raul wants quick voice-scope work — call the matching voice_* tool, then narrate the result.',
+    '- If Raul wants real work — call dispatch_prometheus_worker FIRST (no spoken ack before it); the spoken confirmation comes after the tool result.',
+    '- If Raul interrupts an active worker with a correction — call steer_active_worker.',
+    '- If Raul explicitly cancels — call interrupt_active_worker.',
+    '',
+    '## Tool calls are REAL actions — never fake them',
+    '- A tool only runs if you actually emit the function call. Saying "on it", "handing that off", "I started the worker", or "let me search" does NOT run anything by itself.',
+    '- CRITICAL for hand-offs: when Raul wants real work, emit the dispatch_prometheus_worker function call in the SAME turn as your spoken ack. Speaking an acknowledgement WITHOUT emitting the function call is a failure — the work never starts. Prefer to call the tool first, then speak; never end your turn on just an ack when work is required.',
+    '- Likewise, never claim a search/note/screenshot/timer happened unless you actually called the matching voice_* tool and received its result.',
+    '- After you say you are doing something, the corresponding function call MUST be in your output.',
+    '',
+    '## Hard boundaries',
+    '- Never claim you used full Worker tools or changed files/accounts from the voice layer unless a voice_* tool result confirms it.',
+    '- Never narrate that you are calling a tool ("let me search for that" → just call voice_web_search and report the result).',
+    '- For screenshot tools: capture only. No clicks, typing, navigation, or UI control from voice.',
+    '',
+    '## Worker context (current state — read-only orientation)',
+    args.contextBlock || '(no extended context available)',
+  ];
+  if (args.voiceRuntime) {
+    lines.push('', '## Voice runtime state', args.voiceRuntime);
+  }
+  if (args.wakePhrase) {
+    lines.push('', `## Wake phrase: "${args.wakePhrase}"`, 'If quiet mode is active, stay silent until this phrase is heard.');
+  }
+  lines.push('', '## Worker context packet', JSON.stringify(args.contextPacket, null, 2));
+  lines.push('', '## Current time', JSON.stringify(buildVoiceTimeContext(), null, 2));
+  return clampRealtimeInstructions(lines.filter(Boolean).join('\n'));
+}
+
+router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const authCandidates = await getRealtimeAgentAuthCandidates();
+    if (!authCandidates.length) {
+      res.status(400).json({ ok: false, success: false, error: 'OpenAI Realtime requires OPENAI_API_KEY, OPENAI_REALTIME_API_KEY, or a connected OpenAI Codex OAuth account.' });
+      return;
+    }
+
+    const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
+    const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
+    const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
+    if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
+    const originalPrompt = String(body.originalUserPrompt || '').trim();
+    const contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+    const wakePhrase = cleanVoiceWakePhrase(body?.voiceRuntime?.wakePhrase || body?.voice_runtime?.wakePhrase || '');
+
+    const instructions = buildRealtimeVoiceAgentInstructions({
+      contextBlock: contextBlockResult.contextBlock,
+      contextPacket,
+      voiceRuntime: voiceRuntimeContext,
+      wakePhrase,
+    });
+    const tools = buildRealtimeVoiceAgentTools();
+
+    const model = sanitizeRealtimeAgentModel(body.model);
+    const voice = sanitizeRealtimeAgentVoice(body.voice);
+    const speed = sanitizeRealtimeAgentSpeed(body.speed);
+
+    // gpt-realtime session config — audio.input MUST include turn_detection
+    // (server VAD) and transcription so the model autoresponds when the user
+    // stops speaking and the user-side transcript surfaces in events.
+    const sessionConfig: any = {
+      session: {
+        type: 'realtime',
+        model,
+        audio: {
+          input: {
+            noise_reduction: { type: 'near_field' },
+            transcription: { model: 'gpt-realtime-whisper' },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 600,
+              create_response: true,
+            },
+          },
+          output: { voice, speed },
+        },
+        instructions,
+        tools,
+        tool_choice: 'auto',
+      },
+    };
+
+    // Try each credential in turn. 401/403 means "wrong key" — fall through to the
+    // next candidate (e.g. API key absent → Codex OAuth). Any other failure is real.
+    const serialized = JSON.stringify(sessionConfig);
+    let data: any = null;
+    let usedAuth: RealtimeAgentAuthCandidate['auth'] | null = null;
+    let lastFailure: { status: number; data: any } | null = null;
+    for (const candidate of authCandidates) {
+      const upstream = await fetch(REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${candidate.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: serialized,
+      });
+      const text = await upstream.text();
+      let parsed: any = null;
+      try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+      if (upstream.ok) {
+        data = parsed;
+        usedAuth = candidate.auth;
+        break;
+      }
+      lastFailure = { status: upstream.status, data: parsed };
+      if (upstream.status !== 401 && upstream.status !== 403) break;
+    }
+
+    if (!data) {
+      res.status(lastFailure?.status || 502).json({
+        ok: false,
+        success: false,
+        error: lastFailure?.data?.error?.message || lastFailure?.data?.error || `OpenAI Realtime returned ${lastFailure?.status || 502}`,
+        details: lastFailure?.data,
+      });
+      return;
+    }
+    const clientSecret = String(data?.client_secret?.value || data?.value || data?.client_secret || '').trim();
+    if (!clientSecret) {
+      res.status(502).json({ ok: false, success: false, error: 'Realtime client_secret was not returned.', details: data });
+      return;
+    }
+    res.json({
+      ok: true,
+      success: true,
+      clientSecret,
+      auth: usedAuth,
+      model,
+      voice,
+      speed,
+      contextPacket,
+      instructionsLength: instructions.length,
+      toolCount: tools.length,
+      expiresAt: data?.client_secret?.expires_at || data?.expires_at || null,
+      sessionConfig: { type: 'realtime', model, voice, speed },
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+// ============================================================================
+// xAI / Grok Realtime Voice Agent
+// ----------------------------------------------------------------------------
+// xAI's realtime Voice Agent is the speech-to-speech sibling of OpenAI Realtime.
+// Unlike OpenAI (WebRTC + server-side SDP), xAI's browser transport is a raw
+// WebSocket authenticated with an ephemeral client-secret passed via the WS
+// subprotocol (xai-client-secret.<token>). So this bootstrap mints the token and
+// returns the instructions/tools/voice for the CLIENT to send over session.update
+// after the socket opens. The instruction/tool/context builders are shared with
+// the OpenAI agent so both providers behave identically once connected.
+// ============================================================================
+
+const XAI_REALTIME_CLIENT_SECRETS_ENDPOINT = `${(process.env.XAI_ENDPOINT || 'https://api.x.ai/v1').replace(/\/+$/, '')}/realtime/client_secrets`;
+const XAI_REALTIME_WS_BASE = process.env.XAI_REALTIME_WS_URL || 'wss://api.x.ai/v1/realtime';
+const DEFAULT_XAI_REALTIME_MODEL = process.env.XAI_REALTIME_MODEL || 'grok-voice-latest';
+const DEFAULT_XAI_REALTIME_VOICE = process.env.XAI_REALTIME_VOICE || 'eve';
+const XAI_REALTIME_USER_AGENT = process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0';
+const XAI_REALTIME_VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'];
+
+function getXaiRealtimeApiKey(): string {
+  const cfg = getConfig().getConfig() as any;
+  const providers = cfg?.llm?.providers && typeof cfg.llm.providers === 'object' ? cfg.llm.providers : {};
+  const raw = typeof providers?.xai?.api_key === 'string'
+    ? String(getConfig().resolveSecret(providers.xai.api_key) || '').trim()
+    : '';
+  const key = String(process.env.XAI_API_KEY || raw || '').trim();
+  return /^xai-[A-Za-z0-9_-]+/.test(key) ? key : '';
+}
+
+function hasXaiRealtimeOAuth(): boolean {
+  return isXAIConnected(getConfig().getConfigDir());
+}
+
+// Resolve the usable xAI credential for the realtime client_secret mint: a raw
+// xAI API key OR the connected xAI OAuth account (mirrors voice.router's xaiAuthToken).
+async function getXaiRealtimeToken(): Promise<string> {
+  const apiKey = getXaiRealtimeApiKey();
+  if (apiKey) return apiKey;
+  if (!hasXaiRealtimeOAuth()) return '';
+  try {
+    return await getValidXAIToken(getConfig().getConfigDir());
+  } catch {
+    return '';
+  }
+}
+
+function sanitizeXaiRealtimeModel(value: unknown): string {
+  const model = String(value || DEFAULT_XAI_REALTIME_MODEL).trim();
+  return /^[a-zA-Z0-9._:-]+$/.test(model) ? model : DEFAULT_XAI_REALTIME_MODEL;
+}
+
+function sanitizeXaiRealtimeVoice(value: unknown): string {
+  const voice = String(value || DEFAULT_XAI_REALTIME_VOICE).trim().toLowerCase();
+  return /^[a-zA-Z0-9._:-]+$/.test(voice) ? voice : DEFAULT_XAI_REALTIME_VOICE;
+}
+
+router.get('/api/realtime/xai/status', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const hasApiKey = !!getXaiRealtimeApiKey();
+  const hasOAuth = hasXaiRealtimeOAuth();
+  res.json({
+    success: true,
+    configured: hasApiKey || hasOAuth,
+    model: DEFAULT_XAI_REALTIME_MODEL,
+    voice: DEFAULT_XAI_REALTIME_VOICE,
+    voices: XAI_REALTIME_VOICE_IDS,
+    auth: hasApiKey ? 'api_key' : (hasOAuth ? 'xai_oauth' : 'none'),
+    oauthConfigured: hasOAuth,
+    apiKeyConfigured: hasApiKey,
+  });
+});
+
+router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const token = await getXaiRealtimeToken();
+    if (!token) {
+      res.status(400).json({ ok: false, success: false, error: 'xAI Realtime requires an xAI API key (XAI_API_KEY) or a connected xAI OAuth account. Add one in Settings -> Models.' });
+      return;
+    }
+
+    const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
+    const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
+    const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
+    if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
+    const originalPrompt = String(body.originalUserPrompt || '').trim();
+    const contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+    const wakePhrase = cleanVoiceWakePhrase(body?.voiceRuntime?.wakePhrase || body?.voice_runtime?.wakePhrase || '');
+
+    const instructions = buildRealtimeVoiceAgentInstructions({
+      contextBlock: contextBlockResult.contextBlock,
+      contextPacket,
+      voiceRuntime: voiceRuntimeContext,
+      wakePhrase,
+    });
+    const tools = buildRealtimeVoiceAgentTools();
+
+    const model = sanitizeXaiRealtimeModel(body.model);
+    const voice = sanitizeXaiRealtimeVoice(body.voice);
+    const speed = sanitizeRealtimeAgentSpeed(body.speed);
+
+    // Mint a short-lived ephemeral token. The browser cannot set WS headers, so it
+    // connects with the token as a subprotocol (xai-client-secret.<token>) and sends
+    // the session config (instructions/tools/voice) itself via session.update.
+    const upstream = await fetch(XAI_REALTIME_CLIENT_SECRETS_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': XAI_REALTIME_USER_AGENT,
+      },
+      body: JSON.stringify({ expires_after: { seconds: 300 } }),
+    });
+    const text = await upstream.text();
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+    console.log('[xai-realtime] client_secret mint', {
+      endpoint: XAI_REALTIME_CLIENT_SECRETS_ENDPOINT,
+      status: upstream.status,
+      ok: upstream.ok,
+      responseKeys: data && typeof data === 'object' ? Object.keys(data) : typeof data,
+      body: upstream.ok ? undefined : String(text || '').slice(0, 500),
+    });
+    if (!upstream.ok) {
+      res.status(upstream.status || 502).json({
+        ok: false,
+        success: false,
+        error: data?.error?.message || data?.error || `xAI Realtime client_secret mint failed (${upstream.status})`,
+        details: data,
+      });
+      return;
+    }
+    const clientSecret = String(data?.client_secret?.value || data?.value || data?.client_secret || data?.secret || '').trim();
+    if (!clientSecret) {
+      res.status(502).json({ ok: false, success: false, error: 'xAI Realtime client_secret was not returned.', details: data });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      success: true,
+      provider: 'xai',
+      clientSecret,
+      wsUrl: `${XAI_REALTIME_WS_BASE}?model=${encodeURIComponent(model)}`,
+      model,
+      voice,
+      speed,
+      instructions,
+      tools,
+      contextPacket,
+      instructionsLength: instructions.length,
+      toolCount: tools.length,
+      expiresAt: data?.client_secret?.expires_at || data?.expires_at || null,
+      sessionConfig: { type: 'realtime', model, voice, speed },
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/voice-agent/realtime-tool', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = String(body.sessionId || 'default').trim() || 'default';
+    const toolName = String(body.toolName || body.name || '').trim();
+    const toolArgs = body.toolArgs && typeof body.toolArgs === 'object'
+      ? body.toolArgs
+      : parseVoiceToolArgs(body.arguments || body.args);
+    if (!toolName) {
+      res.status(400).json({ ok: false, success: false, error: 'toolName is required' });
+      return;
+    }
+    const trace: VoiceAgentProcessEntry[] = [];
+    const raw = await executeVoiceAgentToolWithTrace(sessionId, toolName, toolArgs, trace);
+    const parsed = parseVoiceToolResult(raw);
+    const runtimeDirective = voiceRuntimeDirectiveFromToolResult(parsed);
+    // If this tool captured a screenshot, hand the preview back so the client can
+    // overlay it on the voice orb directly (no reliance on the ws relay).
+    const preview = takeLastVoiceScreenshotPreview(sessionId);
+    res.json({
+      ok: true,
+      success: true,
+      toolName,
+      result: parsed,
+      raw,
+      runtimeDirective,
+      preview,
+      processEntries: trace,
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
@@ -9250,7 +11462,7 @@ router.post('/api/mobile/voice/interruption', (req, res) => {
     let injectedContextText = buildVoiceInterruptionContextBlock(event);
     let steerApplied = false;
     let steerEventId = '';
-    const voiceReply = composeVoiceAgentReply(action, transcript, classification, contextPacket);
+    const voiceReply = '';
     if (
       action === 'steer_worker'
       && activeRuntime?.id
@@ -9304,6 +11516,11 @@ router.post('/api/mobile/voice/interruption', (req, res) => {
       eventId,
       intent: classification.intent,
       action,
+      transcript,
+      currentUserPrompt: transcript,
+      userInterruptionTranscript: transcript,
+      voiceReply,
+      contextPacket,
       shouldAbortOriginalRun: action === 'interrupt_worker',
       runtimeId: activeRuntime?.id || '',
       steerApplied,
@@ -9369,6 +11586,17 @@ router.post('/api/chat/steer', (req, res) => {
         at: Date.now(),
       },
     });
+
+    // Wake up any tool Promise waiting for a dev-source-edit approval for this session
+    try {
+      const approvalQueue = getApprovalQueue();
+      const pendingApprovals = approvalQueue.listPending()
+        .filter((a) => a.sessionId === sessionId && a.approvalKind === 'dev_source_edit');
+      for (const pending of pendingApprovals) {
+        approvalQueue.notifySteer(pending.id, message);
+      }
+    } catch { /* best effort */ }
+
     broadcastWS({
       type: 'chat_steer',
       sessionId,
@@ -9445,6 +11673,14 @@ router.post('/api/chat', async (req, res) => {
       : eventData;
     httpSendSSE(event, payload);
   };
+  const __turnT0 = Date.now();
+  const __turnTimingLog = (label: string) => {
+    try {
+      const line = `${new Date().toISOString()} +${String(Date.now() - __turnT0).padStart(6)}ms session=${resolvedSessionId} ${label}\n`;
+      fs.appendFileSync(path.join(getConfig().getConfigDir(), 'logs', 'turn-timing.log'), line, 'utf-8');
+    } catch {}
+  };
+  __turnTimingLog('request_received');
   sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
   sendSSE('ui_preflight', { message: 'Request received. Starting chat turn...' });
   const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
@@ -9474,10 +11710,22 @@ router.post('/api/chat', async (req, res) => {
   });
   const rawSendSSE = sendSSE;
   const runtimeProcessEntries: Record<string, any>[] = [];
+  let __firstContentLogged = false;
   sendSSE = (event, data) => {
+    rawSendSSE(event, data);
+    // Skip per-token checkpointing — token/thinking_delta are high-frequency streaming
+    // events that don't need durable persistence. 3 sync fs ops per token was killing
+    // streaming throughput by blocking the Node.js event loop on every chunk.
+    if (event === 'token' || event === 'thinking_delta') {
+      if (!__firstContentLogged) { __firstContentLogged = true; __turnTimingLog(`FIRST_CONTENT(${event})`); }
+      return;
+    }
+    if (event === 'ui_preflight') __turnTimingLog(`preflight: ${String(data?.message || '').slice(0, 60)}`);
+    else if (event === 'thinking' || event === 'tool_call' || event === 'tool_result' || event === 'progress_state') __turnTimingLog(`${event}: ${String(data?.message || data?.name || data?.action || '').slice(0, 60)}`);
     const checkpoint: Record<string, any> = { event, at: Date.now() };
     if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
+    if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
     if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
     const processEntry = runtimeProcessEntryFromSseEvent(event, data);
     if (processEntry) {
@@ -9488,7 +11736,6 @@ router.post('/api/chat', async (req, res) => {
       checkpoint.processEntries = [...runtimeProcessEntries];
     }
     updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
-    rawSendSSE(event, data);
   };
   let requestCompleted = false;
   res.on('close', () => {
@@ -9519,6 +11766,7 @@ router.post('/api/chat', async (req, res) => {
           turnOrigin,
           { clientRequestId },
 			    );
+        attachRuntimeProcessEntriesToLatestAssistant(resolvedSessionId, runtimeProcessEntries);
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
 	      sendSSE('final', {
@@ -9527,6 +11775,7 @@ router.post('/api/chat', async (req, res) => {
         generatedImages: result.generatedImages,
         generatedVideos: result.generatedVideos,
         canvasFiles: result.canvasFiles,
+        fileChanges: result.fileChanges,
       });
 	      sendSSE('done', {
         reply: result.text, mode: result.type,
@@ -9537,6 +11786,7 @@ router.post('/api/chat', async (req, res) => {
         generatedImages: result.generatedImages,
         generatedVideos: result.generatedVideos,
         canvasFiles: result.canvasFiles,
+        fileChanges: result.fileChanges,
       });
     }
 		  } catch (err: any) {
@@ -9572,6 +11822,18 @@ router.get('/api/sessions', async (req, res) => {
         return;
       }
     }
+
+    const hasPaging = req.query.limit != null || req.query.offset != null;
+    if (hasPaging) {
+      const page = listSessionSummaries({
+        channel: channel as any,
+        limit: Number(req.query.limit),
+        offset: Number(req.query.offset),
+      });
+      res.json(page);
+      return;
+    }
+
     res.json({ sessions: listSessionSummaries(channel as any) });
   } catch (err: any) {
     console.error('[/api/sessions] Error:', err);
@@ -9666,7 +11928,7 @@ router.post('/api/sessions/:id/history', (req, res) => {
       res.status(400).json({ error: 'Session id required' });
       return;
     }
-    const history = Array.isArray(req.body?.history) ? req.body.history : [];
+    const history = mergeHistoryWithExistingMessageMetadata(id, Array.isArray(req.body?.history) ? req.body.history : []);
     replaceHistory(id, history as any, { resetCompaction: req.body?.resetCompaction === true });
     res.json({ success: true });
   } catch (e: any) {
@@ -9685,6 +11947,25 @@ router.post('/api/sessions/:id/edit-rerun-reset', (req, res) => {
   res.json({ success: true });
 });
 
+router.patch('/api/sessions/:id', (req, res) => {
+  try {
+    const title = String(req.body?.title || '').replace(/\s+/g, ' ').trim();
+    if (!title) {
+      res.status(400).json({ error: 'Title required' });
+      return;
+    }
+    const summary = renameSession(req.params.id, title);
+    if (!summary) {
+      res.status(400).json({ error: 'Could not rename session' });
+      return;
+    }
+    res.json({ success: true, session: summary });
+  } catch (e: any) {
+    console.error('[/api/sessions/:id PATCH] Error:', e);
+    res.status(500).json({ error: e.message || 'Failed to rename session' });
+  }
+});
+
 router.get('/api/sessions/:id', (req, res) => {
   try {
     const sessionId = String(req.params.id);
@@ -9699,6 +11980,7 @@ router.get('/api/sessions/:id', (req, res) => {
         id: session.id,
         channel: session.channel,
         history: session.history,
+        processLog: sessionProcessLogFromHistory(session),
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
         lastAssistantAt: session.lastAssistantAt || null,
@@ -9710,14 +11992,60 @@ router.get('/api/sessions/:id', (req, res) => {
         canvasProjectLink: session.canvasProjectLink || null,
         mainChatGoal: session.mainChatGoal || null,
         mainChatGoalHistory: session.mainChatGoalHistory || [],
-        title: session.history && session.history.length > 0
-          ? (session.history.find(m => m.role === 'user')?.content || session.id).slice(0, 42)
-          : session.id,
+        title: getSessionDisplayTitle(session),
+        autoTitleLocked: session.autoTitleLocked === true,
       }
     });
   } catch (e: any) {
     console.error('[/api/sessions/:id] Error:', e);
     res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/api/sessions/:id/context-window', (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!id) {
+      res.status(400).json({ error: 'Session id required' });
+      return;
+    }
+    const profile = resolveActiveModelContextProfile();
+    const budget = buildContextBudget(profile);
+    const messageCount = resolveRollingCompactionPolicy().messageCount;
+    const history = getHistoryForApiCall(id, Math.ceil(messageCount / 2), { maxMessages: messageCount });
+    const recentToolContext = getRecentToolObservationsForContext(
+      id,
+      5,
+      Math.max(2500, Math.min(16000, budget.toolContextBudgetTokens * 3)),
+    );
+    const messageTokens = estimateMessagesTokensForModel(history as any, profile);
+    const toolTokens = estimateTextTokensForModel(recentToolContext, profile.tokenizer);
+    const currentInputTokens = messageTokens + toolTokens;
+    const session = getSession(id);
+    const storedThread = estimateStoredThreadFootprint(id, session, profile);
+    const modelUsage = aggregateSessionModelUsage(id);
+    res.json({
+      success: true,
+      sessionId: id,
+      profile,
+      budget,
+      metricKind: 'next_model_call_estimate',
+      currentInputTokens,
+      messageTokens,
+      toolObservationTokens: toolTokens,
+      storedThread,
+      modelUsage,
+      contextWindowTokens: profile.contextWindowTokens,
+      inputBudgetTokens: budget.inputBudgetTokens,
+      compactionTriggerTokens: budget.compactionTriggerTokens,
+      percentOfWindow: profile.contextWindowTokens > 0 ? currentInputTokens / profile.contextWindowTokens : 0,
+      percentOfInputBudget: budget.inputBudgetTokens > 0 ? currentInputTokens / budget.inputBudgetTokens : 0,
+      historyMessages: history.length,
+      hasToolObservations: !!recentToolContext,
+    });
+  } catch (e: any) {
+    console.error('[/api/sessions/:id/context-window] Error:', e);
+    res.status(500).json({ error: e.message || 'Failed to compute context window' });
   }
 });
 

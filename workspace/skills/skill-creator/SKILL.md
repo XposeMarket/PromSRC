@@ -2,7 +2,7 @@
 name: Skill Creator
 description: A repeatable, quality-controlled process for building Prometheus skills that trigger reliably and actually change behavior.
 emoji: "🧩"
-version: 2.0.0
+version: 3.0.0
 triggers: create a skill, make a skill, build a skill, add skill, capture as skill, turn this into a skill, write a skill, new skill, skill builder, skill creator, add capability, upgrade skill, improve skill, review skill, skill not triggering, skill quality check, i want prometheus to be able to
 ---
 
@@ -14,10 +14,7 @@ A repeatable, quality-controlled process for building Prometheus skills that tri
 
 ## What Is a Skill?
 
-A skill is a `SKILL.md` file that lives in:
-```
-D:\Prometheus\workspace\skills\<skill-name>\SKILL.md
-```
+A skill is a `SKILL.md` file that lives in `workspace/skills/<skill-name>/SKILL.md`.
 
 Prometheus reads the skill when a user's request matches the trigger signals in the frontmatter. Skills are **structured instructions, not code** — they guide how Prometheus thinks and acts for a specific category of task.
 
@@ -25,6 +22,15 @@ Prometheus reads the skill when a user's request matches the trigger signals in 
 1. It triggers on the right requests (and not the wrong ones)
 2. It measurably improves the output quality for that task
 3. It doesn't make Prometheus robotic or over-procedural
+
+## Simple vs Bundle Skills
+
+| Type | When to use | Tool |
+|------|-------------|------|
+| **Simple** | Single SKILL.md, self-contained instructions | `skill_create` |
+| **Bundle** | Has templates, examples, schemas, or reference files | `skill_create_bundle` |
+
+Use `skill_create_bundle` when the skill references lookup material, prompt templates, or structured examples that would bloat the SKILL.md body. Resources live under `examples/`, `templates/`, `schemas/`, `prompts/`, or `references/` and are loaded on demand via `skill_resource_read`.
 
 ---
 
@@ -147,38 +153,49 @@ One sentence: what this skill is for.
 
 ---
 
-## Step 4: Skill File Creation
+## Step 4: Create the Skill
 
-1. Create the directory:
-   ```
-   D:\Prometheus\workspace\skills\<kebab-case-name>\
-   ```
-
-2. Write `SKILL.md` with frontmatter + body
-
-3. If the skill references external material (templates, examples, lookup tables), add them in a `references/` subfolder:
-   ```
-   D:\Prometheus\workspace\skills\<skill-name>\references\<file>.md
-   ```
-
----
-
-## Step 5: Register in _state.json
-
-Add the skill to `D:\Prometheus\workspace\skills\_state.json`:
-
-```json
-{
-  "existing-skill": false,
-  "your-new-skill": false
-}
+**For a simple skill (no external resources):**
+```
+skill_create(
+  id: "kebab-case-name",
+  name: "Human Readable Name",
+  description: "...",
+  instructions: "<full SKILL.md body>",
+  emoji: "🔧",
+  triggers: "phrase one, phrase two, ..."
+)
 ```
 
-`false` = inactive (user enables via UI or by changing to `true`)
+**For a bundle skill (with templates, examples, or reference files):**
+```
+skill_create_bundle(
+  id: "kebab-case-name",
+  name: "Human Readable Name",
+  description: "...",
+  instructions: "<SKILL.md body>",
+  emoji: "🔧",
+  triggers: "phrase one, phrase two, ..."
+)
+```
+
+Then add resources with:
+```
+skill_resource_write("skill-id", "templates/main-template.md", "<content>")
+skill_resource_write("skill-id", "examples/example-output.md", "<content>")
+skill_resource_write("skill-id", "references/lookup-table.md", "<content>")
+```
+
+To update an existing skill's frontmatter/metadata:
+```
+skill_manifest_write("skill-id", { name, description, triggers, emoji, version })
+```
+
+Skills are **auto-discovered** by the runtime — no manual registration required. `skill_list()` will show the new skill immediately.
 
 ---
 
-## Step 6: Quality Checklist
+## Step 5: Quality Checklist
 
 Run this before finalizing any skill:
 
@@ -199,12 +216,13 @@ Run this before finalizing any skill:
 - [ ] Frontmatter YAML is valid (check indentation, no tabs)
 - [ ] `name` is Title Case
 - [ ] `version` starts at `1.0.0` (or bumped if upgrading)
-- [ ] Registered in `_state.json`
+- [ ] Created via `skill_create` or `skill_create_bundle` (auto-registered, no manual step)
+- [ ] Bundle resources added via `skill_resource_write` if needed
 - [ ] Folder uses kebab-case
 
 ---
 
-## Step 7: Testing Protocol
+## Step 6: Testing Protocol
 
 Run 3 mental tests:
 
@@ -250,14 +268,31 @@ When upgrading an existing skill:
 
 ```
 workspace/skills/
-  _state.json                    ← registry (skill-name: enabled bool)
   <skill-name>/
-    SKILL.md                     ← required: frontmatter + body
-    references/                  ← optional: lookup files, templates
-      <reference-file>.md
+    SKILL.md                      ← required: frontmatter + body
+    examples/                     ← optional: example outputs
+    templates/                    ← optional: reusable prompt/doc templates
+    schemas/                      ← optional: JSON/YAML schemas
+    prompts/                      ← optional: system prompts or few-shot examples
+    references/                   ← optional: lookup tables, cheat sheets
 ```
 
 **Skill loading:** Prometheus reads `SKILL.md` frontmatter to match triggers, then loads the full body into context when triggered. The `description` field is the primary matching signal. `triggers` provides additional keyword hints.
+
+**Bundle resources** are NOT auto-loaded — they are loaded on demand via `skill_resource_read(id, path)`. Reference them by path in the SKILL.md body so Prometheus knows when to fetch them.
+
+**Key tools:**
+| Tool | Purpose |
+|------|---------|
+| `skill_list()` | See all available skills |
+| `skill_read(id)` | Read a skill's SKILL.md |
+| `skill_create(...)` | Create a simple one-file skill |
+| `skill_create_bundle(...)` | Create a skill with resource slots |
+| `skill_resource_list(id)` | List a bundle's resource files |
+| `skill_resource_read(id, path)` | Load a specific resource file |
+| `skill_resource_write(id, path, content)` | Add or update a resource |
+| `skill_manifest_write(id, manifest)` | Update frontmatter/metadata |
+| `skill_inspect(id)` | View normalized metadata and provenance |
 
 ---
 
@@ -268,6 +303,7 @@ workspace/skills/
 | Vague description ("helps with X") | Skill never triggers | Add 10 explicit user phrases |
 | Triggers too broad ("help", "write") | Skill over-triggers | Narrow to specific domain phrases |
 | No concrete examples | Output stays generic | Add at minimum one full template |
-| Over 400 lines | Overwhelming and slow | Split into sub-skills or trim |
+| Over 400 lines | Overwhelming and slow | Split into sub-skills or use a bundle with resources |
 | Missing anti-patterns section | Prometheus makes common mistakes | Add "rules" or "what not to do" section |
-| Not registered in _state.json | Skill exists but never activates | Always register after creation |
+| Bloating SKILL.md with big lookup tables | Slow to load, hard to maintain | Move to `references/` resource and load on demand |
+| Creating skill manually (mkdir + write) | May not be indexed correctly | Always use `skill_create` or `skill_create_bundle` |

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "prometheus style",
+    "ash archive",
+    "prometheus brand style",
+    "prometheus promo video",
+    "prometheus hyperframes style",
+    "living dossier",
+    "stolen fire os",
+    "mythic operational",
+    "archival control room",
+    "prometheus art direction",
+    "prometheus house style",
+    "avoid AI video tells",
+    "no purple blue gradients",
+    "dossier style",
+    "archival industrial style"
+  ],
+  "categories": [
+    "creative",
+    "brand",
+    "video",
+    "hyperframes",
+    "motion-design",
+    "prometheus"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "media_quality"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "workspace_write",
+      "media_quality"
+    ],
+    "recommendedToolCategories": [
+      "creative_mode",
+      "workspace_write",
+      "media_quality"
+    ],
+    "defaultWorkflow": [
+      "Read this skill plus hyperframes/hyperframes-cli for Prometheus promo work.",
+      "Use Ash & Archive palette and anti-AI-tell guardrails before authoring.",
+      "Export and frame-verify the final MP4 before calling it done."
+    ],
+    "canSpawnSubagents": false
+  },
+  "id": "prometheus-ash-archive-style"
+}

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
 <title>Prometheus</title>
 <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
 <link rel="stylesheet" href="vendor/codemirror/theme/material-darker.min.css">
@@ -38,12 +38,12 @@
 </script>
 <!-- F2: External CSS (replaces inline <style> block) -->
 <link rel="stylesheet" href="static/styles/fonts.css">
-<link rel="stylesheet" href="static/styles/base.css">
+<link rel="stylesheet" href="static/styles/base.css?v=sidebar-resize-fix">
 <link rel="stylesheet" href="static/styles/components.css">
-<link rel="stylesheet" href="static/styles/pages.css">
+<link rel="stylesheet" href="static/styles/pages.css?v=skill-left-panel-cleanup">
 <link rel="stylesheet" href="static/styles/projects.css">
-<link rel="stylesheet" href="static/styles/hub.css">
-<link rel="stylesheet" href="static/styles/mobile.css">
+<link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
+<link rel="stylesheet" href="static/styles/mobile.css?v=session-last-message-sort">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <link rel="manifest" href="/manifest.webmanifest">
@@ -1815,6 +1815,7 @@
      LEFT SIDEBAR (v2)
 ═══════════════════════════════════════════════════════════ -->
 <aside class="sidebar" id="sidebar">
+  <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
 
   <!-- FIXED TOP: logo + new chat + search -->
   <div class="sidebar-fixed">
@@ -2112,7 +2113,6 @@
 	      <div class="queued-prompts-panel" id="queued-prompts-panel">
 	        <div class="queued-prompts-head">
 	          <span id="queued-prompts-title">Queued prompts</span>
-	          <button class="queued-clear-btn" onclick="clearQueuedPrompts()">Clear</button>
 	        </div>
 	        <div class="queued-prompts-list" id="queued-prompts-list"></div>
 	      </div>
@@ -2156,10 +2156,19 @@
             <label id="voice-speak-provider-label" hidden>Speak <select id="voice-tts-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
             <label id="voice-output-voice-label" hidden>Voice <select id="voice-output-voice" onchange="onVoiceProviderChanged()"><option value="">Default</option></select></label>
             <label id="realtime-voice-label" hidden>Voice <select id="realtime-voice-select" onchange="onRealtimeVoiceChanged()"><option value="marin">Marin</option></select></label>
-            <label id="voice-speed-label">Speed <select id="realtime-voice-speed-select" onchange="onRealtimeVoiceSpeedChanged()"><option value="1.1">1.1x</option></select></label>
-            <label id="voice-narration-label">Narration <select id="realtime-narration-mode-select" onchange="onRealtimeNarrationModeChanged()"><option value="quiet">Quiet</option><option value="milestones">Milestones</option></select></label>
-            <label id="realtime-listen-label">Realtime permissions <select id="realtime-listen-mode-select" onchange="onRealtimeListenModeChanged()"><option value="auto_send">Always listening</option><option value="confirm_send">Listen, don't send</option><option value="hold_space">Hold Space to talk</option></select></label>
-            <span class="realtime-wake-gate-status" id="realtime-wake-gate-status" hidden></span>
+            <span class="voice-settings-wrap">
+              <button id="voice-settings-btn" class="voice-settings-btn" type="button" onclick="toggleVoiceSettingsPopover(event)" title="Voice settings" aria-label="Voice settings" aria-expanded="false">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.3l.06.06A1.65 1.65 0 0 0 8.92 4a1.65 1.65 0 0 0 1-1.51V2a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.32.48.99 1.51 1H21a2 2 0 1 1 0 4h-.09c-1.03.01-1.37.68-1.51 1Z"/></svg>
+              </button>
+              <span id="voice-settings-popover" class="voice-settings-popover" hidden>
+                <label id="voice-speed-label">Speed <select id="realtime-voice-speed-select" onchange="onRealtimeVoiceSpeedChanged()"><option value="1.1">1.1x</option></select></label>
+                <label id="voice-narration-label">Narration <select id="realtime-narration-mode-select" onchange="onRealtimeNarrationModeChanged()"><option value="quiet">Quiet</option><option value="milestones">Milestones</option></select></label>
+                <label id="realtime-listen-label">Realtime permissions <select id="realtime-listen-mode-select" onchange="onRealtimeListenModeChanged()"><option value="auto_send">Always listening</option><option value="confirm_send">Listen, don't send</option><option value="hold_space">Hold Space to talk</option></select></label>
+                <label id="realtime-agent-toggle-label" hidden><input type="checkbox" id="realtime-agent-toggle" onchange="onRealtimeAgentToggleChanged()" />End-to-end agent</label>
+                <label id="xai-realtime-toggle-label" hidden><input type="checkbox" id="xai-realtime-toggle" onchange="onXaiRealtimeToggleChanged()" />Use xAI Realtime</label>
+                <span class="realtime-wake-gate-status" id="realtime-wake-gate-status" hidden></span>
+              </span>
+            </span>
           </span>
         </div>
         <div class="chat-model-switcher-wrap">
@@ -2168,6 +2177,60 @@
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
             <span style="color:var(--muted)">via <span id="chat-provider-name">Prometheus</span></span>
           </button>
+          <button
+            id="chat-context-window-btn"
+            class="chat-context-window-btn"
+            type="button"
+            onclick="toggleChatContextWindowPopover(event)"
+            title="Context window"
+            aria-label="Context window"
+            aria-expanded="false"
+          >
+            <span class="chat-context-window-dot"></span>
+          </button>
+          <div id="chat-context-window-popover" class="chat-context-window-popover" hidden>
+            <div class="chat-context-window-row chat-context-window-head">
+              <span>Next call estimate</span>
+              <span id="chat-context-window-total">Loading...</span>
+            </div>
+            <div class="chat-context-window-track" aria-hidden="true">
+              <div id="chat-context-window-fill" class="chat-context-window-fill"></div>
+            </div>
+            <div class="chat-context-window-metrics">
+              <div class="chat-context-window-row">
+                <span>Messages</span>
+                <span id="chat-context-window-messages">-</span>
+              </div>
+              <div class="chat-context-window-row">
+                <span>Tool observations</span>
+                <span id="chat-context-window-tools">-</span>
+              </div>
+              <div class="chat-context-window-row">
+                <span>Compaction trigger</span>
+                <span id="chat-context-window-trigger">-</span>
+              </div>
+              <div class="chat-context-window-row">
+                <span>Full stored thread</span>
+                <span id="chat-context-window-stored">-</span>
+              </div>
+              <div class="chat-context-window-row">
+                <span>Stored process logs</span>
+                <span id="chat-context-window-process">-</span>
+              </div>
+              <div class="chat-context-window-row">
+                <span>Raw tool storage</span>
+                <span id="chat-context-window-raw-tools">-</span>
+              </div>
+              <div class="chat-context-window-row">
+                <span>Logged provider usage</span>
+                <span id="chat-context-window-usage">-</span>
+              </div>
+              <div class="chat-context-window-row">
+                <span>Tool schema estimate</span>
+                <span id="chat-context-window-tool-schema">-</span>
+              </div>
+            </div>
+          </div>
           <!-- Model switcher popover -->
           <div id="model-switcher-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);right:0;background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 4px 20px rgba(16,32,64,0.13);padding:10px;z-index:100;min-width:220px">
             <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Switch Model</div>
@@ -3372,6 +3435,43 @@
             </div>
 
     <div id="settings-panel-security" style="display:none;padding:14px 16px">
+      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+          <div>
+            <div class="right-section-title" style="margin-bottom:4px">Terminal Permissions</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.45">Choose how Prometheus handles command approvals after hard blocks and path checks pass.</div>
+          </div>
+          <button class="btn btn-sm" onclick="saveSecuritySettings({showStatus:true})" style="background:#fff;border:1px solid var(--line);color:var(--text);flex-shrink:0">Save</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
+            <input id="settings-terminal-permission-default" type="radio" name="settings-terminal-permission-mode" value="default" checked style="margin-top:3px" />
+            <span>
+              <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Default Permissions</span>
+              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Ask for command approval unless an exact command was trusted for this session or always.</span>
+            </span>
+          </label>
+          <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
+            <input id="settings-terminal-permission-lite" type="radio" name="settings-terminal-permission-mode" value="lite" style="margin-top:3px" />
+            <span>
+              <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Lite Permissions</span>
+              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Auto-approve allowed terminal commands so long tasks keep moving. Hard-blocked commands still stop immediately.</span>
+            </span>
+          </label>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:9px;overflow-wrap:anywhere">Hard-blocked patterns: <span id="settings-hard-blocked-patterns">Loading...</span></div>
+        <div id="settings-security-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+          <div>
+            <div class="right-section-title" style="margin-bottom:4px">Always-Allowed Commands</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.45">Exact command and working-directory grants created from the Always Allow button.</div>
+          </div>
+          <button class="btn btn-sm" onclick="loadSecuritySettings()" style="background:#fff;border:1px solid var(--line);color:var(--text);flex-shrink:0">Refresh</button>
+        </div>
+        <div id="settings-command-permissions-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px">
         <div class="right-section-title" style="margin-bottom:8px">File Access</div>
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Workspace Path</label>
@@ -3475,6 +3575,11 @@
               <option value="medium" selected>medium</option>
               <option value="high">high</option>
             </select>
+            <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Tool Choice <span style="color:var(--muted);font-weight:400">(when to force tool use)</span></label>
+            <select id="settings-openai-tool-choice" class="settings-input" style="font-size:13px">
+              <option value="required">required — force tool call on first turn</option>
+              <option value="auto">auto — let model decide (enables preamble)</option>
+            </select>
             <div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn btn-sm" onclick="refreshOpenAIModels()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>
               <button class="btn btn-sm" onclick="testProviderConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
@@ -3521,6 +3626,11 @@
                 <option value="high">high</option>
                 <option value="xhigh">xhigh (extra high)</option>
               </select>
+              <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Tool Choice <span style="color:var(--muted);font-weight:400">(when to force tool use)</span></label>
+              <select id="settings-codex-tool-choice" class="settings-input" style="font-size:13px">
+                <option value="auto" selected>auto — let model decide (enables preamble)</option>
+                <option value="required">required — force tool call on first turn</option>
+              </select>
               <button class="btn btn-sm" onclick="disconnectCodex()" style="margin-top:10px;background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect Account</button>
             </div>
           </div>
@@ -3546,18 +3656,29 @@
                 <div id="anthropic-auth-type" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
               </div>
 	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
-	              <select id="settings-anthropic-model" class="settings-input" style="font-size:13px">
-	                <option value="claude-opus-4-6">claude-opus-4-6 (flagship)</option>
+	              <select id="settings-anthropic-model" class="settings-input" style="font-size:13px" onchange="syncAnthropicReasoningControls()">
+	                <option value="claude-opus-4-8">claude-opus-4-8 (flagship)</option>
+	                <option value="claude-opus-4-7">claude-opus-4-7</option>
+	                <option value="claude-opus-4-6">claude-opus-4-6</option>
 	                <option value="claude-sonnet-4-6">claude-sonnet-4-6 (balanced)</option>
 	                <option value="claude-sonnet-4-5-20250514">claude-sonnet-4-5</option>
 	                <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 (fast)</option>
 	              </select>
+                <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Thinking Effort</label>
+                <select id="settings-anthropic-effort" class="settings-input" style="font-size:13px">
+                  <option value="">Provider default (High)</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">Extra High</option>
+                  <option value="max">Max</option>
+                </select>
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);margin-top:10px;cursor:pointer">
                   <input id="settings-anthropic-extended-thinking" type="checkbox" onchange="onAnthropicThinkingToggle(this.checked)" />
-                  <span>Enable extended thinking</span>
+                  <span>Enable Claude thinking</span>
                 </label>
                 <div id="anthropic-thinking-budget-row" style="display:none;margin-top:10px">
-                  <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Thinking Budget</label>
+                  <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Legacy Thinking Budget</label>
                   <select id="settings-anthropic-thinking-budget" class="settings-input" style="font-size:13px">
                     <option value="2048">2,048 tokens</option>
                     <option value="5000">5,000 tokens</option>
@@ -3625,6 +3746,26 @@
 
 	          <div id="prov-fields-dynamic"></div>
 
+            <div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
+                <div>
+                  <div style="font-size:12px;font-weight:800;color:var(--text)">Context & Summary Compaction</div>
+                  <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-top:2px">Resolved from provider metadata, config, or a known model profile.</div>
+                </div>
+                <label title="Keep long workflows inside the model context window" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;white-space:nowrap">
+                  <input id="settings-rolling-compaction-enabled" type="checkbox" checked />
+                  Enabled
+                </label>
+              </div>
+              <div id="settings-context-budget-summary">
+                <div style="font-size:11px;color:var(--muted);padding:8px 0">Loading token budget...</div>
+              </div>
+              <input id="settings-rolling-compaction-count" type="hidden" value="20" />
+              <input id="settings-rolling-compaction-tools" type="hidden" value="5" />
+              <input id="settings-rolling-compaction-words" type="hidden" value="900" />
+              <input id="settings-rolling-compaction-model" type="hidden" value="" />
+            </div>
+
 	        </div>
 
         <!-- Right col: Agent Model Defaults -->
@@ -3640,11 +3781,12 @@
               <option value="">Select template...</option>
             </select>
             <input id="amd-template-name" class="settings-input" style="width:100%;margin-bottom:8px" placeholder="Template name" />
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px">
               <button onclick="saveAgentModelDefaultTemplate()" class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)">Save</button>
               <button onclick="applyAgentModelDefaultTemplate()" class="btn btn-sm">Apply</button>
               <button onclick="deleteAgentModelDefaultTemplate()" class="btn btn-sm" style="background:#fff;border:1px solid #fecaca;color:#dc2626">Delete</button>
             </div>
+            <button id="amd-set-default-btn" onclick="applyAsDefaultTemplate()" class="btn btn-sm" style="width:100%;margin-bottom:8px;background:#fff;border:1px solid var(--line);color:var(--text)">Apply as Default</button>
             <div id="amd-template-status" style="font-size:11px;min-height:16px"></div>
           </div>
 
@@ -3908,34 +4050,6 @@
           <div id="amd-status" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
 	          <div style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
 
-            <div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff">
-              <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:5px">Rolling Context Compaction</div>
-              <div style="font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:10px">
-                Uses an isolated compactor prompt (no Prom persona/tools) to summarize thread history, then resets active chat context to the summary.
-              </div>
-              <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:10px;cursor:pointer">
-                <input id="settings-rolling-compaction-enabled" type="checkbox" checked />
-                Enable rolling compaction
-              </label>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-                <div>
-                  <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Message trigger</label>
-                  <input id="settings-rolling-compaction-count" type="number" min="10" max="120" value="20" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px;font-size:12px" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Tool turns included</label>
-                  <input id="settings-rolling-compaction-tools" type="number" min="1" max="12" value="5" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px;font-size:12px" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Summary word cap</label>
-                  <input id="settings-rolling-compaction-words" type="number" min="80" max="1500" value="900" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px;font-size:12px" />
-                </div>
-                <div>
-                  <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Compactor model override (optional)</label>
-                  <input id="settings-rolling-compaction-model" type="text" placeholder="blank = use active provider model" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px;font-size:11px;font-family:'IBM Plex Mono',monospace" />
-                </div>
-              </div>
-            </div>
 	    </div>
 	  </div>
 	</div>
@@ -4413,7 +4527,7 @@
       <div style="border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
           <div class="right-section-title" style="margin:0;flex:1">Remote access</div>
-          <span id="pairing-remote-status-pill" style="font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Off</span>
+          <span id="pairing-remote-status-pill" style="font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Funnel offline</span>
         </div>
         <div style="font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:10px">
           Off by default — local Wi-Fi pairing still works exactly as before. Turn this on to make the QR code encode a public HTTPS URL (e.g. a Tailscale Funnel address) so phones can pair from cellular or any other network. Desktop approval is still required for every new device.
@@ -4445,14 +4559,19 @@
           </div>
 
           <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fafafa">
-            <div style="font-size:12px;font-weight:800;color:var(--text);margin-bottom:6px">Tailscale status</div>
-            <div id="pairing-ts-status" style="font-size:12px;color:var(--muted);line-height:1.55">Click <strong>Detect Tailscale</strong> to check installation, login, and Funnel state.</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <div style="font-size:12px;font-weight:800;color:var(--text);flex:1">Tailscale Funnel</div>
+              <span id="pairing-funnel-live-pill" style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;background:#eee;color:#555">Checking…</span>
+            </div>
+            <div id="pairing-ts-status" style="font-size:12px;color:var(--muted);line-height:1.55">Click <strong>Detect Tailscale</strong> to check installation and login state.</div>
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+              <button id="pairing-funnel-enable-btn" class="btn btn-sm" style="background:#15803d;color:#fff;border:none;display:none">Enable Funnel</button>
+              <button id="pairing-funnel-disable-btn" class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:#b91c1c;display:none">Disable Funnel</button>
+            </div>
+            <div id="pairing-funnel-msg" style="margin-top:6px;font-size:11px;color:var(--muted);line-height:1.45"></div>
             <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:var(--muted);line-height:1.55">
-              <strong>One-time setup</strong>:<br>
-              1. Install Tailscale from <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">tailscale.com</span> and sign in.<br>
-              2. In a terminal, run:
-              <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px 8px;word-break:break-all"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></div>
-              3. Click <strong>Detect Tailscale</strong>, accept the suggested URL, save, then generate a new QR.
+              <strong>One-time setup</strong>: Install Tailscale from <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">tailscale.com</span> and sign in, then use <strong>Enable Funnel</strong> above.
+              <div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px 8px;word-break:break-all;display:none"><span id="pairing-ts-funnel-cmd">tailscale funnel 18789</span></div>
             </div>
           </div>
         </div>
@@ -4639,9 +4758,7 @@ function connectWS() {
       if (msg.automatedSession && typeof window.upsertAutomatedSession === 'function') {
         window.upsertAutomatedSession(msg.automatedSession);
       }
-      if (msg.isOk) {
-        if (typeof window.addProcessEntry === 'function') window.addProcessEntry('info', 'Heartbeat tick complete: HEARTBEAT_OK');
-      } else {
+      if (!msg.isOk) {
         if (typeof window.bgtToast === 'function') window.bgtToast('\u2764 Heartbeat', String(msg.text || 'Heartbeat reported updates').slice(0, 120));
         if (typeof window.addProcessEntry === 'function') window.addProcessEntry('warn', 'Heartbeat reported actionable updates.');
       }
@@ -4915,7 +5032,7 @@ function _renderChannelDrill(channelKey) {
   // Collect sessions for this channel
   let sessions = (window.chatSessions || [])
     .filter(s => _getSessionChannel(s) === channelKey)
-    .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+    .sort((a, b) => getSessionSortTime(b) - getSessionSortTime(a));
 
   // For server-backed channels: include sessions not yet in chatSessions
   let serverOnly = [];
@@ -4946,7 +5063,7 @@ function _renderChannelDrill(channelKey) {
     const aPinned = _pinnedChats.includes(a.id) ? 1 : 0;
     const bPinned = _pinnedChats.includes(b.id) ? 1 : 0;
     if (aPinned !== bPinned) return bPinned - aPinned;
-    return (b.updatedAt || b.lastActiveAt || b.createdAt || 0) - (a.updatedAt || a.lastActiveAt || a.createdAt || 0);
+    return getSessionSortTime(b) - getSessionSortTime(a);
   };
   sessions = sessions.sort(sortPinnedFirst);
   serverOnly = serverOnly.sort(sortPinnedFirst);
@@ -4955,18 +5072,16 @@ function _renderChannelDrill(channelKey) {
     const isActive = s.id === window.activeChatSessionId;
     const isPinned = _pinnedChats.includes(s.id);
     return `
-<div class="job-item channel-chat-item${isActive ? ' active' : ''}${s.unread ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}" onclick="openSession('${s.id}')">
-  <button class="chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${s.unread ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}" onclick="openSession('${s.id}')">
+  ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
-      <div class="job-item-title">${s.unread ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3b82f6;margin-right:5px;vertical-align:middle"></span>' : ''}${escHtml(s.title || 'Untitled')}</div>
+      <div class="job-item-title">${s.unread ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'Untitled')}</div>
     </div>
-    ${_channelsEditMode ? `<button class="sidebar-action job-item-action" style="padding:3px 8px;font-size:10px" onclick="deleteChatSession('${s.id}', event)">Delete</button>` : ''}
   </div>
-  <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+  <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-    <span class="badge badge-queued">${(s.history || []).length} msgs</span>
-    <span style="color:var(--muted);font-size:10px">${timeAgo(s.updatedAt || s.createdAt)}</span>
+    <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
   </div>
 </div>`;
   }).join('');
@@ -4976,18 +5091,16 @@ function _renderChannelDrill(channelKey) {
     const isPinned = _pinnedChats.includes(s.id);
     const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
     return `
-<div class="job-item channel-chat-item${isActive ? ' active' : ''}${isPinned ? ' pinned-chat' : ''} session-terminal" onclick="openTerminalSession('${s.id}', '${channelKey}')">
-  <button class="chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''} session-terminal" onclick="openTerminalSession('${s.id}', '${channelKey}')">
+  ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       <div class="job-item-title">${title}</div>
     </div>
-    ${_channelsEditMode ? `<button class="sidebar-action job-item-action" style="padding:3px 8px;font-size:10px" onclick="deleteChatSession('${s.id}', event)">Delete</button>` : ''}
   </div>
-  <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+  <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-    <span class="badge badge-queued">${(s.history || []).length} msgs</span>
-    <span style="color:var(--muted);font-size:10px">${new Date(s.lastActiveAt || s.createdAt).toLocaleDateString()}</span>
+    <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt)}</span>
   </div>
 </div>`;
   }).join('');
@@ -5009,6 +5122,77 @@ function toggleChatPin(id, ev) {
   localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
   renderSessionsList();
   if (_channelsViewOpen) renderChannelsList();
+}
+
+function renderSessionEditActions(id, isPinned) {
+  return `
+    <button class="chat-session-action-btn chat-session-rename-btn" onclick="renameChatSession('${id}', event)" title="Rename chat" aria-label="Rename chat">${SKILL_EDIT_ICON}</button>
+    <button class="chat-session-action-btn chat-session-delete-btn" onclick="deleteChatSession('${id}', event)" title="Delete chat" aria-label="Delete chat">${SKILL_DEL_ICON}</button>
+    <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
+  `;
+}
+
+function updateSessionTitleEverywhere(id, title) {
+  const apply = (session) => {
+    if (!session || String(session.id) !== String(id)) return false;
+    session.title = title;
+    session.autoTitleLocked = true;
+    session.updatedAt = Date.now();
+    session.lastActiveAt = session.lastActiveAt || session.updatedAt;
+    return true;
+  };
+  let changed = false;
+  (window.chatSessions || []).forEach((session) => { changed = apply(session) || changed; });
+  (window.terminalSessions || []).forEach((session) => { changed = apply(session) || changed; });
+  (window.mobileSessions || []).forEach((session) => { changed = apply(session) || changed; });
+  ['telegramSessions', 'discordSessions', 'whatsappSessions'].forEach((key) => {
+    (window[key] || []).forEach((session) => { changed = apply(session) || changed; });
+  });
+  if (window.channelSessionsByChannel && typeof window.channelSessionsByChannel === 'object') {
+    Object.values(window.channelSessionsByChannel).forEach((list) => {
+      (Array.isArray(list) ? list : []).forEach((session) => { changed = apply(session) || changed; });
+    });
+  }
+  return changed;
+}
+
+async function renameChatSession(id, ev) {
+  if (ev) ev.stopPropagation();
+  const existing = (window.chatSessions || []).find(s => s.id === id)
+    || (window.terminalSessions || []).find(s => s.id === id)
+    || (window.mobileSessions || []).find(s => s.id === id)
+    || (window.telegramSessions || []).find(s => s.id === id)
+    || (window.discordSessions || []).find(s => s.id === id)
+    || (window.whatsappSessions || []).find(s => s.id === id)
+    || (window.channelSessionsByChannel
+      ? Object.values(window.channelSessionsByChannel).flat().find(s => s && s.id === id)
+      : null);
+  const current = String(existing?.title || existing?.preview || '').trim();
+  const next = window.prompt('Rename chat session', current || 'New chat');
+  if (next == null) return;
+  const title = String(next || '').replace(/\s+/g, ' ').trim();
+  if (!title) return;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    const data = await res.json().catch(() => ({}));
+    const savedTitle = String(data?.session?.title || title).trim() || title;
+    updateSessionTitleEverywhere(id, savedTitle);
+    saveChatSessions();
+    renderSessionsList();
+    if (_channelsViewOpen) renderChannelsList();
+    if (typeof showToast === 'function') showToast('Session renamed', savedTitle, 'success');
+  } catch (err) {
+    if (typeof showToast === 'function') showToast('Rename failed', err.message || 'Could not rename session', 'error');
+    else alert(`Rename failed: ${err.message || err}`);
+  }
 }
 
 function _getSessionChannelLabel(s) {
@@ -5036,6 +5220,7 @@ function sessionFromSearchResult(result) {
     history: Array.isArray(existing?.history) ? existing.history : [],
     createdAt: result.createdAt || existing?.createdAt || Date.now(),
     updatedAt: result.lastActiveAt || result.updatedAt || existing?.updatedAt || existing?.createdAt || Date.now(),
+    lastMessageAt: result.lastMessageAt || existing?.lastMessageAt || 0,
     source: existing?.source || result.channel || '',
     channel: existing?.channel || result.channel || '',
     projectId: result.projectId || existing?.projectId || '',
@@ -5093,6 +5278,31 @@ function renderSessionSearchPreview(s) {
   return `<div class="session-search-preview"><span>${escHtml(label)}:</span> ${makeHighlightedSearchSnippet(content, index, _sessionSearchQuery)}</div>`;
 }
 
+function getChatMessageTimestamp(msg) {
+  const ts = Number(msg?.timestamp || 0);
+  return Number.isFinite(ts) && ts > 0 ? ts : 0;
+}
+
+function getSessionLastMessageAt(s) {
+  const explicit = Number(s?.lastMessageAt || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const history = Array.isArray(s?.history) ? s.history : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    const role = String(msg?.role || '').toLowerCase();
+    if (role !== 'user' && role !== 'assistant' && role !== 'ai') continue;
+    const content = String(msg?.content || '').trim();
+    if (!content) continue;
+    const ts = getChatMessageTimestamp(msg);
+    if (ts > 0) return ts;
+  }
+  return Number(s?.createdAt || s?.updatedAt || s?.lastActiveAt || 0) || 0;
+}
+
+function getSessionSortTime(s) {
+  return getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
+}
+
 function renderChatSessionCard(s) {
   const isPinned = _pinnedChats.includes(s.id);
   const searchResult = getSessionSearchResult(s.id);
@@ -5109,20 +5319,19 @@ function renderChatSessionCard(s) {
       ? `openTerminalSession('${s.id}')`
       : `openSession('${s.id}')`;
   const searchPreview = renderSessionSearchPreview(s);
+  const isWorking = !!(window._sessionThinking && window._sessionThinking[s.id]);
   return `
-    <div class="job-item ${s.id === window.activeChatSessionId ? 'active' : ''}${s.unread ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}" onclick="${openHandler}">
-      <button class="chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
+    <div class="job-item chat-session-item ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${window.sessionsEditMode ? ' is-editing' : ''}" onclick="${openHandler}">
+      ${window.sessionsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
-          <div class="job-item-title">${s.unread ? '🔵 ' : ''}${escHtml(s.title || 'New chat')}</div>
+          <div class="job-item-title">${s.unread ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'New chat')}</div>
         </div>
-        ${window.sessionsEditMode ? `<button class="sidebar-action job-item-action" style="padding:3px 8px;font-size:10px" onclick="deleteChatSession('${s.id}', event)">Delete</button>` : ''}
       </div>
-      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+      <div class="job-item-meta">
         ${s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : ''}
         ${sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : ''}
-        <span class="badge badge-queued">${(s.history || []).length} msgs</span>
-        <span style="color:var(--muted);font-size:10px">${timeAgo(s.updatedAt || s.createdAt)}</span>
+        <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
       </div>
       ${searchPreview}
     </div>
@@ -5144,6 +5353,7 @@ function renderSessionsList() {
       history: Array.isArray(ts.history) ? ts.history : [],
       createdAt: ts.createdAt || ts.lastActiveAt || Date.now(),
       updatedAt: ts.lastActiveAt || ts.createdAt || Date.now(),
+      lastMessageAt: ts.lastMessageAt || 0,
       source: ts.source || ts.channel || 'terminal',
       _serverOnlyTerminal: true,
     }));
@@ -5169,7 +5379,7 @@ function renderSessionsList() {
     ...searchedChannelSessions,
     ...pinnedServerChannelSessions,
     ...searchOnlySessions,
-  ].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+  ].sort((a, b) => getSessionSortTime(b) - getSessionSortTime(a));
   if (_sessionSearchQuery) {
     sorted = sorted.filter(s => {
       const title = (s.title || 'New chat').toLowerCase();
@@ -5270,17 +5480,44 @@ function updateTokenCount() {
   const count = estimateTokens(chatHistory);
   if (count === 0) { badge.textContent = ''; return; }
   const k = count >= 1000 ? (count / 1000).toFixed(1) + 'k' : count;
-  badge.textContent = `· ~${k} tokens`;
+  badge.textContent = `· visible ~${k} tokens`;
 }
 
 // ---- Model switcher ----
 let _modelSwitcherOpen = false;
 
 const LOCAL_PROVIDERS = new Set(['ollama', 'llama_cpp', 'lm_studio']);
-const EFFORT_CAPABLE_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity']);
+const EFFORT_CAPABLE_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity']);
 const THINKING_CAPABLE_PROVIDERS = new Set(['anthropic']);
 
-function _effortLevelsForProvider(provider) {
+function _activeModelForProvider(provider, llm) {
+  const providers = llm?.providers && typeof llm.providers === 'object' ? llm.providers : {};
+  const configured = providers?.[provider]?.model;
+  return String(configured || window._activeModel || document.getElementById('chat-model-name')?.dataset?.baseName || document.getElementById('chat-model-name')?.textContent || '').trim();
+}
+
+function _supportsAnthropicEffort(model) {
+  return /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(String(model || ''))
+    || /^claude-sonnet-4-6(?:\b|[-_])/.test(String(model || ''))
+    || /^claude-mythos-preview(?:\b|[-_])/.test(String(model || ''));
+}
+
+function _supportsAnthropicXHigh(model) {
+  return /^claude-opus-4-(7|8)(?:\b|[-_])/.test(String(model || ''));
+}
+
+function _effortLevelsForProvider(provider, model) {
+  if (provider === 'anthropic') {
+    const levels = [
+      { v: '',       label: 'Provider Default', desc: 'Anthropic default (High)' },
+      { v: 'low',    label: 'Low',              desc: 'Fastest, lowest token spend' },
+      { v: 'medium', label: 'Medium',           desc: 'Balanced speed and quality' },
+      { v: 'high',   label: 'High',             desc: 'Default deep reasoning' },
+      { v: 'xhigh',  label: 'Extra High',       desc: 'Opus 4.7/4.8 coding work' },
+      { v: 'max',    label: 'Max',              desc: 'Highest capability' },
+    ];
+    return _supportsAnthropicXHigh(model) ? levels : levels.filter((level) => level.v !== 'xhigh');
+  }
   // Codex supports xhigh; other effort-capable providers cap at high.
   if (provider === 'openai_codex') {
     return [
@@ -5305,6 +5542,7 @@ function _getProviderReasoningControlId(provider) {
   return {
     openai: 'settings-openai-effort',
     openai_codex: 'settings-codex-effort',
+    anthropic: 'settings-anthropic-effort',
     perplexity: 'settings-perplexity-effort',
   }[provider] || '';
 }
@@ -5339,7 +5577,11 @@ function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
     const budgetSelect = document.getElementById('settings-anthropic-thinking-budget');
     if (budgetSelect) budgetSelect.value = String(window.anthropicThinkingBudget);
     const row = document.getElementById('anthropic-thinking-budget-row');
-    if (row) row.style.display = enabled ? 'block' : 'none';
+    if (typeof window.syncAnthropicReasoningControls === 'function') {
+      window.syncAnthropicReasoningControls();
+    } else if (row) {
+      row.style.display = enabled ? 'block' : 'none';
+    }
   }
 }
 
@@ -5374,7 +5616,9 @@ function _buildLlmForReasoningUpdate(baseLlm, provider, patch) {
       : (typeof patch?.level === 'string' ? patch.level.trim() : '');
     if (level) providerCfg.reasoning_effort = level;
     else delete providerCfg.reasoning_effort;
-  } else if (provider === 'anthropic') {
+  }
+
+  if (provider === 'anthropic') {
     if (Object.prototype.hasOwnProperty.call(patch || {}, 'extended_thinking')) {
       providerCfg.extended_thinking = !!patch.extended_thinking;
     }
@@ -5438,9 +5682,20 @@ async function toggleModelSwitcher() {
   }
 
   if (EFFORT_CAPABLE_PROVIDERS.has(provider)) {
-    await refreshReasoningPrefsFromSettings(provider);
+    const llm = await refreshReasoningPrefsFromSettings(provider);
     if (titleEl) titleEl.textContent = 'Reasoning Effort';
-    const levels = _effortLevelsForProvider(provider);
+    const model = _activeModelForProvider(provider, llm);
+    if (provider === 'anthropic' && !_supportsAnthropicEffort(model)) {
+      window.reasoningLevel = '';
+      listEl.innerHTML = `
+        <div style="border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:var(--panel-2);color:var(--muted);font-size:12px;line-height:1.45">
+          <div style="font-weight:700;color:var(--text);margin-bottom:3px">Provider Default</div>
+          <div>${escHtml(model || 'This Claude model')} does not expose configurable thinking effort.</div>
+        </div>
+      `;
+      return;
+    }
+    const levels = _effortLevelsForProvider(provider, model);
     const current = typeof window.reasoningLevel === 'string' ? window.reasoningLevel : '';
     listEl.innerHTML = levels.map(l => `
       <button onclick="setReasoningLevel('${l.v}')" style="text-align:left;background:${l.v === current ? 'var(--brand)' : 'transparent'};color:${l.v === current ? '#fff' : 'var(--text)'};border:1px solid ${l.v === current ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;transition:background 0.1s">
@@ -5488,6 +5743,7 @@ async function switchModel(modelName) {
       label.dataset.baseName = modelName;
       label.textContent = modelName;
     }
+    if (typeof window.scheduleChatContextWindowRefresh === 'function') window.scheduleChatContextWindowRefresh(250);
   } catch {
     // silent fail — model will still update on next status poll
   }
@@ -5531,6 +5787,16 @@ function setAnthropicBudget(budget) {
 async function setReasoningLevel(level) {
   const provider = window._activeProvider || 'openai';
   try {
+    if (provider === 'anthropic') {
+      const llm = window._llmSettingsCache || await refreshReasoningPrefsFromSettings(provider);
+      const model = _activeModelForProvider(provider, llm);
+      if (!_supportsAnthropicEffort(model)) {
+        window.reasoningLevel = '';
+        _closeModelSwitcher();
+        return;
+      }
+      if (level === 'xhigh' && !_supportsAnthropicXHigh(model)) level = 'high';
+    }
     await persistProviderReasoningPrefs(provider, { reasoning_effort: level });
     const el = document.getElementById('chat-model-name');
     if (el) {
@@ -5911,7 +6177,8 @@ async function checkStatus() {
 	      ro.className = 'info-val ' + (providerChecking ? '' : (backendOnline ? 'green' : 'red'));
 	    }
 
-	    const modelName = status.currentModel || '-';
+    const modelName = status.currentModel || '-';
+	    window._activeModel = modelName;
 	    const rm = document.getElementById('r-model');
 	    if (rm) rm.textContent = modelName;
 	    document.getElementById('current-model').textContent = modelName;
@@ -5924,6 +6191,7 @@ async function checkStatus() {
 	    if (badge) badge.textContent = isCloud ? providerLabel.toUpperCase() : '';
 	    const cpn = document.getElementById('chat-provider-name');
 	    if (cpn) cpn.textContent = providerLabel;
+      if (typeof window.refreshChatContextWindow === 'function') window.refreshChatContextWindow().catch(() => {});
       if (window._llmSettingsCache) applyReasoningPrefsFromProviderConfig(window._llmSettingsCache, provider);
       lastStatusOkAt = Date.now();
 	  } catch {
@@ -5952,7 +6220,7 @@ const AMD_SLOTS = {
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
@@ -6154,6 +6422,24 @@ function renderSkillMeta(s) {
   return chips.join('');
 }
 
+function openSkillView(id) {
+  if (typeof window.openHubSkillModal === 'function') {
+    window.openHubSkillModal(id);
+  } else {
+    openSkillReadOnly(id);
+  }
+}
+
+function renderSkillHoverActions(id) {
+  const safeId = escHtml(id);
+  return `
+    <div class="skill-hover-popover" onclick="event.stopPropagation()">
+      <button type="button" onclick="openSkillView('${safeId}')" title="View skill">View</button>
+      <button type="button" onclick="editSkill('${safeId}')" title="Edit skill">Edit</button>
+    </div>
+  `;
+}
+
 function setSkillModalReadOnly(readOnly) {
   ['skill-modal-name', 'skill-modal-emoji', 'skill-modal-desc'].forEach((id) => {
     const el = document.getElementById(id);
@@ -6225,8 +6511,8 @@ function renderSkillsList() {
     el.innerHTML = visibleSkills.map(s => {
       const isPinned = _pinnedSkills.includes(s.id);
       return `
-      <div class="skill-card ${isPinned ? ' pinned' : ''}" data-skill-id="${escHtml(s.id)}" onclick="openSkillReadOnly('${escHtml(s.id)}')">
-        ${renderSkillBadge(s)}
+      <div class="skill-card ${isPinned ? ' pinned' : ''}" data-skill-id="${escHtml(s.id)}" onclick="openSkillView('${escHtml(s.id)}')">
+        ${renderSkillHoverActions(s.id)}
         <button class="skill-pin-btn${isPinned ? ' active' : ''}" onclick="event.stopPropagation();toggleSkillPin('${escHtml(s.id)}')" title="${isPinned ? 'Unpin' : 'Pin'} skill" aria-label="${isPinned ? 'Unpin' : 'Pin'} skill">${SKILL_STAR_ICON(isPinned)}</button>
         <div class="skill-card-top">
           <div class="skill-card-icon">${SKILL_FLAME_ICON}</div>
@@ -6237,7 +6523,6 @@ function renderSkillsList() {
             <div class="skill-card-desc">${escHtml(s.description || 'No description')}</div>
           </div>
           <div class="skill-card-actions">
-            <button class="skill-mini-btn" onclick="event.stopPropagation();editSkill('${escHtml(s.id)}')" title="Edit" aria-label="Edit skill">${SKILL_EDIT_ICON}</button>
             <button class="skill-remove-btn" onclick="event.stopPropagation();deleteSkill('${escHtml(s.id)}')" title="Delete" aria-label="Delete skill">${SKILL_DEL_ICON}</button>
           </div>
         </div>
@@ -6362,6 +6647,7 @@ async function saveSkillFromModal() {
   }
 }
 window.openSkillReadOnly = openSkillReadOnly;
+window.openSkillView = openSkillView;
 window.editSkillFromView = editSkillFromView;
 window.filterSkills = filterSkills;
 window.showMoreSkills = showMoreSkills;
@@ -6689,10 +6975,10 @@ let _errBackdrop = null;
 <script type="module" src="static/api.js"></script>
 <script type="module" src="static/utils.js"></script>
 <script type="module" src="static/ws.js"></script>
-<script type="module" src="static/app.js?v=5"></script>
-<script type="module" src="static/pages/ChatPage.js"></script>
+<script type="module" src="static/app.js?v=sidebar-width-reset"></script>
+<script type="module" src="static/pages/ChatPage.js?v=session-last-message-sort"></script>
 <script type="module" src="static/pages/AuditPage.js"></script>
-<script type="module" src="static/pages/HubPage.js"></script>
+<script type="module" src="static/pages/HubPage.js?v=skill-hover-actions"></script>
 <script type="module" src="static/pages/MemoryPage.js"></script>
 <script type="module" src="static/pages/ProposalsPage.js"></script>
 <script type="module" src="static/pages/SchedulePage.js"></script>
@@ -6868,11 +7154,11 @@ let _errBackdrop = null;
     if (!root) return;
     root.hidden = false;
     if (!root.innerHTML.trim()) {
-      root.innerHTML = '<div class="pm-mobile-boot-screen"><div class="pm-mobile-boot-mark">P</div><div>Loading Prometheus Mobile...</div></div>';
+      root.innerHTML = '<div class="pm-mobile-boot-screen"><div class="pm-mobile-boot-mark"><img src="/assets/Prometheus.png" alt="Prometheus" /></div><div>Loading Prometheus Mobile...</div></div>';
     }
   })();
 </script>
-<script type="module" src="static/mobile/mobile-router.js?v=xaitts8"></script>
+<script type="module" src="static/mobile/mobile-router.js?v=mobile-voice-live-update-fix"></script>
 <script>
   // ── Prometheus Mobile: PWA bootstrap ──
   // 1. Capture beforeinstallprompt early so we can offer "Install" from the drawer.

@@ -1154,7 +1154,7 @@ export class BackgroundTaskRunner {
 
     this._broadcast('task_panel_update', { taskId: reloadedOriginalTask.id });
 
-    const { launchBackgroundTaskRunner } = await import('./task-router.js');
+    const { launchBackgroundTaskRunner } = await import('./task-router');
     launchBackgroundTaskRunner(reloadedOriginalTask.id);
 
     return {
@@ -1473,7 +1473,9 @@ export class BackgroundTaskRunner {
 		    const suppressSyntheticToolProgress = isProposalLikeSourceSession;
 		    if (isProposalLikeSourceSession && isDevSrcScopedProposalTask) {
 		      try {
+		        activateToolCategory(sessionId, 'source_read');
 		        activateToolCategory(sessionId, 'source_write');
+		        activateToolCategory(sourceSessionId, 'source_read');
 		        activateToolCategory(sourceSessionId, 'source_write');
         const proposalScope = initialTask.proposalExecution?.mutationScope;
         if (proposalScope && ((proposalScope.allowedFiles || []).length > 0 || (proposalScope.allowedDirs || []).length > 0)) {

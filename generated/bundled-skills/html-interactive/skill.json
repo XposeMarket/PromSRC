@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "name": "HTML Interactive Widgets",
+  "description": "Build live inline HTML widgets, dashboards, calculators, filterable tables, KPI scorecards, steppers, sliders, and interactive reports directly in chat using fenced html blocks.",
+  "version": "1.0.0",
+  "triggers": [
+    "interactive dashboard",
+    "html widget",
+    "interactive widget",
+    "live dashboard",
+    "filterable table",
+    "sortable table",
+    "kpi cards",
+    "scorecard",
+    "calculator",
+    "slider",
+    "step-through",
+    "interactive report",
+    "dashboard with filters",
+    "build an interactive",
+    "make it clickable",
+    "what-if calculator",
+    "scenario explorer",
+    "inline html"
+  ],
+  "categories": [
+    "visualization",
+    "interactive-output",
+    "dashboards",
+    "html",
+    "reports"
+  ],
+  "requiredTools": [
+    "skill_read"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "skill_read"
+    ],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [
+      "Read html-interactive.",
+      "Output one inline fenced html block only.",
+      "Keep the outer wrapper transparent and scripts self-contained."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "id": "html-interactive"
+}

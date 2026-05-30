@@ -51,10 +51,11 @@ export async function executeSkillList(
   skillsManager: SkillsManager,
 ): Promise<ToolResult> {
   skillsManager.scanSkills();
+  const all = skillsManager.getAll();
   const list = skillsManager.getCompactList();
   return {
     success: true,
-    stdout: `Skills in ${skillsManager.getSkillsDir()}:\n\n${list}\n\nUse skill_read(id) to read the relevant SKILL.md.`,
+    stdout: `${all.length} skills available. Call skill_read(id) to load one.\n\n${list}`,
   };
 }
 
@@ -74,17 +75,32 @@ export async function executeSkillRead(
     };
   }
 
+  let skillMd: string;
   try {
-    return {
-      success: true,
-      stdout: fs.readFileSync(skill.filePath, 'utf-8'),
-    };
+    skillMd = fs.readFileSync(skill.filePath, 'utf-8');
   } catch {
-    return {
-      success: true,
-      stdout: skill.instructions,
-    };
+    skillMd = skill.instructions;
   }
+
+  // For bundle skills, return a resource menu so the AI fetches what it needs lazily.
+  if (skill.kind === 'bundle' && skill.resources.length > 0) {
+    const menuLines = skill.resources.map((r: any) =>
+      `- ${r.path}${r.description ? ` — ${r.description}` : ''}`
+    );
+    const firstResource = skill.resources[0];
+    const suggested = `skill_resource_read({ id: "${id}", path: "${firstResource.path}" })`;
+    const menu = [
+      '',
+      '',
+      'Relevant resources:',
+      ...menuLines,
+      '',
+      `Suggested next call if you need a resource:\n${suggested}`,
+    ].join('\n');
+    return { success: true, stdout: skillMd + menu };
+  }
+
+  return { success: true, stdout: skillMd };
 }
 
 export async function executeSkillCreate(
@@ -136,7 +152,7 @@ export const skillListTool = {
 
 export const skillReadTool = {
   name: 'skill_read',
-  description: 'Read a skill by id. Returns the full SKILL.md instructions plus bundle resource hints when available.',
+  description: 'Read a skill by id. Returns the full SKILL.md instructions. For bundle skills, returns a resource menu with paths and descriptions — use skill_resource_read to fetch individual resources as needed.',
   execute: (args: any) => executeSkillRead(args, getDefaultSkillsManager()),
   schema: { id: 'string (required) - skill id from skill_list' },
   jsonSchema: {

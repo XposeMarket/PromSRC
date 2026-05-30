@@ -2,12 +2,20 @@
  * vault.ts — Prometheus Secret Vault
  *
  * Provides AES-256-GCM encrypted storage for all credentials.
- * Keys are derived from a machine-scoped master key (never stored alongside secrets).
  * Secrets are NEVER returned in logs, toString(), or JSON.stringify().
+ *
+ * Master key handling depends on how Prometheus is running:
+ *  - Desktop app (Electron-managed): the master key is OS-sealed at rest by the
+ *    Electron main process (safeStorage → DPAPI on Windows / Keychain on macOS),
+ *    stored as `vault/vault.key.enc`, and handed to this gateway process in memory
+ *    via stdin (see vault-key-bootstrap.ts). The plaintext key never touches disk
+ *    in this mode.
+ *  - Standalone (Docker / `npm run gateway`): no main process is available to seal
+ *    the key, so it falls back to a local `vault/vault.key` file with NO at-rest
+ *    protection. A one-time warning is logged in this mode.
  *
  * Security model:
  *  - Encrypt on write, decrypt only on explicit .get() call
- *  - Vault key stored separately from vault data
  *  - All access logged with caller tag (no secret value in log)
  *  - UI/log layer should always call redact() before outputting any string
  */
@@ -15,6 +23,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { getInjectedMasterKey } from './vault-key-bootstrap.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -122,6 +131,19 @@ export function scrubSecrets(input: string): string {
   return out;
 }
 
+// ─── Fallback warning ──────────────────────────────────────────────────────────
+
+let _warnedUnprotectedKey = false;
+function warnUnprotectedKeyOnce(): void {
+  if (_warnedUnprotectedKey) return;
+  _warnedUnprotectedKey = true;
+  console.warn(
+    '[Vault] Master key stored unencrypted on disk (vault/vault.key). ' +
+    'OS-backed key protection is only available in the Prometheus desktop app. ' +
+    'Protect the vault directory with filesystem permissions.'
+  );
+}
+
 // ─── SecretVault ──────────────────────────────────────────────────────────────
 
 export class SecretVault {
@@ -148,12 +170,20 @@ export class SecretVault {
   }
 
   private loadOrCreateMasterKey(): Buffer {
+    // Preferred path: key was OS-sealed by the Electron main process and handed to
+    // us over stdin. Use it directly — never read or write a key file.
+    const injected = getInjectedMasterKey();
+    if (injected) return injected;
+
+    // Fallback path (standalone / Docker): no main process to seal the key, so it
+    // lives in a plaintext file alongside the vault with no at-rest protection.
+    warnUnprotectedKeyOnce();
     if (fs.existsSync(this.keyPath)) {
       const hex = fs.readFileSync(this.keyPath, 'utf-8').trim();
       return Buffer.from(hex, 'hex');
     }
     const key = crypto.randomBytes(KEY_BYTES);
-    // mode 0o600 = owner read/write only
+    // mode 0o600 = owner read/write only (no-op on Windows/NTFS)
     fs.writeFileSync(this.keyPath, key.toString('hex'), { mode: 0o600 });
     return key;
   }

@@ -1,0 +1,116 @@
+---
+# Thought 3 - 2026-05-24 | Window: 2026-05-24 13:28 UTC-2026-05-24 19:28 UTC
+_Generated: 2026-05-24 15:28 local_
+
+## Summary
+This window had strong signal around Prometheus production workflows rather than ordinary chat. Raul investigated skill mechanics after a huge Codex prompt overflow, pushed on HyperFrames video generation quality, tested X/xAI connector behavior, and surfaced a concrete preference that generated media should be presented in-canvas instead of merely delivered as a message.
+
+The biggest momentum thread is HyperFrames. Prometheus first produced an xAI OAuth/Grok clip through Creative/HTML Motion, but Raul caught that the exported MP4 was a black screen and challenged the fallback away from strict HyperFrames. The recovery succeeded with a real HyperFrames CLI-only project/render, but only after command friction, FFmpeg discovery, Windows shell quirks, and final-export verification lessons. I wonder if the right Dream follow-up is not another one-off skill tweak but a first-class HyperFrames project/render/verify toolchain so this stops feeling like driving a compiler through a keyhole.
+
+The other live thread is X integration. The X API connector is authenticated as @raulinvests and basic `/users/me` works, but most data endpoints fail with `402 CreditsDepleted`; xurl OAuth setup advanced to the point where Raul changed the app to Native and pasted a secret, then a provider/API crash and gateway restart interrupted the actual retry. I wonder if a small secure xurl/OAuth resume workflow should be prioritized, because Raul has already done the annoying developer-console part and the next step is procedural.
+
+There were a few quality bruises: two “Hey! How can I help?” responses to explicit skill-update requests, black-screen export not caught before the user saw it, and gateway restarts cutting through active work. But the window produced unusually actionable learning: strict HyperFrames means CLI project path for now, exported media must be sampled from the final file, and X connector failures are billing/credit-related rather than generic auth failures.
+
+## A. Activity Summary
+- Skill-mechanics/source investigation: Raul asked whether the oversized prompt came from reading the HyperFrames skill/resources or the video task; Prometheus explained both were involved and then inspected the skill runtime/source injection path. It recommended skills behave as retrievable playbooks, not permanent mega-prompts. Evidence: `audit/chats/transcripts/mobile_mpjr4q96_jxxhbl.md:23-49`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:7`.
+- X/xurl OAuth retry: Prometheus retried local xurl setup, verified local `xurl.exe` and registered app `prometheus-x`, identified the X Developer app as Web App/Confidential instead of Native/Public as the likely OAuth blocker, then Raul changed it to Native and pasted a secret; the retry was interrupted by an OpenAI/Codex 520 and gateway restart. Evidence: `audit/chats/transcripts/0889e2b9-113c-4497-b391-995151368583.md:217-264`, `:265-300`.
+- X API connector test: Prometheus tested X connector tools, confirmed @raulinvests is connected and `/users/me` works, gathered profile metrics, found most normal X API endpoints blocked by `402 CreditsDepleted`, and separated that from `x_api_get_usage` needing app-only auth. Evidence: `audit/chats/transcripts/ce5ffa8b-237a-419d-ad29-4baf2d225401.md:36-74`, `:75-107`; `memory/2026-05-24-intraday-notes.md:47-49`.
+- Amazon keyboard search: Raul asked for Bluetooth keyboards on Amazon. Prometheus used product-carousel workflow and reported options, but Raul immediately said he did not see any carousel; gateway restart interrupted the correction. Evidence: `audit/chats/transcripts/mobile_mpk1216j_73yoz6.md:1-18`.
+- xAI OAuth/Grok promo clip attempt: Prometheus created a 15s clip using real uploaded xAI and Prometheus logos, but initially relied on Creative/HTML Motion fallback and did not verify the exported MP4; Raul reported it was a black screen. Evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:1-57`.
+- Strict HyperFrames recovery: Raul requested “HYPERFRAMES ONLY”; Prometheus rebuilt as a real HyperFrames CLI project at `hyperframes-xai-oauth/`, rendered `xai-oauth-hyperframes-only.mp4`, inspected timestamps, and presented the file. Evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:58-74`; `memory/2026-05-24-intraday-notes.md:55-57`.
+- Skill updates requested but interrupted: Raul explicitly asked to update HyperFrames skills with strict CLI path/export verification/Windows caveats. Prometheus twice answered “Hey! How can I help?” instead of acting, then gateway restart interrupted the pending skill-update work. Evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:377-626`.
+- Task/proposal state: `audit/tasks` shows 3 task records: 2 needing assistance and 1 paused. Notable stuck items include browser visual fallback proposal paused on gateway restart and mobile voice parity verification needing assistance. Evidence: `audit/tasks/INDEX.md:5-8`, `audit/tasks/state/_index.json:8-68`, `:69-109`.
+- Scheduled jobs/cron runs: no cron run history activity found in `audit/cron/runs/` beyond `.gitkeep`. Evidence: directory listing `audit/cron/runs`.
+- Teams: no substantive team activity in `audit/teams/` for this window. Evidence: directory listing `audit/teams`.
+
+## B. Behavior Quality
+**Went well:**
+- Prometheus gave a clear source-grounded recommendation on skill mechanics: lightweight matching hints are good, full active-skill reinjection can over-bloat context, resources should be read on demand. | evidence: `audit/chats/transcripts/mobile_mpjr4q96_jxxhbl.md:43-120`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:7`
+- X API connector diagnosis was clean and correctly distinguished billing/credits from auth-mode errors. | evidence: `audit/chats/transcripts/ce5ffa8b-237a-419d-ad29-4baf2d225401.md:41-74`, `:89-107`
+- After Raul challenged the black-screen video, Prometheus owned the failure directly and identified the missing exported-file verification gate. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57`
+- Strict HyperFrames recovery produced a real CLI-rendered MP4 with explicit project path, render command, frame count, and timestamp inspect results. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:58-74`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:15`
+- Raul’s generated-media presentation preference was captured immediately in the live workflow. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:17-24`, `Brain/skill-gardener/2026-05-24/workflow-episodes.jsonl:12`
+
+**Stalled or struggled:**
+- The first xAI OAuth/Grok video was presented as done without verifying the exported MP4, and Raul found it was a black screen. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57`
+- Prometheus silently fell back from HyperFrames to HTML Motion/Creative after HyperFrames QA failed, which violated the spirit of Raul’s HyperFrames request. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:38-51`
+- The skill-update request at 18:49 and 18:51 received generic “Hey! How can I help?” responses instead of action, then was interrupted by restart. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:377-626`
+- xurl OAuth retry was blocked by provider 520/gateway restart right after Raul supplied the needed Native-app change/secret, leaving a sensitive setup half-finished. | evidence: `audit/chats/transcripts/0889e2b9-113c-4497-b391-995151368583.md:265-300`
+- Product carousel delivery had a UI/visibility failure: Prometheus said it showed a carousel, but Raul did not see one, and restart prevented correction. | evidence: `audit/chats/transcripts/mobile_mpk1216j_73yoz6.md:1-18`
+
+**Tool usage patterns:**
+- HyperFrames work repeatedly hit first-class Creative/HyperFrames runtime issues (`ReferenceError: __name is not defined`, black exports, missing active HTML motion clip) and then succeeded only through a workspace CLI project path. Evidence: `Brain/skill-episodes/2026-05-24/episodes.jsonl:14-15`.
+- Windows shell friction recurred: PowerShell `&&` failed, FFmpeg missing from PATH, absolute cwd outside allowlist, and command policy blocked some FFmpeg/diagnostic one-liners. Evidence: `Brain/skill-episodes/2026-05-24/episodes.jsonl:15`.
+- Browser/desktop OAuth work had many brittle operations: Chrome debugger profile failure, desktop window matching failures, coordinate/scroll issues, and start_process spawn failure. Evidence: `Brain/skill-episodes/2026-05-24/episodes.jsonl:9-11`.
+
+**User corrections:**
+- Raul corrected the media artifact behavior: delivery_send is not enough; generated videos/images/media should be presented in canvas with the final response. Evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:17-24`.
+- Raul corrected the HyperFrames workflow: asked why Prometheus used HTML Motion/Creative instead of strict HyperFrames and said the export was black. Evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:25-60`.
+- Raul reported a missing carousel after Amazon product search. Evidence: `audit/chats/transcripts/mobile_mpk1216j_73yoz6.md:9-18`.
+
+## C. Skill And Workflow Signals
+| Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
+|----------------|--------|-----------------|-----------|---------|
+| hyperframes | Used for Prometheus/xAI video work, but current first-class runtime path overstates stability; strict HyperFrames should route to real CLI project when requested. | update existing skill with Prometheus runtime guardrail/resource | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:242-347`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:14` |
+| hyperframes-cli | CLI-only recovery was the reliable path; observed FFmpeg missing, Node warning, PowerShell `&&` caveat, duplicate media warning nuance, and final MP4 verification requirement. | update existing skill with strict project-flow reference | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:58-74`, `:286-347`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:15` |
+| prometheus-creative-mode | Creative/HTML Motion fallback exported a black MP4 and should require final exported-file verification; fallback must be disclosed if user asked for HyperFrames. | Dream review: maybe add video export no-ship gate/fallback disclosure to Creative skill too | medium | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57`, `Brain/skill-gardener/2026-05-24/live-candidates.jsonl:5-6` |
+| product-carousel-builder | Carousel tool was called but user did not see it, implying final response should verify/present carousel visibility or provide fallback text/cards. | Dream review: add carousel visibility confirmation/fallback guidance | medium | `audit/chats/transcripts/mobile_mpk1216j_73yoz6.md:1-18`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:13` |
+| secret-and-token-ops / xurl OAuth setup | X OAuth setup involved a user-supplied secret, app-type mismatch, xurl auth state, and provider crash; workflow needs secure resume/checkpoint behavior. | propose/review a secure xurl OAuth runbook or skill resource | medium | `audit/chats/transcripts/0889e2b9-113c-4497-b391-995151368583.md:217-300`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:9-11` |
+| skill mechanics / source review | Raul explicitly explored how skills are injected; recommendation was compact active summaries and on-demand resources instead of permanent mega-prompts. | src_edit opportunity for skill_read/active skill context compaction | high | `audit/chats/transcripts/mobile_mpjr4q96_jxxhbl.md:23-49`, `memory/2026-05-24-intraday-notes.md:43-45` |
+
+## C2. Existing Skill Maintenance
+**Applied during this Thought:**
+- `hyperframes` | Added resource `references/prometheus-runtime-reality-2026-05-24.md` covering strict HyperFrames routing to CLI project path, final MP4 verification hard gate, Creative fallback disclosure, Windows runtime caveats, duplicate-media-warning nuance, and preferred artifact pattern. | why: Raul explicitly asked to update the skills with these exact lessons and evidence showed the existing skill overstates first-class runtime smoothness. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57`, `:75-376`, `:377-468`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:14-15` | verification: `skill_inspect("hyperframes")` now lists `references/prometheus-runtime-reality-2026-05-24.md`, validation ok, resource read returned the new strict-routing/export-verification content.
+- `hyperframes-cli` | Added resource `references/strict-hyperframes-project-flow-2026-05-24.md` covering HyperFrames-only CLI project workflow, FFmpeg/Node/PowerShell/workspace allowlist caveats, no-ship export gates, and final response checklist. | why: the strict CLI path was the successful recovery and Raul asked for current Prometheus-state skill adjustments. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:58-74`, `:197-376`, `Brain/skill-episodes/2026-05-24/episodes.jsonl:15` | verification: `skill_inspect("hyperframes-cli")` now lists `references/strict-hyperframes-project-flow-2026-05-24.md`, validation ok, resource read returned the new strict project-flow content.
+
+**Deferred for Dream review:**
+- `prometheus-creative-mode` | defer because the most urgent user-requested update was HyperFrames-specific, and Creative export no-ship behavior may deserve a broader video QA/source/tool proposal rather than only a skill note. | evidence: `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57`
+- `product-carousel-builder` | defer because only one observed visibility failure; Dream should inspect whether `show_product_carousel` actually delivered a UI artifact before changing the skill. | evidence: `audit/chats/transcripts/mobile_mpk1216j_73yoz6.md:9-18`
+- xurl/X OAuth workflow | defer as possible new focused runbook/resource; it spans secrets, browser, desktop, and shell and needs careful sensitive handling. | evidence: `audit/chats/transcripts/0889e2b9-113c-4497-b391-995151368583.md:217-300`
+
+## D. Business Candidates
+| Candidate | Destination | Action | Confidence | Evidence |
+|-----------|-------------|--------|-----------|---------|
+| X social account @raulinvests connector status and profile metrics: connected, id `1882606353359011840`, 131 followers, 460 following, 659 tweets, 4,109 likes, 85 media, listed_count 1. | entities/social/raulinvests.md | update_entity | high | `audit/chats/transcripts/ce5ffa8b-237a-419d-ad29-4baf2d225401.md:41-53`, `memory/2026-05-24-intraday-notes.md:47-49` |
+| X API project/account has depleted API credits for normal read endpoints; usage endpoint needs OAuth2 app-only auth, while user-context auth works for `/users/me`. | entities/vendor/x-api.md or entities/social/raulinvests.md | append_event | high | `audit/chats/transcripts/ce5ffa8b-237a-419d-ad29-4baf2d225401.md:55-74`, `:89-107` |
+| xurl setup for Prometheus reached app `prometheus-x`; app was changed to Native by Raul and secret was supplied, but OAuth retry was interrupted by provider/gateway crash. | entities/vendor/xurl.md | append_event | medium | `audit/chats/transcripts/0889e2b9-113c-4497-b391-995151368583.md:217-300` |
+| Prometheus xAI OAuth/Grok promotional media now exists in two forms: initial Creative/HTML Motion clip had black-screen export failure; strict HyperFrames-only CLI project succeeded at `hyperframes-xai-oauth/xai-oauth-hyperframes-only.mp4`. | entities/projects/prometheus.md | append_event | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:1-74`, `memory/2026-05-24-intraday-notes.md:51-57` |
+| Prometheus positioning signal: Grok is now available in Prometheus with text and voice models; message angle is “control Prometheus with your voice, powered by xAI.” | BUSINESS.md or entities/projects/prometheus.md | append_event | medium | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:1-9` |
+
+**Business candidate JSONL:** Brain\business-candidates\2026-05-24\candidates.jsonl written
+
+## E. Memory Candidates
+| Item | Target | Recall Trigger | Future Behavior | Staleness Risk | Confidence | Evidence |
+|------|--------|----------------|-----------------|----------------|-----------|---------|
+| Generated media should be presented in-canvas with final response, not only sent via delivery_send. | already written during live session / USER or SOUL if not reconciled | Whenever generating videos/images/media artifacts | Use `present_file` by default unless Raul explicitly asks to send/deliver elsewhere. | Could change if Raul prefers Telegram/external delivery for a specific workflow. | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:17-24`, `Brain/skill-gardener/2026-05-24/workflow-episodes.jsonl:12` |
+| Strict HyperFrames requests should not silently fall back to Creative/HTML Motion; verify final exported MP4 frames. | skill, not memory | HyperFrames/Creative video tasks | Handled as skill resource update in C2 rather than memory. | Runtime may improve once native tools are fixed. | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57`, `:242-347` |
+| Skill system should prefer retrievable playbooks/on-demand resources over persistent mega-prompt active injection. | MEMORY.md or source proposal, but likely src_edit opportunity | Future skill-runtime design work | Investigate compact skill_read/active-skill summaries and resource-on-demand behavior. | Could be superseded by an implemented skill context compaction change. | medium | `audit/chats/transcripts/mobile_mpjr4q96_jxxhbl.md:23-49`, `memory/2026-05-24-intraday-notes.md:43-45` |
+
+## F. Opportunity Seeds
+| Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
+|------|----------------|----------------------------|-----------|---------|
+| Build first-class HyperFrames project/render/check/verify tools (`hyperframes_project_create`, `hyperframes_render_project`, `hyperframes_verify_mp4`). | Would remove repeated shell approvals/friction, enforce final MP4 verification, handle FFmpeg/Node/browser runtime consistently, and prevent black-screen exports. | `src/gateway/tools/*`, Creative/HyperFrames tool surfaces, `hyperframes-xai-oauth/`, skills `hyperframes`, `hyperframes-cli` | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:77-376` |
+| Resume xurl OAuth after Raul changed X app to Native and supplied secret. | Setup is close to completion and user already did the developer-console change; interruption left valuable momentum dangling. | `workspace/tools/xurl-local/`, secret-handling workflow, X Developer Console state | high | `audit/chats/transcripts/0889e2b9-113c-4497-b391-995151368583.md:245-300` |
+| Fix or audit Creative/HyperFrames `__name is not defined` runtime bug. | This runtime error repeatedly blocked HyperFrames QA/render and pushed Prometheus into fallback paths. | Creative runtime/evaluator code, `hyperframes_qa`, `creative_render_snapshot` | high | `Brain/skill-episodes/2026-05-24/episodes.jsonl:1-3`, `:14` |
+| Add exported-video no-ship gate to Creative exports. | Black-screen MP4 reached Raul despite source lint/snapshots. A final-file sampling gate would catch this class. | Creative export pipeline, video QA tools, `creative_export`, `creative_quality_report` | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57` |
+| Investigate product carousel visibility/delivery on mobile. | Raul did not see the carousel after Prometheus claimed it was shown; product recommendations are high-use consumer workflow. | `show_product_carousel` tool delivery path, mobile UI artifact rendering, `product-carousel-builder` | medium | `audit/chats/transcripts/mobile_mpk1216j_73yoz6.md:1-18` |
+| Skill context compaction design. | Oversized 5.9M character Codex instructions likely involved large skill/resource injection and active-skill reinjection; reducing this protects long creative/source tasks. | `src/gateway/skills-runtime/skills-manager.ts`, `skill_read`, active skills context builder | high | `audit/chats/transcripts/mobile_mpjr4q96_jxxhbl.md:11-49`, `memory/2026-05-24-intraday-notes.md:43-45` |
+| Unstick paused/needs-assistance tasks from proposal execution. | Existing approved/paused work remains unfinished: browser visual fallback and mobile voice parity verification. | `audit/tasks/state/_index.json`, proposal executor/restart recovery | medium | `audit/tasks/INDEX.md:5-8`, `audit/tasks/state/_index.json:8-109` |
+
+## G. Improvement Candidates
+| Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
+|-------|---------------|--------------------------|------------|---------|
+| Native HyperFrames project/render/check/verify toolchain needed to avoid CLI approval dance and enforce MP4 verification. | feature_addition | code_change | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:84-195`, `:348-376` |
+| Creative/HyperFrames runtime `ReferenceError: __name is not defined` breaks QA/render snapshots. | src_edit | code_change | high | `Brain/skill-episodes/2026-05-24/episodes.jsonl:1-3`, `:14` |
+| Creative export can produce black-screen/tiny MP4 without no-ship final-file verification. | src_edit | code_change | high | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:27-57` |
+| Skill system active-skill/resource injection can bloat context and should use compact summaries/windowed active instructions. | src_edit | code_change | high | `audit/chats/transcripts/mobile_mpjr4q96_jxxhbl.md:23-49`, `memory/2026-05-24-intraday-notes.md:43-45` |
+| xurl OAuth setup should have a secure guided resume flow for Native App/client secret and local callback auth. | general / skill_evolution | review | medium | `audit/chats/transcripts/0889e2b9-113c-4497-b391-995151368583.md:217-300` |
+| Product carousel UI artifact may not display to mobile user despite `show_product_carousel` call. | src_edit / review | review | medium | `audit/chats/transcripts/mobile_mpk1216j_73yoz6.md:1-18` |
+| Pending skill-update request was mishandled by generic greeting responses after explicit actionable ask. | prompt_mutation | none | medium | `audit/chats/transcripts/fc74d27f-a783-421a-9808-9f0ea16fa8a6.md:377-566` |
+| Approved task/proposal executor work remains paused/needs assistance after restarts/provider issues. | task_trigger | action | medium | `audit/tasks/INDEX.md:5-8`, `audit/tasks/state/_index.json:8-109` |
+
+## H. Window Verdict
+**Active:** yes
+**Signal quality:** high
+**Summary:** The window produced strong product/tooling signal: HyperFrames needs a native bounded toolchain plus final-export verification, skill context needs compaction, X connector is authenticated but credit-limited, and xurl OAuth is close but interrupted. User corrections were concrete and valuable, especially around black-screen media export, strict HyperFrames routing, and artifact presentation.
+---

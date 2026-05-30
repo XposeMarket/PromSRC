@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1080px; height: 1920px; overflow: hidden; background: #050505; }
+      body { font-family: "Aptos Display", "Arial Narrow", Arial, sans-serif; color: #f7f2ea; }
+      #root { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: #050505; isolation: isolate; }
+      .stage-grid { position: absolute; inset: 0; opacity: .33; background-image: repeating-linear-gradient(0deg, transparent 0 33px, #17120d 33px 36px), repeating-linear-gradient(90deg, transparent 0 33px, #17120d 33px 36px); }
+      .dot { position: absolute; width: 10px; height: 10px; background: #ff6a00; box-shadow: 0 0 0 5px #050505; }
+      .dot.dull { background: #342b22; }
+      .edge { position: absolute; background: #ff6a00; z-index: 2; transform-origin: left top; }
+      .edge.top { height: 16px; left: 60px; right: 60px; top: 58px; }
+      .edge.left { width: 16px; top: 58px; bottom: 58px; left: 60px; }
+      .meta { position: absolute; z-index: 9; left: 92px; right: 92px; top: 94px; display: flex; justify-content: space-between; align-items: center; font-family: "Cascadia Mono", "Courier New", monospace; font-size: 22px; letter-spacing: .08em; text-transform: uppercase; color: #e4d7c8; }
+      .pill { color: #f7f2ea; border: 2px solid #40362c; padding: 14px 18px; background: #0c0b0a; }
+      .scene { position: absolute; inset: 0; padding: 170px 92px 126px; display: flex; flex-direction: column; justify-content: center; gap: 46px; opacity: 0; z-index: 3; }
+      .kicker { font-family: "Cascadia Mono", "Courier New", monospace; font-size: 26px; letter-spacing: .16em; text-transform: uppercase; color: #ffd266; }
+      .headline { font-size: 112px; line-height: .92; letter-spacing: -.06em; font-weight: 900; text-transform: uppercase; max-width: 900px; }
+      .headline.small { font-size: 86px; line-height: .98; letter-spacing: -.045em; }
+      .body { font-size: 38px; line-height: 1.18; color: #e4d7c8; max-width: 820px; font-weight: 500; }
+      .logo-row { display: flex; align-items: center; gap: 34px; margin: 16px 0 8px; }
+      .logo-card { width: 230px; height: 230px; display: grid; place-items: center; background: #fff; border: 4px solid #fff; box-shadow: 18px 18px 0 #000, 18px 18px 0 4px #40362c; }
+      .logo-card.dark { background: #000; border-color: #2b2722; box-shadow: 18px 18px 0 #000, 18px 18px 0 4px #ff6a00; }
+      .logo-card img { width: 82%; height: 82%; object-fit: contain; display: block; }
+      .logo-card.dark img { width: 100%; height: 100%; object-fit: contain; }
+      .connector { position: relative; width: 170px; height: 8px; background: #ff6a00; transform-origin: left center; }
+      .connector::before, .connector::after { content: ""; position: absolute; top: 50%; width: 24px; height: 24px; margin-top: -12px; background: #ffd266; }
+      .connector::before { left: -2px; } .connector::after { right: -2px; }
+      .model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; max-width: 860px; }
+      .model { min-height: 260px; background: #191612; border: 3px solid #40362c; padding: 30px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 14px 14px 0 #000; }
+      .tag { font-family: "Cascadia Mono", "Courier New", monospace; font-size: 22px; color: #ffd266; letter-spacing: .1em; text-transform: uppercase; }
+      .model h2 { font-size: 54px; line-height: .95; margin: 0; letter-spacing: -.04em; text-transform: uppercase; }
+      .model p { font-size: 27px; line-height: 1.1; color: #e4d7c8; margin: 0; }
+      .voice-stack { display: grid; gap: 20px; max-width: 840px; }
+      .voice-command { background: #f7f2ea; color: #090807; padding: 30px 30px; border: 4px solid #fff; font-size: 43px; line-height: 1.02; font-weight: 900; letter-spacing: -.045em; text-transform: uppercase; box-shadow: 20px 20px 0 #ff6a00; max-width: 780px; }
+      .wave { height: 132px; display: flex; gap: 14px; align-items: end; padding: 0 16px; }
+      .bar { width: 34px; background: #ff6a00; transform-origin: bottom; border: 2px solid #000; }
+      .bar:nth-child(2n) { background: #ffd266; }
+      .cta-wrap { display: grid; grid-template-columns: 270px 1fr; gap: 42px; align-items: center; max-width: 900px; }
+      .final-logo { width: 270px; height: 270px; background: #000; border: 3px solid #322d27; display: grid; place-items: center; box-shadow: 22px 22px 0 #ff6a00; }
+      .final-logo img { width: 100%; height: 100%; object-fit: contain; }
+      .auth-card { border: 3px solid #40362c; background: #11100f; padding: 34px; display: grid; gap: 18px; max-width: 820px; box-shadow: 22px 22px 0 #000; }
+      .auth-line { display: grid; grid-template-columns: 190px 1fr; gap: 18px; align-items: center; font-family: "Cascadia Mono", "Courier New", monospace; font-size: 27px; color: #f7f2ea; }
+      .label { color: #e4d7c8; text-transform: uppercase; font-size: 21px; letter-spacing: .1em; }
+      .status { color: #ffd266; }
+      .footer { position: absolute; z-index: 9; left: 92px; right: 92px; bottom: 94px; display: flex; justify-content: space-between; align-items: end; font-family: "Cascadia Mono", "Courier New", monospace; color: #e4d7c8; font-size: 23px; letter-spacing: .04em; }
+      .powered { color: #f7f2ea; font-size: 28px; text-transform: uppercase; } .powered b { color: #ffd266; }
+      .wipe { position: absolute; inset: 0; z-index: 20; background: #ff6a00; transform: translateX(-110%); }
+      .wipe.light { background: #f7f2ea; } .fade { position: absolute; inset: 0; z-index: 30; background: #000; pointer-events: none; opacity: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="15" data-width="1080" data-height="1920">
+      <div class="stage-grid" data-layout-ignore></div>
+      <div class="dot" style="left:120px;top:250px" data-layout-ignore></div><div class="dot dull" style="left:360px;top:220px" data-layout-ignore></div><div class="dot dull" style="left:780px;top:310px" data-layout-ignore></div><div class="dot" style="left:170px;top:760px" data-layout-ignore></div><div class="dot dull" style="left:850px;top:1030px" data-layout-ignore></div><div class="dot" style="left:260px;top:1260px" data-layout-ignore></div><div class="dot dull" style="left:680px;top:1410px" data-layout-ignore></div><div class="dot" style="left:430px;top:1690px" data-layout-ignore></div>
+      <div class="edge top"></div><div class="edge left"></div>
+      <div class="meta"><span>Prometheus OAuth Bridge</span><span class="pill">xAI Connected</span></div>
+
+      <section id="s1" class="scene">
+        <div class="kicker">New inside Prometheus</div>
+        <div class="headline">xAI OAuth is live.</div>
+        <div class="logo-row"><div class="logo-card"><img src="xai-logo.png" alt="xAI logo" /></div><div class="connector"></div><div class="logo-card dark"><img src="prometheus-logo-final.png" alt="Prometheus logo" /></div></div>
+        <div class="body">Connect xAI once. Prometheus can route Grok into your actual workspace.</div>
+      </section>
+
+      <section id="s2" class="scene">
+        <div class="kicker">One account. Two model lanes.</div>
+        <div class="headline small">Grok text and voice models are now available.</div>
+        <div class="model-grid"><div class="model"><div class="tag">Text</div><h2>Think, code, search</h2><p>Use Grok as a first-class Prometheus model route.</p></div><div class="model"><div class="tag">Voice</div><h2>Listen, answer, act</h2><p>Realtime voice control with xAI-powered speech.</p></div></div>
+      </section>
+
+      <section id="s3" class="scene">
+        <div class="kicker">Hands off the keyboard</div>
+        <div class="headline small">Control Prometheus with your voice.</div>
+        <div class="voice-stack" data-layout-allow-overflow><div class="voice-command" data-layout-allow-overflow>“Hey Prometheus, open my workflow.”</div><div class="wave"><div class="bar" style="height:42px"></div><div class="bar" style="height:94px"></div><div class="bar" style="height:70px"></div><div class="bar" style="height:118px"></div><div class="bar" style="height:56px"></div><div class="bar" style="height:132px"></div><div class="bar" style="height:86px"></div><div class="bar" style="height:110px"></div><div class="bar" style="height:48px"></div><div class="bar" style="height:104px"></div><div class="bar" style="height:66px"></div><div class="bar" style="height:124px"></div></div></div>
+        <div class="body">Speak naturally. Prometheus listens, reasons, and uses your tools.</div>
+      </section>
+
+      <section id="s4" class="scene">
+        <div class="cta-wrap"><div class="final-logo"><img src="prometheus-logo-final.png" alt="Prometheus logo" /></div><div><div class="kicker">Powered by xAI</div><div class="headline small">Grok is now in Prometheus.</div></div></div>
+        <div class="auth-card"><div class="auth-line"><span class="label">OAuth</span><span class="status">CONNECTED</span></div><div class="auth-line"><span class="label">Text</span><span>Grok model routing</span></div><div class="auth-line"><span class="label">Voice</span><span>Realtime voice control</span></div></div>
+      </section>
+
+      <div class="footer"><span>Local AI command center</span><span class="powered">Powered by <b>xAI</b></span></div>
+      <div id="wipe1" class="wipe"></div><div id="wipe2" class="wipe light"></div><div id="wipe3" class="wipe"></div><div id="fade" class="fade"></div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      gsap.set(["#s1", "#s2", "#s3", "#s4"], { opacity: 0 });
+      gsap.set(["#wipe1", "#wipe2", "#wipe3"], { x: "-110%" });
+
+      tl.from(".edge.top", { scaleX: 0, duration: .55, ease: "expo.out" }, .15)
+        .from(".edge.left", { scaleY: 0, duration: .65, ease: "power4.out" }, .2)
+        .from(".meta", { y: -28, opacity: 0, duration: .5, ease: "power2.out" }, .3);
+
+      tl.set("#s1", { opacity: 1 }, .22)
+        .from("#s1 .kicker", { x: -50, opacity: 0, duration: .45, ease: "power3.out" }, .45)
+        .from("#s1 .headline", { y: 72, opacity: 0, letterSpacing: "-.12em", duration: .68, ease: "expo.out" }, .62)
+        .from("#s1 .logo-card", { scale: .72, opacity: 0, rotation: -4, duration: .48, stagger: .13, ease: "back.out(1.6)" }, .96)
+        .from("#s1 .connector", { scaleX: 0, opacity: 0, duration: .38, ease: "power4.out" }, 1.12)
+        .from("#s1 .body", { y: 35, opacity: 0, duration: .55, ease: "sine.out" }, 1.38)
+        .to("#s1 .logo-row", { y: -8, duration: 2.1, ease: "sine.inOut" }, 1.6);
+
+      tl.to("#wipe1", { x: "0%", duration: .24, ease: "power4.in" }, 3.35)
+        .set("#s1", { opacity: 0 }, 3.6)
+        .set("#s2", { opacity: 1 }, 3.6)
+        .to("#wipe1", { x: "110%", duration: .46, ease: "expo.out" }, 3.6)
+        .from("#s2 .kicker", { x: 80, opacity: 0, duration: .42, ease: "power2.out" }, 3.77)
+        .from("#s2 .headline", { x: -76, opacity: 0, duration: .64, ease: "expo.out" }, 3.9)
+        .from("#s2 .model:first-child", { y: 120, rotation: -2, opacity: 0, duration: .56, ease: "back.out(1.35)" }, 4.34)
+        .from("#s2 .model:last-child", { y: -80, rotation: 2, opacity: 0, duration: .62, ease: "power3.out" }, 4.48)
+        .to("#s2 .model", { y: -10, duration: 2.0, stagger: .12, ease: "sine.inOut" }, 5.0);
+
+      tl.to("#wipe2", { x: "0%", duration: .28, ease: "power3.in" }, 7.05)
+        .set("#s2", { opacity: 0 }, 7.34)
+        .set("#s3", { opacity: 1 }, 7.34)
+        .to("#wipe2", { x: "110%", duration: .42, ease: "power4.out" }, 7.34)
+        .from("#s3 .kicker", { y: -40, opacity: 0, duration: .42, ease: "power2.out" }, 7.55)
+        .from("#s3 .headline", { scale: .86, opacity: 0, duration: .58, ease: "expo.out" }, 7.7)
+        .from("#s3 .voice-command", { x: -120, opacity: 0, duration: .58, ease: "back.out(1.2)" }, 8.08)
+        .from("#s3 .bar", { scaleY: .08, opacity: 0, duration: .42, stagger: .035, ease: "power4.out" }, 8.46)
+        .from("#s3 .body", { x: 70, opacity: 0, duration: .48, ease: "sine.out" }, 8.82)
+        .to("#s3 .bar", { scaleY: .45, duration: .55, stagger: { each: .045, yoyo: true, repeat: 5 }, ease: "sine.inOut" }, 9.0);
+
+      tl.to("#wipe3", { x: "0%", duration: .24, ease: "power4.in" }, 10.9)
+        .set("#s3", { opacity: 0 }, 11.16)
+        .set("#s4", { opacity: 1 }, 11.16)
+        .to("#wipe3", { x: "110%", duration: .46, ease: "expo.out" }, 11.16)
+        .from("#s4 .final-logo", { scale: .72, rotation: -5, opacity: 0, duration: .56, ease: "back.out(1.45)" }, 11.38)
+        .from("#s4 .kicker", { x: 65, opacity: 0, duration: .38, ease: "power3.out" }, 11.54)
+        .from("#s4 .headline", { y: 70, opacity: 0, duration: .6, ease: "expo.out" }, 11.72)
+        .from("#s4 .auth-card", { y: 96, opacity: 0, duration: .56, ease: "power2.out" }, 12.28)
+        .from("#s4 .auth-line", { x: -42, opacity: 0, duration: .3, stagger: .11, ease: "power4.out" }, 12.48)
+        .to("#s4 .final-logo", { y: -10, duration: 1.6, ease: "sine.inOut" }, 12.9)
+        .to("#fade", { opacity: 1, duration: .45, ease: "power2.in" }, 14.55);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

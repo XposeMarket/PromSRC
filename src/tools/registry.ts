@@ -30,6 +30,11 @@ import {
   clearSharedToolExecutionContext,
   setSharedToolExecutionContext,
 } from './execution-context.js';
+import { findCommandPermissionGrant } from '../gateway/command-permissions.js';
+import { commandMatchesAllowlist, commandMatchesTrustedDev } from './shell.js';
+import { getConfig } from '../config/config.js';
+import { addSessionAllowedPath, addPersistentAllowedPath } from '../gateway/path-permissions.js';
+import { getApprovalQueue } from '../gateway/verification-flow.js';
 
 export interface Tool {
   name: string;
@@ -421,7 +426,7 @@ class ToolRegistry {
 
     // ── READ tier: just execute ────────────────────────────────────────────
     if (tier === 'read') {
-      return this._runTool(tool, args, toolName);
+      return this._runToolWithPathApproval(tool, args, toolName);
     }
 
     // ── PROPOSE tier: return a draft without executing ────────────────────
@@ -473,6 +478,68 @@ class ToolRegistry {
       });
 
       return proposalResult;
+    }
+
+    // ── COMMIT tier: check allowlist + persisted grants before requesting approval ──
+    const rawCmd = String(args?.command ?? args?.cmd ?? '').trim();
+    if (rawCmd) {
+      // 1. Config allowed_commands (glob/prefix matching)
+      const shellPerms = (getConfig().getConfig() as any)?.tools?.permissions?.shell;
+      const allowedCmds: string[] = shellPerms?.allowed_commands ?? [];
+      if (commandMatchesAllowlist(rawCmd, allowedCmds)) {
+        appendAuditEntry({
+          sessionId: _currentSessionId,
+          agentId: _currentAgentId,
+          actionType: 'approval_resolved',
+          toolName,
+          toolArgs: args,
+          policyTier: 'commit',
+          approvalStatus: 'auto_allowed',
+          resultSummary: 'Allowed by config allowed_commands',
+        });
+        return this._runToolWithPathApproval(tool, args, toolName);
+      }
+
+      // 2. Persisted session/always grant
+      const workspacePath = getConfig().getWorkspacePath();
+      const grant = findCommandPermissionGrant({
+        sessionId: _currentSessionId,
+        toolName,
+        action: rawCmd,
+        target: String(args?.cwd ?? workspacePath),
+        targetKind: 'command_cwd',
+        workspaceRoot: workspacePath,
+        riskScore: policy.riskScore,
+      });
+      if (grant) {
+        appendAuditEntry({
+          sessionId: _currentSessionId,
+          agentId: _currentAgentId,
+          actionType: 'approval_resolved',
+          toolName,
+          toolArgs: args,
+          policyTier: 'commit',
+          approvalStatus: 'auto_allowed',
+          resultSummary: `Allowed by ${grant.scope} grant ${grant.id}`,
+        });
+        return this._runToolWithPathApproval(tool, args, toolName);
+      }
+
+      // 3. Lite mode + trusted dev commands — no approval needed
+      const approvalMode = String((getConfig().getConfig() as any)?.tools?.permissions?.shell?.approval_mode || 'default');
+      if (approvalMode === 'lite' && commandMatchesTrustedDev(rawCmd)) {
+        appendAuditEntry({
+          sessionId: _currentSessionId,
+          agentId: _currentAgentId,
+          actionType: 'approval_resolved',
+          toolName,
+          toolArgs: args,
+          policyTier: 'commit',
+          approvalStatus: 'auto_allowed',
+          resultSummary: 'Auto-allowed: trusted dev command in lite mode',
+        });
+        return this._runToolWithPathApproval(tool, args, toolName);
+      }
     }
 
     // ── COMMIT tier: route to existing verification flow ──────────────────
@@ -535,6 +602,58 @@ class ToolRegistry {
     });
 
     return result;
+  }
+
+  /**
+   * Run a tool and, if it signals _needsPathApproval, queue a path approval
+   * and retry once the user grants access (session or always).
+   */
+  private async _runToolWithPathApproval(tool: Tool, args: any, toolName: string): Promise<ToolResult> {
+    const result = await this._runTool(tool, args, toolName);
+    if (result.success || !result.data?._needsPathApproval) return result;
+
+    const requestedPath = String(result.data.requestedPath || '');
+    if (!requestedPath) return result;
+
+    const approvalQueue = getApprovalQueue();
+    const approval = approvalQueue.create({
+      sessionId: _currentSessionId,
+      agentId: _currentAgentId,
+      originType: 'main_chat',
+      toolName,
+      toolArgs: args,
+      approvalKind: 'path_access',
+      pathAccess: { requestedPath },
+      action: `Allow access to path outside workspace: ${requestedPath}`,
+      reason: `"${toolName}" needs to run in a directory outside the configured workspace paths. Approve to allow Prometheus to continue working there.`,
+      policyTier: 'commit',
+      riskScore: 3,
+      affectedSystems: [`filesystem:${requestedPath}`],
+    });
+
+    try {
+      const { broadcastWS } = await import('../gateway/comms/broadcaster.js');
+      broadcastWS({
+        type: 'approval_created',
+        sessionId: _currentSessionId,
+        approvalId: approval.id,
+        summary: approval.action,
+        toolName,
+        approval,
+      });
+    } catch { /* best-effort */ }
+
+    const approved = await new Promise<boolean>((resolve) => {
+      approvalQueue.onResolve(approval.id, resolve);
+    });
+
+    if (!approved) {
+      return { success: false, error: `Path access denied: "${requestedPath}"` };
+    }
+
+    // Path was added to session/persistent store by the settings router before
+    // firing the approval callback — retry the tool now that the path is allowed.
+    return this._runTool(tool, args, toolName);
   }
 
   /** Internal: actually run the tool, wrap errors */

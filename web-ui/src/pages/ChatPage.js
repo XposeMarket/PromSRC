@@ -34,9 +34,30 @@ import { installProcessRunCardHandlers, renderProcessRunCard } from '../componen
 const API = window.API || '';
 const CHAT_SESSIONS_KEY = window.CHAT_SESSIONS_KEY || 'prometheus_chat_sessions_v1';
 const AGENT_SESSION_KEY = window.AGENT_SESSION_KEY || 'prometheus_agent_session_id';
+const ACTIVE_CHAT_SESSION_KEY = window.ACTIVE_CHAT_SESSION_KEY || 'prometheus_active_chat_session_id';
 const THEME_KEY = window.THEME_KEY || 'prometheus_theme';
 const MAX_QUEUED_PROMPTS = window.MAX_QUEUED_PROMPTS || 8;
 const AGENT_STATUS = window.AGENT_STATUS || { ACTIVE: 'active', COMPLETED: 'completed', PAUSED: 'paused' };
+const EMPTY_CHAT_STARTER_PROMPTS = [
+  {
+    title: 'Start a new build',
+    body: 'Shape a page, app mockup, workflow, or feature plan inside the current project.',
+    prompt: 'Help me start a new build in this project. Ask only for the key missing details, then turn it into a concrete implementation plan.',
+  },
+  {
+    title: 'Review recent momentum',
+    body: 'Look across recent Prometheus work and suggest the next highest-leverage move.',
+    prompt: 'Review the recent Prometheus project momentum and suggest the single highest-leverage next step, with a short plan for how to execute it.',
+  },
+  {
+    title: 'Turn an idea into a plan',
+    body: 'Take a rough thought and convert it into a scoped build, research, or agent task.',
+    prompt: 'Help me turn a rough idea into a clear plan. Start by making the idea concrete, then propose the smallest useful first version.',
+  },
+];
+let emptyChatBrainCards = [];
+let emptyChatBrainCardsLoaded = false;
+let emptyChatBrainCardsLoading = false;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -172,11 +193,29 @@ let voicePendingProcessing = false;
 function generateSessionId() {
   return (crypto?.randomUUID?.() || ('sess_' + Math.random().toString(36).slice(2)));
 }
+function rememberActiveChatSessionId(id) {
+  const sid = String(id || '').trim();
+  if (!sid) return '';
+  try { localStorage.setItem(ACTIVE_CHAT_SESSION_KEY, sid); } catch {}
+  return sid;
+}
+function recallActiveChatSessionId() {
+  try {
+    return String(
+      localStorage.getItem(ACTIVE_CHAT_SESSION_KEY)
+        || localStorage.getItem(AGENT_SESSION_KEY)
+        || ''
+    ).trim();
+  } catch {
+    return '';
+  }
+}
 function setAgentSessionId(id) {
   const next = String(id || '').trim() || generateSessionId();
   window.agentSessionId = next;
   window.agentSessionId = next;
   localStorage.setItem(AGENT_SESSION_KEY, next);
+  rememberActiveChatSessionId(next);
   return next;
 }
 
@@ -256,6 +295,177 @@ async function fetchJsonWithTimeout(url, timeoutMs = 2500) {
   }
 }
 
+const chatContextWindowState = {
+  loading: false,
+  open: false,
+  lastSessionId: '',
+  lastFetchAt: 0,
+  refreshTimer: 0,
+  data: null,
+};
+
+function getChatContextWindowSessionId() {
+  return String(window.activeChatSessionId || window.agentSessionId || '').trim();
+}
+
+function formatContextTokenCount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return `${m >= 10 ? m.toFixed(0) : m.toFixed(1)}m`;
+  }
+  if (n >= 1_000) {
+    const k = n / 1_000;
+    return `${k >= 100 ? k.toFixed(0) : k.toFixed(1)}k`;
+  }
+  return String(Math.round(n));
+}
+
+function setChatContextWindowLoading(label = 'Loading...') {
+  const total = document.getElementById('chat-context-window-total');
+  if (total) total.textContent = label;
+}
+
+function renderChatContextWindow(data = chatContextWindowState.data) {
+  const btn = document.getElementById('chat-context-window-btn');
+  const fill = document.getElementById('chat-context-window-fill');
+  const total = document.getElementById('chat-context-window-total');
+  const messages = document.getElementById('chat-context-window-messages');
+  const tools = document.getElementById('chat-context-window-tools');
+  const trigger = document.getElementById('chat-context-window-trigger');
+  const stored = document.getElementById('chat-context-window-stored');
+  const process = document.getElementById('chat-context-window-process');
+  const rawTools = document.getElementById('chat-context-window-raw-tools');
+  const usage = document.getElementById('chat-context-window-usage');
+  const toolSchema = document.getElementById('chat-context-window-tool-schema');
+  if (!btn) return;
+
+  if (!data || data.success === false) {
+    btn.style.setProperty('--chat-context-window-deg', '0deg');
+    if (fill) fill.style.width = '0%';
+    if (total) total.textContent = 'Unavailable';
+    if (messages) messages.textContent = '-';
+    if (tools) tools.textContent = '-';
+    if (trigger) trigger.textContent = '-';
+    if (stored) stored.textContent = '-';
+    if (process) process.textContent = '-';
+    if (rawTools) rawTools.textContent = '-';
+    if (usage) usage.textContent = '-';
+    if (toolSchema) toolSchema.textContent = '-';
+    return;
+  }
+
+  const current = Math.max(0, Number(data.currentInputTokens || 0));
+  const windowTokens = Math.max(0, Number(data.contextWindowTokens || 0));
+  const storedThread = data.storedThread || {};
+  const modelUsage = data.modelUsage || {};
+  const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
+  btn.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
+  btn.title = `Next model call estimate: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens`;
+  if (fill) fill.style.width = `${percent.toFixed(1)}%`;
+  if (total) total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)`;
+  if (messages) messages.textContent = `${formatContextTokenCount(data.messageTokens)} tokens`;
+  if (tools) tools.textContent = `${formatContextTokenCount(data.toolObservationTokens)} tokens`;
+  if (trigger) trigger.textContent = `${formatContextTokenCount(data.compactionTriggerTokens)} tokens`;
+  if (stored) stored.textContent = `${formatContextTokenCount(storedThread.fullStoredThreadTokens)} tokens`;
+  if (process) process.textContent = `${formatContextTokenCount(storedThread.processEntryTokens)} tokens`;
+  if (rawTools) rawTools.textContent = `${formatContextTokenCount(storedThread.rawToolResultTokens)} tokens`;
+  if (usage) usage.textContent = `${formatContextTokenCount(modelUsage.totalTokens)} tokens`;
+  if (toolSchema) toolSchema.textContent = `${formatContextTokenCount(modelUsage.estimatedToolSchemaTokens)} tokens`;
+}
+
+async function refreshChatContextWindow(options = {}) {
+  const sid = getChatContextWindowSessionId();
+  const btn = document.getElementById('chat-context-window-btn');
+  if (!btn) return null;
+  if (!sid) {
+    chatContextWindowState.data = null;
+    renderChatContextWindow(null);
+    return null;
+  }
+  const force = options.force === true;
+  const now = Date.now();
+  if (chatContextWindowState.loading) return chatContextWindowState.data;
+  if (!force && chatContextWindowState.lastSessionId === sid && now - chatContextWindowState.lastFetchAt < 3500) {
+    return chatContextWindowState.data;
+  }
+
+  chatContextWindowState.loading = true;
+  chatContextWindowState.lastSessionId = sid;
+  if (!chatContextWindowState.data) setChatContextWindowLoading();
+  try {
+    const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000);
+    chatContextWindowState.lastFetchAt = Date.now();
+    chatContextWindowState.data = data && data.success !== false ? data : null;
+    renderChatContextWindow(chatContextWindowState.data);
+    return chatContextWindowState.data;
+  } finally {
+    chatContextWindowState.loading = false;
+  }
+}
+
+function scheduleChatContextWindowRefresh(delayMs = 450) {
+  if (chatContextWindowState.refreshTimer) clearTimeout(chatContextWindowState.refreshTimer);
+  chatContextWindowState.refreshTimer = setTimeout(() => {
+    chatContextWindowState.refreshTimer = 0;
+    refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function toggleChatContextWindowPopover(event) {
+  if (event) event.stopPropagation();
+  const popover = document.getElementById('chat-context-window-popover');
+  const btn = document.getElementById('chat-context-window-btn');
+  if (!popover || !btn) return;
+  chatContextWindowState.open = popover.hidden;
+  popover.hidden = !chatContextWindowState.open;
+  btn.setAttribute('aria-expanded', chatContextWindowState.open ? 'true' : 'false');
+  if (chatContextWindowState.open) refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+}
+
+function closeChatContextWindowPopover() {
+  const popover = document.getElementById('chat-context-window-popover');
+  const btn = document.getElementById('chat-context-window-btn');
+  if (popover) popover.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+  chatContextWindowState.open = false;
+}
+
+function toggleVoiceSettingsPopover(event) {
+  if (event) event.stopPropagation();
+  const popover = document.getElementById('voice-settings-popover');
+  const btn = document.getElementById('voice-settings-btn');
+  if (!popover || !btn) return;
+  const nextOpen = !!popover.hidden;
+  popover.hidden = !nextOpen;
+  btn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+}
+
+function closeVoiceSettingsPopover() {
+  const popover = document.getElementById('voice-settings-popover');
+  const btn = document.getElementById('voice-settings-btn');
+  if (popover) popover.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+if (!window.__promChatContextWindowHandlersInstalled) {
+  window.__promChatContextWindowHandlersInstalled = true;
+  document.addEventListener('click', (event) => {
+    const wrap = document.querySelector('.chat-model-switcher-wrap');
+    if (!wrap || !wrap.contains(event.target)) closeChatContextWindowPopover();
+    const voiceWrap = document.querySelector('.voice-settings-wrap');
+    if (!voiceWrap || !voiceWrap.contains(event.target)) closeVoiceSettingsPopover();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeChatContextWindowPopover();
+      closeVoiceSettingsPopover();
+    }
+  });
+  setInterval(() => refreshChatContextWindow().catch(() => {}), 15000);
+}
+
 function makeEmptyStreamState() {
   return {
     streamingAIText: '',
@@ -275,6 +485,9 @@ function makeEmptyStreamState() {
     currentTurnStartIndex: -1,
     activeModelBadge: null,
     pendingApprovals: [],
+    abortRequested: false,
+    abortRequestedAt: 0,
+    abortRequestedSource: '',
     forceAppendAssistantAfterInterruption: false,
   };
 }
@@ -325,6 +538,12 @@ function syncActiveSessionRunState() {
 
 async function requestGatewayMainChatAbort(sessionId = window.activeChatSessionId, source = 'desktop') {
   const sid = String(sessionId || '').trim();
+  const st = getSessionStreamState(sid);
+  if (st) {
+    st.abortRequested = true;
+    st.abortRequestedAt = Date.now();
+    st.abortRequestedSource = String(source || 'desktop');
+  }
   try {
     const result = await api('/api/mobile/commands/stop-now', {
       method: 'POST',
@@ -1674,7 +1893,7 @@ function captureBrowserCanvasControl(reason = 'User clicked into the browser can
   syncBrowserControlCapture(true, {
     owner: 'user',
     reason,
-    statusLabel: mode === 'teach'
+    statusLabel: (mode === 'teach' && isBrowserTeachRecording(state))
       ? 'Teach mode is recording. Stage the next step, then continue it when you are ready.'
       : 'You are controlling the browser.',
     render: true,
@@ -1706,8 +1925,15 @@ function handleCapturedBrowserKeydown(event) {
   if (event?.isComposing) return;
   const normalizedKey = normalizeBrowserForwardedKey(event);
   if (!normalizedKey) return;
-  if (mode === 'teach' && !isBrowserTeachRecording(state)) {
-    if (normalizedKey !== 'Escape') return;
+  // Before "Start Teach" is pressed, forward all keys exactly like copilot mode.
+  if (mode === 'teach' && !isBrowserTeachRecording(state) && normalizedKey === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    releaseBrowserCanvasControl({
+      reason: 'User released browser control with Escape.',
+      statusLabel: 'Browser control returned to Prometheus.',
+    });
+    return;
   }
   if (normalizedKey === 'Escape') {
     event.preventDefault();
@@ -1758,7 +1984,7 @@ function handleCapturedBrowserWheel(event) {
   const state = getBrowserCanvasState();
   const mode = normalizeBrowserInteractionMode(state.interactionMode);
   if (mode !== 'copilot' && mode !== 'teach') return;
-  if (mode === 'teach' && !isBrowserTeachRecording(state)) return;
+  // Before recording starts, scrolling works like copilot navigation.
   if (!state.controlCaptured || state.controlOwner !== 'user') return;
   const point = resolveBrowserCanvasViewportPointFromClient(event?.clientX, event?.clientY);
   if (!point) return;
@@ -2978,7 +3204,9 @@ function inspectBrowserCanvasPoint(event) {
     showToast('Browser connection is reconnecting. Try again in a second.', 'info');
     return;
   }
-  if (mode === 'copilot') {
+  const teach = getBrowserTeachSession(state);
+  // Copilot mode, or teach mode before "Start Teach" — navigate freely like copilot.
+  if (mode === 'copilot' || (mode === 'teach' && !isBrowserTeachRecording(state))) {
     captureBrowserCanvasControl('User clicked into the browser canvas.');
     state.statusLabel = 'Sending click to browser...';
     renderBrowserCanvasSurface();
@@ -2992,7 +3220,6 @@ function inspectBrowserCanvasPoint(event) {
     });
     return;
   }
-  const teach = getBrowserTeachSession(state);
   if (isBrowserTeachRecording(state) && teach.pendingStep) {
     showToast('Continue or discard the current teach step first.', 'info');
     return;
@@ -3946,10 +4173,27 @@ function renderQueuedPromptsPanel() {
   title.textContent = `Queued prompts (${count})`;
   list.innerHTML = queue.map((q, i) => `
     <div class="queued-item">
-      <div class="queued-item-text">${escHtml(getQueuedTurnMessage(q))}${getQueuedTurnFiles(q).length ? `<span class="queued-item-attachments"> +${getQueuedTurnFiles(q).length} file(s)</span>` : ''}</div>
+      <span class="queued-item-index">${i + 1}.</span>
+      <div class="queued-item-text">${escHtml(getQueuedTurnMessage(q))}${getQueuedTurnFiles(q).length ? `<span class="queued-item-attachments">+${getQueuedTurnFiles(q).length}</span>` : ''}</div>
       <div class="queued-item-actions">
-        <button class="queued-item-btn queued-steer-btn" onclick="steerQueuedPrompt(${i})">Steer</button>
-        <button class="queued-item-btn" onclick="removeQueuedPrompt(${i})">Remove</button>
+        <button class="queued-icon-btn queued-steer-btn" onclick="steerQueuedPrompt(${i})" title="Steer into active run" style="width:auto;padding:0 8px;gap:5px;font-size:11.5px;font-weight:700;font-family:Manrope,sans-serif;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          Steer
+        </button>
+        <button class="queued-icon-btn queued-remove-btn" onclick="removeQueuedPrompt(${i})" title="Remove from queue">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </button>
+        <div class="queued-item-menu-wrap">
+          <button class="queued-icon-btn queued-dots-btn" onclick="toggleQueuedPromptMenu(event,${i})" title="More options">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+          </button>
+          <div class="queued-item-popover" id="queued-popover-${i}">
+            <button class="queued-popover-btn" onclick="editQueuedPrompt(${i})">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Edit this prompt
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   `).join('');
@@ -3962,6 +4206,38 @@ function removeQueuedPrompt(index) {
   window.queuedPrompts = queue;
   updateQueuedPromptUI();
 }
+
+function toggleQueuedPromptMenu(event, index) {
+  event.stopPropagation();
+  const popover = document.getElementById(`queued-popover-${index}`);
+  if (!popover) return;
+  const isOpen = popover.classList.contains('open');
+  document.querySelectorAll('.queued-item-popover.open').forEach((p) => p.classList.remove('open'));
+  if (!isOpen) popover.classList.add('open');
+}
+
+function editQueuedPrompt(index) {
+  const queue = getActiveQueuedPrompts();
+  if (!Number.isInteger(index) || index < 0 || index >= queue.length) return;
+  const turn = normalizeQueuedChatTurn(queue[index]);
+  const message = String(turn.message || '').trim();
+  queue.splice(index, 1);
+  window.queuedPrompts = queue;
+  updateQueuedPromptUI();
+  const input = document.getElementById('chat-input');
+  if (input && message) {
+    input.value = message;
+    input.dispatchEvent(new Event('input'));
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.queued-item-menu-wrap')) {
+    document.querySelectorAll('.queued-item-popover.open').forEach((p) => p.classList.remove('open'));
+  }
+});
 
 function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   const sid = String(sessionId || '').trim();
@@ -3988,6 +4264,7 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   sess.history.push({
     role: 'user',
     content: text,
+    attachmentPreviews: Array.isArray(data?.attachmentPreviews) && data.attachmentPreviews.length ? data.attachmentPreviews : undefined,
     timestamp: Date.now(),
     channel: 'web',
     channelLabel: 'steer',
@@ -4015,21 +4292,28 @@ async function steerQueuedPrompt(index) {
   const turn = normalizeQueuedChatTurn(queue[index]);
   const message = String(turn.message || '').trim();
   if (!message) return;
-  if (getQueuedTurnFiles(turn).length) {
-    showToast('Steer needs text only for now', 'Remove attached files or let this queued prompt run next.', 'info');
-    return;
-  }
   const sessionId = String(window.activeChatSessionId || '').trim();
   if (!sessionId || !isSessionThinking(sessionId)) {
     showToast('No active run to steer', 'This prompt can still run normally when the chat is idle.', 'info');
     return;
   }
   try {
+    const queuedFiles = getQueuedTurnFiles(turn);
+    let steerMessage = message;
+    let attachmentPreviews = [];
+    if (queuedFiles.length) {
+      addSessionProcessEntry(sessionId, 'info', `Uploading ${queuedFiles.length} queued steer file(s).`, { actor: 'Chat Steer' });
+      const uploadResults = await uploadStagedFilesToCanvas(queuedFiles);
+      const fileContextNote = buildFileContextNote(uploadResults);
+      steerMessage = fileContextNote ? message + fileContextNote : message;
+      attachmentPreviews = uploadResultsToAttachmentPreviews(uploadResults);
+    }
     const data = await api('/api/chat/steer', {
       method: 'POST',
       body: {
         sessionId,
-        message,
+        message: steerMessage,
+        attachmentPreviews: attachmentPreviews.length ? attachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage) : undefined,
         source: 'web_queue_button',
       },
       timeoutMs: 15000,
@@ -4037,8 +4321,8 @@ async function steerQueuedPrompt(index) {
     queue.splice(index, 1);
     window.queuedPrompts = queue;
     updateQueuedPromptUI();
-    appendChatSteerWorkflowSplit(sessionId, message, data);
-    showToast('Steer sent', 'Prometheus will fold it into the active run.', 'success', 1800);
+    appendChatSteerWorkflowSplit(sessionId, steerMessage, { ...data, attachmentPreviews });
+    showToast('Steer sent', queuedFiles.length ? 'Files uploaded and folded into the active run.' : 'Prometheus will fold it into the active run.', 'success', 1800);
   } catch (err) {
     addSessionProcessEntry(sessionId, 'error', `Steer failed: ${String(err?.message || err)}`, { actor: 'Chat Steer' });
     showToast('Steer failed', String(err?.message || err), 'error');
@@ -4062,13 +4346,8 @@ function updateQueuedPromptUI() {
   window.queuedPrompts = queue;
   const count = queue.length;
   if (badge) {
-    if (count > 0) {
-      badge.style.display = 'inline';
-      badge.textContent = `Queued: ${count}`;
-    } else {
-      badge.style.display = 'none';
-      badge.textContent = '';
-    }
+    badge.style.display = 'none';
+    badge.textContent = '';
   }
   if (sendBtn) {
     sendBtn.disabled = false;
@@ -4334,9 +4613,113 @@ function isCommandSessionTitle(value) {
   return /^\/[a-z][\w-]*(?:@\w+)?(?:\s|$)/i.test(String(value || '').trim());
 }
 
+function normalizeSessionTitleText(value) {
+  return String(value || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[#*_~>[\]()"']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isGreetingOnlySessionMessage(text) {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return true;
+  return /^(?:hey|hi|hello|yo|sup|gm|good\s+(?:morning|afternoon|evening)|howdy|hiya|heya|thanks|thank you|ok|okay|cool|nice|great|test|testing|new chat|greeting)[\s!.,-]*(?:prom|prometheus)?[\s!.,-]*(?:how(?:'|’)s it going\??|what(?:'|’)s up\??)?$/i.test(t);
+}
+
+function titleCaseSessionWord(word, index) {
+  const lower = String(word || '').toLowerCase();
+  const keepLower = new Set(['a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'into', 'of', 'on', 'or', 'the', 'to', 'via', 'with']);
+  const upper = new Set(['ai', 'api', 'ci', 'css', 'html', 'ui', 'ux', 'llm', 'mcp', 'pwa', 'qr', 'sms', 'seo']);
+  if (upper.has(lower)) return lower.toUpperCase();
+  if (index > 0 && keepLower.has(lower)) return lower;
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+function polishSessionTitle(raw) {
+  let text = normalizeSessionTitleText(raw)
+    .replace(/^(?:please\s+)?(?:can|could|would)\s+you\s+/i, '')
+    .replace(/^(?:please\s+)?(?:can|could|would)\s+we\s+/i, '')
+    .replace(/^(?:please\s+)?(?:help\s+me\s+|help\s+us\s+|help\s+)/i, '')
+    .replace(/^(?:please\s+)?(?:look\s+into|check\s+out|take\s+a\s+look\s+at|investigate|review|fix|update|add|create|make|build|implement|debug)\s+/i, (match) => {
+      const verb = match.replace(/please\s+/i, '').trim();
+      return verb.replace(/\s+/g, ' ') + ' ';
+    })
+    .replace(/\b(?:please|pls|thanks|thank you)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  text = text
+    .replace(/\b(?:i think|maybe|kind of|sort of|basically|actually)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const words = text.split(/\s+/).filter(Boolean);
+  const stopAt = words.findIndex((word, index) => index >= 3 && /^(?:because|where|while|when|after|before|so|and|but|however)$/i.test(word));
+  const kept = (stopAt > 0 ? words.slice(0, stopAt) : words).slice(0, 7);
+  const title = kept.map(titleCaseSessionWord).join(' ').replace(/[.,:;!?-]+$/g, '').trim();
+  return title.length > 56 ? `${title.slice(0, 53).trim()}...` : title;
+}
+
 function makeSessionTitle(history) {
-  const firstUser = (history || []).find(m => m.role === 'user' && !isSessionTitleCommandMessage(m));
-  return firstUser ? String(firstUser.content || '').trim().slice(0, 42) || 'New chat' : 'New chat';
+  const earlyUsers = (Array.isArray(history) ? history : [])
+    .filter(m => m?.role === 'user' && !isSessionTitleCommandMessage(m) && !isInternalChatMessage(m))
+    .slice(0, 3);
+  const candidate = earlyUsers
+    .map(m => normalizeSessionTitleText(m.content))
+    .find(text => text.length >= 8 && !isGreetingOnlySessionMessage(text));
+  return candidate ? polishSessionTitle(candidate) || 'New chat' : 'New chat';
+}
+
+function shouldAutoRefreshSessionTitle(session, history) {
+  if (session?.autoTitleLocked === true) return false;
+  const current = String(session?.title || '').trim();
+  if (!current || current === 'New chat' || isCommandSessionTitle(current)) return true;
+  const firstUser = (Array.isArray(history) ? history : [])
+    .find(m => m?.role === 'user' && !isSessionTitleCommandMessage(m) && !isInternalChatMessage(m));
+  const firstUserTitle = normalizeSessionTitleText(firstUser?.content).slice(0, 60).trim();
+  return !!firstUserTitle && current === firstUserTitle;
+}
+
+function applyAutoSessionTitleOnce(session, history) {
+  if (!session || !shouldAutoRefreshSessionTitle(session, history)) {
+    if (session && session.autoTitleLocked !== true) {
+      const current = String(session.title || '').trim();
+      if (current && current !== 'New chat' && !isCommandSessionTitle(current) && !isGreetingOnlySessionMessage(current)) {
+        session.autoTitleLocked = true;
+      }
+    }
+    return false;
+  }
+  const nextTitle = makeSessionTitle(history);
+  if (!nextTitle || nextTitle === 'New chat') return false;
+  session.title = nextTitle;
+  session.autoTitleLocked = true;
+  return true;
+}
+
+function getChatMessageTimestamp(msg) {
+  const ts = Number(msg?.timestamp || 0);
+  return Number.isFinite(ts) && ts > 0 ? ts : 0;
+}
+
+function getSessionLastMessageAt(session) {
+  const explicit = Number(session?.lastMessageAt || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const history = Array.isArray(session?.history) ? session.history : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    const role = String(msg?.role || '').toLowerCase();
+    if (role !== 'user' && role !== 'assistant' && role !== 'ai') continue;
+    const content = String(msg?.content || '').trim();
+    if (!content || isInternalChatMessage(msg)) continue;
+    const ts = getChatMessageTimestamp(msg);
+    if (ts > 0) return ts;
+  }
+  return Number(session?.createdAt || session?.updatedAt || session?.lastActiveAt || 0) || 0;
 }
 
 function createEmptyChatSession(id = generateSessionId()) {
@@ -4344,6 +4727,7 @@ function createEmptyChatSession(id = generateSessionId()) {
   return {
     id,
     title: 'New chat',
+    autoTitleLocked: false,
     history: [],
     processLog: [],
     creativeMode: null,
@@ -4361,6 +4745,7 @@ function createEmptyChatSession(id = generateSessionId()) {
     mainChatGoalHistory: [],
     createdAt: now,
     updatedAt: now,
+    lastMessageAt: 0,
   };
 }
 
@@ -4531,10 +4916,32 @@ function waitForSessionIdle(sessionId, timeoutMs = 1800) {
   });
 }
 
+function findRecentVoiceWorkflowUserIndex(history, transcript, maxAgeMs = 180000) {
+  const text = String(transcript || '').replace(/\s+/g, ' ').trim();
+  if (!text || !Array.isArray(history)) return -1;
+  const now = Date.now();
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const msg = history[i];
+    if (!msg || msg.role !== 'user') continue;
+    const content = String(msg.content || '').replace(/\s+/g, ' ').trim();
+    if (content !== text) continue;
+    const ts = Number(msg.timestamp || 0);
+    if (Number.isFinite(ts) && ts > 0 && now - ts > maxAgeMs) continue;
+    if (msg.workflowGroupId || msg.voiceInterruptionEventId || /^voice_/i.test(String(msg.channel || ''))) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
   const sid = String(sessionId || '').trim();
   const sess = getChatSessionById(sid);
   if (!sess) return false;
+  const eventId = String(data?.eventId || data?.steerEventId || '').trim();
+  if (eventId && Array.isArray(sess.history) && sess.history.some((msg) => String(msg?.voiceInterruptionEventId || '') === eventId)) {
+    return data?.classification?.shouldAbortOriginalRun === true;
+  }
   const shouldAbort = data?.classification?.shouldAbortOriginalRun === true;
   if (!shouldAbort && data?.steerApplied === true) {
     return appendChatSteerWorkflowSplit(sid, transcript || '(voice interruption)', {
@@ -4560,6 +4967,7 @@ function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
       workflowGroupId: groupId,
       workflowPart: 'before_interruption',
       workflowLabel: 'Tool stream before interruption',
+      voiceInterruptionEventId: eventId || undefined,
     });
   }
   sess.history.push({
@@ -4571,19 +4979,27 @@ function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
     workflowGroupId: groupId,
     workflowPart: 'interruption',
     workflowLabel: `Interruption: ${intent}`,
+    voiceInterruptionEventId: eventId || undefined,
   });
-  const reply = String(data?.voiceReply || (shouldAbort ? 'Stopped.' : 'Got it.')).trim();
-  sess.history.push({
-    role: 'assistant',
-    content: shouldAbort
-      ? `${reply}\n\n[Stopped by user]\n\nVoice interruption stopped the active Prometheus worker. Process log preserved.`
-      : `${reply}\n\nTool stream continues after interruption.`,
-    timestamp: Date.now(),
-    processEntries: sess.processLog.slice(startIndex),
-    workflowGroupId: groupId,
-    workflowPart: shouldAbort ? 'abort_response' : 'interruption_response',
-    workflowLabel: shouldAbort ? 'Abort response' : 'Interruption response',
-  });
+  const reply = String(data?.voiceReply || '').trim();
+  const responseEntries = Array.isArray(data?.processEntries) && data.processEntries.length
+    ? data.processEntries
+    : sess.processLog.slice(startIndex);
+  if (reply || shouldAbort) {
+    sess.history.push({
+      role: 'assistant',
+      content: [
+        reply,
+        shouldAbort ? '[Stopped by user]\n\nVoice interruption stopped the active Prometheus worker. Process log preserved.' : '',
+      ].filter(Boolean).join('\n\n'),
+      timestamp: Date.now(),
+      processEntries: responseEntries,
+      workflowGroupId: groupId,
+      workflowPart: shouldAbort ? 'abort_response' : 'interruption_response',
+      workflowLabel: shouldAbort ? 'Abort response' : 'Interruption response',
+      voiceInterruptionEventId: eventId || undefined,
+    });
+  }
   if (!shouldAbort && st) st.forceAppendAssistantAfterInterruption = true;
   persistSession(sid);
   if (window.activeChatSessionId === sid) {
@@ -4593,14 +5009,20 @@ function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
   return shouldAbort;
 }
 
+const _MSG_ICON_COPY = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`;
+const _MSG_ICON_PEN = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22H21"/><path d="M15 2a2.121 2.121 0 0 1 3 3L5 17l-4 1 1-4z"/></svg>`;
+const _MSG_ICON_FORK = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="2"/><circle cx="5" cy="20" r="2"/><circle cx="19" cy="20" r="2"/><path d="M12 6v5l-5.5 7M12 11l5.5 7"/></svg>`;
+const _MSG_ICON_PREV = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>`;
+const _MSG_ICON_NEXT = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
+
 function renderMessageActions(msg, originalIndex) {
   const isUser = msg?.role === 'user';
   const copyTitle = isUser ? 'Copy prompt' : 'Copy response';
   const editOrFork = isUser
-    ? `<button class="msg-action-btn" type="button" title="Edit prompt" onclick="startEditUserMessage(${originalIndex}, event)"><iconify-icon icon="solar:pen-2-linear" width="14" height="14"></iconify-icon></button>`
-    : `<button class="msg-action-btn" type="button" title="Fork conversation" onclick="forkConversationFromAssistantMessage(${originalIndex}, event)"><iconify-icon icon="solar:branching-paths-up-linear" width="14" height="14"></iconify-icon></button>`;
+    ? `<button class="msg-action-btn" type="button" title="Edit prompt" onclick="startEditUserMessage(${originalIndex}, event)">${_MSG_ICON_PEN}</button>`
+    : `<button class="msg-action-btn" type="button" title="Fork conversation" onclick="forkConversationFromAssistantMessage(${originalIndex}, event)">${_MSG_ICON_FORK}</button>`;
   return `<div class="msg-actions">
-    <button class="msg-action-btn" type="button" title="${copyTitle}" onclick="copyChatMessage(${originalIndex}, event)"><iconify-icon icon="solar:copy-linear" width="14" height="14"></iconify-icon></button>
+    <button class="msg-action-btn" type="button" title="${copyTitle}" onclick="copyChatMessage(${originalIndex}, event)">${_MSG_ICON_COPY}</button>
     ${editOrFork}
     ${isUser ? renderPromptVariantNav(originalIndex) : ''}
   </div>`;
@@ -4611,9 +5033,9 @@ function renderPromptVariantNav(originalIndex) {
   if (variants.length < 2) return '';
   const active = getPromptVariantActiveIndex(originalIndex);
   return `<div class="msg-variant-nav" title="Prompt variants">
-    <button class="msg-action-btn" type="button" title="Previous variant" ${active <= 0 ? 'disabled' : ''} onclick="switchPromptVariant(${originalIndex}, ${active - 1}, event)"><iconify-icon icon="solar:alt-arrow-left-linear" width="14" height="14"></iconify-icon></button>
+    <button class="msg-action-btn" type="button" title="Previous variant" ${active <= 0 ? 'disabled' : ''} onclick="switchPromptVariant(${originalIndex}, ${active - 1}, event)">${_MSG_ICON_PREV}</button>
     <span>${active + 1}/${variants.length}</span>
-    <button class="msg-action-btn" type="button" title="Next variant" ${active >= variants.length - 1 ? 'disabled' : ''} onclick="switchPromptVariant(${originalIndex}, ${active + 1}, event)"><iconify-icon icon="solar:alt-arrow-right-linear" width="14" height="14"></iconify-icon></button>
+    <button class="msg-action-btn" type="button" title="Next variant" ${active >= variants.length - 1 ? 'disabled' : ''} onclick="switchPromptVariant(${originalIndex}, ${active + 1}, event)">${_MSG_ICON_NEXT}</button>
   </div>`;
 }
 
@@ -4634,7 +5056,8 @@ function isInternalChatSession(session) {
 
 function isInternalChatMessage(msg) {
   const text = String(msg?.content || '').trim();
-  return /^\[BACKGROUND_TASK_RESULT\b/i.test(text);
+  return /^\[BACKGROUND_TASK_RESULT\b/i.test(text)
+    || /^Restart Context Packet\b/i.test(text);
 }
 
 function setChatSessions(next) {
@@ -4649,18 +5072,30 @@ function setChatSessions(next) {
 }
 
 function normalizeStoredSession(session) {
-  const history = stabilizeChatHistoryOrder(
+  const history = reconcileChatHistoryAfterMerge(
     collapseDuplicateAssistantMessages(
-      Array.isArray(session?.history) ? session.history.filter((msg) => !isInternalChatMessage(msg)) : []
+      normalizeChatHistoryTimestamps(Array.isArray(session?.history) ? session.history.filter((msg) => !isInternalChatMessage(msg)) : [])
     )
   );
-  const title = isCommandSessionTitle(session?.title)
-    ? makeSessionTitle(history)
-    : session?.title;
+  const normalizedTitleSession = {
+    title: session?.title,
+    autoTitleLocked: session?.autoTitleLocked === true,
+  };
+  applyAutoSessionTitleOnce(normalizedTitleSession, history);
+  const title = normalizedTitleSession.title || 'New chat';
+  // If processLog was cleared by a localStorage quota fallback but history messages still carry
+  // their processEntries, rebuild the flat processLog from those entries so the process log
+  // panel is not empty on the next page load.
+  const existingProcessLog = Array.isArray(session?.processLog) ? session.processLog : [];
+  const processLog = existingProcessLog.length > 0
+    ? existingProcessLog
+    : history.flatMap((m) => processEntriesForMessage(m));
   return {
     ...session,
     title,
+    autoTitleLocked: normalizedTitleSession.autoTitleLocked === true,
     history,
+    processLog,
     creativeMode: normalizeCreativeMode(session?.creativeMode),
     canvasProjectRoot: normalizeCanvasPath(session?.canvasProjectRoot) || null,
     canvasProjectLabel: session?.canvasProjectLabel || null,
@@ -4696,6 +5131,7 @@ function sessionStubFromServer(s) {
     mainChatGoal: s.mainChatGoal || null,
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
+    lastMessageAt: s.lastMessageAt || s.lastActiveAt || s.createdAt || Date.now(),
     source: channel !== 'web' ? channel : undefined,
     automated: channel !== 'web',
     _needsServerLoad: true,
@@ -4714,10 +5150,14 @@ function mergeServerSessionSummaries(summaries) {
     if (existing) {
       const serverUpdatedAt = Number(serverStub.updatedAt || 0);
       const localUpdatedAt = Number(existing.updatedAt || existing.createdAt || 0);
+      const serverLastMessageAt = Number(serverStub.lastMessageAt || 0);
+      const localLastMessageAt = Number(existing.lastMessageAt || getSessionLastMessageAt(existing) || 0);
       Object.assign(existing, {
-        title: serverStub.title || existing.title,
+        title: existing.autoTitleLocked === true ? existing.title : (serverStub.title || existing.title),
+        autoTitleLocked: existing.autoTitleLocked === true || serverStub.autoTitleLocked === true,
         createdAt: existing.createdAt || serverStub.createdAt,
         updatedAt: Math.max(localUpdatedAt, serverUpdatedAt) || serverStub.updatedAt,
+        lastMessageAt: Math.max(localLastMessageAt, serverLastMessageAt) || existing.lastMessageAt || serverStub.lastMessageAt || 0,
         source: serverStub.source || existing.source,
         automated: existing.automated || serverStub.automated,
         creativeMode: existing.creativeMode ?? serverStub.creativeMode,
@@ -4726,7 +5166,9 @@ function mergeServerSessionSummaries(summaries) {
         canvasProjectLink: existing.canvasProjectLink || serverStub.canvasProjectLink,
         mainChatGoal: serverStub.mainChatGoal || existing.mainChatGoal || null,
       });
-      if (serverUpdatedAt > localUpdatedAt + 250 || !Array.isArray(existing.history) || existing.history.length === 0) {
+      const hasHistoryButNoProcessLog = Array.isArray(existing.history) && existing.history.length > 0
+        && (!Array.isArray(existing.processLog) || existing.processLog.length === 0);
+      if (serverUpdatedAt > localUpdatedAt + 250 || !Array.isArray(existing.history) || existing.history.length === 0 || hasHistoryButNoProcessLog) {
         existing._needsServerLoad = true;
       }
     } else {
@@ -4734,7 +5176,7 @@ function mergeServerSessionSummaries(summaries) {
       byId.set(String(serverSession.id), serverStub);
     }
   }
-  window.chatSessions.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  window.chatSessions.sort((a, b) => getSessionLastMessageAt(b) - getSessionLastMessageAt(a));
 }
 
 // Fetch a single session's full history from the server and populate the stub.
@@ -4771,21 +5213,28 @@ async function _loadSessionFromServer(id, options = {}) {
     sess.creativeHtmlMotionClip = s.creativeHtmlMotionClip || null;
     sess.mainChatGoal = s.mainChatGoal || null;
     sess.mainChatGoalHistory = Array.isArray(s.mainChatGoalHistory) ? s.mainChatGoalHistory : [];
+    if (s.autoTitleLocked === true && String(s.title || '').trim()) {
+      sess.title = String(s.title || '').trim();
+      sess.autoTitleLocked = true;
+    }
     const channel = String(s.channel || sess.source || '').trim();
     if (channel && channel !== 'web') {
       sess.source = channel;
       sess.automated = true;
     }
-    if (sess.history.length > 0) sess.title = makeSessionTitle(sess.history) || sess.title;
+    applyAutoSessionTitleOnce(sess, sess.history);
     sess.createdAt = s.createdAt || sess.createdAt;
     sess.updatedAt = s.lastActiveAt || sess.updatedAt;
+    sess.lastMessageAt = s.lastMessageAt || getSessionLastMessageAt(sess);
     delete sess._needsServerLoad;
     saveChatSessions();
+    if (window.activeChatSessionId === id) scheduleChatContextWindowRefresh(250);
   } catch {}
 }
 
 async function loadChatSessions() {
   let storedSessions = [];
+  const preferredActiveSessionId = recallActiveChatSessionId();
   try {
     storedSessions = JSON.parse(localStorage.getItem(CHAT_SESSIONS_KEY) || '[]');
   } catch {
@@ -4831,12 +5280,15 @@ async function loadChatSessions() {
             mainChatGoal: s.mainChatGoal || null,
             createdAt: s.createdAt || Date.now(),
             updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
+            lastMessageAt: s.lastMessageAt || s.lastActiveAt || s.createdAt || Date.now(),
             // Preserve channel so _isChannelSession works on stubs
             source: (s.channel && s.channel !== 'web') ? s.channel : undefined,
             automated: !!(s.channel && s.channel !== 'web'),
             _needsServerLoad: true,
           })));
-          window.activeChatSessionId = window.chatSessions[0].id;
+          window.activeChatSessionId = window.chatSessions.some((s) => s.id === preferredActiveSessionId)
+            ? preferredActiveSessionId
+            : window.chatSessions[0].id;
           setAgentSessionId(window.activeChatSessionId);
           saveChatSessions();
           // Eagerly load the active session's history so it renders immediately
@@ -4847,19 +5299,22 @@ async function loadChatSessions() {
     } catch {}
 
     if (!recovered) {
-      const id = generateSessionId();
+      const id = preferredActiveSessionId || generateSessionId();
       window.activeChatSessionId = id;
       setAgentSessionId(id);
       saveChatSessions();
     }
   } else if (!window.activeChatSessionId || !window.chatSessions.some(s => s.id === window.activeChatSessionId)) {
-    window.activeChatSessionId = window.chatSessions[0].id;
+    window.activeChatSessionId = window.chatSessions.some((s) => s.id === preferredActiveSessionId)
+      ? preferredActiveSessionId
+      : window.chatSessions[0].id;
     setAgentSessionId(window.activeChatSessionId);
   }
   if (!window.agentSessionId || window.agentSessionId !== window.activeChatSessionId) setAgentSessionId(window.activeChatSessionId);
   saveChatSessions();
   if (window.activeChatSessionId) await _loadSessionFromServer(window.activeChatSessionId);
   syncActiveChat();
+  scheduleChatContextWindowRefresh(350);
   if (window.activeChatSessionId) catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
 
   // Load terminal sessions from the server
@@ -4870,6 +5325,21 @@ async function loadChatSessions() {
   window.terminalSessionRefreshTimer = setInterval(() => {
     loadTerminalSessions();
   }, 30000);
+
+  // Periodic session list refresh to surface cross-channel sessions missed by WS
+  if (window._sessionListRefreshTimer) clearInterval(window._sessionListRefreshTimer);
+  window._sessionListRefreshTimer = setInterval(async () => {
+    try {
+      const data = await fetchJsonWithTimeout('/api/sessions', 2500);
+      if (data) {
+        const svr = Array.isArray(data.sessions) ? data.sessions : [];
+        if (svr.length > 0) {
+          mergeServerSessionSummaries(svr);
+          if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+        }
+      }
+    } catch {}
+  }, 45000);
 }
 
 function getActiveMainChatGoal() {
@@ -5033,10 +5503,12 @@ function syncActiveChat() {
   renderBrowserCanvasSurface();
   // Instantly refresh pending actions for the new session
   if (typeof window.loadSessionApprovals === 'function') window.loadSessionApprovals();
+  if (sess && !window._sessionThinking?.[sess.id]) restorePendingInlineApprovalsForSession(sess.id).catch(() => {});
   // Sync button/input state for the newly active session
   const activeSessThinking = syncActiveSessionRunState();
   if (typeof window.setButtonState === 'function') window.setButtonState(activeSessThinking);
   updateQueuedPromptUI();
+  scheduleChatContextWindowRefresh(250);
 }
 
 function refreshVisibleChannelsList() {
@@ -5051,7 +5523,7 @@ function persistActiveChat() {
   window.chatSessions[idx].history = window.chatHistory;
   window.chatSessions[idx].processLog = window.processLogEntries;
   window.chatSessions[idx].progressState = window.runtimeProgressState;
-  window.chatSessions[idx].title = makeSessionTitle(window.chatHistory);
+  applyAutoSessionTitleOnce(window.chatSessions[idx], window.chatHistory);
   window.chatSessions[idx].updatedAt = Date.now();
   window.chatSessions[idx].creativeMode = normalizeCreativeMode(window.currentCreativeMode);
   window.chatSessions[idx].canvasProjectRoot = canvasProjectRoot || null;
@@ -5137,6 +5609,7 @@ async function openTerminalSession(id, source = 'terminal') {
         creativeHtmlMotionClip: s.creativeHtmlMotionClip || null,
         createdAt: s.createdAt,
         updatedAt: s.lastActiveAt,
+        lastMessageAt: s.lastMessageAt || getSessionLastMessageAt({ history: (s.history || []), createdAt: s.createdAt, updatedAt: s.lastActiveAt }),
         automated: false,
         source,
       };
@@ -5177,6 +5650,7 @@ function newChatSession() {
   }
   syncActiveChat();
   saveChatSessions();
+  scheduleChatContextWindowRefresh(150);
   // New regular chat always exits project mode
   if (typeof window._maybeClearProjectState === 'function') {
     window._maybeClearProjectState(id);
@@ -5418,31 +5892,6 @@ function updateAgentMode() {
 }
 
 // ---- Chat ----
-function renderThinkBlock(thinking) {
-  if (!thinking || !thinking.trim()) return '';
-  const id = 'think_' + Math.random().toString(36).slice(2);
-  const wordCount = thinking.trim().split(/\s+/).length;
-  return `
-    <div class="think-block">
-      <button class="think-toggle" id="${id}_btn" onclick="toggleThink('${id}')">
-        <span class="think-icon">...</span>
-        <span>Thought process</span>
-        <span style="margin-left:auto;opacity:0.5">${wordCount} words</span>
-      </button>
-      <div class="think-content" id="${id}_body">${escHtml(thinking)}</div>
-    </div>
-  `;
-}
-
-function toggleThink(id) {
-  const btn = document.getElementById(id + '_btn');
-  const body = document.getElementById(id + '_body');
-  if (!btn || !body) return;
-  const open = body.style.display !== 'none' && body.style.display !== '';
-  body.style.display = open ? 'none' : 'block';
-  btn.classList.toggle('open', !open);
-}
-
 function renderReactSteps(steps) {
   if (!steps || steps.length === 0) return '';
   const toolSteps = steps.filter(s => s.action);
@@ -7745,6 +8194,46 @@ function renderAssistantGeneratedVideos(message) {
     </div>`;
 }
 
+function pcScrollRight(btn) {
+  const track = btn.closest('.product-carousel')?.querySelector('[data-carousel]');
+  if (track) track.scrollBy({ left: 268, behavior: 'smooth' });
+}
+
+function renderProductCarousel(msg) {
+  const carousel = msg?.productCarousel;
+  const items = Array.isArray(carousel?.items) ? carousel.items : [];
+  if (!items.length) return '';
+  const title = String(carousel?.title || '');
+  const cards = items.map((item) => {
+    const imgSrc = item.imagePath
+      ? `/api/canvas/download?path=${encodeURIComponent(item.imagePath)}`
+      : (item.imageUrl || '');
+    const stars = item.rating != null
+      ? `<span class="pc-rating">★ ${Number(item.rating).toFixed(1)}</span>`
+      : '';
+    const tag = item.tag ? `<span class="pc-tag">${escHtml(item.tag)}</span>` : '';
+    const price = item.price ? `<span class="pc-price">${escHtml(item.price)}</span>` : '';
+    const desc = item.description ? `<span class="pc-desc"> · ${escHtml(item.description)}</span>` : '';
+    const imgEl = imgSrc
+      ? `<img class="pc-img" src="${escHtml(imgSrc)}" alt="" loading="lazy">`
+      : `<div class="pc-img pc-img-placeholder"></div>`;
+    return `<a class="pc-card" href="${escHtml(item.productUrl)}" target="_blank" rel="noopener noreferrer">
+        <div class="pc-img-wrap">${imgEl}${tag}</div>
+        <strong class="pc-title">${escHtml(item.title)}</strong>
+        <div class="pc-meta">${price}${desc}</div>
+        ${stars}
+      </a>`;
+  }).join('');
+  const arrowBtn = items.length > 2
+    ? `<button class="pc-arrow" onclick="pcScrollRight(this)" aria-label="Scroll right">›</button>`
+    : '';
+  return `<div class="product-carousel">
+    ${title ? `<div class="pc-heading">${escHtml(title)}</div>` : ''}
+    <div class="pc-track" data-carousel>${cards}</div>
+    ${arrowBtn}
+  </div>`;
+}
+
 function renderArtifacts(artifacts) {
   const rows = Array.isArray(artifacts) ? artifacts : [];
   if (!rows.length) return '';
@@ -7794,6 +8283,82 @@ function renderArtifacts(artifacts) {
     `;
   }).join('');
   return `${renderPresentedMediaCards(mediaCards)}${cards ? `<div class="artifact-list">${cards}</div>` : ''}`;
+}
+
+function normalizeFileChangesPayload(fileChanges) {
+  const files = Array.isArray(fileChanges?.files) ? fileChanges.files : [];
+  if (!files.length) return null;
+  const normalizedFiles = files.map((file) => {
+    const pathValue = normalizeCanvasPath(String(file?.path || file?.displayPath || '').trim());
+    const displayPath = String(file?.displayPath || pathValue || '').trim();
+    const status = String(file?.status || 'modified').toLowerCase();
+    return {
+      path: pathValue,
+      displayPath,
+      status: ['added', 'modified', 'deleted', 'renamed'].includes(status) ? status : 'modified',
+      insertions: Math.max(0, Number(file?.insertions) || 0),
+      deletions: Math.max(0, Number(file?.deletions) || 0),
+      binary: file?.binary === true,
+    };
+  }).filter((file) => file.displayPath || file.path);
+  if (!normalizedFiles.length) return null;
+  const summary = fileChanges?.summary && typeof fileChanges.summary === 'object' ? fileChanges.summary : {};
+  return {
+    summary: {
+      fileCount: Math.max(normalizedFiles.length, Number(summary.fileCount) || 0),
+      insertions: Math.max(0, Number(summary.insertions) || normalizedFiles.reduce((sum, file) => sum + file.insertions, 0)),
+      deletions: Math.max(0, Number(summary.deletions) || normalizedFiles.reduce((sum, file) => sum + file.deletions, 0)),
+    },
+    files: normalizedFiles,
+  };
+}
+
+function renderFileChangeRow(file) {
+  const canOpen = file.path && file.status !== 'deleted';
+  const pathArg = encodeInlineJsString(file.path);
+  const labelArg = encodeInlineJsString(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file');
+  const openAttrs = canOpen
+    ? `role="button" tabindex="0" onclick="canvasPresentFile(${pathArg}, ${labelArg})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg})}"`
+    : 'aria-disabled="true"';
+  const statusLabel = file.binary ? 'binary' : file.status;
+  return `
+    <div class="file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}" ${openAttrs}>
+      <div class="file-change-main">
+        <span class="file-change-status ${escHtml(file.status)}">${escHtml(statusLabel)}</span>
+        <span class="file-change-path" title="${escHtml(file.displayPath)}">${escHtml(file.displayPath)}</span>
+      </div>
+      <div class="file-change-counts" aria-label="${file.insertions} additions and ${file.deletions} deletions">
+        <span class="ins">+${file.insertions}</span>
+        <span class="del">-${file.deletions}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderFileChanges(fileChanges) {
+  const data = normalizeFileChangesPayload(fileChanges);
+  if (!data) return '';
+  const files = data.files;
+  const visible = files.slice(0, 3);
+  const rest = files.slice(3);
+  const fileWord = data.summary.fileCount === 1 ? 'file' : 'files';
+  return `
+    <div class="file-changes-card">
+      <div class="file-changes-head">
+        <strong>${data.summary.fileCount} ${fileWord} changed</strong>
+        <span class="file-changes-total"><span class="ins">+${data.summary.insertions}</span><span class="del">-${data.summary.deletions}</span></span>
+      </div>
+      <div class="file-change-list">
+        ${visible.map(renderFileChangeRow).join('')}
+        ${rest.length ? `
+          <details class="file-change-more">
+            <summary>View ${rest.length} more ${rest.length === 1 ? 'file' : 'files'}</summary>
+            ${rest.map(renderFileChangeRow).join('')}
+          </details>
+        ` : ''}
+      </div>
+    </div>
+  `;
 }
 
 async function openInFileLocation(targetPath) {
@@ -7858,7 +8423,7 @@ function renderLiveTurnTrace(entries) {
   return `<div class="live-turn-trace">
     ${list.map((entry) => {
       const type = String(entry.type || 'info').toLowerCase();
-      const label = type === 'assistant' ? 'Prometheus' : type === 'think' ? 'Reasoning' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
+      const label = type === 'assistant' ? 'Prometheus' : type === 'preamble' ? 'Preamble' : type === 'think' ? 'Reasoning' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
       const text = String(entry.text || '').trim();
       const body = type === 'assistant'
         ? `<div class="live-turn-md">${renderMd(text)}</div>`
@@ -7871,9 +8436,75 @@ function renderLiveTurnTrace(entries) {
   </div>`;
 }
 
+function normalizeEmptyChatBrainCard(card) {
+  if (!card || typeof card !== 'object') return null;
+  const title = String(card.title || '').trim();
+  const body = String(card.body || '').trim();
+  const prompt = String(card.prompt || '').trim();
+  if (!title || !body || !prompt) return null;
+  return {
+    title,
+    body,
+    prompt,
+    source: String(card.source || '').trim(),
+    kind: String(card.kind || '').trim(),
+  };
+}
+
+async function loadEmptyChatBrainCards() {
+  if (emptyChatBrainCardsLoaded || emptyChatBrainCardsLoading) return;
+  emptyChatBrainCardsLoading = true;
+  try {
+    const data = await api('/api/brain/pulse-cards');
+    const cards = Array.isArray(data?.cards)
+      ? data.cards.map(normalizeEmptyChatBrainCard).filter(Boolean).slice(0, 3)
+      : [];
+    emptyChatBrainCards = cards;
+    emptyChatBrainCardsLoaded = true;
+  } catch (err) {
+    console.warn('[Chat] Failed to load Brain pulse cards:', err);
+    emptyChatBrainCards = [];
+    emptyChatBrainCardsLoaded = true;
+  } finally {
+    emptyChatBrainCardsLoading = false;
+  }
+
+  if (document.getElementById('chat-view')?.classList.contains('chat-empty')) {
+    renderChatMessages();
+  }
+}
+
+function getEmptyChatStarterCards() {
+  return emptyChatBrainCards.length ? emptyChatBrainCards : EMPTY_CHAT_STARTER_PROMPTS;
+}
+
+function renderEmptyChatStarterCards() {
+  const cards = getEmptyChatStarterCards();
+  return `<div class="chat-pulse-cards" aria-label="Starter prompts">
+    ${cards.map((card, index) => `
+      <button class="chat-pulse-card" type="button" onclick="applyEmptyChatStarterPrompt(${index})">
+        <span class="chat-pulse-card-title">${escHtml(card.title)}</span>
+        <span class="chat-pulse-card-body">${escHtml(card.body)}</span>
+      </button>
+    `).join('')}
+  </div>`;
+}
+
+function applyEmptyChatStarterPrompt(index) {
+  const card = getEmptyChatStarterCards()[index];
+  const input = document.getElementById('chat-input');
+  if (!card || !input) return;
+  input.value = card.prompt;
+  resizeChatInput(input);
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  handleSlashCommandInput(input);
+}
+
 function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
+  const chatView = document.getElementById('chat-view');
 
   const visibleHistory = collapseDuplicateAssistantMessageEntries((window.chatHistory || [])
     .map((msg, originalIndex) => ({ msg, originalIndex })))
@@ -7881,16 +8512,20 @@ function renderChatMessages() {
   const voicePendingHtml = renderVoicePendingTurns();
 
   if (visibleHistory.length === 0 && !voicePendingHtml) {
+    if (chatView) chatView.classList.add('chat-empty');
     container.innerHTML = `
       <div class="chat-welcome" id="chat-welcome">
         <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
         <h2>Prometheus</h2>
         <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
         <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
+        ${renderEmptyChatStarterCards()}
       </div>`;
+    loadEmptyChatBrainCards();
     return;
   }
 
+  if (chatView) chatView.classList.remove('chat-empty');
   container.innerHTML = visibleHistory.map(({ msg, originalIndex }) => {
     const isSyntheticTimerTrigger =
       String(msg?.channelLabel || '').toLowerCase() === 'timer'
@@ -7921,13 +8556,14 @@ function renderChatMessages() {
         ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
         <div class="msg-bubble-stack">
           ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
-          <div class="msg-body">
-		            ${!isUser ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
+          <div class="msg-body${msg.approvalRequest && !msg.content ? ' msg-body-approval-only' : ''}">
+		            ${!isUser && !(msg.approvalRequest && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
 		            ${assistantContentHtml}
-		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderThinkBlock(msg.thinking) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
 		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
 		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedVideos(msg) : ''}
 		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
+		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFileChanges(msg.fileChanges) : ''}
 		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
 		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
 		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
@@ -7947,6 +8583,9 @@ function renderChatMessages() {
     const liveTraceHtml = renderLiveTurnTrace(window.liveTraceEntries || []);
     const liveApprovalsHtml = renderStreamingApprovals(window.pendingApprovals || []);
 	    const thinkingOnly = !window.streamingAIText && !progressHtml && !liveTraceHtml && !liveApprovalsHtml;
+    const currentProcessOpen = !!window.currentTurnProcessOpen;
+    const currentTurnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
+    const currentProcessHtml = currentProcessOpen ? formatProcessLines(currentTurnEntries) : '';
 	    container.innerHTML += `
       <div class="msg-shell ai">
         <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
@@ -7961,14 +8600,14 @@ function renderChatMessages() {
             ${liveApprovalsHtml}
             ${!thinkingOnly ? `<div style="margin-top:8px">
               <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
-              <div id="current-turn-process" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6"></div>
+              <div id="current-turn-process" style="display:${currentProcessOpen ? 'block' : 'none'};margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">${currentProcessHtml}</div>
             </div>` : ''}
           </div>
         </div>
       </div>`;
   }
 
-  container.scrollTop = container.scrollHeight;
+  if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
 }
 
 async function copyChatMessage(originalIndex, ev) {
@@ -7989,7 +8628,6 @@ function forkConversationFromAssistantMessage(originalIndex, ev) {
   const source = getChatSessionById(window.activeChatSessionId) || {};
   const forked = {
     ...createEmptyChatSession(id),
-    title: makeSessionTitle(forkedHistory),
     history: forkedHistory,
     processLog: [],
     creativeMode: normalizeCreativeMode(source.creativeMode),
@@ -8005,6 +8643,7 @@ function forkConversationFromAssistantMessage(originalIndex, ev) {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
+  applyAutoSessionTitleOnce(forked, forkedHistory);
   window.chatSessions.unshift(forked);
   window.activeChatSessionId = id;
   setAgentSessionId(id);
@@ -8078,7 +8717,7 @@ async function rerunEditedUserMessage(originalIndex, nextText) {
   history.splice(originalIndex, history.length - originalIndex, activeUser);
   window.chatHistory = history;
   sess.history = history;
-  sess.title = makeSessionTitle(history);
+  applyAutoSessionTitleOnce(sess, history);
   sess.updatedAt = Date.now();
   window.editingUserMessageIndex = -1;
   saveChatSessions();
@@ -8107,7 +8746,7 @@ async function switchPromptVariant(originalIndex, targetIndex, ev) {
   const sess = getChatSessionById(window.activeChatSessionId);
   if (sess) {
     sess.history = history;
-    sess.title = makeSessionTitle(history);
+    applyAutoSessionTitleOnce(sess, history);
     sess.updatedAt = Date.now();
   }
   window.chatHistory = history;
@@ -8356,10 +8995,25 @@ function formatToolProgressForLog(action, message) {
   return `${friendly}: ${message}`;
 }
 
+function compactSkillReadResult(rawText) {
+  const lines = String(rawText || '').replace(/\r\n/g, '\n').split('\n').map(s => s.trim()).filter(Boolean);
+  const title = lines[0] || 'Skill loaded.';
+  const descLine = lines.find(l => /^description:/i.test(l));
+  if (!descLine) return title;
+  const desc = descLine.replace(/^description:\s*/i, '').trim();
+  const truncated = desc.length > 180 ? desc.slice(0, 177) + '...' : desc;
+  return `${title}\nDescription: ${truncated}`;
+}
+
 function formatToolResultForLog(action, text, ok, streamState) {
   const t = String(action || '').trim().toLowerCase();
   if (t === 'complete_plan_step' || t === 'step_complete' || t === 'bg_plan_advance') {
     return `${formatPlanStepResultForLog(streamState, ok)} => ${text || (ok ? 'Done' : 'Failed')}`;
+  }
+  if (t === 'skill_read') {
+    const friendly = formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '');
+    const compact = compactSkillReadResult(text);
+    return `${friendly || 'Tool'} ${ok ? 'complete' : 'failed'} => ${compact}`;
   }
   const friendly = formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '');
   return `${friendly || 'Tool'} ${ok ? 'complete' : 'failed'} => ${text || '(no output)'}`;
@@ -8377,16 +9031,87 @@ function formatForwardedToolMessageForLog(message) {
   return tail ? `${friendly} ${tail}` : friendly;
 }
 
-function renderProcessPill(entries) {
-  const id = 'proc_' + Math.random().toString(36).slice(2);
+function ensureOpenProcessPanelSet() {
+  if (!(window.openProcessLogPanels instanceof Set)) window.openProcessLogPanels = new Set();
+  return window.openProcessLogPanels;
+}
+
+function processPanelHash(value) {
+  const text = String(value || '');
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function processPanelIdForMessage(msg) {
+  const stable = [
+    msg?.timestamp || '',
+    msg?.channel || '',
+    msg?.channelLabel || '',
+    String(msg?.content || '').slice(0, 500),
+    String(msg?.toolLog || '').slice(0, 500),
+  ].join('|');
+  return `proc_msg_${processPanelHash(stable)}`;
+}
+
+function renderProcessPill(entries, panelId) {
+  const id = panelId || ('proc_' + Math.random().toString(36).slice(2));
+  const open = ensureOpenProcessPanelSet().has(id);
   return `
     <div style="margin-top:8px">
       <button class="process-pill-btn" onclick="togglePL('${id}')">Process</button>
-      <div id="${id}" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">
+      <div id="${id}" style="display:${open ? 'block' : 'none'};margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">
         ${formatProcessLines(entries)}
       </div>
     </div>
   `;
+}
+
+function parsePersistedToolLogEntries(toolLog, msg) {
+  const raw = String(toolLog || '').trim();
+  if (!raw || !/^--- tool call \d+ ---/m.test(raw)) return [];
+  const ts = msg?.timestamp ? new Date(Number(msg.timestamp)).toLocaleTimeString() : '';
+  const blocks = raw
+    .split(/(?=^--- tool call \d+ ---$)/m)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const entries = [];
+  for (const block of blocks) {
+    const name = (block.match(/^name:\s*(.+)$/m)?.[1] || '').trim();
+    if (!name) continue;
+    const status = (block.match(/^status:\s*(.+)$/m)?.[1] || '').trim().toLowerCase();
+    const argsMatch = block.match(/^args:\s*\n([\s\S]*?)\nresult:\s*\n([\s\S]*)$/m);
+    const argsText = argsMatch ? argsMatch[1].trim() : '';
+    const resultText = argsMatch ? argsMatch[2].trim() : '';
+    let args = {};
+    if (argsText) {
+      try {
+        args = JSON.parse(argsText);
+      } catch {
+        args = {};
+      }
+    }
+    const ok = status !== 'error' && !/^ERROR:/i.test(resultText);
+    const extra = { source: 'toolLog', toolName: name, args };
+    entries.push({
+      ts,
+      type: name.startsWith('skill_') ? 'skill' : 'tool',
+      actor: 'Prom',
+      content: formatToolCallForLog(name, args, null),
+      extra,
+    });
+    entries.push({
+      ts,
+      type: ok ? 'result' : 'error',
+      actor: 'Prom',
+      content: formatToolResultForLog(name, resultText, ok, null),
+      extra,
+    });
+  }
+  return entries;
 }
 
 function processEntriesForMessage(msg) {
@@ -8395,6 +9120,8 @@ function processEntriesForMessage(msg) {
   }
   const toolLog = String(msg?.toolLog || '').trim();
   if (!toolLog) return [];
+  const parsedToolLog = parsePersistedToolLogEntries(toolLog, msg);
+  if (parsedToolLog.length) return parsedToolLog.map(normalizeProcessEntryForRender).filter(Boolean);
   const ts = msg?.timestamp ? new Date(Number(msg.timestamp)).toLocaleTimeString() : '';
   return [{
     ts,
@@ -8407,7 +9134,7 @@ function processEntriesForMessage(msg) {
 
 function renderMessageProcessPill(msg) {
   const entries = processEntriesForMessage(msg);
-  return entries.length ? renderProcessPill(entries) : '';
+  return entries.length ? renderProcessPill(entries, processPanelIdForMessage(msg)) : '';
 }
 
 function processEntryKey(entry) {
@@ -8472,6 +9199,115 @@ function assistantContentMergeKey(msg) {
   return content ? `assistant|${content}` : '';
 }
 
+function normalizedChatText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function isRestartContextPacketMessage(msg) {
+  if (!isAssistantLikeMessage(msg)) return false;
+  const content = String(msg?.content || '').trim();
+  if (/^Restart Context Packet\b/i.test(content)) return true;
+  const entries = processEntriesForMessage(msg);
+  return entries.some((entry) => entry?.extra?.packetType === 'restart_context_packet');
+}
+
+function isGatewayRestartCheckpointMessage(msg) {
+  if (!isAssistantLikeMessage(msg)) return false;
+  return /^\[Interrupted by gateway restart\]/i.test(String(msg?.content || '').trim());
+}
+
+function isNoResponseReceivedAssistantMessage(msg) {
+  if (!isAssistantLikeMessage(msg)) return false;
+  return /^no response received\.?$/i.test(String(msg?.content || '').trim());
+}
+
+function isStoppedByUserAssistantMessage(msg) {
+  if (!isAssistantLikeMessage(msg)) return false;
+  const content = String(msg?.content || '').trim();
+  return /^\[(?:Stopped by user|Generation stopped by user|Stopped by user while thinking|Generation stopped)\]/i.test(content);
+}
+
+function restartPacketSubject(msg) {
+  const content = String(msg?.content || '');
+  const match = content.match(/Interrupted by user while I was working on:\s*([^\n]+)/i);
+  return normalizedChatText(match?.[1] || '');
+}
+
+function nearestPreviousUserText(history, index) {
+  for (let i = index - 1; i >= 0; i--) {
+    if (String(history[i]?.role || '') === 'user') return normalizedChatText(history[i]?.content || '');
+  }
+  return '';
+}
+
+function hasStoppedBubbleForRestartPacket(history, packet) {
+  const subject = restartPacketSubject(packet);
+  if (!subject) return false;
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+    if (!isStoppedByUserAssistantMessage(msg)) continue;
+    const prevUser = nearestPreviousUserText(history, i);
+    if (prevUser && (prevUser === subject || prevUser.includes(subject) || subject.includes(prevUser))) return true;
+  }
+  return false;
+}
+
+function userDuplicateKey(msg) {
+  if (String(msg?.role || '') !== 'user') return '';
+  const content = normalizedChatText(msg?.content || '');
+  if (!content) return '';
+  let attachments = '';
+  try {
+    attachments = Array.isArray(msg?.attachmentPreviews) && msg.attachmentPreviews.length
+      ? JSON.stringify(msg.attachmentPreviews.map((item) => ({
+          name: item?.name || '',
+          path: item?.path || item?.canvasPath || '',
+          size: item?.size || 0,
+        })))
+      : '';
+  } catch {
+    attachments = '';
+  }
+  return `user|${content}|${attachments}`;
+}
+
+function shouldDropDuplicateUserMessage(existing, candidate) {
+  const a = Number(existing?.timestamp || 0);
+  const b = Number(candidate?.timestamp || 0);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return true;
+  return Math.abs(a - b) <= 120000;
+}
+
+function reconcileChatHistoryAfterMerge(history) {
+  const source = Array.isArray(history) ? history.filter((msg) => msg && typeof msg === 'object' && !isInternalChatMessage(msg)) : [];
+  const out = [];
+  const seenUsers = new Map();
+  const hasGatewayRestartCheckpoint = source.some(isGatewayRestartCheckpointMessage);
+  for (const raw of source) {
+    const msg = { ...raw };
+    if (hasGatewayRestartCheckpoint && isNoResponseReceivedAssistantMessage(msg)) continue;
+    if (isRestartContextPacketMessage(msg) && !Array.isArray(msg.fileChanges?.files)) {
+      continue;
+    }
+    const userKey = userDuplicateKey(msg);
+    if (userKey) {
+      const existingIndex = seenUsers.get(userKey);
+      if (existingIndex !== undefined) {
+        const existing = out[existingIndex];
+        if (shouldDropDuplicateUserMessage(existing, msg)) {
+          out[existingIndex] = chatMessageRichnessScore(msg) > chatMessageRichnessScore(existing)
+            ? mergeChatMessageMetadata(msg, existing)
+            : mergeChatMessageMetadata(existing, msg);
+          continue;
+        }
+      }
+      seenUsers.set(userKey, out.length);
+    }
+    out.push(msg);
+  }
+  return out;
+}
+
 function chatMessageRichnessScore(msg) {
   if (!msg || typeof msg !== 'object') return 0;
   return [
@@ -8482,6 +9318,7 @@ function chatMessageRichnessScore(msg) {
     Array.isArray(msg.generatedImages) ? msg.generatedImages.length : 0,
     Array.isArray(msg.generatedVideos) ? msg.generatedVideos.length : 0,
     Array.isArray(msg.canvasFiles) ? msg.canvasFiles.length : 0,
+    Array.isArray(msg.fileChanges?.files) ? msg.fileChanges.files.length : 0,
   ].reduce((sum, value) => sum + value, 0);
 }
 
@@ -8494,6 +9331,8 @@ function mergeChatMessageMetadata(target, source) {
   if (Array.isArray(source.generatedImages) && source.generatedImages.length && !target.generatedImages?.length) target.generatedImages = source.generatedImages;
   if (Array.isArray(source.generatedVideos) && source.generatedVideos.length && !target.generatedVideos?.length) target.generatedVideos = source.generatedVideos;
   if (Array.isArray(source.canvasFiles) && source.canvasFiles.length && !target.canvasFiles?.length) target.canvasFiles = source.canvasFiles;
+  if (Array.isArray(source.fileChanges?.files) && source.fileChanges.files.length && !target.fileChanges?.files?.length) target.fileChanges = source.fileChanges;
+  if (source.productCarousel?.items?.length && !target.productCarousel?.items?.length) target.productCarousel = source.productCarousel;
   return target;
 }
 
@@ -8578,9 +9417,20 @@ function mergeServerAndLocalHistory(localHistory, serverHistory) {
     if (contentKey) byAssistantContent.set(contentKey, msg);
     merged.push(msg);
   };
-  stabilizeChatHistoryOrder(serverHistory).forEach((msg) => addOrMerge(msg, 'server'));
-  stabilizeChatHistoryOrder(localHistory).forEach((msg) => addOrMerge(msg, 'local'));
-  return stabilizeChatHistoryOrder(merged);
+  const localOrdered = normalizeChatHistoryTimestamps(localHistory);
+  const serverOrdered = normalizeChatHistoryTimestamps(serverHistory);
+  const localHasVisibleInterruptedTurn = localOrdered.some(isStoppedByUserAssistantMessage);
+  localOrdered.forEach((msg) => addOrMerge(msg, 'local'));
+  serverOrdered.forEach((msg) => {
+    if (
+      localHasVisibleInterruptedTurn
+      && isRestartContextPacketMessage(msg)
+      && !Array.isArray(msg.fileChanges?.files)
+      && hasStoppedBubbleForRestartPacket(localOrdered, msg)
+    ) return;
+    addOrMerge(msg, 'server');
+  });
+  return reconcileChatHistoryAfterMerge(merged);
 }
 
 function hasAssistantProcessBubbleAfterLastUser(history) {
@@ -8598,29 +9448,40 @@ function hasAssistantProcessBubbleAfterLastUser(history) {
 }
 
 function buildRestartProcessPacketMessage(sess) {
-  if (!sess || typeof sess !== 'object') return null;
-  const history = Array.isArray(sess.history) ? sess.history : [];
-  if (hasAssistantProcessBubbleAfterLastUser(history)) return null;
-  const processLog = mergeProcessEntryLists(sess.processLog || []);
-  if (!processLog.length) return null;
-  const streamState = getSessionStreamState(String(sess.id || ''));
-  const startIndex = Number(streamState?.currentTurnStartIndex);
-  const turnEntries = Number.isFinite(startIndex) && startIndex >= 0
-    ? processLog.slice(startIndex)
-    : processLog.slice(-120);
-  const entries = turnEntries.length ? turnEntries : processLog.slice(-120);
-  if (!entries.length) return null;
-  return {
-    role: 'assistant',
-    content: [
-      'Restart Context Packet',
-      '',
-      'The gateway restarted before this turn could finish saving its final assistant response.',
-      'I preserved the process log from the interrupted turn. Open Process to inspect the full tool stream.',
-    ].join('\n'),
-    timestamp: Date.now() - 1,
-    processEntries: entries,
-  };
+  // Restart context packets are backend/process-log material only. The visible
+  // chat surface should show the gateway interruption checkpoint plus the
+  // restart follow-up, never a separate packet bubble.
+  return null;
+}
+
+function clearLiveTurnStateForSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  delete window._sessionThinking?.[sid];
+  delete window._sessionAbortControllers?.[sid];
+  if (window._mainChatStreamCatchupTimers?.[sid]) {
+    clearTimeout(window._mainChatStreamCatchupTimers[sid]);
+    delete window._mainChatStreamCatchupTimers[sid];
+  }
+  resetSessionStreamState(sid);
+  const sess = getChatSessionById(sid);
+  if (sess) {
+    sess.history = reconcileChatHistoryAfterMerge(sess.history || []);
+  }
+  if (sid === window.activeChatSessionId) {
+    applyStreamStateToWindow(sid);
+    syncActiveSessionRunState();
+    if (typeof window.setButtonState === 'function') window.setButtonState(false);
+    window.currentPreflightStatus = '';
+    window.currentProgressLines = [];
+    window.currentProgressThinkingActive = false;
+    window.currentProgressThinkingText = '';
+    window.streamingAIText = '';
+    window.streamingThinkingText = '';
+    window.liveTraceEntries = [];
+    window.currentTurnStartIndex = -1;
+    updateHeartbeatUI?.();
+  }
 }
 
 function normalizeProcessActor(rawActor, type, content, extra) {
@@ -8688,6 +9549,7 @@ function toggleCurrentProcess() {
   const panel = document.getElementById('current-turn-process');
   if (!panel) return;
   const open = panel.style.display !== 'none';
+  window.currentTurnProcessOpen = !open;
   panel.style.display = open ? 'none' : 'block';
   if (!open) {
     const turnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
@@ -9025,7 +9887,12 @@ function renderProcessLog() {
 
 function togglePL(id) {
   const el = document.getElementById(id);
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (!el) return;
+  const set = ensureOpenProcessPanelSet();
+  const shouldOpen = el.style.display === 'none';
+  el.style.display = shouldOpen ? 'block' : 'none';
+  if (shouldOpen) set.add(id);
+  else set.delete(id);
 }
 
 function isFailedTurnReply(text) {
@@ -9218,13 +10085,16 @@ function persistSession(id) {
     window.processLogEntries = Array.isArray(s.processLog) ? s.processLog : (s.processLog = []);
     if (s.progressState) window.runtimeProgressState = s.progressState;
   }
-  s.title = makeSessionTitle(s.history);
+  applyAutoSessionTitleOnce(s, s.history);
   s.updatedAt = Date.now();
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   if (typeof window.updateStats === 'function') window.updateStats([]);
   // Re-render messages only if user is currently viewing this session
-  if (window.activeChatSessionId === id) renderChatMessages();
+  if (window.activeChatSessionId === id) {
+    renderChatMessages();
+    scheduleChatContextWindowRefresh(500);
+  }
 }
 
 function restoreActiveSessionIfStreamStoleFocus(previousActiveSessionId, streamSessionId) {
@@ -9389,7 +10259,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 
   const reuseExistingUserIndex = Number.isInteger(options.reuseExistingUserIndex)
     ? options.reuseExistingUserIndex
-    : -1;
+    : (options.voiceAgentHandoff === true ? findRecentVoiceWorkflowUserIndex(sessionHistoryRef, messageWithFiles) : -1);
   const userTurnMessage = reuseExistingUserIndex >= 0 && sessionHistoryRef[reuseExistingUserIndex]?.role === 'user'
     ? sessionHistoryRef[reuseExistingUserIndex]
     : {
@@ -9436,7 +10306,9 @@ async function sendChat(queuedMessage = null, options = {}) {
     clearChatComposerAfterSend(input);
   }
   window._sessionThinking[thisSessionId] = true;
+  window.chatMessagesUserScrolledUp = false;
   if (window.activeChatSessionId === thisSessionId) syncActiveSessionRunState();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   streamState.lastHeartbeat = {
     state: 'running',
     level: '',
@@ -9528,6 +10400,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 		  const allSteps = [];
 		  let finalReply = '';
 		  let finalArtifacts = [];
+		  let finalFileChanges = null;
 		  const canvasPresentedFiles = []; // file paths presented to canvas this turn
 		  const turnGeneratedImages = [];
 		  const turnGeneratedImageKeys = new Set();
@@ -9642,9 +10515,47 @@ async function sendChat(queuedMessage = null, options = {}) {
 		  };
 
 		  let partialContent = '';
+		  let turnAbortController = null;
+		  let interruptedTurnSaved = false;
+		  const saveInterruptedAssistantTurn = () => {
+		    if (interruptedTurnSaved) return;
+		    interruptedTurnSaved = true;
+		    const isEditRerunReset = window._editRerunAbortResetSessions?.has?.(thisSessionId);
+		    if (isEditRerunReset) return;
+		    const lastAssistant = sessionHistoryRef[sessionHistoryRef.length - 1];
+		    if (lastAssistant && isAssistantLikeMessage(lastAssistant) && /^\[(?:Stopped by user|Generation stopped)\]/i.test(String(lastAssistant.content || '').trim())) {
+		      return;
+		    }
+		    const alreadyLogged = getTurnEntries().some((entry) => (
+		      String(entry?.type || '').toLowerCase() === 'warn'
+		      && /generation stopped by user/i.test(String(entry?.content || ''))
+		    ));
+		    if (!alreadyLogged) addProcessEntry('warn', 'Generation stopped by user. Process log preserved.');
+		    const turnEntries = getTurnEntries();
+		    const streamedText = String(streamState.streamingAIText || partialContent || '').trim();
+		    const streamedThinking = String(streamState.streamingThinkingText || '').trim();
+		    const content = partialContent ||
+		      (streamedText
+		        ? `[Stopped by user]\n\n${streamedText}`
+		        : allSteps.length
+		          ? `[Stopped by user]\n\nStopped after ${allSteps.length} step${allSteps.length !== 1 ? 's' : ''}. Process log preserved.`
+		          : streamedThinking
+		            ? '[Stopped by user while thinking. Process log preserved.]'
+		            : '[Generation stopped by user. Process log preserved.]');
+		    appendAssistantTurnForUser({
+		      role: 'ai',
+		      content,
+		      steps: allSteps,
+		      generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+		      generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
+		      mode: window.useAgentMode ? 'agentic' : 'chat',
+		      thinking: streamedThinking || undefined,
+		      processEntries: turnEntries,
+		    });
+		  };
 	  try {
 	    // Use SSE fetch — stream steps live as they arrive
-		    const turnAbortController = new AbortController();
+		    turnAbortController = new AbortController();
 		    window._sessionAbortControllers[thisSessionId] = turnAbortController;
 		    if (window.activeChatSessionId === thisSessionId) currentAbortController = turnAbortController;
 
@@ -9731,7 +10642,9 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              pendingThinkingBurst += chunk;
 	              streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
 	              if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
-	              appendLiveTrace('think', chunk, { append: true });
+	              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+	                appendLiveTrace('preamble', chunk, { append: true });
+	              }
 	            }
 	            break;
 	          }
@@ -9741,7 +10654,6 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (thoughtText) {
 	              collectTurnThinking(thoughtText);
 	              logThinkingToProcess(thoughtText);
-	              appendLiveTrace('think', thoughtText);
 	            }
 	            break;
 	          }
@@ -9751,7 +10663,6 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              const thinkingText = String(event.thinking).trim();
 	              collectTurnThinking(thinkingText);
 	              logThinkingToProcess(thinkingText);
-	              appendLiveTrace('think', thinkingText);
 	            }
 	            break;
 
@@ -9782,7 +10693,9 @@ async function sendChat(queuedMessage = null, options = {}) {
           case 'voice_milestone': {
             const text = String(event.text || '').trim();
             if (text) {
-              addProcessEntry('info', `Voice milestone: ${text}`, event.tool ? { actor: 'Voice Narrator', tool: event.tool } : { actor: 'Voice Narrator' });
+              if (isDesktopVoiceNarrationActive()) {
+                addProcessEntry('info', `Voice milestone: ${text}`, event.tool ? { actor: 'Voice Narrator', tool: event.tool } : { actor: 'Voice Narrator' });
+              }
               speakVoiceMilestone(text, { force: event.stage === 'start', minGapMs: Number(event.minGapMs ?? 2500) || 2500 });
             }
             break;
@@ -10216,6 +11129,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (finalReply) partialContent = finalReply;
 	            if (event.thinking) collectTurnThinking(event.thinking);
 	            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
+	            finalFileChanges = event.fileChanges || null;
 	            streamState.activeModelBadge = null; // clear badge when turn completes
 	            break;
 
@@ -10226,7 +11140,10 @@ async function sendChat(queuedMessage = null, options = {}) {
       }
     }
 
-	    if (finalReply) {
+	    if (streamState.abortRequested === true || turnAbortController?.signal?.aborted) {
+	      persistTurnThinkingToProcess();
+	      saveInterruptedAssistantTurn();
+	    } else if (finalReply) {
 	      const mergedThinking = persistTurnThinkingToProcess();
 	      await applyDesignAssistantOps(finalReply);
 	      applyCreativeAssistantOps(finalReply);
@@ -10235,6 +11152,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        role: 'ai',
 	        content: finalReply,
 	        artifacts: finalArtifacts,
+	        fileChanges: finalFileChanges || undefined,
 	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
 	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
 	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
@@ -10263,33 +11181,10 @@ async function sendChat(queuedMessage = null, options = {}) {
     persistTurnThinkingToProcess();
     const wasAborted = err?.name === 'AbortError'
       || turnAbortController?.signal?.aborted
+      || streamState.abortRequested === true
       || /abort/i.test(String(err?.message || err || ''));
     if (wasAborted) {
-      const isEditRerunReset = window._editRerunAbortResetSessions?.has?.(thisSessionId);
-      if (!isEditRerunReset) {
-        addProcessEntry('warn', 'Generation stopped by user.');
-        const turnEntries = getTurnEntries();
-        const streamedText = String(streamState.streamingAIText || partialContent || '').trim();
-        const streamedThinking = String(streamState.streamingThinkingText || '').trim();
-        const content = partialContent ||
-          (streamedText
-            ? `[Stopped by user]\n\n${streamedText}`
-            : allSteps.length
-              ? `[Stopped - ${allSteps.length} step${allSteps.length !== 1 ? 's' : ''} completed]`
-              : streamedThinking
-                ? '[Stopped by user while thinking. Process log preserved.]'
-                : '[Generation stopped]');
-        appendAssistantTurnForUser({
-          role: 'ai',
-          content,
-          steps: allSteps,
-          generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
-          generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
-          mode: window.useAgentMode ? 'agentic' : 'chat',
-          thinking: streamedThinking || undefined,
-          processEntries: turnEntries,
-        });
-      }
+      saveInterruptedAssistantTurn();
     } else {
       const turnEntries = getTurnEntries();
       streamState.lastHeartbeat = { ...streamState.lastHeartbeat, state: 'stalled', level: 'hard', message: String(err.message || 'connection_error'), current_step: 'error' };
@@ -10329,6 +11224,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   sendBtn.disabled = false;
   releaseChatSendLock(sendLock);
   forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+  scheduleChatContextWindowRefresh(500);
   updateQueuedPromptUI();
   if (Number.isInteger(options.reuseExistingUserIndex) && options.reuseExistingUserIndex >= 0) {
     updatePromptVariantAfterRerun(options.reuseExistingUserIndex);
@@ -10651,6 +11547,7 @@ let voiceCatalogCache = {};
 let voiceRepliesEnabled = false;
 let regularVoiceControlsVisible = false;
 let realtimeVoiceRepliesEnabled = false;
+let realtimeVoiceStarting = false;
 let backendVoiceRecorder = null;
 let backendVoiceChunks = [];
 let backendVoiceMimeType = 'audio/webm';
@@ -10679,6 +11576,8 @@ let realtimeAssistantEchoTimer = null;
 let realtimeAssistantEchoSnippets = [];
 let realtimeContextPackCache = null;
 let realtimeContextPackFetchedAt = 0;
+let realtimeVoiceWorkerContextPacketCache = null;
+let realtimeVoiceWorkerContextPacketFetchedAt = 0;
 let realtimeDictationConnection = null;
 let realtimeDictationConnecting = null;
 let realtimeDictationRecording = false;
@@ -10691,6 +11590,7 @@ let realtimeDictationSubmitTimer = null;
 let realtimeDictationCompletedItemIds = new Set();
 let realtimeDictationRecentSubmitKeys = new Map();
 let realtimeWakeGate = null;
+let realtimeSessionWakePhrase = '';
 let realtimeDictationFallbackTimer = null;
 let realtimeDictationUtteranceSeq = 0;
 let realtimeDictationSubmittedUtteranceSeq = -1;
@@ -10776,8 +11676,11 @@ function loadDesktopVoiceSettings() {
       realtimeSpeed: Number(saved.realtimeSpeed || getStoredVoiceSetting('realtime_voice_speed', '1.1') || 1.1),
       serverVoice: saved.serverVoice || getStoredVoiceSetting('voice_xai_voice', 'eve'),
       xaiSpeed: Number(saved.xaiSpeed || saved.realtimeSpeed || 1.0),
-      dictation: saved.dictation || 'milestone',
+      dictation: saved.dictation || 'quiet',
       sttProviderLocked: saved.sttProviderLocked === true,
+      autoProviderDefault: saved.autoProviderDefault || '',
+      voiceAgentRealtimeAgent: saved.voiceAgentRealtimeAgent !== false,
+      voiceAgentXaiRealtime: saved.voiceAgentXaiRealtime === true,
     };
   } catch {
     return {
@@ -10788,8 +11691,11 @@ function loadDesktopVoiceSettings() {
       realtimeSpeed: 1.1,
       serverVoice: 'eve',
       xaiSpeed: 1.0,
-      dictation: 'milestone',
+      dictation: 'quiet',
       sttProviderLocked: false,
+      autoProviderDefault: '',
+      voiceAgentRealtimeAgent: true,
+      voiceAgentXaiRealtime: false,
     };
   }
 }
@@ -10802,6 +11708,39 @@ function saveDesktopVoiceSettings(settings = {}) {
   };
   try { localStorage.setItem(DESKTOP_VOICE_SETTINGS_KEY, JSON.stringify(desktopVoiceSettings)); } catch {}
   return desktopVoiceSettings;
+}
+
+function getDesktopVoiceDefaultProvider() {
+  if (realtimeVoiceConfigured) return 'openai_realtime';
+  const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
+  return xaiReady ? 'xai' : 'default';
+}
+
+function applyDesktopVoiceProviderDefaults() {
+  const provider = getDesktopVoiceDefaultProvider();
+  if (provider === 'default') return false;
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  const autoProviderDefault = String(desktopVoiceSettings.autoProviderDefault || '');
+  const isDefaultRoute =
+    !desktopVoiceSettings.sttProviderLocked ||
+    autoProviderDefault ||
+    mode === 'default' ||
+    (
+      String(desktopVoiceSettings.sttProvider || 'browser') === 'browser' &&
+      String(desktopVoiceSettings.ttsProvider || 'browser') === 'browser'
+    );
+  if (!isDefaultRoute) return false;
+  if (mode === provider && autoProviderDefault === provider) return false;
+  const next =
+    provider === 'openai_realtime'
+      ? { voiceMode: 'openai_realtime', sttProvider: 'browser', ttsProvider: 'browser' }
+      : { voiceMode: 'xai', sttProvider: 'xai', ttsProvider: 'xai', serverVoice: desktopVoiceSettings.serverVoice || 'eve' };
+  saveDesktopVoiceSettings({
+    ...next,
+    sttProviderLocked: true,
+    autoProviderDefault: provider,
+  });
+  return true;
 }
 
 function normalizeRealtimeVoiceSpeed(value) {
@@ -10865,6 +11804,21 @@ function realtimeAllowsContinuousCapture() {
   return realtimeVoiceRepliesEnabled && !realtimeUsesHoldSpace();
 }
 
+function wantsVoiceAgentRealtimeMode() {
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  if (mode === 'openai_realtime') return desktopVoiceSettings.voiceAgentRealtimeAgent !== false;
+  if (mode === 'xai') return desktopVoiceSettings.voiceAgentXaiRealtime === true;
+  return false;
+}
+
+// True when the active voice mode is the xAI/Grok speech-to-speech realtime agent
+// (the "Use xAI Realtime" checkbox is on). The non-realtime xAI STT/TTS route is
+// the default; this only flips on when the user opts in.
+function wantsXaiRealtimeMode() {
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  return mode === 'xai' && desktopVoiceSettings.voiceAgentXaiRealtime === true;
+}
+
 function setRegularVoiceControlsVisible(visible) {
   regularVoiceControlsVisible = !!visible;
   const controls = document.getElementById('voice-provider-controls');
@@ -10889,12 +11843,14 @@ function setRealtimeVoiceControlsVisible(visible) {
 }
 
 function disableRealtimeVoiceMode() {
-  if (!realtimeVoiceRepliesEnabled && !realtimeDictationConnection && !realtimeVoiceConnection) return;
+  if (!realtimeVoiceRepliesEnabled && !realtimeVoiceStarting && !realtimeDictationConnection && !realtimeVoiceConnection && !voiceAgentRealtimeConnection && !voiceAgentRealtimeConnecting) return;
   realtimeVoiceModeEpoch += 1;
+  realtimeVoiceStarting = false;
   realtimeHoldSpaceActive = false;
   clearRealtimeAssistantSpeakingState();
   realtimeVoiceRepliesEnabled = false;
-  clearRealtimeWakeGate({ silent: true });
+  resetRealtimeSessionWakePhrase({ clearInput: true });
+  stopVoiceAgentRealtimeSession();
   closeRealtimeDictationConnection();
   closeRealtimeVoiceConnection();
   resetRealtimeDictationTranscript();
@@ -10934,7 +11890,9 @@ function setUnifiedVoiceButtonState() {
   const modeLabel = mode === 'openai_realtime' ? 'OpenAI Realtime' : mode === 'xai' ? 'xAI / Grok' : 'Default voice';
   btn.title = gate
     ? `Silent until "${gate.phrase}"`
-    : realtimeActive
+    : realtimeVoiceStarting
+      ? 'Starting OpenAI Realtime voice'
+      : realtimeActive
       ? 'Stop OpenAI Realtime voice'
       : regularActive
         ? 'Stop dictation'
@@ -10955,7 +11913,9 @@ function writeDictationTranscript(interimText = '') {
 function appendDictationText(text) {
   if (!voiceDictationEnabled) return;
   const input = document.getElementById('chat-input');
-  const transcript = String(text || '').trim();
+  const gateResult = handleVoiceWakeGateTranscript(text, { source: 'regular_voice' });
+  if (gateResult.handled) return;
+  const transcript = String(gateResult.text || '').trim();
   if (!input || !transcript) return;
   const current = String(input.value || '').trim();
   input.value = current ? `${current} ${transcript}` : transcript;
@@ -10992,6 +11952,7 @@ function submitVoiceCommandIfPresent() {
     if (result?.catch) result.catch((err) => showToast('Voice send failed', String(err?.message || err), 'error'));
   }, 0);
   voiceDictationEnabled = false;
+  resetRealtimeSessionWakePhrase({ clearInput: false });
   setRegularVoiceControlsVisible(false);
   return true;
 }
@@ -11042,10 +12003,13 @@ function toggleBrowserDictation() {
       if (!transcript) continue;
       stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'dictation_transcribing' });
       if (event.results[i].isFinal) {
-        voiceDictationFinalText = `${voiceDictationFinalText} ${transcript}`.trim();
-        sawFinal = true;
+        const gateResult = handleVoiceWakeGateTranscript(transcript, { source: 'browser_voice' });
+        if (!gateResult.handled && gateResult.text) {
+          voiceDictationFinalText = `${voiceDictationFinalText} ${gateResult.text}`.trim();
+          sawFinal = true;
+        }
       } else {
-        interim = `${interim} ${transcript}`.trim();
+        if (!getRealtimeWakeGate()) interim = `${interim} ${transcript}`.trim();
       }
     }
     writeDictationTranscript(interim);
@@ -11117,10 +12081,18 @@ function appendXaiStreamingDictationEvent(event) {
   const text = String(event?.text || event?.transcript || event?.channel?.text || '').replace(/\s+/g, ' ').trim();
   if (!text) return;
   if (event?.is_final === true || event?.speech_final === true || event?.type === 'transcript.done') {
-    xaiStreamingDictationFinalText = text;
+    const gateResult = handleVoiceWakeGateTranscript(text, { source: 'xai_streaming_voice' });
+    if (gateResult.handled) {
+      xaiStreamingDictationFinalText = '';
+      xaiStreamingDictationInterimText = '';
+      voiceDictationFinalText = '';
+      writeXaiStreamingDictationTranscript();
+      return;
+    }
+    xaiStreamingDictationFinalText = gateResult.text || text;
     xaiStreamingDictationInterimText = '';
   } else {
-    xaiStreamingDictationInterimText = text;
+    xaiStreamingDictationInterimText = getRealtimeWakeGate() ? '' : text;
   }
   voiceDictationFinalText = xaiStreamingDictationFinalText;
   writeXaiStreamingDictationTranscript();
@@ -11324,6 +12296,11 @@ async function toggleBackendDictation(options = {}) {
 }
 
 function toggleVoiceDictation() {
+  if (realtimeVoiceStarting) {
+    disableRealtimeVoiceMode();
+    showToast('Realtime voice cancelled', '', 'info', 1400);
+    return;
+  }
   if (realtimeVoiceRepliesEnabled) {
     toggleRealtimeVoiceReplies().catch((err) => showToast('Realtime voice could not stop', String(err?.message || err), 'error'));
     return;
@@ -11331,6 +12308,7 @@ function toggleVoiceDictation() {
   if (voiceDictationEnabled || voiceDictationActive || voiceRecognition || backendVoiceRecorder || xaiStreamingDictationConnection) {
     voiceDictationEnabled = false;
     voiceRepliesEnabled = false;
+    resetRealtimeSessionWakePhrase({ clearInput: true });
     setRegularVoiceControlsVisible(false);
     setVoiceDictationState(false);
     if (voiceRecognition) {
@@ -11358,6 +12336,25 @@ function toggleVoiceDictation() {
     toggleRealtimeVoiceReplies().catch((err) => showToast('Realtime voice could not start', String(err?.message || err), 'error'));
     return;
   }
+  // xAI realtime opt-in: speech-to-speech over WebSocket, same agent machinery
+  // as OpenAI Realtime. If realtime can't start, fall back to the standard xAI
+  // STT/TTS route rather than leaving the user with no working voice.
+  if (mode === 'xai' && wantsXaiRealtimeMode()) {
+    toggleRealtimeVoiceReplies().catch((err) => {
+      const reason = String(err?.message || err || 'Unknown error').slice(0, 300);
+      showToast('xAI realtime failed — using standard xAI voice', reason, 'error', 8000);
+      try { addSessionProcessEntry(window.activeChatSessionId || 'default', 'warn', `xAI realtime failed: ${reason} (fell back to standard xAI voice)`, { actor: 'Voice Agent (xAI Realtime)' }); } catch {}
+      console.warn('[xai-realtime] start failed, falling back to standard xAI route', err);
+      startStandardDesktopDictation('xai');
+    });
+    return;
+  }
+  startStandardDesktopDictation(mode);
+}
+
+// Standard (non-realtime) desktop dictation: xAI or browser STT/TTS split flow.
+// Extracted so the xAI realtime path can fall back to it on failure.
+function startStandardDesktopDictation(mode) {
   if (mode === 'xai') {
     const xaiTtsReady = isVoiceProviderConfigured('tts', 'xai');
     const xaiSttReady = isVoiceProviderConfigured('stt', 'xai');
@@ -11436,6 +12433,90 @@ function stripRealtimeWakeCommandPunctuation(value) {
   return String(value || '').replace(/^[\s,.:;"'!?-]+|[\s,.:;"'!?-]+$/g, '').trim();
 }
 
+function setRealtimeSessionWakePhrase(phrase, options = {}) {
+  const clean = stripRealtimeWakeCommandPunctuation(String(phrase || '').replace(/\s+/g, ' ').trim());
+  const normalized = normalizeRealtimeWakePhrase(clean);
+  if (!normalized) return false;
+  realtimeSessionWakePhrase = clean;
+  if (options.toast !== false) {
+    showToast('Wake phrase set', `"${clean}"`, 'success', 2200);
+  }
+  addProcessEntry?.('info', `Realtime voice: wake phrase set to "${clean}".`);
+  return true;
+}
+
+function resetRealtimeSessionWakePhrase(options = {}) {
+  const hadPhrase = !!realtimeSessionWakePhrase;
+  realtimeSessionWakePhrase = '';
+  clearRealtimeWakeGate({ silent: true, clearInput: options.clearInput });
+  if (hadPhrase && options.toast === true) {
+    showToast('Wake phrase cleared', '', 'info', 1600);
+  }
+}
+
+function buildRealtimeWakeGateFromPhrase(phrase, source = '') {
+  const clean = stripRealtimeWakeCommandPunctuation(String(phrase || '').replace(/\s+/g, ' ').trim());
+  const normalizedPhrase = normalizeRealtimeWakePhrase(clean);
+  if (!normalizedPhrase) return null;
+  return {
+    active: true,
+    phrase: clean,
+    normalizedPhrase,
+    suppressTranscript: true,
+    suppressSend: true,
+    suppressVoice: true,
+    workerPolicy: 'continue',
+    source,
+    createdAt: Date.now(),
+  };
+}
+
+function parseRealtimeWakePhraseSettingCommand(value) {
+  const source = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!source) return null;
+  const patterns = [
+    /\bset\s+(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:to|as)\s+(.+)$/i,
+    /\b(?:make|change)\s+(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:to|as)\s+(.+)$/i,
+    /\b(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:is|should\s+be)\s+(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    const phrase = stripRealtimeWakeCommandPunctuation(match?.[1] || '');
+    if (phrase) return { kind: 'set_wake_phrase', phrase };
+  }
+  return null;
+}
+
+function isRealtimeQuietModeCommand(value) {
+  const normalized = normalizeRealtimeWakePhrase(value);
+  if (!normalized) return false;
+  const command = normalized
+    .replace(/^(?:(?:okay|ok|alright|all right|great|cool|perfect|thanks|thank you|now|please)\s+)+/g, '')
+    .replace(/^prometheus\s+please\s+/g, 'prometheus ')
+    .replace(/\s+(?:please|thanks|thank you)$/g, '')
+    .trim();
+  return [
+    /^prometheus\s+quiet$/,
+    /^quiet\s+prometheus$/,
+    /^(?:be|go|stay|get|keep|become)\s+quiet\s+prometheus$/,
+    /^prometheus\s+(?:be\s+quiet|go\s+quiet|quiet|sleep)$/,
+    /^prometheus\s+stop\s+listening$/,
+    /^(?:turn\s+on|enter|go\s+into|start)\s+quiet\s+mode$/,
+    /^(?:prometheus\s+)?(?:now\s+)?be\s+quiet$/,
+  ].some((pattern) => pattern.test(command));
+}
+
+function isRealtimeWakeUnlockCommand(value) {
+  const normalized = normalizeRealtimeWakePhrase(value);
+  if (!normalized) return false;
+  return (
+    /\bprometheus\s+(?:unlock|wake\s+up|listen\s+normally)\b/.test(normalized)
+    || /\b(?:unlock|wake\s+up)\s+prometheus\b/.test(normalized)
+    || /\b(?:turn|switch)\s+off\s+(?:the\s+)?wake\s+(?:phrase|word)\b/.test(normalized)
+    || /\b(?:disable|clear|remove|reset)\s+(?:the\s+)?wake\s+(?:phrase|word)\b/.test(normalized)
+  );
+}
+
 function parseRealtimeWakeGateCommand(value) {
   const source = String(value || '').replace(/\s+/g, ' ').trim();
   if (!source) return null;
@@ -11470,6 +12551,14 @@ function parseRealtimeWakeGateCommand(value) {
 function parseRealtimeControlCommand(value) {
   const normalized = normalizeRealtimeWakePhrase(value);
   if (!normalized) return null;
+  if (isRealtimeWakeUnlockCommand(value)) {
+    return { kind: 'unlock_voice' };
+  }
+  const wakePhraseCommand = parseRealtimeWakePhraseSettingCommand(value);
+  if (wakePhraseCommand) return wakePhraseCommand;
+  if (isRealtimeQuietModeCommand(value)) {
+    return { kind: 'quiet_mode' };
+  }
   if (/^(?:hey\s+)?(?:prometheus\s+)?(?:what\s+are\s+you\s+doing|what\s+is\s+going\s+on|what\s+s\s+going\s+on|what\s+are\s+you\s+working\s+on|status|status\s+update|any\s+progress|how\s+is\s+it\s+going|how\s+s\s+it\s+going)\??$/.test(normalized)) {
     return { kind: 'status' };
   }
@@ -11513,6 +12602,34 @@ function interruptActivePrometheusWorkerFromVoice() {
 
 function handleRealtimeControlCommand(command) {
   if (!command?.kind) return false;
+  if (command.kind === 'unlock_voice') {
+    resetRealtimeSessionWakePhrase({ clearInput: true, toast: true });
+    const text = 'Unlocked. Listening normally.';
+    speakAssistantReply(text).catch(() => {});
+    return true;
+  }
+  if (command.kind === 'set_wake_phrase') {
+    const ok = setRealtimeSessionWakePhrase(command.phrase);
+    if (!ok) {
+      const text = 'I did not catch the wake phrase. Say something like, set my wake phrase to hey Prometheus.';
+      speakAssistantReply(text).catch(() => {});
+    }
+    return true;
+  }
+  if (command.kind === 'quiet_mode') {
+    if (!realtimeSessionWakePhrase) {
+      const text = 'Set a wake phrase first, so you do not get stuck in quiet mode.';
+      showToast('Wake phrase needed', 'Say “set my wake phrase to ...” first.', 'info', 2600);
+      speakAssistantReply(text).catch(() => {});
+      return true;
+    }
+    const gate = buildRealtimeWakeGateFromPhrase(realtimeSessionWakePhrase, 'quiet_mode_command');
+    if (gate) {
+      activateRealtimeWakeGate(gate);
+      return true;
+    }
+    return false;
+  }
   if (command.kind === 'status') {
     const text = getRealtimePrometheusStatusText();
     addProcessEntry?.('info', `Realtime voice status: ${text}`);
@@ -11738,23 +12855,33 @@ async function handleRealtimeVoiceInterruptionOnly(userInterruptionTranscript = 
   const ctx = realtimeVoicePendingInterruptContext;
   if (!ctx) return false;
   const sessionId = String(window.activeChatSessionId || 'default').trim() || 'default';
+  const requestBody = {
+    sessionId,
+    reason: ctx.reason || 'barge_in',
+    currentSpokenSegment: ctx.responsePreview || '',
+    assistantTextSoFar: ctx.responsePreview || '',
+    transcript: userInterruptionTranscript,
+    userInterruptionTranscript,
+    voiceMode: 'desktop_realtime',
+    source: 'desktop_realtime_voice_agent',
+  };
   let data = null;
+  let streamingDispatcher = createDesktopVoiceAgentStreamingDispatcher();
   try {
-    const response = await fetch('/api/voice-agent/input', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId,
-        reason: ctx.reason || 'barge_in',
-        currentSpokenSegment: ctx.responsePreview || '',
-        assistantTextSoFar: ctx.responsePreview || '',
-        transcript: userInterruptionTranscript,
-        userInterruptionTranscript,
-        voiceMode: 'desktop_realtime',
-        source: 'desktop_realtime_voice_agent',
-      }),
-    });
-    data = await response.json().catch(() => ({}));
+    try {
+      data = await streamVoiceAgentInput(requestBody, (chunk) => {
+        try { streamingDispatcher?.enqueue?.(chunk); } catch {}
+      });
+    } catch (streamErr) {
+      console.warn('[voice-agent] interruption streaming failed, falling back to JSON:', streamErr);
+      streamingDispatcher = null;
+      const response = await fetch('/api/voice-agent/input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+      data = await response.json().catch(() => ({}));
+    }
   } catch (err) {
     addProcessEntry?.('error', `Realtime voice interruption failed: ${String(err?.message || err)}`);
     return false;
@@ -11802,9 +12929,25 @@ async function handleRealtimeVoiceInterruptionOnly(userInterruptionTranscript = 
         persistSession(sessionId);
       }
     }
+    delete window._sessionThinking[sessionId];
+    delete window._sessionAbortControllers[sessionId];
+    if (st) {
+      st.streamingAIText = '';
+      st.streamingThinkingText = '';
+      st.liveTraceEntries = [];
+      st.currentPreflightStatus = '';
+    }
+    if (window.activeChatSessionId === sessionId) {
+      syncActiveSessionRunState();
+      applyStreamStateToWindow(sessionId);
+      if (typeof window.setButtonState === 'function') window.setButtonState(false);
+      renderProgressPanel();
+      renderChatMessages();
+    }
   }
-  const reply = String(data?.voiceReply || (intent === 'cancel' ? 'Stopped.' : 'Got it.')).trim();
-  if (reply) speakRealtimeNarration(reply, { force: true, minGapMs: 0 });
+  const reply = String(data?.voiceReply || '').trim();
+  const alreadySpoken = !!data?.streamedSpeech && !!streamingDispatcher;
+  if (reply && !alreadySpoken) speakRealtimeNarration(reply, { force: true, minGapMs: 0 });
   renderProcessLog?.();
   return true;
 }
@@ -11815,24 +12958,35 @@ async function submitDesktopVoiceAsLiveSteer(transcript = '', options = {}) {
   const sessionId = String(window.activeChatSessionId || 'default').trim() || 'default';
   const ctx = realtimeVoicePendingInterruptContext;
   realtimeVoicePendingInterruptContext = null;
+  const requestBody = {
+    sessionId,
+    reason: ctx?.reason || 'voice_steer',
+    currentSpokenSegment: ctx?.responsePreview || '',
+    assistantTextSoFar: ctx?.responsePreview || '',
+    transcript: text,
+    userInterruptionTranscript: text,
+    voiceMode: 'desktop_realtime',
+    source: String(options.source || 'desktop_realtime_voice_steer'),
+  };
   let data = null;
+  let streamingDispatcher = createDesktopVoiceAgentStreamingDispatcher();
   try {
-    const response = await fetch('/api/voice-agent/input', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId,
-        reason: ctx?.reason || 'voice_steer',
-        currentSpokenSegment: ctx?.responsePreview || '',
-        assistantTextSoFar: ctx?.responsePreview || '',
-        transcript: text,
-        userInterruptionTranscript: text,
-        voiceMode: 'desktop_realtime',
-        source: String(options.source || 'desktop_realtime_voice_steer'),
-      }),
-    });
-    data = await response.json().catch(() => ({}));
-    if (!response.ok || (!data?.success && !data?.ok)) return false;
+    try {
+      data = await streamVoiceAgentInput(requestBody, (chunk) => {
+        try { streamingDispatcher?.enqueue?.(chunk); } catch {}
+      });
+    } catch (streamErr) {
+      console.warn('[voice-agent] steer streaming failed, falling back to JSON:', streamErr);
+      streamingDispatcher = null;
+      const response = await fetch('/api/voice-agent/input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+      data = await response.json().catch(() => ({}));
+      if (!response.ok || (!data?.success && !data?.ok)) return false;
+    }
+    if (!data?.success && !data?.ok) return false;
   } catch (err) {
     addProcessEntry?.('error', `Realtime voice steer failed: ${String(err?.message || err)}`);
     return false;
@@ -11848,11 +13002,72 @@ async function submitDesktopVoiceAsLiveSteer(transcript = '', options = {}) {
     const ctrl = window._sessionAbortControllers?.[sessionId] || currentAbortController;
     try { if (ctrl && !ctrl.signal?.aborted) ctrl.abort(); } catch {}
     await requestGatewayMainChatAbort(sessionId, 'desktop_realtime_voice_steer');
+    await waitForSessionIdle(sessionId, 1800);
+    const st = getSessionStreamState(sessionId);
+    delete window._sessionThinking[sessionId];
+    delete window._sessionAbortControllers[sessionId];
+    if (st) {
+      st.streamingAIText = '';
+      st.streamingThinkingText = '';
+      st.liveTraceEntries = [];
+      st.currentPreflightStatus = '';
+    }
+    if (window.activeChatSessionId === sessionId) {
+      syncActiveSessionRunState();
+      applyStreamStateToWindow(sessionId);
+      if (typeof window.setButtonState === 'function') window.setButtonState(false);
+      renderProgressPanel();
+      renderChatMessages();
+    }
   }
   const reply = String(data?.voiceReply || '').trim();
-  if (reply) speakRealtimeNarration(reply, { force: true, minGapMs: 0 });
+  const alreadySpoken = !!data?.streamedSpeech && !!streamingDispatcher;
+  if (reply && !alreadySpoken) speakRealtimeNarration(reply, { force: true, minGapMs: 0 });
   renderProcessLog?.();
   return true;
+}
+
+// Returns a streaming TTS dispatcher matched to the user's desktop voice
+// settings, or null if the current setup can't stream sentence-by-sentence
+// (browser TTS / openai_realtime — those have their own pipelines).
+function createDesktopVoiceAgentStreamingDispatcher() {
+  if (realtimeVoiceRepliesEnabled) {
+    return {
+      enqueue(text) {
+        const t = String(text || '').trim();
+        if (!t) return;
+        speakRealtimeNarration(t, { force: true, minGapMs: 0 });
+      },
+      wait() { return Promise.resolve(); },
+    };
+  }
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  const provider = mode === 'xai'
+    ? 'xai'
+    : (voiceTtsProvider || desktopVoiceSettings.ttsProvider || 'browser');
+  if (provider === 'browser') {
+    return {
+      enqueue(text) {
+        const t = String(text || '').trim();
+        if (!t) return;
+        try { speakWithBrowserVoice(t); } catch {}
+      },
+      wait() { return Promise.resolve(); },
+    };
+  }
+  if (provider === 'openai_realtime') {
+    return {
+      enqueue(text) {
+        const t = String(text || '').trim();
+        if (!t) return;
+        speakWithRealtimeVoice(t).catch(() => {});
+      },
+      wait() { return Promise.resolve(); },
+    };
+  }
+  const selected = getProviderInfo('tts', provider);
+  if (selected && !selected.configured) return null;
+  return createStreamingTtsDispatcher(provider);
 }
 
 async function speakDesktopVoiceAgentReply(text) {
@@ -11896,6 +13111,38 @@ function logDesktopVoiceLatency(sessionId, stage, startedAt, extra = {}) {
   });
 }
 
+function getCachedRealtimeVoiceWorkerContextPacket(sessionId) {
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const packet = realtimeVoiceWorkerContextPacketCache;
+  const ageMs = Date.now() - Number(realtimeVoiceWorkerContextPacketFetchedAt || 0);
+  if (!packet || String(packet.sessionId || '') !== sid || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > 10_000) return null;
+  return packet;
+}
+
+async function prefetchRealtimeVoiceWorkerContextPacket(sessionId, options = {}) {
+  const sid = String(sessionId || 'default').trim() || 'default';
+  try {
+    const response = await fetch('/api/voice-agent/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: sid,
+        source: String(options.source || 'desktop_voice_context_prefetch'),
+        voiceMode: realtimeVoiceRepliesEnabled ? 'desktop_realtime' : `desktop_${normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode)}`,
+        originalUserPrompt: String(options.originalUserPrompt || ''),
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || (!data?.success && !data?.ok) || !data?.contextPacket) return null;
+    realtimeVoiceWorkerContextPacketCache = data.contextPacket;
+    realtimeVoiceWorkerContextPacketFetchedAt = Date.now();
+    return realtimeVoiceWorkerContextPacketCache;
+  } catch (err) {
+    console.warn('[voice-agent] context packet prefetch failed:', err);
+    return null;
+  }
+}
+
 async function prepareDesktopVoiceAgentHandoff(sessionId, transcript = '', options = {}) {
   const sid = String(sessionId || 'default').trim() || 'default';
   const text = String(transcript || '').trim();
@@ -11903,32 +13150,56 @@ async function prepareDesktopVoiceAgentHandoff(sessionId, transcript = '', optio
   try {
     const handoffStartedAt = Date.now();
     addSessionProcessEntry(sid, 'info', 'Voice Agent: preparing contextual acknowledgement.', { actor: 'Voice Agent' });
-    const response = await fetch('/api/voice-agent/input', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: sid,
-        transcript: text,
-        userInterruptionTranscript: text,
-        source: String(options.source || 'desktop_voice_handoff'),
-        voiceMode: realtimeVoiceRepliesEnabled ? 'desktop_realtime' : `desktop_${normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode)}`,
-      }),
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || (!result?.success && !result?.ok)) {
-      throw new Error(result?.error || `Voice Agent failed (${response.status})`);
+    const contextPacket = getCachedRealtimeVoiceWorkerContextPacket(sid);
+    const requestBody = {
+      sessionId: sid,
+      transcript: text,
+      userInterruptionTranscript: text,
+      source: String(options.source || 'desktop_voice_handoff'),
+      voiceMode: realtimeVoiceRepliesEnabled ? 'desktop_realtime' : `desktop_${normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode)}`,
+      ...(contextPacket ? { contextPacket } : {}),
+    };
+    // Try streaming first — fires TTS chunk-by-chunk as the model generates,
+    // so the user hears the first word ~200-400ms after the model starts.
+    let result = null;
+    let streamingDispatcher = createDesktopVoiceAgentStreamingDispatcher();
+    let firstChunkLogged = false;
+    try {
+      result = await streamVoiceAgentInput(requestBody, (chunk) => {
+        if (!firstChunkLogged) {
+          firstChunkLogged = true;
+          logDesktopVoiceLatency(sid, 'first speech chunk', handoffStartedAt, { nonBlocking: true });
+        }
+        try { streamingDispatcher?.enqueue?.(chunk); } catch {}
+      });
+    } catch (err) {
+      console.warn('[voice-agent] streaming failed, falling back to JSON:', err);
+      streamingDispatcher = null;
+      const response = await fetch('/api/voice-agent/input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+      result = await response.json().catch(() => ({}));
+      if (!response.ok || (!result?.success && !result?.ok)) {
+        throw new Error(result?.error || `Voice Agent failed (${response.status})`);
+      }
     }
     logDesktopVoiceLatency(sid, 'voice-agent endpoint', handoffStartedAt, {
       action: result?.action || '',
       timings: result?.timings || null,
     });
     const reply = String(result?.voiceReply || '').trim();
+    const alreadySpoken = !!(result?.streamedSpeech) && !!streamingDispatcher;
     if (result?.action === 'handoff_new_work') {
-      if (reply) {
+      if (reply && !alreadySpoken) {
         logDesktopVoiceLatency(sid, 'ack TTS started', handoffStartedAt, { nonBlocking: true });
         speakDesktopVoiceAgentReply(reply)
           .then(() => logDesktopVoiceLatency(sid, 'ack TTS dispatched', handoffStartedAt, { nonBlocking: true }))
           .catch((err) => addSessionProcessEntry(sid, 'warn', `Voice acknowledgement failed: ${String(err?.message || err)}`, { actor: 'Voice Latency' }));
+      } else if (alreadySpoken) {
+        // Let chunks finish playing in the background.
+        streamingDispatcher.wait().then(() => logDesktopVoiceLatency(sid, 'streamed TTS finished', handoffStartedAt, { nonBlocking: true }));
       }
       logDesktopVoiceLatency(sid, 'worker handoff released', handoffStartedAt);
       return {
@@ -11937,10 +13208,13 @@ async function prepareDesktopVoiceAgentHandoff(sessionId, transcript = '', optio
         callerContext: String(result?.injectedContextText || '').trim(),
       };
     }
-    if (reply) {
+    if (reply && !alreadySpoken) {
       logDesktopVoiceLatency(sid, 'ack TTS started', handoffStartedAt, { nonBlocking: false });
       await speakDesktopVoiceAgentReply(reply);
       logDesktopVoiceLatency(sid, 'ack TTS completed', handoffStartedAt, { nonBlocking: false });
+    } else if (alreadySpoken) {
+      await streamingDispatcher.wait();
+      logDesktopVoiceLatency(sid, 'streamed TTS completed', handoffStartedAt, { nonBlocking: false });
     }
     if (result?.steerApplied === true || result?.action === 'steer_worker') {
       appendVoiceInterruptionWorkflowSplit(sid, text, result);
@@ -12036,6 +13310,44 @@ function splitRealtimeWakePhraseRemainder(transcript, gate) {
     }
   }
   return { woke: true, remainder: '' };
+}
+
+function handleVoiceWakeGateTranscript(transcript, options = {}) {
+  const rawTranscript = String(transcript || '').replace(/\s+/g, ' ').trim();
+  if (!rawTranscript) return { handled: true, text: '' };
+  if (isRealtimeWakeUnlockCommand(rawTranscript)) {
+    handleRealtimeControlCommand({ kind: 'unlock_voice' });
+    return { handled: true, text: '' };
+  }
+  const gate = getRealtimeWakeGate();
+  if (gate) {
+    const wake = splitRealtimeWakePhraseRemainder(rawTranscript, gate);
+    if (!wake.woke) return { handled: true, text: '' };
+    clearRealtimeWakeGate();
+    const remainder = String(wake.remainder || '').trim();
+    if (!remainder) return { handled: true, text: '' };
+    const control = parseRealtimeControlCommand(remainder);
+    if (control && handleRealtimeControlCommand(control)) return { handled: true, text: '' };
+    const nextWakeCommand = parseRealtimeWakeGateCommand(remainder);
+    if (nextWakeCommand) {
+      if (nextWakeCommand.phrase) setRealtimeSessionWakePhrase(nextWakeCommand.phrase, { toast: false });
+      activateRealtimeWakeGate(nextWakeCommand);
+      return { handled: true, text: '' };
+    }
+    return { handled: false, text: remainder };
+  }
+
+  const control = parseRealtimeControlCommand(rawTranscript);
+  if (control && handleRealtimeControlCommand(control)) return { handled: true, text: '' };
+
+  const wakeCommand = parseRealtimeWakeGateCommand(rawTranscript);
+  if (wakeCommand) {
+    if (wakeCommand.phrase) setRealtimeSessionWakePhrase(wakeCommand.phrase, { toast: false });
+    activateRealtimeWakeGate(wakeCommand);
+    return { handled: true, text: '' };
+  }
+
+  return { handled: false, text: rawTranscript };
 }
 
 function resetRealtimeDictationTranscript(options = {}) {
@@ -12302,6 +13614,7 @@ function handleRealtimeTranscriptionEvent(event, epoch = realtimeVoiceModeEpoch)
     realtimeDictationUtteranceStartedAt = Date.now();
     realtimeDictationFirstDeltaLogged = false;
     logDesktopVoiceLatency(window.activeChatSessionId || 'default', 'mic speech started', realtimeDictationUtteranceStartedAt);
+    prefetchRealtimeVoiceWorkerContextPacket(window.activeChatSessionId || 'default', { source: 'desktop_realtime_speech_started' }).catch(() => {});
     realtimeDraftFinalText = '';
     realtimeDraftInterimText = '';
     if (!realtimeDictationFinalText && !realtimeDictationDeltas.size) {
@@ -12375,6 +13688,7 @@ function handleRealtimeTranscriptionEvent(event, epoch = realtimeVoiceModeEpoch)
       if (control && handleRealtimeControlCommand(control)) return;
       const wakeCommand = parseRealtimeWakeGateCommand(rawTranscript);
       if (wakeCommand) {
+        if (wakeCommand.phrase) setRealtimeSessionWakePhrase(wakeCommand.phrase, { toast: false });
         activateRealtimeWakeGate(wakeCommand);
         return;
       }
@@ -12397,6 +13711,7 @@ function handleRealtimeTranscriptionEvent(event, epoch = realtimeVoiceModeEpoch)
         if (control && handleRealtimeControlCommand(control)) return;
         const nextWakeCommand = parseRealtimeWakeGateCommand(wake.remainder);
         if (nextWakeCommand) {
+          if (nextWakeCommand.phrase) setRealtimeSessionWakePhrase(nextWakeCommand.phrase, { toast: false });
           activateRealtimeWakeGate(nextWakeCommand);
           return;
         }
@@ -12421,6 +13736,7 @@ function handleRealtimeTranscriptionEvent(event, epoch = realtimeVoiceModeEpoch)
     const wakeCommand = parseRealtimeWakeGateCommand(rawTranscript);
     if (wakeCommand) {
       if (itemId) realtimeDictationDeltas.delete(itemId);
+      if (wakeCommand.phrase) setRealtimeSessionWakePhrase(wakeCommand.phrase, { toast: false });
       activateRealtimeWakeGate(wakeCommand);
       return;
     }
@@ -12526,6 +13842,7 @@ async function ensureRealtimeDictationConnection() {
     if (!sdpResponse.ok) throw new Error(answerSdp || `Realtime transcription call failed (${sdpResponse.status})`);
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
+    prefetchRealtimeVoiceWorkerContextPacket(window.activeChatSessionId || 'default', { source: 'desktop_realtime_ready' }).catch(() => {});
     if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch) {
       try { dc.close(); } catch {}
       try { pc.close(); } catch {}
@@ -12579,6 +13896,11 @@ function handleRealtimeSpaceKeydown(event) {
   if (event.code !== 'Space' || event.repeat || isEditableVoiceTarget(event.target)) return;
   event.preventDefault();
   realtimeHoldSpaceActive = true;
+  // Realtime end-to-end agent: open mic directly on the realtime session
+  if (isVoiceAgentRealtimeMode()) {
+    pttRealtimeAgentPress();
+    return;
+  }
   resetRealtimeDictationTranscript({ baseFromInput: true });
   startRealtimeInputCapture().catch((err) => {
     realtimeHoldSpaceActive = false;
@@ -12591,6 +13913,10 @@ function handleRealtimeSpaceKeyup(event) {
   if (event.code !== 'Space') return;
   event.preventDefault();
   realtimeHoldSpaceActive = false;
+  if (isVoiceAgentRealtimeMode()) {
+    pttRealtimeAgentRelease();
+    return;
+  }
   stopRealtimeInputCapture({ submit: true, delayMs: 420 });
 }
 
@@ -12804,6 +14130,14 @@ function renderVoiceProviderControls() {
   if (speedLabel) speedLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
   if (narrationLabel) narrationLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
   if (listenLabel) listenLabel.hidden = mode !== 'openai_realtime';
+  const realtimeAgentLabel = document.getElementById('realtime-agent-toggle-label');
+  const realtimeAgentToggle = document.getElementById('realtime-agent-toggle');
+  if (realtimeAgentLabel) realtimeAgentLabel.hidden = mode !== 'openai_realtime';
+  if (realtimeAgentToggle) realtimeAgentToggle.checked = desktopVoiceSettings.voiceAgentRealtimeAgent !== false;
+  const xaiRealtimeLabel = document.getElementById('xai-realtime-toggle-label');
+  const xaiRealtimeToggle = document.getElementById('xai-realtime-toggle');
+  if (xaiRealtimeLabel) xaiRealtimeLabel.hidden = mode !== 'xai';
+  if (xaiRealtimeToggle) xaiRealtimeToggle.checked = desktopVoiceSettings.voiceAgentXaiRealtime === true;
   const voiceLabel = document.getElementById('voice-output-voice-label');
   if (voiceLabel && mode !== 'xai') voiceLabel.hidden = true;
   renderOutputVoiceSelect().catch(() => {});
@@ -12832,6 +14166,7 @@ async function refreshVoiceProviderStatus() {
         ttsProviders: Array.isArray(data.ttsProviders) ? data.ttsProviders : [],
       };
       realtimeVoiceConfigured = !!getProviderInfo('tts', 'openai_realtime')?.configured;
+      applyDesktopVoiceProviderDefaults();
       if (voiceTtsProvider === 'openai_realtime') {
         voiceTtsProvider = 'browser';
         storeVoiceProvider('tts', voiceTtsProvider);
@@ -12878,6 +14213,7 @@ function onVoiceProviderChanged() {
     sttProvider: voiceSttProvider,
     ttsProvider: voiceTtsProvider,
     serverVoice: voiceProvider === 'xai' && voiceOutputVoice ? voiceOutputVoice : desktopVoiceSettings.serverVoice,
+    autoProviderDefault: '',
   });
   renderOutputVoiceSelect().catch(() => {});
   setRealtimeVoiceButtonState();
@@ -12907,6 +14243,7 @@ function onVoiceModeChanged() {
     realtimeSpeed: realtimeVoiceSpeed,
     serverVoice: desktopVoiceSettings.serverVoice || 'eve',
     sttProviderLocked: true,
+    autoProviderDefault: '',
   });
   renderVoiceProviderControls();
   setUnifiedVoiceButtonState();
@@ -13169,6 +14506,10 @@ function speakVoiceMilestone(text, options = {}) {
   });
 }
 
+function isDesktopVoiceNarrationActive() {
+  return realtimeNarrationMode === 'milestones' && !!(realtimeVoiceRepliesEnabled || voiceRepliesEnabled);
+}
+
 function realtimeNarrationFromToolCall(action, displayAction = '') {
   const tool = String(action || '').trim();
   const display = String(displayAction || '').replace(/\s+/g, ' ').trim();
@@ -13286,6 +14627,850 @@ async function speakWithRealtimeVoiceManaged(content) {
     });
   }
 }
+
+// ============================================================================
+// REALTIME VOICE AGENT — full audio-in / audio-out via OpenAI Realtime API.
+// Replaces the split flow (transcription session + voice-agent decision + TTS
+// session) with a single Realtime session whose model handles small talk,
+// voice_* tool calls, and worker dispatch through function calling. Used when
+// the user has voiceMode === 'openai_realtime' end-to-end.
+// ============================================================================
+
+let voiceAgentRealtimeConnection = null;       // { pc, dc, audio, micStream, micTrack, sessionId, listenMode }
+let voiceAgentRealtimeConnecting = null;
+let voiceAgentRealtimeListenMode = 'idle';      // 'idle' | 'push_to_talk' | 'always_listening'
+const voiceAgentRealtimeFunctionCallBuffers = new Map(); // call_id -> { name, argsStr }
+
+// Quiet mode for the realtime end-to-end agent. We keep OpenAI's own STT running
+// (transcription stays on) but flip turn_detection.create_response OFF so the model
+// stops auto-replying. Each completed user transcript is checked for the wake phrase;
+// a match re-opens the agent and replies to that utterance. No second recognizer.
+const voiceAgentRealtimeQuiet = { active: false, wakePhrase: '', wakeNormalized: '', pendingActivate: false };
+
+// Per-response tracking to catch the Realtime failure mode where the model SAYS it
+// handed work to the worker but never emits the dispatch function call. If a response
+// claims a hand-off yet called no function, we auto-dispatch the user's request.
+const voiceAgentRealtimeTurn = { hadFunctionCall: false, lastUserTranscript: '', lastAssistantTranscript: '', nudged: false };
+const REALTIME_HANDOFF_CLAIM_RE = /\b(hand(?:ing|ed)?\s*(?:it|that|this)?\s*off|to the worker|kick(?:ing)?\s*(?:it|that)?\s*off|i('?ve|\s*have)?\s*started|getting started|i'?ll\s*(?:start|get|run|handle|take care)|on it|working on (?:it|that)|in progress|started (?:it|that|the|on)|spun? up|firing up)\b/i;
+
+function sendRealtimeAgentCreateResponseFlag(enabled) {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!dc || dc.readyState !== 'open') return;
+  const listenMode = voiceAgentRealtimeConnection?.listenMode || voiceAgentRealtimeListenMode;
+  // Quiet mode (create_response gating) only applies to always-listening server VAD.
+  // In push-to-talk there is no turn_detection, so don't reinstate server VAD here.
+  if (listenMode !== 'always_listening') return;
+  try {
+    dc.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          input: {
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+              create_response: !!enabled,
+            },
+            transcription: { model: 'gpt-realtime-whisper' },
+          },
+        },
+      },
+    }));
+  } catch {}
+}
+
+function setRealtimeAgentWakePhrase(phrase) {
+  const clean = String(phrase || '').replace(/\s+/g, ' ').trim();
+  voiceAgentRealtimeQuiet.wakePhrase = clean;
+  voiceAgentRealtimeQuiet.wakeNormalized = normalizeRealtimeWakePhrase(clean);
+}
+
+function activateRealtimeAgentQuietMode() {
+  if (!voiceAgentRealtimeConnection) return;
+  voiceAgentRealtimeQuiet.active = true;
+  sendRealtimeAgentCreateResponseFlag(false);
+  const phrase = voiceAgentRealtimeQuiet.wakePhrase;
+  showToast('Quiet mode', phrase ? `Silent until you say "${phrase}".` : 'Silent until you wake Prometheus.', 'info', 2600);
+  setUnifiedVoiceButtonState();
+}
+
+function deactivateRealtimeAgentQuietMode() {
+  if (!voiceAgentRealtimeQuiet.active) return;
+  voiceAgentRealtimeQuiet.active = false;
+  voiceAgentRealtimeQuiet.pendingActivate = false;
+  sendRealtimeAgentCreateResponseFlag(true);
+  setUnifiedVoiceButtonState();
+}
+
+function handleRealtimeAgentQuietTranscript(transcript) {
+  if (!voiceAgentRealtimeQuiet.active) return;
+  const wake = voiceAgentRealtimeQuiet.wakeNormalized;
+  if (!wake) return;
+  const heard = normalizeRealtimeWakePhrase(transcript);
+  if (!heard || !heard.includes(wake)) return; // not woken — stay silent
+  deactivateRealtimeAgentQuietMode();
+  showToast('Awake', 'Prometheus is listening again.', 'success', 1800);
+  // Reply to the wake utterance now that create_response is back on.
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (dc?.readyState === 'open') {
+    try { dc.send(JSON.stringify({ type: 'response.create' })); } catch {}
+  }
+}
+
+function isVoiceAgentRealtimeMode() {
+  if (!realtimeVoiceRepliesEnabled) return false;
+  // openai_realtime (WebRTC) or xai (WebSocket) qualify as full realtime agent,
+  // each gated by its own per-provider realtime opt-in checkbox.
+  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
+  if (mode === 'openai_realtime') return desktopVoiceSettings.voiceAgentRealtimeAgent !== false;
+  if (mode === 'xai') return desktopVoiceSettings.voiceAgentXaiRealtime === true;
+  return false;
+}
+
+async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
+  // Provider dispatch: xAI uses a native WebSocket transport, OpenAI uses WebRTC.
+  if (wantsXaiRealtimeMode()) return startXaiRealtimeSession(sessionId, options);
+  if (voiceAgentRealtimeConnection?.dc?.readyState === 'open') return voiceAgentRealtimeConnection;
+  if (voiceAgentRealtimeConnecting) return voiceAgentRealtimeConnecting;
+  const sid = String(sessionId || window.activeChatSessionId || 'default').trim() || 'default';
+  const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  voiceAgentRealtimeListenMode = listenMode;
+
+  voiceAgentRealtimeConnecting = (async () => {
+    const startedAt = Date.now();
+    addSessionProcessEntry(sid, 'info', 'Voice Agent (Realtime): bootstrapping session.', { actor: 'Voice Agent (Realtime)' });
+
+    // 1. Bootstrap — gateway builds instructions, tools, and mints ephemeral token
+    const wakeGate = getRealtimeWakeGate?.();
+    voiceAgentRealtimeQuiet.active = false;
+    voiceAgentRealtimeQuiet.pendingActivate = false;
+    setRealtimeAgentWakePhrase(wakeGate?.phrase || '');
+    const bootstrapResp = await fetch('/api/voice-agent/realtime-bootstrap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: sid,
+        voice: normalizeRealtimeVoice(realtimeVoiceSelection || getStoredVoiceSetting('realtime_voice', 'marin')),
+        speed: normalizeRealtimeVoiceSpeed(realtimeVoiceSpeed),
+        voiceRuntime: wakeGate?.phrase
+          ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
+          : undefined,
+      }),
+    });
+    const bootstrap = await bootstrapResp.json().catch(() => ({}));
+    if (!bootstrapResp.ok || !bootstrap?.success) {
+      throw new Error(bootstrap?.error || `Voice agent realtime bootstrap failed (${bootstrapResp.status})`);
+    }
+    logDesktopVoiceLatency?.(sid, 'realtime-agent bootstrap', startedAt);
+
+    // 2. Establish WebRTC: mic in (sendrecv) + audio out
+    const pc = new RTCPeerConnection();
+    let audio = document.getElementById('voice-agent-realtime-audio');
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = 'voice-agent-realtime-audio';
+      audio.autoplay = true;
+      audio.playsInline = true;
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+    }
+    audio.muted = false;
+    audio.volume = 1;
+    pc.ontrack = (event) => {
+      audio.srcObject = event.streams[0];
+      audio.play?.().catch((err) => {
+        console.warn('[voice-agent-realtime] audio playback blocked', err);
+      });
+    };
+
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const micTrack = micStream.getAudioTracks()[0];
+    micTrack.enabled = listenMode === 'always_listening';
+    pc.addTrack(micTrack, micStream);
+    // Explicit recvonly audio transceiver so OpenAI knows we want audio back.
+    try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
+
+    const dc = pc.createDataChannel('oai-events');
+    dc.addEventListener('message', (msgEvent) => {
+      let event = null;
+      try { event = JSON.parse(msgEvent.data); } catch { return; }
+      handleVoiceAgentRealtimeEvent(event, sid).catch(() => {});
+    });
+
+    const dcOpen = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Voice agent realtime data channel did not open.')), 12000);
+      dc.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
+      dc.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Voice agent realtime data channel failed.')); }, { once: true });
+    });
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${bootstrap.clientSecret}`,
+        'Content-Type': 'application/sdp',
+      },
+      body: offer.sdp,
+    });
+    const answerSdp = await sdpResp.text();
+    if (!sdpResp.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResp.status})`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    await dcOpen;
+    if (window.__voiceAgentRealtimeDebug) {
+      console.debug('[voice-agent-realtime] data channel open; bootstrap', {
+        model: bootstrap.model, voice: bootstrap.voice, toolCount: bootstrap.toolCount, listenMode,
+      });
+    }
+
+    // 3. Configure turn detection per listen mode (gpt-realtime format — under audio.input)
+    //    always_listening -> server VAD auto-commits + auto-replies.
+    //    push_to_talk     -> turn_detection disabled; audio only flows while the
+    //                        mic track is enabled (button held), and we manually
+    //                        commit + create_response on release. This stops the
+    //                        session from "staying on" / auto-replying when PTT is on.
+    try {
+      const sessionUpdate = {
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          audio: {
+            input: {
+              turn_detection: listenMode === 'always_listening'
+                ? {
+                    type: 'server_vad',
+                    threshold: 0.5,
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 500,
+                    create_response: true,
+                  }
+                : null,
+              transcription: { model: 'gpt-realtime-whisper' },
+            },
+          },
+        },
+      };
+      dc.send(JSON.stringify(sessionUpdate));
+      if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] sent session.update', sessionUpdate.session.audio.input);
+    } catch (err) {
+      if (window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] session.update failed', err);
+    }
+
+    voiceAgentRealtimeConnection = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode };
+    pc.addEventListener('connectionstatechange', () => {
+      if (['closed', 'failed', 'disconnected'].includes(pc.connectionState)) {
+        if (voiceAgentRealtimeConnection?.pc === pc) {
+          voiceAgentRealtimeConnection = null;
+        }
+      }
+    });
+    logDesktopVoiceLatency?.(sid, 'realtime-agent ready', startedAt);
+    addSessionProcessEntry(sid, 'info', `Voice Agent (Realtime): connected (${listenMode}).`, { actor: 'Voice Agent (Realtime)' });
+    return voiceAgentRealtimeConnection;
+  })().finally(() => {
+    voiceAgentRealtimeConnecting = null;
+  });
+  return voiceAgentRealtimeConnecting;
+}
+
+function stopVoiceAgentRealtimeSession() {
+  const conn = voiceAgentRealtimeConnection;
+  voiceAgentRealtimeConnection = null;
+  voiceAgentRealtimeConnecting = null;
+  voiceAgentRealtimeListenMode = 'idle';
+  voiceAgentRealtimeFunctionCallBuffers.clear();
+  try { conn?.cleanup?.(); } catch {}
+  try { conn?.dc?.close(); } catch {}
+  try { conn?.pc?.close(); } catch {}
+  try { if (conn?.audio) conn.audio.srcObject = null; } catch {}
+  try { conn?.micStream?.getTracks().forEach((t) => t.stop()); } catch {}
+}
+
+function setVoiceAgentRealtimeMicEnabled(enabled) {
+  const track = voiceAgentRealtimeConnection?.micTrack;
+  if (!track) return;
+  track.enabled = !!enabled;
+}
+
+// Push a realtime-agent turn into the visible desktop chat thread so the user
+// sees their own spoken messages and Prom's replies in the main chat — not just
+// the process log. Display-only: the realtime session itself owns the audio.
+function appendRealtimeAgentChatMessage(sessionId, role, text) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  const content = String(text || '').trim();
+  if (!sid || !content) return;
+  const sess = getChatSessionById(sid);
+  if (!sess) return;
+  if (!Array.isArray(sess.history)) sess.history = [];
+  sess.history.push({
+    role: role === 'user' ? 'user' : 'ai',
+    content,
+    timestamp: Date.now(),
+    source: 'voice_agent_realtime',
+    channel: 'voice',
+    channelLabel: 'Realtime voice',
+  });
+  try { persistSession(sid); } catch {}
+  if (window.activeChatSessionId === sid) {
+    window.chatHistory = sess.history;
+    try { renderChatMessages(); } catch {}
+  }
+}
+
+// Safety net: the Realtime model sometimes SAYS it handed work to the worker but
+// never emits dispatch_prometheus_worker. When a response claims a hand-off yet
+// called no function, dispatch the user's request ourselves so the claim is true.
+function maybeRecoverHallucinatedRealtimeHandoff(sessionId) {
+  if (voiceAgentRealtimeTurn.hadFunctionCall || voiceAgentRealtimeTurn.nudged) return;
+  const claim = voiceAgentRealtimeTurn.lastAssistantTranscript || '';
+  const task = String(voiceAgentRealtimeTurn.lastUserTranscript || '').trim();
+  if (!task || !REALTIME_HANDOFF_CLAIM_RE.test(claim)) return;
+  voiceAgentRealtimeTurn.nudged = true;
+  addSessionProcessEntry(sessionId, 'warn', `Realtime model claimed a hand-off without calling dispatch_prometheus_worker — auto-dispatching: ${task.slice(0, 160)}`, { actor: 'Voice Agent (Realtime)' });
+  try {
+    if (typeof window.sendChat === 'function') {
+      window.sendChat(task, { skipVoiceAgent: true, voiceSource: 'realtime_agent_dispatch_recovery' });
+    }
+  } catch (err) {
+    console.warn('[voice-agent-realtime] handoff recovery failed', err);
+  }
+}
+
+async function handleVoiceAgentRealtimeEvent(event, sessionId) {
+  const type = String(event?.type || '');
+  if (window.__voiceAgentRealtimeDebug) {
+    try {
+      console.debug('[voice-agent-realtime] event', type, type === 'error' ? event?.error : (event?.transcript ?? ''));
+    } catch {}
+  }
+
+  // Streaming function-call argument accumulation
+  if (type === 'response.function_call_arguments.delta') {
+    const callId = String(event.call_id || '').trim();
+    if (!callId) return;
+    const buf = voiceAgentRealtimeFunctionCallBuffers.get(callId) || { name: '', argsStr: '' };
+    buf.argsStr += String(event.delta || '');
+    voiceAgentRealtimeFunctionCallBuffers.set(callId, buf);
+    return;
+  }
+  if (type === 'response.function_call_arguments.done') {
+    const callId = String(event.call_id || '').trim();
+    const name = String(event.name || '').trim();
+    const argsStr = String(event.arguments || voiceAgentRealtimeFunctionCallBuffers.get(callId)?.argsStr || '');
+    voiceAgentRealtimeFunctionCallBuffers.delete(callId);
+    let args = {};
+    try { args = argsStr ? JSON.parse(argsStr) : {}; } catch {}
+    await executeVoiceAgentRealtimeFunctionCall({ call_id: callId, name, args }, sessionId);
+    return;
+  }
+  if (type === 'response.created') {
+    voiceAgentRealtimeTurn.hadFunctionCall = false;
+    voiceAgentRealtimeTurn.lastAssistantTranscript = '';
+    return;
+  }
+  if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
+    const item = event.item;
+    voiceAgentRealtimeTurn.hadFunctionCall = true;
+    const callId = String(item.call_id || '').trim();
+    if (callId) {
+      voiceAgentRealtimeFunctionCallBuffers.set(callId, { name: String(item.name || ''), argsStr: '' });
+    }
+    return;
+  }
+
+  // User-side transcript (what the user said)
+  if (type === 'conversation.item.input_audio_transcription.completed') {
+    const transcript = String(event.transcript || '').trim();
+    if (transcript) {
+      voiceAgentRealtimeTurn.lastUserTranscript = transcript;
+      voiceAgentRealtimeTurn.nudged = false;
+      addSessionProcessEntry(sessionId, 'user', `User: ${transcript}`, { actor: 'Voice Agent (Realtime)' });
+      appendRealtimeAgentChatMessage(sessionId, 'user', transcript);
+      // Quiet mode: only the wake phrase re-opens the agent.
+      handleRealtimeAgentQuietTranscript(transcript);
+    }
+    return;
+  }
+
+  // Assistant-side transcript (what Prom said) — for chat history + display
+  if (type === 'response.audio_transcript.done' || type === 'response.output_audio_transcript.done') {
+    const transcript = String(event.transcript || '').trim();
+    if (transcript) {
+      voiceAgentRealtimeTurn.lastAssistantTranscript = transcript;
+      addSessionProcessEntry(sessionId, 'info', `Prom: ${transcript}`, { actor: 'Voice Agent (Realtime)' });
+      appendRealtimeAgentChatMessage(sessionId, 'ai', transcript);
+    }
+    return;
+  }
+
+  // A response finished — quiet-mode activation + hallucinated-handoff safety net.
+  if (type === 'response.done' || type === 'response.audio.done') {
+    if (voiceAgentRealtimeQuiet.pendingActivate) {
+      voiceAgentRealtimeQuiet.pendingActivate = false;
+      activateRealtimeAgentQuietMode();
+    }
+    maybeRecoverHallucinatedRealtimeHandoff(sessionId);
+    return;
+  }
+
+  // Errors
+  if (type === 'error') {
+    const message = String(event?.error?.message || event?.error || '');
+    console.warn('[voice-agent-realtime] server error', event);
+    if (message) {
+      addSessionProcessEntry(sessionId, 'warn', `Realtime error: ${message}`, { actor: 'Voice Agent (Realtime)' });
+      showToast('Realtime error', message, 'error', 5000);
+    }
+    return;
+  }
+}
+
+async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
+  const name = String(call?.name || '').trim();
+  if (!name) return;
+  const callId = String(call?.call_id || '').trim();
+  const args = call?.args && typeof call.args === 'object' ? call.args : {};
+
+  addSessionProcessEntry(sessionId, 'tool', `Realtime model called: ${name}`, { actor: 'Voice Agent (Realtime)', args });
+
+  // Worker control — handled client-side via existing flows
+  if (name === 'dispatch_prometheus_worker') {
+    const task = String(args.task || '').trim();
+    if (task) {
+      try {
+        // Reuse the regular chat send path so the worker runs with full context.
+        // sendChat(queuedMessage, options) — pass the task as the queued message so
+        // it does not depend on composer state, and skip the voice-agent decision
+        // (the realtime model already decided to hand off).
+        if (typeof window.sendChat === 'function') {
+          await window.sendChat(task, { skipVoiceAgent: true, voiceSource: 'realtime_agent_dispatch' });
+        }
+      } catch (err) {
+        console.warn('[voice-agent-realtime] dispatch failed', err);
+      }
+    }
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: true, dispatched: !!task, task }));
+    return;
+  }
+  if (name === 'steer_active_worker') {
+    const message = String(args.message || '').trim();
+    if (message) {
+      try { await submitDesktopVoiceAsLiveSteer(message, { source: 'realtime_agent_steer' }); } catch {}
+    }
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: true, steered: !!message }));
+    return;
+  }
+  if (name === 'interrupt_active_worker') {
+    try { await requestGatewayMainChatAbort?.(sessionId, 'realtime_agent_interrupt'); } catch {}
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: true, interrupted: true, reason: String(args.reason || '') }));
+    return;
+  }
+
+  // All voice_* tools route through the gateway tool endpoint
+  try {
+    const response = await fetch('/api/voice-agent/realtime-tool', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, toolName: name, toolArgs: args }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.success) {
+      sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, error: data?.error || `Tool failed (${response.status})` }));
+      return;
+    }
+    // Apply any runtime directive (wake phrase / quiet mode) to the live session.
+    const directive = data.runtimeDirective;
+    if (directive?.action) {
+      const phrase = String(directive.wakePhrase || '').trim();
+      if (directive.action === 'set_wake_phrase' && phrase) {
+        setRealtimeAgentWakePhrase(phrase);
+      } else if (directive.action === 'enter_quiet_mode' || directive.action === 'set_quiet_until') {
+        if (phrase) setRealtimeAgentWakePhrase(phrase);
+        // Activate after the spoken acknowledgement finishes so Prom can confirm
+        // before going silent. response.done flips it on.
+        if (voiceAgentRealtimeQuiet.wakeNormalized) {
+          voiceAgentRealtimeQuiet.pendingActivate = true;
+        }
+      }
+    }
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify(data.result || data.raw || { ok: true }));
+  } catch (err) {
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, error: String(err?.message || err) }));
+  }
+}
+
+function sendVoiceAgentRealtimeFunctionOutput(callId, output) {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!dc || dc.readyState !== 'open' || !callId) return;
+  try {
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'function_call_output',
+        call_id: callId,
+        output: String(output || ''),
+      },
+    }));
+    // Trigger the model to continue/respond to the tool result
+    dc.send(JSON.stringify({ type: 'response.create' }));
+  } catch (err) {
+    console.warn('[voice-agent-realtime] sendFunctionCallOutput failed', err);
+  }
+}
+
+// Public hooks used by the mic UI: PTT button and always-listening toggle
+function pttRealtimeAgentPress() {
+  // User pressed PTT — open mic and let user speak
+  if (!voiceAgentRealtimeConnection) {
+    startVoiceAgentRealtimeSession(window.activeChatSessionId || 'default', { listenMode: 'push_to_talk' })
+      .then(() => setVoiceAgentRealtimeMicEnabled(true))
+      .catch((err) => console.warn('[voice-agent-realtime] PTT start failed', err));
+    return;
+  }
+  setVoiceAgentRealtimeMicEnabled(true);
+}
+
+function pttRealtimeAgentRelease() {
+  // User released PTT — close mic; server VAD will detect end-of-speech if buffered
+  setVoiceAgentRealtimeMicEnabled(false);
+  // Manually commit + create response so the model replies even without VAD
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (dc?.readyState === 'open') {
+    try {
+      dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+      dc.send(JSON.stringify({ type: 'response.create' }));
+    } catch {}
+  }
+}
+
+async function enableRealtimeAgentAlwaysListening() {
+  await startVoiceAgentRealtimeSession(window.activeChatSessionId || 'default', { listenMode: 'always_listening' });
+  setVoiceAgentRealtimeMicEnabled(true);
+}
+
+function disableRealtimeAgentAlwaysListening() {
+  stopVoiceAgentRealtimeSession();
+}
+
+// ============================================================================
+// xAI / Grok Realtime — native WebSocket transport
+// ----------------------------------------------------------------------------
+// xAI's realtime Voice Agent is WebSocket-only for browsers (no WebRTC/SDP path).
+// We connect with an ephemeral token passed as a WS subprotocol, stream mic audio
+// as base64 PCM16 via input_audio_buffer.append, and play response.output_audio
+// deltas through Web Audio. All non-audio events (transcripts, function calls,
+// quiet-mode, errors) reuse the shared OpenAI handler by populating
+// voiceAgentRealtimeConnection with a WebSocket-backed `dc` shim, so PTT,
+// dispatch, steering, and wake-gate behave identically across providers.
+// ============================================================================
+
+const XAI_REALTIME_OUTPUT_SAMPLE_RATE = 24000;
+const XAI_REALTIME_INPUT_SAMPLE_RATE = 24000;
+
+function int16ToFloat32(int16) {
+  const out = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) {
+    const s = int16[i];
+    out[i] = s < 0 ? s / 0x8000 : s / 0x7fff;
+  }
+  return out;
+}
+
+function base64ToArrayBuffer(b64) {
+  const binary = atob(String(b64 || ''));
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+// Sequential PCM16 playback scheduler over a single AudioContext. Each audio
+// delta is queued so chunks play gap-free; barge-in clears the queue.
+function createXaiRealtimePlayback() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx({ sampleRate: XAI_REALTIME_OUTPUT_SAMPLE_RATE });
+  let nextStartTime = 0;
+  const sources = new Set();
+  return {
+    ctx,
+    enqueue(int16) {
+      if (!int16 || !int16.length) return;
+      const float = int16ToFloat32(int16);
+      const buffer = ctx.createBuffer(1, float.length, XAI_REALTIME_OUTPUT_SAMPLE_RATE);
+      buffer.copyToChannel(float, 0);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(ctx.destination);
+      const now = ctx.currentTime;
+      const startAt = Math.max(now, nextStartTime);
+      src.start(startAt);
+      nextStartTime = startAt + buffer.duration;
+      sources.add(src);
+      src.onended = () => sources.delete(src);
+    },
+    interrupt() {
+      for (const src of sources) { try { src.stop(); } catch {} }
+      sources.clear();
+      nextStartTime = 0;
+    },
+    async resume() { try { await ctx.resume?.(); } catch {} },
+    close() {
+      this.interrupt();
+      try { ctx.close?.(); } catch {}
+    },
+  };
+}
+
+async function startXaiRealtimeSession(sessionId, options = {}) {
+  if (voiceAgentRealtimeConnection?.dc?.readyState === 'open') return voiceAgentRealtimeConnection;
+  if (voiceAgentRealtimeConnecting) return voiceAgentRealtimeConnecting;
+  const sid = String(sessionId || window.activeChatSessionId || 'default').trim() || 'default';
+  const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  voiceAgentRealtimeListenMode = listenMode;
+
+  voiceAgentRealtimeConnecting = (async () => {
+    const startedAt = Date.now();
+    addSessionProcessEntry(sid, 'info', 'Voice Agent (xAI Realtime): bootstrapping session.', { actor: 'Voice Agent (xAI Realtime)' });
+
+    // 1. Bootstrap — gateway builds instructions/tools/context and mints an
+    //    ephemeral xAI client secret. Unlike OpenAI, the session config is sent
+    //    by the client over the socket (session.update) after connect.
+    const wakeGate = getRealtimeWakeGate?.();
+    voiceAgentRealtimeQuiet.active = false;
+    voiceAgentRealtimeQuiet.pendingActivate = false;
+    setRealtimeAgentWakePhrase(wakeGate?.phrase || '');
+    const bootstrapResp = await fetch('/api/voice-agent/xai-realtime-bootstrap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: sid,
+        voice: normalizeXaiRealtimeVoice(desktopVoiceSettings.serverVoice || realtimeVoiceSelection),
+        speed: Number(desktopVoiceSettings.xaiSpeed || realtimeVoiceSpeed || 1.0),
+        voiceRuntime: wakeGate?.phrase
+          ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
+          : undefined,
+      }),
+    });
+    const bootstrap = await bootstrapResp.json().catch(() => ({}));
+    if (!bootstrapResp.ok || !bootstrap?.success) {
+      throw new Error(bootstrap?.error || `xAI realtime bootstrap failed (${bootstrapResp.status})`);
+    }
+    logDesktopVoiceLatency?.(sid, 'xai-realtime bootstrap', startedAt);
+    console.info('[xai-realtime] bootstrap ok', {
+      wsUrl: bootstrap.wsUrl,
+      model: bootstrap.model,
+      voice: bootstrap.voice,
+      hasClientSecret: !!bootstrap.clientSecret,
+      clientSecretPrefix: String(bootstrap.clientSecret || '').slice(0, 6),
+      instructionsLength: bootstrap.instructionsLength,
+      toolCount: bootstrap.toolCount,
+    });
+
+    // 2. Open the WebSocket with the ephemeral token as the (single) subprotocol.
+    //    xAI expects exactly one subprotocol entry: xai-client-secret.<token>.
+    //    Offering extra protocols (e.g. 'realtime') makes the server negotiate the
+    //    wrong protocol and the session config / auth silently misbehaves.
+    const ws = new WebSocket(bootstrap.wsUrl, [`xai-client-secret.${bootstrap.clientSecret}`]);
+    ws.binaryType = 'arraybuffer';
+    const playback = createXaiRealtimePlayback();
+    await playback.resume();
+
+    // 3. Mic capture → PCM16 → input_audio_buffer.append.
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const micTrack = micStream.getAudioTracks()[0];
+    micTrack.enabled = listenMode === 'always_listening';
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const captureCtx = new AudioCtx({ sampleRate: XAI_REALTIME_INPUT_SAMPLE_RATE });
+    const source = captureCtx.createMediaStreamSource(micStream);
+    const processor = captureCtx.createScriptProcessor(2048, 1, 1);
+    const mutedGain = captureCtx.createGain();
+    mutedGain.gain.value = 0;
+    processor.onaudioprocess = (event) => {
+      if (ws.readyState !== WebSocket.OPEN || !micTrack.enabled) return;
+      const inputData = event.inputBuffer.getChannelData(0);
+      const pcm = downsampleFloat32ToInt16(inputData, captureCtx.sampleRate || XAI_REALTIME_INPUT_SAMPLE_RATE, XAI_REALTIME_INPUT_SAMPLE_RATE);
+      if (pcm.byteLength > 0) {
+        try { ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: arrayBufferToBase64(pcm.buffer) })); } catch {}
+      }
+    };
+    source.connect(processor);
+    processor.connect(mutedGain);
+    mutedGain.connect(captureCtx.destination);
+    await captureCtx.resume?.();
+
+    // Persistent close/error logging — xAI reports auth/protocol failures as a
+    // WebSocket close code+reason rather than an in-band error event.
+    ws.addEventListener('close', (ev) => {
+      console.warn('[xai-realtime] socket closed', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean, negotiatedProtocol: ws.protocol });
+      try { addSessionProcessEntry(sid, 'warn', `xAI realtime socket closed (code ${ev.code}${ev.reason ? `: ${ev.reason}` : ''}).`, { actor: 'Voice Agent (xAI Realtime)' }); } catch {}
+    });
+    ws.addEventListener('error', (ev) => { console.warn('[xai-realtime] socket error', ev); });
+
+    const wsOpen = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('xAI realtime socket did not open.')), 12000);
+      ws.addEventListener('open', () => {
+        console.info('[xai-realtime] socket open', { negotiatedProtocol: ws.protocol });
+        clearTimeout(timeout);
+        resolve(true);
+      }, { once: true });
+      ws.addEventListener('close', (ev) => { clearTimeout(timeout); reject(new Error(`xAI realtime socket closed before open (code ${ev.code}${ev.reason ? `: ${ev.reason}` : ''}).`)); }, { once: true });
+      ws.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('xAI realtime socket failed.')); }, { once: true });
+    });
+    await wsOpen;
+
+    // WebSocket-backed shim so the shared OpenAI agent helpers (function output,
+    // quiet-mode response.create, etc.) operate on this connection unchanged.
+    const dcShim = {
+      get readyState() { return ws.readyState === WebSocket.OPEN ? 'open' : 'closed'; },
+      send: (payload) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(payload); } catch {} },
+      close: () => { try { ws.close(); } catch {} },
+    };
+
+    ws.addEventListener('message', (msgEvent) => {
+      let event = null;
+      try { event = JSON.parse(typeof msgEvent.data === 'string' ? msgEvent.data : ''); } catch { return; }
+      if (!event) return;
+      handleXaiRealtimeEvent(event, sid, playback).catch(() => {});
+    });
+
+    // 4. Configure the session over the socket.
+    const turnDetection = listenMode === 'always_listening'
+      ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: true }
+      : null;
+    // xAI session.update: voice/instructions/turn_detection are flat; audio
+    // formats are nested under session.audio.input/output.format. Send the core
+    // config first (this MUST be accepted for transcription to work), then tools
+    // as a separate update so a tools-schema mismatch can't break audio config.
+    const coreSession = {
+      instructions: bootstrap.instructions,
+      voice: bootstrap.voice,
+      turn_detection: turnDetection,
+      audio: {
+        input: { format: { type: 'audio/pcm', rate: XAI_REALTIME_INPUT_SAMPLE_RATE } },
+        output: { format: { type: 'audio/pcm', rate: XAI_REALTIME_OUTPUT_SAMPLE_RATE } },
+      },
+    };
+    try { ws.send(JSON.stringify({ type: 'session.update', session: coreSession })); } catch (err) {
+      console.warn('[xai-realtime] core session.update send failed', err);
+    }
+    if (Array.isArray(bootstrap.tools) && bootstrap.tools.length) {
+      try { ws.send(JSON.stringify({ type: 'session.update', session: { tools: bootstrap.tools, tool_choice: 'auto' } })); } catch {}
+    }
+    if (window.__voiceAgentRealtimeDebug) {
+      console.debug('[xai-realtime] connected', { wsUrl: bootstrap.wsUrl, model: bootstrap.model, voice: bootstrap.voice, toolCount: bootstrap.toolCount, listenMode, protocol: ws.protocol });
+    }
+
+    voiceAgentRealtimeConnection = {
+      provider: 'xai',
+      ws,
+      dc: dcShim,
+      pc: null,
+      audio: null,
+      micStream,
+      micTrack,
+      sessionId: sid,
+      listenMode,
+      playback,
+      cleanup: () => {
+        try { processor.disconnect(); } catch {}
+        try { source.disconnect(); } catch {}
+        try { mutedGain.disconnect(); } catch {}
+        try { captureCtx.close?.(); } catch {}
+        try { playback.close(); } catch {}
+        try { ws.close(); } catch {}
+      },
+    };
+    ws.addEventListener('close', () => {
+      if (voiceAgentRealtimeConnection?.ws === ws) voiceAgentRealtimeConnection = null;
+    });
+    logDesktopVoiceLatency?.(sid, 'xai-realtime ready', startedAt);
+    addSessionProcessEntry(sid, 'info', `Voice Agent (xAI Realtime): connected (${listenMode}).`, { actor: 'Voice Agent (xAI Realtime)' });
+    return voiceAgentRealtimeConnection;
+  })().finally(() => {
+    voiceAgentRealtimeConnecting = null;
+  });
+  return voiceAgentRealtimeConnecting;
+}
+
+function normalizeXaiRealtimeVoice(value) {
+  const xaiVoices = new Set(['eve', 'ara', 'rex', 'sal', 'leo']);
+  const voice = String(value || '').trim().toLowerCase();
+  return xaiVoices.has(voice) ? voice : 'eve';
+}
+
+let xaiRealtimeStatusCache = null;
+let xaiRealtimeStatusFetchedAt = 0;
+async function isXaiRealtimeConfigured() {
+  const now = Date.now();
+  if (!xaiRealtimeStatusCache || now - xaiRealtimeStatusFetchedAt > 30 * 1000) {
+    try {
+      const response = await fetch('/api/realtime/xai/status', { cache: 'no-store' });
+      xaiRealtimeStatusCache = await response.json().catch(() => ({}));
+      xaiRealtimeStatusFetchedAt = now;
+    } catch {
+      xaiRealtimeStatusCache = { configured: false };
+    }
+  }
+  return !!xaiRealtimeStatusCache?.configured;
+}
+
+// xAI WS event router: handle audio playback + barge-in here, delegate every
+// other event to the shared OpenAI agent handler (transcripts, tool calls, etc.).
+async function handleXaiRealtimeEvent(event, sessionId, playback) {
+  const type = String(event?.type || '');
+  if (window.__voiceAgentRealtimeDebug && !/delta$/.test(type)) {
+    try { console.debug('[xai-realtime] event', type, event?.transcript ?? ''); } catch {}
+  }
+  // Surface session lifecycle + errors so config rejections are visible without
+  // the debug flag (a rejected session.update is the usual cause of "no transcription").
+  if (type === 'session.created' || type === 'session.updated') {
+    try { console.info('[xai-realtime]', type, event?.session ? { voice: event.session.voice, turn_detection: event.session.turn_detection, audio: event.session.audio } : event); } catch {}
+  }
+  if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
+    const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 400);
+    console.warn('[xai-realtime] server error event', type, event);
+    addSessionProcessEntry(sessionId, 'warn', `xAI realtime error: ${msg}`, { actor: 'Voice Agent (xAI Realtime)' });
+    try { showToast('xAI realtime error', msg, 'error', 8000); } catch {}
+  }
+  // Streamed assistant audio
+  if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
+    const b64 = event.delta || event.audio;
+    if (b64) {
+      try { playback.enqueue(new Int16Array(base64ToArrayBuffer(b64))); } catch {}
+    }
+    return;
+  }
+  // Barge-in: user started talking while Prom was speaking — stop playback.
+  if (type === 'input_audio_buffer.speech_started' || type === 'response.output_audio.cancelled') {
+    try { playback.interrupt(); } catch {}
+    if (type !== 'input_audio_buffer.speech_started') return;
+  }
+  // Everything else (transcripts, function calls, response.done, errors) reuses
+  // the provider-agnostic OpenAI agent handler.
+  await handleVoiceAgentRealtimeEvent(event, sessionId);
+}
+
+// Expose for cross-module use (mic button handlers, settings UI)
+window.startVoiceAgentRealtimeSession = startVoiceAgentRealtimeSession;
+window.stopVoiceAgentRealtimeSession = stopVoiceAgentRealtimeSession;
+window.isVoiceAgentRealtimeMode = isVoiceAgentRealtimeMode;
+window.pttRealtimeAgentPress = pttRealtimeAgentPress;
+window.pttRealtimeAgentRelease = pttRealtimeAgentRelease;
+window.enableRealtimeAgentAlwaysListening = enableRealtimeAgentAlwaysListening;
+window.disableRealtimeAgentAlwaysListening = disableRealtimeAgentAlwaysListening;
 
 function splitVoiceText(text, maxLength = 180) {
   const source = String(text || '').replace(/\s+/g, ' ').trim();
@@ -13417,13 +15602,61 @@ function speakWithBrowserVoice(text) {
   window.speechSynthesis.speak(utterance);
 }
 
-async function speakWithServerTts(text, provider) {
-  const chunks = provider === 'groq' ? splitVoiceText(text, 180) : [String(text || '').trim().slice(0, 6000)];
+// Streaming voice-agent call: POSTs to /api/voice-agent/input with stream:true,
+// consumes SSE chunks, and pipes each sentence to TTS as it arrives so the user
+// hears the first word ~200-400ms after the model starts generating.
+// Returns a promise resolving with the full result payload (same shape as JSON).
+async function streamVoiceAgentInput(body, onChunk) {
+  const response = await fetch('/api/voice-agent/input', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Voice agent stream failed (${response.status})`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buf = '';
+  let finalResult = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const rawEvent = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const dataLine = rawEvent.split('\n').find((l) => l.startsWith('data:'));
+      if (!dataLine) continue;
+      const json = dataLine.slice(5).trim();
+      if (!json) continue;
+      let payload = null;
+      try { payload = JSON.parse(json); } catch { continue; }
+      if (!payload || typeof payload !== 'object') continue;
+      if (payload.type === 'chunk' && payload.text) {
+        try { onChunk?.(String(payload.text)); } catch {}
+      } else if (payload.type === 'done') {
+        finalResult = payload.result || null;
+      } else if (payload.type === 'error') {
+        throw new Error(String(payload.error || 'voice-agent stream error'));
+      }
+    }
+  }
+  return finalResult || {};
+}
+
+// Per-call streaming TTS dispatcher. Each chunk fetched and played sequentially,
+// pre-fetching the next chunk while the current one plays for seamless audio.
+function createStreamingTtsDispatcher(provider) {
   const voiceProvider = provider === 'openai' || provider === 'xai' ? provider : '';
   const selectedVoice = provider === 'xai'
     ? (desktopVoiceSettings.serverVoice || getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'eve'))
     : (voiceProvider ? getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'alloy') : '');
-  for (const chunk of chunks.filter(Boolean)) {
+  const fetchChunk = async (chunk) => {
     const body = { provider, text: chunk };
     if (provider === 'openai' && selectedVoice) body.voice = selectedVoice;
     if (provider === 'xai' && selectedVoice) body.voiceId = selectedVoice;
@@ -13435,6 +15668,62 @@ async function speakWithServerTts(text, provider) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data?.success === false) throw new Error(data?.error || `TTS failed (${response.status})`);
+    return data;
+  };
+  // Sequential playback chain — each enqueue chains the next fetch + play.
+  // The TTS fetch begins immediately when a chunk arrives from the server.
+  let chain = Promise.resolve();
+  let pendingFetch = null;
+  return {
+    enqueue(text) {
+      const t = String(text || '').trim();
+      if (!t) return;
+      // Kick off the fetch right away (don't wait for the previous chunk to finish).
+      const fetched = fetchChunk(t).catch((err) => {
+        console.warn('[voice-agent] streaming TTS fetch failed:', err);
+        return null;
+      });
+      chain = chain
+        .catch(() => {})
+        .then(async () => {
+          const data = await fetched;
+          if (!data) return;
+          try { await playAudioBase64(data.audioBase64, data.mimeType); } catch {}
+        });
+    },
+    wait() { return chain.catch(() => {}); },
+  };
+}
+
+async function speakWithServerTts(text, provider) {
+  const chunkMax = provider === 'groq' ? 180 : 400;
+  const chunks = splitVoiceText(text, chunkMax).filter(Boolean);
+  if (!chunks.length) return;
+  const voiceProvider = provider === 'openai' || provider === 'xai' ? provider : '';
+  const selectedVoice = provider === 'xai'
+    ? (desktopVoiceSettings.serverVoice || getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'eve'))
+    : (voiceProvider ? getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'alloy') : '');
+  const fetchChunk = async (chunk) => {
+    const body = { provider, text: chunk };
+    if (provider === 'openai' && selectedVoice) body.voice = selectedVoice;
+    if (provider === 'xai' && selectedVoice) body.voiceId = selectedVoice;
+    if (provider === 'xai') body.speed = Number(desktopVoiceSettings.xaiSpeed || 1.0);
+    const response = await fetch('/api/voice/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) throw new Error(data?.error || `TTS failed (${response.status})`);
+    return data;
+  };
+  // Pipeline: pre-fetch the next chunk while the current one plays so audio is
+  // ready immediately after each segment ends — first audio byte arrives faster
+  // on multi-sentence replies.
+  let nextFetch = fetchChunk(chunks[0]);
+  for (let i = 0; i < chunks.length; i++) {
+    const data = await nextFetch;
+    if (i + 1 < chunks.length) nextFetch = fetchChunk(chunks[i + 1]);
     await playAudioBase64(data.audioBase64, data.mimeType);
   }
 }
@@ -13462,37 +15751,100 @@ async function speakAssistantReply(text) {
 }
 
 async function toggleRealtimeVoiceReplies() {
-  await refreshRealtimeVoiceStatus();
-  if (!realtimeVoiceConfigured) {
-    showToast('Realtime voice not configured', 'Connect OpenAI Codex OAuth or set an OpenAI Realtime API key on the gateway.', 'error');
+  const xaiRealtime = wantsXaiRealtimeMode();
+  if (xaiRealtime) {
+    if (!(await isXaiRealtimeConfigured())) {
+      // Not configured for realtime — let the caller fall back to standard xAI.
+      throw new Error('xAI realtime not configured');
+    }
+  } else {
+    await refreshRealtimeVoiceStatus();
+    if (!realtimeVoiceConfigured) {
+      setRegularVoiceControlsVisible(true);
+      renderVoiceProviderControls();
+      showToast('Realtime voice not configured', 'Connect OpenAI Codex OAuth or set an OpenAI Realtime API key on the gateway.', 'error');
+      return;
+    }
+  }
+  if (realtimeVoiceStarting) {
+    disableRealtimeVoiceMode();
+    showToast('Realtime voice cancelled', '', 'info', 1400);
     return;
   }
   realtimeVoiceModeEpoch += 1;
-  realtimeVoiceRepliesEnabled = !realtimeVoiceRepliesEnabled;
   const epoch = realtimeVoiceModeEpoch;
-  if (realtimeVoiceRepliesEnabled) {
+  const nextEnabled = !realtimeVoiceRepliesEnabled;
+  if (nextEnabled) {
     voiceRepliesEnabled = false;
     realtimeVoicePlaybackWarningShown = false;
-    saveDesktopVoiceSettings({
-      voiceMode: 'openai_realtime',
-      sttProvider: 'browser',
-      ttsProvider: 'browser',
-      realtimeVoice: realtimeVoiceSelection || 'marin',
-      realtimeSpeed: realtimeVoiceSpeed,
-    });
-    setRegularVoiceControlsVisible(false);
-    setRealtimeVoiceControlsVisible(true);
-    renderVoiceProviderControls();
-    renderRealtimeVoiceSelect().catch(() => {});
+    saveDesktopVoiceSettings(xaiRealtime
+      ? {
+          voiceMode: 'xai',
+          voiceAgentXaiRealtime: true,
+          realtimeVoice: normalizeXaiRealtimeVoice(realtimeVoiceSelection),
+          xaiSpeed: Number(desktopVoiceSettings.xaiSpeed || realtimeVoiceSpeed || 1.0),
+        }
+      : {
+          voiceMode: 'openai_realtime',
+          sttProvider: 'browser',
+          ttsProvider: 'browser',
+          realtimeVoice: realtimeVoiceSelection || 'marin',
+          realtimeSpeed: realtimeVoiceSpeed,
+        });
     if (voiceDictationActive && voiceRecognition) {
       try { voiceRecognition.stop(); } catch {}
     }
     if (backendVoiceRecorder) {
       try { backendVoiceRecorder.stop(); } catch {}
     }
-  }
-  setRealtimeVoiceButtonState();
-  if (realtimeVoiceRepliesEnabled) {
+
+    // Full Realtime end-to-end agent path — single OpenAI session does STT,
+    // reasoning, TTS, and tool calls. Replaces the legacy transcription +
+    // gateway voice agent + TTS split flow.
+    if (wantsVoiceAgentRealtimeMode()) {
+      const listenMode = !realtimeUsesHoldSpace() ? 'always_listening' : 'push_to_talk';
+      const listenMessage = listenMode === 'always_listening'
+        ? 'Realtime end-to-end agent is listening. Speak naturally — Prometheus hears, thinks, and replies in one OpenAI session.'
+        : 'Realtime end-to-end agent is ready. Hold Space to talk.';
+      realtimeVoiceStarting = true;
+      setRealtimeVoiceButtonState();
+      showToast('Starting realtime agent', listenMode === 'always_listening' ? 'Opening your microphone and realtime session...' : 'Opening realtime session...', 'info', 2200);
+      const sid = window.activeChatSessionId || 'default';
+      try {
+        await startVoiceAgentRealtimeSession(sid, { listenMode });
+        if (realtimeVoiceModeEpoch !== epoch) return;
+        realtimeVoiceStarting = false;
+        realtimeVoiceRepliesEnabled = true;
+        setRegularVoiceControlsVisible(false);
+        setRealtimeVoiceControlsVisible(true);
+        renderVoiceProviderControls();
+        renderRealtimeVoiceSelect().catch(() => {});
+        if (listenMode === 'always_listening') setVoiceAgentRealtimeMicEnabled(true);
+        addSessionProcessEntry(sid, 'info', `Realtime agent connected (${listenMode}).`, { actor: 'Voice Agent (Realtime)' });
+        setRealtimeVoiceButtonState();
+        showToast('Realtime agent on', listenMessage, 'success', 3200);
+      } catch (err) {
+        if (realtimeVoiceModeEpoch !== epoch || /stopped/i.test(String(err?.message || err))) return;
+        realtimeVoiceStarting = false;
+        realtimeVoiceRepliesEnabled = false;
+        realtimeVoiceModeEpoch += 1;
+        stopVoiceAgentRealtimeSession();
+        setRegularVoiceControlsVisible(true);
+        renderVoiceProviderControls();
+        setRealtimeVoiceButtonState();
+        // For xAI, let the caller fall back to the standard STT/TTS route.
+        if (xaiRealtime) throw err;
+        showToast('Realtime agent failed', String(err?.message || err), 'error');
+      }
+      return;
+    }
+
+    realtimeVoiceRepliesEnabled = true;
+    setRegularVoiceControlsVisible(false);
+    setRealtimeVoiceControlsVisible(true);
+    renderVoiceProviderControls();
+    renderRealtimeVoiceSelect().catch(() => {});
+    setRealtimeVoiceButtonState();
     const listenMessage = realtimeUsesHoldSpace()
       ? 'Hold Space to talk. Release to send.'
       : realtimeListenMode === 'confirm_send'
@@ -13505,10 +15857,12 @@ async function toggleRealtimeVoiceReplies() {
         if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch || /stopped|inactive/i.test(String(err?.message || err))) return;
         realtimeVoiceRepliesEnabled = false;
         realtimeVoiceModeEpoch += 1;
-        clearRealtimeWakeGate({ silent: true });
+        resetRealtimeSessionWakePhrase({ clearInput: true });
         closeRealtimeDictationConnection();
         closeRealtimeVoiceConnection();
         stopRealtimeDraftRecognition();
+        setRegularVoiceControlsVisible(true);
+        renderVoiceProviderControls();
         setRealtimeVoiceButtonState();
         showToast('Realtime microphone failed', String(err?.message || err), 'error');
       });
@@ -13517,17 +15871,22 @@ async function toggleRealtimeVoiceReplies() {
       if (!realtimeVoiceRepliesEnabled || realtimeVoiceModeEpoch !== epoch || /stopped/i.test(String(err?.message || err))) return;
       realtimeVoiceRepliesEnabled = false;
       realtimeVoiceModeEpoch += 1;
-      clearRealtimeWakeGate({ silent: true });
+      resetRealtimeSessionWakePhrase({ clearInput: true });
       closeRealtimeDictationConnection();
       closeRealtimeVoiceConnection();
       stopRealtimeDraftRecognition();
+      setRegularVoiceControlsVisible(true);
+      renderVoiceProviderControls();
       setRealtimeVoiceButtonState();
       showToast('Realtime voice failed', String(err?.message || err), 'error');
     });
   } else {
+    realtimeVoiceRepliesEnabled = false;
+    setRealtimeVoiceButtonState();
     realtimeHoldSpaceActive = false;
     clearRealtimeAssistantSpeakingState();
-    clearRealtimeWakeGate({ silent: true });
+    resetRealtimeSessionWakePhrase({ clearInput: true });
+    stopVoiceAgentRealtimeSession();
     closeRealtimeDictationConnection();
     closeRealtimeVoiceConnection();
     stopRealtimeDraftRecognition();
@@ -29321,6 +31680,10 @@ function setupChatMessageScrollbarFade() {
   messages.addEventListener('wheel', reveal, { passive: true });
   messages.addEventListener('touchmove', reveal, { passive: true });
   messages.addEventListener('pointerdown', reveal);
+
+  messages.addEventListener('scroll', () => {
+    window.chatMessagesUserScrolledUp = !isNearBottom(messages, 60);
+  }, { passive: true });
 }
 
 function canvasInitDrop() {
@@ -29986,9 +32349,13 @@ function summarizeApprovalForHumans(record = {}, fallback = {}) {
 
   if (toolName === 'run_command') {
     const command = String(args.command || record.command || '').trim();
+    const boundary = record.commandBoundary || fallback.commandBoundary || null;
+    const boundaryScope = String(boundary?.scope || '').trim();
     return {
-      title: 'Command approval',
-      summary: command ? `Run command${args.cwd ? ` in ${args.cwd}` : ''}` : 'Run a command.',
+      title: boundaryScope && boundaryScope !== 'workspace' ? 'Outside-workspace command' : 'Command approval',
+      summary: boundaryScope && boundaryScope !== 'workspace'
+        ? `Run a command that may change ${boundaryScope.replace(/_/g, ' ')} state.`
+        : (command ? `Run command${args.cwd ? ` in ${args.cwd}` : ''}` : 'Run a command.'),
       detail: command,
     };
   }
@@ -30091,6 +32458,7 @@ function normalizeChatApprovalRecord(record = {}, fallback = {}) {
     affectedSystems: Array.isArray(record.affectedSystems) ? record.affectedSystems : (Array.isArray(fallback.affectedSystems) ? fallback.affectedSystems : []),
     scopedAction: String(record.scopedAction || fallback.scopedAction || '').trim(),
     scopedTarget: String(record.scopedTarget || fallback.scopedTarget || '').trim(),
+    commandBoundary: record.commandBoundary || fallback.commandBoundary || null,
     devSourceEdit: record.devSourceEdit || fallback.devSourceEdit || null,
     finalAction: record.finalAction || fallback.finalAction || null,
     status: status || 'pending',
@@ -30113,6 +32481,10 @@ function renderInlineApprovalRequest(item) {
   const isCommandApproval = approval.toolName === 'run_command';
   const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
   const verificationCommand = approval.devSourceEdit?.verificationCommand || '';
+  const commandBoundary = approval.commandBoundary || null;
+  const boundaryScope = String(commandBoundary?.scope || '').trim();
+  const boundaryPaths = Array.isArray(commandBoundary?.externalPaths) ? commandBoundary.externalPaths.filter(Boolean) : [];
+  const boundaryEnv = Array.isArray(commandBoundary?.environmentChanges) ? commandBoundary.environmentChanges.filter(Boolean) : [];
   const devPlan = approval.devSourceEdit?.plan || null;
   const devEvidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
   const devSteps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
@@ -30150,6 +32522,9 @@ function renderInlineApprovalRequest(item) {
       <summary>Expected workflow after edits</summary>
       <ol class="chat-approval-plan">${devExpectedWorkflow.slice(0, 8).map((step) => `<li>${escHtml(String(step))}</li>`).join('')}</ol>
     </details>` : ''}
+    ${boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${commandBoundary?.reason ? `<br>${escHtml(String(commandBoundary.reason))}` : ''}</div>` : ''}
+    ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
+    ${boundaryEnv.length ? `<div class="chat-approval-scope"><span>Environment</span>${boundaryEnv.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
     ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
     ${verificationCommand ? `<div class="chat-approval-scope"><span>Verify</span>${escHtml(verificationCommand)}</div>` : ''}
     ${showTechnicalDetails ? `<details class="chat-approval-technical">
@@ -30346,11 +32721,26 @@ function updateInlineApprovalStatusFromEvent(event = {}, status = '') {
 }
 
 async function resolveInlineApproval(id, action, endpoint, grantScope = '') {
-  const ok = await resolveSessionApproval(id, action, endpoint, grantScope);
-  if (ok) {
+  const result = await resolveSessionApproval(id, action, endpoint, grantScope);
+  if (result?.ok) {
     const approved = action !== 'deny';
     updateInlineApprovalStatusFromEvent({ approvalId: id, sessionId: window.activeChatSessionId }, approved ? 'approved' : 'rejected');
     if (approved) setTimeout(() => loadApprovalProcessRun(id, { attempts: 6, delayMs: 500, forceOpen: true }), 100);
+  }
+}
+
+async function restorePendingInlineApprovalsForSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  try {
+    const data = await api('/api/approvals?status=pending');
+    const approvals = (Array.isArray(data?.approvals) ? data.approvals : [])
+      .filter((approval) => String(approval.sourceSessionId || approval.sessionId || '').trim() === sid);
+    for (const approval of approvals) {
+      upsertInlineApprovalMessage(approval, { create: true });
+    }
+  } catch (err) {
+    console.warn('[ChatPage] could not restore pending approvals:', err);
   }
 }
 
@@ -30424,17 +32814,33 @@ async function resolveSessionApproval(id, action, endpoint, grantScope = '') {
   try {
     const method = 'POST';
     const body = JSON.stringify(grantScope ? { grantScope } : {});
-    await api(endpoint, { method, body });
+    const result = await api(endpoint, { method, body });
     await loadSessionApprovals();
     if (window.currentMode === 'proposals' && typeof window.loadProposals === 'function') window.loadProposals();
     if (window.currentMode === 'approvals' && typeof window.loadApprovals === 'function') window.loadApprovals();
     if (typeof window.checkPendingProposalsBadge === 'function') window.checkPendingProposalsBadge();
     const label = action === 'deny' ? 'Denied' : grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved';
     addProcessEntry('info', `${label}: ${id}`);
-    return true;
+    const resumePrompt = String(result?.resumePrompt || '').trim();
+    if (resumePrompt && action !== 'deny') {
+      const approvalSessionId = String(result?.approval?.sessionId || result?.approval?.sourceSessionId || window.activeChatSessionId || '').trim();
+      if (approvalSessionId && approvalSessionId !== window.activeChatSessionId) {
+        window.activeChatSessionId = approvalSessionId;
+        setAgentSessionId(approvalSessionId);
+        syncActiveChat();
+      }
+      setTimeout(() => {
+        try {
+          sendChat(resumePrompt, { clientRequestId: newChatClientRequestId(approvalSessionId || window.activeChatSessionId) });
+        } catch (err) {
+          showToast('Approval resume failed', String(err?.message || err), 'error');
+        }
+      }, 100);
+    }
+    return { ok: true, data: result, resumePrompt };
   } catch (err) {
     showToast('Error', err.message || 'Could not resolve action', 'error');
-    return false;
+    return { ok: false, error: err };
   }
 }
 
@@ -30464,6 +32870,8 @@ window.renderQueuedPromptsPanel = renderQueuedPromptsPanel;
 window.removeQueuedPrompt = removeQueuedPrompt;
 window.steerQueuedPrompt = steerQueuedPrompt;
 window.clearQueuedPrompts = clearQueuedPrompts;
+window.toggleQueuedPromptMenu = toggleQueuedPromptMenu;
+window.editQueuedPrompt = editQueuedPrompt;
 window.updateQueuedPromptUI = updateQueuedPromptUI;
 window.removeVoicePendingTurn = removeVoicePendingTurn;
 window.editVoicePendingTurn = editVoicePendingTurn;
@@ -30472,6 +32880,10 @@ window.saveChatSessions = saveChatSessions;
 window.makeSessionTitle = makeSessionTitle;
 window.loadChatSessions = loadChatSessions;
 window._loadSessionFromServer = _loadSessionFromServer;
+window.refreshChatContextWindow = refreshChatContextWindow;
+window.scheduleChatContextWindowRefresh = scheduleChatContextWindowRefresh;
+window.toggleChatContextWindowPopover = toggleChatContextWindowPopover;
+window.closeChatContextWindowPopover = closeChatContextWindowPopover;
 window.loadTerminalSessions = loadTerminalSessions;
 window.syncActiveChat = syncActiveChat;
 window.persistActiveChat = persistActiveChat;
@@ -30484,12 +32896,11 @@ window.markSessionUnread = markSessionUnread;
 window.upsertAutomatedSession = upsertAutomatedSession;
 window.setSidebarTab = setSidebarTab;
 window.updateAgentMode = updateAgentMode;
-window.renderThinkBlock = renderThinkBlock;
-window.toggleThink = toggleThink;
 window.renderReactSteps = renderReactSteps;
 window.toggleSteps = toggleSteps;
 window.renderAssistantContent = renderAssistantContent;
 window.renderAssistantGeneratedImages = renderAssistantGeneratedImages;
+window.pcScrollRight = pcScrollRight;
 window.setGeneratedImagePreview = setGeneratedImagePreview;
 // window.getFileIcon — first declaration already exposed above
 window.renderFilePills = renderFilePills;
@@ -30510,6 +32921,9 @@ window.canvasHandleCreativeUploadInput = canvasHandleCreativeUploadInput;
 window.renderArtifacts = renderArtifacts;
 window.openInFileLocation = openInFileLocation;
 window.renderChatMessages = renderChatMessages;
+window.applyEmptyChatStarterPrompt = applyEmptyChatStarterPrompt;
+window.toggleVoiceSettingsPopover = toggleVoiceSettingsPopover;
+window.closeVoiceSettingsPopover = closeVoiceSettingsPopover;
 window.renderMainGoalStrip = renderMainGoalStrip;
 window.mainGoalAction = mainGoalAction;
 window.pushProgressLine = pushProgressLine;
@@ -30548,6 +32962,28 @@ window.onRealtimeVoiceChanged = onRealtimeVoiceChanged;
 window.onRealtimeVoiceSpeedChanged = onRealtimeVoiceSpeedChanged;
 window.onRealtimeNarrationModeChanged = onRealtimeNarrationModeChanged;
 window.onRealtimeListenModeChanged = onRealtimeListenModeChanged;
+window.onRealtimeAgentToggleChanged = function onRealtimeAgentToggleChanged() {
+  const checkbox = document.getElementById('realtime-agent-toggle');
+  const enabled = checkbox?.checked !== false;
+  saveDesktopVoiceSettings({ voiceAgentRealtimeAgent: enabled });
+  // If currently running in legacy mode and user enables the agent (or vice versa),
+  // tear down both pipelines so the next mic engage uses the chosen path.
+  stopVoiceAgentRealtimeSession();
+  try { closeRealtimeDictationConnection?.(); } catch {}
+  try { closeRealtimeVoiceConnection?.(); } catch {}
+  showToast(enabled ? 'Realtime end-to-end agent enabled' : 'End-to-end agent disabled', enabled ? 'Re-engage mic for the new single-session realtime agent.' : 'Falling back to the split flow.', 'info', 2400);
+};
+window.onXaiRealtimeToggleChanged = function onXaiRealtimeToggleChanged() {
+  const checkbox = document.getElementById('xai-realtime-toggle');
+  const enabled = checkbox?.checked === true;
+  saveDesktopVoiceSettings({ voiceAgentXaiRealtime: enabled });
+  // Tear down any live session so the next mic engage uses the chosen route
+  // (xAI realtime speech-to-speech vs the default xAI STT/TTS split flow).
+  stopVoiceAgentRealtimeSession();
+  try { closeRealtimeDictationConnection?.(); } catch {}
+  try { closeRealtimeVoiceConnection?.(); } catch {}
+  showToast(enabled ? 'xAI Realtime enabled' : 'xAI Realtime disabled', enabled ? 'Re-engage mic for live Grok speech-to-speech.' : 'Falling back to the xAI STT/TTS flow.', 'info', 2400);
+};
 window.clearRealtimeWakeGate = clearRealtimeWakeGate;
 window.getCanvasLang = getCanvasLang;
 window.isHtmlFile = isHtmlFile;
@@ -30770,9 +33206,9 @@ wsEventBus.on('main_chat_goal_updated', async (msg) => {
   saveChatSessions();
 });
 
-wsEventBus.on('session_notification', (msg) => {
+wsEventBus.on('session_notification', async (msg) => {
   if (!msg) return;
-  const appendToPreviousSession = () => {
+  const appendToPreviousSession = async () => {
     const prevId = String(msg.previousSessionId || '').trim();
     const text = String(msg.text || '');
     if (!prevId || !text) return null;
@@ -30792,13 +33228,27 @@ wsEventBus.on('session_notification', (msg) => {
       };
       window.chatSessions.unshift(prev);
     }
+    if (String(msg.source || '') === 'hot_restart') {
+      clearLiveTurnStateForSession(prevId);
+      prev._needsServerLoad = true;
+      await _loadSessionFromServer(prevId, { force: true });
+      prev = window.chatSessions.find((s) => s.id === prevId) || prev;
+      prev.history = reconcileChatHistoryAfterMerge(prev.history || []);
+      clearLiveTurnStateForSession(prevId);
+      await restorePendingInlineApprovalsForSession(prevId);
+      prev = window.chatSessions.find((s) => s.id === prevId) || prev;
+    }
     prev.history = Array.isArray(prev.history) ? prev.history : [];
     const packet = buildRestartProcessPacketMessage(prev);
     if (packet) {
       prev.history.push(packet);
     }
     const last = prev.history.length > 0 ? prev.history[prev.history.length - 1] : null;
-    if (!last || String(last.role || '') !== 'assistant' || String(last.content || '') !== text) {
+    const alreadyHasText = prev.history.some((entry) => (
+      String(entry?.role || '') === 'assistant'
+      && String(entry?.content || '') === text
+    ));
+    if (!alreadyHasText && (!last || String(last.role || '') !== 'assistant' || String(last.content || '') !== text)) {
       prev.history.push({ role: 'assistant', content: text });
     }
     prev.updatedAt = Date.now();
@@ -30814,7 +33264,7 @@ wsEventBus.on('session_notification', (msg) => {
     }
   };
   if (String(msg.source || '') === 'hot_restart') {
-    const restored = appendToPreviousSession();
+    const restored = await appendToPreviousSession();
     if (restored?.id) {
       window.activeChatSessionId = restored.id;
       setAgentSessionId(restored.id);
@@ -30823,14 +33273,13 @@ wsEventBus.on('session_notification', (msg) => {
       syncActiveChat();
       if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
       renderChatMessages();
-      catchUpMainChatStream(restored.id).catch(() => {});
     }
     ack();
     return;
   }
   if (msg.automatedSession && typeof window.upsertAutomatedSession === 'function') {
     window.upsertAutomatedSession(msg.automatedSession, { markUnread: true });
-    appendToPreviousSession();
+    await appendToPreviousSession();
     const title = msg.automatedSession.title || msg.title || 'Automated session';
     bgtToast('💬 New automated session', String(title).slice(0, 100));
     ack();
@@ -30847,7 +33296,7 @@ wsEventBus.on('session_notification', (msg) => {
       automated: true,
       source: String(msg.source || ''),
     }, { markUnread: true });
-    appendToPreviousSession();
+    await appendToPreviousSession();
     ack();
   }
 });
@@ -30895,6 +33344,46 @@ wsEventBus.on('delivery_notification', (msg) => {
   if (typeof bgtToast === 'function') bgtToast('Delivered update', text || fileName || 'Screenshot delivered');
 });
 
+wsEventBus.on('vision_injected', (msg) => {
+  if (!msg) return;
+  const tool = String(msg.tool || '').trim();
+  if (!/^voice_(?:browser|desktop)_screenshot$/i.test(tool)) return;
+  const sid = String(msg.sessionId || window.activeChatSessionId || '').trim();
+  const preview = msg.preview && typeof msg.preview === 'object' ? msg.preview : {};
+  const dataUrl = String(preview.dataUrl || msg.dataUrl || '').trim();
+  if (!dataUrl) return;
+  const source = String(msg.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+  const dimensions = preview.width && preview.height ? ` ${preview.width}x${preview.height}` : '';
+  const content = `![${source} screenshot${dimensions}](${dataUrl})`;
+  let sess = (window.chatSessions || []).find((s) => s.id === sid);
+  if (!sess) {
+    sess = {
+      id: sid || `vision_${Date.now()}`,
+      title: `${source} screenshot`,
+      history: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      source: 'voice',
+      automated: true,
+    };
+    window.chatSessions = window.chatSessions || [];
+    window.chatSessions.unshift(sess);
+  }
+  sess.history = Array.isArray(sess.history) ? sess.history : [];
+  sess.history.push({
+    role: 'assistant',
+    content,
+    timestamp: Number(msg.timestamp || Date.now()),
+    channel: 'voice',
+    channelLabel: 'voice preview',
+  });
+  sess.updatedAt = Date.now();
+  if (sess.id !== window.activeChatSessionId) sess.unread = true;
+  saveChatSessions();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  if (sess.id === window.activeChatSessionId) renderChatMessages();
+});
+
 function appendTelegramMessageToSession(sessionId, message) {
   const sid = String(sessionId || '').trim();
   if (!sid || !message || !message.role) return;
@@ -30916,12 +33405,30 @@ function appendTelegramMessageToSession(sessionId, message) {
     && String(last.role || '') === String(next.role || '')
     && String(last.content || '') === String(next.content || '')
   ) {
+    if (next.role === 'assistant') {
+      delete window._sessionThinking[sid];
+      window._sessionStreamState[sid] = makeEmptyStreamState();
+      if (sid === window.activeChatSessionId) {
+        syncActiveSessionRunState();
+        applyStreamStateToWindow(sid);
+        renderChatMessages();
+      }
+    }
     return;
   }
   sess.history.push(next);
   sess.updatedAt = Date.now();
-  sess.title = makeSessionTitle(sess.history);
+  applyAutoSessionTitleOnce(sess, sess.history);
+  if (next.role === 'assistant') {
+    delete window._sessionThinking[sid];
+    window._sessionStreamState[sid] = makeEmptyStreamState();
+  }
   if (sid !== window.activeChatSessionId) sess.unread = true;
+  if (sid === window.activeChatSessionId) {
+    syncActiveSessionRunState();
+    applyStreamStateToWindow(sid);
+    renderChatMessages();
+  }
 }
 
 function inferChannelFromSessionId(sessionId, fallback = '') {
@@ -31048,6 +33555,88 @@ function scheduleMainChatStreamCatchup(sessionId) {
   }, 1800);
 }
 
+// ─── Cross-channel live update helpers ────────────────────────────────────────
+
+async function _wsReconnectCatchUp() {
+  // Refresh session list from server to pick up sessions from other channels
+  try {
+    const data = await fetchJsonWithTimeout('/api/sessions', 2500);
+    if (data) {
+      const svr = Array.isArray(data.sessions) ? data.sessions : [];
+      if (svr.length > 0) {
+        mergeServerSessionSummaries(svr);
+        if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+      }
+    }
+  } catch {}
+  // Catch up on stream events for the active session that arrived while disconnected
+  if (window.activeChatSessionId) {
+    catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
+  }
+}
+
+function _isDesktopIdle() {
+  if (window.isThinking) return false;
+  if (window._sessionAbortControllers?.[window.activeChatSessionId]) return false;
+  const input = document.getElementById('chat-input');
+  if (input && String(input.value || '').trim().length > 0) return false;
+  return true;
+}
+
+function _isExternalChannel(sid) {
+  return ['telegram', 'mobile', 'discord', 'whatsapp', 'terminal'].includes(inferChannelFromSessionId(sid));
+}
+
+function _isMobileShellActive() {
+  return document.body?.classList?.contains('pm-mobile-active') === true;
+}
+
+function _showChannelActivityToast(sid, channelLabel, preview) {
+  if (_isMobileShellActive()) return;
+  document.querySelector('.__channel-activity-toast')?.remove();
+  const toast = document.createElement('div');
+  toast.className = '__sc-toast __channel-activity-toast';
+  const existing = document.querySelectorAll('.__sc-toast');
+  const offset = 24 + [...existing].reduce((sum, t) => sum + t.offsetHeight + 8, 0);
+  toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;background:var(--panel);border:1.5px solid var(--brand, #6366f1);border-radius:12px;padding:12px 16px 12px 14px;min-width:240px;max-width:380px;box-shadow:0 4px 24px rgba(0,0,0,0.18);font-family:var(--font);display:flex;gap:10px;align-items:flex-start`;
+  toast.setAttribute('data-channel-sid', sid);
+  toast.innerHTML = `
+    <span style="font-size:16px;flex-shrink:0;line-height:1.4">💬</span>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:13px;font-weight:800;color:var(--brand,#6366f1);margin-bottom:3px">Live on ${escHtml(channelLabel)}</div>
+      ${preview ? `<div style="font-size:12px;color:var(--muted);line-height:1.5;word-break:break-word;margin-bottom:6px">${escHtml(String(preview).slice(0, 80))}</div>` : ''}
+      <button class="__channel-switch-btn" style="border:none;background:var(--brand,#6366f1);color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">View live →</button>
+    </div>
+    <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;flex-shrink:0;padding:0 0 0 4px">&times;</button>
+  `;
+  toast.querySelector('.__channel-switch-btn').addEventListener('click', () => {
+    _switchToChannelSession(sid);
+    toast.remove();
+  });
+  toast.querySelector('button:last-child').addEventListener('click', () => toast.remove());
+  document.body.appendChild(toast);
+  if (!document.getElementById('__sc-toast-style')) {
+    const s = document.createElement('style');
+    s.id = '__sc-toast-style';
+    s.textContent = '@keyframes scToastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}';
+    document.head.appendChild(s);
+  }
+}
+
+function _switchToChannelSession(sid) {
+  const sess = getChatSessionById(sid);
+  if (!sess) return;
+  window.activeChatSessionId = sid;
+  setAgentSessionId(sid);
+  sess.unread = false;
+  saveChatSessions();
+  syncActiveChat();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  renderChatMessages();
+  catchUpMainChatStream(sid).catch(() => {});
+}
+window._switchToChannelSession = _switchToChannelSession;
+
 function handleMainChatStreamEvent(msg = {}) {
   const sid = String(msg.sessionId || '').trim();
   if (!sid) return;
@@ -31092,11 +33681,28 @@ function handleMainChatStreamEvent(msg = {}) {
         sess.history.push(next);
         appended = true;
       }
-      sess.title = makeSessionTitle(sess.history);
+      applyAutoSessionTitleOnce(sess, sess.history);
       if (appended) addSessionProcessEntry(sid, 'user', content, { actor: next.channelLabel || next.channel || 'Channel' });
     }
     window._sessionThinking[sid] = true;
     streamState.currentTurnStartIndex = sess.processLog.length;
+    // Cross-channel live update: schedule auto-switch or show a toast.
+    // The switch is deferred via setTimeout(0) so it runs AFTER
+    // restoreActiveSessionIfStreamStoleFocus (which otherwise undoes the switch).
+    if (!isViewing && _isExternalChannel(sid) && !_isMobileShellActive()) {
+      const chLabel = sess.source || inferChannelFromSessionId(sid);
+      const capturedContent = content;
+      if (_isDesktopIdle()) {
+        queueMicrotask(() => {
+          if (window.activeChatSessionId !== sid) {
+            _switchToChannelSession(sid);
+            showToast(`Live on ${chLabel}`, capturedContent ? capturedContent.slice(0, 80) : undefined, 'info', 3500);
+          }
+        });
+      } else {
+        _showChannelActivityToast(sid, chLabel, content);
+      }
+    }
     renderIfViewing();
   } else if (evt.type === 'token') {
     const chunk = String(evt.text || '');
@@ -31111,14 +33717,15 @@ function handleMainChatStreamEvent(msg = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
-      appendLiveTraceToStreamState(streamState, 'think', chunk, { append: true });
+      if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
+        appendLiveTraceToStreamState(streamState, 'preamble', chunk, { append: true });
+      }
       renderIfViewing();
     }
   } else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
     const text = String(evt.thinking || evt.text || '').trim();
     if (text) {
       addSessionProcessEntry(sid, 'think', text);
-      appendLiveTraceToStreamState(streamState, 'think', text);
       renderIfViewing();
     }
   } else if (evt.type === 'ui_preflight' || evt.type === 'info') {
@@ -31192,10 +33799,15 @@ function handleMainChatStreamEvent(msg = {}) {
           timestamp: lastUserTimestamp > 0 ? lastUserTimestamp + 1 : Date.now(),
           channel: inferChannelFromSessionId(sid),
           channelLabel: inferChannelFromSessionId(sid),
+          artifacts: Array.isArray(evt.artifacts) && evt.artifacts.length ? evt.artifacts : undefined,
+          generatedImages: Array.isArray(evt.generatedImages) && evt.generatedImages.length ? evt.generatedImages : undefined,
+          generatedVideos: Array.isArray(evt.generatedVideos) && evt.generatedVideos.length ? evt.generatedVideos : undefined,
+          canvasFiles: Array.isArray(evt.canvasFiles) && evt.canvasFiles.length ? evt.canvasFiles : undefined,
+          fileChanges: evt.fileChanges || undefined,
           processEntries: sess.processLog.slice(Number(streamState.currentTurnStartIndex || 0)),
         });
       }
-      sess.title = makeSessionTitle(sess.history);
+      applyAutoSessionTitleOnce(sess, sess.history);
     }
     delete window._sessionThinking[sid];
     window._sessionStreamState[sid] = makeEmptyStreamState();
@@ -31211,8 +33823,9 @@ function handleMainChatStreamEvent(msg = {}) {
   }
 
   sess.updatedAt = Date.now();
+  sess.lastMessageAt = getSessionLastMessageAt(sess);
   if (sid !== window.activeChatSessionId) sess.unread = true;
-  window.chatSessions.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  window.chatSessions.sort((a, b) => getSessionLastMessageAt(b) - getSessionLastMessageAt(a));
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   refreshVisibleChannelsList();
@@ -31281,7 +33894,7 @@ function appendTimerMessageToSession(sessionId, message) {
   }
   sess.history.push(next);
   sess.updatedAt = Date.now();
-  sess.title = makeSessionTitle(sess.history);
+  applyAutoSessionTitleOnce(sess, sess.history);
   if (sid !== window.activeChatSessionId) sess.unread = true;
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
@@ -31872,6 +34485,8 @@ wsEventBus.on('ws:open', () => {
   requestBrowserKnowledge(true);
   syncBrowserCanvasStream({ force: true });
   syncBrowserTeachSessionToBackend();
+  // Catch up on events and sessions missed while WS was disconnected
+  _wsReconnectCatchUp().catch(() => {});
 });
 
 wsEventBus.on('canvas_project_changed', (msg) => {
@@ -32070,14 +34685,27 @@ wsEventBus.on('bg_agent_done', (msg) => {
 // broadcasts coordinator_progress WS events so the process log shows activity
 // instead of appearing to hang silently.
 wsEventBus.on('voice_interruption', (msg) => {
+  if (msg?.isInterruption === false) return;
   const sessionId = String(msg?.sessionId || '').trim();
   const activeSessionId = String(window.activeChatSessionId || '').trim();
   if (!sessionId || sessionId !== activeSessionId) return;
   const intent = String(msg?.intent || 'unknown').trim();
+  const transcript = String(msg?.transcript || msg?.currentUserPrompt || msg?.userInterruptionTranscript || '').trim();
   addSessionProcessEntry(sessionId, 'warn', `Voice interruption: ${intent}${msg?.shouldAbortOriginalRun ? ' (worker abort requested)' : ''}`, {
     actor: 'Voice Interruption',
     eventId: msg?.eventId,
     runtimeId: msg?.runtimeId,
+    transcript,
+    action: msg?.action,
+    steerApplied: msg?.steerApplied === true,
+  });
+  appendVoiceInterruptionWorkflowSplit(sessionId, transcript, {
+    ...msg,
+    classification: {
+      ...(msg?.classification || {}),
+      intent,
+      shouldAbortOriginalRun: msg?.shouldAbortOriginalRun === true,
+    },
   });
 });
 

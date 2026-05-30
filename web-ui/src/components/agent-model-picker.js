@@ -11,8 +11,8 @@
  * Behaviour:
  *   - The agent's `model` field is stored as "provider/model" (matches
  *     the Settings agent edit form). Saved via PATCH /api/agents/:id/model.
- *   - Reasoning controls (OpenAI / OpenAI Codex / Perplexity reasoning
- *     effort, Anthropic extended thinking + budget) live in the global
+ *   - Reasoning controls (OpenAI / OpenAI Codex / Anthropic / Perplexity
+ *     effort, Anthropic thinking toggle + legacy budget) live in the global
  *     `llm.providers.{provider}.*` config. They're shared across every
  *     agent using that provider; we label them as such. Saved via
  *     POST /api/settings/provider.
@@ -40,7 +40,7 @@ const BUILTIN_LABELS = {
 const BUILTIN_STATIC_MODELS = {
   openai:       ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
   xai:          ['grok-4.20-reasoning', 'grok-4-1-fast-reasoning'],
@@ -49,6 +49,7 @@ const BUILTIN_STATIC_MODELS = {
 const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity']);
 const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
 const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 const ANTHROPIC_BUDGETS = [2048, 5000, 10000, 16000, 24000, 32000];
 
 function _providerSortRank(id) {
@@ -164,15 +165,22 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig) {
   if (provider === 'anthropic') {
     const ext = providerConfig?.extended_thinking === true;
     const budget = parseInt(providerConfig?.thinking_budget || '10000', 10);
+    const effort = String(providerConfig?.reasoning_effort || '').trim();
     return `
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Thinking effort</label>
+        <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
+          ${ANTHROPIC_EFFORT_OPTIONS.map((o) => `<option value="${o}" ${o===effort?'selected':''}>${o === 'xhigh' ? 'extra high' : (o || 'provider default')}</option>`).join('')}
+        </select>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Extended thinking</label>
+        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Claude thinking</label>
         <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
           <input type="checkbox" id="${prefix}-extthink-${escHtml(agentId)}" ${ext?'checked':''} style="width:14px;height:14px" />
           Enabled
         </label>
         <select id="${prefix}-budget-${escHtml(agentId)}" style="flex:1;min-width:140px;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
-          ${ANTHROPIC_BUDGETS.map((b) => `<option value="${b}" ${b===budget?'selected':''}>${b.toLocaleString()} tokens</option>`).join('')}
+          ${ANTHROPIC_BUDGETS.map((b) => `<option value="${b}" ${b===budget?'selected':''}>legacy ${b.toLocaleString()} tokens</option>`).join('')}
         </select>
         <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}','anthropic')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
       </div>
@@ -353,8 +361,10 @@ window.agentModelPickerSaveReasoning = async function (prefix, agentId, provider
     const sel = document.getElementById(`${prefix}-effort-${agentId}`);
     providerPatch.reasoning_effort = (sel?.value || '').trim();
   } else if (provider === 'anthropic') {
+    const sel = document.getElementById(`${prefix}-effort-${agentId}`);
     const extEl = document.getElementById(`${prefix}-extthink-${agentId}`);
     const budgetEl = document.getElementById(`${prefix}-budget-${agentId}`);
+    providerPatch.reasoning_effort = (sel?.value || '').trim();
     providerPatch.extended_thinking = !!(extEl && extEl.checked);
     providerPatch.thinking_budget = parseInt(budgetEl?.value || '10000', 10);
   }

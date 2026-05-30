@@ -1,4 +1,4 @@
-import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js';
+import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=mobile-voice-live-update-fix';
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
 
 const SECTIONS = [
@@ -295,6 +295,7 @@ function renderProviderFields(provider, cfg = {}) {
   const keyId = apiKeyInputId(provider);
   const effortId = effortInputId(provider);
   const efforts = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'].map(v => ({ value: v, label: v || 'none' }));
+  const anthropicEfforts = ['', 'low', 'medium', 'high', 'xhigh', 'max'].map(v => ({ value: v, label: v === 'xhigh' ? 'extra high' : (v || 'provider default') }));
   if (provider === 'ollama') {
     return `
       ${field('Endpoint', input(endpointId, cfg.endpoint || 'http://localhost:11434'))}
@@ -323,9 +324,10 @@ function renderProviderFields(provider, cfg = {}) {
   }
   if (provider === 'anthropic') {
     return `
-      ${field('Model', select(modelId, ['claude-opus-4-6','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-4-5-20251001'], cfg.model || 'claude-sonnet-4-6'))}
-      ${toggleRow('pm-anthropic-thinking', 'Enable extended thinking', cfg.extended_thinking === true)}
-      ${field('Thinking Budget', select('pm-anthropic-budget', ['2048','5000','10000','16000','24000','32000'], String(cfg.thinking_budget || '10000')))}
+      ${field('Model', select(modelId, ['claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-4-5-20251001'], cfg.model || 'claude-sonnet-4-6'))}
+      ${field('Thinking Effort', select(effortId, anthropicEfforts, cfg.reasoning_effort || ''))}
+      ${toggleRow('pm-anthropic-thinking', 'Enable Claude thinking', cfg.extended_thinking === true)}
+      ${field('Legacy Thinking Budget', select('pm-anthropic-budget', ['2048','5000','10000','16000','24000','32000'], String(cfg.thinking_budget || '10000')))}
     `;
   }
   if (provider === 'perplexity') {

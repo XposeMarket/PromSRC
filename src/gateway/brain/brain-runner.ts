@@ -27,6 +27,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { activateToolCategory, addMessage, clearHistory, clearSessionMutationScope, persistToolLog, setSessionMutationScope } from '../session';
+import { formatToolObservationsForContext, persistToolResultsAsObservations } from '../tool-observations';
 import { isKnownProviderId } from '../../providers/provider-registry.js';
 import {
   getBrainDir,
@@ -615,13 +616,9 @@ export class BrainRunner {
       { disableCompactionCheck: true, disableMemoryFlushCheck: true },
     );
     if (toolResults.length > 0) {
-      const toolLogLines = toolResults.slice(-8).map((r) => {
-        const ok = r.error ? '✗' : '✓';
-        const args = r.args ? JSON.stringify(r.args).slice(0, 80) : '';
-        const preview = String(r.result || '').slice(0, 120).replace(/\n/g, ' ');
-        return `${ok} ${r.name}(${args}): ${preview}`;
-      });
-      persistToolLog(sessionId, toolLogLines.join('\n'));
+      const observations = persistToolResultsAsObservations(sessionId, `brain_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`, toolResults);
+      const toolLog = formatToolObservationsForContext(observations, { includeHeader: false, maxChars: 5000, maxObservations: 8 });
+      if (toolLog) persistToolLog(sessionId, toolLog);
     }
 
     const fileExists = fs.existsSync(absOutFile);
@@ -808,13 +805,9 @@ export class BrainRunner {
       { disableCompactionCheck: true, disableMemoryFlushCheck: true },
     );
     if (toolResults.length > 0) {
-      const toolLogLines = toolResults.slice(-8).map((r) => {
-        const ok = r.error ? '✗' : '✓';
-        const args = r.args ? JSON.stringify(r.args).slice(0, 80) : '';
-        const preview = String(r.result || '').slice(0, 120).replace(/\n/g, ' ');
-        return `${ok} ${r.name}(${args}): ${preview}`;
-      });
-      persistToolLog(sessionId, toolLogLines.join('\n'));
+      const observations = persistToolResultsAsObservations(sessionId, `brain_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`, toolResults);
+      const toolLog = formatToolObservationsForContext(observations, { includeHeader: false, maxChars: 5000, maxObservations: 8 });
+      if (toolLog) persistToolLog(sessionId, toolLog);
     }
 
     const runFailed = /^error:/i.test(String(resultText || '').trim());
@@ -1062,13 +1055,9 @@ export class BrainRunner {
       { disableCompactionCheck: true, disableMemoryFlushCheck: true },
     );
     if (toolResults.length > 0) {
-      const toolLogLines = toolResults.slice(-8).map((r) => {
-        const ok = r.error ? 'âœ—' : 'âœ“';
-        const args = r.args ? JSON.stringify(r.args).slice(0, 80) : '';
-        const preview = String(r.result || '').slice(0, 120).replace(/\n/g, ' ');
-        return `${ok} ${r.name}(${args}): ${preview}`;
-      });
-      persistToolLog(sessionId, toolLogLines.join('\n'));
+      const observations = persistToolResultsAsObservations(sessionId, `brain_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`, toolResults);
+      const toolLog = formatToolObservationsForContext(observations, { includeHeader: false, maxChars: 5000, maxObservations: 8 });
+      if (toolLog) persistToolLog(sessionId, toolLog);
     }
 
     const cleanupExists = fs.existsSync(absOutFile);
@@ -1718,6 +1707,53 @@ _Generated: ${nowStr}_
 
 ## Summary
 [2-4 short paragraphs. Make this feel like an actual thought, not a report stub: summarize what happened, what it seems to mean, where the momentum or friction was, and include 1-3 natural "I wonder if..." observations. Keep it grounded; do not invent facts.]
+
+## Pulse Cards
+Write exactly 3 homepage Pulse cards that a user could click on the Prometheus new-chat screen.
+These are proactive "you were circling this, want to dig in?" cards based on the user's chats and momentum.
+They are not questions about the Brain Thought, not report summaries, and not citations of your analysis sections.
+Choose card ideas from actual user-facing threads: things Raul mentioned briefly, unfinished ideas, repeated interests, half-built features, follow-up-worthy creative/product/business/code directions, or practical next steps that naturally continue recent conversations.
+Prefer cards that feel useful, timely, personal to Prometheus/Raul's recent work, and editable, not alarmist or awkward.
+Each card must:
+- have a short, natural title under 52 characters
+- have a clear body under 130 characters
+- have a prompt that can be placed directly into the chat composer for the user to edit or send
+- avoid phrases like "Brain Thought", "thought file", "Dream should", "audit window", "evidence", "section", raw citations, file paths, and internal jargon in title/body/prompt
+- make the prompt grounded enough that Prometheus can verify current state before acting
+- be based on actual chat/user evidence from this Thought; if the window has weak signal, use gentle review/planning cards instead of inventing work
+
+Good card style examples:
+- title: "Premium UI Microfeatures"
+  body: "Small polish passes could make Prometheus feel more finished without a huge rebuild."
+  prompt: "Let's dig into premium UI microfeatures for Prometheus based on the recent chat UI work. Review what changed recently, then suggest 5 small high-impact polish ideas and the best first one to implement."
+- title: "Prompt Cache Next Steps"
+  body: "A lightweight way to save winning prompts could turn repeated workflows into reusable tooling."
+  prompt: "Let's explore a Prompt Cache feature for Prometheus. Ground it in recent chats and current source, then sketch the smallest useful version and how it would show up in the UI."
+- title: "Opus 4.8 Showcase"
+  body: "The model upgrade momentum could become a cleaner demo or launch asset."
+  prompt: "Let's revisit the Opus 4.8 showcase idea from the recent Prometheus work. Check what exists now, then propose the cleanest next version or repair path."
+
+Use this exact fenced JSON shape and no extra keys:
+
+\`\`\`json
+[
+  {
+    "title": "Short card title",
+    "body": "One sentence describing why this is worth opening.",
+    "prompt": "A complete, editable user prompt for Prometheus to act on or plan from."
+  },
+  {
+    "title": "Short card title",
+    "body": "One sentence describing why this is worth opening.",
+    "prompt": "A complete, editable user prompt for Prometheus to act on or plan from."
+  },
+  {
+    "title": "Short card title",
+    "body": "One sentence describing why this is worth opening.",
+    "prompt": "A complete, editable user prompt for Prometheus to act on or plan from."
+  }
+]
+\`\`\`
 
 ## A. Activity Summary
 [populate from your analysis]

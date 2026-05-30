@@ -39,6 +39,16 @@
       "path": "examples/2026-05-21-reddit-openclaw-and-steering.md",
       "type": "example",
       "description": "Successful 2026-05-21 lightweight Reddit/OpenClaw AI-surface scan example with tool order, output shape, and steering guardrails."
+    },
+    {
+      "path": "examples/2026-05-22-ai-smoke-test.md",
+      "type": "example",
+      "description": "Successful AI smoke-test example with tool order, Claude name-collision caveat, and output shape from 2026-05-22."
+    },
+    {
+      "path": "examples/2026-05-23-interrupted-browser-target-closed.md",
+      "type": "example",
+      "description": "Recovery example for AI smoke tests when browser_scroll_collect fails because the page/context closed during a run."
     }
   ]
 }

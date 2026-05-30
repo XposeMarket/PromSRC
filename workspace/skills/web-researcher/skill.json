@@ -57,6 +57,16 @@
       "path": "examples/design-operating-system-research-2026-05-10.md",
       "type": "example",
       "description": "Example pattern for researching external design/UI systems and mapping them into Prometheus-native design workflows."
+    },
+    {
+      "path": "notes/search-provider-health-2026-05-22.md",
+      "type": "doc",
+      "description": "Dated provider-health snapshot: normal web search/fetch works; Google API key missing; xAI Live Search deprecated."
+    },
+    {
+      "path": "notes/product-carousel-routing-2026-05-23.md",
+      "type": "doc",
+      "description": "Routing note: use show_product_carousel for curated shopping/product research results."
     }
   ]
 }

@@ -256,28 +256,79 @@ function normalizeWorkspacePathAliases(rawCmd: string, workspacePath: string): s
   return rawCmd.replace(/cd\s+(?:\/d\s+)?(["']?)\/workspace\1/ig, `cd /d "${workspacePath}"`);
 }
 
+const DEFAULT_ALLOWED_SHELL_COMMANDS = [
+  'cd', 'if', 'set', 'echo', 'dir', 'ls', 'pwd', 'cat', 'type', 'more', 'find', 'findstr', 'where', 'whoami',
+  'rg', 'grep', 'egrep', 'fgrep', 'wc', 'cut', 'tr', 'sort', 'uniq', 'head', 'tail', 'tee',
+  'basename', 'dirname', 'realpath', 'stat', 'du', 'df', 'date', 'uname', 'env', 'printenv', 'which',
+  'select-string', 'get-content', 'get-childitem', 'get-item', 'get-location', 'resolve-path',
+  'where-object', 'foreach-object', 'measure-object', 'out-string', 'convertto-json', 'convertfrom-json',
+  'git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'python', 'python3', 'pip', 'pip3', 'tsc', 'ts-node',
+  'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'dotnet', 'docker', 'kubectl', 'az', 'aws',
+  'curl', 'wget', 'cmd', 'powershell', 'pwsh', 'vercel', 'xurl', 'ffmpeg', 'ffprobe', 'magick',
+];
+
+const DEFAULT_WINDOWS_READ_SHELL_COMMANDS = [
+  'ipconfig', 'ping', 'tracert', 'nslookup', 'netstat', 'tasklist', 'systeminfo', 'driverquery',
+  'get-process', 'get-service', 'get-computerinfo', 'get-ciminstance', 'get-winevent', 'get-eventlog',
+  'test-netconnection', 'resolve-dnsname', 'get-netadapter', 'get-netipaddress', 'get-pnpdevice',
+  'get-psdrive', 'get-volume', 'get-disk', 'get-partition', 'chkdsk', 'sc', 'schtasks',
+];
+
+const DEFAULT_WINDOWS_SYSTEM_SHELL_COMMANDS = [
+  'powercfg', 'taskkill', 'start-process', 'stop-process', 'restart-service', 'start-service', 'stop-service',
+  'start-scheduledtask', 'enable-scheduledtask', 'disable-scheduledtask', 'winget', 'displayswitch.exe',
+  'displayswitch', 'control', 'rundll32', 'set-clipboard', 'get-clipboard', 'reg',
+];
+
+function normalizeShellCommandToken(value: unknown): string {
+  const token = String(value || '').trim().toLowerCase();
+  if (!token) return '';
+  return token.replace(/^&\s*/, '').replace(/^\.\\/, '').replace(/^\.\//, '').replace(/\.exe$/i, '.exe');
+}
+
+function configuredShellCommandTokens(field: string): string[] {
+  const shell = (getConfig().getConfig() as any)?.tools?.permissions?.shell || {};
+  const values = Array.isArray(shell[field]) ? shell[field] : [];
+  return values.map(normalizeShellCommandToken).filter(Boolean);
+}
+
+function configuredBlockedShellTokens(): Set<string> {
+  const shell = (getConfig().getConfig() as any)?.tools?.permissions?.shell || {};
+  const blockedPatterns = Array.isArray(shell.blocked_patterns) ? shell.blocked_patterns : [];
+  const blockedExactTokens = blockedPatterns
+    .map(normalizeShellCommandToken)
+    .filter((token: string) => token && /^[a-z0-9_.-]+$/i.test(token));
+  return new Set(blockedExactTokens);
+}
+
+function buildAllowedShellTokenSet(): Set<string> {
+  const blocked = configuredBlockedShellTokens();
+  const tokens = [
+    ...DEFAULT_ALLOWED_SHELL_COMMANDS,
+    ...(isWindows ? DEFAULT_WINDOWS_READ_SHELL_COMMANDS : []),
+    ...(isWindows ? DEFAULT_WINDOWS_SYSTEM_SHELL_COMMANDS : []),
+    ...configuredShellCommandTokens('allowed_commands'),
+    ...configuredShellCommandTokens('allowed_windows_read_commands'),
+    ...configuredShellCommandTokens('allowed_windows_system_commands'),
+    ...configuredShellCommandTokens('allowed_custom_commands'),
+  ].map(normalizeShellCommandToken).filter(Boolean);
+  return new Set(tokens.filter((token) => !blocked.has(token)));
+}
+
 export function isAllowedShellSegment(segment: string): boolean {
   const cleaned = segment.trim().replace(/^\(+/, '');
   if (!cleaned) return true;
   if (/^\$[A-Za-z_][\w:.-]*\s*=/.test(cleaned)) return true;
-  const token = (cleaned.match(/^[^\s]+/)?.[0] || '').toLowerCase();
-  const allowed = new Set([
-    'cd', 'if', 'set', 'echo', 'dir', 'ls', 'pwd', 'cat', 'type', 'more', 'find', 'findstr', 'where', 'whoami',
-    'rg', 'grep', 'egrep', 'fgrep', 'wc', 'cut', 'tr', 'sort', 'uniq', 'head', 'tail', 'tee',
-    'basename', 'dirname', 'realpath', 'stat', 'du', 'df', 'date', 'uname', 'env', 'printenv', 'which',
-    'select-string', 'get-content', 'get-childitem', 'get-item', 'get-location', 'resolve-path',
-    'where-object', 'foreach-object', 'measure-object', 'out-string', 'convertto-json', 'convertfrom-json',
-	    'git', 'npm', 'node', 'npx', 'yarn', 'pnpm', 'python', 'python3', 'pip', 'pip3', 'tsc', 'ts-node',
-	    'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'dotnet', 'docker', 'kubectl', 'az', 'aws',
-	    'curl', 'wget', 'cmd', 'powershell', 'pwsh', 'vercel', 'xurl', 'ffmpeg', 'ffprobe', 'magick',
-	  ]);
-  return allowed.has(token);
+  const token = normalizeShellCommandToken(cleaned.match(/^[^\s]+/)?.[0] || '');
+  return buildAllowedShellTokenSet().has(token);
 }
 
 export function isAllowedShellCommand(rawCmd: string): boolean {
   const segments = rawCmd.split(/&&|\|\||\||;/g).map(s => s.trim()).filter(Boolean);
   return segments.length > 0 && segments.every(isAllowedShellSegment);
 }
+
+const BLOCKED_PATTERNS = ['format', 'shutdown', 'restart'];
 
 async function runCommandCaptured(
   command: string,
@@ -305,7 +356,6 @@ async function runCommandCaptured(
   };
 }
 
-const BLOCKED_PATTERNS = ['del ', 'rm ', 'format', 'shutdown', 'restart', 'rmdir', 'rd ', 'taskkill', 'reg '];
 
 // ── Sub-Agent Tool Profiles ────────────────────────────────────────────────────────────
 export type SubagentProfile = 'file_editor' | 'researcher' | 'shell_runner' | 'reader_only';
@@ -1129,6 +1179,8 @@ export interface HandleChatResult {
   generatedImages?: any[];
   generatedVideos?: any[];
   canvasFiles?: string[];
+  fileChanges?: any;
+  productCarousel?: { title: string; items: any[] };
 }
 
 // ─── Orchestration session stats stubs (multi-agent system removed) ───────────

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "codex",
+    "debugging",
+    "dev handoff",
+    "prometheus debugging",
+    "codex desktop",
+    "pass it onto codex",
+    "tell codex",
+    "let codex know",
+    "same codex chat",
+    "current codex chat",
+    "codex follow-up",
+    "debugging handoff",
+    "send this to codex",
+    "hand off to codex"
+  ],
+  "categories": [
+    "desktop",
+    "debugging",
+    "prometheus",
+    "handoff"
+  ],
+  "requiredTools": [
+    "desktop",
+    "write_note",
+    "timer"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "desktop",
+      "write_note",
+      "timer"
+    ],
+    "recommendedToolCategories": [
+      "desktop_automation"
+    ],
+    "defaultWorkflow": [
+      "Focus Codex and use the requested current-chat or fresh-chat handoff path.",
+      "Submit the prepared debugging prompt, then maximize/capture Codex.",
+      "Send screenshot proof to Telegram, write a note, and set the follow-up timer unless explicitly told not to."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "status": "ready",
+  "lifecycle": "active",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true,
+  "id": "dev-debugging"
+}

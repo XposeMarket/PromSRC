@@ -45,6 +45,15 @@ export function toggleTheme() {
 
 // ── Right panel (inline drawer) ───────────────────────────────
 const RIGHT_PANEL_W = 380;
+const SIDEBAR_DEFAULT_W = 280; // matches --sidebar-w
+const SIDEBAR_MIN_W = 180;
+const SIDEBAR_MAX_W = 400;
+
+function _resetSidebarWidth() {
+  document.documentElement.style.removeProperty('--sidebar-w');
+  try { localStorage.removeItem('sidebar_width'); } catch {}
+  _sidebarDragW = 0;
+}
 
 function _getRightPanelWidth() {
   const panel = document.getElementById('right-panel');
@@ -52,10 +61,29 @@ function _getRightPanelWidth() {
   return panel.offsetWidth || RIGHT_PANEL_W;
 }
 
+// Tracks custom drag width; 0 means use the stylesheet default.
+let _sidebarDragW = 0;
+
+function _clampSidebarWidth(width) {
+  const parsed = Number.parseFloat(width);
+  if (!Number.isFinite(parsed)) return SIDEBAR_DEFAULT_W;
+  return Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, parsed));
+}
+
+function _applySidebarWidth(width) {
+  const nextWidth = _clampSidebarWidth(width);
+  document.documentElement.style.setProperty('--sidebar-w', `${nextWidth}px`);
+  _sidebarDragW = nextWidth;
+  return nextWidth;
+}
+
 function _syncPageViewPositions() {
   const sidebar = document.getElementById('sidebar');
   const collapsed = sidebar && sidebar.classList.contains('collapsed');
-  const left = collapsed ? '64px' : '288px';
+  const sidebarRight = sidebar
+    ? Math.round(sidebar.getBoundingClientRect().right)
+    : (collapsed ? 64 : SIDEBAR_DEFAULT_W);
+  const left = `${sidebarRight}px`;
   const rightW = _getRightPanelWidth();
   const right = rightW > 0 ? `${rightW}px` : '0';
   document.querySelectorAll('.page-view').forEach(el => {
@@ -74,22 +102,20 @@ export function toggleRightPanel() {
   const toggleBtn = document.getElementById('drawerToggle');
   if (!panel) return;
 
-  // Check current state before toggle
   const wasOpen = panel.classList.contains('open');
   const isOpen = panel.classList.toggle('open');
   document.body.classList.toggle('right-collapsed', !isOpen);
   if (toggleBtn) toggleBtn.classList.toggle('active', isOpen);
 
-  // Closing: force clear inline resize styles to allow CSS width: 0 to take effect
   if (!isOpen && wasOpen) {
-    // Remove all inline width properties immediately
     panel.style.removeProperty('width');
     panel.style.removeProperty('min-width');
     panel.style.removeProperty('max-width');
   } else if (isOpen && !wasOpen) {
-    // Opening: keep any inline width from resize, or let CSS handle it
+    // Opening canvas: collapse sidebar AND reset its width
     const sidebar = document.getElementById('sidebar');
     if (sidebar && !sidebar.classList.contains('collapsed')) {
+      _resetSidebarWidth();
       toggleSidebar();
     }
   }
@@ -102,8 +128,61 @@ export function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
   const collapsed = sidebar.classList.toggle('collapsed');
+  if (collapsed) _resetSidebarWidth();
   try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch {}
   _syncPageViewPositions();
+}
+
+// ── Sidebar drag-resize ───────────────────────────────────────
+function _initSidebarResize() {
+  const handle = document.getElementById('sidebar-resize-handle');
+  const sidebar = document.getElementById('sidebar');
+  if (!handle || !sidebar) return;
+
+  let startX = 0;
+  let startW = 0;
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (sidebar.classList.contains('collapsed')) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width || SIDEBAR_DEFAULT_W;
+    handle.setPointerCapture?.(e.pointerId);
+    handle.classList.add('dragging');
+    sidebar.classList.add('is-resizing');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+
+    function onPointerMove(ev) {
+      const delta = ev.clientX - startX;
+      _applySidebarWidth(startW + delta);
+      _syncPageViewPositions();
+    }
+
+    function onPointerUp(ev) {
+      handle.releasePointerCapture?.(ev.pointerId);
+      handle.classList.remove('dragging');
+      sidebar.classList.remove('is-resizing');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup', onPointerUp);
+      document.removeEventListener('pointercancel', onPointerUp);
+      _syncPageViewPositions();
+    }
+
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerUp);
+  });
+}
+
+// Init resize after DOM ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initSidebarResize);
+} else {
+  _initSidebarResize();
 }
 
 // ── More popover ──────────────────────────────────────────────
@@ -311,10 +390,11 @@ window.addEventListener('resize', () => {
 // Restore sidebar collapse state
 (function() {
   try {
+    _resetSidebarWidth();
     if (localStorage.getItem('sidebar_collapsed') === '1') {
       const sidebar = document.getElementById('sidebar');
       if (sidebar) sidebar.classList.add('collapsed');
-      _syncPageViewPositions();
     }
+    _syncPageViewPositions();
   } catch {}
 })();

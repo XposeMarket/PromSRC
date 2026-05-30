@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
+import { getRecentToolObservationsForContext as readRecentToolObservationsForContext } from './tool-observations';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -22,8 +23,14 @@ export interface ChatMessage {
   generatedVideos?: any[];
   attachmentPreviews?: any[];
   canvasFiles?: string[];
+  fileChanges?: any;
   processEntries?: any[];
   toolLog?: string; // full tool call log for this turn (injected by chat.router after turn completes)
+  productCarousel?: { title: string; items: Array<{
+    title: string; price?: string; description?: string; rating?: number;
+    reviews?: number; tag?: string; imageUrl?: string; imagePath?: string;
+    productUrl: string; merchant?: string;
+  }> };
 }
 
 export interface TurnOrigin {
@@ -115,6 +122,8 @@ export interface Session {
   id: string;
   history: ChatMessage[];
   workspace: string;
+  title?: string;
+  autoTitleLocked?: boolean;
   channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system'; // Inferred from sessionId prefix
   createdAt: number;
   lastActiveAt: number;
@@ -129,6 +138,7 @@ export interface Session {
   tags?: string[];
   activatedToolCategories?: string[];
   activatedSkillIds?: string[];
+  activatedSkillResources?: Record<string, string[]>;
   businessContextEnabled?: boolean;
   creativeMode?: CreativeMode | null;
   creativeReferences?: CreativeReferenceRecord[];
@@ -149,6 +159,7 @@ export interface SessionSummary {
   channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
   createdAt: number;
   lastActiveAt: number;
+  lastMessageAt?: number;
   lastAssistantAt?: number;
   mobileLastReadAt?: number;
   mobileUnread?: boolean;
@@ -167,6 +178,20 @@ export interface SessionSearchResult extends SessionSummary {
   matchedRole: ChatMessage['role'] | 'title';
   matchedContent: string;
   matchedIndex: number;
+}
+
+export interface SessionListOptions {
+  channel?: Session['channel'];
+  limit?: number;
+  offset?: number;
+}
+
+export interface SessionListPage {
+  sessions: SessionSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 }
 
 interface SessionIndex {
@@ -499,12 +524,87 @@ function isSessionTitleCommandMessage(msg: any): boolean {
   return isCommandTitleText(msg.content);
 }
 
-function getSessionTitleFromHistory(history: any[]): string {
-  const firstUserMsg = Array.isArray(history)
-    ? history.find((msg) => msg?.role === 'user' && !isSessionTitleCommandMessage(msg))
-    : undefined;
-  const titleRaw = String(firstUserMsg?.content || '').trim();
-  return titleRaw.slice(0, 60) || 'New chat';
+function normalizeSessionTitleText(value: any): string {
+  return String(value || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[#*_~>[\]()"']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isGreetingOnlySessionMessage(text: string): boolean {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return true;
+  return /^(?:hey|hi|hello|yo|sup|gm|good\s+(?:morning|afternoon|evening)|howdy|hiya|heya|thanks|thank you|ok|okay|cool|nice|great|test|testing|new chat|greeting)[\s!.,-]*(?:prom|prometheus)?[\s!.,-]*(?:how(?:'|’)s it going\??|what(?:'|’)s up\??)?$/i.test(t);
+}
+
+function titleCaseSessionWord(word: string, index: number): string {
+  const lower = String(word || '').toLowerCase();
+  const keepLower = new Set(['a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'into', 'of', 'on', 'or', 'the', 'to', 'via', 'with']);
+  const upper = new Set(['ai', 'api', 'ci', 'css', 'html', 'ui', 'ux', 'llm', 'mcp', 'pwa', 'qr', 'sms', 'seo']);
+  if (upper.has(lower)) return lower.toUpperCase();
+  if (index > 0 && keepLower.has(lower)) return lower;
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+function polishSessionTitle(raw: string): string {
+  let text = normalizeSessionTitleText(raw)
+    .replace(/^(?:please\s+)?(?:can|could|would)\s+you\s+/i, '')
+    .replace(/^(?:please\s+)?(?:can|could|would)\s+we\s+/i, '')
+    .replace(/^(?:please\s+)?(?:help\s+me\s+|help\s+us\s+|help\s+)/i, '')
+    .replace(/^(?:please\s+)?(?:look\s+into|check\s+out|take\s+a\s+look\s+at|investigate|review|fix|update|add|create|make|build|implement|debug)\s+/i, (match) => {
+      const verb = match.replace(/please\s+/i, '').trim();
+      return `${verb.replace(/\s+/g, ' ')} `;
+    })
+    .replace(/\b(?:please|pls|thanks|thank you)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  text = text
+    .replace(/\b(?:i think|maybe|kind of|sort of|basically|actually)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const words = text.split(/\s+/).filter(Boolean);
+  const stopAt = words.findIndex((word, index) => index >= 3 && /^(?:because|where|while|when|after|before|so|and|but|however)$/i.test(word));
+  const kept = (stopAt > 0 ? words.slice(0, stopAt) : words).slice(0, 7);
+  const title = kept.map(titleCaseSessionWord).join(' ').replace(/[.,:;!?-]+$/g, '').trim();
+  return title.length > 56 ? `${title.slice(0, 53).trim()}...` : title;
+}
+
+export function getSessionTitleFromHistory(history: any[]): string {
+  const earlyUsers = (Array.isArray(history) ? history : [])
+    .filter((msg) => msg?.role === 'user' && !isSessionTitleCommandMessage(msg))
+    .slice(0, 3);
+  const candidate = earlyUsers
+    .map((msg) => normalizeSessionTitleText(msg?.content))
+    .find((text) => text.length >= 8 && !isGreetingOnlySessionMessage(text));
+  return candidate ? polishSessionTitle(candidate) || 'New chat' : 'New chat';
+}
+
+function shouldLockExistingSessionTitle(title: any): boolean {
+  const current = String(title || '').trim();
+  return !!current && current !== 'New chat' && !isCommandTitleText(current) && !isGreetingOnlySessionMessage(current);
+}
+
+function applyAutoSessionTitleOnce(session: Session): void {
+  if (!session || session.autoTitleLocked === true) return;
+  if (shouldLockExistingSessionTitle(session.title)) {
+    session.autoTitleLocked = true;
+    return;
+  }
+  const nextTitle = getSessionTitleFromHistory(session.history);
+  if (!nextTitle || nextTitle === 'New chat') return;
+  session.title = nextTitle;
+  session.autoTitleLocked = true;
+}
+
+export function getSessionDisplayTitle(session: Pick<Session, 'title' | 'history'>): string {
+  const current = String(session?.title || '').trim();
+  return current || getSessionTitleFromHistory(session?.history || []);
 }
 
 function getLastAssistantTimestamp(history: any[]): number | undefined {
@@ -512,6 +612,26 @@ function getLastAssistantTimestamp(history: any[]): number | undefined {
   for (let i = history.length - 1; i >= 0; i--) {
     const msg = history[i];
     if (msg?.role !== 'assistant') continue;
+    const ts = Number(msg.timestamp || 0);
+    return Number.isFinite(ts) && ts > 0 ? ts : Date.now();
+  }
+  return undefined;
+}
+
+function isSummaryTimelineMessage(msg: any): boolean {
+  const content = String(msg?.content || '').trim();
+  if (!content) return false;
+  if (content === PRE_COMPACTION_SUMMARY_PROMPT) return false;
+  if (content === PRE_COMPACTION_MEMORY_FLUSH_PROMPT) return false;
+  if (/^\[(?:Rolling context summary|Compacted context summary|Active goal progress summary)\]/i.test(content)) return false;
+  return msg?.role === 'user' || msg?.role === 'assistant';
+}
+
+function getLastMessageTimestamp(history: any[]): number | undefined {
+  if (!Array.isArray(history)) return undefined;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (!isSummaryTimelineMessage(msg)) continue;
     const ts = Number(msg.timestamp || 0);
     return Number.isFinite(ts) && ts > 0 ? ts : Date.now();
   }
@@ -546,7 +666,8 @@ function buildSessionSummary(session: Session): SessionSummary {
       mainChatGoal: null,
     };
   }
-  const title = getSessionTitleFromHistory(session.history);
+  const title = getSessionDisplayTitle(session);
+  const lastMessageAt = getLastMessageTimestamp(session.history);
   const lastAssistantAt = getLastAssistantTimestamp(session.history);
   const mobileLastReadAt = Number.isFinite(Number(session.mobileLastReadAt)) ? Number(session.mobileLastReadAt) : undefined;
   return {
@@ -554,6 +675,7 @@ function buildSessionSummary(session: Session): SessionSummary {
     channel: session.channel || inferChannelFromSessionId(session.id),
     createdAt: Number(session.createdAt || Date.now()),
     lastActiveAt: Number(session.lastActiveAt || Date.now()),
+    lastMessageAt,
     lastAssistantAt,
     mobileLastReadAt,
     mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
@@ -595,7 +717,8 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
   try {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     const history = Array.isArray(data?.history) ? data.history : [];
-    const title = getSessionTitleFromHistory(history);
+    const title = String(data?.title || '').trim() || getSessionTitleFromHistory(history);
+    const lastMessageAt = getLastMessageTimestamp(history);
     const lastAssistantAt = getLastAssistantTimestamp(history);
     const mobileLastReadAt = Number.isFinite(Number(data?.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined;
     const channel = data?.channel === 'terminal'
@@ -611,6 +734,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       channel,
       createdAt: Number.isFinite(Number(data?.createdAt)) ? Number(data.createdAt) : Date.now(),
       lastActiveAt: Number.isFinite(Number(data?.lastActiveAt)) ? Number(data.lastActiveAt) : Date.now(),
+      lastMessageAt,
       lastAssistantAt,
       mobileLastReadAt,
       mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
@@ -648,7 +772,7 @@ function rebuildSessionIndex(): SessionIndex {
   return index;
 }
 
-export function listSessionSummaries(channel?: Session['channel']): SessionSummary[] {
+function getSortedSessionSummaries(channel?: Session['channel']): SessionSummary[] {
   ensureSessionDir();
   let index = loadSessionIndex();
   const hasSessionFiles = fs.readdirSync(SESSION_DIR).some((f) => f.endsWith('.json') && f !== '_index.json');
@@ -661,13 +785,38 @@ export function listSessionSummaries(channel?: Session['channel']): SessionSumma
     ) {
       sessionIndexCommandTitleRebuildAttempted = true;
       index = rebuildSessionIndex();
+    } else if (Object.values(index.summaries).some((summary) => summary.messageCount > 0 && !summary.lastMessageAt)) {
+      index = rebuildSessionIndex();
     }
   }
   return Object.values(index.summaries)
     .filter((summary) => !INTERNAL_SESSION_ID_RE.test(summary.id))
     .filter((summary) => !channel || summary.channel === channel)
     .filter((summary) => summary.messageCount > 0 || summary.channel === 'mobile')
-    .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0));
+}
+
+export function listSessionSummaries(channel?: Session['channel']): SessionSummary[];
+export function listSessionSummaries(options: SessionListOptions): SessionListPage;
+export function listSessionSummaries(input?: Session['channel'] | SessionListOptions): SessionSummary[] | SessionListPage {
+  const options = typeof input === 'object' && input !== null ? input : { channel: input };
+  const sorted = getSortedSessionSummaries(options.channel);
+  if (typeof input !== 'object' || input === null) return sorted;
+
+  const limit = Number.isFinite(Number(options.limit))
+    ? Math.max(1, Math.min(200, Math.floor(Number(options.limit))))
+    : 20;
+  const offset = Number.isFinite(Number(options.offset))
+    ? Math.max(0, Math.floor(Number(options.offset)))
+    : 0;
+  const sessions = sorted.slice(offset, offset + limit);
+  return {
+    sessions,
+    total: sorted.length,
+    limit,
+    offset,
+    hasMore: offset + sessions.length < sorted.length,
+  };
 }
 
 function readSessionFileForSearch(sessionId: string): Session | null {
@@ -1209,6 +1358,8 @@ export function getSession(id: string): Session {
         id: data.id || id,
         history: Array.isArray(data.history) ? data.history : [],
         workspace: data.workspace || getConfig().getWorkspacePath(),
+        title: typeof data.title === 'string' ? data.title : undefined,
+        autoTitleLocked: data.autoTitleLocked === true,
         channel: data.channel || inferChannelFromSessionId(id),
         createdAt: data.createdAt || Date.now(),
         lastActiveAt: data.lastActiveAt || Date.now(),
@@ -1254,6 +1405,8 @@ export function getSession(id: string): Session {
     id,
     history: [],
     workspace: getConfig().getWorkspacePath(),
+    title: undefined,
+    autoTitleLocked: false,
     channel: inferChannelFromSessionId(id),
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
@@ -1532,6 +1685,21 @@ export function getRecentToolLog(
   return block.length <= Number(maxChars) ? block : block.slice(0, Number(maxChars)) + '\n[...truncated]';
 }
 
+export function getRecentToolObservationsForContext(
+  id: string,
+  lookbackTurns: number = 5,
+  maxChars?: number,
+): string {
+  const observations = readRecentToolObservationsForContext(id, {
+    lookbackTurns,
+    maxChars,
+    includeHeader: true,
+  });
+  if (observations) return observations;
+  const legacy = getRecentToolLog(id, lookbackTurns, maxChars);
+  return legacy ? legacy.replace(/^\[RECENT_TOOL_LOG\]/, '[RECENT_TOOL_OBSERVATIONS]\nlegacy_format: true') : '';
+}
+
 /**
  * Persists a full tool log string onto the most recent assistant message
  * in session history. Called by chat.router after allToolResults are finalized.
@@ -1773,6 +1941,18 @@ export function deleteSession(id: string): boolean {
   }
 }
 
+export function renameSession(id: string, title: string): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  const nextTitle = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!sessionId || !nextTitle) return null;
+  const session = getSession(sessionId);
+  session.title = nextTitle;
+  session.autoTitleLocked = true;
+  session.lastActiveAt = Date.now();
+  flushSession(sessionId);
+  return buildSessionSummary(session);
+}
+
 export function cleanupSessions(nowMs: number = Date.now()): { deleted: number; scanned: number } {
   ensureSessionDir();
   let deleted = 0;
@@ -1843,6 +2023,7 @@ function saveSession(id: string): void {
     const latest = sessions.get(id);
     if (!latest) return;
     latest.lastAssistantAt = getLastAssistantTimestamp(latest.history);
+    applyAutoSessionTitleOnce(latest);
     ensureSessionDir();
     try {
       fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(latest), null, 2));
@@ -1866,6 +2047,7 @@ export function flushSession(id: string): void {
   const session = sessions.get(id);
   if (!session) return;
   session.lastAssistantAt = getLastAssistantTimestamp(session.history);
+  applyAutoSessionTitleOnce(session);
   ensureSessionDir();
   try {
     fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session), null, 2));
@@ -1967,6 +2149,24 @@ export function setActivatedSkillIds(id: string, skillIds: string[]): void {
 export function getActivatedSkillIds(id: string): Set<string> {
   const session = getSession(id);
   return new Set(session.activatedSkillIds || []);
+}
+
+export function activateSkillResourceForSession(sessionId: string, skillId: string, resourcePath: string): void {
+  const nSkill = normalizeSessionSkillId(skillId);
+  const nPath = String(resourcePath || '').trim();
+  if (!nSkill || !nPath) return;
+  const session = getSession(sessionId);
+  if (!session.activatedSkillResources) session.activatedSkillResources = {};
+  const existing = session.activatedSkillResources[nSkill] || [];
+  if (!existing.includes(nPath)) {
+    session.activatedSkillResources[nSkill] = [...existing, nPath];
+    saveSession(sessionId);
+  }
+}
+
+export function getActivatedSkillResources(sessionId: string, skillId: string): string[] {
+  const session = getSession(sessionId);
+  return (session.activatedSkillResources || {})[normalizeSessionSkillId(skillId)] || [];
 }
 
 export function setBusinessContextEnabled(id: string, enabled: boolean): boolean {

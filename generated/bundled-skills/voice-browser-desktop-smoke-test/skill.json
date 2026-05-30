@@ -33,6 +33,11 @@
       "path": "examples/2026-05-21-stop-steer-guardrail.md",
       "type": "example",
       "description": "2026-05-21 guardrail example for honoring stop/steer interruptions during the voice browser-desktop smoke test and avoiding stale completion after cancellation."
+    },
+    {
+      "path": "examples/2026-05-21-mobile-screenshot-updates.md",
+      "type": "example",
+      "description": "Raul's 2026-05-21 preference: send mobile/origin screenshots after visible focus/action steps during voice desktop smoke-test runs."
     }
   ]
 }

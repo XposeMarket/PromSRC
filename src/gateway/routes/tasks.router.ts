@@ -2,7 +2,7 @@
 // Tasks, Background Tasks, Schedules, Error Response routes
 import { Router } from 'express';
 // Proposal imports removed — all /api/proposals* routes live in proposals.router.ts
-import { getConfig } from '../../config/config';
+import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { addMessage } from '../session';
 import { broadcastWS } from '../comms/broadcaster';
 import {
@@ -134,6 +134,27 @@ function readHeartbeatInstructions(): string {
 
 function writeHeartbeatInstructions(content: string): string {
   const heartbeatPath = getHeartbeatFilePath();
+  fs.mkdirSync(path.dirname(heartbeatPath), { recursive: true });
+  fs.writeFileSync(heartbeatPath, String(content || ''), 'utf-8');
+  return heartbeatPath;
+}
+
+function getAgentHeartbeatFilePath(agentId: string): string {
+  const normalized = String(agentId || 'main').trim() || 'main';
+  const workspacePath = getConfig().getWorkspacePath();
+  if (normalized === 'main' || normalized === 'default') return path.join(workspacePath, 'HEARTBEAT.md');
+
+  const subagentPath = path.join(workspacePath, '.prometheus', 'subagents', normalized);
+  if (fs.existsSync(subagentPath)) return path.join(subagentPath, 'HEARTBEAT.md');
+
+  const agent = getAgentById(normalized);
+  if (agent) return path.join(ensureAgentWorkspace(agent), 'HEARTBEAT.md');
+
+  return path.join(subagentPath, 'HEARTBEAT.md');
+}
+
+function writeAgentHeartbeatInstructions(agentId: string, content: string): string {
+  const heartbeatPath = getAgentHeartbeatFilePath(agentId);
   fs.mkdirSync(path.dirname(heartbeatPath), { recursive: true });
   fs.writeFileSync(heartbeatPath, String(content || ''), 'utf-8');
   return heartbeatPath;
@@ -284,6 +305,9 @@ router.put('/api/heartbeat/agents/:agentId', (req, res) => {
     if (Number.isFinite(rawInterval)) partial.intervalMinutes = Math.max(1, Math.min(1440, Math.floor(rawInterval)));
     if (typeof body.model === 'string') partial.model = body.model.trim();
     const config = _heartbeatRunner.updateAgentConfig(agentId, partial);
+    const heartbeatPath = typeof body.instructions === 'string'
+      ? writeAgentHeartbeatInstructions(agentId, body.instructions)
+      : undefined;
 
     // Optionally also register the agent if not already registered
     // (handles UI enabling an agent that wasn't registered at startup)
@@ -297,7 +321,7 @@ router.put('/api/heartbeat/agents/:agentId', (req, res) => {
     _heartbeatRunner.registerAgent(agentId, workspacePath);
 
     broadcastWS({ type: 'heartbeat_agent_config_updated', agentId, config });
-    res.json({ success: true, agentId, config });
+    res.json({ success: true, agentId, config, path: heartbeatPath });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });
   }

@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prometheus — Ash & Archive</title>
+  <style>
+    :root {
+      --obsidian: #070706;
+      --charcoal: #151411;
+      --ash: #2b2924;
+      --bone: #eee7d6;
+      --paper: #d8cfbb;
+      --dust: #8f8777;
+      --ember: #ff5a1f;
+      --oxblood: #7b1e2b;
+      --green: #9fbf70;
+      --brass: #c6a15b;
+      --ink: #10100e;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--obsidian);
+      color: var(--bone);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    [data-composition-id="prometheus-ash-archive"] {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background: var(--obsidian);
+      isolation: isolate;
+    }
+
+    .scene {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .scene.is-light { color: var(--ink); background: var(--bone); }
+    .scene.is-dark { color: var(--bone); background: var(--obsidian); }
+
+    .grain, .scanlines, .printer-noise, .vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 50;
+    }
+    .grain {
+      opacity: 0.18;
+      mix-blend-mode: overlay;
+      background-image:
+        radial-gradient(circle at 20% 30%, rgba(255,255,255,0.18) 0 1px, transparent 1px),
+        radial-gradient(circle at 75% 60%, rgba(255,255,255,0.12) 0 1px, transparent 1px),
+        radial-gradient(circle at 45% 80%, rgba(0,0,0,0.18) 0 1px, transparent 1px);
+      background-size: 17px 17px, 29px 29px, 23px 23px;
+    }
+    .scanlines {
+      opacity: 0.11;
+      background: repeating-linear-gradient(to bottom, rgba(255,255,255,0.16) 0 1px, transparent 1px 5px);
+      mix-blend-mode: soft-light;
+    }
+    .printer-noise {
+      opacity: 0.08;
+      background:
+        linear-gradient(90deg, transparent 0 7%, rgba(0,0,0,0.28) 7.2% 7.35%, transparent 7.5% 64%, rgba(0,0,0,0.16) 64.2% 64.35%, transparent 64.6%),
+        repeating-linear-gradient(0deg, rgba(0,0,0,0.25) 0 1px, transparent 1px 19px);
+    }
+    .vignette {
+      z-index: 49;
+      background: radial-gradient(circle at 50% 48%, transparent 0 54%, rgba(0,0,0,0.42) 100%);
+    }
+
+    .mono { font-family: Consolas, "Courier New", monospace; letter-spacing: 0.02em; }
+    .serif { font-family: Georgia, "Times New Roman", serif; }
+    .smallcap { text-transform: uppercase; letter-spacing: 0.16em; }
+
+    .rule { height: 2px; background: currentColor; transform-origin: left center; opacity: 0.72; }
+    .vertical-rule { width: 2px; background: currentColor; transform-origin: top center; opacity: 0.5; }
+    .status-dot { width: 16px; height: 16px; border-radius: 50%; background: var(--ember); display: inline-block; box-shadow: 0 0 18px rgba(255,90,31,0.45); }
+
+    /* Scene 1 */
+    #s1 {
+      background:
+        radial-gradient(circle at 50% 52%, rgba(255,90,31,0.12), transparent 18%),
+        linear-gradient(180deg, #050504, #11100d 62%, #070706);
+    }
+    .boot-grid {
+      position: absolute;
+      inset: 82px;
+      border: 2px solid rgba(238,231,214,0.16);
+    }
+    .boot-grid::before, .boot-grid::after {
+      content: "";
+      position: absolute;
+      background: rgba(238,231,214,0.12);
+    }
+    .boot-grid::before { left: 23%; top: 0; bottom: 0; width: 2px; }
+    .boot-grid::after { left: 0; right: 0; top: 68%; height: 2px; }
+    .boot-lines { position: absolute; left: 124px; top: 110px; width: 650px; display: grid; gap: 18px; color: var(--dust); font-size: 25px; }
+    .boot-line { display: flex; gap: 18px; align-items: center; white-space: nowrap; }
+    .boot-line b { color: var(--green); font-weight: 700; }
+    .glyph-wrap { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 360px; height: 360px; display: grid; place-items: center; }
+    .glyph-ring { position: absolute; inset: 0; border: 2px solid rgba(198,161,91,0.34); border-radius: 50%; }
+    .glyph-ring.two { inset: 54px; border-color: rgba(255,90,31,0.24); }
+    .flame-glyph { width: 148px; height: 190px; position: relative; filter: drop-shadow(0 0 22px rgba(255,90,31,0.48)); }
+    .flame-glyph::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border: 4px solid var(--ember);
+      border-left-color: var(--brass);
+      border-bottom-color: var(--brass);
+      clip-path: polygon(50% 0, 77% 32%, 66% 58%, 92% 100%, 50% 82%, 8% 100%, 34% 58%, 23% 32%);
+      background: linear-gradient(180deg, rgba(255,90,31,0.18), transparent);
+    }
+    .boot-title { position: absolute; left: 1040px; top: 202px; width: 660px; }
+    .boot-title .kicker { color: var(--brass); font-size: 24px; margin-bottom: 28px; }
+    .boot-title h1 { margin: 0; font-size: 104px; line-height: 0.92; letter-spacing: -0.06em; font-weight: 400; }
+    .boot-title p { margin: 34px 0 0; color: var(--paper); font-size: 34px; line-height: 1.22; }
+    .wake-phrase { position: absolute; right: 122px; bottom: 98px; font-size: 28px; color: var(--dust); }
+    .wake-phrase strong { color: var(--bone); font-weight: 700; }
+
+    /* Scene 2 */
+    #s2 { background: var(--bone); color: var(--ink); }
+    .dossier-shell { position: absolute; inset: 70px 88px; border: 3px solid rgba(16,16,14,0.72); background: rgba(238,231,214,0.74); }
+    .dossier-header { position: absolute; left: 120px; right: 120px; top: 96px; display: grid; grid-template-columns: 1fr auto; gap: 40px; align-items: end; }
+    .dossier-header h2 { margin: 0; font-size: 88px; font-weight: 400; letter-spacing: -0.055em; line-height: 0.96; }
+    .dossier-header .case { text-align: right; font-size: 24px; color: var(--ash); }
+    .proof-board { position: absolute; left: 122px; right: 122px; top: 288px; bottom: 110px; display: grid; grid-template-columns: 0.94fr 1.32fr 0.9fr; gap: 34px; }
+    .panel { position: relative; border: 3px solid var(--ink); background: rgba(216,207,187,0.65); padding: 34px; overflow: hidden; box-shadow: 12px 12px 0 rgba(16,16,14,0.16); }
+    .panel h3 { margin: 0 0 28px; font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
+    .panel .meta { color: var(--ash); font-size: 19px; margin-bottom: 18px; }
+    .path-row, .tool-row, .memory-row { border-top: 2px solid rgba(16,16,14,0.32); padding: 17px 0; font-size: 24px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .path-row span, .tool-row span, .memory-row span { color: var(--ash); }
+    .path-row b, .tool-row b, .memory-row b { font-size: 20px; color: var(--ink); }
+    .terminal-card { background: var(--charcoal); color: var(--bone); border-color: var(--ash); box-shadow: 12px 12px 0 rgba(123,30,43,0.32); }
+    .terminal-card .screen { border: 2px solid rgba(238,231,214,0.25); min-height: 380px; padding: 26px; background: #090907; display: grid; gap: 13px; align-content: start; }
+    .terminal-card .cmd { font-size: 25px; color: var(--paper); }
+    .terminal-card .cmd em { color: var(--ember); font-style: normal; }
+    .stamp { position: absolute; right: 34px; bottom: 34px; color: var(--oxblood); border: 5px solid var(--oxblood); padding: 12px 20px; font-size: 30px; font-weight: 900; transform: rotate(-7deg); letter-spacing: 0.08em; }
+
+    /* Scene 3 */
+    #s3 { background: var(--obsidian); }
+    .lab-bg { position: absolute; inset: 0; background:
+        radial-gradient(ellipse at 22% 52%, rgba(159,191,112,0.16), transparent 28%),
+        radial-gradient(ellipse at 78% 42%, rgba(255,90,31,0.14), transparent 22%),
+        linear-gradient(90deg, #060605, #181610 52%, #070706); }
+    .specimen { position: absolute; left: 170px; top: 150px; width: 670px; height: 670px; border-radius: 50%; border: 3px solid rgba(238,231,214,0.24); overflow: hidden; background:
+        radial-gradient(circle at 50% 50%, transparent 0 10%, rgba(238,231,214,0.08) 10.5% 11%, transparent 11.5% 18%, rgba(238,231,214,0.1) 18.5% 19%, transparent 19.5%),
+        conic-gradient(from 0deg, rgba(238,231,214,0.08), rgba(159,191,112,0.24), rgba(255,90,31,0.16), rgba(238,231,214,0.08)); }
+    .specimen::before { content: ""; position: absolute; inset: 74px; border-radius: 50%; border: 2px dashed rgba(238,231,214,0.32); background: repeating-conic-gradient(from 8deg, rgba(238,231,214,0.12) 0 2deg, transparent 2deg 8deg); }
+    .specimen::after { content: ""; position: absolute; left: 50%; top: 0; width: 2px; height: 100%; background: rgba(238,231,214,0.32); box-shadow: -210px 0 rgba(238,231,214,0.16), 210px 0 rgba(238,231,214,0.16); }
+    .analysis-label { position: absolute; border: 2px solid rgba(238,231,214,0.42); color: var(--paper); padding: 14px 18px; font-size: 20px; background: rgba(7,7,6,0.68); }
+    .analysis-label b { color: var(--green); }
+    .l1 { left: 104px; top: 118px; } .l2 { left: 650px; top: 212px; } .l3 { left: 124px; top: 820px; } .l4 { left: 596px; top: 766px; }
+    .lab-copy { position: absolute; left: 960px; top: 156px; width: 770px; }
+    .lab-copy .kicker { color: var(--ember); font-size: 23px; margin-bottom: 28px; }
+    .lab-copy h2 { margin: 0; font-size: 96px; line-height: 0.95; font-weight: 400; letter-spacing: -0.06em; }
+    .lab-copy p { margin: 32px 0 0; color: var(--paper); font-size: 33px; line-height: 1.28; width: 680px; }
+    .concept-list { margin-top: 44px; display: grid; gap: 14px; width: 690px; }
+    .concept { border-left: 5px solid var(--ember); padding: 14px 0 14px 24px; font-size: 25px; color: var(--paper); background: linear-gradient(90deg, rgba(255,90,31,0.11), transparent); }
+
+    /* Scene 4 */
+    #s4 { background: var(--bone); color: var(--ink); }
+    .ledger { position: absolute; inset: 82px 94px; display: grid; grid-template-columns: 0.82fr 1.18fr; gap: 42px; }
+    .ledger-left { border: 3px solid var(--ink); padding: 46px; position: relative; background: rgba(216,207,187,0.75); }
+    .ledger-left h2 { margin: 0; font-size: 86px; line-height: 0.92; letter-spacing: -0.055em; font-weight: 400; }
+    .ledger-left p { margin-top: 32px; font-size: 31px; line-height: 1.24; color: var(--ash); }
+    .approval-stamp { margin-top: 50px; display: inline-block; border: 6px solid var(--oxblood); color: var(--oxblood); padding: 16px 24px; font-size: 34px; font-weight: 900; transform: rotate(-4deg); }
+    .ledger-table { border: 3px solid var(--ink); background: rgba(238,231,214,0.86); padding: 34px; display: grid; align-content: start; }
+    .table-head, .table-row { display: grid; grid-template-columns: 1.1fr 1.5fr 0.75fr; gap: 24px; align-items: center; }
+    .table-head { font-size: 20px; color: var(--ash); padding-bottom: 18px; border-bottom: 3px solid var(--ink); }
+    .table-row { min-height: 82px; border-bottom: 2px solid rgba(16,16,14,0.32); font-size: 27px; }
+    .table-row .state { font-size: 20px; font-weight: 900; letter-spacing: 0.08em; }
+    .state.green { color: #4a681e; } .state.red { color: var(--oxblood); } .state.ember { color: var(--ember); }
+    .artifact-card { position: absolute; right: 160px; bottom: 126px; width: 450px; border: 3px solid var(--ink); background: var(--charcoal); color: var(--bone); padding: 26px; box-shadow: -12px 12px 0 rgba(16,16,14,0.22); }
+    .artifact-card h4 { margin: 0 0 16px; font-size: 28px; }
+    .artifact-card p { margin: 0; font-size: 22px; color: var(--paper); }
+
+    /* Scene 5 */
+    #s5 { background: var(--obsidian); color: var(--bone); }
+    .scale-map { position: absolute; inset: 110px 110px; border: 2px solid rgba(238,231,214,0.18); }
+    .node { position: absolute; width: 250px; min-height: 124px; border: 2px solid rgba(238,231,214,0.42); background: rgba(21,20,17,0.86); padding: 24px; box-shadow: 0 0 0 8px rgba(238,231,214,0.03); }
+    .node h3 { margin: 0 0 10px; font-size: 28px; }
+    .node p { margin: 0; font-size: 19px; color: var(--dust); line-height: 1.25; }
+    .n1 { left: 110px; top: 140px; } .n2 { left: 492px; top: 76px; } .n3 { left: 840px; top: 210px; } .n4 { right: 166px; top: 116px; } .n5 { left: 296px; bottom: 128px; } .n6 { right: 356px; bottom: 96px; }
+    .connect { position: absolute; height: 2px; background: rgba(255,90,31,0.42); transform-origin: left center; }
+    .c1 { left: 360px; top: 228px; width: 250px; transform: rotate(-10deg); } .c2 { left: 736px; top: 236px; width: 194px; transform: rotate(22deg); } .c3 { left: 1090px; top: 300px; width: 290px; transform: rotate(-18deg); } .c4 { left: 452px; bottom: 292px; width: 452px; transform: rotate(-26deg); } .c5 { right: 604px; bottom: 236px; width: 328px; transform: rotate(17deg); }
+    .scale-title { position: absolute; left: 128px; bottom: 110px; width: 920px; }
+    .scale-title .kicker { color: var(--brass); font-size: 22px; margin-bottom: 20px; }
+    .scale-title h2 { margin: 0; font-size: 89px; line-height: 0.92; letter-spacing: -0.055em; font-weight: 400; }
+    .side-log { position: absolute; right: 118px; top: 410px; width: 440px; display: grid; gap: 12px; font-size: 21px; color: var(--paper); }
+    .side-log div { border-bottom: 1px solid rgba(238,231,214,0.22); padding-bottom: 10px; }
+
+    /* Scene 6 */
+    #s6 { background: var(--obsidian); color: var(--bone); }
+    .final-mark { position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%); width: 470px; height: 470px; display: grid; place-items: center; }
+    .final-mark .glyph-ring { border-color: rgba(198,161,91,0.28); }
+    .final-mark .flame-glyph { transform: scale(1.16); }
+    .final-copy { position: absolute; left: 50%; top: 690px; transform: translateX(-50%); text-align: center; width: 1180px; }
+    .final-copy h2 { margin: 0; font-size: 104px; letter-spacing: -0.06em; line-height: 0.92; font-weight: 400; }
+    .final-copy p { margin: 32px auto 0; color: var(--paper); font-size: 34px; width: 820px; line-height: 1.25; }
+    .final-meta { position: absolute; left: 102px; bottom: 82px; right: 102px; display: flex; justify-content: space-between; color: var(--dust); font-size: 22px; }
+
+    .shutter {
+      position: absolute;
+      inset: 0;
+      z-index: 100;
+      pointer-events: none;
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      opacity: 1;
+    }
+    .shutter span { background: var(--obsidian); transform-origin: top; transform: scaleY(0); }
+    .burn-line { position: absolute; left: 0; right: 0; height: 4px; background: var(--ember); box-shadow: 0 0 28px rgba(255,90,31,0.72); z-index: 101; transform: scaleX(0); transform-origin: left; }
+  </style>
+</head>
+<body>
+  <div data-composition-id="prometheus-ash-archive" data-width="1920" data-height="1080" data-duration="44" data-start="0" data-track-index="0">
+    <section id="s1" class="scene is-dark">
+      <div class="boot-grid"></div>
+      <div class="boot-lines mono">
+        <div class="boot-line"><span class="status-dot"></span><b>LOCAL</b> 127.0.0.1:4567 / gateway awake</div>
+        <div class="boot-line"><span>MEMORY</span> indexed · user rules loaded · today notes attached</div>
+        <div class="boot-line"><span>VOICE</span> wake phrase: <b>hey Prometheus</b></div>
+        <div class="boot-line"><span>TOOLS</span> browser · desktop · files · teams · creative</div>
+      </div>
+      <div class="glyph-wrap">
+        <div class="glyph-ring"></div><div class="glyph-ring two"></div><div class="flame-glyph"></div>
+      </div>
+      <div class="boot-title">
+        <div class="kicker mono smallcap">PROMETHEUS / ASH ARCHIVE STYLE TEST</div>
+        <h1 class="serif">The machine works where you work.</h1>
+        <p>Not a chatbot tab. A local intelligence layer operating through the desktop.</p>
+      </div>
+      <div class="wake-phrase mono">say <strong>“hey Prometheus”</strong> and the system wakes</div>
+      <div class="grain"></div><div class="scanlines"></div><div class="vignette"></div>
+    </section>
+
+    <section id="s2" class="scene is-light">
+      <div class="dossier-shell"></div>
+      <div class="dossier-header">
+        <h2 class="serif">Every action leaves evidence.</h2>
+        <div class="case mono smallcap">CASE 05-25-2026<br/>LOCAL OPERATING LAYER</div>
+      </div>
+      <div class="proof-board">
+        <div class="panel">
+          <div class="meta mono smallcap">WORKSPACE TRACE</div>
+          <h3>Files are not abstract.</h3>
+          <div class="path-row mono"><span>read_file</span><b>workspace/SELF.md</b></div>
+          <div class="path-row mono"><span>write_note</span><b>intraday-notes</b></div>
+          <div class="path-row mono"><span>present_file</span><b>artifact.mp4</b></div>
+          <div class="path-row mono"><span>memory</span><b>USER.md / SOUL.md</b></div>
+        </div>
+        <div class="panel terminal-card">
+          <div class="meta mono smallcap">LIVE TOOL ROUTE</div>
+          <div class="screen mono">
+            <div class="cmd">&gt; browser_open(<em>local app</em>)</div>
+            <div class="cmd">&gt; desktop_screenshot(<em>active window</em>)</div>
+            <div class="cmd">&gt; team.run(<em>bug hunter / verifier</em>)</div>
+            <div class="cmd">&gt; hyperframes.render(<em>final.mp4</em>)</div>
+            <div class="cmd">&gt; approval_gate(<em>human remains in control</em>)</div>
+          </div>
+          <div class="stamp mono">VERIFIED</div>
+        </div>
+        <div class="panel">
+          <div class="meta mono smallcap">MEMORY INDEX</div>
+          <h3>The assistant persists.</h3>
+          <div class="memory-row"><span>Preference</span><b>Ash, not neon</b></div>
+          <div class="memory-row"><span>Project</span><b>Prometheus</b></div>
+          <div class="memory-row"><span>Voice</span><b>Cedar / deeper target</b></div>
+          <div class="memory-row"><span>Rule</span><b>show the proof</b></div>
+        </div>
+      </div>
+      <div class="printer-noise"></div><div class="grain"></div>
+    </section>
+
+    <section id="s3" class="scene is-dark">
+      <div class="lab-bg"></div>
+      <div class="specimen"></div>
+      <div class="analysis-label l1 mono">MEMORY<br/><b>INDEX ACTIVE</b></div>
+      <div class="analysis-label l2 mono">TOOL ROUTE<br/><b>BROWSER + DESKTOP</b></div>
+      <div class="analysis-label l3 mono">LOCAL MACHINE<br/><b>NO CLOUD THEATER</b></div>
+      <div class="analysis-label l4 mono">APPROVAL GATE<br/><b>HUMAN FINAL ACTION</b></div>
+      <div class="lab-copy">
+        <div class="kicker mono smallcap">FIELD MANUAL / PROMETHEUS CORE</div>
+        <h2 class="serif">Ancient intelligence. Modern machine.</h2>
+        <p>The style is not “AI magic.” It is a record of capability: local, visible, inspectable, and alive.</p>
+        <div class="concept-list">
+          <div class="concept mono">archive texture + real UI proof</div>
+          <div class="concept mono">documents, routes, approvals, artifacts</div>
+          <div class="concept mono">ember as signal — never generic glow</div>
+        </div>
+      </div>
+      <div class="grain"></div><div class="scanlines"></div><div class="vignette"></div>
+    </section>
+
+    <section id="s4" class="scene is-light">
+      <div class="ledger">
+        <div class="ledger-left">
+          <div class="mono smallcap" style="font-size:22px;color:var(--ash);margin-bottom:28px;">CONTROL ROOM DOSSIER</div>
+          <h2 class="serif">Approvals stay human.</h2>
+          <p>Prometheus can move fast without pretending irreversible actions are casual. The interface should make control feel physical.</p>
+          <div class="approval-stamp mono">AWAITING RAUL</div>
+        </div>
+        <div class="ledger-table">
+          <div class="table-head mono smallcap"><div>SYSTEM</div><div>VISIBLE ACTION</div><div>STATE</div></div>
+          <div class="table-row"><div>Browser</div><div>Search, inspect, extract, submit only with approval</div><div class="state green mono">LIVE</div></div>
+          <div class="table-row"><div>Desktop</div><div>Screenshot, click, type, verify foreground state</div><div class="state green mono">LIVE</div></div>
+          <div class="table-row"><div>Memory</div><div>Preference and project facts survive the session</div><div class="state ember mono">INDEXED</div></div>
+          <div class="table-row"><div>Teams</div><div>Specialists run the background while Prom keeps context</div><div class="state green mono">READY</div></div>
+          <div class="table-row"><div>External</div><div>Posts, sends, purchases, deletes require final gate</div><div class="state red mono">GATED</div></div>
+        </div>
+      </div>
+      <div class="artifact-card">
+        <h4 class="serif">Artifact generated</h4>
+        <p class="mono">hyperframes-prometheus-ash-archive/final.mp4</p>
+      </div>
+      <div class="printer-noise"></div><div class="grain"></div>
+    </section>
+
+    <section id="s5" class="scene is-dark">
+      <div class="scale-map">
+        <div class="connect c1"></div><div class="connect c2"></div><div class="connect c3"></div><div class="connect c4"></div><div class="connect c5"></div>
+        <div class="node n1"><h3>Browser</h3><p>logged-in web work, extraction, research, action</p></div>
+        <div class="node n2"><h3>Desktop</h3><p>apps, screenshots, real local foreground control</p></div>
+        <div class="node n3"><h3>Memory</h3><p>preferences, projects, rules, continuity</p></div>
+        <div class="node n4"><h3>Teams</h3><p>parallel operators, analysts, builders, verifiers</p></div>
+        <div class="node n5"><h3>Creative</h3><p>HyperFrames, assets, video, QA, export</p></div>
+        <div class="node n6"><h3>Automations</h3><p>schedules, watches, follow-ups, durable work</p></div>
+      </div>
+      <div class="scale-title">
+        <div class="kicker mono smallcap">ONE OPERATING LAYER</div>
+        <h2 class="serif">Everything connected. Nothing hidden.</h2>
+      </div>
+      <div class="side-log mono">
+        <div>&gt; route: origin/mobile · local runtime still active</div>
+        <div>&gt; artifact: canvas-presentable · export verified</div>
+        <div>&gt; policy: human approval before final external action</div>
+        <div>&gt; house style: ash/archive · no neon gradient default</div>
+      </div>
+      <div class="grain"></div><div class="scanlines"></div><div class="vignette"></div>
+    </section>
+
+    <section id="s6" class="scene is-dark">
+      <div class="final-mark">
+        <div class="glyph-ring"></div><div class="glyph-ring two"></div><div class="flame-glyph"></div>
+      </div>
+      <div class="final-copy">
+        <h2 class="serif">Prometheus</h2>
+        <p>A living local command center for the work, files, apps, memory, and people already around you.</p>
+      </div>
+      <div class="final-meta mono smallcap"><span>ASH & ARCHIVE / STYLE PROTOTYPE</span><span>LOCAL INTELLIGENCE LAYER</span></div>
+      <div class="grain"></div><div class="scanlines"></div><div class="vignette"></div>
+    </section>
+
+    <div class="burn-line"></div>
+    <div class="shutter"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+    const D = 44;
+    const scenes = ["#s1", "#s2", "#s3", "#s4", "#s5", "#s6"];
+    tl.set(scenes, { opacity: 0 }, 0);
+    tl.set("#s1", { opacity: 1 }, 0);
+    tl.set(".shutter span", { scaleY: 0 }, 0);
+
+    function shutter(time, nextScene) {
+      tl.to(".burn-line", { scaleX: 1, duration: 0.18, ease: "power4.out" }, time);
+      tl.to(".shutter span", { scaleY: 1, duration: 0.28, ease: "power3.in", stagger: { each: 0.025, from: "start" } }, time + 0.06);
+      tl.set(scenes, { opacity: 0 }, time + 0.42);
+      tl.set(nextScene, { opacity: 1 }, time + 0.42);
+      tl.set(".burn-line", { scaleX: 0 }, time + 0.44);
+      tl.to(".shutter span", { scaleY: 0, duration: 0.42, ease: "expo.out", stagger: { each: 0.018, from: "end" } }, time + 0.48);
+    }
+
+    // Scene 1: cold boot
+    tl.from("#s1 .boot-grid", { opacity: 0, scaleX: 0.92, duration: 0.7, ease: "power3.out" }, 0.18);
+    tl.from("#s1 .boot-line", { x: -54, opacity: 0, duration: 0.42, ease: "steps(6)", stagger: 0.16 }, 0.42);
+    tl.from("#s1 .glyph-ring", { scale: 0.62, opacity: 0, rotation: -18, duration: 1.05, ease: "expo.out", stagger: 0.16 }, 0.76);
+    tl.from("#s1 .flame-glyph", { scale: 0.78, opacity: 0, filter: "drop-shadow(0 0 0 rgba(255,90,31,0))", duration: 0.82, ease: "back.out(1.5)" }, 1.18);
+    tl.from("#s1 .kicker", { y: 26, opacity: 0, duration: 0.5, ease: "power2.out" }, 1.42);
+    tl.from("#s1 h1", { x: 88, opacity: 0, letterSpacing: "0.02em", duration: 0.86, ease: "expo.out" }, 1.62);
+    tl.from("#s1 p", { y: 42, opacity: 0, duration: 0.58, ease: "power4.out" }, 2.1);
+    tl.from("#s1 .wake-phrase", { opacity: 0, y: 22, duration: 0.5, ease: "sine.out" }, 2.44);
+    tl.to("#s1 .glyph-ring", { rotation: 18, duration: 6.3, ease: "none" }, 1.6);
+    shutter(6.75, "#s2");
+
+    // Scene 2: evidence dossier
+    tl.from("#s2 .dossier-shell", { scaleX: 0, opacity: 0, transformOrigin: "left center", duration: 0.56, ease: "power4.out" }, 7.34);
+    tl.from("#s2 .dossier-header h2", { x: -84, opacity: 0, duration: 0.72, ease: "expo.out" }, 7.52);
+    tl.from("#s2 .case", { y: -34, opacity: 0, duration: 0.44, ease: "power2.out" }, 7.74);
+    tl.from("#s2 .panel", { y: 86, opacity: 0, duration: 0.62, ease: "back.out(1.2)", stagger: 0.13 }, 7.96);
+    tl.from("#s2 .path-row, #s2 .cmd, #s2 .memory-row", { x: -30, opacity: 0, duration: 0.28, ease: "power3.out", stagger: 0.035 }, 8.48);
+    tl.from("#s2 .stamp", { scale: 1.7, opacity: 0, rotation: -18, duration: 0.28, ease: "power4.out" }, 10.3);
+    shutter(13.85, "#s3");
+
+    // Scene 3: analysis / field manual
+    tl.from("#s3 .specimen", { scale: 0.72, opacity: 0, rotation: -24, duration: 0.9, ease: "expo.out" }, 14.44);
+    tl.from("#s3 .analysis-label", { opacity: 0, scale: 0.82, x: -28, duration: 0.46, ease: "power3.out", stagger: 0.12 }, 14.88);
+    tl.from("#s3 .kicker", { opacity: 0, y: 22, duration: 0.42, ease: "sine.out" }, 15.16);
+    tl.from("#s3 h2", { x: 80, opacity: 0, duration: 0.72, ease: "expo.out" }, 15.34);
+    tl.from("#s3 p", { y: 38, opacity: 0, duration: 0.48, ease: "power2.out" }, 15.82);
+    tl.from("#s3 .concept", { x: 52, opacity: 0, duration: 0.34, ease: "back.out(1.3)", stagger: 0.12 }, 16.2);
+    tl.to("#s3 .specimen", { rotation: 7, duration: 7.0, ease: "sine.inOut" }, 15.1);
+    shutter(21.05, "#s4");
+
+    // Scene 4: approvals and ledgers
+    tl.from("#s4 .ledger-left", { x: -110, opacity: 0, duration: 0.62, ease: "expo.out" }, 21.64);
+    tl.from("#s4 .ledger-table", { x: 110, opacity: 0, duration: 0.7, ease: "power4.out" }, 21.78);
+    tl.from("#s4 .ledger-left h2", { y: 54, opacity: 0, duration: 0.58, ease: "power3.out" }, 22.06);
+    tl.from("#s4 .ledger-left p", { y: 34, opacity: 0, duration: 0.46, ease: "sine.out" }, 22.36);
+    tl.from("#s4 .table-row", { clipPath: "inset(0 100% 0 0)", opacity: 0.2, duration: 0.36, ease: "power2.out", stagger: 0.09 }, 22.48);
+    tl.from("#s4 .approval-stamp", { scale: 2.2, opacity: 0, rotation: 8, duration: 0.24, ease: "power4.out" }, 23.7);
+    tl.from("#s4 .artifact-card", { y: 90, opacity: 0, rotation: 3, duration: 0.5, ease: "back.out(1.4)" }, 24.08);
+    shutter(28.25, "#s5");
+
+    // Scene 5: connected operating layer
+    tl.from("#s5 .scale-map", { opacity: 0, scale: 0.96, duration: 0.58, ease: "power3.out" }, 28.84);
+    tl.from("#s5 .connect", { scaleX: 0, opacity: 0, duration: 0.36, ease: "power2.out", stagger: 0.08 }, 29.1);
+    tl.from("#s5 .node", { scale: 0.82, opacity: 0, y: 42, duration: 0.46, ease: "back.out(1.25)", stagger: 0.085 }, 29.24);
+    tl.from("#s5 .kicker", { opacity: 0, y: 18, duration: 0.42, ease: "sine.out" }, 30.0);
+    tl.from("#s5 h2", { x: -82, opacity: 0, duration: 0.72, ease: "expo.out" }, 30.18);
+    tl.from("#s5 .side-log div", { x: 46, opacity: 0, duration: 0.32, ease: "steps(5)", stagger: 0.12 }, 30.52);
+    tl.to("#s5 .scale-map", { scale: 1.025, duration: 6.4, ease: "sine.inOut" }, 30.0);
+    shutter(35.45, "#s6");
+
+    // Scene 6: final mark
+    tl.from("#s6 .glyph-ring", { scale: 0.48, opacity: 0, rotation: -22, duration: 1.1, ease: "expo.out", stagger: 0.16 }, 36.04);
+    tl.from("#s6 .flame-glyph", { scale: 0.7, opacity: 0, duration: 0.72, ease: "back.out(1.5)" }, 36.54);
+    tl.from("#s6 h2", { y: 54, opacity: 0, letterSpacing: "0.02em", duration: 0.8, ease: "expo.out" }, 37.0);
+    tl.from("#s6 p", { y: 34, opacity: 0, duration: 0.58, ease: "power3.out" }, 37.54);
+    tl.from("#s6 .final-meta span", { opacity: 0, y: 20, duration: 0.42, ease: "sine.out", stagger: 0.14 }, 38.14);
+    tl.to("#s6 .glyph-ring", { rotation: 16, duration: 5.4, ease: "none" }, 37.2);
+    tl.to("#s6 .final-copy", { opacity: 0, y: -20, duration: 0.85, ease: "power2.in" }, 42.7);
+    tl.to("#s6 .final-mark", { opacity: 0.2, scale: 0.92, duration: 0.9, ease: "power2.in" }, 43.0);
+
+    window.__timelines["prometheus-ash-archive"] = tl;
+  </script>
+</body>
+</html>

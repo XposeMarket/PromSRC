@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "id": "windows-shell-playbook",
+  "name": "windows-shell-playbook",
+  "description": "Windows shell and run_command playbook for PowerShell/cmd-safe commands, path handling, npm/build verification, and avoiding Bash-only syntax such as && on older PowerShell hosts.",
+  "version": "1.0.1",
+  "triggers": [
+    "windows shell",
+    "PowerShell",
+    "cmd.exe",
+    "run_command on Windows",
+    "npm on Windows",
+    "build verification failed",
+    "The token '&&' is not a valid statement separator",
+    "invalid statement separator",
+    "Windows command",
+    "proposal sandbox verification",
+    "shell syntax"
+  ],
+  "categories": [
+    "shell",
+    "windows",
+    "developer-tools"
+  ],
+  "requiredTools": [],
+  "requires": {
+    "tools": [],
+    "toolCategories": [
+      "workspace_write"
+    ],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [
+      "windows"
+    ],
+    "permissions": []
+  },
+  "toolBinding": {
+    "requiredTools": [],
+    "recommendedToolCategories": [
+      "workspace_write"
+    ],
+    "defaultWorkflow": [
+      "Read this skill before constructing Windows run_command strings.",
+      "Use explicit powershell -NoProfile -Command with Set-Location for cwd-dependent commands.",
+      "Avoid Bash chaining assumptions; use semicolons or separate commands with explicit error checks."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {},
+  "status": "ready",
+  "lifecycle": "active",
+  "ownership": "local",
+  "executionEnabled": true
+}

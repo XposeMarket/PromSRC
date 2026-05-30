@@ -55,6 +55,7 @@ Current default LLM config in source:
 - default OpenAI Codex model: `gpt-5.4`
 - default OpenAI model: `gpt-4o`
 - default Anthropic model: `claude-sonnet-4-6`
+- native Anthropic exposed models start with `claude-opus-4-8`, then preserve the current Opus/Sonnet/Haiku models
 - legacy `models.primary`: `qwen3:4b`
 - legacy role defaults (`manager`, `executor`, `verifier`): all `qwen3:4b`
 
@@ -94,3 +95,41 @@ Other current model facts:
 - OpenAI, OpenAI Codex, and Perplexity provider config support `reasoning_effort`
 - validated reasoning efforts include `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`
 - Anthropic provider config supports `extended_thinking` and `thinking_budget`
+
+Provider-aware context budgeting lives in `src/gateway/context/model-context.ts`.
+
+Current context-profile behavior:
+
+- `resolveActiveModelContextProfile(...)` reads the active provider/model from config and returns `providerId`, `model`, `contextWindowTokens`, `maxOutputTokens`, tokenizer family, reasoning-token support, reasoning budget, and source
+- profile sources are `config_override`, `provider_metadata`, `known_table`, `ollama_num_ctx`, or `fallback`
+- provider config overrides can set `context_window` / `contextWindowTokens`, `max_output_tokens` / `maxOutputTokens`, `reasoning_budget_tokens` / `thinking_budget`, and `tokenizer`
+- provider metadata can supply `contextWindowTokens`, `maxOutputTokens`, and tokenizer when available
+- Ollama context can come from configured `num_ctx`, `LOCALCLAW_SESSION_NUM_CTX`, or `LOCALCLAW_CHAT_NUM_CTX`
+- tokenizer families are `openai`, `anthropic`, `gemini`, `llama`, `qwen`, and `heuristic`
+
+Known context table facts:
+
+- OpenAI/OpenAI Codex `gpt-5*` and Codex-named models are currently treated as 400k context with 128k max output
+- OpenAI/OpenAI Codex `gpt-4.1*` is treated as about 1,047,576 context with 32,768 max output
+- OpenAI/OpenAI Codex `gpt-4o` and `o*` models are treated as 128k context
+- Anthropic `claude-opus-4-8` is treated as 1m context with 128k max output
+- Anthropic `claude-*` models are treated as 200k context
+- Gemini `gemini-*` models are treated as 1m context
+- Perplexity sonar models and xAI Grok models currently fall back to 128k known-table entries unless overridden or provider metadata says otherwise
+- unknown local/llama providers fall back lower, currently 8192; unknown cloud-ish providers fall back to 32768
+
+Budget math:
+
+- `buildContextBudget(...)` reserves output tokens, reasoning tokens when supported, and 10% safety headroom
+- usable input budget is context minus reserved output, reasoning, and headroom
+- compaction triggers at 75% of the usable input budget
+- recent tool context budget is about 16% of usable input budget, with a 600-token floor
+- summary budget is about 8% of usable input budget, with a 700-token floor
+
+Token counts are estimates, not provider-billed truth. `estimateTextTokensForModel(...)` uses character-density heuristics by tokenizer family and gives denser code/log text a smaller divisor. Provider usage metadata should be used for calibration where available, but UI/context decisions should still tolerate approximation.
+
+Anthropic extended-thinking request shape:
+
+- Opus 4.7 and newer Opus aliases use adaptive thinking (`thinking: { type: "adaptive" }`) with high effort output config instead of legacy `budget_tokens`.
+- Older supported Claude thinking models continue to use the configured `thinking_budget`.
+- The native Anthropic extension does not carry a descriptor-level static model list; `AnthropicAdapter.listModels()` returns the known native model set. Aggregator descriptors keep static fallback lists in their provider-specific ID formats.

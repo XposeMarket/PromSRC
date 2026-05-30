@@ -24,12 +24,26 @@ Legacy Prometheus `run_command` behavior:
 
 Command safety/runtime details:
 
-- `chat-helpers.ts` maintains `SAFE_COMMANDS`
-- `chat-helpers.ts` maintains `BLOCKED_PATTERNS`
-- `isAllowedShellCommand(...)` checks whether a shell command is allowed
+- `chat-helpers.ts` maintains default command-token allowlists plus config-backed shell command extensions
+- legacy `BLOCKED_PATTERNS` text exists, but hard-deny behavior is now primarily enforced through config `tools.permissions.shell.blocked_patterns` and `src/gateway/tool-deny-policy.ts`
+- `isAllowedShellCommand(...)` checks whether a shell command token can proceed to later policy/approval gates
 - `subagent-executor.ts` blocks bad patterns before approval logic
 - `findCommandPermissionGrant(...)` can auto-allow repeated approved command/browser/desktop actions scoped to cwd, browser page, or desktop window
 - approvals are created through `getApprovalQueue()` and can be delivered to Telegram when `telegramChannel.sendCommandApproval` exists
+
+
+Windows command-policy expansion facts from `src/gateway/chat/chat-helpers.ts`, `src/config/config.ts`, `src/config/config-schema.ts`, `src/types.ts`, and `src/gateway/tool-deny-policy.ts`:
+
+- command allowlisting is token-based: `isAllowedShellCommand(...)` splits shell input on `&&`, `||`, pipes, and `;`, then `isAllowedShellSegment(...)` checks the first command token from each segment
+- base cross-platform tokens live in `DEFAULT_ALLOWED_SHELL_COMMANDS`; Windows-specific diagnostics/read-only tokens live in `DEFAULT_WINDOWS_READ_SHELL_COMMANDS`; Windows local-control tokens live in `DEFAULT_WINDOWS_SYSTEM_SHELL_COMMANDS`
+- config can extend or override the token pool through `tools.permissions.shell.allowed_commands`, `allowed_windows_read_commands`, `allowed_windows_system_commands`, and `allowed_custom_commands`
+- config `tools.permissions.shell.blocked_patterns` can also remove exact command tokens from the dynamically built allow set when the blocked pattern is a simple token
+- current default Windows read/diagnostic command tokens include `ipconfig`, `ping`, `tracert`, `nslookup`, `netstat`, `tasklist`, `systeminfo`, `driverquery`, PowerShell `get-process` / `get-service` / `get-computerinfo` / `get-winevent`, networking diagnostics, device/disk readers, `sc`, and `schtasks`
+- current default Windows local-control command tokens include `powercfg`, `taskkill`, PowerShell process/service/task mutators, `winget`, `displayswitch(.exe)`, `control`, `rundll32`, clipboard commands, and `reg`
+- being token-allowed only means the command can proceed to normal policy, path-scope, audit, command-permission-grant, and approval handling; it is not automatic execution
+- `approval_mode: "lite"` only changes repeated approval friction; it does not bypass token allowlisting, native-file-tool bypass detection, path-scope checks, audit logging, or hard-deny patterns
+- `tool-deny-policy.ts` still hard-denies machine-interruption/destructive patterns such as shutdown/restart/logoff and `powercfg /hibernate on|off` during autonomous goal execution
+- future “Jarvis” work should prefer first-class typed system tools over ever-wider raw shell: power management, process management, service control, network diagnostics, event-log inspection, device/display control, package management, and firewall/security diagnostics should wrap command execution with validation, approval copy, verification, and audit output
 
 Policy engine tiers from `src/tools/registry.ts`:
 

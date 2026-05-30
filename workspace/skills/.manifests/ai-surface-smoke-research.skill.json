@@ -1,6 +1,9 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "id": "ai-surface-smoke-research",
+  "name": "AI Surface Smoke Research",
+  "description": "Run Raul's browser/desktop test workflow: focus Codex and Claude, open Chrome/browser, search Reddit and/or X for AI topics like Claude, OpenClaw, Hermes, summarize signals, and report only after tool-backed execution completes.",
   "version": "1.0.1",
   "triggers": [
     "run ai smoke research",
@@ -17,7 +20,9 @@
     "do that test again",
     "focus codex and claude then search reddit",
     "search reddit and x for claude openclaw hermes",
-    "ai browser desktop smoke test"
+    "ai browser desktop smoke test",
+    "do the ai smoke test",
+    "run the ai smoke test"
   ],
   "categories": [
     "browser",
@@ -30,6 +35,19 @@
     "desktop_automation",
     "skills"
   ],
+  "requires": {
+    "tools": [],
+    "toolCategories": [],
+    "connectors": [],
+    "env": [],
+    "bins": [],
+    "platforms": [],
+    "permissions": []
+  },
+  "assignment": {
+    "assignedAgents": [],
+    "assignedTeams": []
+  },
   "toolBinding": {
     "requiredTools": [
       "browser_automation",
@@ -45,8 +63,7 @@
       "Find and focus Codex, then find Claude and prefer exact handles when names collide.",
       "Open Reddit and/or X with the requested AI query and collect 3-5 scroll passes.",
       "Summarize only after tool-backed collection completes."
-    ],
-    "canSpawnSubagents": false
+    ]
   },
   "permissions": {
     "browser": true,
@@ -54,5 +71,25 @@
     "externalSideEffects": false,
     "workspaceWrite": false
   },
-  "id": "ai-surface-smoke-research"
+  "resources": [
+    {
+      "path": "examples/2026-05-21-reddit-openclaw-and-steering.md",
+      "type": "example",
+      "description": "Successful 2026-05-21 lightweight Reddit/OpenClaw AI-surface scan example with tool order, output shape, and steering guardrails."
+    },
+    {
+      "path": "examples/2026-05-22-ai-smoke-test.md",
+      "type": "example",
+      "description": "Successful AI smoke-test example with tool order, Claude name-collision caveat, and output shape from 2026-05-22."
+    },
+    {
+      "path": "examples/2026-05-23-interrupted-browser-target-closed.md",
+      "type": "example",
+      "description": "Recovery example for AI smoke tests when browser_scroll_collect fails because the page/context closed during a run."
+    }
+  ],
+  "status": "ready",
+  "lifecycle": "active",
+  "ownership": "prometheus-owned-overlay",
+  "executionEnabled": true
 }

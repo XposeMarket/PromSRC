@@ -3,6 +3,7 @@
 // Restored and adapted for dep-injected execution.
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import { getConfig, getAgents, getAgentById } from '../../config/config';
@@ -151,7 +152,6 @@ import {
   waitForBrowserControlRelease,
 } from '../browser-tools';
 import {
-  desktopScreenshot,
   desktopScreenshotWithHistory,
   parseDesktopScreenshotToolArgs,
   parseDesktopPointerMonitorArgs,
@@ -180,12 +180,29 @@ import {
   desktopScroll,
   desktopSendToTelegram,
   getDesktopAdvisorPacket,
+  getDesktopAdvisorPacketById,
   desktopBackgroundStatus,
   desktopBackgroundPrepareSandbox,
   desktopBackgroundCommand,
   desktopDoctor,
+  desktopGetWindowText,
+  desktopGetAccessibilityTree,
+  desktopPixelWatch,
+  desktopRecordMacro,
+  desktopStopMacro,
+  desktopReplayMacro,
+  desktopListMacros,
+  desktopListApps,
+  desktopListWindowsCanonical,
+  desktopGetWindowState,
+  desktopWindowClick,
+  desktopWindowType,
+  desktopWindowPressKey,
+  desktopWindowScroll,
+  desktopWindowDrag,
 } from '../desktop-tools';
 import { deliverToTargets, readAttachmentBuffer } from '../delivery-router';
+import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import {
   refreshMemoryIndexFromAudit,
   searchMemoryIndex,
@@ -215,7 +232,7 @@ import {
   type ToolResult,
   type TaskControlResponse,
 } from '../tool-builder';
-import { activateSkillForSession, activateToolCategory, addCreativeReferences, formatCreativeReferencesForPrompt, getCanvasProjectRoot, getCreativeMode, getCreativeReferences, getSessionMutationScope, isBusinessContextEnabled, normalizeCreativeMode, setBusinessContextEnabled, setCreativeMode } from '../session';
+import { activateSkillForSession, activateSkillResourceForSession, activateToolCategory, addCreativeReferences, formatCreativeReferencesForPrompt, getCanvasProjectRoot, getCreativeMode, getCreativeReferences, getSessionMutationScope, isBusinessContextEnabled, normalizeCreativeMode, setBusinessContextEnabled, setCreativeMode } from '../session';
 import { sendCreativeCommand } from '../creative/command-bus';
 import type { HyperframesPatchOp } from '../creative/hyperframes-bridge';
 import { summarizeHtmlMotionTemplates, applyHtmlMotionTemplate } from '../creative/html-motion-templates';
@@ -366,62 +383,6 @@ export interface ExecuteToolDeps {
   onHardToolDeny?: (event: { sessionId: string; toolName: string; args: any; decision: HardToolDenyDecision }) => void;
 }
 
-async function executeDeliverySendScreenshot(
-  args: any,
-  workspacePath: string,
-  deps: ExecuteToolDeps,
-  sessionId: string,
-): Promise<{ result: string; error: boolean }> {
-  const source = String(args?.source || 'desktop_new').trim().toLowerCase();
-  const caption = String(args?.caption || args?.text || '').trim()
-    || (source.startsWith('browser') ? 'Browser screenshot' : 'Desktop screenshot');
-  let imageBuffer: Buffer | undefined;
-  let mimeType = 'image/jpeg';
-  let fileName = source.startsWith('browser') ? 'browser-screenshot.jpg' : 'desktop-screenshot.jpg';
-
-  if (source === 'browser_new' || source === 'browser_last') {
-    const shot = await browserVisionScreenshot(sessionId);
-    if (!shot?.base64) return { result: 'ERROR: No browser screenshot available. Use browser_open first, or choose source="desktop_new".', error: true };
-    imageBuffer = Buffer.from(shot.base64, 'base64');
-    mimeType = shot.mimeType || 'image/jpeg';
-  } else if (source === 'desktop_new' || source === 'desktop_last') {
-    if (source === 'desktop_new') {
-      const capture = await desktopScreenshot(sessionId);
-      if (capture.startsWith('ERROR')) return { result: capture, error: true };
-    }
-    const packet = getDesktopAdvisorPacket(sessionId);
-    if (!packet?.screenshotBase64) {
-      return { result: 'ERROR: No desktop screenshot available. Call desktop_screenshot first or use source="desktop_new".', error: true };
-    }
-    imageBuffer = Buffer.from(packet.screenshotBase64, 'base64');
-    mimeType = 'image/jpeg';
-  } else if (source === 'file') {
-    const file = readAttachmentBuffer(String(args?.path || args?.file || args?.attachmentPath || ''), workspacePath);
-    imageBuffer = file.buffer;
-    mimeType = file.mimeType;
-    fileName = file.fileName;
-  } else {
-    return { result: 'ERROR: source must be desktop_new, desktop_last, browser_new, browser_last, or file.', error: true };
-  }
-
-  const delivered = await deliverToTargets({
-    sessionId,
-    target: args?.target || 'origin',
-    caption,
-    text: caption,
-    imageBuffer,
-    mimeType,
-    fileName,
-    source: 'delivery_send_screenshot',
-  }, { telegramChannel: deps.telegramChannel, broadcastWS: deps.broadcastWS });
-  const suffix = delivered.errors.length ? ` Errors: ${delivered.errors.join('; ')}` : '';
-  return {
-    result: delivered.delivered.length
-      ? `Screenshot delivered via ${delivered.delivered.join(', ')}.${suffix}`
-      : `ERROR: Screenshot delivery failed.${suffix}`,
-    error: delivered.delivered.length === 0,
-  };
-}
 
 function looksLikeNativeFileToolBypass(command: string): boolean {
   const raw = String(command || '').trim();
@@ -2129,22 +2090,180 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return Array.from(paths).filter(Boolean);
   }
 
-  function validateRunCommandPathScope(command: string): ToolResult | null {
+  type CommandBoundaryScope = NonNullable<ToolPermissionCandidate['boundaryScope']>;
+  type CommandBoundaryAnalysis = {
+    scope: CommandBoundaryScope;
+    reason: string;
+    externalPaths: string[];
+    environmentChanges: string[];
+    packageManager?: string;
+    requiresExplicitApproval: boolean;
+    requiresAdmin: boolean;
+    blocked?: ToolResult;
+  };
+
+  const boundaryRank: Record<CommandBoundaryScope, number> = {
+    workspace: 0,
+    user_profile: 1,
+    global_tooling: 2,
+    unknown_external: 3,
+    system: 4,
+    admin_required: 5,
+  };
+
+  function uniqueStrings(values: string[]): string[] {
+    return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+  }
+
+  function mergeCommandBoundary(base: CommandBoundaryAnalysis, next: Partial<CommandBoundaryAnalysis>): CommandBoundaryAnalysis {
+    const nextScope = next.scope || base.scope;
+    return {
+      scope: boundaryRank[nextScope] > boundaryRank[base.scope] ? nextScope : base.scope,
+      reason: uniqueStrings([base.reason, next.reason || '']).join(' '),
+      externalPaths: uniqueStrings([...(base.externalPaths || []), ...(next.externalPaths || [])]),
+      environmentChanges: uniqueStrings([...(base.environmentChanges || []), ...(next.environmentChanges || [])]),
+      packageManager: next.packageManager || base.packageManager,
+      requiresExplicitApproval: base.requiresExplicitApproval || next.requiresExplicitApproval === true,
+      requiresAdmin: base.requiresAdmin || next.requiresAdmin === true,
+      blocked: base.blocked || next.blocked,
+    };
+  }
+
+  function envPath(name: string, fallback = ''): string {
+    return String(process.env[name] || fallback || '').trim();
+  }
+
+  function userProfileRoots(): string[] {
+    return uniqueStrings([
+      os.homedir(),
+      envPath('USERPROFILE'),
+      envPath('APPDATA'),
+      envPath('LOCALAPPDATA'),
+    ]).map((p) => path.resolve(p));
+  }
+
+  function isInsideUserProfile(target: string): boolean {
+    return userProfileRoots().some((root) => isPathInsideForPermissions(root, target));
+  }
+
+  function commandBoundaryFromPatterns(command: string): CommandBoundaryAnalysis {
+    const cmd = String(command || '');
+    const lower = cmd.toLowerCase().replace(/\s+/g, ' ');
+    let boundary: CommandBoundaryAnalysis = {
+      scope: 'workspace',
+      reason: '',
+      externalPaths: [],
+      environmentChanges: [],
+      requiresExplicitApproval: false,
+      requiresAdmin: false,
+    };
+    const appData = envPath('APPDATA', path.join(os.homedir(), 'AppData', 'Roaming'));
+    const localAppData = envPath('LOCALAPPDATA', path.join(os.homedir(), 'AppData', 'Local'));
+    const npmGlobalRe = /\bnpm(?:\.cmd)?\s+(?:install|i|add)\b[\s\S]*(?:^|\s)(?:-g|--global)(?:\s|$)/i;
+    if (npmGlobalRe.test(cmd) || /\bnpm(?:\.cmd)?\s+link\b/i.test(cmd)) {
+      boundary = mergeCommandBoundary(boundary, {
+        scope: 'global_tooling',
+        reason: 'This is an npm global tooling operation and may install executables outside the workspace.',
+        externalPaths: [
+          path.join(appData, 'npm'),
+          path.join(appData, 'npm', 'node_modules'),
+          path.join(localAppData, 'npm-cache'),
+        ],
+        packageManager: 'npm',
+        requiresExplicitApproval: true,
+      });
+    }
+    if (/\bnpm(?:\.cmd)?\s+config\s+set\s+prefix\b/i.test(cmd)) {
+      boundary = mergeCommandBoundary(boundary, {
+        scope: 'global_tooling',
+        reason: 'This changes npm global install configuration.',
+        externalPaths: [path.join(os.homedir(), '.npmrc')],
+        environmentChanges: ['npm prefix'],
+        packageManager: 'npm',
+        requiresExplicitApproval: true,
+      });
+    }
+    if (/\b(?:pip|pip3|python(?:3)?\s+-m\s+pip)\s+install\b[\s\S]*\s--user\b/i.test(cmd)) {
+      boundary = mergeCommandBoundary(boundary, {
+        scope: 'user_profile',
+        reason: 'This installs Python packages into the user profile outside the workspace.',
+        externalPaths: [path.join(os.homedir(), 'AppData', 'Roaming', 'Python')],
+        packageManager: 'pip',
+        requiresExplicitApproval: true,
+      });
+    }
+    if (/\b(?:winget|choco|chocolatey)\s+(?:install|upgrade|uninstall)\b/i.test(cmd)) {
+      boundary = mergeCommandBoundary(boundary, {
+        scope: 'system',
+        reason: 'This uses a Windows package manager and may change installed applications outside the workspace.',
+        externalPaths: ['Windows installed applications'],
+        packageManager: /\bwinget\b/i.test(cmd) ? 'winget' : 'chocolatey',
+        requiresExplicitApproval: true,
+        requiresAdmin: /\bchoco(?:latey)?\b/i.test(cmd),
+      });
+    }
+    if (/\bscoop\s+(?:install|update|uninstall)\b/i.test(cmd)) {
+      boundary = mergeCommandBoundary(boundary, {
+        scope: 'global_tooling',
+        reason: 'This uses Scoop and may install user-level tools outside the workspace.',
+        externalPaths: [path.join(os.homedir(), 'scoop')],
+        packageManager: 'scoop',
+        requiresExplicitApproval: true,
+      });
+    }
+    if (/\bgit\s+config\s+--global\b/i.test(cmd)) {
+      boundary = mergeCommandBoundary(boundary, {
+        scope: 'user_profile',
+        reason: 'This changes global Git configuration in the user profile.',
+        externalPaths: [path.join(os.homedir(), '.gitconfig')],
+        environmentChanges: ['global git config'],
+        packageManager: 'git',
+        requiresExplicitApproval: true,
+      });
+    }
+    if (/\bsetx\b|\[environment\]::setenvironmentvariable/i.test(lower)) {
+      boundary = mergeCommandBoundary(boundary, {
+        scope: 'user_profile',
+        reason: 'This changes user or machine environment variables outside the workspace.',
+        environmentChanges: ['environment variables'],
+        requiresExplicitApproval: true,
+      });
+    }
+    return boundary;
+  }
+
+  function analyzeRunCommandBoundary(command: string): CommandBoundaryAnalysis {
     const allowedRoots = getRunCommandAllowedRoots();
     const blockedRoots = ((getConfig().getConfig() as any)?.tools?.permissions?.files?.blocked_paths || [])
       .map((p: any) => String(p || '').trim())
       .filter(Boolean)
       .map((p: string) => path.resolve(p));
+    let boundary = commandBoundaryFromPatterns(command);
     for (const candidate of extractAbsolutePathsFromCommand(command)) {
       const resolved = path.resolve(candidate);
       if (blockedRoots.some((blocked: string) => isPathInsideForPermissions(blocked, resolved))) {
-        return { name, args, result: `Blocked: command references blocked path "${candidate}".`, error: true };
+        return mergeCommandBoundary(boundary, {
+          scope: 'admin_required',
+          reason: `Command references blocked path "${candidate}".`,
+          externalPaths: [candidate],
+          requiresExplicitApproval: true,
+          requiresAdmin: true,
+          blocked: { name, args, result: `Blocked: command references blocked path "${candidate}".`, error: true },
+        });
       }
       if (!allowedRoots.some((allowed) => isPathInsideForPermissions(allowed, resolved))) {
-        return { name, args, result: `Blocked: command references absolute path outside this workspace: "${candidate}". Allowed roots: ${allowedRoots.join(', ')}`, error: true };
+        const userProfile = isInsideUserProfile(resolved);
+        boundary = mergeCommandBoundary(boundary, {
+          scope: userProfile ? 'user_profile' : 'unknown_external',
+          reason: userProfile
+            ? `Command references a user-profile path outside the workspace: "${candidate}".`
+            : `Command references an external path outside the workspace: "${candidate}".`,
+          externalPaths: [candidate],
+          requiresExplicitApproval: true,
+        });
       }
     }
-    return null;
+    return boundary;
   }
 
   function stableToolArgsForPermission(toolName: string, toolArgs: any): string {
@@ -2234,8 +2353,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
     }
 
     const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
-    const pathScopeBlock = validateRunCommandPathScope(normalizedCmd);
-    if (pathScopeBlock) return pathScopeBlock;
+    const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
+    if (commandBoundary.blocked) return commandBoundary.blocked;
     if (!deps.isAllowedShellCommand(normalizedCmd)) {
       return {
         name,
@@ -2263,10 +2382,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
       cwd: commandCwdForApproval.cwd,
       cwdDisplay: commandCwdForApproval.displayCwd,
       workspaceRoot: path.resolve(workspacePath),
-      riskScore: Number(evaluation.riskScore || 0),
+      riskScore: Math.max(Number(evaluation.riskScore || 0), commandBoundary.requiresExplicitApproval ? 7 : 0),
+      boundaryScope: commandBoundary.scope,
+      boundaryReason: commandBoundary.reason,
+      externalPaths: commandBoundary.externalPaths,
+      environmentChanges: commandBoundary.environmentChanges,
+      packageManager: commandBoundary.packageManager,
+      requiresExplicitApproval: commandBoundary.requiresExplicitApproval,
+      requiresAdmin: commandBoundary.requiresAdmin,
     };
+    const shellApprovalMode = String((getConfig().getConfig() as any)?.tools?.permissions?.shell?.approval_mode || 'default');
+    const isLiteCommandApprovalBypass = shellApprovalMode === 'lite' && !commandBoundary.requiresExplicitApproval;
     const existingCommandGrant = findCommandPermissionGrant(permissionCandidate);
-    if (existingCommandGrant || isGoalAutonomousApprovalBypass) {
+    const isAutonomousCommandApprovalBypass = isGoalAutonomousApprovalBypass && !commandBoundary.requiresExplicitApproval;
+    if (existingCommandGrant || isAutonomousCommandApprovalBypass || isLiteCommandApprovalBypass) {
       try {
         appendAuditEntry({
           timestamp: new Date().toISOString(),
@@ -2279,6 +2408,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
           approvalStatus: 'auto_allowed',
           resultSummary: existingCommandGrant
             ? `Allowed by ${existingCommandGrant.scope} command permission ${existingCommandGrant.id}`
+            : isLiteCommandApprovalBypass
+            ? 'Auto-allowed by Lite terminal permissions.'
             : 'Auto-allowed by main-chat goal autonomous policy.',
         });
       } catch {}
@@ -2306,6 +2437,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	      } catch {}
 	    }
       const approvalCwd = commandCwdForApproval.displayCwd;
+      const boundaryDetails = commandBoundary.requiresExplicitApproval
+        ? [
+            `This command crosses the workspace boundary (${commandBoundary.scope}).`,
+            commandBoundary.reason,
+            commandBoundary.externalPaths.length ? `Likely external paths: ${commandBoundary.externalPaths.join(', ')}` : '',
+            commandBoundary.environmentChanges.length ? `Environment changes: ${commandBoundary.environmentChanges.join(', ')}` : '',
+          ].filter(Boolean).join(' ')
+        : '';
 	    const approval = approvalQueue.create({
 	      sessionId,
 	      taskId: activeTaskId,
@@ -2313,13 +2452,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	      originType: approvalOrigin.originType,
 	      originLabel: approvalOrigin.originLabel,
 	      toolName: name,
-	      toolArgs: { ...args, command: rawCmd },
+      toolArgs: { ...args, command: rawCmd },
       commandPermissionCandidate: permissionCandidate,
-      action: `Run command in ${approvalCwd}: ${rawCmd}`,
-      reason: evaluation.reason,
+      action: commandBoundary.requiresExplicitApproval
+        ? `Run outside-workspace command in ${approvalCwd}: ${rawCmd}`
+        : `Run command in ${approvalCwd}: ${rawCmd}`,
+      reason: [evaluation.reason, boundaryDetails].filter(Boolean).join('\n\n'),
       policyTier: 'commit',
-      riskScore: Number(evaluation.riskScore || 0),
-      affectedSystems: Array.isArray(evaluation.affectedSystems) ? evaluation.affectedSystems : [],
+      riskScore: permissionCandidate.riskScore,
+      affectedSystems: uniqueStrings([
+        ...(Array.isArray(evaluation.affectedSystems) ? evaluation.affectedSystems : []),
+        ...(commandBoundary.requiresExplicitApproval ? ['outside_workspace', commandBoundary.scope] : []),
+      ]),
     });
 
     try {
@@ -2538,6 +2682,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
       };
     }
     }
+  }
+
+  if (name === 'show_product_carousel') {
+    const items = Array.isArray(args?.items) ? args.items : [];
+    const title = String(args?.title || '');
+    return {
+      name,
+      args,
+      result: `Product carousel ready: "${title}" — ${items.length} item(s) will be displayed.`,
+      error: false,
+      extra: { productCarousel: { title, items } },
+    };
   }
 
   const capabilityDispatch = await executeRegisteredCapabilityTool({
@@ -9053,8 +9209,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const cwd = args.cwd ? resolveAllowedWorkspacePath(String(args.cwd), { requireDirectory: true }).absPath : workspacePath;
           const scripts = readPackageScripts(cwd);
           const command = String(args.command || '').trim() || (scripts.dev ? 'npm run dev' : (scripts.start ? 'npm start' : 'npm run dev'));
-          const pathScopeBlock = validateRunCommandPathScope(command);
-          if (pathScopeBlock) return pathScopeBlock;
+          const commandBoundary = analyzeRunCommandBoundary(command);
+          if (commandBoundary.blocked) return commandBoundary.blocked;
+          if (commandBoundary.requiresExplicitApproval) {
+            return { name, args, result: `start_dev_server command requires outside-workspace approval (${commandBoundary.scope}): ${commandBoundary.reason}`, error: true };
+          }
           const { spawn } = await import('child_process');
           const child = spawn(command, { cwd, shell: true, windowsHide: true, env: process.env });
           const processId = `dev_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -9299,8 +9458,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
           };
         }
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
-        const pathScopeBlock = validateRunCommandPathScope(normalizedCmd);
-        if (pathScopeBlock) return pathScopeBlock;
+        const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
+        if (commandBoundary.blocked) return commandBoundary.blocked;
+        if (commandBoundary.requiresExplicitApproval) {
+          return {
+            name,
+            args,
+            result: `start_process requires an explicit outside-workspace approval for this command (${commandBoundary.scope}): ${commandBoundary.reason || rawCmd}`,
+            error: true,
+          };
+        }
         if (!deps.isAllowedShellCommand(normalizedCmd)) {
           return { name, args, result: `Blocked: shell command is not allowed by policy: "${rawCmd}"`, error: true };
         }
@@ -9405,8 +9572,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
-        const pathScopeBlock = validateRunCommandPathScope(normalizedCmd);
-        if (pathScopeBlock) return pathScopeBlock;
+        const commandBoundary = analyzeRunCommandBoundary(normalizedCmd);
+        if (commandBoundary.blocked) return commandBoundary.blocked;
         const wantVisible = args.visible === true || args.window === true;
         let commandCwd: { cwd: string; displayCwd: string };
         try {
@@ -11517,7 +11684,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_click': {
-        const resolved = await resolveDesktopActionPoint(sessionId, {
+        const clickTarget = {
           x: Number(args.x),
           y: Number(args.y),
           element: args.element == null ? undefined : Number(args.element),
@@ -11526,7 +11693,41 @@ export async function executeTool(name: string, args: any, workspacePath: string
           window_name: args.window_name == null ? undefined : String(args.window_name),
           window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
           ...parseDesktopPointerMonitorArgs(args),
-        }, 'desktop_click');
+        };
+        let resolved = await resolveDesktopActionPoint(sessionId, clickTarget, 'desktop_click');
+
+        // Auto-retry once when the failure is a stale screenshot_id: recapture the same
+        // window (or full screen) and re-resolve with the fresh screenshot_id.
+        if (!resolved.ok && clickTarget.screenshot_id) {
+          const msg = resolved.message;
+          const isStale =
+            msg.includes('is stale') ||
+            msg.includes('predates desktop action tracking') ||
+            /is \d+s old/.test(msg);
+          if (isStale) {
+            const oldPacket = getDesktopAdvisorPacketById(sessionId, clickTarget.screenshot_id);
+            const freshCapture = oldPacket?.targetWindow
+              ? await desktopWindowScreenshot(sessionId, {
+                  handle: oldPacket.targetWindow.handle,
+                  name: oldPacket.targetWindow.title,
+                  focus_first: true,
+                }).catch(() => null)
+              : await desktopScreenshotWithHistory(sessionId).catch(() => null);
+            const freshIdMatch = freshCapture?.match(/Screenshot ID:\s*(ds_[^\s.]+)/);
+            const freshId = freshIdMatch ? freshIdMatch[1] : null;
+            if (freshId) {
+              const retryResolved = await resolveDesktopActionPoint(
+                sessionId,
+                { ...clickTarget, screenshot_id: freshId },
+                'desktop_click',
+              );
+              if (retryResolved.ok) {
+                resolved = retryResolved;
+              }
+            }
+          }
+        }
+
         const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
         if (resolved.ok && finalActionApprovalId) {
           const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
@@ -11676,6 +11877,179 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'desktop_diff_screenshot': {
         const result = await desktopDiffScreenshot(sessionId);
         return { name, args, result, error: false };
+      }
+
+      // Canonical app / window / state model (Phase 1)
+      case 'desktop_list_apps': {
+        const result = await desktopListApps(String(args.filter || ''), args.include_windows !== false);
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_list_windows': {
+        const result = await desktopListWindowsCanonical({
+          app_id: args.app_id == null ? undefined : String(args.app_id),
+          process_name: args.process_name == null ? undefined : String(args.process_name),
+          title: args.title == null ? undefined : String(args.title),
+        });
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_get_window_state': {
+        const result = await desktopGetWindowState(sessionId, {
+          window_id: args.window_id == null ? undefined : String(args.window_id),
+          window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+          app_id: args.app_id == null ? undefined : String(args.app_id),
+          title: args.title == null ? undefined : String(args.title),
+          include_screenshot: args.include_screenshot !== false,
+          include_text: args.include_text === true,
+          focus_first: args.focus_first === true,
+        });
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+
+      // Window-scoped input (Phase 2)
+      case 'desktop_window_click': {
+        const selector = {
+          window_id: args.window_id == null ? undefined : String(args.window_id),
+          window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+          app_id: args.app_id == null ? undefined : String(args.app_id),
+          title: args.title == null ? undefined : String(args.title),
+        };
+        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        if (finalActionApprovalId) {
+          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
+          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        }
+        const result = await desktopWindowClick(
+          selector,
+          {
+            x: Number(args.x),
+            y: Number(args.y),
+            coordinate_space: args.coordinate_space as any,
+            screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
+          },
+          {
+            button: String(args.button || 'left').toLowerCase() === 'right' ? 'right' : 'left',
+            double_click: args.double_click === true,
+            modifier: args.modifier === 'shift' || args.modifier === 'ctrl' || args.modifier === 'alt' ? args.modifier : undefined,
+            verify: args.verify,
+          },
+          sessionId,
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_window_type': {
+        const result = await desktopWindowType(
+          {
+            window_id: args.window_id == null ? undefined : String(args.window_id),
+            window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+            app_id: args.app_id == null ? undefined : String(args.app_id),
+            title: args.title == null ? undefined : String(args.title),
+          },
+          String(args.text || ''),
+          args.raw === true,
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_window_press_key': {
+        const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        if (finalActionApprovalId) {
+          const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
+          if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
+        }
+        const result = await desktopWindowPressKey(
+          {
+            window_id: args.window_id == null ? undefined : String(args.window_id),
+            window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+            app_id: args.app_id == null ? undefined : String(args.app_id),
+            title: args.title == null ? undefined : String(args.title),
+          },
+          String(args.key || 'Enter'),
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_window_scroll': {
+        const dir = String(args.direction || 'down').toLowerCase();
+        const result = await desktopWindowScroll(
+          {
+            window_id: args.window_id == null ? undefined : String(args.window_id),
+            window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+            app_id: args.app_id == null ? undefined : String(args.app_id),
+            title: args.title == null ? undefined : String(args.title),
+          },
+          {
+            direction: (dir === 'up' || dir === 'left' || dir === 'right' ? dir : 'down') as 'up' | 'down' | 'left' | 'right',
+            amount: args.amount == null ? undefined : Number(args.amount),
+            x: args.x == null ? undefined : Number(args.x),
+            y: args.y == null ? undefined : Number(args.y),
+            coordinate_space: args.coordinate_space as any,
+            screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
+          },
+          sessionId,
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_window_drag': {
+        const result = await desktopWindowDrag(
+          {
+            window_id: args.window_id == null ? undefined : String(args.window_id),
+            window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+            app_id: args.app_id == null ? undefined : String(args.app_id),
+            title: args.title == null ? undefined : String(args.title),
+          },
+          {
+            from_x: Number(args.from_x),
+            from_y: Number(args.from_y),
+            to_x: Number(args.to_x),
+            to_y: Number(args.to_y),
+            steps: args.steps == null ? undefined : Number(args.steps),
+            coordinate_space: args.coordinate_space as any,
+            screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
+          },
+          sessionId,
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+
+      // Previously-orphaned tools now wired into the chat/subagent dispatch
+      case 'desktop_get_window_text': {
+        const result = await desktopGetWindowText(args.window_name == null ? undefined : String(args.window_name));
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_get_accessibility_tree': {
+        const result = await desktopGetAccessibilityTree(
+          args.window_name == null ? undefined : String(args.window_name),
+          args.max_depth == null ? undefined : Number(args.max_depth),
+          args.max_nodes == null ? undefined : Number(args.max_nodes),
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_pixel_watch': {
+        const result = await desktopPixelWatch(
+          Number(args.x),
+          Number(args.y),
+          args.target_color == null ? undefined : String(args.target_color),
+          args.timeout_ms == null ? undefined : Number(args.timeout_ms),
+          args.poll_ms == null ? undefined : Number(args.poll_ms),
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_record_macro': {
+        const result = desktopRecordMacro(String(args.name || ''));
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_stop_macro': {
+        const result = desktopStopMacro(args.name == null ? undefined : String(args.name));
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_replay_macro': {
+        const result = await desktopReplayMacro(
+          String(args.name || ''),
+          args.speed_multiplier == null ? undefined : Number(args.speed_multiplier),
+        );
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_list_macros': {
+        const result = desktopListMacros();
+        return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_background_status': {
         const result = await desktopBackgroundStatus();
@@ -12207,18 +12581,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'No skills installed yet. Use skill_create to save a new one.', error: false };
         }
         const slLines = all.map((s: any) => {
-          const bits = [
-            `${s.id}`,
-            s.kind === 'bundle' ? `v${s.version} [bundle: ${(s.resources || []).length} resources]` : '[simple]',
-            Array.isArray(s.requiredTools) && s.requiredTools.length ? `[tools: ${s.requiredTools.join(',')}]` : '',
-            Array.isArray(s.triggers) && s.triggers.length ? `[triggers: ${s.triggers.join(',')}]` : '',
-            `- ${s.description || '(no description)'}`,
-          ].filter(Boolean);
-          return bits.join(' ');
+          const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
+          return `${s.id}${status} - ${s.description || '(no description)'}`;
         }).join('\n');
         return {
           name, args,
-          result: `${all.length} skill${all.length !== 1 ? 's' : ''} available:\n${slLines}\n\nTo read a skill: skill_read("<id>")\nFor bundled resources: skill_resource_list("<id>") then skill_resource_read(id, path)\nFor metadata/provenance: skill_inspect("<id>")\nTo install a downloaded bundle: skill_import_bundle(source)\nTo enrich imported bundle metadata: skill_manifest_write(id, manifest)\nTo maintain bundle resources: skill_resource_write(id, path, content) or skill_resource_delete(id, path)\nTo export/update bundles: skill_export_bundle(id), skill_update_from_source(id)\nTo save a bundle skill: skill_create_bundle(...)\nTo save a simple one-file skill: skill_create(id, name, instructions, ...)`,
+          result: `${all.length} skill${all.length !== 1 ? 's' : ''} available. Call skill_read(id) to load one.\n\n${slLines}`,
           error: false,
         };
       }
@@ -12236,26 +12604,31 @@ export async function executeTool(name: string, args: any, workspacePath: string
         activateSkillForSession(sessionId, skill.id);
         try {
           const content = fs.readFileSync(skill.filePath, 'utf-8').replace(/^\s*emoji\s*:.*\r?\n/gm, '');
-          const resourceLines = Array.isArray(skill.resources) && skill.resources.length
-            ? [
-              '',
-              'Resources:',
-              ...skill.resources.map((r: any) => `- ${r.path} (${r.type})${r.description ? ` - ${r.description}` : ''}`),
-              '',
-              `Use skill_resource_read({"id":"${skill.id}","path":"<resource path>"}) to load a resource.`,
-            ].join('\n')
-            : '';
-          const manifestLines = [
+          const header = [
             `${skill.name} (${skill.id}) ${skill.kind === 'bundle' ? `v${skill.version} bundle` : 'simple skill'}`,
             skill.description ? `Description: ${skill.description}` : '',
             Array.isArray(skill.requiredTools) && skill.requiredTools.length ? `Required tools: ${skill.requiredTools.join(', ')}` : '',
             skill.status && skill.status !== 'ready' ? `Status: ${skill.status}` : '',
             skill.validation && !skill.validation.ok ? `Validation errors: ${skill.validation.errors.join('; ')}` : '',
-            resourceLines,
           ].filter(Boolean).join('\n');
-          return { name, args, result: `${manifestLines}\n\nInstructions:\n${content}`, error: false };
+          let resourceBlock = '';
+          if (skill.kind === 'bundle' && Array.isArray(skill.resources) && skill.resources.length) {
+            const menuLines = skill.resources.map((r: any) =>
+              `- ${r.path}${r.description ? ` — ${r.description}` : ''}`
+            );
+            const firstResource = skill.resources[0];
+            const suggested = `skill_resource_read({ id: "${skillId}", path: "${firstResource.path}" })`;
+            resourceBlock = [
+              '',
+              '',
+              'Relevant resources:',
+              ...menuLines,
+              '',
+              `Suggested next call if you need a resource:\n${suggested}`,
+            ].join('\n');
+          }
+          return { name, args, result: `${header}\n\nInstructions:\n${content}${resourceBlock}`, error: false };
         } catch {
-          // Fallback to stored instructions if file read fails
           return { name, args, result: `${skill.name} (${skillId})\n\n${skill.instructions}`, error: false };
         }
       }
@@ -12288,6 +12661,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!result.ok) return { name, args, result: `skill_resource_read failed: ${result.error}`, error: true };
         const skill = deps.skillsManager.get(skillId);
         activateSkillForSession(sessionId, skill?.id || skillId);
+        activateSkillResourceForSession(sessionId, skill?.id || skillId, result.path);
         return {
           name, args,
           result: `Resource ${skillId}/${result.path}${result.truncated ? ' (truncated)' : ''}:\n\n${result.content}`,
@@ -12872,9 +13246,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
             partial.intervalMinutes = Math.max(1, Math.min(1440, Math.floor(rawInterval)));
           }
           if (typeof args.model === 'string') partial.model = args.model.trim();
+          if (typeof args.instructions === 'string') partial.instructions = args.instructions;
 
           try {
-            // Call the per-agent config update via the tasks router API
+            // Call the per-agent heartbeat API so config, timer, and
+            // HEARTBEAT.md updates are applied through the same path as the UI.
             // (avoids a direct coupling to heartbeatRunner singleton here)
             const runtimeCfg: any = getConfig().getConfig();
             const gatewayPort = Number(runtimeCfg?.gateway?.port) || (process.env.GATEWAY_PORT ? Number(process.env.GATEWAY_PORT) : 18789);
@@ -12891,27 +13267,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             if (!data?.success) throw new Error(data?.error || 'Failed to update heartbeat config');
 
             let resultMsg = `Heartbeat config updated for "${targetAgentId}": ${JSON.stringify(data.config)}`;
-
-            // Optionally update HEARTBEAT.md content
-            if (typeof args.instructions === 'string' && args.instructions.trim()) {
-              const { getConfig, getAgentById, ensureAgentWorkspace } = require('../../config/config');
-              const agent = getAgentById(targetAgentId);
-              let workspacePath: string;
-              const fs = require('fs');
-              const path = require('path');
-              const subagentPath = path.join(getConfig().getWorkspacePath(), '.prometheus', 'subagents', targetAgentId);
-              if (fs.existsSync(subagentPath)) {
-                workspacePath = subagentPath;
-              } else if (agent) {
-                workspacePath = ensureAgentWorkspace(agent);
-              } else {
-                workspacePath = getConfig().getWorkspacePath();
-              }
-              const heartbeatPath = path.join(workspacePath, 'HEARTBEAT.md');
-              fs.mkdirSync(workspacePath, { recursive: true });
-              fs.writeFileSync(heartbeatPath, args.instructions.trim(), 'utf-8');
-              resultMsg += `\nHEARTBEAT.md updated at ${heartbeatPath}`;
-            }
+            if (data.path) resultMsg += `\nHEARTBEAT.md updated at ${data.path}`;
 
             return { name, args, result: resultMsg, error: false };
           } catch (err: any) {
@@ -13694,7 +14050,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             try {
               deps.broadcastWS?.({
                 type: 'dev_reload_requested',
-                target: 'desktop',
+                target: 'all',
                 source: 'prom_apply_dev_changes',
                 reason,
                 surfaces: normalizedSurfaces,
@@ -14032,21 +14388,66 @@ export async function executeTool(name: string, args: any, workspacePath: string
             console.warn('[dev_source_approval] Could not send Telegram approval:', err?.message || err);
           }
 
-          const approved = await new Promise<boolean>((resolve) => {
+          // Wait for approval, but allow a live steer to interrupt so Prometheus can
+          // react (e.g. call update_dev_source_edit) before the user approves.
+          const waitResult = await new Promise<boolean | { steerInterrupt: string }>((resolve) => {
+            let settled = false;
+            const safeResolve = (val: boolean | { steerInterrupt: string }) => {
+              if (settled) return;
+              settled = true;
+              approvalQueue.clearSteerCallback(approval.id);
+              resolve(val);
+            };
+
             approvalQueue.onResolve(approval.id, (isApproved) => {
               if (isApproved) {
                 try {
                   grantDevSourceEditApproval(sessionId, scope, 'approval');
                 } catch (err: any) {
                   console.warn('[dev_source_approval] Could not grant source edit scope:', err?.message || err);
-                  resolve(false);
+                  safeResolve(false);
                   return;
                 }
               }
-              resolve(isApproved);
+              safeResolve(isApproved);
+            });
+
+            // Register steer wakeup: if the user sends a steer while we're waiting,
+            // interrupt immediately so the LLM can react to it.
+            approvalQueue.onSteer(approval.id, (steerMessage) => {
+              safeResolve({ steerInterrupt: steerMessage });
             });
           });
 
+          // Steer arrived while waiting — return early so the model can act on it
+          if (typeof waitResult === 'object' && 'steerInterrupt' in waitResult) {
+            const steerMsg = waitResult.steerInterrupt;
+            console.log(`[dev_source_approval] Steer interrupted approval wait for ${approval.id}: ${steerMsg.slice(0, 120)}`);
+            try {
+              deps.broadcastWS({
+                type: 'approval_steer_interrupt',
+                sessionId,
+                approvalId: approval.id,
+                steerMessage: steerMsg.slice(0, 500),
+              });
+            } catch {}
+            return {
+              name,
+              args,
+              result:
+                `[STEER RECEIVED WHILE WAITING FOR DEV EDIT APPROVAL]\n` +
+                `Steer message: "${steerMsg}"\n\n` +
+                `The dev source edit approval (approval_id: "${approval.id}", dev_edit_id: "${scope.devEditId}") is still pending — the user has not yet approved or denied it.\n\n` +
+                `You can:\n` +
+                `1. Call update_dev_source_edit(approval_id: "${approval.id}", ...) to modify the pending plan, reason, or files before the user approves.\n` +
+                `2. Call await_dev_source_edit_approval(approval_id: "${approval.id}") to resume waiting for the same approval.\n` +
+                `3. Call request_dev_source_edit again with a fresh plan to replace this approval.\n\n` +
+                `Address the steer first — update the plan if needed, then resume waiting.`,
+              error: false,
+            };
+          }
+
+          const approved = waitResult as boolean;
           try {
             deps.broadcastWS({
               type: approved ? 'approval_approved' : 'approval_denied',
@@ -14091,7 +14492,190 @@ export async function executeTool(name: string, args: any, workspacePath: string
           };
         }
 
-	        if (name === 'request_tool_category') {
+	        // ── update_dev_source_edit ─────────────────────────────────────────
+        if (name === 'update_dev_source_edit') {
+          const approvalId = String(args?.approval_id || '').trim();
+          if (!approvalId) {
+            return { name, args, result: 'update_dev_source_edit requires approval_id.', error: true };
+          }
+          const approvalQueue = getApprovalQueue();
+          const existing = approvalQueue.get(approvalId);
+          if (!existing) {
+            return { name, args, result: `Approval ${approvalId} not found.`, error: true };
+          }
+          if (existing.status !== 'pending') {
+            return { name, args, result: `Approval ${approvalId} is already ${existing.status} and cannot be updated.`, error: true };
+          }
+          if (existing.sessionId !== sessionId) {
+            return { name, args, result: 'Cannot update an approval that belongs to a different session.', error: true };
+          }
+
+          const updatedFields: Parameters<typeof approvalQueue.update>[1] = {};
+          if (args?.reason) updatedFields.reason = String(args.reason);
+          if (args?.action) updatedFields.action = String(args.action);
+
+          // Merge plan fields into devSourceEdit.plan
+          const planPatch: Record<string, any> = {};
+          if (args?.plan) {
+            const p = args.plan;
+            if (p.user_request) planPatch.userRequest = String(p.user_request);
+            if (p.reasoning) planPatch.reasoning = String(p.reasoning);
+            if (p.current_state) planPatch.currentState = String(p.current_state);
+            if (p.fix) planPatch.fix = String(p.fix);
+            if (Array.isArray(p.steps)) planPatch.steps = p.steps.map(String);
+            if (Array.isArray(p.verification)) planPatch.verification = p.verification.map(String);
+            if (Array.isArray(p.evidence)) planPatch.evidence = p.evidence;
+            if (p.completion_note_tag) planPatch.completionNoteTag = String(p.completion_note_tag);
+          }
+          if (Object.keys(planPatch).length || args?.files) {
+            updatedFields.devSourceEdit = {} as any;
+            if (Array.isArray(args?.files)) {
+              (updatedFields.devSourceEdit as any).allowedFiles = args.files.map(String);
+              updatedFields.toolArgs = { ...(existing.toolArgs || {}), files: args.files.map(String) };
+            }
+            if (Object.keys(planPatch).length) {
+              (updatedFields.devSourceEdit as any).plan = planPatch;
+            }
+          }
+
+          const updated = approvalQueue.update(approvalId, updatedFields);
+          if (!updated) {
+            return { name, args, result: `Failed to update approval ${approvalId}.`, error: true };
+          }
+
+          try {
+            deps.broadcastWS({
+              type: 'approval_updated',
+              sessionId,
+              approvalId,
+              approval: serializeApprovalForClient(updated),
+            });
+          } catch {}
+
+          return {
+            name,
+            args,
+            result:
+              `Pending approval ${approvalId} updated successfully.\n` +
+              `The user will see the revised plan in the approval card.\n` +
+              `Call await_dev_source_edit_approval(approval_id: "${approvalId}") to resume waiting for the user to approve or deny.`,
+            error: false,
+          };
+        }
+
+        // ── await_dev_source_edit_approval ────────────────────────────────────
+        if (name === 'await_dev_source_edit_approval') {
+          const approvalId = String(args?.approval_id || '').trim();
+          if (!approvalId) {
+            return { name, args, result: 'await_dev_source_edit_approval requires approval_id.', error: true };
+          }
+          const approvalQueue = getApprovalQueue();
+          const existing = approvalQueue.get(approvalId);
+          if (!existing) {
+            return { name, args, result: `Approval ${approvalId} not found.`, error: true };
+          }
+          if (existing.sessionId !== sessionId) {
+            return { name, args, result: 'Cannot await an approval that belongs to a different session.', error: true };
+          }
+          if (existing.status !== 'pending') {
+            const isApproved = existing.status === 'approved';
+            if (isApproved) {
+              const existingGrant = getDevSourceEditGrant(sessionId);
+              if (!existingGrant) {
+                try {
+                  const existingScope = existing.devSourceEdit
+                    ? createDevSourceEditApprovalScope({
+                        sessionId,
+                        files: existing.devSourceEdit.allowedFiles,
+                        reason: existing.devSourceEdit.reason,
+                        plan: existing.devSourceEdit.plan,
+                      })
+                    : null;
+                  if (existingScope) grantDevSourceEditApproval(sessionId, existingScope, 'approval');
+                } catch { /* best effort */ }
+              }
+              return {
+                name, args,
+                result: `Approval ${approvalId} was already approved. Dev source edit scope is active. Proceed with edits.`,
+                error: false,
+              };
+            }
+            return { name, args, result: `Approval ${approvalId} was already ${existing.status}.`, error: true };
+          }
+
+          // Re-enter the steer-interruptible wait
+          const waitResult2 = await new Promise<boolean | { steerInterrupt: string }>((resolve) => {
+            let settled2 = false;
+            const safeResolve2 = (val: boolean | { steerInterrupt: string }) => {
+              if (settled2) return;
+              settled2 = true;
+              approvalQueue.clearSteerCallback(approvalId);
+              resolve(val);
+            };
+
+            approvalQueue.onResolve(approvalId, (isApproved2) => {
+              if (isApproved2) {
+                try {
+                  const existingScope2 = existing.devSourceEdit
+                    ? createDevSourceEditApprovalScope({
+                        sessionId,
+                        files: existing.devSourceEdit.allowedFiles,
+                        reason: existing.devSourceEdit.reason,
+                        plan: existing.devSourceEdit.plan,
+                      })
+                    : null;
+                  if (existingScope2) grantDevSourceEditApproval(sessionId, existingScope2, 'approval');
+                } catch (err: any) {
+                  console.warn('[await_dev_source_approval] Could not grant source edit scope:', err?.message || err);
+                  safeResolve2(false);
+                  return;
+                }
+              }
+              safeResolve2(isApproved2);
+            });
+
+            approvalQueue.onSteer(approvalId, (steerMsg2) => {
+              safeResolve2({ steerInterrupt: steerMsg2 });
+            });
+          });
+
+          if (typeof waitResult2 === 'object' && 'steerInterrupt' in waitResult2) {
+            const steerMsg2 = waitResult2.steerInterrupt;
+            try {
+              deps.broadcastWS({ type: 'approval_steer_interrupt', sessionId, approvalId, steerMessage: steerMsg2.slice(0, 500) });
+            } catch {}
+            return {
+              name,
+              args,
+              result:
+                `[STEER RECEIVED WHILE WAITING FOR APPROVAL]\n` +
+                `Steer message: "${steerMsg2}"\n\n` +
+                `Approval ${approvalId} is still pending. Address the steer, update the plan with update_dev_source_edit if needed, then call await_dev_source_edit_approval again.`,
+              error: false,
+            };
+          }
+
+          const approved2 = waitResult2 as boolean;
+          try {
+            deps.broadcastWS({
+              type: approved2 ? 'approval_approved' : 'approval_denied',
+              sessionId,
+              approvalId,
+              approval: serializeApprovalForClient(existing),
+            });
+          } catch {}
+
+          if (!approved2) {
+            return { name, args, result: 'Dev source edit approval was rejected.', error: true };
+          }
+          return {
+            name, args,
+            result: `Approval ${approvalId} approved. Dev source edit scope is now active. Proceed with edits.`,
+            error: false,
+          };
+        }
+
+        if (name === 'request_tool_category') {
 	          const categoryArgs = normalizeToolArgsForTool(name, args);
 	          const rawCategory = String(categoryArgs?.category || '').trim().toLowerCase();
 	          const requestedCategory = normalizeToolCategory(rawCategory);
@@ -14119,72 +14703,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `Tool category "${requestedCategory}" activated for session ${sessionId}.`, error: false };
         }
 
-        // ── Composite management tools ─────────────────────────────────────
-        const { loadComposites, saveComposite, deleteComposite, executeComposite } = await import('../tools/composite-tools');
-
-        if (name === 'create_composite') {
-          const cName = String(args.name || '').trim().replace(/\s+/g, '_');
-          if (!cName) return { name, args, result: 'name is required', error: true };
-          if (!Array.isArray(args.steps) || !args.steps.length) return { name, args, result: 'steps array is required', error: true };
-          saveComposite({
-            name: cName,
-            description: String(args.description || ''),
-            parameters: args.parameters && typeof args.parameters === 'object' ? args.parameters : {},
-            steps: args.steps,
-          });
-          return { name, args, result: `Composite "${cName}" saved with ${args.steps.length} step(s). It will appear as a callable tool next message.`, error: false };
-        }
-
-        if (name === 'get_composite') {
-          const cName = String(args.name || '').trim();
-          if (!cName) return { name, args, result: 'name is required', error: true };
-          const composites = loadComposites();
-          const existing = composites.get(cName);
-          if (!existing) return { name, args, result: `Composite "${cName}" not found.`, error: true };
-          return { name, args, result: JSON.stringify(existing, null, 2), error: false };
-        }
-
-        if (name === 'edit_composite') {
-          const cName = String(args.name || '').trim();
-          if (!cName) return { name, args, result: 'name is required', error: true };
-          const composites = loadComposites();
-          const existing = composites.get(cName);
-          if (!existing) return { name, args, result: `Composite "${cName}" not found.`, error: true };
-          const newName = args.new_name ? String(args.new_name).trim() : cName;
-          const updated = {
-            name: newName,
-            description: args.description !== undefined ? String(args.description) : existing.description,
-            parameters: args.parameters !== undefined ? args.parameters : existing.parameters,
-            steps: Array.isArray(args.steps) ? args.steps : existing.steps,
-          };
-          if (newName !== cName) deleteComposite(cName);
-          saveComposite(updated);
-          const renamed = newName !== cName ? ` (renamed from "${cName}")` : '';
-          return { name, args, result: `Composite "${newName}" updated${renamed}.`, error: false };
-        }
-
-        if (name === 'delete_composite') {
-          const cName = String(args.name || '').trim();
-          if (!cName) return { name, args, result: 'name is required', error: true };
-          const removed = deleteComposite(cName);
-          return { name, args, result: removed ? `Composite "${cName}" deleted.` : `Composite "${cName}" not found.`, error: !removed };
-        }
-
-        if (name === 'list_composites') {
-          const composites = loadComposites();
-          if (!composites.size) return { name, args, result: 'No composites defined yet.', error: false };
-          const lines = Array.from(composites.values()).map(
-            c => `• ${c.name} (${c.steps.length} steps) — ${c.description}`
-          );
-          return { name, args, result: lines.join('\n'), error: false };
-        }
-
-        // ── Dynamic composite dispatch ─────────────────────────────────────
-        const composites = loadComposites();
-        if (composites.has(name)) {
-          const result = await executeComposite(name, args, executeTool, workspacePath, deps, sessionId);
-          return { name, args, result, error: false };
-        }
+        // ── Composite management and dynamic dispatch ─────────────────────
+        const { handleCompositeTool } = await import('../tools/composite-tools');
+        const compositeResult = await handleCompositeTool(name, args, executeTool, workspacePath, deps, sessionId);
+        if (compositeResult) return compositeResult;
 
         return { name, args, result: `Unknown tool: ${name}`, error: true };
       }

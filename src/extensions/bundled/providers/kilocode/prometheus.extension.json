@@ -12,7 +12,7 @@
     "options": {
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
-      "staticModels": ["kilo/auto", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-flash-preview"],
+      "staticModels": ["kilo/auto", "anthropic/claude-opus-4.8", "anthropic/claude-opus-4.7", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-flash-preview"],
       "supportsLiveModelDiscovery": true
     }
   },

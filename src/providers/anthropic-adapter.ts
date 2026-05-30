@@ -24,11 +24,17 @@ import {
   buildAuthHeaders, getValidToken, loadTokens,
   ANTHROPIC_API_BASE,
 } from '../auth/anthropic-oauth';
-import { contentToString } from './content-utils';
+import { contentToString, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
+
+// Anthropic ignores cache breakpoints on segments below the minimum cacheable
+// size, but to avoid emitting pointless cache writes we only mark the system
+// prefix when it is comfortably large. ~1024 tokens ≈ 3500 chars at 3.5 ch/tok.
+const ANTHROPIC_MIN_CACHE_CHARS = 3500;
 
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
+  'claude-opus-4-8',
   'claude-opus-4-7',
   'claude-opus-4-6',
   'claude-sonnet-4-6',
@@ -59,6 +65,45 @@ export class AnthropicAdapter implements LLMProvider {
     }
     this.id = config.providerId;
     this.directConfig = config;
+  }
+
+  private isAdaptiveThinkingCapableModel(model: string): boolean {
+    return /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model)
+      || /^claude-sonnet-4-6(?:\b|[-_])/.test(model);
+  }
+
+  private supportsXHighEffort(model: string): boolean {
+    return /^claude-opus-4-(7|8)(?:\b|[-_])/.test(model);
+  }
+
+  private supportsEffort(model: string): boolean {
+    return /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(model)
+      || /^claude-sonnet-4-6(?:\b|[-_])/.test(model)
+      || /^claude-mythos-preview(?:\b|[-_])/.test(model);
+  }
+
+  private normalizeEffort(value: unknown, model: string): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined {
+    if (!this.supportsEffort(model)) return undefined;
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw || raw === 'none') return undefined;
+    if (raw === 'extra_high' || raw === 'extra-high' || raw === 'extra high') return this.supportsXHighEffort(model) ? 'xhigh' : 'high';
+    if (raw === 'minimal') return 'low';
+    if (raw === 'xhigh') return this.supportsXHighEffort(model) ? 'xhigh' : 'high';
+    if (raw === 'max') return 'max';
+    if (raw === 'low' || raw === 'medium' || raw === 'high') return raw;
+    return undefined;
+  }
+
+  private getKnownModelInfo(name: string): Partial<ModelInfo> {
+    if (name === 'claude-opus-4-8') {
+      return {
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 128_000,
+        tokenizer: 'anthropic',
+        supportsReasoningTokens: true,
+      };
+    }
+    return {};
   }
 
   private getMessagesEndpoint(): string {
@@ -368,6 +413,21 @@ export class AnthropicAdapter implements LLMProvider {
     // Flush any remaining tool results at end of message list
     flushToolResults();
 
+    // Prompt-cache breakpoint #3 (rolling history): tag the last content block of
+    // the final message. Anthropic caches the longest matching prefix, so each new
+    // turn reads the prior conversation from cache and only the newest delta is
+    // billed at full input rate. Convert string content to a block so the marker
+    // can attach; this is shape-equivalent for the API.
+    const lastMsg = anthropicMessages[anthropicMessages.length - 1];
+    if (lastMsg) {
+      if (Array.isArray(lastMsg.content) && lastMsg.content.length > 0) {
+        const lastBlock = lastMsg.content[lastMsg.content.length - 1];
+        if (lastBlock && typeof lastBlock === 'object') lastBlock.cache_control = { type: 'ephemeral' };
+      } else if (typeof lastMsg.content === 'string' && lastMsg.content.trim()) {
+        lastMsg.content = [{ type: 'text', text: lastMsg.content, cache_control: { type: 'ephemeral' } }];
+      }
+    }
+
     // Strip [TODAY_NOTES...] block from system prompt when requested (e.g. after switch_model)
     if (omitIntradayNotes && systemPrompt.includes('[TODAY_NOTES')) {
       systemPrompt = systemPrompt.replace(/\[TODAY_NOTES[^\]]*\][\s\S]*?(?=\n\n\[|\n\n##|\s*$)/g, '').trim();
@@ -381,11 +441,19 @@ export class AnthropicAdapter implements LLMProvider {
 
   private buildTools(tools?: any[]): any[] | undefined {
     if (!tools?.length) return undefined;
-    return tools.map((t: any) => ({
+    const mapped = tools.map((t: any) => ({
       name:         t.function?.name || t.name,
       description:  t.function?.description || t.description || '',
       input_schema: t.function?.parameters || t.parameters || { type: 'object', properties: {} },
     }));
+    // Prompt-cache breakpoint #1: tools are the largest stable payload (hundreds
+    // of schemas). Tagging the LAST tool caches the entire tools array as a
+    // prefix segment. When a category is activated mid-session the tool list
+    // changes and this re-caches once — expected, then re-stabilizes.
+    if (mapped.length > 0) {
+      (mapped[mapped.length - 1] as any).cache_control = { type: 'ephemeral' };
+    }
+    return mapped;
   }
 
   // ─── Chat ───────────────────────────────────────────────────────────────────
@@ -440,13 +508,40 @@ export class AnthropicAdapter implements LLMProvider {
     return s;
   }
 
+  // Build the Anthropic `system` block array from a (already budget-trimmed)
+  // system string. Splits on the cache marker so the STABLE prefix
+  // (persona/memory/tool-policy) is cached while the VOLATILE tail
+  // (today's notes, retrieved memory, skill turn-context) stays uncached.
+  // For OAuth the Claude Code preamble MUST remain the first block (subscription
+  // gate) — caching attaches to the stable block that follows it.
+  private buildSystemBlocks(systemText: string, includePreamble: boolean): any[] {
+    const preamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
+    const blocks: any[] = [];
+    if (includePreamble) blocks.push(preamble);
+
+    const { stable, volatile } = splitOnCacheMarker(systemText);
+    const stableTrimmed = stable.trim();
+    const volatileTrimmed = volatile.trim();
+
+    if (stableTrimmed) {
+      const block: any = { type: 'text', text: stableTrimmed };
+      // Prompt-cache breakpoint #2: stable system prefix.
+      if (stableTrimmed.length >= ANTHROPIC_MIN_CACHE_CHARS) {
+        block.cache_control = { type: 'ephemeral' };
+      }
+      blocks.push(block);
+    }
+    if (volatileTrimmed) blocks.push({ type: 'text', text: volatileTrimmed });
+    return blocks;
+  }
+
   // Only add interleaved-thinking beta when extended thinking is actually enabled.
   // Adding it unconditionally causes 429s on OAuth tokens.
   private buildHeaders(model: string, extendedThinkingEnabled = false): Record<string, string> {
     const headers = this.directConfig
       ? this.buildDirectHeaders()
       : buildAuthHeaders(this.configDir!);
-    const isThinkingGeneration = /claude-(sonnet|opus)-4-(6|7)/.test(model);
+    const isThinkingGeneration = /claude-(sonnet|opus)-4-(6|7|8)/.test(model);
     if (isThinkingGeneration && extendedThinkingEnabled) {
       const existing = headers['anthropic-beta'];
       if (existing && !existing.includes('interleaved-thinking')) {
@@ -495,6 +590,9 @@ export class AnthropicAdapter implements LLMProvider {
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
     const raw = getConfig().getConfig() as any;
     const anthropicCfg = raw.llm?.providers?.[this.id] || raw.llm?.providers?.anthropic || {};
+    const configuredEffort = this.normalizeEffort((anthropicCfg as any).reasoning_effort, model);
+    const requestedEffort = this.normalizeEffort(options?.think, model);
+    const effort = requestedEffort || configuredEffort;
     const extendedThinkingEnabled = options?.think !== false
       && options?.think !== 'none'
       && (anthropicCfg.extended_thinking === true || !!options?.think);
@@ -525,22 +623,31 @@ export class AnthropicAdapter implements LLMProvider {
     if (system) {
       const bodyWithoutSystem = JSON.stringify({ ...body, system: undefined });
       const trimmed = this.trimSystemForBudget(system, bodyWithoutSystem);
-      if (isOAuth) {
-        body.system = trimmed
-          ? [claudeCodePreamble, { type: 'text', text: trimmed }]
-          : [claudeCodePreamble];
-      } else if (trimmed) {
-        body.system = trimmed;
+      const blocks = this.buildSystemBlocks(trimmed, !!isOAuth);
+      if (blocks.length > 0) {
+        body.system = blocks;
+      } else if (isOAuth) {
+        body.system = [claudeCodePreamble];
       }
     } else if (isOAuth) {
       body.system = [claudeCodePreamble];
     }
 
-    // Extended thinking: enabled via config setting, suppressed for automation turns (think === false)
+    if (effort) {
+      body.output_config = { ...(body.output_config || {}), effort };
+    }
+
+    // Thinking: enabled via config setting, suppressed for automation turns (think === false).
+    // Claude Opus 4.7+ rejects manual budgets; Claude Opus/Sonnet 4.6 support
+    // adaptive thinking and deprecate manual budgets, so prefer adaptive there too.
     if (extendedThinkingEnabled) {
-      const budget = typeof anthropicCfg.thinking_budget === 'number' ? anthropicCfg.thinking_budget : 10000;
-      body.thinking = { type: 'enabled', budget_tokens: budget };
-      body.max_tokens = Math.max(body.max_tokens, budget + 8192);
+      if (this.isAdaptiveThinkingCapableModel(model)) {
+        body.thinking = { type: 'adaptive', display: 'summarized' };
+      } else {
+        const budget = typeof anthropicCfg.thinking_budget === 'number' ? anthropicCfg.thinking_budget : 10000;
+        body.thinking = { type: 'enabled', budget_tokens: budget };
+        body.max_tokens = Math.max(body.max_tokens, budget + 8192);
+      }
     }
 
     // ─── DEBUG: log request shape so we can diff main-chat vs subagent ────────
@@ -788,7 +895,7 @@ export class AnthropicAdapter implements LLMProvider {
     // Anthropic doesn't have a public model listing endpoint for OAuth tokens.
     // Return the known set.
     const models = this.directConfig?.staticModels?.length ? this.directConfig.staticModels : ANTHROPIC_MODELS;
-    return models.map(name => ({ name }));
+    return models.map(name => ({ name, ...this.getKnownModelInfo(name) }));
   }
 
   // ─── Test Connection ─────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
-import { getPublicBuildAllowedCategories } from '../runtime/distribution.js';
+import { getPublicBuildAllowedCategories, isToolHiddenInPublicBuild } from '../runtime/distribution.js';
 
 export interface BuildToolsDeps {
   getMCPManager: () => any;
@@ -332,6 +332,16 @@ export function getToolCategory(name: string): InternalToolCategory | null {
 export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>) {
   const { getMCPManager } = deps;
   const isPublicBuild = getPublicBuildAllowedCategories(['prometheus_source_write'] as const).length === 0;
+  const normalizedActiveCategories = new Set<string>();
+  if (activatedCategories !== undefined) {
+    for (const category of activatedCategories) {
+      const normalized = normalizeToolCategory(category);
+      if (normalized) normalizedActiveCategories.add(normalized);
+    }
+  }
+  const categoryIsActive = (category: ToolCategory): boolean => (
+    activatedCategories === undefined || normalizedActiveCategories.has(category)
+  );
 
   const toolDefs = [
     // ── File, Web, and Memory tools ──────────────────────────────────────────
@@ -584,46 +594,65 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     },
   });
 
-  // ── Connector tools (activated via connectors category) ───────────────────
-  try {
-    ensurePrometheusExtensionRuntimeLoaded();
-    toolDefs.push(...getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions());
-  } catch { /* connector defs may not load in all build targets */ }
+  // ── Dynamic tools (connectors, MCP, composites) ───────────────────────────
+  // These are appended AFTER the deterministic core tools above. Their source
+  // order is not guaranteed stable across turns (server reconnects, composite
+  // edits, Map iteration), and for OpenAI/xAI automatic prefix caching the tool
+  // list is part of the cached prefix — any reorder silently breaks the cache.
+  // We collect them separately and sort by name so the serialized prefix is
+  // byte-stable turn-to-turn. Core tools keep their deliberate code order.
+  const dynamicToolDefs: any[] = [];
 
-  // ── Inject MCP tools from connected servers ────────────────────────────────
-  try {
-    const mcpTools = getMCPManager().getAllTools();
-    for (const t of mcpTools) {
-      const prefixedName = `mcp__${t.serverId}__${t.name}`;
-      toolDefs.push({
-        type: 'function',
-        function: {
-          name: prefixedName,
-          description: `[MCP:${t.serverName}] ${t.description}`,
-          parameters: t.inputSchema ?? { type: 'object', properties: {}, required: [] },
-        },
-      });
-    }
-  } catch { /* MCP not ready yet — skip silently */ }
+  // Connector, MCP, and composite tools can require status probes or filesystem
+  // scans. Avoid touching those dynamic systems unless their category is in the
+  // current tool surface; connector_list remains core for discovery.
+  if (categoryIsActive('external_apps')) {
+    try {
+      ensurePrometheusExtensionRuntimeLoaded();
+      dynamicToolDefs.push(...getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions());
+    } catch { /* connector defs may not load in all build targets */ }
+  }
 
-  // ── Dynamic composite tools (user-defined tool sequences) ─────────────────
-  try {
-    toolDefs.push(...getCompositeDefs());
-    toolDefs.push(...getCompositeManagementTools());
-  } catch { /* composites dir may not exist yet — skip silently */ }
+  if (categoryIsActive('mcp_server_tools')) {
+    try {
+      const mcpTools = getMCPManager().getAllTools();
+      for (const t of mcpTools) {
+        const prefixedName = `mcp__${t.serverId}__${t.name}`;
+        dynamicToolDefs.push({
+          type: 'function',
+          function: {
+            name: prefixedName,
+            description: `[MCP:${t.serverName}] ${t.description}`,
+            parameters: t.inputSchema ?? { type: 'object', properties: {}, required: [] },
+          },
+        });
+      }
+    } catch { /* MCP not ready yet — skip silently */ }
+  }
 
+  if (categoryIsActive('composite_tools')) {
+    try {
+      dynamicToolDefs.push(...getCompositeDefs());
+      dynamicToolDefs.push(...getCompositeManagementTools());
+    } catch { /* composites dir may not exist yet — skip silently */ }
+  }
+
+  dynamicToolDefs.sort((a, b) =>
+    String(a?.function?.name || '').localeCompare(String(b?.function?.name || '')),
+  );
+  toolDefs.push(...dynamicToolDefs);
+
+  // In public builds, hide every tool the execution layer hard-blocks
+  // (isToolHiddenInPublicBuild in subagent-executor) — not just the source-read
+  // names. Otherwise the model is shown source-write / self-update / restart tool
+  // defs it can never execute, wasting context and inviting failed calls.
   const runtimeToolDefs = isPublicBuild
-    ? toolDefs.filter((t: any) => !DEV_ONLY_SOURCE_READ_TOOL_NAMES.has(String(t?.function?.name || '')))
+    ? toolDefs.filter((t: any) => !isToolHiddenInPublicBuild(String(t?.function?.name || '')))
     : toolDefs;
 
   // ── Filter to core + activated categories ──────────────────────────────────
   // When activatedCategories is provided, only return core tools + those in active categories.
   if (activatedCategories !== undefined) {
-    const normalizedActiveCategories = new Set<string>();
-    for (const category of activatedCategories) {
-      const normalized = normalizeToolCategory(category);
-      if (normalized) normalizedActiveCategories.add(normalized);
-    }
     return runtimeToolDefs.filter((t: any) => {
       const name = String(t?.function?.name || '');
       const cat = getToolCategory(name);

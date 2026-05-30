@@ -1,6 +1,21 @@
+import crypto from 'crypto';
 import type { CorsOptions } from 'cors';
 import type { NextFunction, Request, Response } from 'express';
+import type { PrometheusConfig } from '../types';
 import { getConfig } from '../config/config';
+
+/** Typed accessor for the gateway config block — avoids untyped `as any` reads. */
+function getGatewayConfig(): PrometheusConfig['gateway'] {
+  return getConfig().getConfig().gateway;
+}
+
+/** Constant-time string comparison to avoid leaking token contents via timing. */
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 type GatewayRequestLike = {
   headers?: Record<string, any>;
@@ -55,15 +70,14 @@ function getQueryToken(req: GatewayRequestLike): string {
 
 export function resolveGatewayAuthToken(): string {
   const cm = getConfig();
-  const cfg = cm.getConfig() as any;
-  const rawToken = String(cfg?.gateway?.auth?.token || cfg?.gateway?.auth_token || '').trim();
+  const gateway = cm.getConfig().gateway;
+  const rawToken = String(gateway?.auth?.token || gateway?.auth_token || '').trim();
   if (!rawToken) return '';
   return String(cm.resolveSecret(rawToken) || rawToken).trim();
 }
 
 export function isGatewayAuthEnabled(): boolean {
-  const cfg = getConfig().getConfig() as any;
-  return cfg?.gateway?.auth?.enabled !== false;
+  return getGatewayConfig()?.auth?.enabled !== false;
 }
 
 export function isTrustedGatewayOrigin(origin: string | undefined | null): boolean {
@@ -75,8 +89,7 @@ export function isTrustedGatewayOrigin(origin: string | undefined | null): boole
     const host = String(url.hostname || '').trim().toLowerCase();
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
 
-    const cfg = getConfig().getConfig() as any;
-    const configuredHost = String(cfg?.gateway?.host || '').trim().toLowerCase();
+    const configuredHost = String(getGatewayConfig()?.host || '').trim().toLowerCase();
     if (
       configuredHost &&
       configuredHost !== '0.0.0.0' &&
@@ -159,7 +172,7 @@ export function evaluateGatewayRequest(
   const configuredToken = resolveGatewayAuthToken();
   if (configuredToken) {
     const providedToken = extractGatewayToken(req, opts?.allowQueryToken === true);
-    if (providedToken && providedToken === configuredToken) return { ok: true };
+    if (providedToken && safeEqual(providedToken, configuredToken)) return { ok: true };
     return { ok: false, status: 401, message: 'Unauthorized' };
   }
 

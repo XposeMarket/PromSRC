@@ -244,6 +244,7 @@ export function createDevSourceEditApprovalScope(input: {
   expectedWorkflow?: unknown;
   completionNoteTag?: unknown;
   approvalId?: string;
+  devEditId?: string;
   ttlMs?: number;
 }): DevSourceEditScope {
   if (isPublicDistributionBuild()) {
@@ -278,8 +279,9 @@ export function createDevSourceEditApprovalScope(input: {
     verificationProfile,
   });
   const planHash = stableHash(plan);
+  const devEditId = String(input.devEditId || '').trim() || `dev_edit_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
   return {
-    devEditId: `dev_edit_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
+    devEditId,
     allowedFiles,
     verificationCommand,
     verificationProfile,

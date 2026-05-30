@@ -262,6 +262,14 @@ const TELEGRAM_REASONING_EFFORTS: Record<string, Array<{ key: string; value: str
     { key: 'high', value: 'high', label: 'High' },
     { key: 'xhigh', value: 'xhigh', label: 'XHigh' },
   ],
+  anthropic: [
+    { key: 'off', value: '', label: 'Default' },
+    { key: 'low', value: 'low', label: 'Low' },
+    { key: 'medium', value: 'medium', label: 'Medium' },
+    { key: 'high', value: 'high', label: 'High' },
+    { key: 'xhigh', value: 'xhigh', label: 'Extra High' },
+    { key: 'max', value: 'max', label: 'Max' },
+  ],
   perplexity: [
     { key: 'off', value: '', label: 'Off' },
     { key: 'minimal', value: 'minimal', label: 'Minimal' },
@@ -1301,12 +1309,23 @@ export class TelegramChannel {
 
     if (provider === 'anthropic') {
       const enabled = providerCfg?.extended_thinking === true;
+      const currentEffort = typeof providerCfg?.reasoning_effort === 'string'
+        ? providerCfg.reasoning_effort.trim()
+        : '';
       const rawBudget = Number(providerCfg?.thinking_budget);
       const budget = Number.isFinite(rawBudget) && rawBudget >= 1024 ? Math.floor(rawBudget) : 10000;
       const keyboard: Array<Array<{ text: string; callback_data: string }>> = [[
         { text: enabled ? '✅ On' : 'On', callback_data: 'rg:ath:on' },
         { text: !enabled ? '✅ Off' : 'Off', callback_data: 'rg:ath:off' },
       ]];
+      const effortOptions = TELEGRAM_REASONING_EFFORTS.anthropic || [];
+      for (let i = 0; i < effortOptions.length; i += 3) {
+        const row = effortOptions.slice(i, i + 3).map((opt) => ({
+          text: `${opt.value === currentEffort ? '✅ ' : ''}${opt.label}`,
+          callback_data: `rg:eff:anthropic:${opt.key}`,
+        }));
+        keyboard.push(row);
+      }
       for (let i = 0; i < TELEGRAM_ANTHROPIC_BUDGETS.length; i += 3) {
         const row = TELEGRAM_ANTHROPIC_BUDGETS.slice(i, i + 3).map((value) => ({
           text: `${value === budget ? '✅ ' : ''}${Math.round(value / 1000)}k`,
@@ -1321,10 +1340,11 @@ export class TelegramChannel {
           '',
           `<b>Provider:</b> ${escHtml(providerLabel)} (<code>${escHtml(provider)}</code>)`,
           `<b>Model:</b> <code>${escHtml(model)}</code>`,
-          `<b>Current reasoning:</b> ${enabled ? 'extended thinking enabled' : 'extended thinking disabled'}`,
-          `<b>Budget:</b> <code>${budget.toLocaleString('en-US')}</code> tokens`,
+          `<b>Claude thinking:</b> ${enabled ? 'enabled' : 'disabled'}`,
+          `<b>Effort:</b> <code>${escHtml(currentEffort || 'provider default')}</code>`,
+          `<b>Legacy budget:</b> <code>${budget.toLocaleString('en-US')}</code> tokens`,
           '',
-          '<i>Tap a budget to enable extended thinking at that level.</i>',
+          '<i>Pick effort for supported Claude models. Budget applies only to older manual-thinking models.</i>',
         ].join('\n'),
         keyboard,
       };
@@ -1425,6 +1445,11 @@ export class TelegramChannel {
     const nextProviderCfg = { ...(currentProviders?.[provider] || {}) };
 
     if (provider === 'anthropic') {
+      if (Object.prototype.hasOwnProperty.call(patch, 'reasoning_effort')) {
+        const effort = typeof patch.reasoning_effort === 'string' ? patch.reasoning_effort.trim() : '';
+        if (effort) nextProviderCfg.reasoning_effort = effort;
+        else delete nextProviderCfg.reasoning_effort;
+      }
       if (Object.prototype.hasOwnProperty.call(patch, 'extended_thinking')) {
         nextProviderCfg.extended_thinking = patch.extended_thinking === true;
       }
@@ -1489,9 +1514,6 @@ export class TelegramChannel {
     });
     setModelBusy(true);
     const rawSendSSE = params.sendSSE;
-    // Intercept sendSSE('token') events — same pattern as OpenClaw's onPartialReply hook.
-    // This is the reliable path: tokens are already proven to flow through sendSSE even
-    // when callerOnToken positional-arg alignment is fragile across the dep-injected chain.
     const checkpointingSendSSE = (event: string, data: any) => {
       const checkpoint: Record<string, any> = { event, at: Date.now() };
       if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
@@ -1499,10 +1521,6 @@ export class TelegramChannel {
       if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
       updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
       rawSendSSE(event, data);
-      // Feed token events directly to the caller's streaming sink (onPartialReply equivalent).
-      if (event === 'token' && params.callerOnToken && data?.text) {
-        try { params.callerOnToken(String(data.text)); } catch { /* never let stream errors break the turn */ }
-      }
     };
     try {
       const result = this.deps.runInteractiveTurn
@@ -3457,7 +3475,7 @@ export class TelegramChannel {
       
       if (action === 'ap') {
         // Approve proposal
-        const { loadProposal, approveProposal } = await import('../proposals/proposal-store');
+        const { loadProposal } = await import('../proposals/proposal-store');
         const p = loadProposal(proposalId);
         if (!p) {
           await this.apiCall('editMessageText', {
@@ -3475,34 +3493,31 @@ export class TelegramChannel {
         }).catch(() => {});
         
         try {
-          const { dispatchApprovedProposal } = await import('../routes/proposals.router');
-          const approved = approveProposal(proposalId);
-          if (approved) {
-            await this.apiCall('editMessageReplyMarkup', {
-              chat_id: chatId, message_id: messageId,
-              reply_markup: { inline_keyboard: [[{ text: '✅ Approved', callback_data: 'noop' }, { text: '📋 List', callback_data: 'pr:list:pending' }]] },
-            }).catch(() => {});
-            const hasExecutionPlan = !!(approved.executorPrompt || (approved.affectedFiles?.length && approved.details));
-            if (hasExecutionPlan) {
-              await this.sendMessage(chatId, `✅ Proposal <code>#${proposalId}</code> approved. Executing...`);
-              try {
-                await dispatchApprovedProposal(approved, { channel: 'telegram', telegramChatId: chatId });
-                await this.sendMessage(chatId, `🚀 Proposal <code>#${proposalId}</code> dispatched for execution.`);
-              } catch (dispatchErr: any) {
-                await this.sendMessage(chatId, `⚠️ Proposal approved but execution dispatch failed: ${dispatchErr?.message}`);
-              }
-            } else {
-              await this.sendMessage(chatId, `✅ Proposal <code>#${proposalId}</code> approved. Ready for execution.`);
-            }
+          const { approveProposalAction } = await import('../routes/proposals.router');
+          const result = await approveProposalAction(proposalId, {
+            dispatch: { channel: 'telegram', telegramChatId: chatId },
+          });
+          await this.apiCall('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: [[{ text: '✅ Approved', callback_data: 'noop' }, { text: '📋 List', callback_data: 'pr:list:pending' }]] },
+          }).catch(() => {});
+          if (result.dispatched) {
+            await this.sendMessage(chatId, `🚀 Proposal <code>#${proposalId}</code> approved and dispatched for execution.`);
           } else {
-            await this.sendMessage(chatId, `❌ Could not approve proposal <code>#${proposalId}</code>.`);
+            await this.sendMessage(chatId, `✅ Proposal <code>#${proposalId}</code> approved. Ready for execution.`);
           }
         } catch (err: any) {
+          await this.apiCall('editMessageReplyMarkup', {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard: this.buildProposalKeyboard(loadProposal(proposalId) || p, 'pending') },
+          }).catch(() => {});
           await this.sendMessage(chatId, `❌ Approval error: ${err.message}`);
         }
       } else if (action === 'rj') {
         // Reject proposal
-        const { loadProposal, denyProposal } = await import('../proposals/proposal-store');
+        const { loadProposal } = await import('../proposals/proposal-store');
         const p = loadProposal(proposalId);
         if (!p) {
           await this.apiCall('editMessageText', {
@@ -3519,7 +3534,8 @@ export class TelegramChannel {
         }).catch(() => {});
         
         try {
-          denyProposal(proposalId);
+          const { denyProposalAction } = await import('../routes/proposals.router');
+          denyProposalAction(proposalId);
           await this.sendMessage(chatId, `🗑️ Proposal <code>#${proposalId}</code> rejected.`);
         } catch (err: any) {
           await this.sendMessage(chatId, `❌ Rejection error: ${err.message}`);
@@ -3642,29 +3658,23 @@ export class TelegramChannel {
 	        await this.apiCall('editMessageReplyMarkup', {
 	          chat_id: chatId,
 	          message_id: messageId,
-	          reply_markup: { inline_keyboard: [[{ text: '⏳ Approving...', callback_data: 'noop' }]] },
+		          reply_markup: { inline_keyboard: [[{ text: '⏳ Approving...', callback_data: 'noop' }]] },
 		        }).catch(() => {});
 		        try {
-		          const approved = queue.resolve(approvalId, true, 'telegram');
-		          if (!approved) throw new Error('Approval is no longer pending.');
+              const { resolveApprovalDecision } = await import('../approval-actions');
+              const result = resolveApprovalDecision({
+                approvalId,
+                decision: 'approved',
+                resolvedBy: 'telegram',
+                grantScope: action === 'session' || action === 'always' ? action : '',
+              });
+              if (!result.success) throw new Error(result.error || 'Approval could not be resolved.');
+		          const approved = result.approval!;
               let grantLabel = '';
-              if ((action === 'session' || action === 'always') && approved.commandPermissionCandidate) {
-                const { addCommandPermissionGrant } = await import('../command-permissions');
-                const grant = addCommandPermissionGrant(approved.commandPermissionCandidate, action, 'telegram');
-                const { appendAuditEntry } = await import('../audit-log');
-                appendAuditEntry({
-                  sessionId: approved.sessionId,
-                  agentId: approved.agentId,
-                  actionType: 'approval_resolved',
-                  toolName: approved.toolName,
-                  toolArgs: { command: approved.commandPermissionCandidate.command },
-                  policyTier: approved.policyTier,
-                  approvalStatus: 'auto_allowed' as any,
-                  resultSummary: `Created ${action} command permission ${grant.id}`,
-                });
+              if ((action === 'session' || action === 'always') && result.permissionGrant) {
                 grantLabel = action === 'always'
-                  ? ` Always allow saved (<code>${this.tgEscape(grant.id)}</code>).`
-                  : ` Session allow saved (<code>${this.tgEscape(grant.id)}</code>).`;
+                  ? ` Always allow saved (<code>${this.tgEscape(result.permissionGrant.id)}</code>).`
+                  : ` Session allow saved (<code>${this.tgEscape(result.permissionGrant.id)}</code>).`;
               }
 		          await this.apiCall('editMessageReplyMarkup', {
 		            chat_id: chatId,
@@ -3692,8 +3702,13 @@ export class TelegramChannel {
 	          reply_markup: { inline_keyboard: [[{ text: '❌ Rejected', callback_data: 'noop' }, { text: '📋 List', callback_data: 'ca:list:pending' }]] },
 		        }).catch(() => {});
 		        try {
-		          const denied = queue.resolve(approvalId, false, 'telegram');
-		          if (!denied) throw new Error('Approval is no longer pending.');
+              const { resolveApprovalDecision } = await import('../approval-actions');
+              const result = resolveApprovalDecision({
+                approvalId,
+                decision: 'rejected',
+                resolvedBy: 'telegram',
+              });
+		          if (!result.success) throw new Error(result.error || 'Approval could not be resolved.');
 		          await this.sendMessage(chatId, `🗑️ Command approval <code>#${approvalId}</code> rejected.`);
 		        } catch (err: any) {
 		          await this.sendMessage(chatId, `❌ Rejection error: ${err.message}`);
@@ -6534,15 +6549,44 @@ export class TelegramChannel {
     }
 
     // ── /approve <id> — apply a pending repair ──────────────────────────────────
-    if (text.startsWith('/approve')) {
+    if (/^\/approve(?:\s|$)/.test(text)) {
       const repairId = text.slice('/approve'.length).trim();
       if (!repairId) {
-        await this.sendMessage(chatId, '❌ Usage: /approve &lt;repair-id&gt;\n\nUse /repairs to list pending repairs.');
+        await this.sendMessage(chatId, '❌ Usage: /approve &lt;id&gt;\n\nWorks for pending repairs, proposals, and command approvals.');
         return;
       }
       const repair = loadPendingRepairSafe(repairId);
       if (!repair) {
-        await this.sendMessage(chatId, `❌ No pending repair found with ID: <code>${repairId}</code>\n\nUse /repairs to list pending repairs.`);
+        const { loadProposal } = await import('../proposals/proposal-store');
+        const proposal = loadProposal(repairId);
+        if (proposal) {
+          try {
+            const { approveProposalAction } = await import('../routes/proposals.router');
+            const result = await approveProposalAction(repairId, {
+              dispatch: { channel: 'telegram', telegramChatId: chatId },
+            });
+            await this.sendMessage(
+              chatId,
+              result.dispatched
+                ? `🚀 Proposal <code>#${repairId}</code> approved and dispatched for execution.`
+                : `✅ Proposal <code>#${repairId}</code> approved. Ready for execution.`,
+            );
+          } catch (err: any) {
+            await this.sendMessage(chatId, `❌ Proposal approval error: ${err.message}`);
+          }
+          return;
+        }
+        const { getApprovalQueue } = await import('../verification-flow');
+        const approval = getApprovalQueue().get(repairId);
+        if (approval) {
+          const { resolveApprovalDecision } = await import('../approval-actions');
+          const result = resolveApprovalDecision({ approvalId: repairId, decision: 'approved', resolvedBy: 'telegram' });
+          await this.sendMessage(chatId, result.success
+            ? `✅ Approval <code>#${repairId}</code> approved. The paused run will continue now.`
+            : `❌ Approval error: ${this.tgEscape(result.error || 'Approval could not be resolved.')}`);
+          return;
+        }
+        await this.sendMessage(chatId, `❌ No pending repair, proposal, or approval found with ID: <code>${repairId}</code>.`);
         return;
       }
       if (repair.status !== 'pending') {
@@ -6566,15 +6610,37 @@ export class TelegramChannel {
     }
 
     // ── /reject <id> — discard a pending repair ─────────────────────────────────
-    if (text.startsWith('/reject')) {
+    if (/^\/reject(?:\s|$)/.test(text)) {
       const repairId = text.slice('/reject'.length).trim();
       if (!repairId) {
-        await this.sendMessage(chatId, '❌ Usage: /reject &lt;repair-id&gt;');
+        await this.sendMessage(chatId, '❌ Usage: /reject &lt;id&gt;');
         return;
       }
       const repair = loadPendingRepairSafe(repairId);
       if (!repair) {
-        await this.sendMessage(chatId, `❌ No repair found with ID: <code>${repairId}</code>.`);
+        const { loadProposal } = await import('../proposals/proposal-store');
+        const proposal = loadProposal(repairId);
+        if (proposal) {
+          try {
+            const { denyProposalAction } = await import('../routes/proposals.router');
+            denyProposalAction(repairId);
+            await this.sendMessage(chatId, `🗑️ Proposal <code>#${repairId}</code> rejected.`);
+          } catch (err: any) {
+            await this.sendMessage(chatId, `❌ Proposal rejection error: ${err.message}`);
+          }
+          return;
+        }
+        const { getApprovalQueue } = await import('../verification-flow');
+        const approval = getApprovalQueue().get(repairId);
+        if (approval) {
+          const { resolveApprovalDecision } = await import('../approval-actions');
+          const result = resolveApprovalDecision({ approvalId: repairId, decision: 'rejected', resolvedBy: 'telegram' });
+          await this.sendMessage(chatId, result.success
+            ? `🗑️ Approval <code>#${repairId}</code> rejected.`
+            : `❌ Rejection error: ${this.tgEscape(result.error || 'Approval could not be resolved.')}`);
+          return;
+        }
+        await this.sendMessage(chatId, `❌ No repair, proposal, or approval found with ID: <code>${repairId}</code>.`);
         return;
       }
       const deleted = deletePendingRepairSafe(repairId);

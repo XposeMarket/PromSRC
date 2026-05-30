@@ -80,13 +80,42 @@ export function connectWS() {
     }
   };
 
-  window.ws.onclose = () => setTimeout(connectWS, 2000);
-  window.ws.onerror = () => window.ws.close();
+  window.ws.onclose = (event) => {
+    wsEventBus._dispatch({ type: 'ws:close', timestamp: Date.now(), code: event?.code, reason: event?.reason || '' });
+    setTimeout(connectWS, 2000);
+  };
+  window.ws.onerror = (event) => {
+    wsEventBus._dispatch({ type: 'ws:error', timestamp: Date.now(), message: event?.message || 'WebSocket error' });
+    window.ws.close();
+  };
+}
+
+function isMobileRoute() {
+  return !!(location.hash && String(location.hash).startsWith('#mobile'));
+}
+
+async function prepareMobileReload() {
+  if (!isMobileRoute()) return;
+  try {
+    const regs = await navigator.serviceWorker?.getRegistrations?.();
+    for (const reg of regs || []) {
+      try { reg.waiting?.postMessage?.('pm-skip-waiting'); } catch {}
+      try { await reg.update?.(); } catch {}
+    }
+  } catch {}
+  try {
+    const keys = await caches?.keys?.();
+    await Promise.all((keys || []).filter((key) => String(key).startsWith('prometheus-')).map((key) => caches.delete(key)));
+  } catch {}
 }
 
 wsEventBus.on('dev_reload_requested', (msg) => {
-  if (msg?.target && msg.target !== 'desktop') return;
-  if (location.hash && String(location.hash).startsWith('#mobile')) return;
+  const target = String(msg?.target || 'all').toLowerCase();
+  const mobile = isMobileRoute();
+  if (target && target !== 'all' && target !== 'web') {
+    if (mobile && target !== 'mobile') return;
+    if (!mobile && target !== 'desktop') return;
+  }
   const id = String(msg?.timestamp || msg?.reason || Date.now());
   const key = `prom_dev_reload_${id}`;
   try {
@@ -95,7 +124,9 @@ wsEventBus.on('dev_reload_requested', (msg) => {
   } catch {}
   const delayMs = Number.isFinite(Number(msg?.delayMs)) ? Math.max(250, Number(msg.delayMs)) : 900;
   setTimeout(() => {
-    try { location.reload(); } catch {}
+    prepareMobileReload().finally(() => {
+      try { location.reload(); } catch {}
+    });
   }, delayMs);
 });
 

@@ -1,15 +1,35 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
   "id": "hyperframes-cli",
   "name": "hyperframes-cli",
-  "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding (init), validation (lint, inspect), preview, render, and environment troubleshooting (doctor, browser, info, upgrade). Use when running any of these commands or troubleshooting the HyperFrames build/render environment. For asset preprocessing commands (`tts`, `transcribe`, `remove-background`), invoke the `hyperframes-media` skill instead.",
+  "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding (init), validation (lint, inspect, validate), preview, render/export, and environment troubleshooting (doctor, browser, info, upgrade), including Windows FFmpeg/ffprobe/runtime blockers.",
   "version": "1.0.0",
-  "entrypoint": "SKILL.md",
   "triggers": [
-    "hyperframes-cli"
+    "hyperframes-cli",
+    "npx hyperframes",
+    "hyperframes init",
+    "hyperframes lint",
+    "hyperframes validate",
+    "hyperframes inspect",
+    "hyperframes preview",
+    "hyperframes render",
+    "hyperframes export",
+    "ffmpeg not found",
+    "ffprobe",
+    "HyperFrames CLI",
+    "HyperFrames render failed",
+    "HyperFrames inspect failed",
+    "HyperFrames doctor",
+    "sample frames from final MP4",
+    "verify exported MP4"
   ],
   "categories": [
-    "codex",
+    "video",
+    "hyperframes",
+    "cli",
+    "windows",
+    "rendering",
     "imported"
   ],
   "requiredTools": [],
@@ -19,23 +39,15 @@
     "connectors": [],
     "env": [],
     "bins": [],
-    "platforms": [],
+    "platforms": [
+      "windows"
+    ],
     "permissions": [
       "workspaceRead",
       "shell",
       "browser",
       "desktop"
     ]
-  },
-  "assignment": {
-    "assignedAgents": [],
-    "assignedTeams": []
-  },
-  "toolBinding": {
-    "requiredTools": [],
-    "recommendedToolCategories": [],
-    "defaultWorkflow": [],
-    "canSpawnSubagents": false
   },
   "permissions": {
     "workspaceRead": true,
@@ -45,7 +57,18 @@
     "desktop": true,
     "externalSideEffects": false
   },
-  "resources": [],
+  "resources": [
+    {
+      "path": "references/strict-hyperframes-project-flow-2026-05-24.md",
+      "type": "doc",
+      "sizeBytes": 2856
+    },
+    {
+      "path": "references/windows-install-troubleshooting-2026-05-24.md",
+      "type": "doc",
+      "sizeBytes": 2584
+    }
+  ],
   "status": "ready",
   "lifecycle": "experimental",
   "ownership": "prometheus-owned-overlay",

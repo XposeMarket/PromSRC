@@ -1,0 +1,13 @@
+{
+  "skillId": "browser-automation-playbook",
+  "reason": "resource-write",
+  "createdAt": "2026-05-27T04:34:53.736Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\browser-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "notes/locked-desktop-browser-vision-fallback-2026-05-26.md"
+  ],
+  "hash": "74e48569ad84a391"
+}

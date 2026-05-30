@@ -12,7 +12,7 @@
     "options": {
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
-      "staticModels": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-flash-preview", "zai/glm-5.1", "minimax/minimax-m2.7", "moonshotai/kimi-k2.6"],
+      "staticModels": ["anthropic/claude-opus-4.8", "anthropic/claude-opus-4.7", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-flash-preview", "zai/glm-5.1", "minimax/minimax-m2.7", "moonshotai/kimi-k2.6"],
       "supportsLiveModelDiscovery": true
     }
   },
@@ -42,7 +42,7 @@
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "anthropic/claude-opus-4.6"
+        "placeholder": "anthropic/claude-opus-4.8"
       },
       {
         "key": "endpoint",
@@ -55,7 +55,7 @@
   "config": {
     "defaults": {
       "endpoint": "https://ai-gateway.vercel.sh/v1",
-      "model": "anthropic/claude-opus-4.6"
+      "model": "anthropic/claude-opus-4.8"
     },
     "schema": {
       "api_key": "string",

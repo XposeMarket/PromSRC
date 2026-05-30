@@ -1,0 +1,13 @@
+{
+  "skillId": "hyperframes-cli",
+  "reason": "resource-delete",
+  "createdAt": "2026-05-25T05:47:36.774Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hyperframes-cli",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/styles/hyperframes-cli-2026-05-24.md"
+  ],
+  "hash": "b9ffa368a78b8f27"
+}

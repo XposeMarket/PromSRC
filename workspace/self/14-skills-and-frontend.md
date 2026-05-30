@@ -162,6 +162,25 @@ Current notable frontend surfaces also include:
 - Creative HyperFrames UI components under `web-ui/src/components/creative/`
 - Onboarding UI under `web-ui/src/onboarding/`
 
+Chat context-window UI:
+
+- the desktop chat composer shows the active model/provider at the bottom right through `chat-model-name` and `chat-provider-name`
+- beside that label is `chat-context-window-btn`, a small circular context indicator
+- clicking the circle opens `chat-context-window-popover`; it intentionally mirrors the compact context-window style and does not show plan-usage/account quota information
+- the popover displays current estimated input tokens, active model context window, message-token estimate, tool-observation-token estimate, and compaction trigger
+- the UI fetches `GET /api/sessions/:id/context-window`
+- `web-ui/src/pages/ChatPage.js` owns `refreshChatContextWindow(...)`, `scheduleChatContextWindowRefresh(...)`, `toggleChatContextWindowPopover(...)`, and `closeChatContextWindowPopover(...)`
+- the indicator refreshes when the active chat syncs, after server session load, after persisted turns, after model changes, and on a 15-second fallback interval
+- `web-ui/src/styles/components.css` owns the ring, popover, progress bar, and dark-theme styling
+- generated public bundle files under `generated/public-web-ui/` must be resynced with `npm run sync:web-ui` after editing `web-ui/`
+
+Backend endpoint for the UI:
+
+- `GET /api/sessions/:id/context-window` lives in `src/gateway/routes/chat.router.ts`
+- it resolves the active model context profile and budget, estimates the current API history tokens, adds recent tool observation context tokens, and returns both totals and breakdowns
+- it uses `getHistoryForApiCall(...)`, `getRecentToolObservationsForContext(...)`, `estimateMessagesTokensForModel(...)`, and `estimateTextTokensForModel(...)`
+- the endpoint is an estimate/diagnostic surface; it must not mutate session history or trigger compaction by itself
+
 ## 28B) Onboarding and Migration
 
 Onboarding is account-scoped through `src/gateway/routes/onboarding.router.ts` and `src/gateway/onboarding/`.

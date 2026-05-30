@@ -1,0 +1,12 @@
+{
+  "skillId": "desktop-automation-playbook",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-24T03:55:14.026Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\desktop-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "1aa1ae48f7ed464f"
+}

@@ -2326,6 +2326,13 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     || pages.find((p: any) => p.url() === 'about:blank')
     || await context.newPage();
 
+  // tsx compiles with keepNames:true (esbuild), which injects __name() helper calls into
+  // page.evaluate() callbacks. __name is only defined in Node.js scope, not in the browser,
+  // causing "ReferenceError: __name is not defined". Define a stub so evaluate calls don't crash.
+  const __nameStub = `if(typeof globalThis.__name==='undefined'){globalThis.__name=function(t,v){try{Object.defineProperty(t,'name',{value:v,configurable:true});}catch(e){}return t;};}`;
+  await page.addInitScript(__nameStub).catch(() => {});
+  await page.evaluate(__nameStub).catch(() => {});
+
   const session: BrowserSession = {
     sessionId,
     browser,

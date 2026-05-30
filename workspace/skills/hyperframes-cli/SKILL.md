@@ -5,18 +5,21 @@ description: HyperFrames CLI dev loop — `npx hyperframes` for scaffolding (ini
 
 # HyperFrames CLI
 
-Everything runs through `npx hyperframes`. Requires Node.js >= 22 and FFmpeg.
+Everything runs through `npx hyperframes`. Upstream prefers Node.js >= 22 and FFmpeg. In Raul's current Windows runtime, Node v20.20.2 may emit warnings but can still render; missing FFmpeg is the more common hard render blocker.
 
 ## Workflow
 
 1. **Scaffold** — `npx hyperframes init my-video`
 2. **Write** — author HTML composition (see the `hyperframes` skill)
-3. **Lint** — `npx hyperframes lint`
-4. **Visual inspect** — `npx hyperframes inspect`
-5. **Preview** — `npx hyperframes preview`
-6. **Render** — `npx hyperframes render`
+3. **Copy assets** — place real images/video/audio under the project with stable relative paths
+4. **Lint** — `npx hyperframes lint`
+5. **Validate** — `npx hyperframes validate` when available / required by the project
+6. **Visual inspect** — `npx hyperframes inspect`, plus `--at` hero timestamps for important frames
+7. **Preview** — `npx hyperframes preview` when interactive review is useful
+8. **Render** — `npx hyperframes render --output final.mp4`
+9. **Verify exported MP4** — sample frames from the actual final file before presenting
 
-Lint and inspect before preview. `lint` catches missing `data-composition-id`, overlapping tracks, and unregistered timelines. `inspect` opens the rendered composition in headless Chrome, seeks through the timeline, and reports text spilling out of bubbles/containers or off the canvas.
+Lint, validate, and inspect before preview/render. `lint` catches missing `data-composition-id`, overlapping tracks, and unregistered timelines. `inspect` opens the rendered composition in headless Chrome, seeks through the timeline, and reports text spilling out of bubbles/containers or off the canvas. Export verification is a no-ship gate: output-file existence is not proof that the rendered MP4 is good.
 
 ## Scaffolding
 
@@ -120,6 +123,18 @@ npx hyperframes render --docker                       # byte-identical
 
 **Parametrized renders:** the composition declares its variables on the `<html>` root with **`data-composition-variables`** — a JSON **array of declarations** (`{id, type, label, default}` per entry) that defines the schema. Scripts inside read the resolved values via `window.__hyperframes.getVariables()`. The CLI **`--variables '{"title":"Q4 Report"}'`** is a JSON **object keyed by id** that overrides those declared defaults for one render; missing keys fall through, so the same composition runs unchanged in dev preview and in production. (Sub-comp hosts can also override per-instance with **`data-variable-values`** — same object shape, scoped to one mount of the sub-composition. See the `hyperframes` skill for the full pattern.)
 
+## Export Verification — No-Ship Gate
+
+Never call a render finished just because `npx hyperframes render` exited or `final.mp4` exists. Verify the actual exported MP4 before final response:
+
+- sample frames from the final MP4, not the source HTML or preview page;
+- confirm duration/frame count is plausible for the requested length;
+- confirm sampled frames are not black, blank, or missing the main composition;
+- confirm requested logos, text, and primary assets appear in sampled frames;
+- if extraction fails, the file is implausibly tiny, frames are black/empty, or required visible assets are missing, treat the export as failed and keep fixing.
+
+For Raul, the final response for a rendered HyperFrames video should include: project path, source `index.html`, exported MP4 path, checks run (`lint`, `validate`, `inspect`, render), export frame-verification status, and any accepted non-fatal warnings.
+
 ## Asset Preprocessing
 
 `npx hyperframes tts`, `transcribe`, and `remove-background` produce assets (narration audio, word-level transcripts, transparent video) that get dropped into a composition. Each downloads its own model on first run. For voice selection, whisper model rules (the `.en`-translates-non-English gotcha), output format choice (VP9 alpha WebM vs ProRes), and the TTS → transcribe → captions chain, invoke the `hyperframes-media` skill.
@@ -134,6 +149,15 @@ npx hyperframes upgrade      # check for updates
 ```
 
 Run `doctor` first if rendering fails. Common issues: missing FFmpeg, missing Chrome, low memory.
+
+### Prometheus Windows runtime notes (2026-05-24)
+
+- **FFmpeg not found:** If render says FFmpeg is missing, use bundled/installed FFmpeg or `ffmpeg-static`; ensure `ffmpeg.exe` is discoverable from the project or PATH before rerendering.
+- **Node version:** HyperFrames prefers Node >= 22. Raul's machine was observed on Node v20.20.2; warnings are expected, but render may still complete. Do not ignore actual render failures.
+- **PowerShell syntax:** Do not assume `&&` works in Prometheus Windows PowerShell runs. Use separate `run_command` calls or PowerShell-native `$LASTEXITCODE` chaining.
+- **Install checks:** Do not treat missing `node_modules/@hyperframes` alone as proof HyperFrames cannot run; determine whether the workflow uses `npx hyperframes`, a local package, or Prometheus-bundled Creative/HyperFrames tooling.
+- **Duplicate media warning:** `duplicate_media_discovery_risk` is not automatically fatal when it comes from intentional repeated static logo/image use and render plus inspect pass. Fix it when it indicates accidentally stacked or duplicated media/video nodes.
+- **Native Prometheus tool errors:** If first-class Creative/HyperFrames QA/export errors with `ReferenceError: __name is not defined` or exports a black/empty MP4, preserve the authored source and continue via the real CLI project path rather than claiming success.
 
 ## Other
 

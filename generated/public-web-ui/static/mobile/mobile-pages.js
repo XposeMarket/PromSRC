@@ -3,8 +3,8 @@ import {
   chatMessages, recentCommands, mobileSchedules, mobileTeams, mobileTeamDetail,
 } from './mobile-data.js';
 import {
-  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer,
-} from './mobile-shell.js';
+  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions,
+} from './mobile-shell.js?v=mobile-voice-live-update-fix';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow,
@@ -16,7 +16,7 @@ import {
   updateMobileChatSessionHistory, markMobileEditRerunReset, markMobileChatSessionRead,
   loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState,
   claimPairing, pollPairing, verifyPairingMe,
-  createVoiceInterruptionEvent,
+  createVoiceInterruptionEvent, streamVoiceAgentInputMobile,
   getDeviceToken, setDeviceToken, clearDeviceToken,
   mobileGatewayFetch, mobileGatewayTextFetch, buildMobileGatewayWsUrl,
   loadTeamWorkspace, loadTeamWorkspaceFile, loadMemoryGraph,
@@ -38,7 +38,7 @@ import {
 } from './mobile-api.js';
 import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/account.js';
 import { renderMd } from '../utils.js';
-import { wsEventBus } from '../ws.js';
+import { wsEventBus, wsSend } from '../ws.js';
 
 // ---------- tiny toast ----------
 function pmToast(msg, kind = 'info') {
@@ -59,6 +59,21 @@ function pmToast(msg, kind = 'info') {
 }
 
 const FLAME = '<span class="pm-brand-flame">🔥</span>';
+const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
+
+function _notifyMobileChatVoiceUpdate(sessionId, detail = {}) {
+  const sid = String(sessionId || '').trim();
+  try {
+    window.__pmMobileChatVoiceUpdate?.(sid, detail);
+  } catch (err) {
+    console.warn('[mobile voice] chat update bridge failed:', err);
+  }
+  try {
+    window.dispatchEvent(new CustomEvent('pm-mobile-chat-voice-update', {
+      detail: { ...(detail || {}), sessionId: sid },
+    }));
+  } catch {}
+}
 
 /* ---------------- CHAT ---------------- */
 
@@ -144,6 +159,15 @@ function _startMobileNewChat(navigate) {
   __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
   __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
   __pmChat.editingMessageIndex = -1;
+  __pmVoice.targetSessionId = MOBILE_CHAT_SESSION_ID;
+  __pmVoice.targetSessionLabel = 'Mobile - New Chat';
+  __pmVoice.targetSessionChannel = 'mobile';
+  __pmVoice.targetSessionForced = true;
+  __pmVoice.pendingInterruptContext = null;
+  __pmVoice.lastInterruptionEvent = null;
+  if (__pmVoice.activeVoiceRuntime) __pmVoice.activeVoiceRuntime.isStreamActive = false;
+  __pmVoice.activeVoiceRuntime = null;
+  invalidateMobileDrawerSessions('mobile');
   navigate?.('#mobile/chat');
   return MOBILE_CHAT_SESSION_ID;
 }
@@ -157,6 +181,11 @@ function _startMobileNewVoiceDraft() {
   __pmVoice.targetSessionLabel = 'Mobile - New Chat';
   __pmVoice.targetSessionChannel = 'mobile';
   __pmVoice.targetSessionForced = true;
+  __pmVoice.pendingInterruptContext = null;
+  __pmVoice.lastInterruptionEvent = null;
+  if (__pmVoice.activeVoiceRuntime) __pmVoice.activeVoiceRuntime.isStreamActive = false;
+  __pmVoice.activeVoiceRuntime = null;
+  invalidateMobileDrawerSessions('mobile');
   return MOBILE_CHAT_SESSION_ID;
 }
 
@@ -168,7 +197,23 @@ function _mobileRoleToServerRole(role) {
   return String(role || '').toLowerCase() === 'user' ? 'user' : 'assistant';
 }
 
+function _isMobileRestartContextPacketText(value) {
+  return /^Restart Context Packet\b/i.test(String(value || '').trim());
+}
+
+function _isMobileInternalServerMessage(m) {
+  return _isMobileRestartContextPacketText(m?.content) && !Array.isArray(m?.fileChanges?.files);
+}
+
+function _mapServerHistoryToMobile(history) {
+  return (Array.isArray(history) ? history : [])
+    .filter((msg) => !_isMobileInternalServerMessage(msg))
+    .map((msg, index) => _mapServerMessageToMobile(msg, index))
+    .filter(Boolean);
+}
+
 function _mapServerMessageToMobile(m, index = -1) {
+  if (_isMobileInternalServerMessage(m)) return null;
   const role = _serverRoleToMobileRole(m?.role);
   const content = String(m?.content || '');
   const attachmentPreviews = Array.isArray(m?.attachmentPreviews) ? m.attachmentPreviews : [];
@@ -186,6 +231,7 @@ function _mapServerMessageToMobile(m, index = -1) {
     generatedVideos: Array.isArray(m?.generatedVideos) ? m.generatedVideos : [],
     artifacts: Array.isArray(m?.artifacts) ? m.artifacts : [],
     files: Array.isArray(m?.canvasFiles) ? m.canvasFiles : [],
+    fileChanges: m?.fileChanges && typeof m.fileChanges === 'object' ? m.fileChanges : undefined,
     processEntries: Array.isArray(m?.processEntries) ? m.processEntries.map((entry) => ({
       id: entry?.id || `proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       type: String(entry?.type || 'info'),
@@ -209,10 +255,21 @@ function _mobileMessageCopyText(msg) {
   return String(msg?.content || msg?.body?.text || '').trim();
 }
 
+function _isMobileHiddenVoiceDraftMessage(msg, index = -1) {
+  const text = _mobileMessageCopyText(msg);
+  const isDraftText = /^Mobile voice chat$/i.test(text)
+    || (Number(index) <= 1 && /^New Chat$/i.test(text));
+  return isDraftText
+    && !Array.isArray(msg?.body?.attachments)
+    && !Array.isArray(msg?.attachmentPreviews);
+}
+
 function _mobileHistoryForServer(thread = _activeMobileThread()) {
   return (Array.isArray(thread) ? thread : [])
-    .filter((msg) => msg && (msg.role === 'user' || msg.role === 'ai'))
+    .filter((msg, index) => msg && (msg.role === 'user' || msg.role === 'ai') && !_isMobileHiddenVoiceDraftMessage(msg, index))
     .filter((msg) => !msg.streaming)
+    .filter((msg) => !_isMobileRestartContextPacketText(_mobileMessageCopyText(msg)))
+    .filter((msg) => !msg._isRestartNotification)
     .map((msg) => ({
       ..._cloneMobileMessageForBranch(msg),
       role: _mobileRoleToServerRole(msg.role),
@@ -516,6 +573,25 @@ function _appendMobileProcess(message, type, text, extra = null) {
   if (message.processEntries.length > 120) message.processEntries.splice(0, message.processEntries.length - 120);
 }
 
+function _appendMobileUserProcess(message, text, extra = null) {
+  try {
+    const value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!message || !value) return;
+    const clipped = value.length > 900 ? `${value.slice(0, 900)}...` : value;
+    const line = `User: ${clipped}`;
+    if (Array.isArray(message.processEntries) && message.processEntries.some((entry) =>
+      String(entry?.type || '') === 'user' && String(entry?.text || entry?.content || '').trim() === line
+    )) return;
+    _appendMobileProcess(message, 'user', line, {
+      actor: 'User',
+      source: 'mobile_user_message',
+      ...(extra || {}),
+    });
+  } catch (err) {
+    console.warn('[mobile chat] failed to append user process entry', err);
+  }
+}
+
 function _normalizeVoiceAgentProcessEntry(entry) {
   const text = String(entry?.content || entry?.text || '').trim();
   if (!text) return null;
@@ -750,6 +826,143 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   return next;
 }
 
+function _clearMobileLiveRunForSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  if (__pmChat.activeRuns && typeof __pmChat.activeRuns === 'object') delete __pmChat.activeRuns[sid];
+  _clearMobileActiveRun(sid);
+  _markMobileSessionRunning(sid, false);
+  __pmChat.busy = Object.values(__pmChat.activeRuns || {}).some((run) => run?.busy);
+  const thread = __pmChat.threads?.[sid];
+  if (Array.isArray(thread)) {
+    for (let i = thread.length - 1; i >= 0; i -= 1) {
+      const msg = thread[i];
+      if (msg?.streaming || _isMobileRestartContextPacketText(_mobileMessageCopyText(msg))) {
+        thread.splice(i, 1);
+      }
+    }
+  }
+}
+
+async function _applyMobileHotRestartNotification(msg = {}) {
+  const sid = String(msg.previousSessionId || msg.sessionId || '').trim();
+  if (!sid) return;
+  _clearMobileLiveRunForSession(sid);
+  const session = await loadMobileChatSession(sid).catch(() => null);
+  const history = Array.isArray(session?.history) ? session.history : [];
+  const mapped = _mapServerHistoryToMobile(history);
+  const localThread = __pmChat.threads?.[sid] || [];
+  __pmChat.threads[sid] = _mergeMobileThreadLocalArtifacts(mapped, localThread);
+  const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
+  for (const approval of Array.isArray(pendingApprovals) ? pendingApprovals : []) {
+    const approvalSid = String(approval?.sessionId || approval?.sourceSessionId || '').trim();
+    if (approvalSid && approvalSid !== sid) continue;
+    _upsertMobilePendingApproval(approval);
+    const exists = __pmChat.threads[sid].some((item) => String(item?.approvalRequest?.id || '') === String(approval.id || ''));
+    if (!exists) {
+      __pmChat.threads[sid].push({
+        role: 'ai',
+        timestamp: Date.now(),
+        time: _nowTime(),
+        body: { sender: 'Prometheus', text: '' },
+        content: '',
+        approvalRequest: _normalizeMobileApproval(approval),
+      });
+    }
+  }
+  if (!__pmChat.threads[sid].some((item) => _mobileMessageCopyText(item) === String(msg.text || '')) && String(msg.text || '').trim()) {
+    __pmChat.threads[sid].push({
+      role: 'ai',
+      timestamp: Date.now(),
+      time: _nowTime(),
+      body: { sender: 'Prometheus', text: String(msg.text || '') },
+      content: String(msg.text || ''),
+      _isRestartNotification: true,
+    });
+  }
+  // Only take over the chat view if the user is currently viewing that session
+  // or a real (non-draft) session. Never override an intentional new-chat state —
+  // the user pressed New Chat and shouldn't be yanked back to an old session.
+  const _restartActiveSid = String(__pmChat.activeSessionId || '').trim();
+  if (_restartActiveSid === sid || (_restartActiveSid !== MOBILE_CHAT_SESSION_ID && location.hash.startsWith('#mobile/chat'))) {
+    __pmChat.activeSessionId = sid;
+    _activeMobileThread();
+    const threadEl = document.getElementById('pm-chat-thread');
+    const bodyEl = document.getElementById('pm-chat-body');
+    if (threadEl) _flushThreadRender(threadEl, bodyEl, sid);
+  }
+  markMobileChatSessionRead(sid, Date.now()).catch(() => {});
+  if (msg.notificationId) {
+    try { wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId) }); } catch {}
+  }
+}
+
+if (!window.__pmMobileSessionNotificationBridgeInstalled) {
+  window.__pmMobileSessionNotificationBridgeInstalled = true;
+  wsEventBus.on('session_notification', (msg = {}) => {
+    if (String(msg.source || '') === 'hot_restart') {
+      _applyMobileHotRestartNotification(msg).catch((err) => {
+        pmToast(`Restart message sync failed: ${err?.message || err}`, 'error');
+      });
+    }
+  });
+}
+
+function _deliveryNotificationToMobileMedia(msg = {}) {
+  const imageDataUrl = String(msg.imageDataUrl || '').trim();
+  const attachmentPath = String(msg.attachmentPath || '').trim();
+  if (!imageDataUrl && !attachmentPath) return null;
+  return _normalizeMobileMedia({
+    kind: imageDataUrl ? 'image' : _mobileMediaKind({ path: attachmentPath, name: msg.fileName }),
+    dataUrl: imageDataUrl,
+    path: attachmentPath,
+    name: String(msg.fileName || msg.caption || (imageDataUrl ? 'Delivered image.png' : attachmentPath.split(/[\\/]/).pop()) || 'Delivered file').trim(),
+    mimeType: msg.mimeType || (imageDataUrl.match(/^data:([^;]+);/i)?.[1] || ''),
+  });
+}
+
+function _appendMobileDeliveryNotification(msg = {}) {
+  const sid = String(msg.sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
+  const text = String(msg.text || msg.caption || '').trim();
+  const media = _deliveryNotificationToMobileMedia(msg);
+  const key = media ? _mobileMediaKey(media) : '';
+  const exists = __pmChat.threads[sid].some((item) => {
+    if (text && _mobileMessageCopyText(item) === text) return true;
+    if (!key) return false;
+    return _collectMessageMedia(item).some((candidate) => _mobileMediaKey(candidate) === key);
+  });
+  if (exists) return;
+  const turn = {
+    role: 'ai',
+    timestamp: Number(msg.timestamp || Date.now()),
+    time: _nowTime(),
+    body: { sender: 'Prometheus', text },
+    content: text,
+    source: String(msg.source || 'delivery'),
+    channel: String(msg.target || 'mobile'),
+    channelLabel: 'delivery',
+  };
+  if (media) _mergeMobileMediaIntoMessage(turn, [media]);
+  __pmChat.threads[sid].push(turn);
+  if (String(__pmChat.activeSessionId || '') === sid || location.hash.startsWith('#mobile/chat')) {
+    __pmChat.activeSessionId = sid;
+    _activeMobileThread();
+    const threadEl = document.getElementById('pm-chat-thread');
+    const bodyEl = document.getElementById('pm-chat-body');
+    if (threadEl) _flushThreadRender(threadEl, bodyEl, sid);
+  }
+}
+
+if (!window.__pmMobileDeliveryBridgeInstalled) {
+  window.__pmMobileDeliveryBridgeInstalled = true;
+  wsEventBus.on('delivery_notification', (msg = {}) => {
+    const target = String(msg.target || '').toLowerCase();
+    if (target && target !== 'mobile' && target !== 'all') return;
+    _appendMobileDeliveryNotification(msg);
+  });
+}
+
 function _renderMobileMediaGallery(mediaList) {
   const list = Array.isArray(mediaList) ? mediaList : [];
   if (!list.length) return '';
@@ -825,8 +1038,10 @@ function _normalizeMobileApproval(input = {}, fallback = {}) {
     reason: String(source.reason || fallback.reason || '').trim(),
     riskScore: Number.isFinite(Number(source.riskScore)) ? Number(source.riskScore) : Number(fallback.riskScore || 0),
     affectedSystems: Array.isArray(source.affectedSystems) ? source.affectedSystems : (Array.isArray(fallback.affectedSystems) ? fallback.affectedSystems : []),
+    commandBoundary: source.commandBoundary || fallback.commandBoundary || null,
     devSourceEdit: source.devSourceEdit || fallback.devSourceEdit || null,
     finalAction: source.finalAction || fallback.finalAction || null,
+    pathAccess: source.pathAccess || fallback.pathAccess || null,
     status: String(source.status || fallback.status || 'pending').toLowerCase(),
   };
 }
@@ -843,6 +1058,9 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
   const devPlan = approval?.devSourceEdit?.plan || null;
   const evidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
   const steps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
+  const boundary = approval.commandBoundary || null;
+  const boundaryScope = String(boundary?.scope || '').trim();
+  const boundaryPaths = Array.isArray(boundary?.externalPaths) ? boundary.externalPaths.filter(Boolean) : [];
   const expectedWorkflow = Array.isArray(devPlan?.expectedWorkflow)
     ? devPlan.expectedWorkflow
     : (Array.isArray(devPlan?.expected_workflow) ? devPlan.expected_workflow : []);
@@ -855,6 +1073,8 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     ${human.summary ? `<p>${escapeHtml(human.summary)}</p>` : ''}
     ${human.detail ? `<em>${escapeHtml(human.detail)}</em>` : ''}
     ${risk ? `<small>Risk ${escapeHtml(String(risk))}</small>` : ''}
+    ${boundaryScope && boundaryScope !== 'workspace' ? `<em>Boundary: ${escapeHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? ` - ${escapeHtml(String(boundary.reason))}` : ''}</em>` : ''}
+    ${boundaryPaths.length ? `<details class="pm-approval-technical" open><summary>External paths</summary><pre>${escapeHtml(boundaryPaths.slice(0, 8).join('\n'))}</pre></details>` : ''}
     ${devPlan?.reasoning ? `<em>${escapeHtml(String(devPlan.reasoning))}</em>` : ''}
     ${evidence.length ? `<details class="pm-approval-technical" open><summary>Evidence</summary><pre>${escapeHtml(evidence.slice(0, 5).map((item) => `${item.file || 'file'}${item.lines ? `:${item.lines}` : ''} - ${item.finding || ''}`).join('\n'))}</pre></details>` : ''}
     ${steps.length ? `<details class="pm-approval-technical"><summary>Plan</summary><pre>${escapeHtml(steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
@@ -936,8 +1156,7 @@ async function _resolveMobileApprovalButton(button) {
   const scope = button.closest('.pm-chat-approval, .pm-global-approval-sheet');
   scope?.querySelectorAll('button')?.forEach((btn) => { btn.disabled = true; });
   try {
-    if (approved) await approveMobileApproval(id, grantScope);
-    else await denyMobileApproval(id);
+    const result = approved ? await approveMobileApproval(id, grantScope) : await denyMobileApproval(id);
     const updated = _updateMobilePendingApproval(id, { status: approved ? 'approved' : 'rejected' });
     pmToast(approved ? (grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved') : 'Rejected', approved ? 'success' : 'info');
     const sid = updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId;
@@ -951,6 +1170,20 @@ async function _resolveMobileApprovalButton(button) {
         const host = document.querySelector(`[data-process-approval-host="${_pmCssEscape(id)}"]`);
         if (host) _pmLoadApprovalProcessRun(id, host).then(() => _wireMobileProcessRunActions(host)).catch(() => {});
       }, 100);
+      const resumePrompt = String(result?.resumePrompt || '').trim();
+      if (resumePrompt) {
+        const resumeSid = String(result?.approval?.sessionId || updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId || '').trim();
+        if (resumeSid) __pmChat.activeSessionId = resumeSid;
+        if (typeof window.__pmMobileSendMessage === 'function') {
+          setTimeout(() => window.__pmMobileSendMessage(resumePrompt, { fromApprovalResume: true }), 100);
+        } else {
+          const queue = _getMobileQueuedPrompts(resumeSid);
+          queue.push(_makeMobileQueuedPrompt(resumePrompt));
+          if (queue.length > PM_MOBILE_MAX_QUEUED_PROMPTS) queue.splice(0, queue.length - PM_MOBILE_MAX_QUEUED_PROMPTS);
+          _renderMobileQueuedPromptsPanel(resumeSid);
+          pmToast('Approval queued a resume message', 'info');
+        }
+      }
     }
 
   } catch (err) {
@@ -1047,6 +1280,78 @@ function _renderMobileUserEditComposer(m, index, attachmentHtml = '') {
   </div>`;
 }
 
+function _normalizeMobileFileChanges(fileChanges) {
+  const files = Array.isArray(fileChanges?.files) ? fileChanges.files : [];
+  if (!files.length) return null;
+  const normalizedFiles = files.map((file) => {
+    const path = String(file?.path || file?.displayPath || '').trim();
+    const displayPath = String(file?.displayPath || path || '').trim();
+    const statusRaw = String(file?.status || 'modified').toLowerCase();
+    const status = ['added', 'modified', 'deleted', 'renamed'].includes(statusRaw) ? statusRaw : 'modified';
+    return {
+      path,
+      displayPath,
+      status,
+      insertions: Math.max(0, Number(file?.insertions) || 0),
+      deletions: Math.max(0, Number(file?.deletions) || 0),
+      binary: file?.binary === true,
+    };
+  }).filter((file) => file.displayPath || file.path);
+  if (!normalizedFiles.length) return null;
+  const summary = fileChanges?.summary && typeof fileChanges.summary === 'object' ? fileChanges.summary : {};
+  return {
+    summary: {
+      fileCount: Math.max(normalizedFiles.length, Number(summary.fileCount) || 0),
+      insertions: Math.max(0, Number(summary.insertions) || normalizedFiles.reduce((sum, file) => sum + file.insertions, 0)),
+      deletions: Math.max(0, Number(summary.deletions) || normalizedFiles.reduce((sum, file) => sum + file.deletions, 0)),
+    },
+    files: normalizedFiles,
+  };
+}
+
+function _renderMobileFileChangeRow(file) {
+  const canOpen = file.path && file.status !== 'deleted';
+  const kind = _mobileMediaKind({ path: file.path, name: file.displayPath });
+  return `
+    <div class="pm-file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}"
+      ${canOpen ? `data-pm-file-change-path="${escapeHtml(file.path)}" data-pm-file-change-name="${escapeHtml(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file')}" data-pm-file-change-kind="${escapeHtml(kind)}"` : 'aria-disabled="true"'}>
+      <div class="pm-file-change-main">
+        <span class="pm-file-change-status ${escapeHtml(file.status)}">${escapeHtml(file.binary ? 'binary' : file.status)}</span>
+        <span class="pm-file-change-path">${escapeHtml(file.displayPath)}</span>
+      </div>
+      <div class="pm-file-change-counts">
+        <span class="ins">+${file.insertions}</span>
+        <span class="del">-${file.deletions}</span>
+      </div>
+    </div>
+  `;
+}
+
+function _renderMobileFileChanges(fileChanges) {
+  const data = _normalizeMobileFileChanges(fileChanges);
+  if (!data) return '';
+  const visible = data.files.slice(0, 3);
+  const rest = data.files.slice(3);
+  const fileWord = data.summary.fileCount === 1 ? 'file' : 'files';
+  return `
+    <div class="pm-file-changes-card">
+      <div class="pm-file-changes-head">
+        <strong>${data.summary.fileCount} ${fileWord} changed</strong>
+        <span><em class="ins">+${data.summary.insertions}</em><em class="del">-${data.summary.deletions}</em></span>
+      </div>
+      <div class="pm-file-change-list">
+        ${visible.map(_renderMobileFileChangeRow).join('')}
+        ${rest.length ? `
+          <details class="pm-file-change-more">
+            <summary>View ${rest.length} more ${rest.length === 1 ? 'file' : 'files'}</summary>
+            ${rest.map(_renderMobileFileChangeRow).join('')}
+          </details>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
 function _renderChatMessageHtml(m, index = -1) {
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
@@ -1062,6 +1367,9 @@ function _renderChatMessageHtml(m, index = -1) {
   const b = m.body || {};
   let inner = '';
   if (b.sender) inner += `<span class="pm-sender">${escapeHtml(b.sender)}</span>`;
+  if (m.approvalRequest) {
+    inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
+  }
   if (m.streaming && Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length) {
     inner += _renderMobileLiveTrace(m.liveTraceEntries);
   }
@@ -1108,6 +1416,7 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   if (b.browseState) inner += _renderBrowseCard(b.browseState);
   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
+  inner += _renderMobileFileChanges(m.fileChanges);
   inner += _renderMobileProcess(m.processEntries || b.processEntries);
   if (m.time) inner += `<span class="pm-time">${escapeHtml(m.time)}</span>`;
   return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
@@ -1315,12 +1624,53 @@ function _buildMobileFileContextNote(uploadResults = []) {
 
 function _renderThread(threadEl) {
   _reindexMobileThread(__pmChat.thread);
-  threadEl.innerHTML = __pmChat.thread.map((msg, index) => _renderChatMessageHtml(msg, index)).join('');
+  threadEl.innerHTML = __pmChat.thread
+    .map((msg, index) => _isMobileHiddenVoiceDraftMessage(msg, index) ? '' : _renderChatMessageHtml(msg, index))
+    .join('');
   threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
     btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
   });
   _wireMobileProcessRunActions(threadEl);
   _wireMobileMediaCards(threadEl);
+  _wireMobileFileChangeRows(threadEl);
+}
+
+function _mobileChatScrollSnapshot(bodyEl, threshold = 72) {
+  if (!bodyEl) return { nearBottom: true, distanceFromBottom: 0 };
+  const distanceFromBottom = Math.max(0, bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight);
+  return {
+    nearBottom: distanceFromBottom <= threshold,
+    distanceFromBottom,
+  };
+}
+
+function _withMobileInstantScroll(bodyEl, fn) {
+  if (!bodyEl || typeof fn !== 'function') return;
+  const previous = bodyEl.style.scrollBehavior;
+  bodyEl.style.scrollBehavior = 'auto';
+  try {
+    fn();
+  } finally {
+    requestAnimationFrame(() => {
+      if (bodyEl) bodyEl.style.scrollBehavior = previous;
+    });
+  }
+}
+
+function _restoreMobileChatScroll(bodyEl, snapshot, { forceBottom = false } = {}) {
+  if (!bodyEl) return;
+  const snap = snapshot || _mobileChatScrollSnapshot(bodyEl);
+  const followBottom = forceBottom || snap.nearBottom;
+  const apply = () => {
+    if (followBottom) {
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+    } else {
+      const nextTop = bodyEl.scrollHeight - bodyEl.clientHeight - Number(snap.distanceFromBottom || 0);
+      bodyEl.scrollTop = Math.max(0, nextTop);
+    }
+  };
+  _withMobileInstantScroll(bodyEl, apply);
+  requestAnimationFrame(() => _withMobileInstantScroll(bodyEl, apply));
 }
 
 function _scheduleThreadRender(threadEl, bodyEl, key = 'chat', delay = 90) {
@@ -1329,23 +1679,40 @@ function _scheduleThreadRender(threadEl, bodyEl, key = 'chat', delay = 90) {
   if (__pmChat.renderTimers?.[timerKey]) return;
   __pmChat.renderTimers[timerKey] = setTimeout(() => {
     delete __pmChat.renderTimers[timerKey];
+    const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
     _renderThread(threadEl);
-    _scrollChat(bodyEl);
+    _restoreMobileChatScroll(bodyEl, scrollSnapshot);
   }, Math.max(16, Number(delay) || 90));
 }
 
-function _flushThreadRender(threadEl, bodyEl, key = 'chat') {
+function _flushThreadRender(threadEl, bodyEl, key = 'chat', options = {}) {
   const timerKey = String(key || 'chat');
   if (__pmChat.renderTimers?.[timerKey]) {
     clearTimeout(__pmChat.renderTimers[timerKey]);
     delete __pmChat.renderTimers[timerKey];
   }
+  const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
   _renderThread(threadEl);
-  _scrollChat(bodyEl);
+  _restoreMobileChatScroll(bodyEl, scrollSnapshot, options);
+}
+
+function _renderMobileChatSessionNow(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const thread = sid ? __pmChat.threads?.[sid] : null;
+  if (sid && Array.isArray(thread)) {
+    __pmChat.activeSessionId = sid;
+    __pmChat.thread = thread;
+  } else {
+    _activeMobileThread();
+  }
+  const threadEl = document.getElementById('pm-chat-thread');
+  const bodyEl = document.getElementById('pm-chat-body');
+  if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || __pmChat.activeSessionId || 'chat');
 }
 
 function _scrollChat(bodyEl) {
-  if (bodyEl) bodyEl.scrollTop = bodyEl.scrollHeight;
+  if (!bodyEl) return;
+  _restoreMobileChatScroll(bodyEl, null, { forceBottom: true });
 }
 
 const PM_CHAT_SLASH_COMMANDS = [
@@ -1573,9 +1940,33 @@ function _wireMobileMediaCards(root = document) {
   });
 }
 
+function _wireMobileFileChangeRows(root = document) {
+  root?.querySelectorAll?.('[data-pm-file-change-path]')?.forEach((row) => {
+    if (row.dataset.pmFileChangeWired === '1') return;
+    row.dataset.pmFileChangeWired = '1';
+    row.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const path = row.getAttribute('data-pm-file-change-path') || '';
+      const name = row.getAttribute('data-pm-file-change-name') || path.split(/[\\/]/).pop() || 'File';
+      const kind = row.getAttribute('data-pm-file-change-kind') || _mobileMediaKind({ path, name });
+      _openMobileMediaTarget({
+        kind,
+        path,
+        name,
+        src: path ? _mobileMediaUrl({ path }, 'inline') : '',
+        download: path ? _mobileMediaUrl({ path }, 'download') : '',
+      });
+    });
+  });
+}
+
 export function renderChatPage(page, { navigate, sessionId = null }) {
   _installMobileApprovalBridge();
-  let requestedSession = String(sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  // When no explicit session ID is in the URL, always open a fresh new chat.
+  // Using activeSessionId here caused hot-restart notifications to hijack the
+  // chat tab and open an old session instead of the blank new-chat state.
+  let requestedSession = String(sessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   __pmChat.activeSessionId = requestedSession;
   if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
   _activeMobileThread();
@@ -1602,9 +1993,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       </button>
       <div class="pm-composer-row">
         <button type="button" class="pm-icon-btn" id="pm-attach-btn" aria-label="Attach files">${ICONS.paperclip}</button>
-        <input class="pm-composer-input" id="pm-composer-input" placeholder="Type a message…" aria-label="Message" autocomplete="off" />
+        <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
+      </div>
+      <div class="pm-chat-voice-shell" id="pm-chat-voice-shell" hidden>
+        <button type="button" class="pm-chat-voice-close" id="pm-chat-voice-close" aria-label="Exit voice mode">&times;</button>
+        <div class="pm-chat-voice-inline" id="pm-chat-voice-inline" hidden></div>
       </div>
     </form>
   `;
@@ -1619,11 +2014,33 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const sendBtn  = page.querySelector('#pm-send-btn');
   const attachBtn = page.querySelector('#pm-attach-btn');
   const micBtn = page.querySelector('#pm-chat-mic-btn');
+  const chatVoiceShell = page.querySelector('#pm-chat-voice-shell');
+  const chatVoiceClose = page.querySelector('#pm-chat-voice-close');
+  const chatVoiceHost = page.querySelector('#pm-chat-voice-inline');
   const fileInput = page.querySelector('#pm-file-input');
   const attachTray = page.querySelector('#pm-attach-tray');
   const commandChip = page.querySelector('#pm-chat-command-chip');
 
   _pmRefreshSlashChrome(page, input);
+
+  const resizeComposerInput = () => {
+    if (!input) return;
+    const maxHeight = Number(input.dataset.maxHeight || 148);
+    input.style.height = 'auto';
+    const nextHeight = Math.min(input.scrollHeight || 0, maxHeight);
+    input.style.height = `${Math.max(0, nextHeight)}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  };
+  const resetComposerInput = () => {
+    if (!input) return;
+    input.value = '';
+    input.style.height = '';
+    input.style.overflowY = 'hidden';
+    requestAnimationFrame(resizeComposerInput);
+  };
+  requestAnimationFrame(resizeComposerInput);
+  requestAnimationFrame(() => updateChatComposerSpace());
+
 
   function getPendingAttachments() {
     const sid = requestedSession;
@@ -1650,13 +2067,24 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   _scrollChat(body);
   renderPendingAttachments();
 
+  function scheduleMobileRunRecovery(delay = 2500, { force = false, fullRefresh = false } = {}) {
+    const sid = String(requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
+    const remembered = _readMobileActiveRun(sid);
+    const busy = !!(__pmChat.activeRuns?.[sid]?.busy || __pmChat.drawerRunSessionIds?.has?.(sid));
+    if (!force && !remembered && !busy) return;
+    if (__pmChat.recoverTimer) clearTimeout(__pmChat.recoverTimer);
+    __pmChat.recoverTimer = setTimeout(() => refreshMobileRunRecovery({ silent: true, force, fullRefresh }), Math.max(250, Number(delay) || 2500));
+  }
+
   function updateOnlineStatus() {
     const pill = page.querySelector('.pm-online');
     if (!pill) return;
+    const wasOffline = pill.classList.contains('offline') || pill.textContent === 'Offline';
     loadGatewayStatus()
       .then(() => {
         pill.textContent = 'Online';
         pill.classList.remove('offline');
+        if (wasOffline) scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
       })
       .catch(() => {
         pill.textContent = 'Offline';
@@ -1675,13 +2103,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         const history = Array.isArray(session?.history) ? session.history : [];
         const localThread = __pmChat.threads[requestedSession] || [];
         __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
-          history.map((msg, index) => _mapServerMessageToMobile(msg, index)),
+          _mapServerHistoryToMobile(history),
           localThread,
         );
         _activeMobileThread();
         _renderThread(threadEl);
         _scrollChat(body);
-        refreshMobileRunRecovery({ silent: true });
+        refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: true });
       })
       .catch((err) => {
         if (__pmChat.activeSessionId !== requestedSession) return;
@@ -1689,33 +2117,70 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       });
   }
 
-  async function refreshMobileRunRecovery({ silent = false } = {}) {
+  async function refreshMobileRunRecovery({ silent = false, force = false, fullRefresh = false } = {}) {
     const remembered = _readMobileActiveRun(requestedSession);
     try {
       const status = await loadMobileChatRunStatus(requestedSession);
-      if (!remembered && !status?.active) return;
+      if (!force && !remembered && !status?.active) return;
+      // Draft new-chat session has no server-side history — skip even when force=true
+      if (requestedSession === MOBILE_CHAT_SESSION_ID && !remembered && !status?.active) return;
       if (__pmChat.activeSessionId !== requestedSession) return;
+
+      if (fullRefresh || force) {
+        const session = await loadMobileChatSession(requestedSession).catch(() => null);
+        const history = Array.isArray(session?.history) ? session.history : [];
+        const localThread = __pmChat.threads[requestedSession] || [];
+        if (history.length) {
+          __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
+            _mapServerHistoryToMobile(history),
+            localThread,
+          );
+          _activeMobileThread();
+        }
+        const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
+        (Array.isArray(pendingApprovals) ? pendingApprovals : [])
+          .filter((approval) => {
+            const sid = String(approval?.sessionId || approval?.sourceSessionId || '').trim();
+            return !sid || sid === requestedSession;
+          })
+          .forEach((approval) => _upsertMobilePendingApproval(approval));
+      }
+
       const activeThread = _activeMobileThread();
       let aiTurn = _findLatestAssistantTurn(activeThread);
       if (status?.active) {
-        if (!aiTurn || !aiTurn.streaming) {
+        if (!aiTurn || !aiTurn.streaming || fullRefresh || force) {
+          if (aiTurn?.streaming && (fullRefresh || force)) {
+            const existingIndex = activeThread.indexOf(aiTurn);
+            if (existingIndex >= 0) activeThread.splice(existingIndex, 1);
+          }
           aiTurn = { role: 'ai', streaming: true, time: '', timestamp: Date.now(), body: { sender: 'Prometheus', text: '' }, content: '' };
           activeThread.push(aiTurn);
         }
         aiTurn.streaming = true;
-        const lastSeq = Math.max(
+        const lastSeq = (fullRefresh || force) ? 0 : Math.max(
           Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
           Number(remembered?.lastSeq || 0) || 0,
         );
+        if ((fullRefresh || force) && __pmChat.activeRuns?.[requestedSession]) {
+          __pmChat.activeRuns[requestedSession] = { ...__pmChat.activeRuns[requestedSession], lastSeq: 0, streamId: '' };
+        }
         const replay = await loadMobileChatStreamReplay(requestedSession, lastSeq).catch(() => null);
         const events = Array.isArray(replay?.events) ? replay.events : [];
+        let terminal = '';
         for (const frame of events) {
           const applied = applyMobileChatStreamEvent(aiTurn, replayFrameToEvent(frame));
-          if (applied === 'done' || applied === 'error') break;
+          if (applied === 'done' || applied === 'error') {
+            terminal = applied;
+            break;
+          }
         }
-        if (!events.length) {
-          _appendMobileProcess(aiTurn, 'info', 'Connected to the live turn. Waiting for the next update.');
-          _appendMobileLiveTrace(aiTurn, 'tool', 'Connecting to live run...');
+        if (terminal) {
+          finalizeMobileLiveAiTurn(aiTurn);
+          return;
+        }
+        if (!events.length && !String(aiTurn.body?.text || '').trim() && !(Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.length)) {
+          _appendMobileProcess(aiTurn, 'info', 'Live run is connected. Waiting for the next update.');
         }
         _rememberMobileActiveRun(requestedSession, {
           startedAt: status.run?.startedAt || remembered?.startedAt,
@@ -1733,7 +2198,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       if (history.length) {
         const localThread = __pmChat.threads[requestedSession] || [];
         __pmChat.threads[requestedSession] = _mergeMobileThreadLocalArtifacts(
-          history.map((msg, index) => _mapServerMessageToMobile(msg, index)),
+          _mapServerHistoryToMobile(history),
           localThread,
         );
         _activeMobileThread();
@@ -1751,11 +2216,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         setTimeout(() => sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [] }), 0);
       }
     } catch (err) {
+      if (_readMobileActiveRun(requestedSession)?.disconnected) scheduleMobileRunRecovery(2500, { fullRefresh });
       if (!silent) pmToast(`Recovery check failed: ${err.message || err}`, 'warn');
     }
   }
 
-  refreshMobileRunRecovery({ silent: true });
+  refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: true });
   if (requestedSession && requestedSession !== MOBILE_CHAT_SESSION_ID) {
     markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
   }
@@ -1770,13 +2236,17 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
     const sessionBusy = !!(__pmChat.activeRuns?.[activeSid]?.busy || __pmChat.activeRuns?.[sid]?.busy);
     const shouldAbort = sessionBusy && !_composerHasOutboundContent();
+    const shouldVoice = !sessionBusy && !_composerHasOutboundContent();
     sendBtn.disabled = false;
     sendBtn.classList.toggle('is-abort', shouldAbort);
-    sendBtn.title = shouldAbort ? 'Stop Prometheus' : sessionBusy ? 'Queue message' : 'Send';
+    sendBtn.classList.toggle('is-voice', shouldVoice);
+    sendBtn.title = shouldAbort ? 'Stop Prometheus' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send';
     sendBtn.innerHTML = shouldAbort
       ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>`
+      : shouldVoice
+        ? `<img class="pm-send-voice-icon" src="${PM_CHAT_VOICE_ICON_SRC}" alt="" aria-hidden="true" />`
       : ICONS.send;
-    sendBtn.setAttribute('aria-label', shouldAbort ? 'Stop' : sessionBusy ? 'Queue message' : 'Send');
+    sendBtn.setAttribute('aria-label', shouldAbort ? 'Stop' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send');
   }
 
   function setBusy(busy, sessionForBusy = requestedSession) {
@@ -1820,6 +2290,266 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
 
   function renderThreadSoon() {
     _scheduleThreadRender(threadEl, body, requestedSession);
+  }
+
+  function _currentChatVoiceSessionLabel() {
+    const sid = String(requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
+    if (sid === MOBILE_CHAT_SESSION_ID) return 'Mobile - New Chat';
+    const firstText = String((__pmChat.threads?.[sid] || []).find((turn) => turn?.role === 'user')?.body?.text || '').trim();
+    return firstText ? `Mobile - ${firstText.slice(0, 42)}` : 'Mobile - Chat';
+  }
+
+  function _setChatVoiceTarget() {
+    const sid = String(requestedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    __pmVoice.targetSessionId = sid;
+    __pmVoice.targetSessionLabel = _currentChatVoiceSessionLabel();
+    __pmVoice.targetSessionChannel = 'mobile';
+    __pmVoice.targetSessionForced = true;
+    if (__pmVoice.activeVoiceRuntime && String(__pmVoice.activeVoiceRuntime.sessionId || '').trim() !== sid) {
+      __pmVoice.activeVoiceRuntime.isStreamActive = false;
+      __pmVoice.activeVoiceRuntime = null;
+    }
+    if (__pmRealtimeAgent?.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
+      _mobileRealtimeAgentDisableAlwaysListening();
+    }
+  }
+
+  async function _ensureChatVoiceRealSession() {
+    if (requestedSession !== MOBILE_CHAT_SESSION_ID) {
+      _setChatVoiceTarget();
+      return requestedSession;
+    }
+    const actualSessionId = createMobileChatSessionId();
+    __pmChat.threads[actualSessionId] = Array.isArray(__pmChat.threads[MOBILE_CHAT_SESSION_ID])
+      ? __pmChat.threads[MOBILE_CHAT_SESSION_ID]
+      : [];
+    __pmChat.attachments[actualSessionId] = Array.isArray(__pmChat.attachments[MOBILE_CHAT_SESSION_ID])
+      ? __pmChat.attachments[MOBILE_CHAT_SESSION_ID]
+      : [];
+    __pmChat.threads[MOBILE_CHAT_SESSION_ID] = [];
+    __pmChat.attachments[MOBILE_CHAT_SESSION_ID] = [];
+    __pmChat.activeSessionId = actualSessionId;
+    __pmChat.thread = __pmChat.threads[actualSessionId];
+    requestedSession = actualSessionId;
+    __pmVoice.targetSessionId = actualSessionId;
+    __pmVoice.targetSessionLabel = 'Mobile - Chat';
+    __pmVoice.targetSessionChannel = 'mobile';
+    __pmVoice.targetSessionForced = true;
+    if (__pmVoice.activeVoiceRuntime) __pmVoice.activeVoiceRuntime.isStreamActive = false;
+    __pmVoice.activeVoiceRuntime = null;
+    if (__pmRealtimeAgent?.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== actualSessionId) {
+      _mobileRealtimeAgentDisableAlwaysListening();
+    }
+    try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(actualSessionId)}`); } catch {}
+    try {
+      await createMobileChatSession(actualSessionId, { title: 'New Chat' });
+    } catch (err) {
+      const msg = String(err?.message || err || '');
+      if (!/409|already exists|exists/i.test(msg)) console.warn('[mobile chat] failed to create voice chat session:', err);
+    }
+    invalidateMobileDrawerSessions('mobile');
+    _flushThreadRender(threadEl, body, actualSessionId);
+    return actualSessionId;
+  }
+
+  function _setChatVoiceActive(active) {
+    form?.classList.toggle('is-voice-active', !!active);
+    if (chatVoiceShell) chatVoiceShell.hidden = !active;
+    if (chatVoiceHost) chatVoiceHost.hidden = !active;
+    updateChatComposerSpace();
+  }
+
+  function updateChatComposerSpace() {
+    requestAnimationFrame(() => {
+      if (!body || !form) return;
+      const scrollSnapshot = _mobileChatScrollSnapshot(body);
+      const height = Math.ceil(form.getBoundingClientRect?.().height || 0);
+      const space = Math.max(170, height + 28);
+      body.style.setProperty('--pm-chat-composer-space', `${space}px`);
+      _restoreMobileChatScroll(body, scrollSnapshot);
+    });
+  }
+
+  // ----- Mobile keyboard (visualViewport) controller -----
+  // Goal: keep the chat shell (and tab bar) visually still, and float ONLY the
+  // composer above the on-screen keyboard.
+  //
+  // The hard part is iOS Safari: when the input is focused it scrolls the
+  // document to reveal it, which lifts the whole `position: fixed` shell up
+  // above the keyboard. iOS won't undo that scroll on its own (the user has to
+  // scroll the page back), and visualViewport events fire unreliably during the
+  // keyboard animation. So we (a) measure keyboard height from
+  // window.visualViewport, and (b) run a short requestAnimationFrame loop that
+  // forces the document back to the top every frame while the keyboard settles
+  // — effectively performing the "scroll back" the user was doing by hand.
+  const _pmKbApp = document.querySelector('.pm-app') || page;
+  let _pmKbRaf = 0;
+  let _pmKbWasOpen = false;
+  let _pmKbPinRaf = 0;
+  let _pmKbPinUntil = 0;
+  function _pmKbPinScroll() {
+    try {
+      if (window.pageYOffset) window.scrollTo(0, 0);
+      const de = document.scrollingElement || document.documentElement;
+      if (de && de.scrollTop) de.scrollTop = 0;
+      if (document.body && document.body.scrollTop) document.body.scrollTop = 0;
+    } catch {}
+  }
+  function _applyKeyboardOffset() {
+    _pmKbRaf = 0;
+    const vv = window.visualViewport;
+    if (!vv || !_pmKbApp) return;
+    // Keyboard height = layout viewport height minus the visible (visual)
+    // viewport height. The shell stays anchored to the layout viewport, so the
+    // composer only needs to float up by this amount.
+    const offset = Math.max(0, Math.round(window.innerHeight - vv.height));
+    // Ignore small deltas from Safari's collapsing URL bar; only treat a
+    // sizeable gap as a real keyboard.
+    const open = offset > 90;
+    _pmKbApp.style.setProperty('--pm-keyboard-offset', `${open ? offset : 0}px`);
+    _pmKbApp.classList.toggle('pm-keyboard-open', open);
+    // While the keyboard is open, keep the document pinned to the top so iOS
+    // can't leave the fixed shell lifted above the keyboard.
+    if (open) _pmKbPinScroll();
+    // When the keyboard first opens, keep the newest message visible above the
+    // composer if the user was already pinned near the bottom.
+    if (open && !_pmKbWasOpen) {
+      const snap = _mobileChatScrollSnapshot(body);
+      if (snap.nearBottom) requestAnimationFrame(() => _scrollChat(body));
+    }
+    _pmKbWasOpen = open;
+  }
+  function _scheduleKeyboardOffset() {
+    if (_pmKbRaf) return;
+    _pmKbRaf = requestAnimationFrame(_applyKeyboardOffset);
+  }
+  function _pmKbPinLoop() {
+    _pmKbPinRaf = 0;
+    _pmKbPinScroll();
+    _applyKeyboardOffset();
+    if (performance.now() < _pmKbPinUntil) {
+      _pmKbPinRaf = requestAnimationFrame(_pmKbPinLoop);
+    }
+  }
+  function _startKbPinLoop(ms = 700) {
+    _pmKbPinUntil = Math.max(_pmKbPinUntil, performance.now() + ms);
+    if (!_pmKbPinRaf) _pmKbPinRaf = requestAnimationFrame(_pmKbPinLoop);
+  }
+  const _onVvResize = () => { _scheduleKeyboardOffset(); _startKbPinLoop(400); };
+  const _onVvScroll = () => { _scheduleKeyboardOffset(); };
+  const _pmVisualViewport = window.visualViewport || null;
+  if (_pmVisualViewport) {
+    _pmVisualViewport.addEventListener('resize', _onVvResize);
+    _pmVisualViewport.addEventListener('scroll', _onVvScroll);
+  }
+  const _onComposerFocusKb = () => {
+    // Pin aggressively through the keyboard's open animation so the shell never
+    // ends up stuck above the keyboard waiting for a manual scroll.
+    _startKbPinLoop(800);
+  };
+  const _onComposerBlurKb = () => {
+    _pmKbPinUntil = 0;
+    setTimeout(_scheduleKeyboardOffset, 60);
+  };
+  input?.addEventListener('focus', _onComposerFocusKb);
+  input?.addEventListener('blur', _onComposerBlurKb);
+  function _teardownKeyboardController() {
+    if (_pmKbRaf) { cancelAnimationFrame(_pmKbRaf); _pmKbRaf = 0; }
+    if (_pmKbPinRaf) { cancelAnimationFrame(_pmKbPinRaf); _pmKbPinRaf = 0; }
+    _pmKbPinUntil = 0;
+    if (_pmVisualViewport) {
+      _pmVisualViewport.removeEventListener('resize', _onVvResize);
+      _pmVisualViewport.removeEventListener('scroll', _onVvScroll);
+    }
+    input?.removeEventListener('focus', _onComposerFocusKb);
+    input?.removeEventListener('blur', _onComposerBlurKb);
+    if (_pmKbApp) {
+      _pmKbApp.classList.remove('pm-keyboard-open');
+      _pmKbApp.style.removeProperty('--pm-keyboard-offset');
+    }
+  }
+
+  function _closeChatVoiceMode() {
+    chatVoiceHost?._pmCleanup?.();
+    if (chatVoiceHost) {
+      chatVoiceHost.innerHTML = '';
+      chatVoiceHost.hidden = true;
+      delete chatVoiceHost.dataset.pmVoiceMounted;
+    }
+    if (chatVoiceShell) chatVoiceShell.hidden = true;
+    form?.classList.remove('is-voice-active');
+    updateChatComposerSpace();
+    updateComposerSubmitState();
+  }
+
+  function _onChatVoiceUpdate(sessionId, detail = {}) {
+    const sid = String(sessionId || __pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID).trim();
+    if (sid && requestedSession === MOBILE_CHAT_SESSION_ID && sid !== MOBILE_CHAT_SESSION_ID) {
+      requestedSession = sid;
+      try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(sid)}`); } catch {}
+      invalidateMobileDrawerSessions('mobile');
+    }
+    if (!sid || sid === requestedSession || sid === __pmChat.activeSessionId) {
+      if (sid && __pmChat.threads?.[sid]) {
+        __pmChat.activeSessionId = sid;
+        __pmChat.thread = __pmChat.threads[sid];
+      } else {
+        _activeMobileThread();
+      }
+      if (detail?.force === true || detail?.reason === 'voice_turn_started' || detail?.reason === 'voice_session_created') {
+        _flushThreadRender(threadEl, body, sid || requestedSession);
+      } else {
+        renderThreadSoon();
+      }
+      updateComposerSubmitState(sid || requestedSession);
+      return;
+    }
+    if (detail?.force === true) {
+      if (__pmChat.threads?.[sid]) {
+        __pmChat.activeSessionId = sid;
+        __pmChat.thread = __pmChat.threads[sid];
+      }
+      _flushThreadRender(threadEl, body, sid);
+      updateComposerSubmitState(sid);
+    }
+  }
+
+  const previousVoiceUpdateBridge = window.__pmMobileChatVoiceUpdate;
+  window.__pmMobileChatVoiceUpdate = _onChatVoiceUpdate;
+  const _chatVoiceUpdateEventHandler = (event) => {
+    const update = event?.detail || {};
+    _onChatVoiceUpdate(update.sessionId, update);
+  };
+  window.addEventListener('pm-mobile-chat-voice-update', _chatVoiceUpdateEventHandler);
+  chatVoiceClose?.addEventListener('click', _closeChatVoiceMode);
+
+  async function _toggleChatVoiceMode({ autoStart = false } = {}) {
+    if (!chatVoiceHost) return;
+    if (autoStart) await _ensureChatVoiceRealSession();
+    _setChatVoiceTarget();
+    if (chatVoiceHost.hidden || !chatVoiceHost.dataset.pmVoiceMounted) {
+      _setChatVoiceActive(true);
+      chatVoiceHost.dataset.pmVoiceMounted = '1';
+      renderVoicePage(chatVoiceHost, {
+        navigate,
+        inline: true,
+        inlineChatSessionId: __pmVoice.targetSessionId,
+        inlineChatSessionLabel: __pmVoice.targetSessionLabel,
+        autoStart,
+      }).catch((err) => {
+        console.warn('[mobile chat] inline voice mount failed:', err);
+        pmToast('Could not start voice mode.', 'error');
+      }).finally(() => {
+        updateChatComposerSpace();
+      });
+      updateComposerSubmitState();
+      return;
+    }
+    _setChatVoiceActive(true);
+    const voiceMic = chatVoiceHost.querySelector('#pm-voice-mic');
+    if (autoStart && voiceMic) voiceMic.click();
+    updateChatComposerSpace();
+    updateComposerSubmitState();
   }
 
   async function syncMobileThreadHistory(history = _mobileHistoryForServer(), options = {}) {
@@ -2088,11 +2818,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       }
       case 'final':
         _collectMediaFromToolEvent(aiTurn, evt);
+        if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.text) aiTurn.body.text = String(evt.text);
         renderThreadSoon();
         return 'final';
       case 'done':
         _collectMediaFromToolEvent(aiTurn, evt);
+        if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.reply && !String(aiTurn.body.text || '').trim()) aiTurn.body.text = String(evt.reply);
         return 'done';
       case 'error':
@@ -2374,7 +3106,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
         __pmChat.attachments[busySessionId] = [];
         renderPendingAttachments();
       }
-      input.value = '';
+      resetComposerInput();
       _pmClearActiveSlashCommand(page, input, { focus: false });
       _renderMobileQueuedPromptsPanel(busySessionId);
       pmToast(`Queued prompt #${queue.length}. It will run automatically next.`, 'success');
@@ -2391,6 +3123,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       __pmChat.attachments[requestedSession] = [];
       try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(actualSessionId)}`); } catch {}
       requestedSession = actualSessionId;
+      __pmVoice.targetSessionId = actualSessionId;
+      __pmVoice.targetSessionLabel = _currentChatVoiceSessionLabel();
+      __pmVoice.targetSessionChannel = 'mobile';
+      __pmVoice.targetSessionForced = true;
+      if (__pmVoice.activeVoiceRuntime) __pmVoice.activeVoiceRuntime.isStreamActive = false;
+      __pmVoice.activeVoiceRuntime = null;
+      invalidateMobileDrawerSessions('mobile');
     }
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
@@ -2426,8 +3165,14 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       role: 'ai', streaming: true, time: '', timestamp: Date.now(),
       body: { sender: 'Prometheus', text: '' },
       content: '',
+      processEntries: [],
     };
     activeThread.push(aiTurn);
+    _appendMobileUserProcess(aiTurn, msg || 'Attached file(s)', {
+      stage: 'mobile_chat_user_message',
+      sessionId: actualSessionId,
+      clientRequestId,
+    });
     renderThreadNow();
 
     let stoppedByUser = false;
@@ -2498,8 +3243,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
           _appendMobileProcess(aiTurn, 'warn', message);
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
           pmToast('Connection dropped - recovery mode is on.', 'warn');
-          if (__pmChat.recoverTimer) clearTimeout(__pmChat.recoverTimer);
-          __pmChat.recoverTimer = setTimeout(() => refreshMobileRunRecovery({ silent: true }), 2500);
+          scheduleMobileRunRecovery(2500, { force: true });
         } else {
           aiTurn.body.text = (aiTurn.body.text ? aiTurn.body.text + '\n\n' : '') + `Warning: ${message}`;
           _appendMobileProcess(aiTurn, 'error', message);
@@ -2512,8 +3256,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       onDone: () => {
         if (!stoppedByUser && aiTurn.streaming && _readMobileActiveRun(actualSessionId)?.disconnected) {
           setBusy(true, actualSessionId);
-          if (__pmChat.recoverTimer) clearTimeout(__pmChat.recoverTimer);
-          __pmChat.recoverTimer = setTimeout(() => refreshMobileRunRecovery({ silent: true }), 2500);
+          scheduleMobileRunRecovery(2500, { force: true });
           return;
         }
         finishAiTurn();
@@ -2539,11 +3282,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     };
     __pmChat.abort = abortHandle;
   }
+  window.__pmMobileSendMessage = sendMessage;
 
-  const runRecoveryOnReturn = () => refreshMobileRunRecovery({ silent: true });
+  const runRecoveryOnReturn = () => scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
   const runRecoveryOnVisibility = () => {
     if (!document.hidden) runRecoveryOnReturn();
   };
+  const runRecoveryOnWsOpen = () => scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
   const onMainChatStreamEvent = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return;
     if (__pmChat.activeSessionId !== requestedSession) return;
@@ -2571,6 +3316,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     } else if (applied && applied !== 'duplicate') setBusy(true);
   };
   const onVoiceInterruptionEvent = (msg = {}) => {
+    if (msg?.isInterruption === false) return;
     const sid = String(msg.sessionId || '').trim();
     if (sid !== requestedSession) return;
     if (__pmChat.activeSessionId !== requestedSession) return;
@@ -2579,11 +3325,25 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     if (!aiTurn) return;
     const intent = String(msg.intent || 'unknown').trim() || 'unknown';
     const shouldAbort = msg.shouldAbortOriginalRun === true;
+    const transcript = String(msg.transcript || msg.currentUserPrompt || msg.userInterruptionTranscript || '').trim();
+    const classification = {
+      ...(msg.classification || {}),
+      intent,
+      shouldAbortOriginalRun: shouldAbort,
+    };
+    const eventId = String(msg.eventId || msg.steerEventId || '').trim();
+    const abortedBySplit = _applyVoiceInterruptionToMobileChat(sid, { ...msg, classification }, transcript);
+    if (abortedBySplit || (eventId && activeThread.some((turn) => String(turn?.voiceInterruptionEventId || '') === eventId))) {
+      setBusy(false);
+      renderThreadNow();
+      return;
+    }
     _appendMobileProcess(aiTurn, shouldAbort ? 'warn' : 'info', `Voice interruption: ${intent}`, {
       eventId: msg.eventId || '',
       runtimeId: msg.runtimeId || '',
       intent,
       shouldAbortOriginalRun: shouldAbort,
+      transcript,
     });
     if (shouldAbort && aiTurn.streaming && !__pmChat.activeRuns?.[requestedSession]?.abort) {
       const streamed = String(aiTurn.body?.text || aiTurn.content || '').trim();
@@ -2638,6 +3398,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   };
   window.addEventListener('focus', runRecoveryOnReturn);
   document.addEventListener('visibilitychange', runRecoveryOnVisibility);
+  wsEventBus?.on?.('ws:open', runRecoveryOnWsOpen);
+
   wsEventBus?.on?.('main_chat_stream_event', onMainChatStreamEvent);
   wsEventBus?.on?.('voice_interruption', onVoiceInterruptionEvent);
   wsEventBus?.on?.('voice_agent_tool_event', onVoiceAgentToolEvent);
@@ -2645,6 +3407,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   page._pmCleanup = () => {
     previousCleanup?.();
     window.removeEventListener('focus', runRecoveryOnReturn);
+    wsEventBus?.off?.('ws:open', runRecoveryOnWsOpen);
+
     document.removeEventListener('visibilitychange', runRecoveryOnVisibility);
     wsEventBus?.off?.('main_chat_stream_event', onMainChatStreamEvent);
     wsEventBus?.off?.('voice_interruption', onVoiceInterruptionEvent);
@@ -2653,6 +3417,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       clearTimeout(__pmChat.recoverTimer);
       __pmChat.recoverTimer = null;
     }
+    if (window.__pmMobileChatVoiceUpdate === _onChatVoiceUpdate) {
+      window.__pmMobileChatVoiceUpdate = previousVoiceUpdateBridge;
+    }
+    window.removeEventListener('pm-mobile-chat-voice-update', _chatVoiceUpdateEventHandler);
+    chatVoiceClose?.removeEventListener('click', _closeChatVoiceMode);
+    chatVoiceHost?._pmCleanup?.();
+    _teardownKeyboardController();
   };
 
   form.addEventListener('submit', (e) => {
@@ -2660,13 +3431,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     const text = _pmGetComposerValue(input);
     if (/^\/browse(\s|$)/i.test(text.trim())) {
       const path = text.trim().slice('/browse'.length).trim();
-      input.value = '';
+      resetComposerInput();
       _pmClearActiveSlashCommand(page, input, { focus: false });
       handleBrowseCommand(path);
       return;
     }
     if (normalizeBareSlashCommand(text)) {
-      input.value = '';
+      resetComposerInput();
       _pmClearActiveSlashCommand(page, input, { focus: false });
       handleImmediateSlashCommand(text);
       return;
@@ -2676,10 +3447,18 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     const activeAbort = __pmChat.activeRuns?.[activeSid]?.abort || __pmChat.activeRuns?.[requestedSession]?.abort;
     if ((__pmChat.activeRuns?.[activeSid]?.busy || __pmChat.activeRuns?.[requestedSession]?.busy) && !text.trim() && !hasAttachments) {
       activeAbort?.abort?.();
+      resizeComposerInput();
       updateComposerSubmitState();
       return;
     }
-    input.value = '';
+    if (!text.trim() && !hasAttachments) {
+      _toggleChatVoiceMode({ autoStart: true }).catch((err) => {
+        console.warn('[mobile chat] voice mode start failed:', err);
+        pmToast('Could not start voice mode.', 'error');
+      });
+      return;
+    }
+    resetComposerInput();
     _pmClearActiveSlashCommand(page, input, { focus: false });
     updateComposerSubmitState();
     sendMessage(text);
@@ -2728,6 +3507,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   });
 
   input?.addEventListener('input', () => {
+    resizeComposerInput();
     _pmHandleSlashInput(page, input);
     updateComposerSubmitState();
   });
@@ -2735,6 +3515,12 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     const suggestions = _pmSlashCommandSuggestions(input.value);
     const popoverOpen = !page.querySelector('#pm-chat-slash-popover')?.hidden && suggestions.length > 0;
     if (!popoverOpen) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        if (typeof form.requestSubmit === 'function') form.requestSubmit();
+        else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        return;
+      }
       if (e.key === 'Escape' && pmActiveSlashCommand) {
         e.preventDefault();
         _pmClearActiveSlashCommand(page, input);
@@ -2863,6 +3649,27 @@ const SERVER_VOICE_FALLBACKS = {
   openai_realtime: REALTIME_VOICE_OPTIONS.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) })),
 };
 
+function _voicePresetForProviders(inputProvider, outputProvider) {
+  const input = String(inputProvider || '').trim();
+  const output = String(outputProvider || '').trim();
+  if (input === 'openai_realtime' && output === 'openai_realtime') return 'openai_realtime';
+  if (input === 'xai' && output === 'xai') return 'xai';
+  if ((input === 'browser' || input === 'auto') && (output === 'browser' || output === 'auto')) return 'default';
+  return 'custom';
+}
+
+function _inputProviderForMode(mode) {
+  if (mode === 'openai_realtime') return 'openai_realtime';
+  if (mode === 'xai') return 'xai';
+  return 'browser';
+}
+
+function _outputProviderForMode(mode) {
+  if (mode === 'openai_realtime') return 'openai_realtime';
+  if (mode === 'xai') return 'xai';
+  return 'browser';
+}
+
 function _loadVoiceSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(PM_VOICE_SETTINGS_KEY) || '{}');
@@ -2870,33 +3677,287 @@ function _loadVoiceSettings() {
       saved.voiceMode ||
       (saved.sttProvider === 'openai_realtime' || saved.ttsProvider === 'openai_realtime' ? 'openai_realtime' :
         (saved.sttProvider === 'xai' || saved.ttsProvider === 'xai' ? 'xai' : 'default'));
+    const listenMode = ['push_to_speak', 'always_listening'].includes(saved.listenMode) ? saved.listenMode : 'push_to_speak';
+    const sttProvider = ['browser', 'openai_realtime', 'xai'].includes(saved.sttProvider)
+      ? saved.sttProvider
+      : _inputProviderForMode(legacyMode);
+    const ttsProvider = ['browser', 'openai_realtime', 'xai'].includes(saved.ttsProvider)
+      ? saved.ttsProvider
+      : _outputProviderForMode(legacyMode);
+    const voiceMode = saved.voiceMode === 'custom' ? 'custom' : _voicePresetForProviders(sttProvider, ttsProvider);
     return {
-      voiceMode: legacyMode,
-      sttProvider: saved.sttProvider || 'auto',
-      ttsProvider: saved.ttsProvider || 'auto',
+      voiceMode,
+      sttProvider,
+      ttsProvider,
       realtimeVoice: saved.realtimeVoice || 'marin',
       realtimeSpeed: Number(saved.realtimeSpeed || 1.05),
       serverVoice: saved.serverVoice || '',
       xaiSpeed: Number(saved.xaiSpeed || saved.realtimeSpeed || 1.0),
-      dictation: saved.dictation || 'milestone',
+      dictation: saved.dictation || 'quiet',
+      listenMode,
+      wakePhrase: listenMode === 'always_listening' ? _cleanMobileWakePhrase(saved.wakePhrase || '') : '',
+      wakeGateActive: listenMode === 'always_listening' && saved.wakeGateActive === true,
       sttProviderLocked: saved.sttProviderLocked === true,
+      autoProviderDefault: saved.autoProviderDefault || '',
+      voiceAgentRealtimeAgent: saved.voiceAgentRealtimeAgent !== false,
+      voiceAgentXaiRealtime: saved.voiceAgentXaiRealtime === true,
     };
   } catch {
-    return { voiceMode: 'default', sttProvider: 'auto', ttsProvider: 'auto', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'milestone', sttProviderLocked: false };
+    return { voiceMode: 'default', sttProvider: 'browser', ttsProvider: 'browser', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: false, autoProviderDefault: '', voiceAgentRealtimeAgent: true, voiceAgentXaiRealtime: false };
   }
 }
 
 function _saveVoiceSettings(settings) {
   __pmVoice.settings = { ...__pmVoice.settings, ...settings };
-  __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'milestone';
+  __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
   try { localStorage.setItem(PM_VOICE_SETTINGS_KEY, JSON.stringify(__pmVoice.settings)); } catch {}
+}
+
+function _mobileVoiceDefaultProviderFromStatus(status) {
+  const realtime = status?.realtime || {};
+  const sttProviders = Array.isArray(status?.voice?.sttProviders) ? status.voice.sttProviders : [];
+  const ttsProviders = Array.isArray(status?.voice?.ttsProviders) ? status.voice.ttsProviders : [];
+  const openAiReady = !!(realtime?.configured && (realtime?.oauthConfigured || realtime?.apiKeyConfigured));
+  if (openAiReady) return 'openai_realtime';
+  const xaiReady =
+    sttProviders.some(p => p?.configured && p?.id === 'xai') &&
+    ttsProviders.some(p => p?.configured && p?.id === 'xai');
+  return xaiReady ? 'xai' : 'default';
+}
+
+function _applyMobileVoiceProviderDefaults(status) {
+  const provider = _mobileVoiceDefaultProviderFromStatus(status);
+  if (provider === 'default') return false;
+  const settings = __pmVoice.settings || {};
+  const currentMode = String(settings.voiceMode || 'default');
+  const autoProviderDefault = String(settings.autoProviderDefault || '');
+  const isDefaultRoute =
+    !settings.sttProviderLocked ||
+    autoProviderDefault ||
+    currentMode === 'default' ||
+    (
+      String(settings.sttProvider || 'browser') === 'browser' &&
+      String(settings.ttsProvider || 'browser') === 'browser'
+    );
+  if (!isDefaultRoute) return false;
+  if (
+    currentMode === provider &&
+    settings.listenMode === 'always_listening' &&
+    autoProviderDefault === provider
+  ) return false;
+  _saveVoiceSettings({
+    voiceMode: provider,
+    sttProvider: _inputProviderForMode(provider),
+    ttsProvider: _outputProviderForMode(provider),
+    listenMode: 'always_listening',
+    wakeGateActive: false,
+    sttProviderLocked: true,
+    autoProviderDefault: provider,
+    serverVoice: provider === 'xai' ? (settings.serverVoice || 'eve') : '',
+  });
+  return true;
+}
+
+function _normalizeMobileWakePhrase(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _cleanMobileWakePhrase(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,.:;"'!?-]+|[\s,.:;"'!?-]+$/g, '')
+    .trim()
+    .slice(0, 80);
+}
+
+function _stripMobileWakeCommandPunctuation(value) {
+  return _cleanMobileWakePhrase(String(value || '').replace(/\b(?:please|thanks|thank you)\b/gi, ''));
+}
+
+function _parseMobileWakePhraseSettingCommand(value) {
+  const source = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!source) return null;
+  const patterns = [
+    /\bset\s+(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:to|as)\s+(.+)$/i,
+    /\b(?:make|change)\s+(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:to|as)\s+(.+)$/i,
+    /\b(?:my\s+|the\s+)?wake\s+(?:phrase|word)\s+(?:is|should\s+be)\s+(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    const phrase = _stripMobileWakeCommandPunctuation(match?.[1] || '');
+    if (phrase) return { kind: 'set_wake_phrase', phrase };
+  }
+  return null;
+}
+
+function _isMobileQuietModeCommand(value) {
+  const normalized = _normalizeMobileWakePhrase(value);
+  if (!normalized) return false;
+  const command = normalized
+    .replace(/^(?:(?:okay|ok|alright|all right|great|cool|perfect|thanks|thank you|now|please)\s+)+/g, '')
+    .replace(/^prometheus\s+please\s+/g, 'prometheus ')
+    .replace(/\s+(?:please|thanks|thank you)$/g, '')
+    .trim();
+  return [
+    /^prometheus\s+quiet$/,
+    /^quiet\s+prometheus$/,
+    /^(?:be|go|stay|get|keep|become)\s+quiet\s+prometheus$/,
+    /^prometheus\s+(?:be\s+quiet|go\s+quiet|quiet|sleep)$/,
+    /^prometheus\s+stop\s+listening$/,
+    /^(?:turn\s+on|enter|go\s+into|start)\s+quiet\s+mode$/,
+    /^(?:prometheus\s+)?(?:now\s+)?be\s+quiet$/,
+  ].some((pattern) => pattern.test(command));
+}
+
+function _isMobileWakeUnlockCommand(value) {
+  const normalized = _normalizeMobileWakePhrase(value);
+  if (!normalized) return false;
+  return (
+    /\bprometheus\s+(?:unlock|wake\s+up|listen\s+normally)\b/.test(normalized)
+    || /\b(?:unlock|wake\s+up)\s+prometheus\b/.test(normalized)
+    || /\b(?:turn|switch)\s+off\s+(?:the\s+)?wake\s+(?:phrase|word)\b/.test(normalized)
+    || /\b(?:disable|clear|remove|reset)\s+(?:the\s+)?wake\s+(?:phrase|word)\b/.test(normalized)
+  );
+}
+
+function _applyVoiceRuntimeDirective(directive) {
+  const action = String(directive?.action || '');
+  if (action === 'set_wake_phrase') {
+    const wakePhrase = _cleanMobileWakePhrase(directive.wakePhrase || '');
+    if (!wakePhrase) return false;
+    _saveVoiceSettings({ wakePhrase, wakeGateActive: false });
+    try { pmToast(`Wake phrase set to "${wakePhrase}"`, 'success'); } catch {}
+    return true;
+  }
+  if (action === 'clear_wake_phrase') {
+    _saveVoiceSettings({ wakePhrase: '', wakeGateActive: false });
+    try { pmToast('Wake phrase cleared', 'success'); } catch {}
+    return true;
+  }
+  if (action === 'set_quiet_until') {
+    const wakePhrase = _cleanMobileWakePhrase(directive.wakePhrase || '');
+    if (!wakePhrase) {
+      try { pmToast('Wake phrase needed', 'Say "set my wake phrase to ..." first.', 'info'); } catch {}
+      _voiceSetStatus('Wake phrase needed', 'Say “set my wake phrase to ...” first');
+      return false;
+    }
+    _saveVoiceSettings({ wakePhrase, wakeGateActive: true });
+    _voiceSetStatus('Quiet mode', `Say "${wakePhrase}" to wake Prometheus`);
+    try { pmToast(`Quiet until "${wakePhrase}"`, 'info'); } catch {}
+    return true;
+  }
+  if (action === 'enter_quiet_mode') {
+    const wakePhrase = _cleanMobileWakePhrase(directive.wakePhrase || __pmVoice?.settings?.wakePhrase || '');
+    if (!wakePhrase) {
+      try { pmToast('Wake phrase needed', 'Say "set my wake phrase to ..." first.', 'info'); } catch {}
+      _voiceSetStatus('Wake phrase needed', 'Say “set my wake phrase to ...” first');
+      return false;
+    }
+    _saveVoiceSettings({ wakePhrase, wakeGateActive: true });
+    _voiceSetStatus('Quiet mode', `Say "${wakePhrase}" to wake Prometheus`);
+    try { pmToast(`Quiet until "${wakePhrase}"`, 'info'); } catch {}
+    return true;
+  }
+  return false;
+}
+
+function _applyVoiceRuntimeDirectives(result, options = {}) {
+  const directives = Array.isArray(result?.runtimeDirectives) ? result.runtimeDirectives : [];
+  let applied = false;
+  directives.forEach((directive) => {
+    const afterReply = directive?.activateAfterReply === true || directive?.activate_after_reply === true;
+    if (options.onlyAfterReply === true && !afterReply) return;
+    if (options.deferAfterReply === true && afterReply) {
+      __pmVoice.pendingRuntimeDirectivesAfterReply = Array.isArray(__pmVoice.pendingRuntimeDirectivesAfterReply)
+        ? __pmVoice.pendingRuntimeDirectivesAfterReply
+        : [];
+      __pmVoice.pendingRuntimeDirectivesAfterReply.push(directive);
+      return;
+    }
+    applied = _applyVoiceRuntimeDirective(directive) || applied;
+  });
+  return applied;
+}
+
+function _applyPendingVoiceRuntimeDirectivesAfterReply() {
+  const pending = Array.isArray(__pmVoice.pendingRuntimeDirectivesAfterReply)
+    ? __pmVoice.pendingRuntimeDirectivesAfterReply.splice(0)
+    : [];
+  let applied = false;
+  pending.forEach((directive) => {
+    applied = _applyVoiceRuntimeDirective(directive) || applied;
+  });
+  return applied;
+}
+
+let mobileVoiceWorkerContextPacketCache = null;
+let mobileVoiceWorkerContextPacketFetchedAt = 0;
+let mobileVoiceWorkerContextPacketPromise = null;
+let xaiWarmAudioContext = null;
+
+function _getCachedMobileVoiceWorkerContextPacket(sessionId) {
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const packet = mobileVoiceWorkerContextPacketCache;
+  const ageMs = Date.now() - Number(mobileVoiceWorkerContextPacketFetchedAt || 0);
+  if (!packet || String(packet.sessionId || '') !== sid || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > 10_000) return null;
+  return packet;
+}
+
+async function _prefetchMobileVoiceWorkerContextPacket(sessionId, options = {}) {
+  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'default').trim() || 'default';
+  const cached = _getCachedMobileVoiceWorkerContextPacket(sid);
+  if (cached && options.force !== true) return cached;
+  if (mobileVoiceWorkerContextPacketPromise && options.force !== true) return mobileVoiceWorkerContextPacketPromise;
+  mobileVoiceWorkerContextPacketPromise = (async () => {
+    try {
+      const result = await mobileGatewayFetch('/api/voice-agent/context', {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionId: sid,
+          source: String(options.source || 'mobile_voice_context_prefetch'),
+          voiceMode: String(__pmVoice?.settings?.voiceMode || 'default'),
+          originalUserPrompt: String(options.originalUserPrompt || ''),
+        }),
+      });
+      if (!result?.success && !result?.ok) return null;
+      if (!result?.contextPacket) return null;
+      mobileVoiceWorkerContextPacketCache = result.contextPacket;
+      mobileVoiceWorkerContextPacketFetchedAt = Date.now();
+      _voiceDebug?.('voice-context-prefetch-ok', { sessionId: sid, source: options.source || '', elapsedMs: result?.timings?.totalMs || null });
+      return mobileVoiceWorkerContextPacketCache;
+    } catch (err) {
+      console.warn('[voice] mobile context packet prefetch failed', err);
+      _voiceDebug?.('voice-context-prefetch-error', { sessionId: sid, source: options.source || '', message: String(err?.message || err).slice(0, 300) });
+      return null;
+    } finally {
+      mobileVoiceWorkerContextPacketPromise = null;
+    }
+  })();
+  return mobileVoiceWorkerContextPacketPromise;
+}
+
+function _prewarmMobileVoiceWorkerContext(options = {}) {
+  const sid = String(options.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
+  if (!sid) return;
+  _prefetchMobileVoiceWorkerContextPacket(sid, options).catch(() => {});
+}
+
+function _getMobileVoiceWorkerContextPacketForTurn(sessionId, options = {}) {
+  const sid = String(sessionId || 'default').trim() || 'default';
+  const cached = _getCachedMobileVoiceWorkerContextPacket(sid);
+  if (!cached) _prefetchMobileVoiceWorkerContextPacket(sid, options).catch(() => {});
+  return cached;
 }
 
 // Persistent voice state across navigation.
 const __pmVoice = (window.__pmVoice = window.__pmVoice || {
   recent: [],          // [{id, request, currentTool, finalText, toolStream: [], status, ts, expanded}]
   lastAi: '',          // last final response text
-  dictation: 'milestone', // 'quiet' | 'milestone'
+  dictation: 'quiet', // 'quiet' | 'milestone'
   settings: _loadVoiceSettings(),
   provider: null,      // detected provider snapshot
   voiceStatus: null,
@@ -2930,14 +3991,22 @@ const __pmVoice = (window.__pmVoice = window.__pmVoice || {
   previewTimer: null,
 });
 __pmVoice.settings = { ..._loadVoiceSettings(), ...(__pmVoice.settings || {}) };
-if (!['default', 'openai_realtime', 'xai'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'default';
-if (!__pmVoice.settings.sttProviderLocked && !['auto', 'browser', 'openai_realtime'].includes(__pmVoice.settings.sttProvider)) {
-  __pmVoice.settings.sttProvider = 'auto';
-}
-if (__pmVoice.settings.ttsProvider === 'browser') __pmVoice.settings.ttsProvider = 'auto';
-__pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'milestone';
+if (!['default', 'openai_realtime', 'xai', 'custom'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'default';
+if (!['browser', 'openai_realtime', 'xai'].includes(__pmVoice.settings.sttProvider)) __pmVoice.settings.sttProvider = _inputProviderForMode(__pmVoice.settings.voiceMode);
+if (!['browser', 'openai_realtime', 'xai'].includes(__pmVoice.settings.ttsProvider)) __pmVoice.settings.ttsProvider = _outputProviderForMode(__pmVoice.settings.voiceMode);
+__pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
 
 function _voiceSetStatus(s, hint) {
+  if (
+    __pmVoice?.settings?.listenMode === 'always_listening'
+    && __pmVoice?.settings?.wakeGateActive === true
+    && _cleanMobileWakePhrase(__pmVoice?.settings?.wakePhrase || '')
+    && /^(listening|ready)\b/i.test(String(s || ''))
+  ) {
+    const wakePhrase = _cleanMobileWakePhrase(__pmVoice.settings.wakePhrase || '');
+    s = 'Quiet mode';
+    hint = `Say "${wakePhrase}" to wake Prometheus`;
+  }
   const statusEl = __pmVoice.statusEl || document.getElementById('pm-voice-status');
   const hintEl = __pmVoice.hintEl || document.getElementById('pm-voice-hint');
   if (statusEl) statusEl.textContent = s;
@@ -3038,43 +4107,33 @@ function _detectProvider(status) {
   const configuredTts = (status?.voice?.ttsProviders || []).filter(p => p?.configured);
   const configuredStt = (status?.voice?.sttProviders || []).filter(p => p?.configured && p?.id !== 'browser');
   const settings = __pmVoice.settings || {};
-  const mode = String(settings.voiceMode || 'default');
+  const inputProvider = String(settings.sttProvider || _inputProviderForMode(settings.voiceMode || 'default'));
+  const outputProvider = String(settings.ttsProvider || _outputProviderForMode(settings.voiceMode || 'default'));
   const realtimeReady = !!(realtime?.configured && (realtime?.oauthConfigured || realtime?.apiKeyConfigured));
   const xaiTtsReady = configuredTts.some(p => p?.id === 'xai');
   const xaiSttReady = configuredStt.some(p => p?.id === 'xai');
-  if (mode === 'openai_realtime' && realtimeReady) {
-    return {
-      id: 'openai_realtime',
-      label: 'OpenAI Realtime',
-      model: realtime.model || 'gpt-realtime',
-      voice: settings.realtimeVoice || realtime.voice || 'marin',
-      speed: Number(settings.realtimeSpeed || 1.05),
-      canRealtime: true,
-      sttProvider: 'openai_realtime',
-      ttsProvider: 'openai_realtime',
-      ttsVoice: settings.realtimeVoice || realtime.voice || 'marin',
-    };
-  }
-  if (mode === 'xai' && xaiTtsReady && xaiSttReady) {
-    return {
-      id: 'xai',
-      label: 'xAI / Grok',
-      canRealtime: false,
-      sttProvider: 'xai',
-      ttsProvider: 'xai',
-      ttsVoice: settings.serverVoice || 'eve',
-      speed: Number(settings.xaiSpeed || 1.0),
-    };
-  }
+  const sttReady = inputProvider === 'openai_realtime' ? realtimeReady : inputProvider === 'xai' ? xaiSttReady : true;
+  const ttsReady = outputProvider === 'openai_realtime' ? realtimeReady : outputProvider === 'xai' ? xaiTtsReady : true;
+  const sttProvider = sttReady ? inputProvider : 'browser';
+  const ttsProvider = ttsReady ? outputProvider : 'browser';
+  if (sttProvider !== 'browser' || ttsProvider !== 'browser') return {
+    id: _voicePresetForProviders(sttProvider, ttsProvider),
+    label: [sttProvider, ttsProvider].filter(Boolean).join(' input / ') || 'Voice',
+    model: realtime.model || 'gpt-realtime',
+    voice: settings.realtimeVoice || realtime.voice || 'marin',
+    speed: ttsProvider === 'xai' ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05),
+    canRealtime: sttProvider === 'openai_realtime' || ttsProvider === 'openai_realtime',
+    sttProvider,
+    ttsProvider,
+    ttsVoice: ttsProvider === 'xai' ? (settings.serverVoice || 'eve') : (settings.realtimeVoice || realtime.voice || 'marin'),
+  };
   return {
     id: 'browser',
-    label: mode === 'openai_realtime' && !realtimeReady
-      ? 'Default (OpenAI unavailable)'
-      : (mode === 'xai' && (!xaiTtsReady || !xaiSttReady) ? 'Default (xAI unavailable)' : 'Default'),
+    label: 'Default',
     canRealtime: false,
     sttProvider: 'browser',
     ttsProvider: 'browser',
-    requestedMode: mode,
+    requestedMode: settings.voiceMode || 'default',
   };
 }
 
@@ -3140,7 +4199,6 @@ function _speakVoiceMilestone(text, options = {}) {
   }
   const key = spoken.toLowerCase();
   if (recent.has(key)) return;
-  recent.set(key, now);
   __pmVoice.milestoneRecent = recent;
   const minGap = Math.max(0, Number(options.minGapMs ?? 2800) || 0);
   const waitForQuiet = () => new Promise((resolve) => {
@@ -3159,6 +4217,8 @@ function _speakVoiceMilestone(text, options = {}) {
       if (__pmVoice.dictation !== 'milestone' || __pmVoice.speaking) return;
       if (minGap) await new Promise((resolve) => setTimeout(resolve, minGap));
       if (__pmVoice.dictation !== 'milestone' || __pmVoice.speaking) return;
+      recent.set(key, Date.now());
+      __pmVoice.milestoneRecent = recent;
       await _ttsSpeak(spoken);
     })
     .catch((err) => console.warn('[voice] milestone narration failed', err));
@@ -3451,8 +4511,10 @@ function _getServerAudioElement() {
 function _playHtmlAudioElement(audio, playbackRate = 1) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let playbackStarted = false;
     let startedAt = Date.now();
-    const markSpeaking = () => {
+    const markSpeaking = (fromPlayback = false) => {
+      if (fromPlayback) playbackStarted = true;
       startedAt = Date.now();
       _markVoiceSpeakingStart(__pmVoice.currentSpokenSegment);
     };
@@ -3464,8 +4526,8 @@ function _playHtmlAudioElement(audio, playbackRate = 1) {
       __pmVoice.audioObjectUrl = null;
       resolve(true);
     };
-    audio.onplay = markSpeaking;
-    audio.onplaying = markSpeaking;
+    audio.onplay = () => markSpeaking(true);
+    audio.onplaying = () => markSpeaking(true);
     audio.onended = () => {
       const elapsed = Date.now() - startedAt;
       if (elapsed < 1200 && Number(audio.currentTime || 0) < 0.25) {
@@ -3476,7 +4538,10 @@ function _playHtmlAudioElement(audio, playbackRate = 1) {
       }
       finish();
     };
-    audio.onpause = () => finish();
+    audio.onpause = () => {
+      if (!playbackStarted && Number(audio.currentTime || 0) < 0.05) return;
+      finish();
+    };
     audio.onerror = () => {
       if (settled) return;
       settled = true;
@@ -3485,7 +4550,7 @@ function _playHtmlAudioElement(audio, playbackRate = 1) {
     };
     try { audio.playbackRate = Math.max(0.5, Math.min(2, Number(playbackRate) || 1)); } catch {}
     try { audio.load?.(); } catch {}
-    markSpeaking();
+    markSpeaking(false);
     const played = audio.play?.();
     if (played?.catch) played.catch(reject);
   });
@@ -3779,14 +4844,870 @@ function _configuredServerTtsProviders() {
     .map(p => p.id);
 }
 
+// ============================================================================
+// REALTIME VOICE AGENT (mobile) — full audio-in / audio-out via OpenAI Realtime.
+// When voice mode is openai_realtime end-to-end, this replaces the split flow.
+// ============================================================================
+const __pmRealtimeAgent = {
+  conn: null,                        // { pc, dc, audio, micStream, micTrack, sessionId, listenMode }
+  connecting: null,
+  listenMode: 'idle',                // 'idle' | 'push_to_talk' | 'always_listening'
+  functionCallBuffers: new Map(),    // call_id -> { name, argsStr }
+  // Quiet mode: keep OpenAI STT running but turn create_response off; wake phrase
+  // in a completed transcript re-opens the agent. Mirrors the desktop approach.
+  quiet: { active: false, wakePhrase: '', wakeNormalized: '', pendingActivate: false },
+  // Per-response tracking to catch hallucinated worker hand-offs (claimed but no
+  // function call emitted).
+  turn: { hadFunctionCall: false, lastUserTranscript: '', lastAssistantTranscript: '', nudged: false },
+};
+
+const MOBILE_REALTIME_HANDOFF_CLAIM_RE = /\b(hand(?:ing|ed)?\s*(?:it|that|this)?\s*off|to the worker|kick(?:ing)?\s*(?:it|that)?\s*off|i('?ve|\s*have)?\s*started|getting started|i'?ll\s*(?:start|get|run|handle|take care)|on it|working on (?:it|that)|in progress|started (?:it|that|the|on)|spun? up|firing up)\b/i;
+
+function _maybeRecoverMobileHallucinatedHandoff() {
+  const t = __pmRealtimeAgent.turn;
+  if (t.hadFunctionCall || t.nudged) return;
+  const task = String(t.lastUserTranscript || '').trim();
+  if (!task || !MOBILE_REALTIME_HANDOFF_CLAIM_RE.test(t.lastAssistantTranscript || '')) return;
+  t.nudged = true;
+  _voiceDebug('realtime-agent-handoff-recovery', { task: task.slice(0, 160) });
+  try {
+    if (typeof __pmRealtimeAgent.submitToWorker === 'function') __pmRealtimeAgent.submitToWorker(task);
+  } catch (err) {
+    _voiceDebug('realtime-agent-handoff-recovery-failed', { message: err?.message || String(err) });
+  }
+}
+
+function _sendMobileRealtimeAgentCreateResponseFlag(enabled) {
+  const dc = __pmRealtimeAgent.conn?.dc;
+  if (!dc || dc.readyState !== 'open') return;
+  const listenMode = __pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode;
+  // Quiet mode (create_response gating) only applies to always-listening server VAD.
+  // In push-to-talk there is no turn_detection, so don't reinstate server VAD here.
+  if (listenMode !== 'always_listening') return;
+  try {
+    dc.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          input: {
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: listenMode === 'always_listening' ? 500 : 800,
+              create_response: !!enabled,
+            },
+            transcription: { model: 'gpt-realtime-whisper' },
+          },
+        },
+      },
+    }));
+  } catch {}
+}
+
+function _setMobileRealtimeAgentWakePhrase(phrase) {
+  const clean = String(phrase || '').replace(/\s+/g, ' ').trim();
+  __pmRealtimeAgent.quiet.wakePhrase = clean;
+  __pmRealtimeAgent.quiet.wakeNormalized = _normalizeMobileWakePhrase ? _normalizeMobileWakePhrase(clean) : clean.toLowerCase();
+}
+
+function _activateMobileRealtimeAgentQuietMode() {
+  if (!__pmRealtimeAgent.conn) return;
+  __pmRealtimeAgent.quiet.active = true;
+  _sendMobileRealtimeAgentCreateResponseFlag(false);
+  const phrase = __pmRealtimeAgent.quiet.wakePhrase;
+  pmToast(phrase ? `Quiet mode — say "${phrase}" to wake` : 'Quiet mode on', 'info');
+  _setStatus('Quiet', phrase ? `Silent until "${phrase}"` : 'Silent until you wake Prometheus');
+}
+
+function _deactivateMobileRealtimeAgentQuietMode() {
+  if (!__pmRealtimeAgent.quiet.active) return;
+  __pmRealtimeAgent.quiet.active = false;
+  __pmRealtimeAgent.quiet.pendingActivate = false;
+  _sendMobileRealtimeAgentCreateResponseFlag(true);
+}
+
+function _handleMobileRealtimeAgentQuietTranscript(transcript) {
+  if (!__pmRealtimeAgent.quiet.active) return;
+  const wake = __pmRealtimeAgent.quiet.wakeNormalized;
+  if (!wake) return;
+  const heard = _normalizeMobileWakePhrase ? _normalizeMobileWakePhrase(transcript) : String(transcript || '').toLowerCase();
+  if (!heard || !heard.includes(wake)) return; // not woken — stay silent
+  _deactivateMobileRealtimeAgentQuietMode();
+  pmToast('Awake', 'success');
+  const dc = __pmRealtimeAgent.conn?.dc;
+  if (dc?.readyState === 'open') {
+    try { dc.send(JSON.stringify({ type: 'response.create' })); } catch {}
+  }
+}
+
+function _isMobileRealtimeAgentMode() {
+  const mode = String(__pmVoice?.settings?.voiceMode || '').trim();
+  if (mode === 'openai_realtime') return __pmVoice?.settings?.voiceAgentRealtimeAgent !== false;
+  if (mode === 'xai') return __pmVoice?.settings?.voiceAgentXaiRealtime === true;
+  return false;
+}
+
+function _wantsMobileXaiRealtime() {
+  return String(__pmVoice?.settings?.voiceMode || '').trim() === 'xai'
+    && __pmVoice?.settings?.voiceAgentXaiRealtime === true;
+}
+
+async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
+  if (_wantsMobileXaiRealtime()) return _startMobileXaiRealtimeSession(sessionId, options);
+  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  if (
+    __pmRealtimeAgent.conn?.dc?.readyState === 'open'
+    && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid
+  ) return __pmRealtimeAgent.conn;
+  if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
+    _mobileRealtimeAgentDisableAlwaysListening();
+  }
+  if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
+  const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  __pmRealtimeAgent.listenMode = listenMode;
+
+  __pmRealtimeAgent.connecting = (async () => {
+    _voiceDebug('realtime-agent-bootstrap-start', { sessionId: sid, listenMode });
+    const wakePhrase = _cleanMobileWakePhrase(__pmVoice?.settings?.wakePhrase || '');
+    __pmRealtimeAgent.quiet.active = false;
+    __pmRealtimeAgent.quiet.pendingActivate = false;
+    _setMobileRealtimeAgentWakePhrase(wakePhrase || '');
+    const bootstrap = await mobileGatewayFetch('/api/voice-agent/realtime-bootstrap', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId: sid,
+        voice: String(__pmVoice?.settings?.realtimeVoice || 'marin'),
+        speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
+        voiceRuntime: wakePhrase
+          ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
+          : undefined,
+      }),
+    });
+    if (!bootstrap?.success) throw new Error(bootstrap?.error || 'Voice agent realtime bootstrap failed');
+
+    const pc = new RTCPeerConnection();
+    let audio = document.getElementById('pm-voice-agent-realtime-audio');
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = 'pm-voice-agent-realtime-audio';
+      audio.autoplay = true;
+      audio.playsInline = true;
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+    }
+    pc.ontrack = (event) => {
+      audio.srcObject = event.streams[0];
+      audio.play?.().catch(() => {});
+    };
+
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const micTrack = micStream.getAudioTracks()[0];
+    micTrack.enabled = listenMode === 'always_listening';
+    pc.addTrack(micTrack, micStream);
+    try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
+
+    const dc = pc.createDataChannel('oai-events');
+    dc.addEventListener('message', (msgEvent) => {
+      let event = null;
+      try { event = JSON.parse(msgEvent.data); } catch { return; }
+      _handleMobileRealtimeAgentEvent(event, sid).catch(() => {});
+    });
+
+    const dcOpen = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Realtime data channel did not open.')), 12000);
+      dc.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
+      dc.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Realtime data channel failed.')); }, { once: true });
+    });
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${bootstrap.clientSecret}`, 'Content-Type': 'application/sdp' },
+      body: offer.sdp,
+    });
+    const answerSdp = await sdpResp.text();
+    if (!sdpResp.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResp.status})`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+    await dcOpen;
+
+    // always_listening -> server VAD auto-commits + auto-replies.
+    // push_to_speak    -> turn_detection disabled; audio only flows while the mic
+    //                     track is enabled (button held) and we manually commit +
+    //                     create_response on release. Stops the realtime session
+    //                     from "staying on" / auto-replying when PTT is selected.
+    try {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          audio: {
+            input: {
+              turn_detection: listenMode === 'always_listening'
+                ? {
+                    type: 'server_vad',
+                    threshold: 0.5,
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 500,
+                    create_response: true,
+                  }
+                : null,
+              transcription: { model: 'gpt-realtime-whisper' },
+            },
+          },
+        },
+      }));
+    } catch {}
+
+    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode };
+    pc.addEventListener('connectionstatechange', () => {
+      if (['closed', 'failed', 'disconnected'].includes(pc.connectionState) && __pmRealtimeAgent.conn?.pc === pc) {
+        __pmRealtimeAgent.conn = null;
+      }
+    });
+    _voiceDebug('realtime-agent-ready', { sessionId: sid, listenMode });
+    return __pmRealtimeAgent.conn;
+  })().finally(() => {
+    __pmRealtimeAgent.connecting = null;
+  });
+  return __pmRealtimeAgent.connecting;
+}
+
+function _stopMobileRealtimeAgentSession() {
+  const conn = __pmRealtimeAgent.conn;
+  __pmRealtimeAgent.conn = null;
+  __pmRealtimeAgent.connecting = null;
+  __pmRealtimeAgent.listenMode = 'idle';
+  __pmRealtimeAgent.functionCallBuffers.clear();
+  try { conn?.cleanup?.(); } catch {}
+  try { conn?.dc?.close(); } catch {}
+  try { conn?.pc?.close(); } catch {}
+  try { if (conn?.audio) conn.audio.srcObject = null; } catch {}
+  try { conn?.micStream?.getTracks().forEach((t) => t.stop()); } catch {}
+}
+
+function _setMobileRealtimeAgentMicEnabled(enabled) {
+  const track = __pmRealtimeAgent.conn?.micTrack;
+  if (!track) return;
+  track.enabled = !!enabled;
+}
+
+// --- xAI / Grok realtime (WebSocket transport) for mobile -------------------
+const MOBILE_XAI_REALTIME_SAMPLE_RATE = 24000;
+
+function _mobileXaiVoice(value) {
+  const voices = new Set(['eve', 'ara', 'rex', 'sal', 'leo']);
+  const v = String(value || '').trim().toLowerCase();
+  return voices.has(v) ? v : 'eve';
+}
+
+function _mobileBase64ToInt16(b64) {
+  const binary = atob(String(b64 || ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Int16Array(bytes.buffer);
+}
+
+function _mobileInt16ToBase64(int16) {
+  const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function _createMobileXaiPlayback() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+  let nextStartTime = 0;
+  const sources = new Set();
+  return {
+    ctx,
+    enqueue(int16) {
+      if (!int16 || !int16.length) return;
+      const float = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float[i] = int16[i] < 0 ? int16[i] / 0x8000 : int16[i] / 0x7fff;
+      const buffer = ctx.createBuffer(1, float.length, MOBILE_XAI_REALTIME_SAMPLE_RATE);
+      buffer.copyToChannel(float, 0);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(ctx.destination);
+      const startAt = Math.max(ctx.currentTime, nextStartTime);
+      src.start(startAt);
+      nextStartTime = startAt + buffer.duration;
+      sources.add(src);
+      src.onended = () => sources.delete(src);
+    },
+    interrupt() {
+      for (const src of sources) { try { src.stop(); } catch {} }
+      sources.clear();
+      nextStartTime = 0;
+    },
+    close() { this.interrupt(); try { ctx.close?.(); } catch {} },
+  };
+}
+
+async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
+  const sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || 'mobile_default').trim() || 'mobile_default';
+  if (__pmRealtimeAgent.conn?.dc?.readyState === 'open' && String(__pmRealtimeAgent.conn.sessionId || '').trim() === sid) return __pmRealtimeAgent.conn;
+  if (__pmRealtimeAgent.connecting) return __pmRealtimeAgent.connecting;
+  const listenMode = String(options.listenMode || 'push_to_talk').trim();
+  __pmRealtimeAgent.listenMode = listenMode;
+
+  __pmRealtimeAgent.connecting = (async () => {
+    _voiceDebug('xai-realtime-bootstrap-start', { sessionId: sid, listenMode });
+    const wakePhrase = _cleanMobileWakePhrase(__pmVoice?.settings?.wakePhrase || '');
+    __pmRealtimeAgent.quiet.active = false;
+    __pmRealtimeAgent.quiet.pendingActivate = false;
+    _setMobileRealtimeAgentWakePhrase(wakePhrase || '');
+    const bootstrap = await mobileGatewayFetch('/api/voice-agent/xai-realtime-bootstrap', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId: sid,
+        voice: _mobileXaiVoice(__pmVoice?.settings?.serverVoice || __pmVoice?.settings?.realtimeVoice),
+        speed: Number(__pmVoice?.settings?.xaiSpeed || 1.0),
+        voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true } : undefined,
+      }),
+    });
+    if (!bootstrap?.success) throw new Error(bootstrap?.error || 'xAI realtime bootstrap failed');
+
+    // Single subprotocol entry only — xAI negotiates the wrong protocol if extras
+    // (e.g. 'realtime') are offered, which silently breaks session config/auth.
+    const ws = new WebSocket(bootstrap.wsUrl, [`xai-client-secret.${bootstrap.clientSecret}`]);
+    ws.binaryType = 'arraybuffer';
+    const playback = _createMobileXaiPlayback();
+
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const micTrack = micStream.getAudioTracks()[0];
+    micTrack.enabled = listenMode === 'always_listening';
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const captureCtx = new AudioCtx({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+    const source = captureCtx.createMediaStreamSource(micStream);
+    const processor = captureCtx.createScriptProcessor(2048, 1, 1);
+    const mutedGain = captureCtx.createGain();
+    mutedGain.gain.value = 0;
+    processor.onaudioprocess = (event) => {
+      if (ws.readyState !== WebSocket.OPEN || !micTrack.enabled) return;
+      const pcm = _downsampleFloat32(event.inputBuffer.getChannelData(0), captureCtx.sampleRate || MOBILE_XAI_REALTIME_SAMPLE_RATE, MOBILE_XAI_REALTIME_SAMPLE_RATE);
+      if (pcm.length > 0) {
+        try { ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: _mobileInt16ToBase64(pcm) })); } catch {}
+      }
+    };
+    source.connect(processor);
+    processor.connect(mutedGain);
+    mutedGain.connect(captureCtx.destination);
+    await captureCtx.resume?.();
+
+    ws.addEventListener('close', (ev) => {
+      _voiceDebug('xai-realtime-socket-closed', { code: ev.code, reason: ev.reason, protocol: ws.protocol });
+    });
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('xAI realtime socket did not open.')), 12000);
+      ws.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
+      ws.addEventListener('close', (ev) => { clearTimeout(timeout); reject(new Error(`xAI realtime socket closed before open (code ${ev.code}${ev.reason ? `: ${ev.reason}` : ''}).`)); }, { once: true });
+      ws.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('xAI realtime socket failed.')); }, { once: true });
+    });
+
+    const dcShim = {
+      get readyState() { return ws.readyState === WebSocket.OPEN ? 'open' : 'closed'; },
+      send: (payload) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(payload); } catch {} },
+      close: () => { try { ws.close(); } catch {} },
+    };
+
+    ws.addEventListener('message', (msgEvent) => {
+      let event = null;
+      try { event = JSON.parse(typeof msgEvent.data === 'string' ? msgEvent.data : ''); } catch { return; }
+      if (!event) return;
+      const type = String(event.type || '');
+      if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
+        const b64 = event.delta || event.audio;
+        if (b64) { try { playback.enqueue(_mobileBase64ToInt16(b64)); } catch {} }
+        return;
+      }
+      if (type === 'input_audio_buffer.speech_started') { try { playback.interrupt(); } catch {} }
+      if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
+        const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 300);
+        _voiceDebug('xai-realtime-error', { type, msg });
+        try { pmToast(`xAI realtime error: ${msg}`, 'error'); } catch {}
+      }
+      _handleMobileRealtimeAgentEvent(event, sid).catch(() => {});
+    });
+
+    const turnDetection = listenMode === 'always_listening'
+      ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: true }
+      : null;
+    try {
+      ws.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          instructions: bootstrap.instructions,
+          voice: bootstrap.voice,
+          turn_detection: turnDetection,
+          audio: {
+            input: { format: { type: 'audio/pcm', rate: MOBILE_XAI_REALTIME_SAMPLE_RATE } },
+            output: { format: { type: 'audio/pcm', rate: MOBILE_XAI_REALTIME_SAMPLE_RATE } },
+          },
+        },
+      }));
+      if (Array.isArray(bootstrap.tools) && bootstrap.tools.length) {
+        try { ws.send(JSON.stringify({ type: 'session.update', session: { tools: bootstrap.tools, tool_choice: 'auto' } })); } catch {}
+      }
+    } catch {}
+
+    __pmRealtimeAgent.conn = {
+      provider: 'xai', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback,
+      cleanup: () => {
+        try { processor.disconnect(); } catch {}
+        try { source.disconnect(); } catch {}
+        try { mutedGain.disconnect(); } catch {}
+        try { captureCtx.close?.(); } catch {}
+        try { playback.close(); } catch {}
+        try { ws.close(); } catch {}
+      },
+    };
+    ws.addEventListener('close', () => { if (__pmRealtimeAgent.conn?.ws === ws) __pmRealtimeAgent.conn = null; });
+    _voiceDebug('xai-realtime-ready', { sessionId: sid, listenMode });
+    return __pmRealtimeAgent.conn;
+  })().finally(() => {
+    __pmRealtimeAgent.connecting = null;
+  });
+  return __pmRealtimeAgent.connecting;
+}
+
+function _ensureMobileRealtimeAgentChatTurn(sessionId, role) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
+  const key = role === 'user' ? 'mobileUserTurn' : 'mobileAssistantTurn';
+  const existing = __pmRealtimeAgent.turn?.[key];
+  if (existing && __pmChat.threads[sid].includes(existing)) return existing;
+  const turn = role === 'user'
+    ? {
+        role: 'user',
+        streaming: true,
+        time: '',
+        timestamp: Date.now(),
+        body: { text: '', source: 'voice' },
+        content: '',
+        source: 'voice_agent_realtime',
+      }
+    : {
+        role: 'ai',
+        streaming: true,
+        time: '',
+        timestamp: Date.now(),
+        body: { sender: 'Prometheus', text: '' },
+        content: '',
+        source: 'voice_agent_realtime',
+      };
+  __pmChat.threads[sid].push(turn);
+  __pmRealtimeAgent.turn[key] = turn;
+  return turn;
+}
+
+function _finalizeMobileRealtimeAgentChatTurn(sessionId, role, text) {
+  const sid = String(sessionId || '').trim();
+  const turn = _ensureMobileRealtimeAgentChatTurn(sid, role);
+  if (!turn) return null;
+  const value = String(text || turn.content || turn.body?.text || '').trim();
+  if (value) {
+    turn.body = turn.body || (role === 'user' ? { text: '' } : { sender: 'Prometheus', text: '' });
+    turn.body.text = value;
+    turn.content = value;
+  }
+  turn.streaming = false;
+  turn.time = _nowTime();
+  turn.timestamp = Number(turn.timestamp || Date.now()) || Date.now();
+  return turn;
+}
+
+async function _handleMobileRealtimeAgentEvent(event, sessionId) {
+  const type = String(event?.type || '');
+  _voiceDebug('realtime-agent-event', { type, info: type === 'error' ? (event?.error?.message || event?.error) : (event?.transcript ?? undefined) });
+  if (type === 'response.created') {
+    __pmRealtimeAgent.turn.hadFunctionCall = false;
+    __pmRealtimeAgent.turn.lastAssistantTranscript = '';
+    __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+    return;
+  }
+  if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
+    __pmRealtimeAgent.turn.hadFunctionCall = true;
+    const callId = String(event.item.call_id || '').trim();
+    if (callId) __pmRealtimeAgent.functionCallBuffers.set(callId, { name: String(event.item.name || ''), argsStr: '' });
+    return;
+  }
+  if (type === 'response.function_call_arguments.delta') {
+    const callId = String(event.call_id || '').trim();
+    if (!callId) return;
+    const buf = __pmRealtimeAgent.functionCallBuffers.get(callId) || { name: '', argsStr: '' };
+    buf.argsStr += String(event.delta || '');
+    __pmRealtimeAgent.functionCallBuffers.set(callId, buf);
+    return;
+  }
+  if (type === 'response.function_call_arguments.done') {
+    const callId = String(event.call_id || '').trim();
+    const name = String(event.name || __pmRealtimeAgent.functionCallBuffers.get(callId)?.name || '').trim();
+    const argsStr = String(event.arguments || __pmRealtimeAgent.functionCallBuffers.get(callId)?.argsStr || '');
+    __pmRealtimeAgent.functionCallBuffers.delete(callId);
+    let args = {};
+    try { args = argsStr ? JSON.parse(argsStr) : {}; } catch {}
+    await _executeMobileRealtimeAgentFunctionCall({ call_id: callId, name, args }, sessionId);
+    return;
+  }
+  if (type === 'conversation.item.input_audio_transcription.delta') {
+    const delta = String(event.delta || event.transcript || '').trim();
+    if (delta) {
+      const turn = _ensureMobileRealtimeAgentChatTurn(sessionId, 'user');
+      if (turn) {
+        turn.body.text = `${turn.body?.text || ''}${delta}`;
+        turn.content = String(turn.body.text || '');
+        _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_user_transcript_delta' });
+      }
+    }
+    return;
+  }
+  if (type === 'conversation.item.input_audio_transcription.completed') {
+    const transcript = String(event.transcript || '').trim();
+    if (transcript) {
+      __pmRealtimeAgent.turn.lastUserTranscript = transcript;
+      __pmRealtimeAgent.turn.nudged = false;
+      _voiceDebug('realtime-agent-user-transcript', { transcript });
+      // Surface what the user said in the main chat thread (display-only).
+      try {
+        const sid = sessionId;
+        _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
+        __pmRealtimeAgent.turn.mobileUserTurn = null;
+        _persistMobileThreadSnapshot(sid);
+        _renderRecent();
+        _renderMobileChatSessionNow(sid);
+        _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_user_transcript', force: true });
+      } catch {}
+      _handleMobileRealtimeAgentQuietTranscript(transcript);
+    }
+    return;
+  }
+  if (type === 'response.audio_transcript.delta' || type === 'response.output_audio_transcript.delta') {
+    const delta = String(event.delta || event.transcript || '').trim();
+    if (delta) {
+      const turn = _ensureMobileRealtimeAgentChatTurn(sessionId, 'ai');
+      if (turn) {
+        turn.body.text = `${turn.body?.text || ''}${delta}`;
+        turn.content = String(turn.body.text || '');
+        _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_assistant_transcript_delta' });
+      }
+    }
+    return;
+  }
+  if (type === 'response.audio_transcript.done' || type === 'response.output_audio_transcript.done') {
+    const transcript = String(event.transcript || '').trim();
+    if (transcript) {
+      __pmRealtimeAgent.turn.lastAssistantTranscript = transcript;
+      _voiceDebug('realtime-agent-assistant-transcript', { transcript });
+      // Append to chat thread for visibility
+      try {
+        const sid = sessionId;
+        _finalizeMobileRealtimeAgentChatTurn(sid, 'ai', transcript);
+        __pmRealtimeAgent.turn.mobileAssistantTurn = null;
+        _persistMobileThreadSnapshot(sid);
+        _renderRecent();
+        _renderMobileChatSessionNow(sid);
+        _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_transcript', force: true });
+      } catch {}
+    }
+    return;
+  }
+  if (type === 'response.done' || type === 'response.audio.done') {
+    if (__pmRealtimeAgent.quiet.pendingActivate) {
+      __pmRealtimeAgent.quiet.pendingActivate = false;
+      _activateMobileRealtimeAgentQuietMode();
+    }
+    _maybeRecoverMobileHallucinatedHandoff();
+    return;
+  }
+  if (type === 'error') {
+    const message = String(event?.error?.message || event?.error || '');
+    _voiceDebug('realtime-agent-error', { message });
+    if (message) pmToast(`Realtime: ${message}`, 'error');
+    return;
+  }
+}
+
+// Friendly label + key argument for a realtime tool call, for the recent-commands list.
+function _realtimeAgentToolLabel(name, args) {
+  const map = {
+    voice_web_search: 'Web Search',
+    voice_web_fetch: 'Web Fetch',
+    voice_write_note: 'Write Note',
+    voice_set_wake_phrase: 'Set Wake Phrase',
+    voice_enter_quiet_mode: 'Enter Quiet Mode',
+    voice_set_quiet_until: 'Set Quiet Until',
+    voice_skill_lookup: 'Skill Lookup',
+    voice_memory_search: 'Memory Search',
+    voice_timer: 'Timer',
+    voice_browser_screenshot: 'Browser Screenshot',
+    voice_desktop_screenshot: 'Desktop Screenshot',
+    voice_send_screenshot: 'Send Screenshot',
+    dispatch_prometheus_worker: 'Hand off to Worker',
+    steer_active_worker: 'Steer Worker',
+    interrupt_active_worker: 'Interrupt Worker',
+  };
+  const label = map[name] || name.replace(/^voice_/, '').replace(/_/g, ' ');
+  const detail = String(args?.query || args?.task || args?.message || args?.phrase || args?.url || '').trim();
+  return detail ? `${label}: ${detail.slice(0, 80)}` : label;
+}
+
+// Show every realtime tool call in the voice page "recent commands" list (not just
+// worker dispatch). Returns the cmd object so the caller can mark it complete.
+function _addRealtimeAgentRecentCommand(name, args) {
+  try {
+    const cmd = {
+      id: 'rtcmd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      request: _realtimeAgentToolLabel(name, args),
+      currentTool: name,
+      finalText: '',
+      toolStream: [],
+      status: 'thinking',
+      ts: Date.now(),
+      expanded: false,
+      source: 'realtime_agent',
+    };
+    __pmVoice.recent.unshift(cmd);
+    if (__pmVoice.recent.length > 30) __pmVoice.recent.length = 30;
+    _renderRecent();
+    return cmd;
+  } catch { return null; }
+}
+
+function _finishRealtimeAgentRecentCommand(cmd, ok, summary) {
+  if (!cmd) return;
+  try {
+    cmd.status = ok ? 'done' : 'error';
+    cmd.currentTool = ok ? 'complete' : 'error';
+    cmd.finalText = String(summary || '').slice(0, 400);
+    _renderRecent();
+  } catch {}
+}
+
+async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
+  const name = String(call?.name || '').trim();
+  const callId = String(call?.call_id || '').trim();
+  if (!name) return;
+  const args = call?.args && typeof call.args === 'object' ? call.args : {};
+  _voiceDebug('realtime-agent-tool-call', { name, args });
+
+  if (name === 'dispatch_prometheus_worker') {
+    const task = String(args.task || '').trim();
+    let dispatched = false;
+    if (task) {
+      try {
+        if (typeof __pmRealtimeAgent.submitToWorker === 'function') {
+          // Runs the proven voice→worker path: pushes the user turn, creates a
+          // recent command, and streams the worker response into the chat thread.
+          __pmRealtimeAgent.submitToWorker(task);
+          dispatched = true;
+        } else {
+          _voiceDebug('realtime-agent-dispatch-no-bridge', {});
+        }
+      } catch (err) {
+        _voiceDebug('realtime-agent-dispatch-failed', { message: err?.message || String(err) });
+      }
+    }
+    _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: dispatched, dispatched, task }));
+    return;
+  }
+  if (name === 'steer_active_worker') {
+    const message = String(args.message || '').trim();
+    if (message) {
+      try { await _handleMobileVoiceLiveSteer?.(sessionId, message, { source: 'realtime_agent_steer' }); } catch {}
+    }
+    _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: true, steered: !!message }));
+    return;
+  }
+  if (name === 'interrupt_active_worker') {
+    try { await _requestMobileGatewayAbort?.(sessionId, 'realtime_agent_interrupt'); } catch {}
+    _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: true, interrupted: true, reason: String(args.reason || '') }));
+    return;
+  }
+
+  const recentCmd = _addRealtimeAgentRecentCommand(name, args);
+  try {
+    const result = await mobileGatewayFetch('/api/voice-agent/realtime-tool', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, toolName: name, toolArgs: args }),
+    });
+    if (!result?.success) {
+      _finishRealtimeAgentRecentCommand(recentCmd, false, result?.error || 'Tool failed');
+      _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, error: result?.error || 'Tool failed' }));
+      return;
+    }
+    // Apply wake phrase / quiet mode directives to the live realtime session.
+    const directive = result.runtimeDirective;
+    if (directive?.action) {
+      const phrase = String(directive.wakePhrase || '').trim();
+      if (directive.action === 'set_wake_phrase' && phrase) {
+        _setMobileRealtimeAgentWakePhrase(phrase);
+        try { _saveVoiceSettings({ wakePhrase: phrase }); } catch {}
+      } else if (directive.action === 'enter_quiet_mode' || directive.action === 'set_quiet_until') {
+        if (phrase) {
+          _setMobileRealtimeAgentWakePhrase(phrase);
+          try { _saveVoiceSettings({ wakePhrase: phrase }); } catch {}
+        }
+        if (__pmRealtimeAgent.quiet.wakeNormalized) __pmRealtimeAgent.quiet.pendingActivate = true;
+      }
+    }
+    // Overlay any captured screenshot on the voice orb, like other preview cards.
+    if (result.preview?.dataUrl && typeof __pmRealtimeAgent.enqueuePreviews === 'function') {
+      try {
+        const p = result.preview;
+        const label = p.source === 'desktop' ? 'Desktop screenshot' : p.source === 'browser' ? 'Browser screenshot' : 'Screenshot';
+        const dims = p.width && p.height ? ` ${p.width}x${p.height}` : '';
+        __pmRealtimeAgent.enqueuePreviews([{ kind: 'image', name: `${label}${dims}.png`, dataUrl: p.dataUrl, mimeType: p.mimeType || 'image/png' }], { transient: true });
+      } catch {}
+    }
+    const summary = String(result.result?.summary || result.result?.stdout || result.raw || 'Done').toString();
+    _finishRealtimeAgentRecentCommand(recentCmd, true, summary);
+    _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify(result.result || result.raw || { ok: true }));
+  } catch (err) {
+    _finishRealtimeAgentRecentCommand(recentCmd, false, String(err?.message || err));
+    _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, error: String(err?.message || err) }));
+  }
+}
+
+function _sendMobileRealtimeAgentFunctionOutput(callId, output) {
+  const dc = __pmRealtimeAgent.conn?.dc;
+  if (!dc || dc.readyState !== 'open' || !callId) return;
+  try {
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: { type: 'function_call_output', call_id: callId, output: String(output || '') },
+    }));
+    dc.send(JSON.stringify({ type: 'response.create' }));
+  } catch (err) {
+    _voiceDebug('realtime-agent-send-output-failed', { message: err?.message || String(err) });
+  }
+}
+
+// PTT and always-listening hooks for the mobile mic UI
+function _mobileRealtimeAgentPttPress(sessionId) {
+  if (!__pmRealtimeAgent.conn) {
+    _startMobileRealtimeAgentSession(sessionId, { listenMode: 'push_to_talk' })
+      .then(() => _setMobileRealtimeAgentMicEnabled(true))
+      .catch((err) => _voiceDebug('realtime-agent-ptt-start-failed', { message: err?.message || String(err) }));
+    return;
+  }
+  _setMobileRealtimeAgentMicEnabled(true);
+}
+
+function _mobileRealtimeAgentPttRelease() {
+  _setMobileRealtimeAgentMicEnabled(false);
+  const dc = __pmRealtimeAgent.conn?.dc;
+  if (dc?.readyState === 'open') {
+    try {
+      dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+      dc.send(JSON.stringify({ type: 'response.create' }));
+    } catch {}
+  }
+}
+
+async function _mobileRealtimeAgentEnableAlwaysListening(sessionId) {
+  await _startMobileRealtimeAgentSession(sessionId, { listenMode: 'always_listening' });
+  _setMobileRealtimeAgentMicEnabled(true);
+}
+
+function _mobileRealtimeAgentDisableAlwaysListening() {
+  _stopMobileRealtimeAgentSession();
+}
+
+// Streaming TTS dispatcher used for chunk-by-chunk speech as the voice agent
+// streams sentences. Picks the matching path for the current TTS provider so
+// realtime, xAI, OpenAI and browser TTS all work the same way from callers.
+function _createMobileVoiceStreamingDispatcher() {
+  const mode = String(__pmVoice?.settings?.voiceMode || 'default');
+  const outputProvider = String(
+    __pmVoice?.settings?.ttsProvider
+      || __pmVoice?.provider?.ttsProvider
+      || _outputProviderForMode(mode),
+  );
+  // Realtime: relay each chunk through the realtime narration path.
+  if (outputProvider === 'openai_realtime') {
+    let chain = Promise.resolve();
+    return {
+      provider: 'openai_realtime',
+      enqueue(text) {
+        const t = String(text || '').trim();
+        if (!t) return;
+        chain = chain.catch(() => {}).then(() => _speakWithRealtimeVoice(t).catch(() => {}));
+      },
+      wait() { return chain.catch(() => {}); },
+    };
+  }
+  // xAI / OpenAI: serialized fetch+play per chunk, pre-fetched concurrently.
+  if (outputProvider === 'xai' || outputProvider === 'openai') {
+    const ttsProvider = outputProvider;
+    const xaiSpeed = Number(__pmVoice?.settings?.xaiSpeed || __pmVoice?.provider?.speed || 1.0);
+    const xaiVoice = String(__pmVoice?.settings?.serverVoice || __pmVoice?.provider?.ttsVoice || 'eve').trim();
+    const useUrl = ttsProvider === 'xai' && !_isIosSafariBrowser();
+    const buildChunkBody = (chunk) => {
+      const b = { provider: ttsProvider, text: chunk };
+      if (ttsProvider === 'openai' && __pmVoice?.provider?.ttsVoice) b.voice = __pmVoice.provider.ttsVoice;
+      if (ttsProvider === 'xai' && xaiVoice) b.voiceId = xaiVoice;
+      if (ttsProvider === 'xai') b.speed = xaiSpeed;
+      if (useUrl) b.delivery = 'url';
+      return b;
+    };
+    let chain = Promise.resolve();
+    return {
+      provider: ttsProvider,
+      enqueue(text) {
+        const t = String(text || '').trim();
+        if (!t) return;
+        const fetched = synthesizeVoiceAudio(buildChunkBody(t)).catch((err) => {
+          _voiceDebug('tts-stream-fetch-failed', { provider: ttsProvider, message: err?.message || String(err) });
+          return null;
+        });
+        chain = chain.catch(() => {}).then(async () => {
+          const audio = await fetched;
+          if (!audio) return;
+          try {
+            await _playAudioBase64({ ...audio, playbackRate: ttsProvider === 'xai' ? xaiSpeed : 1 });
+          } catch (err) {
+            _voiceDebug('tts-stream-play-failed', { provider: ttsProvider, message: err?.message || String(err) });
+          }
+        });
+      },
+      wait() { return chain.catch(() => {}); },
+    };
+  }
+  // Browser TTS: speakSynthesis enqueues utterances natively.
+  if (outputProvider === 'browser' || !outputProvider) {
+    return {
+      provider: 'browser',
+      enqueue(text) {
+        const t = String(text || '').trim();
+        if (!t) return;
+        try {
+          const utter = new SpeechSynthesisUtterance(t);
+          window.speechSynthesis.speak(utter);
+        } catch {}
+      },
+      wait() { return Promise.resolve(); },
+    };
+  }
+  return null;
+}
+
 async function _ttsSpeak(text) {
   if (!text) return;
   __pmVoice.currentSpokenSegment = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
-  const provider = __pmVoice.provider?.ttsProvider || 'browser';
   const mode = String(__pmVoice.settings?.voiceMode || 'default');
-  _voiceDebug('tts-start', { textLen: String(text || '').length, mode, provider });
-  const explicitVoiceMode = mode === 'openai_realtime' || mode === 'xai';
-  const wantsRealtime = mode === 'openai_realtime' && provider === 'openai_realtime';
+  const outputProvider = String(__pmVoice.settings?.ttsProvider || __pmVoice.provider?.ttsProvider || _outputProviderForMode(mode));
+  _voiceDebug('tts-start', { textLen: String(text || '').length, mode, provider: outputProvider });
+  const explicitVoiceMode = outputProvider === 'openai_realtime' || outputProvider === 'xai';
+  const wantsRealtime = outputProvider === 'openai_realtime';
   let realtimeReady = !!(__pmVoice.provider?.canRealtime || _isRealtimeConnected());
   if (wantsRealtime && !realtimeReady) {
     try {
@@ -3794,7 +5715,7 @@ async function _ttsSpeak(text) {
       __pmVoice.lastVoiceStatus = status;
       __pmVoice.voiceStatus = status?.voice || null;
       const detected = _detectProvider(status);
-      __pmVoice.provider = { ...detected, sttProvider: __pmVoice.provider?.sttProvider || 'browser' };
+      __pmVoice.provider = { ...detected, sttProvider: __pmVoice.provider?.sttProvider || detected.sttProvider || 'browser' };
       realtimeReady = !!(__pmVoice.provider?.canRealtime || _isRealtimeConnected(status));
     } catch {}
   }
@@ -3811,33 +5732,54 @@ async function _ttsSpeak(text) {
       if (explicitVoiceMode) return;
     }
   }
-  // Gate v2 (xaitts-gate2): xAI TTS is preferred whenever it's server-configured
-  // and the user isn't currently on the OpenAI Realtime path. We deliberately do
-  // NOT require voiceMode==='xai' — iOS Safari's stale SW cache kept making the
-  // strict gate route around xai and fall to browser speechSynthesis (orb flashes
-  // then dies). Set window.__pmDisableXaiTts=true at runtime to opt out.
   const xaiTtsConfigured = Array.isArray(__pmVoice.voiceStatus?.ttsProviders)
     && __pmVoice.voiceStatus.ttsProviders.some(p => p?.id === 'xai' && p?.configured);
   const xaiDisabled = !!(typeof window !== 'undefined' && window.__pmDisableXaiTts);
-  const wantsXai = mode === 'xai' || provider === 'xai' || __pmVoice.provider?.id === 'xai';
-  const providersToTry = ((wantsXai || xaiTtsConfigured) && !xaiDisabled && mode !== 'openai_realtime') ? ['xai'] : [];
-  try { console.log('[voice] xai TTS gate v2', { mode, provider, xaiTtsConfigured, willTry: providersToTry }); } catch {}
-  _voiceDebug('tts-gate', { mode, provider, xaiTtsConfigured, wantsXai, providersToTry });
+  const wantsXai = outputProvider === 'xai';
+  const providersToTry = (wantsXai && xaiTtsConfigured && !xaiDisabled) ? ['xai'] : [];
+  try { console.log('[voice] xai TTS gate split-routing', { mode, outputProvider, xaiTtsConfigured, willTry: providersToTry }); } catch {}
+  _voiceDebug('tts-gate', { mode, provider: outputProvider, xaiTtsConfigured, wantsXai, providersToTry });
   for (const ttsProvider of providersToTry) {
     try {
       _voiceSetStatus('Speaking with xAI / Grok', 'Grok voice audio is generating the response');
       _markVoiceSpeakingStart(text);
-      const body = { provider: ttsProvider, text };
-      if (ttsProvider === 'openai' && __pmVoice.provider?.ttsVoice) body.voice = __pmVoice.provider.ttsVoice;
       const xaiSpeed = Number(__pmVoice.settings?.xaiSpeed || __pmVoice.provider?.speed || 1.0);
       const xaiVoice = String(__pmVoice.settings?.serverVoice || __pmVoice.provider?.ttsVoice || 'eve').trim();
-      if (ttsProvider === 'xai' && xaiVoice) body.voiceId = xaiVoice;
-      if (ttsProvider === 'xai') body.speed = xaiSpeed;
-      if (ttsProvider === 'xai') body.delivery = 'url';
-      _voiceDebug('tts-fetch-start', { provider: ttsProvider, voiceId: body.voiceId || '', delivery: body.delivery || '' });
-      const audio = await synthesizeVoiceAudio(body);
-      _voiceDebug('tts-fetch-ok', { provider: ttsProvider, mimeType: audio?.mimeType || '', hasBase64: !!audio?.audioBase64, hasUrl: !!(audio?.audioUrl || audio?.url) });
-      await _playAudioBase64({ ...audio, playbackRate: ttsProvider === 'xai' ? xaiSpeed : 1 });
+      const useUrl = ttsProvider === 'xai' && !_isIosSafariBrowser();
+      const buildChunkBody = (chunk) => {
+        const b = { provider: ttsProvider, text: chunk };
+        if (ttsProvider === 'openai' && __pmVoice.provider?.ttsVoice) b.voice = __pmVoice.provider.ttsVoice;
+        if (ttsProvider === 'xai' && xaiVoice) b.voiceId = xaiVoice;
+        if (ttsProvider === 'xai') b.speed = xaiSpeed;
+        if (useUrl) b.delivery = 'url';
+        return b;
+      };
+      // Split into sentence-sized chunks and pipeline fetch+play so the first
+      // audio segment starts playing before the full reply is encoded.
+      const sentences = (() => {
+        const src = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!src) return [];
+        const parts = src.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [src];
+        const out = []; let cur = '';
+        for (const p of parts) {
+          const next = p.trim();
+          if (!next) continue;
+          if ((cur + ' ' + next).trim().length <= 400) { cur = (cur + ' ' + next).trim(); continue; }
+          if (cur) out.push(cur);
+          cur = next.length <= 400 ? next : (out.push(...next.match(/.{1,400}/g) || [next]), '');
+        }
+        if (cur) out.push(cur);
+        return out.filter(Boolean);
+      })();
+      const chunks = sentences.length ? sentences : [String(text || '').trim().slice(0, 4000)];
+      _voiceDebug('tts-fetch-start', { provider: ttsProvider, voiceId: xaiVoice, delivery: useUrl ? 'url' : 'base64', chunks: chunks.length });
+      let nextFetch = synthesizeVoiceAudio(buildChunkBody(chunks[0]));
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const audio = await nextFetch;
+        if (ci + 1 < chunks.length) nextFetch = synthesizeVoiceAudio(buildChunkBody(chunks[ci + 1]));
+        _voiceDebug('tts-fetch-ok', { provider: ttsProvider, chunk: ci, mimeType: audio?.mimeType || '', hasBase64: !!audio?.audioBase64, hasUrl: !!(audio?.audioUrl || audio?.url) });
+        await _playAudioBase64({ ...audio, playbackRate: ttsProvider === 'xai' ? xaiSpeed : 1 });
+      }
       _voiceDebug('tts-play-ok', { provider: ttsProvider });
       return;
     } catch (err) {
@@ -3849,7 +5791,7 @@ async function _ttsSpeak(text) {
       if (explicitVoiceMode) return;
     }
   }
-  _voiceDebug('tts-browser-fallback', { mode, provider });
+  _voiceDebug('tts-browser-fallback', { mode, provider: outputProvider });
   try {
     const synth = window.speechSynthesis;
     if (!synth) return;
@@ -3900,6 +5842,19 @@ function _captureVoicePlaybackInterrupt(reason = 'barge_in') {
     return false;
   }
   const runtime = __pmVoice.activeVoiceRuntime || {};
+  const runtimeActive = !!(
+    runtime
+    && runtime.isStreamActive === true
+    && String(runtime.sessionId || '').trim()
+  );
+  if (!runtimeActive) {
+    _voiceDebug('voice-playback-cutoff-no-interruption', {
+      reason,
+      textLen: currentSpokenSegment.length,
+      realtimeActive,
+    });
+    return true;
+  }
   const interruptedText = String(runtime.assistantTextSoFar || __pmVoice.lastAi || '').replace(/\s+/g, ' ').trim().slice(0, 1600);
   const spokenTextSoFar = String(__pmVoice.spokenTextSoFar || '').replace(/\s+/g, ' ').trim().slice(-1600);
   __pmVoice.pendingInterruptContext = {
@@ -3957,10 +5912,22 @@ async function _finalizeVoiceInterruptionForTranscript(userInterruptionTranscrip
   __pmVoice.pendingInterruptContext = null;
   try {
     _voiceSetStatus('Interrupted - updating context', 'Prometheus is classifying the interruption');
-    const result = await createVoiceInterruptionEvent(payload);
+    let result = null;
+    let streamingDispatcher = _createMobileVoiceStreamingDispatcher();
+    try {
+      result = await streamVoiceAgentInputMobile(payload, (chunk) => {
+        try { streamingDispatcher?.enqueue?.(chunk); } catch {}
+      });
+    } catch (streamErr) {
+      _voiceDebug('voice-agent-interruption-stream-failed', { message: streamErr?.message || String(streamErr) });
+      streamingDispatcher = null;
+      result = await createVoiceInterruptionEvent(payload);
+    }
     __pmVoice.lastInterruptionEvent = result;
     const reply = String(result?.voiceReply || '').trim();
-    if (reply) await _ttsSpeak(reply);
+    const alreadySpoken = !!result?.streamedSpeech && !!streamingDispatcher;
+    if (reply && !alreadySpoken) await _ttsSpeak(reply);
+    else if (alreadySpoken) await streamingDispatcher.wait();
     if (result?.classification?.intent === 'cancel') {
       _voiceSetStatus('Cancelled', reply || 'Voice interruption cancelled the active run');
     } else if (result?.classification?.intent === 'pause') {
@@ -3999,6 +5966,10 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
   if (!sid || !result?.classification) return false;
   const thread = __pmChat.threads?.[sid];
   if (!Array.isArray(thread)) return false;
+  const eventId = String(result?.eventId || result?.steerEventId || '').trim();
+  if (eventId && thread.some((turn) => String(turn?.voiceInterruptionEventId || '') === eventId)) {
+    return result?.classification?.shouldAbortOriginalRun === true;
+  }
   const classification = result.classification || {};
   const intent = String(classification.intent || 'unknown').trim() || 'unknown';
   const shouldAbort = classification.shouldAbortOriginalRun === true;
@@ -4007,7 +5978,7 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
   const transcriptText = String(transcript || '').trim();
   const workflowGroupId = `${asSteer ? 'chat_steer' : 'voice_workflow'}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const eventExtra = {
-    eventId: result.steerEventId || result.eventId || '',
+    eventId,
     runtimeId: result.runtimeId || result.activeRun?.id || '',
     intent,
     shouldAbortOriginalRun: shouldAbort,
@@ -4037,6 +6008,7 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
         workflowGroupId,
         workflowPart: 'before_interruption',
         workflowLabel: asSteer ? 'Tool stream before steer' : 'Tool stream before interruption',
+        voiceInterruptionEventId: eventId || undefined,
       });
     }
   }
@@ -4049,7 +6021,24 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
     workflowGroupId,
     workflowPart: 'interruption',
     workflowLabel: asSteer ? 'Steer' : `Interruption: ${intent}`,
+    voiceInterruptionEventId: eventId || undefined,
   });
+  const reply = String(result?.voiceReply || '').trim();
+  if (reply) {
+    thread.push({
+      role: 'ai',
+      time: _nowTime(),
+      timestamp: Date.now(),
+      body: { sender: 'Prometheus', text: reply },
+      content: reply,
+      source: 'voice_agent',
+      processEntries: _voiceAgentProcessEntriesFromResult(sid, result),
+      workflowGroupId,
+      workflowPart: shouldAbort ? 'abort_response' : 'interruption_response',
+      workflowLabel: shouldAbort ? 'Abort response' : 'Interruption response',
+      voiceInterruptionEventId: eventId || undefined,
+    });
+  }
   if (!shouldAbort) {
     _persistMobileThreadSnapshot(sid);
     return false;
@@ -4071,7 +6060,12 @@ function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '')
     __pmVoice.activeVoiceRuntime.isStreamActive = false;
   }
 
-  if (!latestAi || !latestAi.streaming) return false;
+  if (!latestAi || !latestAi.streaming) {
+    _clearMobileActiveRun(sid);
+    _markMobileSessionRunning(sid, false);
+    _persistMobileThreadSnapshot(sid);
+    return false;
+  }
   _appendMobileProcess(latestAi, 'warn', 'Voice interruption requested worker abort. Process log preserved.', eventExtra);
   const streamed = String(latestAi.body?.text || latestAi.content || '').trim();
   latestAi.streaming = false;
@@ -4107,18 +6101,34 @@ async function _trySubmitVoiceAsLiveSteer(sessionId, transcript = '') {
   if (!voiceRuntimeActive && !chatRunActive && !gatewayActive) return false;
 
   try {
-    _voiceSetStatus('Refreshing context', 'Checking the current worker before responding');
-    const result = await mobileGatewayFetch('/api/voice-agent/input', {
-      method: 'POST',
-      body: JSON.stringify({
-        sessionId: sid,
-        transcript: text,
-        userInterruptionTranscript: text,
-        source: 'mobile_voice_live_steer',
-        clientRequestId: String(activeVoice?.activeRequestId || ''),
-      }),
-    });
+    _voiceSetStatus('Routing voice', 'Prometheus voice is checking the current worker');
+    const contextPacket = _getMobileVoiceWorkerContextPacketForTurn(sid, { source: 'mobile_voice_live_steer', originalUserPrompt: text });
+    const wakePhrase = _cleanMobileWakePhrase(__pmVoice.settings?.wakePhrase || '');
+    const requestPayload = {
+      sessionId: sid,
+      transcript: text,
+      userInterruptionTranscript: text,
+      source: 'mobile_voice_live_steer',
+      clientRequestId: String(activeVoice?.activeRequestId || ''),
+      voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice.settings?.wakeGateActive === true } : undefined,
+      ...(contextPacket ? { contextPacket } : {}),
+    };
+    let result = null;
+    let streamingDispatcher = _createMobileVoiceStreamingDispatcher();
+    try {
+      result = await streamVoiceAgentInputMobile(requestPayload, (chunk) => {
+        try { streamingDispatcher?.enqueue?.(chunk); } catch {}
+      });
+    } catch (streamErr) {
+      _voiceDebug('voice-agent-steer-stream-failed', { sessionId: sid, message: streamErr?.message || String(streamErr) });
+      streamingDispatcher = null;
+      result = await mobileGatewayFetch('/api/voice-agent/input', {
+        method: 'POST',
+        body: JSON.stringify(requestPayload),
+      });
+    }
     if (!result?.success && !result?.ok) return false;
+    _applyVoiceRuntimeDirectives(result, { deferAfterReply: true });
     const voiceProcessEntries = _voiceAgentProcessEntriesFromResult(sid, result);
     _applyVoiceInterruptionToMobileChat(sid, result, text);
     if (voiceProcessEntries.length) {
@@ -4130,7 +6140,13 @@ async function _trySubmitVoiceAsLiveSteer(sessionId, transcript = '') {
       }
     }
     const reply = String(result?.voiceReply || '').trim();
-    if (reply) await _ttsSpeak(reply);
+    const alreadySpoken = !!result?.streamedSpeech && !!streamingDispatcher;
+    try {
+      if (reply && !alreadySpoken) await _ttsSpeak(reply);
+      else if (alreadySpoken) await streamingDispatcher.wait();
+    } finally {
+      _applyPendingVoiceRuntimeDirectivesAfterReply();
+    }
     const action = String(result?.action || result?.decision?.action || '').trim();
     const confirmed = !!(result?.steerApplied || action === 'steer_worker' || action === 'interrupt_worker');
     if (confirmed) _flashVoiceOrbConfirmed();
@@ -4155,18 +6171,41 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
   if (!sid || !text) return { shouldContinueToWorker: true, result: null };
   try {
     const handoffStartedAt = Date.now();
-    _voiceSetStatus('Checking context', 'Prometheus voice is preparing a reply');
-    const result = await mobileGatewayFetch('/api/voice-agent/input', {
-      method: 'POST',
-      body: JSON.stringify({
-        sessionId: sid,
-        transcript: text,
-        userInterruptionTranscript: text,
-        source: 'mobile_voice_handoff',
-        voiceMode: String(__pmVoice.settings?.voiceMode || 'default'),
-      }),
-    });
+    _voiceSetStatus('Routing voice', 'Prometheus voice is preparing a reply');
+    const contextPacket = _getMobileVoiceWorkerContextPacketForTurn(sid, { source: 'mobile_voice_handoff', originalUserPrompt: text });
+    const wakePhrase = _cleanMobileWakePhrase(__pmVoice.settings?.wakePhrase || '');
+    const requestPayload = {
+      sessionId: sid,
+      transcript: text,
+      userInterruptionTranscript: text,
+      source: 'mobile_voice_handoff',
+      voiceMode: String(__pmVoice.settings?.voiceMode || 'default'),
+      voiceRuntime: wakePhrase ? { wakePhrase, wakeGateActive: __pmVoice.settings?.wakeGateActive === true } : undefined,
+      ...(contextPacket ? { contextPacket } : {}),
+    };
+    // Try SSE streaming first: pipe each sentence into TTS as the model generates it.
+    let result = null;
+    let streamingDispatcher = _createMobileVoiceStreamingDispatcher();
+    let firstChunkLogged = false;
+    try {
+      result = await streamVoiceAgentInputMobile(requestPayload, (chunk) => {
+        if (!firstChunkLogged) {
+          firstChunkLogged = true;
+          _voiceDebug('voice-agent-first-chunk', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt });
+        }
+        try { streamingDispatcher?.enqueue?.(chunk); } catch {}
+      });
+    } catch (streamErr) {
+      _voiceDebug('voice-agent-stream-failed', { sessionId: sid, message: streamErr?.message || String(streamErr) });
+      streamingDispatcher = null;
+      result = await mobileGatewayFetch('/api/voice-agent/input', {
+        method: 'POST',
+        body: JSON.stringify(requestPayload),
+      });
+    }
     if (!result?.success && !result?.ok) return { shouldContinueToWorker: true, result: null };
+    const alreadySpoken = !!result?.streamedSpeech && !!streamingDispatcher;
+    _applyVoiceRuntimeDirectives(result, { deferAfterReply: true });
     _voiceDebug('voice-agent-endpoint', {
       sessionId: sid,
       action: result?.action || '',
@@ -4177,18 +6216,57 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
     const voiceProcessEntries = _voiceAgentProcessEntriesFromResult(sid, result);
     if (result?.action === 'handoff_new_work') {
       if (reply) {
+        if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
+        const thread = __pmChat.threads[sid];
+        const eventId = String(result?.eventId || result?.steerEventId || '').trim();
+        const alreadyHasAck = thread.some((turn) => (
+          turn?.role === 'ai'
+          && String(turn?.content || turn?.body?.text || '').trim() === reply
+          && (!eventId || String(turn?.voiceInterruptionEventId || '') === eventId)
+        ));
+        if (!alreadyHasAck) {
+          thread.push({
+            role: 'ai',
+            time: _nowTime(),
+            timestamp: Date.now(),
+            body: { sender: 'Prometheus', text: reply },
+            content: reply,
+            source: 'voice_agent',
+            processEntries: voiceProcessEntries,
+            voiceInterruptionEventId: eventId || undefined,
+          });
+          _persistMobileThreadSnapshot(sid);
+          _renderRecent();
+        }
+      }
+      if (reply && !alreadySpoken) {
         _voiceDebug('ack-tts-started', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: true });
         _ttsSpeak(reply)
           .then(() => _voiceDebug('ack-tts-dispatched', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: true }))
-          .catch((err) => _voiceDebug('ack-tts-error', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, message: err?.message || String(err) }));
+          .catch((err) => _voiceDebug('ack-tts-error', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, message: err?.message || String(err) }))
+          .finally(() => _applyPendingVoiceRuntimeDirectivesAfterReply());
+      } else if (alreadySpoken) {
+        streamingDispatcher.wait().finally(() => _applyPendingVoiceRuntimeDirectivesAfterReply());
+      } else {
+        _applyPendingVoiceRuntimeDirectivesAfterReply();
       }
       _voiceDebug('worker-handoff-released', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt });
       return { shouldContinueToWorker: true, result };
     }
-    if (reply) {
+    if (reply && !alreadySpoken) {
       _voiceDebug('ack-tts-started', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: false });
-      await _ttsSpeak(reply);
-      _voiceDebug('ack-tts-completed', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: false });
+      try {
+        await _ttsSpeak(reply);
+      } finally {
+        _voiceDebug('ack-tts-completed', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt, nonBlocking: false });
+        _applyPendingVoiceRuntimeDirectivesAfterReply();
+      }
+    } else if (alreadySpoken) {
+      await streamingDispatcher.wait();
+      _voiceDebug('streamed-tts-completed', { sessionId: sid, elapsedMs: Date.now() - handoffStartedAt });
+      _applyPendingVoiceRuntimeDirectivesAfterReply();
+    } else {
+      _applyPendingVoiceRuntimeDirectivesAfterReply();
     }
     if (result?.steerApplied === true || result?.action === 'steer_worker') {
       _applyVoiceInterruptionToMobileChat(sid, result, text);
@@ -4292,7 +6370,10 @@ function _voiceShortSessionLabel(session) {
 
 export async function renderVoicePage(page, ctx) {
   const navigate = ctx?.navigate;
-  const header = renderMobileHeader({
+  const inlineMode = ctx?.inline === true;
+  const inlineSessionId = String(ctx?.inlineChatSessionId || '').trim();
+  const inlineSessionLabel = String(ctx?.inlineChatSessionLabel || '').trim();
+  const header = inlineMode ? '' : renderMobileHeader({
     title: 'Voice Control',
     online: true,
     hideTitle: true,
@@ -4317,6 +6398,38 @@ export async function renderVoicePage(page, ctx) {
           <div class="pm-va-tool" id="pm-va-tool"></div>
           <div class="pm-va-action" id="pm-va-action"></div>
           <div class="pm-va-detail" id="pm-va-detail" hidden></div>
+          <div class="pm-va-section" id="pm-va-path-host" hidden>
+            <div class="pm-va-section-label">Requested path</div>
+            <div class="pm-va-path-val" id="pm-va-path-val"></div>
+          </div>
+          <div class="pm-va-section" id="pm-va-boundary-host" hidden>
+            <div class="pm-va-section-label">External paths</div>
+            <pre class="pm-va-boundary-val" id="pm-va-boundary-val"></pre>
+          </div>
+          <div class="pm-va-section" id="pm-va-files-host" hidden>
+            <div class="pm-va-section-label">Files</div>
+            <div class="pm-va-files-val" id="pm-va-files-val"></div>
+          </div>
+          <div class="pm-va-section" id="pm-va-reasoning-host" hidden>
+            <div class="pm-va-section-label">Reasoning</div>
+            <div class="pm-va-reasoning-val" id="pm-va-reasoning-val"></div>
+          </div>
+          <details class="pm-va-section pm-va-collapsible" id="pm-va-evidence-host" hidden>
+            <summary>Evidence</summary>
+            <pre class="pm-va-evidence-val" id="pm-va-evidence-val"></pre>
+          </details>
+          <details class="pm-va-section pm-va-collapsible" id="pm-va-plan-host" hidden>
+            <summary>Plan</summary>
+            <pre class="pm-va-plan-val" id="pm-va-plan-val"></pre>
+          </details>
+          <details class="pm-va-section pm-va-collapsible" id="pm-va-workflow-host" hidden>
+            <summary>Expected workflow</summary>
+            <pre class="pm-va-workflow-val" id="pm-va-workflow-val"></pre>
+          </details>
+          <div class="pm-va-section" id="pm-va-final-host" hidden>
+            <div class="pm-va-section-label" id="pm-va-final-kind"></div>
+            <div class="pm-va-final-target" id="pm-va-final-target"></div>
+          </div>
           <div class="pm-va-terminal-host" id="pm-va-terminal-host" hidden></div>
           <details class="pm-va-technical" id="pm-va-technical" hidden>
             <summary>Technical details</summary>
@@ -4338,6 +6451,20 @@ export async function renderVoicePage(page, ctx) {
             <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;grid-column:1 / -1;">Voice Mode
               <select id="pm-voice-mode-provider" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;"></select>
             </label>
+            <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;grid-column:1 / -1;">Listen Mode
+              <select id="pm-voice-listen-mode" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;">
+                <option value="push_to_speak">Push to Speak</option>
+                <option value="always_listening">Always listening</option>
+              </select>
+            </label>
+            <label id="pm-voice-realtime-agent-label" style="display:none;grid-column:1 / -1;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">
+              <input type="checkbox" id="pm-voice-realtime-agent" style="margin-right:6px;vertical-align:middle;" />
+              Realtime end-to-end agent (audio in → model → audio out, no gateway voice agent)
+            </label>
+            <label id="pm-voice-xai-realtime-label" style="display:none;grid-column:1 / -1;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">
+              <input type="checkbox" id="pm-voice-xai-realtime" style="margin-right:6px;vertical-align:middle;" />
+              Use xAI Realtime (live Grok speech-to-speech over WebSocket)
+            </label>
             <label id="pm-voice-server-voice-label" style="display:none;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Response Voice
               <select id="pm-voice-server-voice" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;"></select>
             </label>
@@ -4347,6 +6474,25 @@ export async function renderVoicePage(page, ctx) {
             <label id="pm-voice-speed-control" style="display:none;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Speed <span id="pm-voice-speed-label"></span>
               <input id="pm-voice-speed" type="range" min="0.75" max="1.3" step="0.05" style="margin-top:7px;width:100%;" />
             </label>
+            <button id="pm-voice-advanced-toggle" type="button" class="pm-btn ghost" style="grid-column:1 / -1;padding:7px 11px;font-size:12px;">Advanced voice routing</button>
+            <div id="pm-voice-advanced-panel" style="display:none;grid-column:1 / -1;border-top:1px solid var(--pm-border);padding-top:9px;margin-top:2px;">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Input
+                  <select id="pm-voice-input-provider" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;">
+                    <option value="browser">Browser</option>
+                    <option value="openai_realtime">OpenAI Realtime</option>
+                    <option value="xai">xAI / Grok</option>
+                  </select>
+                </label>
+                <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Output
+                  <select id="pm-voice-output-provider" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;">
+                    <option value="browser">Browser</option>
+                    <option value="openai_realtime">OpenAI Realtime</option>
+                    <option value="xai">xAI / Grok</option>
+                  </select>
+                </label>
+              </div>
+            </div>
           </div>
         </div>
         <div id="pm-voice-dictation-fallback" style="display:none;margin-top:12px;width:min(100%,420px);">
@@ -4359,12 +6505,12 @@ export async function renderVoicePage(page, ctx) {
       </section>
 
       <section style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0 4px;">
-        <button class="pm-btn ghost" id="pm-voice-repeat" style="padding:8px 14px;font-size:13px;display:inline-flex;align-items:center;gap:6px;">
+        <button class="pm-btn ghost" id="pm-voice-repeat" type="button" style="padding:8px 14px;font-size:13px;display:inline-flex;align-items:center;gap:6px;">
           🔁 Repeat last response
         </button>
         <div style="display:inline-flex;align-items:center;gap:4px;background:var(--pm-bg-soft);border:1px solid var(--pm-border);border-radius:999px;padding:3px;font-size:12px;font-weight:700;">
-          <button data-mode="quiet"     id="pm-voice-mode-quiet"     style="border:none;background:transparent;color:var(--pm-muted);padding:5px 11px;border-radius:999px;cursor:pointer;font-weight:700;">Quiet</button>
-          <button data-mode="milestone" id="pm-voice-mode-milestone" style="border:none;background:var(--pm-orange);color:#fff;padding:5px 11px;border-radius:999px;cursor:pointer;font-weight:700;">Milestone</button>
+          <button data-mode="quiet"     id="pm-voice-mode-quiet"     type="button" style="border:none;background:transparent;color:var(--pm-muted);padding:5px 11px;border-radius:999px;cursor:pointer;font-weight:700;">Quiet</button>
+          <button data-mode="milestone" id="pm-voice-mode-milestone" type="button" style="border:none;background:var(--pm-orange);color:#fff;padding:5px 11px;border-radius:999px;cursor:pointer;font-weight:700;">Milestone</button>
         </div>
       </section>
 
@@ -4378,13 +6524,15 @@ export async function renderVoicePage(page, ctx) {
 
     </div>
   `;
-  wireHeaderActions(page, {
-    onNewChat: () => {
-      _startMobileNewVoiceDraft();
-      _paintVoiceTarget?.();
-      pmToast('New voice chat started', 'success');
-    },
-  });
+  if (!inlineMode) {
+    wireHeaderActions(page, {
+      onNewChat: () => {
+        _startMobileNewVoiceDraft();
+        _paintVoiceTarget?.();
+        pmToast('New voice chat started', 'success');
+      },
+    });
+  }
 
   const mic        = page.querySelector('#pm-voice-mic');
   const statusEl   = page.querySelector('#pm-voice-status');
@@ -4396,6 +6544,7 @@ export async function renderVoicePage(page, ctx) {
   const settingsToggle = page.querySelector('#pm-voice-settings-toggle');
   const settingsPanel = page.querySelector('#pm-voice-settings-panel');
   const voiceModeSelect = page.querySelector('#pm-voice-mode-provider');
+  const listenModeSelect = page.querySelector('#pm-voice-listen-mode');
   const serverVoiceLabel = page.querySelector('#pm-voice-server-voice-label');
   const serverVoiceSelect = page.querySelector('#pm-voice-server-voice');
   const realtimeVoiceLabel = page.querySelector('#pm-voice-realtime-voice-label');
@@ -4403,6 +6552,10 @@ export async function renderVoicePage(page, ctx) {
   const speedControl = page.querySelector('#pm-voice-speed-control');
   const speedInput = page.querySelector('#pm-voice-speed');
   const speedLabel = page.querySelector('#pm-voice-speed-label');
+  const advancedToggle = page.querySelector('#pm-voice-advanced-toggle');
+  const advancedPanel = page.querySelector('#pm-voice-advanced-panel');
+  const inputProviderSelect = page.querySelector('#pm-voice-input-provider');
+  const outputProviderSelect = page.querySelector('#pm-voice-output-provider');
   const targetBtn  = page.querySelector('#pm-voice-session-target');
   const dictFallback = page.querySelector('#pm-voice-dictation-fallback');
   const dictText = page.querySelector('#pm-voice-dictation-text');
@@ -4602,6 +6755,35 @@ export async function renderVoicePage(page, ctx) {
     _renderVoicePreviewStack();
   }
 
+  function _voicePreviewEventMatchesSession(msg = {}) {
+    const target = String(msg.target || '').toLowerCase();
+    if (target && target !== 'mobile' && target !== 'all') return false;
+    const sid = String(msg.sessionId || '').trim();
+    if (!sid) return true;
+    const targetSid = String(__pmVoice.targetSessionId || '').trim();
+    const activeSid = String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
+    return sid === targetSid || sid === activeSid;
+  }
+
+  const _voiceVisionInjectedHandler = (msg = {}) => {
+    if (!_voicePreviewEventMatchesSession(msg)) return;
+    const media = _visionEventToMobileMedia(msg);
+    if (media) _enqueueVoicePreviews([media], { transient: true });
+  };
+
+  const _voiceDeliveryNotificationHandler = (msg = {}) => {
+    if (!_voicePreviewEventMatchesSession(msg)) return;
+    const media = _deliveryNotificationToMobileMedia(msg);
+    if (media) _enqueueVoicePreviews([media], { transient: false });
+  };
+
+  wsEventBus?.on?.('vision_injected', _voiceVisionInjectedHandler);
+  wsEventBus?.on?.('delivery_notification', _voiceDeliveryNotificationHandler);
+
+  // Bridge: the module-scope realtime agent overlays screenshot previews returned
+  // by the realtime-tool endpoint directly onto the orb via this closure function.
+  __pmRealtimeAgent.enqueuePreviews = (items, opts) => _enqueueVoicePreviews(items, opts || {});
+
   function _showVoiceApproval(approval) {
     if (!approvalCard) return;
     _activeApprovalId = approval.id;
@@ -4634,6 +6816,74 @@ export async function renderVoicePage(page, ctx) {
     }
     approvalCard.querySelector('#pm-va-session')?.toggleAttribute('hidden', !_pmIsCommandApproval(approval));
     approvalCard.querySelector('#pm-va-always')?.toggleAttribute('hidden', !_pmIsCommandApproval(approval));
+
+    // ── path_access ────────────────────────────────────────────────────────
+    const pathHost = approvalCard.querySelector('#pm-va-path-host');
+    const pathVal = approvalCard.querySelector('#pm-va-path-val');
+    const isPathApproval = String(approval.approvalKind || '').trim() === 'path_access';
+    const requestedPath = String(approval.pathAccess?.requestedPath || '').trim();
+    if (pathHost) pathHost.hidden = !isPathApproval || !requestedPath;
+    if (pathVal) pathVal.textContent = requestedPath;
+
+    // ── command boundary external paths ────────────────────────────────────
+    const boundaryHost = approvalCard.querySelector('#pm-va-boundary-host');
+    const boundaryVal = approvalCard.querySelector('#pm-va-boundary-val');
+    const boundaryPaths = Array.isArray(approval.commandBoundary?.externalPaths)
+      ? approval.commandBoundary.externalPaths.filter(Boolean) : [];
+    if (boundaryHost) boundaryHost.hidden = !boundaryPaths.length;
+    if (boundaryVal) boundaryVal.textContent = boundaryPaths.slice(0, 6).join('\n');
+
+    // ── dev_source_edit ────────────────────────────────────────────────────
+    const isDevEdit = String(approval.approvalKind || '').trim() === 'dev_source_edit'
+      || String(approval.toolName || '').trim() === 'request_dev_source_edit';
+    const devFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+    const devPlan = approval.devSourceEdit?.plan || null;
+    const devEvidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
+    const devSteps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
+    const devWorkflow = Array.isArray(devPlan?.expectedWorkflow) ? devPlan.expectedWorkflow
+      : (Array.isArray(devPlan?.expected_workflow) ? devPlan.expected_workflow : []);
+    const devReasoning = String(devPlan?.reasoning || '').trim();
+
+    const filesHost = approvalCard.querySelector('#pm-va-files-host');
+    const filesVal = approvalCard.querySelector('#pm-va-files-val');
+    if (filesHost) filesHost.hidden = !isDevEdit || !devFiles.length;
+    if (filesVal) filesVal.textContent = devFiles.length
+      ? `${devFiles.length} file${devFiles.length === 1 ? '' : 's'}: ${devFiles.slice(0, 4).join(', ')}${devFiles.length > 4 ? '…' : ''}`
+      : '';
+
+    const reasoningHost = approvalCard.querySelector('#pm-va-reasoning-host');
+    const reasoningVal = approvalCard.querySelector('#pm-va-reasoning-val');
+    if (reasoningHost) reasoningHost.hidden = !isDevEdit || !devReasoning;
+    if (reasoningVal) reasoningVal.textContent = devReasoning;
+
+    const evidenceHost = approvalCard.querySelector('#pm-va-evidence-host');
+    const evidenceVal = approvalCard.querySelector('#pm-va-evidence-val');
+    if (evidenceHost) evidenceHost.hidden = !isDevEdit || !devEvidence.length;
+    if (evidenceVal) evidenceVal.textContent = devEvidence.slice(0, 5)
+      .map((e) => `${e.file || 'file'}${e.lines ? `:${e.lines}` : ''} — ${e.finding || ''}`).join('\n');
+
+    const planHost = approvalCard.querySelector('#pm-va-plan-host');
+    const planVal = approvalCard.querySelector('#pm-va-plan-val');
+    if (planHost) planHost.hidden = !isDevEdit || !devSteps.length;
+    if (planVal) planVal.textContent = devSteps.slice(0, 8).map((s, i) => `${i + 1}. ${s}`).join('\n');
+
+    const workflowHost = approvalCard.querySelector('#pm-va-workflow-host');
+    const workflowVal = approvalCard.querySelector('#pm-va-workflow-val');
+    if (workflowHost) workflowHost.hidden = !isDevEdit || !devWorkflow.length;
+    if (workflowVal) workflowVal.textContent = devWorkflow.slice(0, 6).map((s, i) => `${i + 1}. ${s}`).join('\n');
+
+    // ── final_action ───────────────────────────────────────────────────────
+    const isFinalAction = String(approval.approvalKind || '').trim() === 'final_action'
+      || String(approval.toolName || '').trim() === 'request_final_action_approval';
+    const finalKind = String(approval.finalAction?.actionKind || approval.toolArgs?.action_kind || '').trim();
+    const finalTarget = String(approval.finalAction?.targetLabel || approval.toolArgs?.target_label || '').trim();
+    const finalHost = approvalCard.querySelector('#pm-va-final-host');
+    const finalKindEl = approvalCard.querySelector('#pm-va-final-kind');
+    const finalTargetEl = approvalCard.querySelector('#pm-va-final-target');
+    if (finalHost) finalHost.hidden = !isFinalAction;
+    if (finalKindEl) finalKindEl.textContent = finalKind ? finalKind.charAt(0).toUpperCase() + finalKind.slice(1) : 'Action';
+    if (finalTargetEl) finalTargetEl.textContent = finalTarget;
+
     approvalCard.querySelectorAll('.pm-va-btn')?.forEach((btn) => { btn.disabled = false; });
     approvalCard.classList.remove('pm-va-success', 'pm-va-failed', 'pm-va-running');
     approvalCard.style.setProperty('--va-accent', riskColor);
@@ -4729,12 +6979,20 @@ export async function renderVoicePage(page, ctx) {
   const previousVoiceCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousVoiceCleanup?.();
+    wsEventBus?.off?.('vision_injected', _voiceVisionInjectedHandler);
+    wsEventBus?.off?.('delivery_notification', _voiceDeliveryNotificationHandler);
     wsEventBus?.off?.('process_run_exited', _voiceProcessExitHandler);
     wsEventBus?.off?.('timer_done', _voiceTimerDoneHandler);
+    if (__pmVoice.listening) {
+      if (_isAlwaysListeningMode() && !inlineMode) __pmVoice.resumeAlwaysListeningOnVoicePage = true;
+      _stopListening(true);
+    }
     if (__pmVoice.previewTimer) {
       clearTimeout(__pmVoice.previewTimer);
       __pmVoice.previewTimer = null;
     }
+    window.__pmVoiceTargetPicker = null;
+    document.removeEventListener('pm-drawer-closed', _onDrawerClosed);
   };
 
   let _paintVoiceTarget = () => {};
@@ -4745,6 +7003,15 @@ export async function renderVoicePage(page, ctx) {
     targetBtn.textContent = `Target: ${label}`;
     targetBtn.title = sid ? `${label}\n${sid}` : 'Voice commands will use the latest active chat.';
   };
+
+  if (inlineMode) {
+    __pmVoice.targetSessionId = inlineSessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID;
+    __pmVoice.targetSessionLabel = inlineSessionLabel || (__pmVoice.targetSessionId === MOBILE_CHAT_SESSION_ID ? 'Mobile - New Chat' : 'Mobile - Chat');
+    __pmVoice.targetSessionChannel = 'mobile';
+    __pmVoice.targetSessionForced = true;
+    if (targetBtn) targetBtn.hidden = true;
+    _paintVoiceTarget();
+  }
 
   async function _resolveVoiceSessionTarget({ forceRefresh = false } = {}) {
     const forced = __pmVoice.targetSessionForced && String(__pmVoice.targetSessionId || '').trim();
@@ -4772,23 +7039,50 @@ export async function renderVoicePage(page, ctx) {
     return String(__pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID).trim();
   }
 
-  targetBtn.addEventListener('click', async () => {
-    __pmVoice.targetSessionForced = false;
-    __pmVoice.targetSessionId = '';
-    targetBtn.textContent = 'Target: resolving latest chat...';
-    const sid = await _resolveVoiceSessionTarget({ forceRefresh: true });
-    pmToast(`Voice target: ${__pmVoice.targetSessionLabel || sid}`, 'info');
+  const _onDrawerClosed = () => { window.__pmVoiceTargetPicker = null; };
+  document.addEventListener('pm-drawer-closed', _onDrawerClosed);
+
+  targetBtn.addEventListener('click', () => {
+    if (inlineMode) return;
+    window.__pmVoiceTargetPicker = async (sessionId) => {
+      const sessionData = await loadMobileChatSession(sessionId).catch(() => null);
+      __pmVoice.targetSessionId = sessionId;
+      __pmVoice.targetSessionLabel = sessionData ? _voiceShortSessionLabel(sessionData) : `Chat - ${sessionId}`;
+      __pmVoice.targetSessionChannel = sessionData?.channel || '';
+      __pmVoice.targetSessionForced = true;
+      _paintVoiceTarget();
+      pmToast(`Voice target: ${__pmVoice.targetSessionLabel}`, 'info');
+    };
+    openDrawer();
   });
 
-  _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced }).catch(() => {
-    __pmVoice.targetSessionId = __pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID;
-    __pmVoice.targetSessionLabel = __pmVoice.targetSessionLabel || 'Mobile - New Chat';
-    _paintVoiceTarget();
-  });
+  if (!inlineMode) {
+    _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced }).catch(() => {
+      __pmVoice.targetSessionId = __pmVoice.targetSessionId || MOBILE_CHAT_SESSION_ID;
+      __pmVoice.targetSessionLabel = __pmVoice.targetSessionLabel || 'Mobile - New Chat';
+      _paintVoiceTarget();
+    });
+  }
 
   // ── Provider detection ─────────────────────────────────────────────
   function _providerOptionHtml(id, label, selected) {
     return `<option value="${escapeHtml(id)}" ${id === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+  }
+
+  function _routingProviderReady(provider, kind) {
+    const id = String(provider || 'browser');
+    if (id === 'browser') return true;
+    if (id === 'openai_realtime') return _isRealtimeConnected(__pmVoice.lastVoiceStatus);
+    const list = kind === 'input' ? __pmVoice.voiceStatus?.sttProviders : __pmVoice.voiceStatus?.ttsProviders;
+    return Array.isArray(list) && list.some(p => p?.configured && p?.id === id);
+  }
+
+  function _syncVoicePresetFromRouting() {
+    const sttProvider = String(__pmVoice.settings?.sttProvider || 'browser');
+    const ttsProvider = String(__pmVoice.settings?.ttsProvider || 'browser');
+    const preset = _voicePresetForProviders(sttProvider, ttsProvider);
+    _saveVoiceSettings({ voiceMode: preset });
+    return preset;
   }
 
   function _paintVoiceSettings() {
@@ -4797,17 +7091,33 @@ export async function renderVoicePage(page, ctx) {
     const ttsProviders = Array.isArray(__pmVoice.voiceStatus?.ttsProviders) ? __pmVoice.voiceStatus.ttsProviders : [];
     const realtimeReady = _isRealtimeConnected(__pmVoice.lastVoiceStatus);
     const xaiReady = sttProviders.some(p => p?.configured && p?.id === 'xai') && ttsProviders.some(p => p?.configured && p?.id === 'xai');
-    const selectedMode = ['default', 'openai_realtime', 'xai'].includes(settings.voiceMode) ? settings.voiceMode : 'default';
+    const selectedMode = ['default', 'openai_realtime', 'xai', 'custom'].includes(settings.voiceMode) ? settings.voiceMode : _syncVoicePresetFromRouting();
+    const outputProvider = String(settings.ttsProvider || _outputProviderForMode(selectedMode));
+    if (listenModeSelect) listenModeSelect.value = _voiceListenMode();
+    // Realtime-agent toggle: only visible when voice mode is openai_realtime
+    const realtimeAgentLabel = page.querySelector('#pm-voice-realtime-agent-label');
+    const realtimeAgentCheckbox = page.querySelector('#pm-voice-realtime-agent');
+    if (realtimeAgentLabel) realtimeAgentLabel.style.display = selectedMode === 'openai_realtime' ? '' : 'none';
+    if (realtimeAgentCheckbox) realtimeAgentCheckbox.checked = settings.voiceAgentRealtimeAgent !== false;
+    // xAI realtime toggle: only visible when voice mode is xai
+    const xaiRealtimeLabel = page.querySelector('#pm-voice-xai-realtime-label');
+    const xaiRealtimeCheckbox = page.querySelector('#pm-voice-xai-realtime');
+    if (xaiRealtimeLabel) xaiRealtimeLabel.style.display = selectedMode === 'xai' ? '' : 'none';
+    if (xaiRealtimeCheckbox) xaiRealtimeCheckbox.checked = settings.voiceAgentXaiRealtime === true;
     voiceModeSelect.innerHTML = [
       _providerOptionHtml('default', 'Default', selectedMode),
       _providerOptionHtml('openai_realtime', `OpenAI Realtime${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
       _providerOptionHtml('xai', `xAI / Grok${xaiReady ? '' : ' (not connected)'}`, selectedMode),
+      _providerOptionHtml('custom', 'Custom routing', selectedMode),
     ].join('');
-    const selectedServerTts = selectedMode === 'xai' && xaiReady ? 'xai' : '';
+    if (inputProviderSelect) inputProviderSelect.value = String(settings.sttProvider || _inputProviderForMode(selectedMode));
+    if (outputProviderSelect) outputProviderSelect.value = outputProvider;
+    if (advancedPanel && selectedMode === 'custom') advancedPanel.style.display = 'block';
+    const selectedServerTts = outputProvider === 'xai' && _routingProviderReady('xai', 'output') ? 'xai' : '';
     realtimeVoiceSelect.innerHTML = REALTIME_VOICE_OPTIONS
       .map(id => _providerOptionHtml(id, id[0].toUpperCase() + id.slice(1), settings.realtimeVoice || 'marin'))
       .join('');
-    if (realtimeVoiceLabel) realtimeVoiceLabel.style.display = selectedMode === 'openai_realtime' ? '' : 'none';
+    if (realtimeVoiceLabel) realtimeVoiceLabel.style.display = outputProvider === 'openai_realtime' ? '' : 'none';
     if (selectedServerTts && serverVoiceLabel && serverVoiceSelect) {
       serverVoiceLabel.style.display = '';
       serverVoiceSelect.innerHTML = `<option value="">Loading voices...</option>`;
@@ -4832,11 +7142,11 @@ export async function renderVoicePage(page, ctx) {
       serverVoiceLabel.style.display = 'none';
       serverVoiceSelect.innerHTML = '';
     }
-    const speedValue = selectedMode === 'xai' ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05);
-    if (speedControl) speedControl.style.display = ['openai_realtime', 'xai'].includes(selectedMode) ? '' : 'none';
-    speedInput.min = selectedMode === 'xai' ? '0.5' : '0.75';
-    speedInput.max = selectedMode === 'xai' ? '2' : '1.3';
-    speedInput.step = selectedMode === 'xai' ? '0.05' : '0.05';
+    const speedValue = outputProvider === 'xai' ? Number(settings.xaiSpeed || 1.0) : Number(settings.realtimeSpeed || 1.05);
+    if (speedControl) speedControl.style.display = ['openai_realtime', 'xai'].includes(outputProvider) ? '' : 'none';
+    speedInput.min = outputProvider === 'xai' ? '0.5' : '0.75';
+    speedInput.max = outputProvider === 'xai' ? '2' : '1.3';
+    speedInput.step = '0.05';
     speedInput.value = String(speedValue);
     speedLabel.textContent = `${Number(speedInput.value).toFixed(2)}x`;
   }
@@ -4848,14 +7158,18 @@ export async function renderVoicePage(page, ctx) {
 
   function _paintProviderBanner() {
     const p = __pmVoice.provider || _detectProvider(__pmVoice.lastVoiceStatus || {});
-    const mode = String(__pmVoice.settings?.voiceMode || 'default');
-    let detail = mode === 'openai_realtime'
-      ? (p.id === 'openai_realtime' ? 'Mode: <strong>OpenAI Realtime</strong>' : 'Mode: <strong>Default</strong> - OpenAI Realtime unavailable')
-      : mode === 'xai'
-        ? (p.id === 'xai' ? 'Mode: <strong>xAI / Grok</strong>' : 'Mode: <strong>Default</strong> - xAI/Grok unavailable')
-        : 'Mode: <strong>Default</strong>';
-    if (p.id === 'openai_realtime') detail += ` - ${escapeHtml(p.voice || 'marin')}`;
-    if (p.id === 'xai') detail += ` - ${escapeHtml(p.ttsVoice || 'eve')}`;
+    const stt = String(p.sttProvider || __pmVoice.settings?.sttProvider || 'browser');
+    const tts = String(p.ttsProvider || __pmVoice.settings?.ttsProvider || 'browser');
+    const providerLabel = (id, kind) => {
+      if (id === 'openai_realtime') return 'OpenAI Realtime';
+      if (id === 'xai') return 'xAI / Grok';
+      if (kind === 'input') return 'Browser';
+      return 'Device voice';
+    };
+    let detail = `Input: <strong>${escapeHtml(providerLabel(stt, 'input'))}</strong> - Output: <strong>${escapeHtml(providerLabel(tts, 'output'))}</strong>`;
+    if (tts === 'openai_realtime') detail += ` - ${escapeHtml(p.voice || __pmVoice.settings?.realtimeVoice || 'marin')}`;
+    if (tts === 'xai') detail += ` - ${escapeHtml(p.ttsVoice || __pmVoice.settings?.serverVoice || 'eve')}`;
+    detail += ` - ${_isAlwaysListeningMode() ? 'Always listening' : 'Push to Speak'}`;
     banner.innerHTML = detail + ` - <a href="#" id="pm-voice-settings" style="color:var(--pm-orange);font-weight:700;text-decoration:none;">Settings</a>`;
     page.querySelector('#pm-voice-settings')?.addEventListener('click', e => {
       e.preventDefault();
@@ -4868,16 +7182,92 @@ export async function renderVoicePage(page, ctx) {
   });
   voiceModeSelect.addEventListener('change', () => {
     const mode = voiceModeSelect.value || 'default';
+    const wasListening = __pmVoice.listening;
+    if (mode === 'custom') {
+      _saveVoiceSettings({ voiceMode: 'custom', sttProviderLocked: true });
+      if (advancedPanel) advancedPanel.style.display = 'block';
+      _recomputeVoiceProvider();
+      _paintProviderBanner();
+      return;
+    }
     _saveVoiceSettings({
       voiceMode: mode,
-      sttProvider: mode === 'openai_realtime' ? 'openai_realtime' : (mode === 'xai' ? 'xai' : 'browser'),
-      ttsProvider: mode === 'openai_realtime' ? 'openai_realtime' : (mode === 'xai' ? 'xai' : 'browser'),
+      sttProvider: _inputProviderForMode(mode),
+      ttsProvider: _outputProviderForMode(mode),
       serverVoice: mode === 'xai' ? (__pmVoice.settings?.serverVoice || 'eve') : '',
       sttProviderLocked: true,
+      autoProviderDefault: '',
     });
+    if (mode !== 'openai_realtime') _closeRealtimeSpeechConnection();
     _recomputeVoiceProvider();
     _paintProviderBanner();
+    if (wasListening) {
+      _stopListening(true);
+      if (_isAlwaysListeningMode()) setTimeout(() => _startAlwaysListening(), 250);
+    }
   });
+  listenModeSelect?.addEventListener('change', () => {
+    const listenMode = listenModeSelect.value === 'always_listening' ? 'always_listening' : 'push_to_speak';
+    _saveVoiceSettings(listenMode === 'push_to_speak'
+      ? { listenMode, wakePhrase: '', wakeGateActive: false, autoProviderDefault: '' }
+      : { listenMode, wakeGateActive: false, autoProviderDefault: '' });
+    if (listenMode === 'always_listening') {
+      pmToast('Always listening enabled', 'success');
+      _startAlwaysListening();
+    } else {
+      pressArm = false;
+      mic.classList.remove('pressed');
+      if (__pmVoice.listening) _stopListening(true);
+      _setReadyVoiceState();
+      pmToast('Push to Speak enabled. Wake phrase cleared.', 'info');
+    }
+    _paintVoiceSettings();
+    _paintProviderBanner();
+  });
+  advancedToggle?.addEventListener('click', () => {
+    if (!advancedPanel) return;
+    advancedPanel.style.display = advancedPanel.style.display === 'none' ? 'block' : 'none';
+  });
+  page.querySelector('#pm-voice-realtime-agent')?.addEventListener('change', (ev) => {
+    const enabled = ev?.target?.checked !== false;
+    if (__pmVoice.listening) _stopListening(true);
+    _stopMobileRealtimeAgentSession();
+    _saveVoiceSettings({ voiceAgentRealtimeAgent: enabled });
+    pmToast(enabled ? 'Realtime end-to-end agent enabled' : 'Realtime agent disabled', 'info');
+    _paintProviderBanner();
+  });
+  page.querySelector('#pm-voice-xai-realtime')?.addEventListener('change', (ev) => {
+    const enabled = ev?.target?.checked === true;
+    if (__pmVoice.listening) _stopListening(true);
+    _stopMobileRealtimeAgentSession();
+    _saveVoiceSettings({ voiceAgentXaiRealtime: enabled });
+    pmToast(enabled ? 'xAI Realtime enabled' : 'xAI Realtime disabled', 'info');
+    _paintProviderBanner();
+  });
+  const _applyRoutingProviderChange = () => {
+    const wasListening = __pmVoice.listening;
+    const previousOutput = String(__pmVoice.settings?.ttsProvider || 'browser');
+    const sttProvider = String(inputProviderSelect?.value || 'browser');
+    const ttsProvider = String(outputProviderSelect?.value || 'browser');
+    const preset = _voicePresetForProviders(sttProvider, ttsProvider);
+    _saveVoiceSettings({
+      sttProvider,
+      ttsProvider,
+      voiceMode: preset,
+      serverVoice: ttsProvider === 'xai' ? (__pmVoice.settings?.serverVoice || 'eve') : __pmVoice.settings?.serverVoice || '',
+      sttProviderLocked: true,
+      autoProviderDefault: '',
+    });
+    if (previousOutput === 'openai_realtime' || ttsProvider === 'openai_realtime') _closeRealtimeSpeechConnection();
+    _recomputeVoiceProvider();
+    _paintProviderBanner();
+    if (wasListening) {
+      _stopListening(true);
+      if (_isAlwaysListeningMode()) setTimeout(() => _startAlwaysListening(), 250);
+    }
+  };
+  inputProviderSelect?.addEventListener('change', _applyRoutingProviderChange);
+  outputProviderSelect?.addEventListener('change', _applyRoutingProviderChange);
   serverVoiceSelect?.addEventListener('change', () => {
     _saveVoiceSettings({ serverVoice: serverVoiceSelect.value });
     if (__pmVoice.provider) __pmVoice.provider.ttsVoice = serverVoiceSelect.value;
@@ -4891,18 +7281,56 @@ export async function renderVoicePage(page, ctx) {
   });
   speedInput.addEventListener('input', () => {
     speedLabel.textContent = `${Number(speedInput.value).toFixed(2)}x`;
-    const mode = String(__pmVoice.settings?.voiceMode || 'default');
-    _saveVoiceSettings(mode === 'xai' ? { xaiSpeed: Number(speedInput.value) } : { realtimeSpeed: Number(speedInput.value) });
+    const outputProvider = String(__pmVoice.settings?.ttsProvider || _outputProviderForMode(__pmVoice.settings?.voiceMode || 'default'));
+    _saveVoiceSettings(outputProvider === 'xai' ? { xaiSpeed: Number(speedInput.value) } : { realtimeSpeed: Number(speedInput.value) });
     _recomputeVoiceProvider();
     _paintProviderBanner();
   });
 
+  let autoStartHandled = false;
+  const _runVoiceAutoStart = () => {
+    if (autoStartHandled || ctx?.autoStart !== true) return;
+    autoStartHandled = true;
+    _unlockVoiceAudio();
+    if (_isAlwaysListeningMode()) {
+      setTimeout(() => _startAlwaysListening(), 0);
+    } else {
+      pressArm = true;
+      mic.classList.add('pressed');
+      _ensureWarmMic().catch((err) => {
+        _showDictationFallback(err?.message || _voiceCapabilityNote());
+        pmToast('Microphone permission is not available', 'error');
+      });
+      _startListening();
+    }
+  };
+
   loadVoiceStatus().then(status => {
     __pmVoice.lastVoiceStatus = status;
     __pmVoice.voiceStatus = status?.voice || null;
+    _applyMobileVoiceProviderDefaults(status);
     __pmVoice.provider = _detectProvider(status);
     _paintVoiceSettings();
     _paintProviderBanner();
+    _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'mobile_voice_page_ready' });
+    // If mic permission was already granted in a prior session, warm the mic stream
+    // and realtime connection now so the very first PTT press is instant.
+    const inputNow = String(__pmVoice.settings?.sttProvider || _inputProviderForMode(__pmVoice.settings?.voiceMode || 'default'));
+    if (inputNow === 'openai_realtime' && _isRealtimeConnected(status)) {
+      const tryPrewarm = () => _ensureWarmMic().then(() => _prewarmRealtimeConn()).catch(() => {});
+      if (navigator.permissions) {
+        navigator.permissions.query({ name: 'microphone' })
+          .then(r => { if (r.state === 'granted') tryPrewarm(); })
+          .catch(() => {});
+      }
+    }
+    if (_isAlwaysListeningMode() && !__pmVoice.listening) {
+      __pmVoice.resumeAlwaysListeningOnVoicePage = false;
+      if (ctx?.autoStart === true) _runVoiceAutoStart();
+      else setTimeout(() => _startAlwaysListening(), 350);
+    } else {
+      _runVoiceAutoStart();
+    }
     return;
     const p = __pmVoice.provider;
     const mode = String(__pmVoice.settings?.voiceMode || 'default');
@@ -4917,6 +7345,7 @@ export async function renderVoicePage(page, ctx) {
     page.querySelector('#pm-voice-settings')?.addEventListener('click', e => { e.preventDefault(); navigate?.('#mobile/settings/models'); });
   }).catch(() => {
     banner.textContent = 'Using browser speech';
+    _runVoiceAutoStart();
   });
 
   // ── Dictation mode toggle ─────────────────────────────────────────
@@ -4933,6 +7362,7 @@ export async function renderVoicePage(page, ctx) {
     modeMile.style.color  = mode === 'milestone' ? activeColor : inactiveColor;
   }
   _setMode(__pmVoice.dictation);
+  if (!__pmVoice.listening) _setReadyVoiceState();
   modeQuiet.addEventListener('click', () => _setMode('quiet'));
   modeMile.addEventListener('click',  () => _setMode('milestone'));
 
@@ -5061,8 +7491,192 @@ export async function renderVoicePage(page, ctx) {
   let recognitionSubmitTimer = null;
   let pressArm = false;
   let suppressNextClick = false;
+  // Pre-warmed connections — established in background so PTT starts instantly
+  let warmRealtimeConn = null;        // { pc, dc, stream, ready } — OpenAI Realtime RTCPeerConnection
+  let warmRealtimeConnPromise = null; // in-flight prewarm promise
 
   function _setStatus(s, hint) { _voiceSetStatus(s, hint); }
+
+  function _voiceListenMode() {
+    return __pmVoice.settings?.listenMode === 'always_listening' ? 'always_listening' : 'push_to_speak';
+  }
+
+  function _isAlwaysListeningMode() {
+    return _voiceListenMode() === 'always_listening';
+  }
+
+  function _shouldKeepListening() {
+    return pressArm || _isAlwaysListeningMode();
+  }
+
+  function _readyVoiceHint() {
+    if (!_isAlwaysListeningMode()) return 'Tap and hold the mic to speak';
+    const wakePhrase = _cleanMobileWakePhrase(__pmVoice.settings?.wakePhrase || '');
+    return wakePhrase && __pmVoice.settings?.wakeGateActive === true
+      ? `Quiet until "${wakePhrase}"`
+      : 'Always listening while this page stays open';
+  }
+
+  function _setReadyVoiceState() {
+    _setOrbState(null);
+    _setStatus('Ready', _readyVoiceHint());
+  }
+
+  function _splitMobileWakePhraseRemainder(text) {
+    const source = String(text || '').replace(/\s+/g, ' ').trim();
+    const phrase = _isAlwaysListeningMode() && __pmVoice.settings?.wakeGateActive === true
+      ? _cleanMobileWakePhrase(__pmVoice.settings?.wakePhrase || '')
+      : '';
+    if (!source || !phrase) return { allowed: true, text: source };
+    const normalizedPhrase = _normalizeMobileWakePhrase(phrase);
+    const sourceWords = source.split(/\s+/).filter(Boolean);
+    const phraseWords = phrase.split(/\s+/).filter(Boolean);
+    if (!normalizedPhrase || !phraseWords.length || sourceWords.length < phraseWords.length) {
+      return { allowed: false, text: source };
+    }
+    for (let i = 0; i <= sourceWords.length - phraseWords.length; i += 1) {
+      const candidate = _normalizeMobileWakePhrase(sourceWords.slice(i, i + phraseWords.length).join(' '));
+      if (candidate !== normalizedPhrase) continue;
+      const remainder = sourceWords.slice(i + phraseWords.length).join(' ').trim();
+      _saveVoiceSettings({ wakeGateActive: false });
+      _setReadyVoiceState();
+      _paintVoiceSettings();
+      _paintProviderBanner();
+      return { allowed: true, text: remainder, woke: true };
+    }
+    return { allowed: false, text: source };
+  }
+
+  function _collapseDuplicatedFinalTranscript(text) {
+    const source = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!source) return '';
+    const words = source.split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length % 2 !== 0) return source;
+    const midpoint = words.length / 2;
+    const firstWords = words.slice(0, midpoint);
+    const secondWords = words.slice(midpoint);
+    const firstNormalized = _normalizeMobileWakePhrase(firstWords.join(' '));
+    const secondNormalized = _normalizeMobileWakePhrase(secondWords.join(' '));
+    if (!firstNormalized || firstNormalized !== secondNormalized) return source;
+    const collapsed = firstWords.join(' ').trim();
+    _voiceDebug('voice-final-transcript-deduped', { originalLen: source.length, collapsedLen: collapsed.length });
+    return collapsed || source;
+  }
+
+  function _clearMobileWakePhrase({ speak = false } = {}) {
+    _saveVoiceSettings({ wakePhrase: '', wakeGateActive: false });
+    _setReadyVoiceState();
+    _paintVoiceSettings();
+    _paintProviderBanner();
+    const text = 'Unlocked. Always listening normally.';
+    pmToast('Wake phrase cleared', 'success');
+    if (speak) _ttsSpeak(text).catch(() => {});
+  }
+
+  function _setMobileWakePhrase(phrase, { speak = false } = {}) {
+    const wakePhrase = _cleanMobileWakePhrase(phrase);
+    if (!wakePhrase) return false;
+    _saveVoiceSettings({ wakePhrase, wakeGateActive: false });
+    _setReadyVoiceState();
+    _paintVoiceSettings();
+    _paintProviderBanner();
+    pmToast(`Wake phrase set to "${wakePhrase}"`, 'success');
+    _voiceDebug('wake-phrase-set-local', { phraseLen: wakePhrase.length, speak });
+    return true;
+  }
+
+  function _activateMobileQuietGate({ speak = false } = {}) {
+    const wakePhrase = _cleanMobileWakePhrase(__pmVoice.settings?.wakePhrase || '');
+    if (!wakePhrase) {
+      const text = 'Set a wake phrase first, so you do not get stuck in quiet mode.';
+      pmToast('Wake phrase needed', 'Say "set my wake phrase to ..." first.', 'info');
+      _setStatus('Wake phrase needed', 'Say “set my wake phrase to ...” first');
+      if (speak) _ttsSpeak(text).catch(() => {});
+      return true;
+    }
+    _saveVoiceSettings({ wakeGateActive: true });
+    _setStatus('Quiet mode', `Say "${wakePhrase}" to wake Prometheus`);
+    _paintVoiceSettings();
+    _paintProviderBanner();
+    pmToast(`Quiet until "${wakePhrase}"`, 'info');
+    return true;
+  }
+
+  function _maybeHandleMobileWakeControl(text) {
+    if (_isMobileWakeUnlockCommand(text)) {
+      _clearMobileWakePhrase({ speak: true });
+      return true;
+    }
+    const wakePhraseCommand = _parseMobileWakePhraseSettingCommand(text);
+    if (wakePhraseCommand) {
+      _setMobileWakePhrase(wakePhraseCommand.phrase, { speak: false });
+      return false;
+    }
+    if (_isMobileQuietModeCommand(text)) {
+      _activateMobileQuietGate({ speak: true });
+      return true;
+    }
+    return false;
+  }
+
+  function _submitAlwaysListeningSpeech(text) {
+    let finalText = _collapseDuplicatedFinalTranscript(text);
+    if (!finalText) return false;
+    if (_isMobileWakeUnlockCommand(finalText)) {
+      _clearMobileWakePhrase({ speak: true });
+      return true;
+    }
+    const wake = _splitMobileWakePhraseRemainder(finalText);
+    if (!wake.allowed) {
+      _voiceDebug('wake-phrase-gated', { textLen: finalText.length, phraseLen: String(__pmVoice.settings?.wakePhrase || '').length });
+      _setStatus('Listening', `Say "${__pmVoice.settings?.wakePhrase}" to wake Prometheus`);
+      return false;
+    }
+    if (wake.woke && !wake.text) {
+      pmToast('Prometheus is listening normally', 'success');
+      return true;
+    }
+    finalText = wake.text || finalText;
+    if (_maybeHandleMobileWakeControl(finalText)) return true;
+    const submitText = finalText;
+    const normalized = _normalizeMobileWakePhrase(submitText);
+    const previous = String(__pmVoice.realtimeLastAutoSubmitText || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+    const previousAt = Number(__pmVoice.realtimeLastAutoSubmitAt || 0);
+    if (normalized && previous && normalized === previous && Date.now() - previousAt < 10000) {
+      _voiceDebug('realtime-always-submit-dedupe', { textLen: submitText.length });
+      return false;
+    }
+    __pmVoice.realtimeLastAutoSubmitText = submitText;
+    __pmVoice.realtimeLastAutoSubmitAt = Date.now();
+    if (__pmVoice.realtimeAlwaysSubmitTimer) {
+      clearTimeout(__pmVoice.realtimeAlwaysSubmitTimer);
+      __pmVoice.realtimeAlwaysSubmitTimer = null;
+    }
+    if (!__pmVoice.alwaysSubmitChain) __pmVoice.alwaysSubmitChain = Promise.resolve();
+    __pmVoice.alwaysSubmitChain = __pmVoice.alwaysSubmitChain
+      .catch(() => {})
+      .then(() => _submitSpeech(submitText))
+      .catch((err) => {
+        console.warn('[voice] always-listening submit failed', err);
+        pmToast(err?.message || 'Voice submit failed', 'error');
+      });
+    return true;
+  }
+
+  function _scheduleRealtimeAlwaysSubmit(reason = 'realtime_settled', delayMs = 900) {
+    if (!_isAlwaysListeningMode()) return;
+    if (__pmVoice.realtimeAlwaysSubmitTimer) clearTimeout(__pmVoice.realtimeAlwaysSubmitTimer);
+    __pmVoice.realtimeAlwaysSubmitTimer = setTimeout(() => {
+      __pmVoice.realtimeAlwaysSubmitTimer = null;
+      const text = _currentRealtimeTranscript();
+      if (!text) return;
+      __pmVoice.realtimeTranscript = '';
+      __pmVoice.realtimeDeltas = new Map();
+      __pmVoice.realtimeFinalAt = 0;
+      _voiceDebug('voice-always-submit-fallback', { reason, textLen: text.length });
+      _submitAlwaysListeningSpeech(text);
+    }, Math.max(120, Number(delayMs || 900) || 900));
+  }
 
   function _voiceCapabilityNote() {
     const secure = window.isSecureContext === true;
@@ -5099,6 +7713,7 @@ export async function renderVoicePage(page, ctx) {
           if (__pmVoice.warmMicStream === stream) __pmVoice.warmMicStream = null;
         });
       });
+      setTimeout(() => _prewarmRealtimeConn(), 80);
       return stream;
     }).catch((err) => {
       __pmVoice.warmMicPromise = null;
@@ -5111,7 +7726,73 @@ export async function renderVoicePage(page, ctx) {
     try { __pmVoice.warmMicStream?.getTracks?.().forEach(track => track.stop()); } catch {}
     __pmVoice.warmMicStream = null;
     __pmVoice.warmMicPromise = null;
+    try { xaiWarmAudioContext?.close?.(); } catch {}
+    xaiWarmAudioContext = null;
     _closeRealtimeSpeechConnection();
+    _discardWarmRealtimeConn();
+  }
+
+  function _discardWarmRealtimeConn() {
+    const conn = warmRealtimeConn;
+    warmRealtimeConn = null;
+    warmRealtimeConnPromise = null;
+    // Re-enable tracks before closing so the mic stream isn't left muted
+    try { conn?.stream?.getAudioTracks?.().forEach(t => { t.enabled = true; }); } catch {}
+    try { conn?.dc?.close?.(); } catch {}
+    try { conn?.pc?.close?.(); } catch {}
+  }
+
+  // Establishes a RTCPeerConnection + data channel in the background so that
+  // when the user presses PTT the connection is already open and transcription
+  // begins immediately instead of spending 1–2 s on "Connecting...".
+  async function _prewarmRealtimeConn() {
+    const mode = String(__pmVoice.settings?.voiceMode || 'default');
+    const inputProvider = String(__pmVoice.settings?.sttProvider || _inputProviderForMode(mode));
+    if (inputProvider !== 'openai_realtime') return;
+    if (!_isRealtimeConnected()) return;
+    if (realtimeTranscription) return; // never prewarm while a live transcription owns the tracks
+    if (warmRealtimeConn?.ready || warmRealtimeConnPromise) return;
+    if (!_hasUsableWarmMic()) return; // mic must already be granted — never prompt here
+    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') return;
+
+    warmRealtimeConnPromise = (async () => {
+      try {
+        const stream = __pmVoice.warmMicStream; // already live — no getUserMedia call
+        // Mute tracks while idle so OpenAI receives no ambient audio
+        stream.getAudioTracks().forEach(t => { t.enabled = false; });
+
+        const pc = new RTCPeerConnection();
+        stream.getAudioTracks().forEach(track => pc.addTrack(track, stream));
+        const dc = pc.createDataChannel('oai-events');
+
+        const dcOpen = new Promise((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error('Prewarm timeout')), 15000);
+          dc.addEventListener('open', () => { clearTimeout(t); resolve(); }, { once: true });
+          dc.addEventListener('error', () => { clearTimeout(t); reject(new Error('Prewarm DC error')); }, { once: true });
+        });
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const offerSdp = await _waitForLocalRealtimeOfferSdp(pc);
+        const answerSdp = await _exchangeRealtimeSdpViaGateway({
+          sdp: offerSdp,
+          mode: 'transcription',
+          language: navigator.language?.split('-')?.[0] || undefined,
+        });
+        await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+        await dcOpen;
+
+        // Tracks stay disabled until user presses PTT
+        warmRealtimeConn = { pc, dc, stream, ready: true };
+        warmRealtimeConnPromise = null;
+        _voiceDebug('prewarm-realtime-ok', {});
+      } catch (err) {
+        warmRealtimeConnPromise = null;
+        warmRealtimeConn = null;
+        _voiceDebug('prewarm-realtime-error', { message: String(err?.message || err).slice(0, 300) });
+      }
+    })();
+    return warmRealtimeConnPromise;
   }
 
   window.addEventListener('pagehide', _releaseWarmMic, { once: true });
@@ -5145,7 +7826,8 @@ export async function renderVoicePage(page, ctx) {
 
   function _wantsRealtimeDictation(status = __pmVoice.lastVoiceStatus) {
     const mode = String(__pmVoice.settings?.voiceMode || 'default');
-    return mode === 'openai_realtime' && _isRealtimeConnected(status);
+    const inputProvider = String(__pmVoice.settings?.sttProvider || _inputProviderForMode(mode));
+    return inputProvider === 'openai_realtime' && _isRealtimeConnected(status);
   }
 
   function _currentRealtimeTranscript() {
@@ -5161,6 +7843,7 @@ export async function renderVoicePage(page, ctx) {
     if (!clean) return;
     if (itemId && __pmVoice.realtimeDeltas instanceof Map) __pmVoice.realtimeDeltas.delete(itemId);
     __pmVoice.realtimeTranscript = [__pmVoice.realtimeTranscript, clean].filter(Boolean).join(' ').trim();
+    __pmVoice.realtimeFinalAt = Date.now();
     _setStatus('Listening...', __pmVoice.realtimeTranscript.slice(0, 90) || 'Release to send');
   }
 
@@ -5205,6 +7888,7 @@ export async function renderVoicePage(page, ctx) {
     } else {
       if (!(__pmVoice.realtimeDeltas instanceof Map)) __pmVoice.realtimeDeltas = new Map();
       __pmVoice.realtimeDeltas.set('xai', text);
+      _scheduleRealtimeAlwaysSubmit('xai_partial_idle', 1800);
     }
     _setStatus('Listening...', (_currentRealtimeTranscript() || 'Release to send').slice(0, 90));
   }
@@ -5227,9 +7911,8 @@ export async function renderVoicePage(page, ctx) {
       _setStatus('Connecting...', 'Starting xAI streaming transcription');
       _voiceDebug('xai-stream-stt-start', {});
       stream = await _ensureWarmMic();
-      if (!pressArm) {
-        _setOrbState(null);
-        _setStatus('Ready', 'Tap and hold the mic to speak');
+      if (!_shouldKeepListening()) {
+        _setReadyVoiceState();
         return;
       }
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -5255,16 +7938,19 @@ export async function renderVoicePage(page, ctx) {
         try { processor?.disconnect?.(); } catch {}
         try { source?.disconnect?.(); } catch {}
         try { mutedGain?.disconnect?.(); } catch {}
-        try { await audioContext?.close?.(); } catch {}
         if (xaiStreamingStt?.ws === ws) xaiStreamingStt = null;
       };
       const fallbackToBatch = async (reason) => {
-        if (fellBack || !pressArm) return;
+        if (fellBack || !_shouldKeepListening()) return;
         fellBack = true;
         _voiceDebug('xai-stream-stt-fallback', { elapsedMs: Date.now() - startedAt, reason: String(reason || '').slice(0, 300) });
         await cleanupStreaming();
         __pmVoice.listening = false;
         mic.classList.remove('recording');
+        if (_isAlwaysListeningMode()) {
+          _showDictationFallback('Always listening needs a streaming STT provider. xAI streaming did not stay connected.');
+          return;
+        }
         _setStatus('Listening...', 'Using xAI batch transcription fallback');
         _startBackendListening('xai');
       };
@@ -5288,11 +7974,20 @@ export async function renderVoicePage(page, ctx) {
           _setStatus('xAI listening', 'xAI is streaming microphone audio. Release to send.');
           _voiceDebug('xai-stream-stt-ready', { elapsedMs: Date.now() - startedAt });
           mic.classList.add('recording');
+          _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'xai_stream_stt_started' });
           return;
         }
         if (type === 'transcript.partial' || type === 'transcript.done') {
           _appendXaiStreamingTranscript(data);
           if (type === 'transcript.done') {
+            const text = String(data?.text || data?.transcript || '').replace(/\s+/g, ' ').trim() || _currentRealtimeTranscript();
+            if (_isAlwaysListeningMode()) {
+              __pmVoice.realtimeTranscript = '';
+              __pmVoice.realtimeDeltas = new Map();
+              _submitAlwaysListeningSpeech(text);
+            } else if (xaiStreamingStt?.ws === ws && xaiStreamingStt?.stopping) {
+              _finalizeXaiStreamingSubmit(xaiStreamingStt, text, 'transcript.done');
+            }
             _voiceDebug('xai-stream-stt-done', {
               elapsedMs: Date.now() - startedAt,
               textLen: String(data?.text || data?.transcript || '').length,
@@ -5327,14 +8022,12 @@ export async function renderVoicePage(page, ctx) {
       source.connect(processor);
       processor.connect(mutedGain);
       mutedGain.connect(audioContext.destination);
-      await audioContext.resume?.();
     } catch (err) {
       _voiceDebug('xai-stream-stt-error', { elapsedMs: Date.now() - startedAt, message: String(err?.message || err).slice(0, 500) });
       try { xaiStreamingStt?.ws?.close?.(); } catch {}
       try { xaiStreamingStt?.processor?.disconnect?.(); } catch {}
       try { xaiStreamingStt?.source?.disconnect?.(); } catch {}
       try { xaiStreamingStt?.mutedGain?.disconnect?.(); } catch {}
-      try { await xaiStreamingStt?.audioContext?.close?.(); } catch {}
       xaiStreamingStt = null;
       console.warn('[voice] xAI streaming STT failed, falling back to batch STT', err);
       pmToast('xAI streaming STT failed; using batch transcription', 'error');
@@ -5344,14 +8037,15 @@ export async function renderVoicePage(page, ctx) {
 
   function _stopXaiStreamingListening(abort) {
     const conn = xaiStreamingStt;
-    xaiStreamingStt = null;
     if (!conn) return;
     conn.stopping = true;
     try { conn.processor?.disconnect?.(); } catch {}
     try { conn.source?.disconnect?.(); } catch {}
     try { conn.mutedGain?.disconnect?.(); } catch {}
     try { conn.audioContext?.close?.(); } catch {}
+    xaiWarmAudioContext = null;
     if (abort) {
+      xaiStreamingStt = null;
       try { conn.ws?.close?.(); } catch {}
       __pmVoice.realtimeTranscript = '';
       __pmVoice.realtimeDeltas = new Map();
@@ -5362,13 +8056,31 @@ export async function renderVoicePage(page, ctx) {
     _setOrbState('thinking');
     _setStatus('Transcribing...', 'Finalizing xAI transcript');
     try { conn.ws?.send?.(JSON.stringify({ type: 'audio.done' })); } catch {}
-    setTimeout(() => {
-      try { conn.ws?.close?.(); } catch {}
-      const text = _currentRealtimeTranscript();
-      __pmVoice.realtimeTranscript = '';
-      __pmVoice.realtimeDeltas = new Map();
-      _submitSpeech(text);
-    }, 450);
+    conn.finalizeTimer = setTimeout(() => {
+      _finalizeXaiStreamingSubmit(conn, _currentRealtimeTranscript(), 'finalize_timeout');
+    }, 2600);
+  }
+
+  function _finalizeXaiStreamingSubmit(conn, text, reason = '') {
+    if (!conn || conn.finalized) return;
+    conn.finalized = true;
+    if (conn.finalizeTimer) {
+      clearTimeout(conn.finalizeTimer);
+      conn.finalizeTimer = null;
+    }
+    try { conn.ws?.close?.(); } catch {}
+    if (xaiStreamingStt === conn) xaiStreamingStt = null;
+    const finalText = String(text || '').replace(/\s+/g, ' ').trim();
+    __pmVoice.realtimeTranscript = '';
+    __pmVoice.realtimeDeltas = new Map();
+    _voiceDebug('xai-stream-stt-submit', { reason, textLen: finalText.length });
+    if (!finalText) {
+      pmToast('I did not catch any speech. Try again.', 'info');
+      _setOrbState(null);
+      _setStatus('Ready', 'Tap and hold the mic to speak');
+      return;
+    }
+    _submitSpeech(finalText);
   }
 
   async function _startRealtimeTranscriptionListening() {
@@ -5384,36 +8096,98 @@ export async function renderVoicePage(page, ctx) {
     }
     __pmVoice.realtimeTranscript = '';
     __pmVoice.realtimeDeltas = new Map();
+    __pmVoice.realtimeFinalAt = 0;
     let stream = null;
     try {
       _setOrbState('thinking');
-      _setStatus('Connecting...', 'Starting OpenAI Realtime transcription');
-      _voiceDebug('realtime-stt-start', {
-        hasWarmMic: !!__pmVoice.warmMicStream,
-        realtimeConnected: _isRealtimeConnected(),
-      });
-      stream = await _ensureWarmMic();
-      if (!pressArm) {
-        _setOrbState(null);
-        _setStatus('Ready', 'Tap and hold the mic to speak');
-        return;
+
+      if (!warmRealtimeConn?.ready && warmRealtimeConnPromise) {
+        await Promise.race([
+          warmRealtimeConnPromise.catch(() => null),
+          new Promise(resolve => setTimeout(resolve, 900)),
+        ]);
       }
-      const pc = new RTCPeerConnection();
-      stream.getAudioTracks().forEach(track => pc.addTrack(track, stream));
-      const dc = pc.createDataChannel('oai-events');
+      // ── Fast path: use pre-warmed connection (eliminates 1–2 s "Connecting…") ──
+      const prewarmed = warmRealtimeConn?.ready ? warmRealtimeConn : null;
+      warmRealtimeConn = null; // consume the pre-warmed slot
+      let pc, dc;
+
+      if (prewarmed) {
+        stream = prewarmed.stream;
+        pc = prewarmed.pc;
+        dc = prewarmed.dc;
+        // Unmute tracks so OpenAI starts receiving real microphone audio
+        stream.getAudioTracks().forEach(t => { t.enabled = true; });
+        // Clear any audio that may have accumulated in the buffer during idle
+        try { dc.send(JSON.stringify({ type: 'input_audio_buffer.clear' })); } catch {}
+        _voiceDebug('realtime-stt-prewarm-hit', { elapsedMs: Date.now() - realtimeStartedAt });
+      } else {
+        // ── Slow path: establish a fresh connection (first PTT or prewarm missed) ──
+        _setStatus('Connecting...', 'Starting OpenAI Realtime transcription');
+        _voiceDebug('realtime-stt-start', {
+          hasWarmMic: !!__pmVoice.warmMicStream,
+          realtimeConnected: _isRealtimeConnected(),
+        });
+        stream = await _ensureWarmMic();
+        if (!_shouldKeepListening()) {
+          _setReadyVoiceState();
+          return;
+        }
+        pc = new RTCPeerConnection();
+        stream.getAudioTracks().forEach(track => pc.addTrack(track, stream));
+        dc = pc.createDataChannel('oai-events');
+
+        const dcOpen = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Realtime transcription channel did not open')), 12000);
+          dc.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
+          dc.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Realtime transcription channel failed')); }, { once: true });
+        });
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const offerSdp = await _waitForLocalRealtimeOfferSdp(pc);
+        _voiceDebug('realtime-stt-offer-ready', {
+          sdpLength: offerSdp.length,
+          hasAudio: /\r?\nm=audio\s/i.test(offerSdp),
+          elapsedMs: Date.now() - realtimeStartedAt,
+        });
+        const answerSdp = await _exchangeRealtimeSdpViaGateway({
+          sdp: offerSdp,
+          mode: 'transcription',
+          language: navigator.language?.split('-')?.[0] || undefined,
+        });
+        await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+        await dcOpen;
+        if (!_shouldKeepListening()) {
+          try { dc.close?.(); } catch {}
+          try { pc.close?.(); } catch {}
+          _setReadyVoiceState();
+          return;
+        }
+      }
+
       realtimeTranscription = { pc, dc, stream, stopping: false };
 
-      dc.addEventListener('message', (messageEvent) => {
+      if (!dc._pmMobileSttHandlerAttached) dc.addEventListener('message', (messageEvent) => {
         let data = null;
         try { data = JSON.parse(messageEvent.data); } catch { return; }
         const type = String(data?.type || '');
         if (type === 'input_audio_buffer.speech_started') {
+          if (__pmVoice.realtimeAlwaysSubmitTimer) {
+            clearTimeout(__pmVoice.realtimeAlwaysSubmitTimer);
+            __pmVoice.realtimeAlwaysSubmitTimer = null;
+          }
           __pmVoice.realtimeUtteranceStartedAt = Date.now();
           __pmVoice.realtimeFirstDeltaLogged = false;
           _voiceDebug('mic-speech-started', { provider: 'openai_realtime' });
           _captureVoicePlaybackInterrupt('barge_in');
           _ttsStop();
           _setStatus('Listening...', 'I hear you');
+          _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'realtime_stt_speech_started' });
+          return;
+        }
+        if (type === 'input_audio_buffer.speech_stopped' || type === 'input_audio_buffer.committed') {
+          _voiceDebug('realtime-stt-buffer-event', { provider: 'openai_realtime', type });
+          _scheduleRealtimeAlwaysSubmit(type, type === 'input_audio_buffer.committed' ? 750 : 1100);
           return;
         }
         if (type === 'conversation.item.input_audio_transcription.delta') {
@@ -5433,9 +8207,14 @@ export async function renderVoicePage(page, ctx) {
             });
           }
           _setStatus('Listening...', (_currentRealtimeTranscript() || 'Release to send').slice(0, 90));
+          _scheduleRealtimeAlwaysSubmit('realtime_delta_idle', 1800);
           return;
         }
         if (type === 'conversation.item.input_audio_transcription.completed') {
+          if (__pmVoice.realtimeAlwaysSubmitTimer) {
+            clearTimeout(__pmVoice.realtimeAlwaysSubmitTimer);
+            __pmVoice.realtimeAlwaysSubmitTimer = null;
+          }
           _captureVoicePlaybackInterrupt('barge_in');
           _ttsStop();
           _voiceDebug('stt-final', {
@@ -5445,6 +8224,12 @@ export async function renderVoicePage(page, ctx) {
             textLen: String(data?.transcript || '').length,
           });
           _appendRealtimeTranscript(String(data?.item_id || ''), data?.transcript || '');
+          if (_isAlwaysListeningMode()) {
+            const text = String(data?.transcript || '').replace(/\s+/g, ' ').trim();
+            __pmVoice.realtimeTranscript = '';
+            __pmVoice.realtimeDeltas = new Map();
+            _submitAlwaysListeningSpeech(text);
+          }
           return;
         }
         if (type === 'conversation.item.input_audio_transcription.failed' || type === 'error') {
@@ -5452,35 +8237,7 @@ export async function renderVoicePage(page, ctx) {
           pmToast(String(message), 'error');
         }
       });
-
-      const dcOpen = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Realtime transcription channel did not open')), 12000);
-        dc.addEventListener('open', () => { clearTimeout(timeout); resolve(true); }, { once: true });
-        dc.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Realtime transcription channel failed')); }, { once: true });
-      });
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      const offerSdp = await _waitForLocalRealtimeOfferSdp(pc);
-      _voiceDebug('realtime-stt-offer-ready', {
-        sdpLength: offerSdp.length,
-        hasAudio: /\r?\nm=audio\s/i.test(offerSdp),
-        elapsedMs: Date.now() - realtimeStartedAt,
-      });
-      const answerSdp = await _exchangeRealtimeSdpViaGateway({
-        sdp: offerSdp,
-        mode: 'transcription',
-        language: navigator.language?.split('-')?.[0] || undefined,
-      });
-      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-      await dcOpen;
-      if (!pressArm) {
-        try { dc.close?.(); } catch {}
-        try { pc.close?.(); } catch {}
-        realtimeTranscription = null;
-        _setOrbState(null);
-        _setStatus('Ready', 'Tap and hold the mic to speak');
-        return;
-      }
+      dc._pmMobileSttHandlerAttached = true;
 
       dictFallback.style.display = 'none';
       __pmVoice.listening = true;
@@ -5522,35 +8279,90 @@ export async function renderVoicePage(page, ctx) {
     const conn = realtimeTranscription;
     realtimeTranscription = null;
     if (abort) {
+      try { conn?.stream?.getAudioTracks?.().forEach(t => { t.enabled = false; }); } catch {}
       try { conn?.dc?.close?.(); } catch {}
       try { conn?.pc?.close?.(); } catch {}
       __pmVoice.realtimeTranscript = '';
       __pmVoice.realtimeDeltas = new Map();
-      _setOrbState(null);
-      _setStatus('Ready', 'Tap and hold the mic to speak');
+      if (__pmVoice.realtimeAlwaysSubmitTimer) {
+        clearTimeout(__pmVoice.realtimeAlwaysSubmitTimer);
+        __pmVoice.realtimeAlwaysSubmitTimer = null;
+      }
+      _setReadyVoiceState();
+      // Pre-warm next connection right away so it's ready on the next PTT press
+      if (!_isAlwaysListeningMode()) setTimeout(() => _prewarmRealtimeConn(), 400);
       return;
     }
     _setOrbState('thinking');
     _setStatus('Transcribing...', 'Finalizing realtime transcript');
-    setTimeout(() => {
+    _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'mobile_realtime_transcript_finalizing' });
+    try { conn?.dc?.send?.(JSON.stringify({ type: 'input_audio_buffer.commit' })); } catch {}
+    const releasedAt = Date.now();
+    const submitWhenSettled = () => {
       const text = _currentRealtimeTranscript();
-      try { conn?.dc?.close?.(); } catch {}
-      try { conn?.pc?.close?.(); } catch {}
+      const finalAgeMs = Date.now() - Number(__pmVoice.realtimeFinalAt || 0);
+      if (!text && Date.now() - releasedAt < 650) {
+        setTimeout(submitWhenSettled, 80);
+        return;
+      }
+      if (text && (!__pmVoice.realtimeFinalAt || finalAgeMs < 120) && Date.now() - releasedAt < 650) {
+        setTimeout(submitWhenSettled, 60);
+        return;
+      }
+      try { conn?.stream?.getAudioTracks?.().forEach(t => { t.enabled = false; }); } catch {}
+      try { conn?.dc?.send?.(JSON.stringify({ type: 'input_audio_buffer.clear' })); } catch {}
+      if (
+        conn?.dc?.readyState === 'open'
+        && conn?.pc
+        && !['closed', 'failed'].includes(String(conn.pc.connectionState || ''))
+        && conn?.stream?.getAudioTracks?.().some(t => t.readyState === 'live')
+      ) {
+        warmRealtimeConn = { pc: conn.pc, dc: conn.dc, stream: conn.stream, ready: true };
+        warmRealtimeConnPromise = null;
+        _voiceDebug('realtime-stt-parked-for-reuse', {});
+      } else {
+        try { conn?.dc?.close?.(); } catch {}
+        try { conn?.pc?.close?.(); } catch {}
+      }
       __pmVoice.realtimeTranscript = '';
       __pmVoice.realtimeDeltas = new Map();
+      __pmVoice.realtimeFinalAt = 0;
       _submitSpeech(text);
-    }, 1000);
+      // Pre-warm while the response is being processed
+      if (!_isAlwaysListeningMode()) setTimeout(() => _prewarmRealtimeConn(), 400);
+    };
+    setTimeout(submitWhenSettled, 120);
   }
+
+  // Bridge: the realtime end-to-end agent lives at module scope and cannot reach
+  // this closure-local function directly. Expose it so dispatch_prometheus_worker
+  // can run real work through the proven voice→worker streaming path.
+  __pmRealtimeAgent.submitToWorker = (text) => _submitSpeech(text);
 
   async function _submitSpeech(text) {
     const finalText = String(text || '').trim();
     if (!finalText) { _setStatus('Ready', 'Tap and hold the mic to speak'); _setOrbState(null); return; }
-    const activeVoiceRuntime = __pmVoice.activeVoiceRuntime || null;
+    let activeVoiceRuntime = __pmVoice.activeVoiceRuntime || null;
+    const forcedVoiceTarget = __pmVoice.targetSessionForced
+      ? String(__pmVoice.targetSessionId || '').trim()
+      : '';
+    if (
+      inlineMode
+      && activeVoiceRuntime?.isStreamActive === true
+      && forcedVoiceTarget
+      && String(activeVoiceRuntime.sessionId || '').trim() !== forcedVoiceTarget
+    ) {
+      activeVoiceRuntime.isStreamActive = false;
+      __pmVoice.activeVoiceRuntime = null;
+      activeVoiceRuntime = null;
+    }
+    _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'mobile_submit_speech_start', originalUserPrompt: finalText });
     let targetSessionId = activeVoiceRuntime?.isStreamActive === true && activeVoiceRuntime?.sessionId
       ? String(activeVoiceRuntime.sessionId).trim()
       : await _resolveVoiceSessionTarget({ forceRefresh: !__pmVoice.targetSessionForced });
     if (targetSessionId === MOBILE_CHAT_SESSION_ID) {
       const actualSessionId = createMobileChatSessionId();
+      const voiceTitle = String(finalText || 'New Chat').replace(/\s+/g, ' ').trim().slice(0, 72) || 'New Chat';
       __pmChat.threads[actualSessionId] = Array.isArray(__pmChat.threads[MOBILE_CHAT_SESSION_ID])
         ? __pmChat.threads[MOBILE_CHAT_SESSION_ID]
         : [];
@@ -5562,11 +8374,22 @@ export async function renderVoicePage(page, ctx) {
       __pmChat.activeSessionId = actualSessionId;
       __pmChat.thread = __pmChat.threads[actualSessionId];
       __pmVoice.targetSessionId = actualSessionId;
-      __pmVoice.targetSessionLabel = 'Mobile - Voice chat';
+      __pmVoice.targetSessionLabel = 'Mobile - Chat';
       __pmVoice.targetSessionChannel = 'mobile';
       __pmVoice.targetSessionForced = true;
       targetSessionId = actualSessionId;
+      try {
+        await createMobileChatSession(actualSessionId, { title: voiceTitle });
+      } catch (err) {
+        const msg = String(err?.message || err || '');
+        if (!/409|already exists|exists/i.test(msg)) {
+          console.warn('[mobile voice] failed to create voice-first mobile session:', err);
+        }
+      }
+      invalidateMobileDrawerSessions('mobile');
       _paintVoiceTarget?.();
+      _prewarmMobileVoiceWorkerContext({ sessionId: targetSessionId, source: 'mobile_voice_session_created', originalUserPrompt: finalText, force: true });
+      _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_session_created', force: true });
     }
     const hadPendingInterruption = !!__pmVoice.pendingInterruptContext;
     if (hadPendingInterruption) {
@@ -5629,6 +8452,7 @@ export async function renderVoicePage(page, ctx) {
     } : {}),
   };
     chatThread.push(chatAiTurn);
+    _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_turn_started' });
     const cmd = {
       id: 'cmd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       request: finalText,
@@ -5665,6 +8489,16 @@ export async function renderVoicePage(page, ctx) {
     };
     const handoffResult = __pmVoice.lastHandoffEvent || null;
     __pmVoice.lastHandoffEvent = null;
+    const handoffProcessEntries = handoffResult ? _voiceAgentProcessEntriesFromResult(targetSessionId, handoffResult) : [];
+    if (handoffProcessEntries.length) {
+      chatAiTurn.processEntries.push(...handoffProcessEntries);
+    }
+    _appendMobileUserProcess(chatAiTurn, finalText, {
+      stage: 'mobile_voice_worker_user_message',
+      sessionId: targetSessionId,
+      source: 'voice_worker_handoff',
+      requestId: cmd.id,
+    });
     const handoffAck = String(handoffResult?.voiceReply || '').trim();
     const backendHandoffContext = String(handoffResult?.injectedContextText || '').trim();
     const handoffContext = backendHandoffContext || (handoffResult
@@ -5688,15 +8522,21 @@ export async function renderVoicePage(page, ctx) {
     _voiceDebug('worker-handoff-starting', { sessionId: targetSessionId, requestId: cmd.id });
     const interruptionIntent = String(interruptionResult?.classification?.intent || '').trim();
     if (interruptionCallerContext && (interruptionIntent === 'cancel' || interruptionIntent === 'pause' || interruptionIntent === 'unknown')) {
-      const reply = String(interruptionResult?.voiceReply || (interruptionIntent === 'cancel' ? 'Cancelled.' : interruptionIntent === 'pause' ? 'Paused.' : 'I heard you interrupt, but I did not catch that clearly.')).trim();
+      const reply = String(interruptionResult?.voiceReply || '').trim();
       cmd.status = interruptionIntent === 'cancel' ? 'cancelled' : interruptionIntent;
       cmd.currentTool = interruptionIntent;
       cmd.finalText = reply;
-      chatAiTurn.streaming = false;
-      chatAiTurn.time = _nowTime();
-      chatAiTurn.body.text = reply;
+      if (reply) {
+        chatAiTurn.streaming = false;
+        chatAiTurn.time = _nowTime();
+        chatAiTurn.body.text = reply;
+        chatAiTurn.content = reply;
+      } else {
+        const idx = chatThread.indexOf(chatAiTurn);
+        if (idx >= 0) chatThread.splice(idx, 1);
+      }
       _appendMobileProcess(chatAiTurn, 'info', `Voice interruption: ${interruptionIntent}`);
-      __pmVoice.lastAi = reply;
+      if (reply) __pmVoice.lastAi = reply;
       _refreshRepeatBtn();
       _renderRecent();
       _persistMobileThreadSnapshot(targetSessionId);
@@ -5745,6 +8585,7 @@ export async function renderVoicePage(page, ctx) {
         _updateToolFlip(cmd, String(m).slice(0, 80));
         cmd.toolStream.push(String(m));
         _appendMobileProcess(chatAiTurn, 'info', String(m));
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_info' });
         if (!voiceWorkerFirstPreflightLogged) {
           voiceWorkerFirstPreflightLogged = true;
           _voiceDebug('worker-first-preflight', {
@@ -5777,23 +8618,30 @@ export async function renderVoicePage(page, ctx) {
         if (__pmVoice.activeVoiceRuntime?.activeRequestId === cmd.id) {
           __pmVoice.activeVoiceRuntime.assistantTextSoFar = aiBuf;
         }
+        chatAiTurn.body.text = aiBuf;
+        chatAiTurn.content = aiBuf;
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_token' });
         cmd.status = 'streaming';
         _updateToolFlip(cmd, 'responding...');
       },
       onVoiceMilestone: (evt) => {
         const text = String(evt?.text || '').trim();
         if (!text) return;
-        cmd.toolStream.push(`voice: ${text}`);
-        _appendMobileProcess(chatAiTurn, 'info', `Voice milestone: ${text}`, evt);
-        if (cmd.expanded) _renderRecent();
+        if (__pmVoice.dictation === 'milestone') {
+          cmd.toolStream.push(`voice: ${text}`);
+          _appendMobileProcess(chatAiTurn, 'info', `Voice milestone: ${text}`, evt);
+          _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_milestone' });
+          if (cmd.expanded) _renderRecent();
+        }
         const spokenMilestone = _voiceSpokenMilestone(text);
-        if (spokenMilestone) {
+        if (__pmVoice.dictation === 'milestone' && spokenMilestone) {
           _speakVoiceMilestone(spokenMilestone, { minGapMs: Number(evt?.minGapMs ?? 2500) || 2500 });
         }
       },
       onThinking: (m) => {
         _appendMobileProcess(chatAiTurn, 'think', String(m).slice(0, 220));
         _appendMobileLiveTrace(chatAiTurn, 'think', m, { append: true });
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_thinking' });
       },
       onToolCall: (evt) => {
         const label = _mobileToolLabel(evt);
@@ -5801,6 +8649,7 @@ export async function renderVoicePage(page, ctx) {
         const text = `${label}${args ? `: ${args}` : ''}`;
         _appendMobileProcess(chatAiTurn, 'tool', text, evt);
         _appendMobileLiveTrace(chatAiTurn, 'tool', text);
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_call' });
         _updateToolFlip(cmd, label.slice(0, 80));
         cmd.toolStream.push(`⚙ ${text}`);
         if (cmd.expanded) _renderRecent();
@@ -5816,6 +8665,7 @@ export async function renderVoicePage(page, ctx) {
         const resultText = `${label}${result ? ` → ${result}` : ' complete'}`;
         _appendMobileProcess(chatAiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
         _appendMobileLiveTrace(chatAiTurn, evt.error ? 'error' : 'result', `${label}${evt.error ? ' failed' : ' complete'}`);
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_result' });
         cmd.toolStream.push(`${evt.error ? '✗' : '✓'} ${resultText}`);
         if (cmd.expanded) _renderRecent();
       },
@@ -5823,6 +8673,7 @@ export async function renderVoicePage(page, ctx) {
         const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
         _appendMobileProcess(chatAiTurn, 'info', progressText, evt);
         _appendMobileLiveTrace(chatAiTurn, 'tool', progressText);
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_progress' });
         cmd.toolStream.push(`… ${progressText}`);
         if (cmd.expanded) _renderRecent();
       },
@@ -5836,6 +8687,7 @@ export async function renderVoicePage(page, ctx) {
         _mergeMobileMediaIntoMessage(cmd, [item]);
         _enqueueVoicePreviews([item], { transient: false });
         _appendMobileProcess(chatAiTurn, 'file', `Presented file: ${path}`, evt);
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_canvas_present' });
         if (cmd.expanded) _renderRecent();
       },
       onEvent: (evt) => {
@@ -5870,6 +8722,13 @@ export async function renderVoicePage(page, ctx) {
           __pmVoice.activeVoiceRuntime.assistantTextSoFar = aiBuf;
           __pmVoice.activeVoiceRuntime.isStreamActive = false;
         }
+        chatAiTurn.streaming = false;
+        chatAiTurn.time = _nowTime();
+        chatAiTurn.body.text = aiBuf;
+        chatAiTurn.content = aiBuf;
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_final' });
+        _persistMobileThreadSnapshot(targetSessionId);
+        __pmVoice.pendingInterruptContext = null;
         _ttsStop();
         finalSpoken = true;
         _ttsSpeak(aiBuf);
@@ -5890,6 +8749,8 @@ export async function renderVoicePage(page, ctx) {
         chatAiTurn.streaming = false;
         chatAiTurn.time = _nowTime();
         _appendMobileProcess(chatAiTurn, 'error', err.message || 'Chat error');
+        _persistMobileThreadSnapshot(targetSessionId);
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_error', force: true });
         pmToast(err.message || 'Voice request failed', 'error');
         _renderRecent();
         _setOrbState(null);
@@ -5902,6 +8763,7 @@ export async function renderVoicePage(page, ctx) {
           __pmVoice.activeVoiceRuntime.assistantTextSoFar = aiBuf;
           __pmVoice.activeVoiceRuntime.isStreamActive = false;
         }
+        __pmVoice.pendingInterruptContext = null;
         window.wsEventBus?.off('approval_created', _wsApprovalHandler);
         _hideVoiceApproval();
         cmd.status = 'done';
@@ -5910,6 +8772,9 @@ export async function renderVoicePage(page, ctx) {
         chatAiTurn.streaming = false;
         chatAiTurn.time = _nowTime();
         if (aiBuf) chatAiTurn.body.text = aiBuf;
+        chatAiTurn.content = String(chatAiTurn.body?.text || '');
+        _persistMobileThreadSnapshot(targetSessionId);
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_done', force: true });
         __pmVoice.lastAi = aiBuf;
         _refreshRepeatBtn();
         _renderRecent();
@@ -5944,6 +8809,7 @@ export async function renderVoicePage(page, ctx) {
     __pmChat.busy = true;
     _rememberMobileActiveRun(targetSessionId);
     _markMobileSessionRunning(targetSessionId, true);
+    _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_run_active' });
     cmd._stream = stream;
   }
 
@@ -5957,50 +8823,67 @@ export async function renderVoicePage(page, ctx) {
       clearTimeout(recognitionSubmitTimer);
       recognitionSubmitTimer = null;
     }
+    // Full Realtime voice agent path — OpenAI Realtime handles STT + reasoning
+    // + TTS in a single session. No transcript posting, no gateway voice agent
+    // decision call. Bypasses the entire split flow when active.
+    if (_isMobileRealtimeAgentMode()) {
+      const sid = __pmVoice.targetSessionId || __pmChat.activeSessionId || 'mobile_default';
+      const listenMode = _isAlwaysListeningMode() ? 'always_listening' : 'push_to_talk';
+      __pmVoice.listening = true;
+      _setOrbState('listening');
+      _setStatus('Listening...', listenMode === 'always_listening' ? 'Always listening with Realtime agent.' : 'Release to send');
+      mic.classList.add('recording');
+      try {
+        if (listenMode === 'always_listening') {
+          await _mobileRealtimeAgentEnableAlwaysListening(sid);
+        } else {
+          _mobileRealtimeAgentPttPress(sid);
+        }
+      } catch (err) {
+        _voiceDebug('realtime-agent-start-failed', { message: err?.message || String(err) });
+        pmToast(`Realtime agent failed: ${err?.message || err}`, 'error');
+        __pmVoice.listening = false;
+        mic.classList.remove('recording');
+        _setReadyVoiceState();
+      }
+      return;
+    }
     const mode = String(__pmVoice.settings?.voiceMode || 'default');
-    if (mode === 'openai_realtime') {
+    const inputProvider = String(__pmVoice.settings?.sttProvider || _inputProviderForMode(mode));
+    if (inputProvider === 'openai_realtime') {
       if (!_isRealtimeConnected()) {
         pmToast('OpenAI Realtime is not connected; using Default', 'error');
-        __pmVoice.provider = { ...(__pmVoice.provider || {}), sttProvider: 'browser', ttsProvider: 'browser', canRealtime: false };
+        __pmVoice.provider = { ...(__pmVoice.provider || {}), sttProvider: 'browser', canRealtime: false };
         _startBrowserListening();
         return;
       }
+      const detected = __pmVoice.lastVoiceStatus ? _detectProvider(__pmVoice.lastVoiceStatus) : (__pmVoice.provider || {});
       __pmVoice.provider = {
-        ...(__pmVoice.provider || {}),
-        id: 'openai_realtime',
-        label: 'OpenAI Realtime',
+        ...detected,
         canRealtime: true,
         sttProvider: 'openai_realtime',
-        ttsProvider: 'openai_realtime',
+        ttsProvider: detected.ttsProvider || __pmVoice.settings?.ttsProvider || 'browser',
         voice: __pmVoice.settings?.realtimeVoice || __pmVoice.provider?.voice || 'marin',
-        speed: Number(__pmVoice.settings?.realtimeSpeed || 1.05),
+        speed: Number((detected.ttsProvider || __pmVoice.settings?.ttsProvider) === 'xai' ? (__pmVoice.settings?.xaiSpeed || 1.0) : (__pmVoice.settings?.realtimeSpeed || 1.05)),
       };
-      _setStatus('Connecting...', 'Starting OpenAI Realtime input and response audio');
+      _setStatus('Connecting...', 'Starting OpenAI Realtime input');
       _startRealtimeTranscriptionListening();
       return;
     }
-    if (mode === 'xai') {
+    if (inputProvider === 'xai') {
       const sttProviders = Array.isArray(__pmVoice.voiceStatus?.sttProviders) ? __pmVoice.voiceStatus.sttProviders : [];
-      const ttsProviders = Array.isArray(__pmVoice.voiceStatus?.ttsProviders) ? __pmVoice.voiceStatus.ttsProviders : [];
-      const xaiTtsReady = ttsProviders.some(p => p?.configured && p?.id === 'xai');
       const xaiSttReady = sttProviders.some(p => p?.configured && p?.id === 'xai');
-      if (!xaiTtsReady) {
-        pmToast('xAI/Grok voice is not connected; using Default', 'error');
-        __pmVoice.provider = { ...(__pmVoice.provider || {}), sttProvider: 'browser', ttsProvider: 'browser', canRealtime: false };
-        _startBrowserListening();
-        return;
-      }
+      const detected = __pmVoice.lastVoiceStatus ? _detectProvider(__pmVoice.lastVoiceStatus) : (__pmVoice.provider || {});
       __pmVoice.provider = {
-        ...(__pmVoice.provider || {}),
-        id: 'xai',
-        label: 'xAI / Grok',
+        ...detected,
         sttProvider: 'xai',
-        ttsProvider: 'xai',
+        ttsProvider: detected.ttsProvider || __pmVoice.settings?.ttsProvider || 'browser',
         ttsVoice: __pmVoice.settings?.serverVoice || __pmVoice.provider?.ttsVoice || 'eve',
-        speed: Number(__pmVoice.settings?.xaiSpeed || 1.0),
+        speed: Number((detected.ttsProvider || __pmVoice.settings?.ttsProvider) === 'xai' ? (__pmVoice.settings?.xaiSpeed || 1.0) : (__pmVoice.settings?.realtimeSpeed || 1.05)),
       };
       if (!xaiSttReady) {
         pmToast('xAI/Grok transcription is not connected; using Default input', 'error');
+        __pmVoice.provider = { ...__pmVoice.provider, sttProvider: 'browser', canRealtime: false };
         _startBrowserListening();
         return;
       }
@@ -6010,7 +8893,7 @@ export async function renderVoicePage(page, ctx) {
     __pmVoice.provider = {
       ...(__pmVoice.provider || {}),
       sttProvider: 'browser',
-      ttsProvider: 'browser',
+      ttsProvider: __pmVoice.settings?.ttsProvider || __pmVoice.provider?.ttsProvider || 'browser',
       canRealtime: false,
     };
     _startBrowserListening();
@@ -6018,7 +8901,7 @@ export async function renderVoicePage(page, ctx) {
       __pmVoice.lastVoiceStatus = status;
       __pmVoice.voiceStatus = status?.voice || null;
       const detected = _detectProvider(status);
-      __pmVoice.provider = { ...detected, sttProvider: 'browser', ttsProvider: 'browser' };
+      __pmVoice.provider = { ...detected, sttProvider: 'browser' };
       _paintVoiceSettings();
     }).catch(() => {});
   }
@@ -6030,18 +8913,17 @@ export async function renderVoicePage(page, ctx) {
     if (!rec) {
       _showDictationFallback('Browser dictation is not available here. Choose a server STT provider or OpenAI Realtime in Voice Settings.');
       pmToast('Voice recognition unavailable in this browser', 'error');
-      _setOrbState(null);
-      _setStatus('Ready', 'Tap and hold the mic to speak');
+      _setReadyVoiceState();
       return;
     }
-    if (!pressArm) {
-      _setOrbState(null);
-      _setStatus('Ready', 'Tap and hold the mic to speak');
+    if (!_shouldKeepListening()) {
+      _setReadyVoiceState();
       return;
     }
+    rec.continuous = _isAlwaysListeningMode();
     __pmVoice.listening = true;
     _setOrbState('listening');
-    _setStatus('Listening…', 'Release to send');
+    _setStatus('Listening...', _isAlwaysListeningMode() ? 'Always listening. Tap the mic to pause.' : 'Release to send');
     mic.classList.add('recording');
 
     rec.onresult = (evt) => {
@@ -6056,7 +8938,13 @@ export async function renderVoicePage(page, ctx) {
       }
       if (fin) recognitionTranscript = (recognitionTranscript + ' ' + fin).trim();
       recognitionInterim = String(interim || '').trim();
-      _setStatus('Listening…', (_latestBrowserTranscript() || '…').slice(0, 80));
+      const transcript = _latestBrowserTranscript();
+      _setStatus('Listening...', (transcript || '...').slice(0, 80));
+      if (_isAlwaysListeningMode() && fin) {
+        recognitionTranscript = '';
+        recognitionInterim = '';
+        _submitAlwaysListeningSpeech(fin);
+      }
     };
     rec.onerror = (e) => {
       console.warn('[voice] recognition error', e);
@@ -6064,8 +8952,16 @@ export async function renderVoicePage(page, ctx) {
       _stopListening(true);
     };
     rec.onend = () => {
+      if (__pmVoice.listening && _isAlwaysListeningMode()) {
+        rec = null;
+        setTimeout(() => {
+          if (__pmVoice.listening && _isAlwaysListeningMode()) _startBrowserListening();
+        }, 250);
+        return;
+      }
       if (__pmVoice.listening) _stopListening(false);
     };
+    _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'browser_stt_started' });
     try { rec.start(); } catch (err) {
       pmToast('Could not start mic. Check permissions.', 'error');
       _stopListening(true);
@@ -6089,6 +8985,10 @@ export async function renderVoicePage(page, ctx) {
   }
 
   async function _startBackendListening(provider) {
+    if (_isAlwaysListeningMode()) {
+      _showDictationFallback('Always listening needs browser dictation, OpenAI Realtime, or xAI streaming STT. Server batch transcription remains Push to Speak.');
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       _showDictationFallback(_voiceCapabilityNote());
       pmToast('Safari is not exposing microphone capture to this page', 'error');
@@ -6101,9 +9001,8 @@ export async function renderVoicePage(page, ctx) {
     }
     try {
       const stream = await _ensureWarmMic();
-      if (!pressArm) {
-        _setOrbState(null);
-        _setStatus('Ready', 'Tap and hold the mic to speak');
+      if (!_shouldKeepListening()) {
+        _setReadyVoiceState();
         return;
       }
       dictFallback.style.display = 'none';
@@ -6179,6 +9078,20 @@ export async function renderVoicePage(page, ctx) {
     if (!__pmVoice.listening) return;
     __pmVoice.listening = false;
     mic.classList.remove('recording');
+    // Realtime agent path — PTT release commits buffer + asks for response;
+    // always-listening abort tears down the session.
+    if (__pmRealtimeAgent?.conn) {
+      if (__pmRealtimeAgent.listenMode === 'always_listening' || abort) {
+        _mobileRealtimeAgentDisableAlwaysListening();
+        _setOrbState(null);
+        _setStatus('Ready', 'Tap and hold the mic to speak');
+      } else {
+        _mobileRealtimeAgentPttRelease();
+        _setOrbState('thinking');
+        _setStatus('Thinking...', 'Realtime agent is responding');
+      }
+      return;
+    }
     if (xaiStreamingStt) {
       _stopXaiStreamingListening(abort);
       return;
@@ -6224,9 +9137,23 @@ export async function renderVoicePage(page, ctx) {
     _submitBrowserTranscriptSoon(0);
   }
 
+  function _startAlwaysListening() {
+    if (!_isAlwaysListeningMode()) return;
+    if (__pmVoice.listening) return;
+    pressArm = false;
+    mic.classList.remove('pressed');
+    _unlockVoiceAudio();
+    _ensureWarmMic().catch((err) => {
+      _showDictationFallback(err?.message || _voiceCapabilityNote());
+      pmToast('Microphone permission is not available', 'error');
+    });
+    _startListening();
+  }
+
   function _beginHold(e) {
     e?.preventDefault?.();
     e?.stopPropagation?.();
+    if (_isAlwaysListeningMode()) return;
     if (pressArm) return;
     pressArm = true;
     suppressNextClick = true;
@@ -6242,6 +9169,7 @@ export async function renderVoicePage(page, ctx) {
   function _endHold(abort = false, e) {
     e?.preventDefault?.();
     e?.stopPropagation?.();
+    if (_isAlwaysListeningMode()) return;
     if (!pressArm) return;
     pressArm = false;
     mic.classList.remove('pressed');
@@ -6269,6 +9197,17 @@ export async function renderVoicePage(page, ctx) {
   let tapCount = 0;
   mic.addEventListener('click', () => {
     if (suppressNextClick) { suppressNextClick = false; return; }
+    if (_isAlwaysListeningMode()) {
+      if (__pmVoice.listening) {
+        pressArm = false;
+        mic.classList.remove('pressed');
+        _stopListening(true);
+        _setReadyVoiceState();
+      } else {
+        _startAlwaysListening();
+      }
+      return;
+    }
     tapCount++;
     if (tapCount === 1) {
       setTimeout(() => {
@@ -6293,6 +9232,8 @@ export async function renderVoicePage(page, ctx) {
       }, 220);
     }
   });
+
+  if (ctx?.autoStart === true) setTimeout(() => _runVoiceAutoStart(), 3000);
 }
 
 /* ---------------- SCHEDULE ---------------- */
@@ -7527,10 +10468,20 @@ function _pmHumanApproval(approval = {}) {
       detail: files.length ? `${files.length} file${files.length === 1 ? '' : 's'} requested` : '',
     };
   }
-  if (tool === 'run_command') {
+  if (kind === 'path_access') {
+    const p = String(approval?.pathAccess?.requestedPath || args.path || '').trim();
     return {
-      title: 'Command approval',
-      summary: args.cwd ? `Run command in ${args.cwd}` : 'Run command',
+      title: 'Path access',
+      summary: 'Prometheus needs to access a directory outside the workspace.',
+      detail: p,
+    };
+  }
+  if (tool === 'run_command' || tool === 'shell' || tool === 'run_command_supervised' || tool === 'start_process') {
+    const boundary = approval?.commandBoundary || null;
+    const scope = String(boundary?.scope || '').trim();
+    return {
+      title: scope && scope !== 'workspace' ? 'Outside-workspace command' : 'Command approval',
+      summary: scope && scope !== 'workspace' ? `May change ${scope.replace(/_/g, ' ')} state.` : (args.cwd ? `Run command in ${args.cwd}` : 'Run command'),
       detail: String(args.command || '').trim(),
     };
   }
@@ -7591,7 +10542,11 @@ function _pmApprovalSummary(approval) {
 }
 
 function _pmIsCommandApproval(approval = {}) {
-  return String(approval?.toolName || '').trim() === 'run_command';
+  const tool = String(approval?.toolName || '').trim();
+  const kind = String(approval?.approvalKind || '').trim();
+  return kind === 'path_access' || kind === 'command'
+    || tool === 'run_command' || tool === 'shell'
+    || tool === 'run_command_supervised' || tool === 'start_process';
 }
 
 function _pmFormatDuration(ms) {
@@ -7971,12 +10926,18 @@ function _renderMoreLanding(page, { navigate }) {
     });
   };
 
+  // Render the (navigational) cards immediately with empty previews so the page
+  // is instantly usable, then fill in the preview stats once the summary
+  // resolves. The previous version blocked on a skeleton until all 5 analytics
+  // requests inside loadMobileMoreSummary() finished, which could hang the More
+  // page for ~10s on the slowest endpoint.
+  paint(null);
+
   const load = async () => {
     try {
-      body.innerHTML = _pmMoreSkeleton();
       paint(await loadMobileMoreSummary());
     } catch (err) {
-      body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.dots}</div><h2>Could not load More</h2><p>${escapeHtml(err.message || '')}</p></div>`;
+      pmToast(`Could not refresh More: ${err.message || ''}`, 'error');
     }
   };
   page.querySelector('#pm-more-refresh')?.addEventListener('click', load);

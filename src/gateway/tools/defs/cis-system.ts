@@ -746,6 +746,59 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'update_dev_source_edit',
+        description:
+          'Update a pending dev source edit approval (before the user approves or denies it). ' +
+          'Use this after receiving a steer interrupt during an approval wait — revise the plan, reason, files, or steps to reflect the steer, then call await_dev_source_edit_approval to resume waiting. ' +
+          'Only works on pending approvals in the current session.',
+        parameters: {
+          type: 'object',
+          required: ['approval_id'],
+          properties: {
+            approval_id: { type: 'string', description: 'The approval ID returned by request_dev_source_edit or from the steer-interrupt result.' },
+            reason: { type: 'string', description: 'Updated short reason for the edit request.' },
+            files: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Updated list of project-relative src/ or web-ui/ file paths.',
+            },
+            plan: {
+              type: 'object',
+              description: 'Partial plan update — only provided fields are merged in.',
+              properties: {
+                user_request: { type: 'string' },
+                reasoning: { type: 'string' },
+                current_state: { type: 'string' },
+                fix: { type: 'string' },
+                steps: { type: 'array', items: { type: 'string' } },
+                verification: { type: 'array', items: { type: 'string' } },
+                completion_note_tag: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'await_dev_source_edit_approval',
+        description:
+          'Resume waiting for a pending dev source edit approval after a steer interrupt. ' +
+          'Call this after handling a steer (and optionally calling update_dev_source_edit) to re-enter the steer-interruptible wait. ' +
+          'Returns immediately if the approval was already resolved. Can be interrupted again by another steer.',
+        parameters: {
+          type: 'object',
+          required: ['approval_id'],
+          properties: {
+            approval_id: { type: 'string', description: 'The approval ID to resume waiting for.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'write_proposal',
 	        description:
 	          'Submit a proposal for human approval. Use for any change that requires human review before execution. Every executable proposal should choose exactly one execution_mode: code_change, action, or review. The proposal will appear in the Prometheus proposals panel for approval or denial. ' +
@@ -824,9 +877,9 @@ export function getCisSystemTools(): any[] {
         name: 'prom_apply_dev_changes',
         description:
           'Smart dev-only helper that makes Prometheus code/UI edits live. Use after applying approved source or web-ui/mobile changes. ' +
-          'For web-ui/mobile changes it runs npm run sync:web-ui and requests a desktop web UI reload. ' +
+          'For web-ui/mobile changes it runs npm run sync:web-ui and requests connected web/mobile UI reload. ' +
           'For backend/src/gateway changes it runs the build and gracefully restarts the gateway. ' +
-          'For mixed backend + web-ui/mobile changes it syncs web-ui first, then builds/restarts, then the restarted gateway asks the desktop UI to reload. ' +
+          'For mixed backend + web-ui/mobile changes it syncs web-ui first, then builds/restarts, then the restarted gateway asks connected desktop and mobile UI clients to reload. ' +
           'Use this instead of manually remembering sync/build/restart/reload steps during local dev/proposal execution.',
         parameters: {
           type: 'object',
@@ -838,7 +891,7 @@ export function getCisSystemTools(): any[] {
                 type: 'string',
                 enum: ['backend', 'src', 'gateway', 'web-ui', 'mobile', 'config', 'static'],
               },
-              description: 'Changed areas. backend/src/gateway/config trigger build+restart; web-ui/mobile/static trigger sync:web-ui and desktop reload.',
+              description: 'Changed areas. backend/src/gateway/config trigger build+restart; web-ui/mobile/static trigger sync:web-ui and connected web/mobile reload.',
             },
             mode: {
               type: 'string',
@@ -852,7 +905,7 @@ export function getCisSystemTools(): any[] {
             title: { type: 'string', description: 'Human-readable title for restart/reload context.' },
             summary: { type: 'string', description: 'Brief description of what changed.' },
             affected_files: { type: 'array', items: { type: 'string' }, description: 'Changed file paths.' },
-            refresh_desktop: { type: 'boolean', description: 'Whether to reload connected desktop web UI clients. Defaults true.' },
+            refresh_desktop: { type: 'boolean', description: 'Whether to reload connected desktop and mobile web UI clients. Defaults true. Legacy name kept for compatibility.' },
             test_instructions: { type: 'string', description: 'What to verify after restart/reload.' },
           },
         },
@@ -1245,6 +1298,40 @@ export function getCisSystemTools(): any[] {
             description: { type: 'string', description: 'One-sentence summary of what this skill does' },
             instructions: { type: 'string', description: 'Full markdown instructions for using this skill - be thorough, as this is what you will read with skill_read when relevant' },
             triggers: { type: 'string', description: 'Comma-separated keywords used as discovery metadata, e.g. "python,debug,traceback"' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'show_product_carousel',
+        description: 'Display product cards in a horizontal scrollable carousel in the chat UI. Call this AFTER you have already extracted product data from the page using browser tools. You decide which products to show (aim for 3–8, curated by relevance/quality). Each item needs at minimum a title and productUrl. Use imageUrl for images you found on the page, or imagePath for images you downloaded to the workspace.',
+        parameters: {
+          type: 'object',
+          required: ['title', 'items'],
+          properties: {
+            title: { type: 'string', description: 'Carousel heading shown above the cards, e.g. "Electric Toothbrushes on Amazon"' },
+            items: {
+              type: 'array',
+              description: 'Product cards to display (3–8 recommended). You curate this list — do not dump all results.',
+              items: {
+                type: 'object',
+                required: ['title', 'productUrl'],
+                properties: {
+                  title:       { type: 'string', description: 'Product name' },
+                  price:       { type: 'string', description: 'Price string, e.g. "$38.49"' },
+                  description: { type: 'string', description: 'One short line about the product, e.g. "Top-rated for overall cleaning and durability."' },
+                  rating:      { type: 'number', description: '0–5 star rating as a number' },
+                  reviews:     { type: 'number', description: 'Number of reviews' },
+                  tag:         { type: 'string', description: 'Optional badge label, e.g. "Best overall", "Best budget", "Editor\'s pick"' },
+                  imageUrl:    { type: 'string', description: 'Direct image URL from the page (preferred if available)' },
+                  imagePath:   { type: 'string', description: 'Workspace-relative path if you downloaded the image with browser tools' },
+                  productUrl:  { type: 'string', description: 'URL to the product page — used as the card link' },
+                  merchant:    { type: 'string', description: 'Store name, e.g. "Amazon", "Best Buy"' },
+                },
+              },
+            },
           },
         },
       },

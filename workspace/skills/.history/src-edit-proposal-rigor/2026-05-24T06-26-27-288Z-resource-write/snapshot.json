@@ -1,0 +1,12 @@
+{
+  "skillId": "src-edit-proposal-rigor",
+  "reason": "resource-write",
+  "createdAt": "2026-05-24T06:26:27.292Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\src-edit-proposal-rigor",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "5e01f1479e94516e"
+}

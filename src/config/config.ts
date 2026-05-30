@@ -188,7 +188,77 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       shell: {
         workspace_only: true,
         confirm_destructive: true,
-        blocked_patterns: ['rm -rf /', 'del C:\\Windows', 'format']
+        blocked_patterns: [
+          'rm -rf /',
+          'del C:\\Windows',
+          'format',
+          'diskpart',
+          'bcdedit',
+          'cipher /w',
+          'vssadmin delete shadows',
+          'wmic shadowcopy delete',
+          'shutdown',
+          'restart-computer',
+          'stop-computer',
+          'logoff',
+          'runas',
+          'start-process -verb runas',
+          'set-mppreference -disablerealtimemonitoring',
+          'netsh advfirewall set allprofiles state off',
+          'reg delete hklm',
+          'reg delete hkcr',
+          'reg delete hku',
+        ],
+        allowed_windows_read_commands: [
+          'ipconfig',
+          'ping',
+          'tracert',
+          'nslookup',
+          'netstat',
+          'tasklist',
+          'systeminfo',
+          'driverquery',
+          'get-process',
+          'get-service',
+          'get-computerinfo',
+          'get-ciminstance',
+          'get-winevent',
+          'get-eventlog',
+          'test-netconnection',
+          'resolve-dnsname',
+          'get-netadapter',
+          'get-netipaddress',
+          'get-pnpdevice',
+          'get-psdrive',
+          'get-volume',
+          'get-disk',
+          'get-partition',
+          'chkdsk',
+          'sc',
+          'schtasks',
+        ],
+        allowed_windows_system_commands: [
+          'powercfg',
+          'taskkill',
+          'start-process',
+          'stop-process',
+          'restart-service',
+          'start-service',
+          'stop-service',
+          'start-scheduledtask',
+          'enable-scheduledtask',
+          'disable-scheduledtask',
+          'winget',
+          'displayswitch.exe',
+          'displayswitch',
+          'control',
+          'rundll32',
+          'set-clipboard',
+          'get-clipboard',
+          'reg',
+        ],
+        allowed_custom_commands: [],
+        approval_mode: 'default'
       },
       files: {
         allowed_paths: [WORKSPACE_DIR],
@@ -201,7 +271,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     }
   },
   skills: {
-    directory: path.join(CONFIG_DIR, 'skills'),
+    directory: path.join(WORKSPACE_DIR, 'skills'),
     registries: ['https://clawhub.ai'],
     auto_update: false
   },
@@ -252,6 +322,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   agent_model_defaults: {},
   agent_model_default_templates: [],
   active_agent_model_default_template: '',
+  default_agent_model_template: '',
   session: {
     maxMessages: 120,
     compactionThreshold: 0.7,
@@ -387,11 +458,11 @@ function isStaleWindowsPath(p: string): boolean {
 }
 
 // Replace a stale Windows path with a sensible cross-platform fallback.
-// workspace → WORKSPACE_DIR, skills → CONFIG_DIR/skills, memory → CONFIG_DIR/memory,
+// workspace → WORKSPACE_DIR, skills → WORKSPACE_DIR/skills, memory → CONFIG_DIR/memory,
 // everything else → WORKSPACE_DIR (safe catch-all).
 function resolveStaleWindowsPath(p: string): string {
   const lp = String(p || '').toLowerCase().replace(/\\/g, '/');
-  if (lp.includes('skill')) return path.join(CONFIG_DIR, 'skills');
+  if (lp.includes('skill')) return path.join(WORKSPACE_DIR, 'skills');
   if (lp.includes('memory')) return path.join(CONFIG_DIR, 'memory');
   return WORKSPACE_DIR;
 }
@@ -416,7 +487,7 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
   // ── .localclaw → .prometheus migration ──────────────────────────────────
   const skillsDir = String(out?.skills?.directory || '');
   if (skillsDir && skillsDir.includes('.localclaw')) {
-    out.skills = { ...(out.skills || {}), directory: path.join(CONFIG_DIR, 'skills') };
+    out.skills = { ...(out.skills || {}), directory: path.join(WORKSPACE_DIR, 'skills') };
   }
 
   const memoryPath = String(out?.memory?.path || '');
@@ -434,7 +505,7 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
   }
 
   if (out?.skills?.directory && isStaleWindowsPath(out.skills.directory)) {
-    const fixed = path.join(CONFIG_DIR, 'skills');
+    const fixed = path.join(WORKSPACE_DIR, 'skills');
     console.log(`[Config] Replacing stale Windows skills path "${out.skills.directory}" → "${fixed}"`);
     out.skills = { ...(out.skills || {}), directory: fixed };
   }

@@ -27,6 +27,35 @@ Telegram currently supports:
 - command approvals
 - persona-specific bots that can route group/direct messages to configured agent IDs
 - team room mirroring for team chat, dispatch, completion, proposed changes, and manager review events
+- **live token streaming to desktop web UI** — every token, tool call, and tool result emitted during a Telegram turn is broadcast as a `main_chat_stream_event` WebSocket message to all connected desktop clients, so the desktop sees Telegram activity live without refresh
+
+## 25-LIVE) Cross-Channel Live Update Behavior (Web UI)
+
+All channel messages (Telegram, mobile PWA, CLI, Discord, WhatsApp) flow through `handleChat` in `src/gateway/routes/chat.router.ts`. The `sendSSE` wrapper inside `handleChat` calls `appendMainChatStreamEvent` which broadcasts `{ type: 'main_chat_stream_event', sessionId, streamId, seq, event, data }` to ALL connected WebSocket clients.
+
+The desktop web UI (`web-ui/src/pages/ChatPage.js`) listens to `main_chat_stream_event` in `handleMainChatStreamEvent`. When events arrive for a session the desktop isn't currently viewing:
+
+- **Auto-switch**: if the desktop is idle (no active run, no typing), it switches to the external channel session immediately and shows a brief toast
+- **Activity toast**: if the desktop is mid-conversation, a "Live on [channel] — View live →" toast appears so the user can jump to it manually
+
+Session IDs by channel:
+- Telegram: `telegram_<userId>_<chatId>` (via `getTelegramSessionId`)
+- Mobile PWA: `mobile_default` (or per-thread session IDs)
+- CLI: `cli_<id>`
+
+On WS reconnect (`ws:open`), the desktop calls `_wsReconnectCatchUp` which:
+1. Fetches `/api/sessions` and merges any sessions added while disconnected
+2. Calls `catchUpMainChatStream(activeChatSessionId)` to replay missed stream events from the in-memory ring buffer (up to 800 events, 45-min TTL)
+
+The session list is also refreshed from server every 45 seconds via `window._sessionListRefreshTimer` to surface any sessions missed by WebSocket events.
+
+Stream event deduplication uses `shouldProcessMainChatStreamEvent` keyed by `sessionId + streamId` — each new AI turn gets a fresh `streamId` UUID so there is no cross-turn sequence collision.
+
+Key source files for cross-channel live updates:
+- `src/gateway/routes/chat.router.ts` — `appendMainChatStreamEvent`, `beginMainChatStream`, `finishMainChatStream`
+- `src/gateway/comms/broadcaster.ts` — `broadcastWS` (sends to all WS clients)
+- `web-ui/src/pages/ChatPage.js` — `handleMainChatStreamEvent`, `_wsReconnectCatchUp`, `_switchToChannelSession`, `_showChannelActivityToast`, `_isDesktopIdle`
+- `web-ui/src/ws.js` — WebSocket connection and auto-reconnect
 
 Current Telegram command surface in code includes:
 

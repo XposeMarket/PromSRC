@@ -446,6 +446,81 @@ router.get('/api/pairing/tailscale/status', async (_req, res) => {
   res.json(out);
 });
 
+// ── Tailscale funnel management ──────────────────────────────────────────
+// Enables or disables the Tailscale funnel for the gateway port without
+// requiring the user to open a terminal. All commands run as the same OS
+// user that started the gateway process.
+
+function _gatewayPort(): number {
+  const cfg = getConfig().getConfig() as any;
+  return Number(cfg?.gateway?.port || process.env.GATEWAY_PORT || 18789);
+}
+
+async function _isFunnelActiveOnPort(port: number): Promise<boolean> {
+  const result = await _runTailscaleCli(['funnel', 'status'], 5000);
+  if (result.code !== 0 || !result.stdout) return false;
+  const portMatches = Array.from(result.stdout.matchAll(/127\.0\.0\.1:(\d+)/g));
+  return portMatches.some(m => Number(m[1]) === port);
+}
+
+// Enable funnel for the gateway port.
+router.post('/api/pairing/tailscale/funnel/enable', async (_req, res) => {
+  const port = _gatewayPort();
+  const result = await _runTailscaleCli(['funnel', String(port)], 10000);
+  if (result.code !== 0 && result.code !== -2) {
+    const errMsg = (result.stderr || result.stdout || '').trim() || 'Failed to enable Tailscale funnel.';
+    return res.json({ success: false, error: errMsg, port });
+  }
+  const active = await _isFunnelActiveOnPort(port);
+  res.json({ success: true, funnelActive: active, port });
+});
+
+// Disable (reset) the funnel.
+router.post('/api/pairing/tailscale/funnel/disable', async (_req, res) => {
+  const result = await _runTailscaleCli(['funnel', 'reset'], 8000);
+  const ok = result.code === 0;
+  res.json({ success: ok, error: ok ? undefined : (result.stderr || 'Failed to reset funnel').trim() });
+});
+
+// Lightweight status check — just returns funnelActive for the gateway port.
+router.get('/api/pairing/tailscale/funnel/status', async (_req, res) => {
+  const port = _gatewayPort();
+  const active = await _isFunnelActiveOnPort(port);
+  res.json({ success: true, funnelActive: active, port });
+});
+
+// ── Funnel watchdog (exported for use by startup.ts) ─────────────────────
+let _funnelWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+export async function ensureTailscaleFunnel(opts: { logPrefix?: string } = {}): Promise<void> {
+  const cfg = getConfig().getConfig() as any;
+  const ra = cfg?.gateway?.remoteAccess;
+  if (!ra?.enabled || ra?.mode !== 'tailscale-funnel') return;
+  const port = _gatewayPort();
+  const log = opts.logPrefix || '[TailscaleFunnel]';
+  const active = await _isFunnelActiveOnPort(port);
+  if (active) {
+    console.log(`${log} Funnel already active on port ${port}.`);
+    return;
+  }
+  console.log(`${log} Funnel not active — enabling on port ${port}…`);
+  const result = await _runTailscaleCli(['funnel', String(port)], 12000);
+  if (result.code === 0 || result.code === -2) {
+    console.log(`${log} Funnel enable command sent.`);
+  } else {
+    const err = (result.stderr || result.stdout || '').trim();
+    console.warn(`${log} Failed to enable funnel: ${err}`);
+  }
+}
+
+export function startFunnelWatchdog(intervalMs: number = 5 * 60_000): void {
+  if (_funnelWatchdogTimer) return; // already running
+  _funnelWatchdogTimer = setInterval(() => {
+    ensureTailscaleFunnel({ logPrefix: '[FunnelWatchdog]' }).catch(() => {});
+  }, intervalMs);
+  if (typeof (_funnelWatchdogTimer as any).unref === 'function') (_funnelWatchdogTimer as any).unref();
+}
+
 // ── mobile: who am I? (validate token in hand) ───────────────────────────
 router.get('/api/pairing/me', (req, res) => {
   const token = String(req.headers['x-pairing-token'] || req.query.pt || '').trim();

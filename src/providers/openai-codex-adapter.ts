@@ -15,7 +15,7 @@
 
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
 import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
-import { contentToString } from './content-utils';
+import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
@@ -73,11 +73,19 @@ function parseUsage(usage: any): ModelUsage | undefined {
     || usage.completion_tokens_details?.reasoning_tokens
     || 0,
   );
+  // Codex Responses API reports automatic prompt-cache hits here (subset of
+  // input_tokens). Surfaced for cache hit-ratio observability only.
+  const cacheReadTokens = Number(
+    usage.input_tokens_details?.cached_tokens
+    || usage.prompt_tokens_details?.cached_tokens
+    || 0,
+  );
   const totalTokens = Number(usage.total_tokens || (inputTokens + outputTokens + reasoningTokens));
   return {
     inputTokens,
     outputTokens,
     reasoningTokens,
+    cacheReadTokens,
     totalTokens,
     source: 'provider',
   };
@@ -94,6 +102,7 @@ export const CODEX_EFFORT_MAP: Record<string, string> = {
   high: 'high',
   extra_high: 'xhigh',
   xhigh: 'xhigh',
+  max: 'xhigh',
 };
 
 export class OpenAICodexAdapter implements LLMProvider {
@@ -231,10 +240,14 @@ export class OpenAICodexAdapter implements LLMProvider {
 
     // Extract system message as instructions
     const systemMsg = messages.find(m => m.role === 'system');
-    const instructions = systemMsg ? contentToString(systemMsg.content) : '';
+    // Codex auto-caches on a stable instructions+input prefix; strip the cache
+    // sentinel so it never reaches the model (it has no API role here).
+    const instructions = systemMsg ? stripCacheMarker(contentToString(systemMsg.content)) : '';
 
     const hasTools = Array.isArray(options?.tools) && options!.tools!.length > 0;
-    const toolChoice = hasTools ? 'auto' : 'auto';
+    const _cfgRootCodex = getConfig().getConfig() as any;
+    const _codexToolChoiceCfg = String(_cfgRootCodex?.llm?.providers?.openai_codex?.tool_choice || '').trim();
+    const toolChoice = hasTools ? (_codexToolChoiceCfg === 'required' ? 'required' : 'auto') : 'auto';
     const input = this.buildInput(messages);
 
     const runRequest = async (requestedModel: string, allowFallback: boolean): Promise<ChatResult> => {

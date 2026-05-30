@@ -139,6 +139,11 @@ function renderSkillBadges(s) {
   return badges.length ? `<div class="hub-skill-badges">${badges.join('')}</div>` : '';
 }
 
+function stripMarkdownFrontmatter(md) {
+  const text = String(md || '');
+  return text.replace(/^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trimStart();
+}
+
 function renderSkillChanges(changes, limit = 3) {
   const items = Array.isArray(changes) ? changes.slice(0, limit) : [];
   if (!items.length) return `<div class="hub-skill-change-empty">No recent skill changes.</div>`;
@@ -148,21 +153,61 @@ function renderSkillChanges(changes, limit = 3) {
         const type = labelize(ch.changeType || 'skill_update');
         const when = relTime(ch.timestamp);
         const reason = String(ch.reason || '').trim();
-        const paths = Array.isArray(ch.changedPaths) ? ch.changedPaths.filter(Boolean).slice(0, 2) : [];
+        const paths = Array.isArray(ch.changedPaths) ? ch.changedPaths.filter(Boolean) : [];
         const appliedBy = String(ch.appliedBy || '').trim();
+        const evidence = String(ch.evidence || '').trim();
+        const metadata = ch.metadata && typeof ch.metadata === 'object' ? ch.metadata : null;
+        const details = JSON.stringify({
+          changeType: ch.changeType || 'skill_update',
+          timestamp: ch.timestamp || '',
+          reason,
+          changedPaths: paths,
+          evidence,
+          appliedBy,
+          ...(metadata ? { metadata } : {}),
+        }, null, 2);
         return `
-          <div class="hub-skill-change">
+          <div class="hub-skill-change" data-hub-change-card tabindex="0" role="button" aria-expanded="false">
             <div class="hub-skill-change-main">
               <span class="hub-skill-change-type">${escHtml(type)}</span>
               <span class="hub-skill-change-time" title="${escHtml(fmtDate(ch.timestamp))}">${escHtml(when)}</span>
             </div>
             ${reason ? `<div class="hub-skill-change-reason">${escHtml(reason)}</div>` : ''}
-            ${paths.length ? `<div class="hub-skill-change-paths">${paths.map(p => `<span>${escHtml(p)}</span>`).join('')}</div>` : ''}
+            ${paths.length ? `<div class="hub-skill-change-paths">${paths.slice(0, 3).map(p => `<span>${escHtml(p)}</span>`).join('')}</div>` : ''}
             ${appliedBy ? `<div class="hub-skill-change-by">${escHtml(appliedBy)}</div>` : ''}
+            <div class="hub-skill-change-detail"><pre>${escHtml(details)}</pre></div>
           </div>
         `;
       }).join('')}
     </div>
+  `;
+}
+
+function renderSkillAddons(skill) {
+  const resources = Array.isArray(skill?.resources) ? skill.resources : [];
+  if (!resources.length) return '';
+  return `
+    <details class="hub-modal-addons">
+      <summary><span>Add-ons</span><strong>${resources.length} file${resources.length === 1 ? '' : 's'}</strong></summary>
+      <div class="hub-modal-resource-list">
+        ${resources.map((resource) => {
+          const relPath = String(resource?.path || '').trim();
+          if (!relPath) return '';
+          const type = String(resource?.type || '').trim();
+          const size = Number(resource?.sizeBytes || 0);
+          const desc = String(resource?.description || '').trim();
+          return `
+            <button class="hub-modal-resource-item" type="button" data-skill-id="${escHtml(skill.id)}" data-resource-path="${escHtml(relPath)}">
+              <span class="hub-modal-resource-path">${escHtml(relPath)}</span>
+              <span class="hub-modal-resource-meta">${escHtml([type, size ? `${size.toLocaleString()} bytes` : '', desc].filter(Boolean).join(' · '))}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+      <div id="hub-modal-resource-preview" class="hub-modal-resource-preview">
+        <div class="hub-modal-resource-empty">Select a file to preview it.</div>
+      </div>
+    </details>
   `;
 }
 
@@ -190,6 +235,7 @@ function renderSkillCard(s) {
         </div>
         <div class="hub-skill-card-actions">
           <button class="hub-skill-view-btn" data-action="view" data-id="${escHtml(s.id)}" type="button">View</button>
+          <button class="hub-skill-view-btn secondary" data-action="edit" data-id="${escHtml(s.id)}" type="button">Edit</button>
         </div>
       </div>
     </div>
@@ -237,6 +283,7 @@ function renderSkillsGrid() {
   }
   grid.innerHTML = visible.map(renderSkillCard).join('');
   grid.classList.toggle('hub-skills-grid-all', Boolean(query) || _viewAll);
+  wireHubSkillChangeCards(grid);
 
   grid.querySelectorAll('[data-action="toggle"]').forEach(el => {
     el.addEventListener('click', () => {
@@ -251,6 +298,13 @@ function renderSkillsGrid() {
       e.stopPropagation();
       const id = el.getAttribute('data-id');
       if (id) openHubSkillModal(id);
+    });
+  });
+  grid.querySelectorAll('[data-action="edit"]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = el.getAttribute('data-id');
+      if (id && typeof window.editSkill === 'function') window.editSkill(id);
     });
   });
 }
@@ -866,7 +920,7 @@ async function openHubSkillModal(id) {
     const sk = r?.skill || {};
     if (nameEl)  nameEl.textContent  = sk.name || id;
     if (verEl)   verEl.textContent   = sk.version ? `v${sk.version}` : '';
-    const md = String(sk.content || '');
+    const md = stripMarkdownFrontmatter(sk.content);
     const lifecycleHtml = `
       <div class="hub-modal-skill-meta">
         <div class="hub-modal-skill-meta-item"><span>Status</span><strong>${escHtml(labelize(sk.status))}</strong></div>
@@ -874,11 +928,12 @@ async function openHubSkillModal(id) {
         <div class="hub-modal-skill-meta-item"><span>Ownership</span><strong>${escHtml(labelize(sk.ownership))}</strong></div>
         <div class="hub-modal-skill-meta-item"><span>Manifest</span><strong>${escHtml(labelize(sk.manifestSource))}</strong></div>
       </div>
-      <div class="hub-modal-change-panel">
-        <div class="hub-modal-section-title">Recent skill changes</div>
-        ${renderSkillChanges(sk.recentChanges, 8)}
-      </div>
-    `;
+        <div class="hub-modal-change-panel">
+          <div class="hub-modal-section-title">Recent skill changes</div>
+          ${renderSkillChanges(sk.recentChanges, 8)}
+        </div>
+        ${renderSkillAddons(sk)}
+      `;
     let html;
     try {
       html = (window.marked && typeof window.marked.parse === 'function')
@@ -888,8 +943,63 @@ async function openHubSkillModal(id) {
       html = `<pre>${escHtml(md)}</pre>`;
     }
     body.innerHTML = `${lifecycleHtml}<div class="hub-modal-markdown">${html}</div>`;
+    wireHubSkillChangeCards(body);
+    wireHubResourceButtons(body);
   } catch (err) {
     body.innerHTML = `<div class="hub-empty">Failed to load skill: ${escHtml(err?.message || String(err))}</div>`;
+  }
+}
+
+function toggleHubSkillChangeCard(card) {
+  if (!card) return;
+  const open = card.classList.toggle('open');
+  card.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function wireHubSkillChangeCards(root = document) {
+  root.querySelectorAll('[data-hub-change-card]').forEach((card) => {
+    if (card.dataset.changeBound === '1') return;
+    card.dataset.changeBound = '1';
+    card.addEventListener('click', (event) => {
+      if (event.target.closest('a,button')) return;
+      toggleHubSkillChangeCard(card);
+    });
+    card.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      toggleHubSkillChangeCard(card);
+    });
+  });
+}
+
+function wireHubResourceButtons(root = document) {
+  root.querySelectorAll('.hub-modal-resource-item[data-skill-id][data-resource-path]').forEach((button) => {
+    if (button.dataset.resourceBound === '1') return;
+    button.dataset.resourceBound = '1';
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openHubSkillResource(button.dataset.skillId || '', button.dataset.resourcePath || '');
+    });
+  });
+}
+
+async function openHubSkillResource(skillId, relPath) {
+  const preview = document.getElementById('hub-modal-resource-preview');
+  if (!preview) return;
+  preview.innerHTML = `<div class="hub-modal-resource-empty">Loading ${escHtml(relPath)}...</div>`;
+  try {
+    const r = await api(`/api/hub/skills/${encodeURIComponent(skillId)}/resources/content?path=${encodeURIComponent(relPath)}`);
+    const resource = r?.resource || {};
+    preview.innerHTML = `
+      <div class="hub-modal-resource-preview-head">
+        <strong>${escHtml(resource.path || relPath)}</strong>
+        ${resource.truncated ? '<span>Truncated</span>' : ''}
+      </div>
+      <pre>${escHtml(resource.content || '')}</pre>
+    `;
+  } catch (err) {
+    preview.innerHTML = `<div class="hub-modal-resource-empty">Failed to load file: ${escHtml(err?.message || String(err))}</div>`;
   }
 }
 
@@ -1025,6 +1135,8 @@ export function hubPageActivate() {
 window.hubPageActivate = hubPageActivate;
 window.openHubSkillModal = openHubSkillModal;
 window.closeHubSkillModal = closeHubSkillModal;
+window.toggleHubSkillChangeCard = toggleHubSkillChangeCard;
+window.openHubSkillResource = openHubSkillResource;
 window.loadCuratorSuggestions = loadCuratorSuggestions;
 
 wsEventBus.on('main_chat_goal_updated', () => {

@@ -1,0 +1,13 @@
+{
+  "skillId": "file-surgery",
+  "reason": "resource-delete",
+  "createdAt": "2026-05-28T05:44:19.741Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\file-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/recovery/recovery-note-find-replace-webui-source-failed-text-not-found-in-web-ui--2026-05-27.md"
+  ],
+  "hash": "ab468838f01cd6f1"
+}

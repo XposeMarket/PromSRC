@@ -64,6 +64,21 @@
       "path": "examples/dev-fast-approval-small-web-ui-fix.md",
       "type": "example",
       "description": "Example of choosing request_dev_source_edit for a small web-ui fix, then syncing, verifying, and reporting."
+    },
+    {
+      "path": "notes/audit-memory-search-routing-2026-05-24.md",
+      "type": "doc",
+      "description": "Guardrail for choosing source-scoped vs workspace file search tools during Prometheus debugging investigations."
+    },
+    {
+      "path": "notes/web-ui-source-tool-path-selection-2026-05-26.md",
+      "type": "doc",
+      "description": "Guardrail for choosing web-ui-specific source tools and web-ui-relative paths after a generic source_stats path miss."
+    },
+    {
+      "path": "notes/mobile-drawer-pagination-smoke-2026-05-26.md",
+      "type": "doc",
+      "description": "Guardrail from the 2026-05-26 mobile session drawer pagination regression: callback/helper threading and real drawer smoke are required before reporting completion."
     }
   ]
 }

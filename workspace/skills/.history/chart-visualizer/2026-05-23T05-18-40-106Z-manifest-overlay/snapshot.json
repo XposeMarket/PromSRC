@@ -1,0 +1,11 @@
+{
+  "skillId": "chart-visualizer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-23T05:18:40.109Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\chart-visualizer",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "da55558de290d402"
+}

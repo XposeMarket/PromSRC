@@ -1,0 +1,13 @@
+{
+  "name": "hyperframes-opus-4-8-prometheus",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "npx hyperframes lint",
+    "validate": "npx hyperframes validate",
+    "inspect": "npx hyperframes inspect",
+    "render": "npx hyperframes render --output final.mp4 --quality standard --fps 30",
+    "probe": "ffprobe -v error -show_entries format=duration -show_entries stream=nb_frames,width,height,r_frame_rate -of default=noprint_wrappers=1 final.mp4",
+    "frames": "ffmpeg -y -i final.mp4 -vf fps=1/5 qa-frames/frame-%02d.png"
+  }
+}

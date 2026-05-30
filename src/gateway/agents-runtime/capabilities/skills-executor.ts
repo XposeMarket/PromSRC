@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { parseJsonLike, type ToolResult } from '../../tool-builder';
-import { activateSkillForSession } from '../../session';
+import { activateSkillForSession, activateSkillResourceForSession } from '../../session';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 
 const SKILL_TOOL_NAMES = new Set([
@@ -55,18 +55,12 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
           return { name, args, result: 'No skills installed yet. Use skill_create to save a new one.', error: false };
         }
         const slLines = all.map((s: any) => {
-          const bits = [
-            `${s.id}`,
-            s.kind === 'bundle' ? `v${s.version} [bundle: ${(s.resources || []).length} resources]` : '[simple]',
-            Array.isArray(s.requiredTools) && s.requiredTools.length ? `[tools: ${s.requiredTools.join(',')}]` : '',
-            Array.isArray(s.triggers) && s.triggers.length ? `[triggers: ${s.triggers.join(',')}]` : '',
-            `- ${s.description || '(no description)'}`,
-          ].filter(Boolean);
-          return bits.join(' ');
+          const status = s.eligibility?.status && s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
+          return `${s.id}${status} - ${s.description || '(no description)'}`;
         }).join('\n');
         return {
           name, args,
-          result: `${all.length} skill${all.length !== 1 ? 's' : ''} available:\n${slLines}\n\nTo read a skill: skill_read("<id>")\nFor bundled resources: skill_resource_list("<id>") then skill_resource_read(id, path)\nFor metadata/provenance: skill_inspect("<id>")\nTo install a downloaded bundle: skill_import_bundle(source)\nTo enrich imported bundle metadata: skill_manifest_write(id, manifest)\nTo maintain bundle resources: skill_resource_write(id, path, content) or skill_resource_delete(id, path)\nTo export/update bundles: skill_export_bundle(id), skill_update_from_source(id)\nTo save a bundle skill: skill_create_bundle(...)\nTo save a simple one-file skill: skill_create(id, name, instructions, ...)`,
+          result: `${all.length} skill${all.length !== 1 ? 's' : ''} available. Call skill_read(id) to load one.\n\n${slLines}`,
           error: false,
         };
       }
@@ -81,24 +75,33 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         activateSkillForSession(sessionId, skill.id);
         try {
           const content = stripSkillEmojiFrontmatter(fs.readFileSync(skill.filePath, 'utf-8'));
-          const resourceLines = Array.isArray(skill.resources) && skill.resources.length
-            ? [
-              '',
-              'Resources:',
-              ...skill.resources.map((r: any) => `- ${r.path} (${r.type})${r.description ? ` - ${r.description}` : ''}`),
-              '',
-              `Use skill_resource_read({"id":"${skill.id}","path":"<resource path>"}) to load a resource.`,
-            ].join('\n')
-            : '';
-          const manifestLines = [
+          const header = [
             `${skill.name} (${skill.id}) ${skill.kind === 'bundle' ? `v${skill.version} bundle` : 'simple skill'}`,
             skill.description ? `Description: ${skill.description}` : '',
             Array.isArray(skill.requiredTools) && skill.requiredTools.length ? `Required tools: ${skill.requiredTools.join(', ')}` : '',
             skill.status && skill.status !== 'ready' ? `Status: ${skill.status}` : '',
             skill.validation && !skill.validation.ok ? `Validation errors: ${skill.validation.errors.join('; ')}` : '',
-            resourceLines,
           ].filter(Boolean).join('\n');
-          return { name, args, result: `${manifestLines}\n\nInstructions:\n${content}`, error: false };
+
+          // For bundle skills, show a resource menu so the AI can fetch what it needs lazily.
+          let resourceBlock = '';
+          if (skill.kind === 'bundle' && Array.isArray(skill.resources) && skill.resources.length) {
+            const menuLines = skill.resources.map((r: any) =>
+              `- ${r.path}${r.description ? ` — ${r.description}` : ''}`
+            );
+            const firstResource = skill.resources[0];
+            const suggested = `skill_resource_read({ id: "${skillId}", path: "${firstResource.path}" })`;
+            resourceBlock = [
+              '',
+              '',
+              'Relevant resources:',
+              ...menuLines,
+              '',
+              `Suggested next call if you need a resource:\n${suggested}`,
+            ].join('\n');
+          }
+
+          return { name, args, result: `${header}\n\nInstructions:\n${content}${resourceBlock}`, error: false };
         } catch {
           return { name, args, result: `${skill.name} (${skillId})\n\n${skill.instructions}`, error: false };
         }
@@ -132,6 +135,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         if (!result.ok) return { name, args, result: `skill_resource_read failed: ${result.error}`, error: true };
         const skill = deps.skillsManager.get(skillId);
         activateSkillForSession(sessionId, skill?.id || skillId);
+        activateSkillResourceForSession(sessionId, skill?.id || skillId, result.path);
         return {
           name, args,
           result: `Resource ${skillId}/${result.path}${result.truncated ? ' (truncated)' : ''}:\n\n${result.content}`,

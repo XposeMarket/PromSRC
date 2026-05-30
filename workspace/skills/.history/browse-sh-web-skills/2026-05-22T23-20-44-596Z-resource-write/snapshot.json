@@ -1,0 +1,13 @@
+{
+  "skillId": "browse-sh-web-skills",
+  "reason": "resource-write",
+  "createdAt": "2026-05-22T23:20:44.607Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\browse-sh-web-skills",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/browse-sh-amazon-search-products.md"
+  ],
+  "hash": "37ecde65ac5b54fd"
+}

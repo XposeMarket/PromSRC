@@ -1,0 +1,12 @@
+{
+  "skillId": "hyperframes-cli",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-29T22:55:54.356Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\hyperframes-cli",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "5b50124ec447d0ad"
+}

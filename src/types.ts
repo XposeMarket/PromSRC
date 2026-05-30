@@ -131,7 +131,17 @@ export interface ToolPermissions {
   shell: {
     workspace_only: boolean;
     confirm_destructive: boolean;
+    /** Hard-deny command/pattern fragments checked before approval. */
     blocked_patterns: string[];
+    /** Base cross-platform command tokens accepted by run_command/start_process. */
+    allowed_commands?: string[];
+    /** Low-risk Windows diagnostics/read-only command tokens. */
+    allowed_windows_read_commands?: string[];
+    /** Windows local-control command tokens that may mutate machine/app state but still require commit-tier approval. */
+    allowed_windows_system_commands?: string[];
+    /** Extra operator-configured command tokens. These still pass approval/path/audit gates. */
+    allowed_custom_commands?: string[];
+    approval_mode?: 'default' | 'lite';
   };
   files: {
     allowed_paths: string[];
@@ -353,6 +363,8 @@ export interface PrometheusConfig {
       enabled: boolean;
       token?: string;
     };
+    /** @deprecated legacy flat token field; prefer gateway.auth.token */
+    auth_token?: string;
     remoteAccess?: {
       enabled: boolean;
       mode: 'tailscale-funnel' | 'custom';
@@ -402,6 +414,7 @@ export interface PrometheusConfig {
    */
   agent_model_default_templates?: AgentModelDefaultTemplate[];
   active_agent_model_default_template?: string;
+  default_agent_model_template?: string;
   tools: {
     enabled: string[];
     permissions: ToolPermissions;

@@ -932,6 +932,464 @@ export const desktopBackgroundCommandTool: Tool = {
 };
 
 
+// ─── Window control + introspection (registry sync) ───────────────────────────
+
+export const desktopWindowControlTool: Tool = {
+  name: 'desktop_window_control',
+  description: 'Safely minimize, maximize, restore, or close a window via native Windows APIs. Prefer over clicking title-bar chrome.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['action'],
+    properties: {
+      action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'] },
+      name: { type: 'string', description: 'Partial window title or process name.' },
+      handle: { type: 'number', description: 'Exact window handle (HWND).' },
+      active: { type: 'boolean', description: 'Use the active window when no name/handle is supplied.' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopWindowControl } = await dt();
+      const actionRaw = String(args?.action || '').toLowerCase();
+      const action = actionRaw === 'minimize' || actionRaw === 'maximize' || actionRaw === 'restore' || actionRaw === 'close' ? actionRaw : 'restore';
+      return wrapResult(await desktopWindowControl(action, {
+        name: args?.name == null ? undefined : String(args.name),
+        handle: args?.handle == null ? undefined : Number(args.handle),
+        active: args?.active === true,
+      }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopGetWindowTextTool: Tool = {
+  name: 'desktop_get_window_text',
+  description: 'Extract readable text from a window via Windows UI Automation. More reliable than OCR for text-based UIs. Omit window_name for the active window.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: { window_name: { type: 'string' } },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopGetWindowText } = await dt();
+      return wrapResult(await desktopGetWindowText(args?.window_name == null ? undefined : String(args.window_name)));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopGetAccessibilityTreeTool: Tool = {
+  name: 'desktop_get_accessibility_tree',
+  description: 'Return the Windows UI Automation accessibility tree for a window (roles, names, enabled/focused state, bounds). Omit window_name for the active window.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      window_name: { type: 'string' },
+      max_depth: { type: 'integer', description: '1-10, default 5.' },
+      max_nodes: { type: 'integer', description: '10-1000, default 300.' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopGetAccessibilityTree } = await dt();
+      return wrapResult(await desktopGetAccessibilityTree(
+        args?.window_name == null ? undefined : String(args.window_name),
+        args?.max_depth == null ? undefined : Number(args.max_depth),
+        args?.max_nodes == null ? undefined : Number(args.max_nodes),
+      ));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopPixelWatchTool: Tool = {
+  name: 'desktop_pixel_watch',
+  description: 'Poll a virtual-screen pixel until its color changes (or matches target_color). Cheap alternative to polling full screenshots.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['x', 'y'],
+    properties: {
+      x: { type: 'number' },
+      y: { type: 'number' },
+      target_color: { type: 'string', description: 'Optional hex color to wait FOR, e.g. "#00FF00".' },
+      timeout_ms: { type: 'number' },
+      poll_ms: { type: 'number' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopPixelWatch } = await dt();
+      return wrapResult(await desktopPixelWatch(
+        Number(args?.x),
+        Number(args?.y),
+        args?.target_color == null ? undefined : String(args.target_color),
+        args?.timeout_ms == null ? undefined : Number(args.timeout_ms),
+        args?.poll_ms == null ? undefined : Number(args.poll_ms),
+      ));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopRecordMacroTool: Tool = {
+  name: 'desktop_record_macro',
+  description: 'Start recording a desktop macro. Subsequent click/type/press_key/scroll calls are captured. Call desktop_stop_macro to save.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['name'],
+    properties: { name: { type: 'string' } },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopRecordMacro } = await dt();
+      return wrapResult(desktopRecordMacro(String(args?.name || '')));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopStopMacroTool: Tool = {
+  name: 'desktop_stop_macro',
+  description: 'Stop the active macro recording and save it.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: { name: { type: 'string', description: 'Optional override name.' } },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopStopMacro } = await dt();
+      return wrapResult(desktopStopMacro(args?.name == null ? undefined : String(args.name)));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopReplayMacroTool: Tool = {
+  name: 'desktop_replay_macro',
+  description: 'Replay a saved desktop macro. speed_multiplier scales playback speed (default 1.0).',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['name'],
+    properties: {
+      name: { type: 'string' },
+      speed_multiplier: { type: 'number' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopReplayMacro } = await dt();
+      return wrapResult(await desktopReplayMacro(String(args?.name || ''), args?.speed_multiplier == null ? undefined : Number(args.speed_multiplier)));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopListMacrosTool: Tool = {
+  name: 'desktop_list_macros',
+  description: 'List all saved desktop macros and their action counts.',
+  schema: {},
+  jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
+  execute: async (): Promise<ToolResult> => {
+    try {
+      const { desktopListMacros } = await dt();
+      return wrapResult(desktopListMacros());
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+// ─── Canonical app / window / state model (Phase 1) ───────────────────────────
+
+export const desktopListAppsTool: Tool = {
+  name: 'desktop_list_apps',
+  description: 'List installed and running apps in the canonical model. Running apps first, each with open windows (window_id, handle, bounds, is_active). Returns app_id values for launches and window_id values for window-scoped tools.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      filter: { type: 'string' },
+      include_windows: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopListApps } = await dt();
+      return wrapResult(await desktopListApps(String(args?.filter || ''), args?.include_windows !== false));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopListWindowsTool: Tool = {
+  name: 'desktop_list_windows',
+  description: 'Flat list of open windows in the canonical model (window_id, handle, app_id, process_name, title, bounds, monitor_index, is_active).',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      app_id: { type: 'string' },
+      process_name: { type: 'string' },
+      title: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopListWindowsCanonical } = await dt();
+      return wrapResult(await desktopListWindowsCanonical({
+        app_id: args?.app_id == null ? undefined : String(args.app_id),
+        process_name: args?.process_name == null ? undefined : String(args.process_name),
+        title: args?.title == null ? undefined : String(args.title),
+      }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopGetWindowStateTool: Tool = {
+  name: 'desktop_get_window_state',
+  description: 'Canonical snapshot of one window: metadata + optional screenshot (with reusable screenshot_id) + optional accessibility text. Identify by window_id (preferred), window_handle, app_id, or title.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      window_id: { type: 'string' },
+      window_handle: { type: 'number' },
+      app_id: { type: 'string' },
+      title: { type: 'string' },
+      include_screenshot: { type: 'boolean' },
+      include_text: { type: 'boolean' },
+      focus_first: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopGetWindowState } = await dt();
+      return wrapResult(await desktopGetWindowState(DESKTOP_SESSION, {
+        window_id: args?.window_id == null ? undefined : String(args.window_id),
+        window_handle: args?.window_handle == null ? undefined : Number(args.window_handle),
+        app_id: args?.app_id == null ? undefined : String(args.app_id),
+        title: args?.title == null ? undefined : String(args.title),
+        include_screenshot: args?.include_screenshot !== false,
+        include_text: args?.include_text === true,
+        focus_first: args?.focus_first === true,
+      }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+// ─── Window-scoped input (Phase 2) ─────────────────────────────────────────────
+
+function windowSelector(args: any) {
+  return {
+    window_id: args?.window_id == null ? undefined : String(args.window_id),
+    window_handle: args?.window_handle == null ? undefined : Number(args.window_handle),
+    app_id: args?.app_id == null ? undefined : String(args.app_id),
+    title: args?.title == null ? undefined : String(args.title),
+  };
+}
+
+const windowSelectorSchema = {
+  window_id: { type: 'string', description: 'Stable window id (win_<handle>).' },
+  window_handle: { type: 'number', description: 'Exact window handle (HWND).' },
+  app_id: { type: 'string', description: 'Target app_id.' },
+  title: { type: 'string', description: 'Partial window title/process name.' },
+};
+
+export const desktopWindowClickTool: Tool = {
+  name: 'desktop_window_click',
+  description: 'Click inside a specific window (window_id preferred). Focuses the window first; coordinates default to window-space.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['x', 'y'],
+    properties: {
+      ...windowSelectorSchema,
+      x: { type: 'number' },
+      y: { type: 'number' },
+      coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'] },
+      screenshot_id: { type: 'string' },
+      button: { type: 'string', enum: ['left', 'right'] },
+      double_click: { type: 'boolean' },
+      modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'] },
+      verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopWindowClick } = await dt();
+      return wrapResult(await desktopWindowClick(
+        windowSelector(args),
+        {
+          x: Number(args?.x),
+          y: Number(args?.y),
+          coordinate_space: args?.coordinate_space,
+          screenshot_id: args?.screenshot_id == null ? undefined : String(args.screenshot_id),
+        },
+        {
+          button: String(args?.button || 'left').toLowerCase() === 'right' ? 'right' : 'left',
+          double_click: args?.double_click === true,
+          modifier: args?.modifier === 'shift' || args?.modifier === 'ctrl' || args?.modifier === 'alt' ? args.modifier : undefined,
+          verify: args?.verify,
+        },
+        DESKTOP_SESSION,
+      ));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopWindowTypeTool: Tool = {
+  name: 'desktop_window_type',
+  description: 'Type text into a specific window (window_id preferred). Focuses first, then types via clipboard paste (raw=true for key events).',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['text'],
+    properties: { ...windowSelectorSchema, text: { type: 'string' }, raw: { type: 'boolean' } },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopWindowType } = await dt();
+      return wrapResult(await desktopWindowType(windowSelector(args), String(args?.text || ''), args?.raw === true));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopWindowPressKeyTool: Tool = {
+  name: 'desktop_window_press_key',
+  description: 'Press a key/combo in a specific window (window_id preferred). Focuses first. Examples: Enter, Ctrl+S, Alt+Tab.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['key'],
+    properties: { ...windowSelectorSchema, key: { type: 'string' } },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopWindowPressKey } = await dt();
+      return wrapResult(await desktopWindowPressKey(windowSelector(args), String(args?.key || 'Enter')));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopWindowScrollTool: Tool = {
+  name: 'desktop_window_scroll',
+  description: 'Scroll inside a specific window (window_id preferred). Focuses first; provide x/y to position the cursor over the pane.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['direction'],
+    properties: {
+      ...windowSelectorSchema,
+      direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+      amount: { type: 'number' },
+      x: { type: 'number' },
+      y: { type: 'number' },
+      coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'] },
+      screenshot_id: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopWindowScroll } = await dt();
+      const dir = String(args?.direction || 'down').toLowerCase();
+      return wrapResult(await desktopWindowScroll(
+        windowSelector(args),
+        {
+          direction: (dir === 'up' || dir === 'left' || dir === 'right' ? dir : 'down') as 'up' | 'down' | 'left' | 'right',
+          amount: args?.amount == null ? undefined : Number(args.amount),
+          x: args?.x == null ? undefined : Number(args.x),
+          y: args?.y == null ? undefined : Number(args.y),
+          coordinate_space: args?.coordinate_space,
+          screenshot_id: args?.screenshot_id == null ? undefined : String(args.screenshot_id),
+        },
+        DESKTOP_SESSION,
+      ));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopWindowDragTool: Tool = {
+  name: 'desktop_window_drag',
+  description: 'Drag between two points inside a specific window (window_id preferred). Focuses first; endpoints default to window-space.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['from_x', 'from_y', 'to_x', 'to_y'],
+    properties: {
+      ...windowSelectorSchema,
+      from_x: { type: 'number' },
+      from_y: { type: 'number' },
+      to_x: { type: 'number' },
+      to_y: { type: 'number' },
+      steps: { type: 'number' },
+      coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'] },
+      screenshot_id: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopWindowDrag } = await dt();
+      return wrapResult(await desktopWindowDrag(
+        windowSelector(args),
+        {
+          from_x: Number(args?.from_x),
+          from_y: Number(args?.from_y),
+          to_x: Number(args?.to_x),
+          to_y: Number(args?.to_y),
+          steps: args?.steps == null ? undefined : Number(args.steps),
+          coordinate_space: args?.coordinate_space,
+          screenshot_id: args?.screenshot_id == null ? undefined : String(args.screenshot_id),
+        },
+        DESKTOP_SESSION,
+      ));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 export const allDesktopTools: Tool[] = [
@@ -964,4 +1422,23 @@ export const allDesktopTools: Tool[] = [
   desktopBackgroundStatusTool,
   desktopBackgroundPrepareSandboxTool,
   desktopBackgroundCommandTool,
+  // Window control + introspection (registry sync)
+  desktopWindowControlTool,
+  desktopGetWindowTextTool,
+  desktopGetAccessibilityTreeTool,
+  desktopPixelWatchTool,
+  desktopRecordMacroTool,
+  desktopStopMacroTool,
+  desktopReplayMacroTool,
+  desktopListMacrosTool,
+  // Canonical app / window / state model (Phase 1)
+  desktopListAppsTool,
+  desktopListWindowsTool,
+  desktopGetWindowStateTool,
+  // Window-scoped input (Phase 2)
+  desktopWindowClickTool,
+  desktopWindowTypeTool,
+  desktopWindowPressKeyTool,
+  desktopWindowScrollTool,
+  desktopWindowDragTool,
 ];

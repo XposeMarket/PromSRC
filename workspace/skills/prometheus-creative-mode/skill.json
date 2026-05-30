@@ -78,6 +78,11 @@
       "path": "references/known-issues/creative-stitch-rough-cut-truncation-2026-05-20.md",
       "type": "doc",
       "description": "Known issue and recovery pattern for Creative stitch/rough-cut outputs truncating multi-clip generated sequences; observed during Prometheus/PulseFit promo on 2026-05-20."
+    },
+    {
+      "path": "references/known-issues/promo-pacing-readability-2026-05-28.md",
+      "type": "doc",
+      "description": "Prometheus promo/explainer pacing guardrail from Raul's 2026-05-28 HyperFrames feedback."
     }
   ]
 }

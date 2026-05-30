@@ -32,6 +32,7 @@ const isXAIConnected = (...args: any[]) => require('../../auth/xai-oauth').isXAI
 const clearXAITokens = (...args: any[]) => require('../../auth/xai-oauth').clearXAITokens(...args);
 const loadXAITokens = (...args: any[]) => require('../../auth/xai-oauth').loadXAITokens(...args);
 const completeXAIOAuthWithCode = (...args: any[]) => require('../../auth/xai-oauth').completeXAIOAuthWithCode(...args);
+const startXAITokenKeepAlive = (...args: any[]) => require('../../auth/xai-oauth').startXAITokenKeepAlive(...args);
 const saveXApiCredentials = (...args: any[]) => require('../../auth/x-api-oauth').saveXApiCredentials(...args);
 const startXApiOAuthFlowBackground = (...args: any[]) => require('../../auth/x-api-oauth').startXApiOAuthFlowBackground(...args);
 const pollXApiOAuthBackground = () => require('../../auth/x-api-oauth').pollXApiOAuthBackground();
@@ -53,14 +54,22 @@ import {
   revokeCommandPermissionGrant,
   type CommandPermissionScope,
 } from '../command-permissions';
+import { addSessionAllowedPath, addPersistentAllowedPath } from '../path-permissions';
 import { appendAuditEntry } from '../audit-log';
 import { requireGatewayAuth as sharedRequireGatewayAuth } from '../gateway-auth';
 import { listProviderDescriptors, listProviderSecretFieldPaths } from '../../providers/provider-registry.js';
 import { getLastMainSessionId } from '../comms/broadcaster';
+import { createDevSourceEditApprovalScope, grantDevSourceEditApproval } from '../dev-source-approvals';
+import { buildContextBudget, resolveActiveModelContextProfile, selectModelInfoForContextProfile } from '../context/model-context';
+import { resolveApprovalDecision } from '../approval-actions';
 
 export const router = Router();
 
 const CONFIG_DIR_PATH = getConfig().getConfigDir();
+
+// Start the 30-minute keep-alive immediately so tokens stay fresh even when
+// the user isn't actively chatting (prevents ~36-hour refresh-token expiry).
+startXAITokenKeepAlive(CONFIG_DIR_PATH);
 
 function setXAIAuthModeOAuth(): void {
   const configManager = getConfig();
@@ -383,9 +392,22 @@ router.get('/api/settings/features', (_req, res) => {
   });
 });
 
-router.get('/api/settings/session', (_req, res) => {
+router.get('/api/settings/session', async (_req, res) => {
   const cfg = (getConfig().getConfig() as any).session || {};
   const d = getSessionDefaults();
+  let contextProfile = resolveActiveModelContextProfile();
+  try {
+    const provider = getProvider();
+    const models = await Promise.race([
+      provider.listModels(),
+      new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 1800)),
+    ]);
+    const modelInfo = selectModelInfoForContextProfile(models, contextProfile.model);
+    if (modelInfo) contextProfile = resolveActiveModelContextProfile(modelInfo);
+  } catch {
+    // Keep settings fast and available even when provider metadata endpoints are offline.
+  }
+  const contextBudget = buildContextBudget(contextProfile);
   res.json({
     success: true,
     session: {
@@ -398,6 +420,8 @@ router.get('/api/settings/session', (_req, res) => {
       rollingCompactionToolTurns: toBoundedInt(cfg.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
       rollingCompactionSummaryMaxWords: toBoundedInt(cfg.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
       rollingCompactionModel: String(cfg.rollingCompactionModel || '').trim(),
+      contextProfile,
+      contextBudget,
     },
   });
 });
@@ -635,6 +659,7 @@ router.get('/api/settings/agent-model-defaults', (_req, res) => {
     defaults: cfg.agent_model_defaults || {},
     templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
     activeTemplateId: cfg.active_agent_model_default_template || '',
+    defaultTemplateId: cfg.default_agent_model_template || '',
     agents: (cfg.agents || []).map((a: any) => ({
       id:    a.id,
       name:  a.name,
@@ -685,6 +710,7 @@ router.get('/api/settings/agent-model-default-templates', (_req, res) => {
     success: true,
     templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
     activeTemplateId: cfg.active_agent_model_default_template || '',
+    defaultTemplateId: cfg.default_agent_model_template || '',
     currentDefaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
   });
 });
@@ -780,6 +806,33 @@ router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) 
     template,
     defaults: (cm.getConfig() as any).agent_model_defaults || {},
     activeTemplateId: template.id,
+  });
+});
+
+// POST /api/settings/agent-model-default-templates/:id/set-default
+// Mark a template as the startup default AND apply it to the live agent_model_defaults.
+// On server start, the default template is always re-applied so the config stays consistent.
+router.post('/api/settings/agent-model-default-templates/:id/set-default', (req, res) => {
+  const cm = getConfig();
+  const current = cm.getConfig() as any;
+  const templates = normalizeAgentModelTemplates(current.agent_model_default_templates || []);
+  const idx = findTemplateIndex(templates, req.params.id);
+  if (idx < 0) {
+    res.status(404).json({ success: false, error: `Template "${req.params.id}" not found` });
+    return;
+  }
+  const template = templates[idx];
+  cm.updateConfig({
+    agent_model_defaults: normalizeAgentModelDefaults(template.defaults),
+    active_agent_model_default_template: template.id,
+    default_agent_model_template: template.id,
+  } as any);
+  res.json({
+    success: true,
+    template,
+    defaults: (cm.getConfig() as any).agent_model_defaults || {},
+    activeTemplateId: template.id,
+    defaultTemplateId: template.id,
   });
 });
 
@@ -960,6 +1013,15 @@ router.get('/api/approvals', requireGatewayAuth, (req, res) => {
       command: String(record.toolArgs?.command || ''),
       scopedAction: record.commandPermissionCandidate?.action || '',
       scopedTarget: record.commandPermissionCandidate?.targetDisplay || '',
+      commandBoundary: record.commandPermissionCandidate ? {
+        scope: record.commandPermissionCandidate.boundaryScope || 'workspace',
+        reason: record.commandPermissionCandidate.boundaryReason || '',
+        externalPaths: record.commandPermissionCandidate.externalPaths || [],
+        environmentChanges: record.commandPermissionCandidate.environmentChanges || [],
+        packageManager: record.commandPermissionCandidate.packageManager || '',
+        requiresExplicitApproval: record.commandPermissionCandidate.requiresExplicitApproval === true,
+        requiresAdmin: record.commandPermissionCandidate.requiresAdmin === true,
+      } : undefined,
       sourceSessionId: record.sessionId,
     }));
   res.json({ approvals });
@@ -979,54 +1041,20 @@ function resolveApprovalRequest(req: any, res: any, decision: 'approved' | 'reje
     res.status(400).json({ success: false, error: `grantScope must be one of: ${VALID_GRANT_SCOPES.join(', ')}` });
     return;
   }
-  const queue = getApprovalQueue();
-  const approval = queue.get(req.params.id);
-  if (!approval) {
-    res.status(404).json({ success: false, error: 'Approval not found' });
-    return;
-  }
-  if (approval.status !== 'pending') {
-    res.status(409).json({ success: false, error: `Approval already ${approval.status}` });
-    return;
-  }
-  if (requestedDecision === 'approved' && grantScope && (
-    approval.approvalKind === 'dev_source_edit'
-    || approval.toolName === 'request_dev_source_edit'
-    || approval.approvalKind === 'final_action'
-    || approval.toolName === 'request_final_action_approval'
-  )) {
-    res.status(400).json({ success: false, error: 'One-shot approvals cannot be saved as session or always permissions.' });
-    return;
-  }
-  const resolved = queue.resolve(req.params.id, requestedDecision === 'approved', resolvedBy);
-  if (!resolved) {
-    res.status(409).json({ success: false, error: 'Approval could not be resolved' });
-    return;
-  }
-  let permissionGrant: any = null;
-  if (requestedDecision === 'approved' && grantScope && approval.commandPermissionCandidate) {
-    try {
-      permissionGrant = addCommandPermissionGrant(approval.commandPermissionCandidate, grantScope, resolvedBy);
-      appendAuditEntry({
-        sessionId: approval.sessionId,
-        agentId: approval.agentId,
-        actionType: 'approval_resolved',
-        toolName: approval.toolName,
-        toolArgs: approval.toolArgs,
-        policyTier: approval.policyTier,
-        approvalStatus: 'auto_allowed' as any,
-        resultSummary: `Created ${grantScope} scoped tool permission ${permissionGrant.id}`,
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: `Approval resolved, but command permission could not be saved: ${err?.message || err}` });
-      return;
-    }
-  }
-  // Security audit: log every approval action (action name only, no payload)
-  import('../../security/log-scrubber').then(({ log }) => {
-    log.security('[approvals]', requestedDecision.toUpperCase(), 'approval-id:', req.params.id, 'action:', approval.action);
-  }).catch(() => {});
-  res.json({ success: true, decision: requestedDecision, approval: resolved, permissionGrant });
+  const result = resolveApprovalDecision({
+    approvalId: req.params.id,
+    decision: requestedDecision,
+    resolvedBy,
+    grantScope,
+  });
+  res.status(result.statusCode).json(result.statusCode === 200 ? {
+    success: true,
+    decision: result.decision,
+    approval: result.approval,
+    permissionGrant: result.permissionGrant,
+    resumePrompt: result.resumePrompt,
+    requiresChatResume: result.requiresChatResume,
+  } : { success: false, error: result.error });
 }
 
 router.get('/api/command-permissions', requireGatewayAuth, (req, res) => {
@@ -1047,6 +1075,86 @@ router.delete('/api/command-permissions/:id', requireGatewayAuth, (req, res) => 
     resultSummary: `Revoked command permission ${req.params.id}`,
   });
   res.json({ success: true });
+});
+
+router.get('/api/settings/security', requireGatewayAuth, (_req, res) => {
+  const cfg = getConfig().getConfig() as any;
+  const shell = cfg?.tools?.permissions?.shell || {};
+  const mode = shell.approval_mode === 'lite' ? 'lite' : 'default';
+  res.json({
+    success: true,
+    terminalPermissionMode: mode,
+    hardBlockedPatterns: Array.isArray(shell.blocked_patterns) ? shell.blocked_patterns : [],
+    commandPermissions: listCommandPermissionGrants(),
+  });
+});
+
+router.post('/api/settings/security', requireGatewayAuth, (req, res) => {
+  try {
+    const mode = req.body?.terminalPermissionMode === 'lite' ? 'lite' : 'default';
+    const cm = getConfig();
+    const current = cm.getConfig() as any;
+    cm.updateConfig({
+      tools: {
+        ...(current.tools || {}),
+        permissions: {
+          ...(current.tools?.permissions || {}),
+          shell: {
+            ...(current.tools?.permissions?.shell || {}),
+            approval_mode: mode,
+          },
+        },
+      },
+    } as any);
+    appendAuditEntry({
+      actionType: 'approval_resolved',
+      toolName: 'settings_security',
+      approvalStatus: 'auto_allowed',
+      resultSummary: `Terminal permission mode set to ${mode}`,
+    });
+    res.json({ success: true, terminalPermissionMode: mode });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to save security settings' });
+  }
+});
+
+router.patch('/api/approvals/:id', requireGatewayAuth, (req, res) => {
+  try {
+    const queue = getApprovalQueue();
+    const approval = queue.get(req.params.id);
+    if (!approval) {
+      res.status(404).json({ success: false, error: 'Approval not found' });
+      return;
+    }
+    if (approval.status !== 'pending') {
+      res.status(409).json({ success: false, error: `Approval is already ${approval.status}` });
+      return;
+    }
+    const body = req.body || {};
+    const fields: Parameters<typeof queue.update>[1] = {};
+    if (body.reason) fields.reason = String(body.reason);
+    if (body.action) fields.action = String(body.action);
+    if (body.files || body.plan) {
+      fields.devSourceEdit = {} as any;
+      if (Array.isArray(body.files)) (fields.devSourceEdit as any).allowedFiles = body.files.map(String);
+      if (body.plan && typeof body.plan === 'object') (fields.devSourceEdit as any).plan = body.plan;
+      if (Array.isArray(body.files)) {
+        fields.toolArgs = { ...(approval.toolArgs || {}), files: body.files.map(String) };
+      }
+    }
+    const updated = queue.update(req.params.id, fields);
+    if (!updated) {
+      res.status(500).json({ success: false, error: 'Update failed' });
+      return;
+    }
+    const { broadcastWS } = require('../comms/broadcaster');
+    try {
+      broadcastWS({ type: 'approval_updated', approvalId: updated.id, approval: updated });
+    } catch {}
+    res.json({ success: true, approval: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Failed to update approval' });
+  }
 });
 
 router.post('/api/approvals/:id', requireGatewayAuth, (req, res) => {
@@ -1415,6 +1523,20 @@ router.post('/api/settings/bulk', (req, res) => {
       };
     }
 
+    if (body.security) {
+      const mode = body.security.terminalPermissionMode === 'lite' ? 'lite' : 'default';
+      updates.tools = {
+        ...((updates.tools || current.tools || {})),
+        permissions: {
+          ...((updates.tools?.permissions || current.tools?.permissions || {})),
+          shell: {
+            ...((updates.tools?.permissions?.shell || current.tools?.permissions?.shell || {})),
+            approval_mode: mode,
+          },
+        },
+      };
+    }
+
     configManager.updateConfig(updates as any);
     if (providerChanged) resetProvider();
     if (providerChanged) refreshXAITools();
@@ -1502,6 +1624,7 @@ router.get('/api/auth/xai/status', (_req, res) => {
     oauthConnected: connected,
     apiKeyConnected: hasApiKey,
     expires_at: tokens?.expires_at || null,
+    refresh_token_expires_at: tokens?.refresh_token_expires_at || null,
     refresh_available: !!tokens?.refresh_token,
     auth: connected ? 'oauth' : hasApiKey ? 'api_key' : 'none',
     tokenSource: connected ? 'xai_oauth' : hasApiKey ? 'xai_api_key' : undefined,

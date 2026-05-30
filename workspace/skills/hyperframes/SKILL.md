@@ -18,6 +18,30 @@ When working inside Prometheus Creative Mode, HyperFrames is the deterministic c
 
 Use this skill for the HTML/animation/timing rules once the production route is chosen.
 
+## Prometheus Runtime Reality (2026-05-24)
+
+Raul's current Prometheus/Windows HyperFrames reality is not the same as the ideal first-class Creative path. Treat these as hard routing rules until native Prometheus HyperFrames QA/export is proven stable again:
+
+- **Strict HyperFrames means a CLI project path.** If Raul explicitly says "HyperFrames only" or rejects Creative/HTML Motion fallback, prefer a real workspace HyperFrames CLI project (`hyperframes-[slug]/`) over Creative/HTML Motion wrappers. The reliable path from the 2026-05-24 run was: `npx hyperframes init` (or equivalent real project folder), author `index.html`, copy real assets into the project, run `npx hyperframes lint` / `validate` / `inspect`, render with `npx hyperframes render`, then verify the exported MP4.
+- **Do not silently fallback.** HTML Motion / Creative tools are acceptable fallback routes only when the user asked for a video generally. If the user asked for HyperFrames specifically, do not quietly switch back to Creative/HTML Motion. State the exact HyperFrames blocker and continue fixing inside the HyperFrames CLI/project route unless Raul explicitly approves a fallback.
+- **Known native-tool blocker.** In the observed run, Prometheus first-class `hyperframes_insert_clip` could insert a clip, but QA/render via native Creative/HyperFrames tooling hit `ReferenceError: __name is not defined`; a Creative HTML Motion export also produced a bad black MP4. That means snapshots, editor state, or exported-file existence are not enough proof.
+- **Hard export verification gate.** Never claim a HyperFrames video is done from lint, inspect, a snapshot, or output-file existence alone. After export, sample frames from the actual final MP4 and confirm duration/frame count is plausible, frames are not black/blank, and required logos/text/assets are visible. If frame extraction fails or sampled frames are empty/missing core content, treat the export as failed.
+- **Preferred real-project artifact shape:**
+
+```text
+hyperframes-[slug]/
+  index.html
+  hyperframes.json
+  package.json
+  assets...
+  final.mp4
+```
+
+Final HyperFrames responses should include project path, source file path, exported MP4 path, checks run, and whether the exported MP4 was frame-verified.
+
+For the full current-runtime note, read [references/prometheus-runtime-reality-2026-05-24.md](references/prometheus-runtime-reality-2026-05-24.md). For command/runtime details, read the `hyperframes-cli` skill.
+
+
 ## Approach
 
 ### Discovery (exploratory requests only)

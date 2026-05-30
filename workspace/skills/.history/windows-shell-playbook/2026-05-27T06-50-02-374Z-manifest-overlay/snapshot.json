@@ -1,0 +1,11 @@
+{
+  "skillId": "windows-shell-playbook",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-27T06:50:02.376Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\windows-shell-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "a7c4b83b06a44cfd"
+}

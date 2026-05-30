@@ -13,7 +13,9 @@
 
 - `src/gateway/core/startup.ts` owns startup boot orchestration
 - `src/gateway/routes/chat.router.ts` owns `/api/chat`, tool loop execution, plan discipline, SSE streaming, browser/vision nudges, and mode-specific prompting
-- `src/gateway/session.ts` owns session history, rolling compaction, rolling summaries, workspace binding, and persisted `creativeMode`
+- `src/gateway/session.ts` owns session history, rolling summaries, workspace binding, persisted `creativeMode`, and recent tool-context fallback helpers
+- `src/gateway/context/model-context.ts` owns provider-aware context profiles, token estimates, and compaction/input budget math
+- `src/gateway/tool-observations.ts` owns persisted compact tool observations for future-turn context and compaction
 - `src/gateway/prompt-context.ts` builds the dynamic tool/memory/project prompt blocks
 - `src/gateway/tool-builder.ts` assembles the tool surface from core tools, category tools, connector tools, composites, and MCP tools
 - `src/gateway/browser-tools.ts` is the browser automation/runtime state system
@@ -141,6 +143,25 @@ Security sharp edge to preserve:
 - That also means remote-access configuration/device-management endpoints in the pairing router are not individually protected by `requireGatewayAuth` at the router mount layer.
 - Do not casually expose a Funnel/public URL without understanding this. A hardening pass should make desktop management endpoints loopback/account-gated while keeping only `qr`, `claim`, `poll`, certificate download, and `me` available as needed for pairing.
 - A leaked QR/human code is not a credential by itself because desktop approval is still required, but it can create pending approval prompts.
+
+Tailscale First-Time Setup Runbook (Windows):
+
+1. **Verify Tailscale is logged in** — open PowerShell and run `tailscale status`. You should see your machine's MagicDNS hostname (e.g. `fonso-pc.tailca7310.ts.net`). If not connected, run `tailscale up`.
+2. **Enable Funnel in the admin console** — Funnel is off by default for every tailnet. Go to [login.tailscale.com/admin](https://login.tailscale.com/admin) → your machine → enable Funnel. Without this step the CLI command will error.
+3. **Expose the gateway port** — run `tailscale funnel 18789` in PowerShell (use the actual port from `gateway.port` if changed). This creates a public `https://` route to `localhost:18789`. Run `tailscale funnel status` to confirm the port is listed.
+4. **Configure remote access in the UI** — in the desktop app go to Settings → Pairing → Remote Access section:
+   - Click **Detect Tailscale** — the UI calls `GET /api/pairing/tailscale/status`, checks the CLI, and shows your hostname plus a **"Use this URL"** button.
+   - Click **"Use this URL"** — fills in `https://<your-machine>.tail…ts.net`.
+   - Set mode to **Tailscale Funnel**, check **Enable**.
+   - Click **Save** (calls `PUT /api/pairing/remote-access`).
+5. **Regenerate the QR** — click **Regenerate QR** (or the refresh button). The response from `POST /api/pairing/qr` will now use the public Tailscale URL; a blue **"Remote access ON"** badge appears.
+6. **Pair the phone** — scan the QR from iPhone Safari (or enter the human pair code in the Home Screen PWA), then approve the request on the desktop.
+
+Windows-specific notes:
+- The `tailscale` binary added by the Windows installer may not be in `%PATH%` for all shells. If `_runTailscaleCli` fails (installed=false in `/api/pairing/tailscale/status`), add the Tailscale install dir (typically `C:\Program Files\Tailscale`) to `PATH` and restart the gateway.
+- The binary-search helpers in `workspace/oss agents/openclaw/src/infra/tailscale.ts` only probe macOS paths; they are not used by the desktop gateway, which calls `tailscale` directly via `spawn('tailscale', ...)` in `src/gateway/routes/pairing.router.ts:_runTailscaleCli`.
+- Tailscale Funnel on Windows keeps running as a system service even after the terminal closes; it persists until you run `tailscale funnel reset`.
+- The `x-forwarded-proto: https` check in `core/server.ts` ensures that Tailscale's HTTPS termination does not trigger the HTTP→HTTPS redirect loop (the gateway stays on plain HTTP internally; Tailscale handles TLS).
 
 Self-edit verification checklist for pairing/remote access:
 

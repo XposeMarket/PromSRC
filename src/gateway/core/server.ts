@@ -439,17 +439,17 @@ export function createServer(
       try {
         ws.send(JSON.stringify(payload));
         console.log(`[Prom] Sent startup notification ${item.id} -> session ${item.sessionId}`);
-        if (item.devReload?.enabled) {
-          const delayMs = Number.isFinite(Number(item.devReload.delayMs)) ? Math.max(250, Number(item.devReload.delayMs)) : 1200;
+        if (item.source === 'hot_restart' || item.devReload?.enabled) {
+          const delayMs = Number.isFinite(Number(item.devReload?.delayMs)) ? Math.max(250, Number(item.devReload.delayMs)) : 1200;
           setTimeout(() => {
             try {
               if (ws.readyState === 1) {
                 ws.send(JSON.stringify({
                   type: 'dev_reload_requested',
-                  target: 'desktop',
+                  target: 'all',
                   source: 'hot_restart',
-                  reason: item.devReload?.reason || item.title || 'Prometheus dev changes applied',
-                  surfaces: item.devReload?.surfaces || [],
+                  reason: item.devReload?.reason || item.title || 'Prometheus restart complete',
+                  surfaces: item.devReload?.surfaces || ['restart'],
                   timestamp: Date.now(),
                 }));
               }

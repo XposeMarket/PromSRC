@@ -1,6 +1,6 @@
 # SELF — Prometheus Self-Reference (Split Index)
 
-Last verified against `src/`, `web-ui/`, route/tool definitions, config defaults, current package metadata, Brain runner skill-curator behavior, Hub curator UI, and voice-agent/mobile dictation routing on: 2026-05-21
+Last verified against `src/`, `web-ui/`, route/tool definitions, config defaults, command policy/approval surfaces, current package metadata, provider-aware context budgeting, rolling/mid-workflow compaction, tool observation injection, Brain runner skill-curator behavior, Hub/chat context UI, voice-agent/mobile dictation routing/direct voice tool wrappers, the desktop web UI source/generated route/component surface, and the Prometheus Mobile PWA/gateway route surface on: 2026-05-29
 Workspace: `D:\Prometheus\workspace`
 Project root: `D:\Prometheus`
 
@@ -42,6 +42,8 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 26, 27 | Memory Files/Search, Memory Index Layers | [13-memory.md](13-memory.md) |
 | 28, 28A, 28B | Bundled Skills, Hub/Frontend Views, Onboarding/Migration | [14-skills-and-frontend.md](14-skills-and-frontend.md) |
 | 29, 30, 31 | Data Paths, Sharp Edges, Maintenance Rule | [15-paths-and-sharp-edges.md](15-paths-and-sharp-edges.md) |
+| 32 | Prometheus Mobile App Maintenance Reference | [16-mobile-app.md](16-mobile-app.md) |
+| 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
 
 ## Operational Runbooks
 

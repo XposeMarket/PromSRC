@@ -65,10 +65,61 @@ desktop_background_command({ "action": "run", "command": "start notepad" })
 desktop_background_command({ "action": "type", "text": "Hello from Prometheus" })
 ```
 
+## Canonical Window Model (host)
+
+The host desktop layer now exposes a Codex-style canonical app/window/state
+model on top of the existing PowerShell internals:
+
+- `desktop_list_apps` — installed + running apps; running apps first, each with
+  open windows (`window_id`, `handle`, `bounds`, `is_active`) and a stable
+  `app_id`.
+- `desktop_list_windows` — flat window list with `window_id` (= `win_<HWND>`),
+  `app_id`, `process_name`, `title`, `bounds`, `monitor_index`, `is_active`.
+- `desktop_get_window_state` — point-in-time snapshot of one window: metadata,
+  an optional screenshot (with a reusable `screenshot_id`), and optional
+  accessibility text. Resolve the window by `window_id` (preferred),
+  `window_handle`, `app_id`, or `title`.
+
+Window-scoped input tools resolve an exact window (restoring + focusing it)
+before acting, with coordinates defaulting to **window-space**:
+
+- `desktop_window_click`, `desktop_window_type`, `desktop_window_press_key`,
+  `desktop_window_scroll`, `desktop_window_drag`.
+
+These wrap the existing primitives, so the older `desktop_click` / `desktop_type`
+coordinate tools remain available and unchanged.
+
+### Capture backend
+
+`resolveDesktopCaptureBackend()` selects the capture path and is reported by
+`desktop_doctor`. The env var `PROMETHEUS_DESKTOP_CAPTURE_BACKEND` accepts
+`auto` (default), `graphics_capture`, or `copy_from_screen`. Today all values
+resolve to the stable `copy_from_screen` path; the
+`graphics_capture` value is reserved for a future Windows.Graphics.Capture
+native helper that can capture occluded windows.
+
+### Confirmation taxonomy
+
+`src/gateway/ui-action-policy.ts` ports the Codex confirmation taxonomy
+(`evaluateUiActionRisk`) into a shared, tested decision point for both desktop
+and browser UI actions (allow / confirm / handoff / deny). Final-action gating
+remains enforced by the tool layer via `request_final_action_approval` +
+`consumeFinalActionApproval`.
+
+### Registry parity
+
+All three desktop tool surfaces — `getDesktopToolDefinitions()` (model-facing),
+the chat/subagent dispatch in `subagent-executor.ts`, and the `allDesktopTools`
+ToolRegistry wrappers in `src/tools/desktop.ts` — are kept in sync by
+`scripts/test-desktop-registry-parity.mjs` (run after `npm run build:backend`).
+
 ## Next Steps
 
+- **Native Windows.Graphics.Capture helper** so `graphics_capture` can capture
+  occluded windows per-window (currently falls back to `copy_from_screen`).
+- **Background worker parity (Phase 6):** add `list_windows`, `get_window_state`,
+  `get_accessibility_tree`, and window-scoped `window_click` / `window_type` /
+  `window_key` to the sandbox worker, and return screenshots as base64.
 - Add a persistent Hyper-V worker profile for real apps and saved login state.
-- Add screenshot image injection for `desktop_background_command(action=screenshot)`.
-- Add named windows, accessibility tree, and OCR inside the worker.
 - Add a target selector so normal `desktop_*` calls can route to `host`,
   `sandbox`, or a configured `worker_url`.

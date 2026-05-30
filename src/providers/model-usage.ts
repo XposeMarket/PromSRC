@@ -18,6 +18,9 @@ export interface ModelUsageEvent {
   totalTokens: number;
   source: 'provider' | 'estimated';
   durationMs?: number;
+  estimatedMessageInputTokens?: number;
+  estimatedToolSchemaTokens?: number;
+  estimatedProviderInputTokens?: number;
 }
 
 function usageLogPath(): string {
@@ -61,6 +64,11 @@ export function estimateMessagesTokens(messages: ChatMessage[] | Array<any> | un
   }, 0);
 }
 
+export function estimateToolSchemaTokens(tools: Array<any> | undefined): number {
+  if (!Array.isArray(tools) || tools.length === 0) return 0;
+  return estimateTextTokens(JSON.stringify(tools));
+}
+
 export function normalizeUsage(usage: ModelUsage | undefined, fallback: {
   inputTokens?: number;
   outputTokens?: number;
@@ -101,8 +109,26 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       totalTokens: normalizeCount(event.totalTokens),
       source: event.source || 'estimated',
       durationMs: normalizeCount(event.durationMs),
+      estimatedMessageInputTokens: normalizeCount(event.estimatedMessageInputTokens),
+      estimatedToolSchemaTokens: normalizeCount(event.estimatedToolSchemaTokens),
+      estimatedProviderInputTokens: normalizeCount(event.estimatedProviderInputTokens),
     };
     if (full.totalTokens <= 0) return;
+    // Phase 0 instrumentation: one concise, human-readable line per provider-reported
+    // call so prompt-cache behavior is observable live. Only logged when the provider
+    // actually returns usage (source === 'provider'); estimates are silent to avoid noise.
+    if (full.source === 'provider') {
+      const cacheableInput = full.inputTokens + full.cacheReadTokens;
+      const hitRatio = cacheableInput > 0
+        ? Math.round((full.cacheReadTokens / cacheableInput) * 100)
+        : 0;
+      console.log(
+        `[cache] ${full.provider}/${full.model} `
+        + `in=${full.inputTokens} cacheRead=${full.cacheReadTokens} `
+        + `cacheWrite=${full.cacheWriteTokens} out=${full.outputTokens} `
+        + `hit=${hitRatio}%`,
+      );
+    }
     const filePath = usageLogPath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.appendFileSync(filePath, JSON.stringify(full) + '\n', 'utf-8');

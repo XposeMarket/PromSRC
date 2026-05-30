@@ -19,6 +19,13 @@ export interface ToolPermissionCandidate {
   command?: string;
   cwd?: string;
   cwdDisplay?: string;
+  boundaryScope?: 'workspace' | 'user_profile' | 'global_tooling' | 'system' | 'admin_required' | 'unknown_external';
+  boundaryReason?: string;
+  externalPaths?: string[];
+  environmentChanges?: string[];
+  packageManager?: string;
+  requiresExplicitApproval?: boolean;
+  requiresAdmin?: boolean;
 }
 
 export interface CommandPermissionCandidate extends ToolPermissionCandidate {
@@ -51,6 +58,13 @@ export interface CommandPermissionGrant {
   cwdHash?: string;
   commandDisplay?: string;
   cwdDisplay?: string;
+  boundaryScope?: ToolPermissionCandidate['boundaryScope'];
+  boundaryReason?: string;
+  externalPaths?: string[];
+  environmentChanges?: string[];
+  packageManager?: string;
+  requiresExplicitApproval?: boolean;
+  requiresAdmin?: boolean;
 }
 
 const persistedGrants: { loaded: boolean; grants: CommandPermissionGrant[] } = {
@@ -121,6 +135,13 @@ function normalizeGrant(raw: any): CommandPermissionGrant | null {
     cwdHash: cwdHash || undefined,
     commandDisplay: raw.commandDisplay ? String(raw.commandDisplay) : undefined,
     cwdDisplay: raw.cwdDisplay ? String(raw.cwdDisplay) : undefined,
+    boundaryScope: raw.boundaryScope ? String(raw.boundaryScope) as any : undefined,
+    boundaryReason: raw.boundaryReason ? String(raw.boundaryReason) : undefined,
+    externalPaths: Array.isArray(raw.externalPaths) ? raw.externalPaths.map((p: any) => String(p || '')).filter(Boolean) : undefined,
+    environmentChanges: Array.isArray(raw.environmentChanges) ? raw.environmentChanges.map((p: any) => String(p || '')).filter(Boolean) : undefined,
+    packageManager: raw.packageManager ? String(raw.packageManager) : undefined,
+    requiresExplicitApproval: raw.requiresExplicitApproval === true || undefined,
+    requiresAdmin: raw.requiresAdmin === true || undefined,
   };
 }
 
@@ -188,6 +209,13 @@ export function buildToolPermissionCandidate(input: ToolPermissionCandidate) {
     cwdHash: cwd ? hash(cwd) : undefined,
     commandDisplay: command ? redactDisplay(command) : undefined,
     cwdDisplay: input.cwdDisplay,
+    boundaryScope: input.boundaryScope,
+    boundaryReason: input.boundaryReason ? redactDisplay(input.boundaryReason) : undefined,
+    externalPaths: Array.isArray(input.externalPaths) ? input.externalPaths.map(redactDisplay).filter(Boolean) : undefined,
+    environmentChanges: Array.isArray(input.environmentChanges) ? input.environmentChanges.map(redactDisplay).filter(Boolean) : undefined,
+    packageManager: input.packageManager,
+    requiresExplicitApproval: input.requiresExplicitApproval === true,
+    requiresAdmin: input.requiresAdmin === true,
   };
 }
 
@@ -239,6 +267,13 @@ export function addCommandPermissionGrant(
     cwdHash: candidate.cwdHash,
     commandDisplay: candidate.commandDisplay,
     cwdDisplay: candidate.cwdDisplay,
+    boundaryScope: candidate.boundaryScope,
+    boundaryReason: candidate.boundaryReason,
+    externalPaths: candidate.externalPaths,
+    environmentChanges: candidate.environmentChanges,
+    packageManager: candidate.packageManager,
+    requiresExplicitApproval: candidate.requiresExplicitApproval,
+    requiresAdmin: candidate.requiresAdmin,
   };
 
   const existing = loadGrants();

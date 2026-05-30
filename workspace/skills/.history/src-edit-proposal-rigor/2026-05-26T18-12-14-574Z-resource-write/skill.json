@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "src-edit-proposal-rigor",
+  "name": "src-edit-proposal-rigor",
+  "description": "Strict Codex-style workflow for Prometheus self-source edits, including evidence-first proposals and the dev-only request_dev_source_edit fast approval flow.",
+  "emoji": "🧩",
+  "version": "2.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "src edit",
+    "source edit",
+    "Prometheus source",
+    "change Prometheus source code",
+    "self-edit Prometheus",
+    "request_dev_source_edit",
+    "dev source edit",
+    "proposal code change",
+    "code_change proposal",
+    "edit src",
+    "edit web-ui",
+    "edit mobile app",
+    "edit generated web ui",
+    "edit gateway",
+    "edit route",
+    "edit tool execution",
+    "edit approvals",
+    "edit scheduler",
+    "edit memory",
+    "edit connector",
+    "patch Prometheus internals",
+    "fix Prometheus bug",
+    "implement Prometheus feature"
+  ],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "examples/creative-runtime-to-tool-category-proposal.md",
+      "type": "example",
+      "description": "Concrete example/template for proposals that collapse a special runtime mode back into normal main-chat tool-category routing."
+    },
+    {
+      "path": "notes/proposal-store-executor-prompt-field-compat-2026-05-16.md",
+      "type": "doc",
+      "description": "Guardrail for src proposals when ProposalStore source-read evidence validation ignores snake_case executor_prompt."
+    },
+    {
+      "path": "notes/restart-continuity-and-dirty-state-2026-05-18.md",
+      "type": "doc",
+      "description": "Guardrail for resuming src/package migration work after a gateway restart: verify actual approvals, command/source edits, dirty state, and pending build checks before summarizing."
+    },
+    {
+      "path": "notes/source-path-and-mutation-scope-2026-05-18.md",
+      "type": "doc",
+      "description": "Guardrail for Prometheus source edits: use source-relative paths with source tools, include all needed files in mutation scope, and recover from syntax-rejected edits by re-reading exact blocks."
+    },
+    {
+      "path": "notes/dev-source-fast-approval-2026-05-20.md",
+      "type": "doc",
+      "description": "How to use the dev-only request_dev_source_edit fast approval flow without bypassing Codex-style source-edit rigor."
+    },
+    {
+      "path": "examples/dev-fast-approval-small-web-ui-fix.md",
+      "type": "example",
+      "description": "Example of choosing request_dev_source_edit for a small web-ui fix, then syncing, verifying, and reporting."
+    },
+    {
+      "path": "notes/audit-memory-search-routing-2026-05-24.md",
+      "type": "doc",
+      "description": "Guardrail for choosing source-scoped vs workspace file search tools during Prometheus debugging investigations."
+    }
+  ]
+}

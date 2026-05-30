@@ -230,6 +230,38 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   });
   startupMark('gpu detection deferred');
 
+  // Auto-apply the designated default template so agent_model_defaults is always consistent
+  // with the user's saved default, even if something cleared it between restarts.
+  (function applyDefaultModelTemplate() {
+    try {
+      const cm2 = getConfig();
+      const cfg2 = cm2.getConfig() as any;
+      const defaultId: string = cfg2.default_agent_model_template || '';
+      if (!defaultId) return;
+      const templates: any[] = Array.isArray(cfg2.agent_model_default_templates) ? cfg2.agent_model_default_templates : [];
+      const template = templates.find((t: any) => t && (t.id === defaultId || t.name === defaultId));
+      if (!template?.defaults) return;
+      const keys = [
+        'main_chat', 'proposal_executor_high_risk', 'proposal_executor_low_risk',
+        'manager', 'team_manager', 'subagent', 'team_subagent', 'background_task',
+        'subagent_planner', 'subagent_orchestrator', 'subagent_researcher', 'subagent_analyst',
+        'subagent_builder', 'subagent_operator', 'subagent_verifier',
+        'switch_model_low', 'switch_model_medium', 'coordinator', 'background_agent',
+      ];
+      const defaults: Record<string, string> = {};
+      for (const key of keys) {
+        const val = typeof template.defaults[key] === 'string' ? template.defaults[key].trim() : '';
+        if (val) defaults[key] = val;
+      }
+      cm2.updateConfig({
+        agent_model_defaults: defaults,
+        active_agent_model_default_template: template.id,
+      } as any);
+    } catch (err: any) {
+      console.warn('[startup] Failed to apply default model template:', err?.message || err);
+    }
+  })();
+
   const liveConfig = getConfig().getConfig();
   const searchCfg = (liveConfig as any).search || {};
   // HIGH-03: resolve vault references before checking presence — never log the key value itself
@@ -272,6 +304,16 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     console.log(`╚════════════════════════════════════════════════════════════════╝\n`);
   }
   await yieldStartup();
+
+  try {
+    const { compactRuntimeStateOnStartup } = require('../live-runtime-registry') as typeof import('../live-runtime-registry');
+    const compaction = compactRuntimeStateOnStartup();
+    if (compaction.ledgerRemoved > 0 || compaction.eventsRotated) {
+      console.log(`[RuntimeRecovery] Compacted runtime ledger (removed ${compaction.ledgerRemoved}, kept ${compaction.ledgerKept}${compaction.eventsRotated ? ', rotated event log' : ''}).`);
+    }
+  } catch (err: any) {
+    console.warn('[RuntimeRecovery] Ledger compaction failed:', err?.message || err);
+  }
 
   try {
     const { launchBackgroundTaskRunner } = require('../tasks/task-router') as typeof import('../tasks/task-router');
@@ -770,6 +812,17 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
         .fire({ type: 'gateway:startup', workspacePath: bootWorkspace })
         .catch((err: any) => console.warn('[hooks] gateway:startup error:', err?.message || err));
     });
+
+    // Re-establish Tailscale funnel if remote access was enabled before this
+    // gateway session started, then keep a watchdog running so it auto-recovers
+    // if Tailscale is restarted or the funnel drops unexpectedly.
+    try {
+      const { ensureTailscaleFunnel, startFunnelWatchdog } = await import('../routes/pairing.router');
+      await ensureTailscaleFunnel({ logPrefix: '[Startup/TailscaleFunnel]' });
+      startFunnelWatchdog(5 * 60_000); // re-check every 5 minutes
+    } catch (err: any) {
+      console.warn('[Startup/TailscaleFunnel] Could not start funnel watchdog:', err?.message || err);
+    }
   }
   startupMark('runStartup complete');
 }

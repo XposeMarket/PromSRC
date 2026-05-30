@@ -65,7 +65,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'desktop-control',
     description: 'Routine desktop automation is allowed; final high-impact submissions should request explicit final-action approval',
-    toolPattern: 'desktop_click|desktop_type|desktop_press|desktop_drag|desktop_launch|desktop_close',
+    toolPattern: 'desktop_click|desktop_type|desktop_press|desktop_drag|desktop_scroll|desktop_launch|desktop_close|desktop_window_click|desktop_window_type|desktop_window_press|desktop_window_scroll|desktop_window_drag|desktop_window_control',
     tier: 'read',
     riskScore: 3,
   },

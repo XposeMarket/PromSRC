@@ -1,0 +1,11 @@
+{
+  "skillId": "svg-diagrams",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-23T05:18:54.877Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\svg-diagrams",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "cc34b0273e138aae"
+}

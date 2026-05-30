@@ -55,6 +55,11 @@
       "path": "references/codex-style-engineering-mode.md",
       "type": "doc",
       "description": "Quick Codex-style engineering checklist for code/file edits, verification, repair loops, and final reporting."
+    },
+    {
+      "path": "references/recovery/recovery-note-find-replace-source-failed-text-not-found-in-src-gateway-r-2026-05-23.md",
+      "type": "doc",
+      "description": "Refined recovery note for source/file patch text-not-found context drift."
     }
   ]
 }

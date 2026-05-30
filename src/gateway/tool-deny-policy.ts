@@ -202,12 +202,13 @@ function evaluateCommandDeny(rawCommand: string): HardToolDenyDecision {
     /\bstop-computer\b/,
     /\blogoff\b/,
     /\bshutdown\.exe\b/,
+    /\bpowercfg\b[\s\S]*\/(?:hibernate|h)\s+(?:off|on)\b/,
   ])) {
     return deny(
       'machine_interruption',
-      'This command would shut down, restart, or log off the machine.',
-      'Do not interrupt the machine during autonomous goal mode.',
-      'Keep the current process alive and report if a restart is truly required.',
+      'This command would shut down, restart, log off, or materially change machine power state.',
+      'Do not interrupt the machine or toggle hibernation during autonomous goal mode.',
+      'Keep the current process alive and report if a restart or administrator-only power change is truly required.',
     );
   }
 

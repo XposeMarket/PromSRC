@@ -1,0 +1,13 @@
+{
+  "skillId": "web-researcher",
+  "reason": "resource-delete",
+  "createdAt": "2026-05-24T06:55:44.008Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\web-researcher",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/workflows/web-researcher-2026-05-23.md"
+  ],
+  "hash": "1df8b2523c7585e9"
+}

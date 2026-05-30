@@ -393,10 +393,15 @@ function decideDesktopObservation(
     || toolName === 'desktop_get_clipboard'
     || toolName === 'desktop_diff_screenshot'
     || toolName === 'desktop_get_window_text'
+    || toolName === 'desktop_get_accessibility_tree'
+    || toolName === 'desktop_list_apps'
+    || toolName === 'desktop_list_windows'
+    || toolName === 'desktop_get_window_state'
+    || toolName === 'desktop_list_macros'
   ) {
     return { mode: 'none', reason: 'read-only desktop inspection tool', shouldRunAdvisor: false };
   }
-  if (toolName === 'desktop_scroll' && toDesktopScrollAmount(input.args) <= 3) {
+  if ((toolName === 'desktop_scroll' || toolName === 'desktop_window_scroll') && toDesktopScrollAmount(input.args) <= 3) {
     return { mode: 'none', reason: 'small desktop scroll', shouldRunAdvisor: false };
   }
   if (
@@ -414,26 +419,30 @@ function decideDesktopObservation(
   if (toolName === 'desktop_focus_window') {
     return { mode: 'screenshot', reason: 'focusing a window changes the active UI', shouldRunAdvisor: true };
   }
-  if (toolName === 'desktop_drag') {
+  if (toolName === 'desktop_drag' || toolName === 'desktop_window_drag') {
     return { mode: 'screenshot', reason: 'drag-and-drop needs post-action verification', shouldRunAdvisor: true };
+  }
+  if (toolName === 'desktop_window_control') {
+    return { mode: 'screenshot', reason: 'window min/max/restore/close changed the UI', shouldRunAdvisor: true };
   }
   if (toolName === 'desktop_launch_app' || toolName === 'desktop_close_app') {
     return { mode: 'screenshot', reason: 'app/window lifecycle changed', shouldRunAdvisor: true };
   }
-  if (toolName === 'desktop_scroll') {
+  if (toolName === 'desktop_scroll' || toolName === 'desktop_window_scroll') {
     return { mode: 'screenshot', reason: 'large desktop scroll should be verified visually', shouldRunAdvisor: true };
   }
-  if (toolName === 'desktop_press_key' && DESKTOP_LIKELY_SUBMIT_KEY_RE.test(desktopKey(input.args))) {
+  if ((toolName === 'desktop_press_key' || toolName === 'desktop_window_press_key') && DESKTOP_LIKELY_SUBMIT_KEY_RE.test(desktopKey(input.args))) {
     return { mode: 'screenshot', reason: 'desktop keypress likely submitted or closed UI', shouldRunAdvisor: true };
   }
-  if (toolName === 'desktop_press_key') {
+  if (toolName === 'desktop_press_key' || toolName === 'desktop_window_press_key') {
     return { mode: 'screenshot', reason: 'desktop keypress may have changed focused UI state', shouldRunAdvisor: true };
   }
-  if (toolName === 'desktop_click') {
+  if (toolName === 'desktop_click' || toolName === 'desktop_window_click') {
     return { mode: 'screenshot', reason: 'coordinate click is ambiguous without fresh visual verification', shouldRunAdvisor: true };
   }
   if (
     toolName === 'desktop_type'
+    || toolName === 'desktop_window_type'
     || toolName === 'desktop_type_raw'
     || toolName === 'desktop_set_clipboard'
   ) {

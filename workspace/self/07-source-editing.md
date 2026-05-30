@@ -281,6 +281,31 @@ Execution behavior after approval:
 - For backend/runtime edits, `prom_apply_dev_changes` should build and restart the gateway.
 - For mixed backend plus web/mobile changes, `prom_apply_dev_changes` should sync web UI first, build backend, restart, then request a desktop reload.
 
+Steer-interrupt during approval wait:
+
+- When a steer arrives while `request_dev_source_edit` is waiting for user approval, the wait Promise resolves immediately with a steer-interrupt result rather than blocking until approval.
+- The tool returns a message describing the steer message and the pending approval ID. The approval is NOT rejected — it remains pending.
+- Prometheus should address the steer (which may say "change the plan", "add a file", "use a different approach", etc.), optionally call `update_dev_source_edit` to revise the pending plan/files/reason, then call `await_dev_source_edit_approval` to resume waiting.
+- A second steer can interrupt `await_dev_source_edit_approval` the same way.
+- The user's approval card in the UI updates live when `update_dev_source_edit` is called (via `approval_updated` WebSocket broadcast).
+
+`update_dev_source_edit(approval_id, ...)`:
+- Updates the pending approval's `reason`, `files`, and/or `plan` fields.
+- Broadcasts `approval_updated` so the UI approval card re-renders with the revised plan.
+- Only works on pending approvals in the current session.
+- After updating, call `await_dev_source_edit_approval` to re-enter the wait.
+
+`await_dev_source_edit_approval(approval_id)`:
+- Re-enters the steer-interruptible wait for an already-created pending approval.
+- Returns immediately if the approval was already resolved (approved or denied).
+- Rebuilds the dev-source-edit grant from the approval record's `devSourceEdit` metadata on approval.
+- Can be interrupted by another steer, which again returns the steer message and leaves the approval pending.
+
+`PATCH /api/approvals/:id`:
+- HTTP endpoint to update a pending approval's `reason`, `action`, `files`, and/or `plan` from the UI or external callers.
+- Returns 404 if not found, 409 if already resolved.
+- Broadcasts `approval_updated` WebSocket event after a successful update.
+
 Post-restart/reload completion rule:
 
 - `prom_apply_dev_changes` should carry the active `dev_edit_id` and approved completion note tag. It can infer the active pending dev edit for the session, but explicit `dev_edit_id` is better.

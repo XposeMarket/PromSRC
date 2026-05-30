@@ -1,0 +1,13 @@
+{
+  "skillId": "file-surgery",
+  "reason": "resource-delete",
+  "createdAt": "2026-05-23T06:07:10.465Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\file-surgery",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/recovery/recovery-note-find-replace-source-failed-text-not-found-in-src-gateway-a-2026-05-22.md"
+  ],
+  "hash": "0ef3885e213891b4"
+}

@@ -1,0 +1,12 @@
+{
+  "skillId": "product-carousel-builder",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-23T05:58:34.523Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\product-carousel-builder",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "1f3fdf43ff64fdff"
+}

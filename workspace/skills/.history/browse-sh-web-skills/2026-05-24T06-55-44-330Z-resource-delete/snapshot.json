@@ -1,0 +1,13 @@
+{
+  "skillId": "browse-sh-web-skills",
+  "reason": "resource-delete",
+  "createdAt": "2026-05-24T06:55:44.336Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\browse-sh-web-skills",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/workflows/browse-sh-web-skills-2026-05-23.md"
+  ],
+  "hash": "2e8a4c90f90d2d73"
+}

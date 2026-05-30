@@ -36,23 +36,27 @@ const LMStudioProviderSchema = z.object({
   api_key: z.string().optional(),
 });
 
-// Accepted reasoning effort levels for providers that expose one
-// (OpenAI / Codex / Perplexity reasoning models).
-const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional();
+// Accepted reasoning effort levels for providers that expose one.
+// Anthropic additionally accepts "max"; providers that do not support it must
+// clamp or reject it at their adapter/UI boundary.
+const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional();
 
 const OpenAIProviderSchema = z.object({
   api_key: z.string(),   // may be "vault:<key>" or "env:VAR"
   model: z.string(),
   reasoning_effort: ReasoningEffortSchema,
+  tool_choice: z.enum(['auto', 'required']).optional(),
 });
 
 const OpenAICodexProviderSchema = z.object({
   model: z.string(),
   reasoning_effort: ReasoningEffortSchema,
+  tool_choice: z.enum(['auto', 'required']).optional(),
 });
 
 const AnthropicProviderSchema_LLM = z.object({
   model: z.string(),
+  reasoning_effort: ReasoningEffortSchema,
   extended_thinking: z.boolean().optional(),
   thinking_budget: z.number().int().min(1024).optional(),
 });
@@ -100,6 +104,11 @@ const ToolPermissionsSchema = z.object({
     workspace_only: z.boolean(),
     confirm_destructive: z.boolean(),
     blocked_patterns: z.array(z.string()),
+    allowed_commands: z.array(z.string()).optional(),
+    allowed_windows_read_commands: z.array(z.string()).optional(),
+    allowed_windows_system_commands: z.array(z.string()).optional(),
+    allowed_custom_commands: z.array(z.string()).optional(),
+    approval_mode: z.enum(['default', 'lite']).optional(),
   }),
   files: z.object({
     allowed_paths: z.array(z.string()),
@@ -315,6 +324,7 @@ export const PrometheusConfigSchema = z.object({
     updated_at: z.string().optional(),
   })).optional(),
   active_agent_model_default_template: z.string().optional(),
+  default_agent_model_template: z.string().optional(),
 
   tools: z.object({
     enabled:     z.array(z.string()),

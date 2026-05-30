@@ -8,7 +8,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { addMessage, getHistoryForApiCall, getRecentToolLog, type ChatMessage } from './session';
+import { addMessage, getHistoryForApiCall, getRecentToolObservationsForContext, type ChatMessage } from './session';
 import { readRestartContext, clearRestartContext, queueStartupNotification, type RestartContext } from './lifecycle';
 import {
   listHotRestartMainChatRecoveries,
@@ -114,12 +114,15 @@ function isInternalRestartHistoryMessage(msg: ChatMessage): boolean {
   if (/^SYSTEM:\s+Context is getting long/i.test(text)) return true;
   if (/^Before continuing:\s+summarize the conversation so far/i.test(text)) return true;
   if (/^\[BACKGROUND_TASK_RESULT\b/i.test(text)) return true;
+  if (/^\[Interrupted by gateway restart\]/i.test(text)) return true;
+  if (/^Restart Context Packet\b/i.test(text)) return true;
   return false;
 }
 
 function getRecentConversationForRestart(previousSessionId?: string): {
   excerpt: string;
   lastUserRequest: string;
+  lastAssistantResponse: string;
   recentToolLog: string;
 } {
   const sid = String(previousSessionId || '').trim();
@@ -127,6 +130,7 @@ function getRecentConversationForRestart(previousSessionId?: string): {
     return {
       excerpt: '(No previous session was recorded for this restart.)',
       lastUserRequest: '',
+      lastAssistantResponse: '',
       recentToolLog: '',
     };
   }
@@ -134,12 +138,13 @@ function getRecentConversationForRestart(previousSessionId?: string): {
   try {
     const history = getHistoryForApiCall(sid, 12, { maxMessages: 24 })
       .filter((msg) => !isInternalRestartHistoryMessage(msg));
-    const recentToolLog = getRecentToolLog(sid, 3, 3000);
+    const recentToolLog = getRecentToolObservationsForContext(sid, 3, 3000);
 
     if (history.length === 0) {
       return {
         excerpt: `(No recent conversation history was available for session ${sid}.)`,
         lastUserRequest: '',
+        lastAssistantResponse: '',
         recentToolLog,
       };
     }
@@ -157,52 +162,67 @@ function getRecentConversationForRestart(previousSessionId?: string): {
       ?.replace(/\s+/g, ' ')
       ?.trim()
       ?.slice(0, 220) || '';
+    const lastAssistantResponse = [...history]
+      .reverse()
+      .find((msg) => msg.role === 'assistant' && !isInternalRestartHistoryMessage(msg))
+      ?.content
+      ?.replace(/\s+/g, ' ')
+      ?.trim()
+      ?.slice(0, 320) || '';
 
-    return { excerpt, lastUserRequest, recentToolLog };
+    return { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog };
   } catch (err: any) {
     return {
       excerpt: `(Could not load recent conversation history for ${sid}: ${String(err?.message || err || 'unknown error')})`,
       lastUserRequest: '',
+      lastAssistantResponse: '',
       recentToolLog: '',
     };
   }
 }
 
-function buildHotRestartPrompt(lastUserRequest: string, ctx?: RestartContext): string {
+function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: string, ctx?: RestartContext): string {
   const devEdit = ctx?.devEditContinuation;
   if (devEdit) {
     const tag = devEdit.completionNoteTag || 'dev_edit_complete';
     return [
       'HOT RESTART DEV-EDIT FOLLOW-UP:',
       'A hot restart/reload just completed after an approved Prometheus dev source edit.',
-      'Use the restart context, approved dev-edit plan, recent conversation, and recent tool log as factual memory.',
+      'Use the restart context, approved dev-edit plan, recent conversation, and recent tool observations as factual memory.',
       `Required next tool call: write_note({"tag":"${tag}","dev_edit_id":"${devEdit.id}","content":"<brief summary of files changed, verification, and live status>"}).`,
       'This note completes the declared dev-edit plan. After the note succeeds, respond to the user with the usual concise edit summary.',
       'Do not redo the source edits unless the context shows apply_live failed.',
       lastUserRequest
         ? `Refer to the user's latest request naturally: "${lastUserRequest}".`
         : 'If no prior request is clear, say the approved dev edit was applied and the gateway is back.',
+      lastAssistantResponse
+        ? `The assistant's latest pre-restart reply was: "${lastAssistantResponse}". Continue from that state; do not pretend it was unseen.`
+        : '',
       'Keep it short and concrete.',
-    ].join('\n').trim();
+    ].filter(Boolean).join('\n').trim();
   }
   return [
     'HOT RESTART FOLLOW-UP:',
     'A hot restart just completed and you are resuming an existing conversation.',
     'Write the assistant message that should appear right after the restart.',
-    'Use the restart context, runtime recovery summary, recent conversation, and recent tool log as factual memory.',
+    'Use the restart context, runtime recovery summary, recent conversation, and recent tool observations as factual memory.',
+    'Pay special attention to the latest assistant reply before the restart. The restart message should continue after that reply, not restate only the latest user request.',
     'Confirm the restart succeeded, state what was just completed when the context shows it, and give the next verification/action for the user.',
     'If the main chat was interrupted mid-flow, explicitly acknowledge the checkpoint and ask whether the user wants you to continue from there.',
     'If any background task, subagent, team run, scheduled task, heartbeat, or brain run was paused/interrupted, mention it briefly and ask whether the user wants it resumed. Include a short identifier when useful.',
     lastUserRequest
       ? `If the work is still in flight, refer to the user's latest request naturally: "${lastUserRequest}".`
       : 'If no prior request is clear, say you are back and ready to continue.',
+    lastAssistantResponse
+      ? `The assistant's latest pre-restart reply was: "${lastAssistantResponse}". Do not ignore it; use it to decide what is already done.`
+      : '',
     'Do not claim paused work resumed unless the runtime recovery summary says it auto-resumed.',
     'Keep it short, natural, and conversational.',
     'Do not call any tools.',
-  ].join('\n').trim();
+  ].filter(Boolean).join('\n').trim();
 }
 
-function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: string, lastUserRequest: string, recentToolLog: string, recoverySummary: string): string {
+function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: string, lastUserRequest: string, lastAssistantResponse: string, recentToolLog: string, recoverySummary: string): string {
   const didBuild = ctx.buildOutput !== undefined;
   const affectedFiles = Array.isArray(ctx.affectedFiles) && ctx.affectedFiles.length > 0
     ? ctx.affectedFiles.slice(0, 10).join('\n')
@@ -241,6 +261,7 @@ function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: s
     `repair_id: ${ctx.repairId || '(none)'}`,
     `test_instructions: ${ctx.testInstructions || '(none)'}`,
     `last_user_request: ${lastUserRequest || '(none detected)'}`,
+    `last_assistant_response: ${lastAssistantResponse || '(none detected)'}`,
     'affected_files:',
     affectedFiles,
     ...devEditLines,
@@ -252,12 +273,15 @@ function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: s
     recentConversation,
     '',
     'recent_tool_log:',
-    recentToolLog || '(No recent tool log recorded.)',
+    recentToolLog || '(No recent tool observations recorded.)',
     '[/HOT RESTART CONTEXT]',
   ].join('\n');
 }
 
-function buildHotRestartFallbackMessage(lastUserRequest: string): string {
+function buildHotRestartFallbackMessage(lastUserRequest: string, lastAssistantResponse: string): string {
+  if (lastAssistantResponse) {
+    return `Hey - the restart was successful. I am back in the same thread. Before the restart, my last update was: "${lastAssistantResponse}".`;
+  }
   if (lastUserRequest) {
     return `Hey - the restart was successful. I am back in the same thread and ready to keep going on "${lastUserRequest}".`;
   }
@@ -377,21 +401,21 @@ function buildHotRestartTargets(restartCtx: RestartContext, fallbackSessionId: s
   }
 
   const previousSessionId = String(restartCtx.previousSessionId || '').trim();
-  if (previousSessionId && !targets.has(previousSessionId)) {
+  const previousRecovery = previousSessionId ? bySession.get(previousSessionId) : undefined;
+  if (previousSessionId && previousRecovery && !targets.has(previousSessionId)) {
     targets.set(previousSessionId, {
       sessionId: previousSessionId,
-      recoverySummary: buildTargetRecoverySummary(previousSessionId, bySession.get(previousSessionId), recoveries),
-      telegram: telegramTargetForRestartSession(restartCtx, previousSessionId, bySession.get(previousSessionId)),
+      recoverySummary: buildTargetRecoverySummary(previousSessionId, previousRecovery, recoveries),
+      telegram: telegramTargetForRestartSession(restartCtx, previousSessionId, previousRecovery),
     });
   }
 
-  if (targets.size === 0) {
-    const mobileFallback = restartCtx.originChannel === 'mobile' ? 'mobile_default' : '';
-    const targetSessionId = mobileFallback || fallbackSessionId;
-    targets.set(fallbackSessionId, {
+  if (targets.size === 0 && restartCtx.devEditContinuation) {
+    const targetSessionId = previousSessionId || (restartCtx.originChannel === 'mobile' ? 'mobile_default' : fallbackSessionId);
+    targets.set(targetSessionId, {
       sessionId: targetSessionId,
       recoverySummary: buildTargetRecoverySummary(targetSessionId, undefined, recoveries),
-      telegram: { enabled: false },
+      telegram: telegramTargetForRestartSession(restartCtx, targetSessionId, undefined),
     });
   }
 
@@ -410,19 +434,19 @@ export async function runBootMd(
     const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
     const targets = buildHotRestartTargets(restartCtx, sessionMeta.id);
     const results = await Promise.all(targets.map(async (target, index) => {
-      const { excerpt, lastUserRequest, recentToolLog } = getRecentConversationForRestart(target.sessionId);
+      const { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog } = getRecentConversationForRestart(target.sessionId);
       const internalSessionId = `${sessionMeta.id}_${sanitizeIdPart(target.sessionId)}_${index}`;
       let finalText = '';
       try {
         const result = await handleChat(
-          buildHotRestartPrompt(lastUserRequest, restartCtx),
+          buildHotRestartPrompt(lastUserRequest, lastAssistantResponse, restartCtx),
           internalSessionId,
           (evt, data) => {
             if (evt === 'tool_call') {
               console.log(`[boot-md]  -> ${String(data?.action || 'unknown')} (unexpected during hot restart)`);
             }
           },
-          buildHotRestartCallerContext(restartCtx, excerpt, lastUserRequest, recentToolLog, target.recoverySummary),
+          buildHotRestartCallerContext(restartCtx, excerpt, lastUserRequest, lastAssistantResponse, recentToolLog, target.recoverySummary),
         );
         finalText = String(result.text || '').trim();
       } catch (err: any) {
@@ -430,7 +454,7 @@ export async function runBootMd(
       }
 
       if (!finalText) {
-        finalText = buildHotRestartFallbackMessage(lastUserRequest);
+        finalText = buildHotRestartFallbackMessage(lastUserRequest, lastAssistantResponse);
       }
       finalText = appendRecoverySummaryToHotRestartMessage(finalText, target.recoverySummary);
 

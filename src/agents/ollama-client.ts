@@ -17,6 +17,7 @@ import {
   appendModelUsageEvent,
   estimateMessagesTokens,
   estimateTextTokens,
+  estimateToolSchemaTokens,
   normalizeUsage,
 } from '../providers/model-usage';
 import { AgentRole } from '../types';
@@ -46,7 +47,7 @@ export class OllamaClient {
       temperature?: number;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       tools?: any[];
       model?: string;
       onToken?: (chunk: string) => void;
@@ -77,8 +78,11 @@ export class OllamaClient {
       abortSignal:       options?.abortSignal,
       omitIntradayNotes: options?.omitIntradayNotes,
     });
+    const estimatedMessageInputTokens = estimateMessagesTokens(messages);
+    const estimatedToolSchemaTokens = estimateToolSchemaTokens(options?.tools);
+    const estimatedProviderInputTokens = estimatedMessageInputTokens + estimatedToolSchemaTokens;
     const usage = normalizeUsage(result.usage, {
-      inputTokens: estimateMessagesTokens(messages),
+      inputTokens: estimatedProviderInputTokens,
       outputTokens: estimateMessagesTokens([result.message]) + estimateTextTokens(result.thinking),
     });
     appendModelUsageEvent({
@@ -88,6 +92,9 @@ export class OllamaClient {
       sessionId: options?.usageContext?.sessionId,
       agentId: options?.usageContext?.agentId,
       ...usage,
+      estimatedMessageInputTokens,
+      estimatedToolSchemaTokens,
+      estimatedProviderInputTokens,
       durationMs: Date.now() - startedAt,
     });
     return { message: result.message, thinking: result.thinking };
@@ -104,7 +111,7 @@ export class OllamaClient {
       system?: string;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'high' | 'medium' | 'low';
+      think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       usageContext?: { sessionId?: string; agentId?: string };
     }
   ): Promise<GenerateOutput> {

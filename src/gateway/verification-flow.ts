@@ -1,5 +1,7 @@
 // src/gateway/verification-flow.ts
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import type { ToolPermissionCandidate } from './command-permissions';
 
 interface VerificationSession {
@@ -29,7 +31,9 @@ export interface ApprovalRecord {
   /** The tool that is waiting for approval */
   toolName: string;
   toolArgs: Record<string, any>;
-  approvalKind?: 'command' | 'tool' | 'dev_source_edit' | 'final_action';
+  approvalKind?: 'command' | 'tool' | 'dev_source_edit' | 'final_action' | 'path_access';
+  /** Path approval fields — populated when approvalKind === 'path_access' */
+  pathAccess?: { requestedPath: string };
   /** Human-readable description of what will happen */
   action: string;
   reason?: string;
@@ -109,6 +113,15 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
     policyTier: record.policyTier,
     riskScore: record.riskScore,
     affectedSystems: Array.isArray(record.affectedSystems) ? record.affectedSystems : [],
+    commandBoundary: record.commandPermissionCandidate ? {
+      scope: record.commandPermissionCandidate.boundaryScope || 'workspace',
+      reason: record.commandPermissionCandidate.boundaryReason || '',
+      externalPaths: Array.isArray(record.commandPermissionCandidate.externalPaths) ? record.commandPermissionCandidate.externalPaths : [],
+      environmentChanges: Array.isArray(record.commandPermissionCandidate.environmentChanges) ? record.commandPermissionCandidate.environmentChanges : [],
+      packageManager: record.commandPermissionCandidate.packageManager || '',
+      requiresExplicitApproval: record.commandPermissionCandidate.requiresExplicitApproval === true,
+      requiresAdmin: record.commandPermissionCandidate.requiresAdmin === true,
+    } : undefined,
     devSourceEdit: record.devSourceEdit ? truncateApprovalValue(record.devSourceEdit) : undefined,
     finalAction: record.finalAction ? truncateApprovalValue(record.finalAction) : undefined,
     createdAt: record.createdAt,
@@ -125,6 +138,66 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
 class ApprovalQueue {
   private records: Map<string, ApprovalRecord> = new Map();
   private callbacks: Map<string, (approved: boolean) => void> = new Map();
+  /** Steer-wakeup callbacks: fired when a steer interrupts a waiting approval */
+  private steerCallbacks: Map<string, (steerMessage: string) => void> = new Map();
+
+  constructor() {
+    this.loadDurableRecords();
+  }
+
+  private storePath(): string {
+    const root = process.env.PROMETHEUS_DATA_DIR
+      || process.env.PROMETHEUS_APP_ROOT
+      || path.resolve(__dirname, '..', '..');
+    const dir = path.join(root, '.prometheus');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, 'approvals.json');
+  }
+
+  private persistDurableRecords(): void {
+    try {
+      const records = [...this.records.values()]
+        .filter((record) => record.status === 'pending' || Date.now() - new Date(record.resolvedAt || record.createdAt).getTime() < 24 * 60 * 60 * 1000);
+      const p = this.storePath();
+      const tmp = `${p}.tmp-${Date.now()}`;
+      fs.writeFileSync(tmp, JSON.stringify({ approvals: records }, null, 2), 'utf-8');
+      fs.renameSync(tmp, p);
+    } catch (err: any) {
+      console.warn('[ApprovalQueue] Failed to persist approvals:', err?.message || err);
+    }
+  }
+
+  private loadDurableRecords(): void {
+    try {
+      const p = this.storePath();
+      if (!fs.existsSync(p)) return;
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      const approvals = Array.isArray(parsed?.approvals) ? parsed.approvals : [];
+      for (const raw of approvals) {
+        if (!raw || typeof raw !== 'object') continue;
+        const id = String(raw.id || '').trim();
+        const sessionId = String(raw.sessionId || '').trim();
+        const toolName = String(raw.toolName || '').trim();
+        if (!id || !sessionId || !toolName) continue;
+        const status = raw.status === 'approved' || raw.status === 'rejected' ? raw.status : 'pending';
+        this.records.set(id, {
+          ...raw,
+          id,
+          sessionId,
+          toolName,
+          toolArgs: raw.toolArgs && typeof raw.toolArgs === 'object' ? raw.toolArgs : {},
+          policyTier: raw.policyTier === 'propose' ? 'propose' : 'commit',
+          riskScore: Number.isFinite(Number(raw.riskScore)) ? Number(raw.riskScore) : 0,
+          affectedSystems: Array.isArray(raw.affectedSystems) ? raw.affectedSystems.map(String) : [],
+          createdAt: String(raw.createdAt || new Date().toISOString()),
+          status,
+        } as ApprovalRecord);
+      }
+      if (approvals.length) console.log(`[ApprovalQueue] Restored ${this.records.size} durable approval(s)`);
+    } catch (err: any) {
+      console.warn('[ApprovalQueue] Failed to restore approvals:', err?.message || err);
+    }
+  }
 
   create(partial: Omit<ApprovalRecord, 'id' | 'createdAt' | 'status'>): ApprovalRecord {
     const id = crypto.randomUUID();
@@ -135,6 +208,7 @@ class ApprovalQueue {
       status: 'pending',
     };
     this.records.set(id, record);
+    this.persistDurableRecords();
     console.log(`[ApprovalQueue] Created approval ${id} for "${record.toolName}" (${record.policyTier}, risk=${record.riskScore})`);
     return record;
   }
@@ -183,7 +257,12 @@ class ApprovalQueue {
     } catch { /* best effort */ }
 
     console.log(`[ApprovalQueue] ${approved ? 'APPROVED' : 'REJECTED'} approval ${id} for "${record.toolName}"`);
+    this.persistDurableRecords();
     return record;
+  }
+
+  hasResolveCallback(id: string): boolean {
+    return this.callbacks.has(id);
   }
 
   /**
@@ -199,6 +278,60 @@ class ApprovalQueue {
     this.callbacks.set(id, callback);
   }
 
+  /**
+   * Update mutable fields of a pending approval (plan, reason, files, toolArgs).
+   * Returns the updated record or null if not found / already resolved.
+   */
+  update(id: string, fields: {
+    reason?: string;
+    action?: string;
+    devSourceEdit?: Partial<ApprovalRecord['devSourceEdit']>;
+    toolArgs?: Partial<Record<string, any>>;
+  }): ApprovalRecord | null {
+    const record = this.records.get(id);
+    if (!record || record.status !== 'pending') return null;
+    if (fields.reason !== undefined) record.reason = fields.reason;
+    if (fields.action !== undefined) record.action = fields.action;
+    if (fields.toolArgs) record.toolArgs = { ...record.toolArgs, ...fields.toolArgs };
+    if (fields.devSourceEdit && record.devSourceEdit) {
+      record.devSourceEdit = { ...record.devSourceEdit, ...fields.devSourceEdit } as ApprovalRecord['devSourceEdit'];
+      if (fields.devSourceEdit.plan !== undefined && record.devSourceEdit) {
+        record.devSourceEdit.plan = {
+          ...(record.devSourceEdit.plan || {}),
+          ...(fields.devSourceEdit.plan || {}),
+        };
+      }
+    }
+    console.log(`[ApprovalQueue] Updated pending approval ${id}`);
+    this.persistDurableRecords();
+    return record;
+  }
+
+  /**
+   * Register a one-shot callback that fires when notifySteer() is called for this approval.
+   * The tool wait loop uses this to wake up when the user sends a steer while waiting.
+   */
+  onSteer(id: string, callback: (steerMessage: string) => void): void {
+    this.steerCallbacks.set(id, callback);
+  }
+
+  /** Remove a previously registered steer callback (e.g. when approval resolves first). */
+  clearSteerCallback(id: string): void {
+    this.steerCallbacks.delete(id);
+  }
+
+  /**
+   * Wake up the waiting tool Promise for this approval with a steer message.
+   * Called by the steer injection path when a steer arrives while an approval is pending.
+   */
+  notifySteer(id: string, steerMessage: string): boolean {
+    const cb = this.steerCallbacks.get(id);
+    if (!cb) return false;
+    this.steerCallbacks.delete(id);
+    cb(steerMessage);
+    return true;
+  }
+
   /** Prune resolved records older than 24h */
   cleanup(): void {
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -208,6 +341,7 @@ class ApprovalQueue {
         this.callbacks.delete(id);
       }
     }
+    this.persistDurableRecords();
   }
 }
 

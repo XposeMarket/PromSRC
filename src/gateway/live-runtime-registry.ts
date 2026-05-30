@@ -76,6 +76,25 @@ export interface RuntimeSteerEvent {
   contextSummary?: string;
 }
 
+const TERMINAL_CHECKPOINT_EVENTS = new Set(['done', 'final', 'error']);
+
+export function hasTerminalRuntimeCheckpoint(runtime: Pick<LiveRuntimeSnapshot, 'status' | 'checkpoint' | 'completedAt'> | null | undefined): boolean {
+  if (!runtime) return false;
+  const status = String(runtime.status || '').trim();
+  if (status === 'completed' || status === 'aborted') return true;
+  if (Number(runtime.completedAt || 0) > 0) return true;
+  const event = String(runtime.checkpoint?.event || '').trim().toLowerCase();
+  return TERMINAL_CHECKPOINT_EVENTS.has(event);
+}
+
+export function isRuntimeRecoverableAfterRestart(runtime: Pick<LiveRuntimeSnapshot, 'status' | 'checkpoint' | 'completedAt' | 'recoveryData'> | null | undefined): boolean {
+  if (!runtime) return false;
+  if (hasTerminalRuntimeCheckpoint(runtime)) return false;
+  const recoveryData = runtime.recoveryData || {};
+  if (recoveryData.recoveredAt || recoveryData.recovery) return false;
+  return runtime.status === 'running' || runtime.status === 'interrupted';
+}
+
 interface LiveRuntimeRecord extends LiveRuntimeSnapshot {
   abortSignal?: { aborted: boolean };
   onAbort?: () => void;
@@ -147,14 +166,59 @@ function appendRuntimeEvent(type: string, runtime: LiveRuntimeSnapshot, extra?: 
   } catch {}
 }
 
-function persistRuntime(runtime: LiveRuntimeSnapshot, eventType: string, extra?: Record<string, any>): void {
+const MAX_DURABLE_CHECKPOINT_TEXT = 500;
+
+// Strip the heavy live-UI payload (process log, long messages) before writing to
+// the durable ledger. The full record stays in memory for live UI + graceful
+// shutdown capture; only a lightweight summary is persisted to disk so the ledger
+// can't grow into a multi-MB blob that's parsed/rewritten on every checkpoint.
+function toDurableSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
+  const out: LiveRuntimeSnapshot = { ...snapshot };
+  const cp = out.checkpoint;
+  if (cp && typeof cp === 'object') {
+    const light: Record<string, any> = {
+      event: cp.event,
+      message: typeof cp.message === 'string' ? cp.message.slice(0, MAX_DURABLE_CHECKPOINT_TEXT) : cp.message,
+      toolName: cp.toolName,
+      label: cp.label,
+      kind: cp.kind,
+      detail: typeof cp.detail === 'string' ? cp.detail.slice(0, MAX_DURABLE_CHECKPOINT_TEXT) : cp.detail,
+      pendingSteerCount: cp.pendingSteerCount,
+      updatedAt: cp.updatedAt,
+    };
+    for (const k of Object.keys(light)) {
+      if (light[k] === undefined) delete light[k];
+    }
+    out.checkpoint = light;
+  }
+  return out;
+}
+
+function persistRuntime(runtime: LiveRuntimeSnapshot, eventType: string, extra?: Record<string, any>, opts?: { full?: boolean }): void {
   try {
     const ledger = readLedger();
-    ledger.runtimes[runtime.id] = runtime;
+    // `full` keeps the heavy checkpoint (process log) on disk — only used on
+    // interruption so the owning session can recover its own full context.
+    ledger.runtimes[runtime.id] = opts?.full ? runtime : toDurableSnapshot(runtime);
     writeLedger(ledger);
     appendRuntimeEvent(eventType, runtime, extra);
   } catch (err: any) {
     console.warn('[live-runtime] Failed to persist runtime:', err?.message || err);
+  }
+}
+
+// Remove a runtime from the durable ledger entirely (terminal runtimes do not
+// need to survive a restart). Still appends a one-line audit event.
+function deleteDurableRuntime(id: string, eventType: string, snapshotForEvent?: LiveRuntimeSnapshot, extra?: Record<string, any>): void {
+  try {
+    const ledger = readLedger();
+    if (ledger.runtimes[id]) {
+      delete ledger.runtimes[id];
+      writeLedger(ledger);
+    }
+    if (snapshotForEvent) appendRuntimeEvent(eventType, snapshotForEvent, extra);
+  } catch (err: any) {
+    console.warn('[live-runtime] Failed to delete durable runtime:', err?.message || err);
   }
 }
 
@@ -222,7 +286,9 @@ export function finishLiveRuntime(id: string): void {
     record.status = record.abortSignal?.aborted ? 'aborted' : 'completed';
     record.completedAt = Date.now();
     record.updatedAt = Date.now();
-    persistRuntime(toSnapshot(record), record.status === 'aborted' ? 'aborted' : 'completed');
+    // Terminal runtimes are not recoverable, so drop them from the durable
+    // ledger instead of writing a record that would accumulate forever.
+    deleteDurableRuntime(key, record.status === 'aborted' ? 'aborted' : 'completed', toSnapshot(record));
   }
   activeRuntimes.delete(key);
 }
@@ -352,6 +418,18 @@ function inferDefaultRecoveryPolicy(kind: LiveRuntimeKind): LiveRuntimeSnapshot[
   return 'mark_interrupted';
 }
 
+// Debounced ledger flush: coalesce rapid checkpoint updates into a single write
+// so tool_call/tool_result bursts don't saturate the disk with sync I/O.
+const _pendingLedgerFlush = new Map<string, ReturnType<typeof setTimeout>>();
+function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): void {
+  const existing = _pendingLedgerFlush.get(id);
+  if (existing) clearTimeout(existing);
+  _pendingLedgerFlush.set(id, setTimeout(() => {
+    _pendingLedgerFlush.delete(id);
+    try { persistRuntime(snapshot, 'checkpoint'); } catch {}
+  }, 200));
+}
+
 export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<string, any>): void {
   const record = activeRuntimes.get(String(id || ''));
   if (!record) return;
@@ -361,12 +439,25 @@ export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<strin
     updatedAt: Date.now(),
   };
   record.updatedAt = Date.now();
-  persistRuntime(toSnapshot(record), 'checkpoint');
+  scheduleCheckpointFlush(id, toSnapshot(record));
 }
 
 export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): LiveRuntimeSnapshot[] {
   const interrupted: LiveRuntimeSnapshot[] = [];
   for (const record of activeRuntimes.values()) {
+    if (!isRuntimeRecoverableAfterRestart(record)) {
+      if (record.status === 'running') {
+        record.status = hasTerminalRuntimeCheckpoint(record) ? 'completed' : 'aborted';
+      }
+      if (!record.completedAt && hasTerminalRuntimeCheckpoint(record)) record.completedAt = Date.now();
+      record.updatedAt = Date.now();
+      const snapshot = toSnapshot(record);
+      // Already-finished work is not recoverable — drop it from the ledger.
+      deleteDurableRuntime(record.id, 'restart_skipped_completed', snapshot, { reason });
+      activeRuntimes.delete(record.id);
+      continue;
+    }
+
     record.status = 'interrupted';
     record.interruptedAt = Date.now();
     record.interruptReason = reason;
@@ -374,7 +465,10 @@ export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): Live
     if (record.abortSignal) record.abortSignal.aborted = true;
     const snapshot = toSnapshot(record);
     interrupted.push(snapshot);
-    persistRuntime(snapshot, 'interrupted', { reason });
+    // Persist the FULL snapshot (with process log) so the owning session can
+    // recover its own context after restart. This is the one path that keeps
+    // the heavy checkpoint on disk.
+    persistRuntime(snapshot, 'interrupted', { reason }, { full: true });
   }
   return interrupted;
 }
@@ -385,12 +479,7 @@ export function listDurableRuntimes(): LiveRuntimeSnapshot[] {
 }
 
 export function listInterruptedRuntimes(): LiveRuntimeSnapshot[] {
-  return listDurableRuntimes().filter((runtime) => {
-    if (runtime.status === 'running') return true;
-    if (runtime.status !== 'interrupted') return false;
-    const recoveryData = runtime.recoveryData || {};
-    return !recoveryData.recoveredAt && !recoveryData.recovery;
-  });
+  return listDurableRuntimes().filter((runtime) => isRuntimeRecoverableAfterRestart(runtime));
 }
 
 export function markDurableRuntimeRecovered(id: string, status: 'completed' | 'aborted' | 'interrupted' = 'interrupted', extra?: Record<string, any>): void {
@@ -401,7 +490,92 @@ export function markDurableRuntimeRecovered(id: string, status: 'completed' | 'a
   runtime.updatedAt = Date.now();
   if (status === 'interrupted' && !runtime.interruptedAt) runtime.interruptedAt = Date.now();
   runtime.recoveryData = { ...(runtime.recoveryData || {}), ...(extra || {}), recoveredAt: Date.now() };
-  ledger.runtimes[runtime.id] = runtime;
+  // The heavy process log was already injected into the owning session during
+  // recovery; only keep the lightweight summary on disk from here on.
+  ledger.runtimes[runtime.id] = toDurableSnapshot(runtime);
   writeLedger(ledger);
   appendRuntimeEvent('recovered', runtime, extra);
+}
+
+// Remove terminal and already-recovered runtimes from the durable ledger.
+// Cheap to call on startup — keeps the ledger from accumulating dead records.
+export function pruneDurableLedger(): { removed: number; kept: number } {
+  try {
+    const ledger = readLedger();
+    const ids = Object.keys(ledger.runtimes || {});
+    let removed = 0;
+    for (const id of ids) {
+      const rt = ledger.runtimes[id];
+      const recovered = !!(rt?.recoveryData && (rt.recoveryData.recoveredAt || rt.recoveryData.recovery));
+      if (hasTerminalRuntimeCheckpoint(rt) || recovered) {
+        delete ledger.runtimes[id];
+        removed++;
+      }
+    }
+    if (removed > 0) writeLedger(ledger);
+    return { removed, kept: Object.keys(ledger.runtimes).length };
+  } catch (err: any) {
+    console.warn('[live-runtime] pruneDurableLedger failed:', err?.message || err);
+    return { removed: 0, kept: 0 };
+  }
+}
+
+const MAX_RUNTIME_EVENTS_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_RUNTIME_EVENTS_KEPT_LINES = 2000;
+
+// One-time / self-healing compaction. Backs up oversized state files to `.bak`
+// then rewrites the ledger with only recoverable, lightweight records and trims
+// the append-only event log. Safe to call on every startup.
+export function compactRuntimeStateOnStartup(): { ledgerRemoved: number; ledgerKept: number; eventsRotated: boolean } {
+  let ledgerRemoved = 0;
+  let ledgerKept = 0;
+  let eventsRotated = false;
+
+  // --- Ledger compaction ---
+  try {
+    const ledgerPath = getRuntimeLedgerPath();
+    if (fs.existsSync(ledgerPath)) {
+      const ledger = readLedger();
+      const ids = Object.keys(ledger.runtimes || {});
+      const next: Record<string, LiveRuntimeSnapshot> = {};
+      for (const id of ids) {
+        const rt = ledger.runtimes[id];
+        // Keep only entries that can actually be recovered after a restart
+        // (running/interrupted, not terminal, not already recovered). Strip the
+        // heavy process log from each survivor.
+        if (isRuntimeRecoverableAfterRestart(rt)) {
+          next[id] = toDurableSnapshot(rt);
+        } else {
+          ledgerRemoved++;
+        }
+      }
+      ledgerKept = Object.keys(next).length;
+      if (ledgerRemoved > 0) {
+        try { fs.copyFileSync(ledgerPath, `${ledgerPath}.bak`); } catch {}
+        writeLedger({ version: 1, updatedAt: Date.now(), runtimes: next });
+      }
+    }
+  } catch (err: any) {
+    console.warn('[live-runtime] ledger compaction failed:', err?.message || err);
+  }
+
+  // --- Event log rotation ---
+  try {
+    const eventsPath = getRuntimeEventsPath();
+    if (fs.existsSync(eventsPath)) {
+      const size = fs.statSync(eventsPath).size;
+      if (size > MAX_RUNTIME_EVENTS_BYTES) {
+        const raw = fs.readFileSync(eventsPath, 'utf-8');
+        const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+        const kept = lines.slice(-MAX_RUNTIME_EVENTS_KEPT_LINES);
+        try { fs.copyFileSync(eventsPath, `${eventsPath}.bak`); } catch {}
+        fs.writeFileSync(eventsPath, kept.length ? `${kept.join('\n')}\n` : '', 'utf-8');
+        eventsRotated = true;
+      }
+    }
+  } catch (err: any) {
+    console.warn('[live-runtime] event log rotation failed:', err?.message || err);
+  }
+
+  return { ledgerRemoved, ledgerKept, eventsRotated };
 }

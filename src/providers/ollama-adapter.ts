@@ -6,6 +6,7 @@
 
 import { Ollama } from 'ollama';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
+import { stripCacheMarker } from './content-utils';
 
 /**
  * Coerce a message's content to a plain string.
@@ -14,11 +15,14 @@ import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, Ge
  */
 function contentToString(content: string | ContentPart[] | null): string {
   if (!content) return '';
-  if (typeof content === 'string') return content;
-  return content
-    .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
-    .map(p => p.text)
-    .join('\n');
+  const text = typeof content === 'string'
+    ? content
+    : content
+        .filter((p): p is Extract<ContentPart, { type: 'text' }> => p.type === 'text')
+        .map(p => p.text)
+        .join('\n');
+  // Strip the prompt-cache sentinel (Ollama has no caching API; it must not leak).
+  return text.indexOf('␞') !== -1 ? stripCacheMarker(text) : text;
 }
 
 function parseOllamaUsage(chunk: any): ModelUsage | undefined {
@@ -238,10 +242,10 @@ export class OllamaAdapter implements LLMProvider {
     await this.client.pull({ model: modelName, stream: false });
   }
 
-  private buildThinkCandidates(requested?: boolean | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none') {
-    // Ollama doesn't support extra_high — fall back to high
+  private buildThinkCandidates(requested?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none') {
+    // Ollama doesn't support Anthropic/Codex higher tiers — fall back to high.
     const normalized: boolean | 'high' | 'medium' | 'low' | undefined =
-      requested === 'extra_high' || requested === 'xhigh'
+      requested === 'max' || requested === 'extra_high' || requested === 'xhigh'
         ? 'high'
         : requested === 'minimal'
           ? 'low'

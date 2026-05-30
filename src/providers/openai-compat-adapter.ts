@@ -9,8 +9,23 @@
  */
 
 import type { LLMProvider, ChatMessage, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ProviderID } from './LLMProvider';
-import { contentToString } from './content-utils';
+import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
+
+// Remove the prompt-cache sentinel from any string message content. OpenAI/xAI
+// auto-cache on a stable prefix, so the marker has no API role here and must not
+// leak into the model's view of the prompt.
+function sanitizeCacheMarkers(messages: ChatMessage[]): ChatMessage[] {
+  let touched = false;
+  const out = messages.map((m) => {
+    if (typeof m.content === 'string' && m.content.indexOf('␞') !== -1) {
+      touched = true;
+      return { ...m, content: stripCacheMarker(m.content) };
+    }
+    return m;
+  });
+  return touched ? out : messages;
+}
 
 // Map Prometheus-internal think hints → OpenAI-style reasoning_effort literal.
 // 'xhigh' / 'extra_high' are Codex-only; regular OpenAI + Perplexity cap at 'high',
@@ -18,7 +33,7 @@ import { getConfig } from '../config/config';
 const EFFORT_MAP: Record<string, string> = {
   none: 'none', minimal: 'minimal', fast: 'minimal',
   low: 'low', medium: 'medium', high: 'high',
-  xhigh: 'high', extra_high: 'high',
+  xhigh: 'high', extra_high: 'high', max: 'high',
 };
 
 // Providers that meaningfully accept a `reasoning_effort` parameter via the
@@ -64,11 +79,20 @@ function parseUsage(data: any): ModelUsage | undefined {
     || usage.output_tokens_details?.reasoning_tokens
     || 0,
   );
+  // OpenAI + xAI/Grok auto-cache stable prefixes and report hits here. These are
+  // a subset of prompt_tokens (already counted in inputTokens) — surfaced for
+  // observability of cache hit-ratio, not added to the total again.
+  const cacheReadTokens = Number(
+    usage.prompt_tokens_details?.cached_tokens
+    || usage.input_tokens_details?.cached_tokens
+    || 0,
+  );
   const totalTokens = Number(usage.total_tokens || (inputTokens + outputTokens + reasoningTokens));
   return {
     inputTokens,
     outputTokens,
     reasoningTokens,
+    cacheReadTokens,
     totalTokens,
     source: 'provider',
   };
@@ -155,7 +179,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
     // OpenAI Codex OAuth requires a specific system prompt to validate CLI authorization
-    let finalMessages = messages;
+    let finalMessages = sanitizeCacheMarkers(messages);
     if (this.id === 'openai_codex') {
       const CODEX_SYSTEM = 'You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user\'s local machine.';
       const hasSystem = messages.length > 0 && messages[0].role === 'system';
@@ -174,6 +198,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      max_tokens: options?.max_tokens ?? 512,
 	      stream: !!options?.onToken,
 	    };
+	    // frequency_penalty removed: grok-4.3+ rejects the parameter with a 400 error.
 	    // Reasoning effort: only forward for providers that implement it.
     if (this.config.supportsReasoningEffort ?? EFFORT_PROVIDERS.has(this.id as string)) {
 	      let rawEffort: string | undefined;
@@ -196,11 +221,18 @@ export class OpenAICompatAdapter implements LLMProvider {
     const cappedTools = capProviderTools(this.id, options?.tools);
     if (cappedTools?.length) {
       body.tools = cappedTools;
-      // Force 'required' on the first model turn (last message is from user) so the
-      // model MUST call a tool rather than producing an intent-only acknowledgment.
-      // After a tool result is in context the model needs 'auto' to write a final reply.
+      const cfgRoot2 = getConfig().getConfig() as any;
+      const configuredToolChoice = String(cfgRoot2?.llm?.providers?.[this.id]?.tool_choice || '').trim();
       const lastMsgRole = finalMessages[finalMessages.length - 1]?.role;
-      body.tool_choice = lastMsgRole === 'user' ? 'required' : 'auto';
+      if (configuredToolChoice === 'auto') {
+        // User opted in to auto — let model decide whether to call a tool or speak first.
+        // After a tool result the model always needs 'auto' to write a final reply.
+        body.tool_choice = 'auto';
+      } else {
+        // Default: force 'required' on the first user turn so the model acts immediately,
+        // then 'auto' after tool results so it can write a final reply.
+        body.tool_choice = lastMsgRole === 'user' ? 'required' : 'auto';
+      }
     }
 
 	    if (body.stream) {
@@ -638,7 +670,11 @@ export class OpenAICompatAdapter implements LLMProvider {
 	  async listModels(): Promise<ModelInfo[]> {
 	    try {
 	      const data = await this.get(this.config.modelsPath || '/v1/models');
-	      return (data.data || []).map((m: any) => ({ name: m.id }));
+	      return (data.data || []).map((m: any) => ({
+	        name: m.id,
+	        contextWindowTokens: Number(m.context_window || m.contextWindowTokens || m.context_length || m.max_context_length) || undefined,
+	        maxOutputTokens: Number(m.max_output_tokens || m.maxOutputTokens || m.output_token_limit) || undefined,
+	      }));
 	    } catch {
 	      return (this.config.staticModels || []).map((name) => ({ name }));
 	    }

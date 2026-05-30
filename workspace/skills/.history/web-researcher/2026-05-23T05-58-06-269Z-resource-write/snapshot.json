@@ -1,0 +1,12 @@
+{
+  "skillId": "web-researcher",
+  "reason": "resource-write",
+  "createdAt": "2026-05-23T05:58:06.274Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\web-researcher",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "467c665330ea306d"
+}

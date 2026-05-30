@@ -1,0 +1,13 @@
+{
+  "skillId": "desktop-automation-playbook",
+  "reason": "resource-delete",
+  "createdAt": "2026-05-29T04:45:07.624Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\desktop-automation-playbook",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/workflows/desktop-automation-playbook-2026-05-28.md"
+  ],
+  "hash": "90b08bdea90bc323"
+}

@@ -209,6 +209,7 @@ export class SubagentHeartbeatManager {
   private configPath: string;
   private persisted: PersistedConfig;
   private agents: Map<string, AgentHeartbeatEntry> = new Map();
+  private started = false;
 
   constructor(deps: HeartbeatRunnerDeps) {
     this.deps = deps;
@@ -329,12 +330,14 @@ export class SubagentHeartbeatManager {
       lastResult: null,
     };
     this.agents.set(agentId, entry);
+    if (this.started) this._scheduleNext(entry);
     console.log(`[HeartbeatRunner] Registered agent "${agentId}" (enabled=${config.enabled}, interval=${config.intervalMinutes}min)`);
   }
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────
 
   start(): void {
+    this.started = true;
     for (const entry of this.agents.values()) {
       this._scheduleNext(entry);
     }
@@ -343,6 +346,7 @@ export class SubagentHeartbeatManager {
   }
 
   stop(): void {
+    this.started = false;
     for (const entry of this.agents.values()) {
       this._stopTimer(entry);
     }
@@ -442,7 +446,16 @@ export class SubagentHeartbeatManager {
       return;
     }
 
-    const prompt = rawMd!.trim();
+    const heartbeatPath = path.join(entry.workspacePath, 'HEARTBEAT.md');
+    const prompt = [
+      `Read and follow this HEARTBEAT.md file: ${heartbeatPath}`,
+      '',
+      'If there is no clearly actionable work in the file, reply with exactly HEARTBEAT_OK and nothing else.',
+      'If there is actionable work, do it and report only the actionable result.',
+      '',
+      '--- HEARTBEAT.md ---',
+      rawMd!.trim(),
+    ].join('\n');
     const sessionId = `heartbeat_${entry.agentId}`;
     const abortSignal = { aborted: false };
     const runtimeId = registerLiveRuntime({
@@ -478,7 +491,7 @@ export class SubagentHeartbeatManager {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Internal HEARTBEAT tick for agent "${entry.agentId}". Read HEARTBEAT.md instructions and execute them. If nothing is actionable, reply HEARTBEAT_OK.`,
+        `CONTEXT: Internal HEARTBEAT tick for agent "${entry.agentId}". Read ${heartbeatPath} and execute it. If nothing is actionable, reply exactly HEARTBEAT_OK.`,
         modelOverride,
         'heartbeat',
       );
@@ -519,15 +532,18 @@ export class SubagentHeartbeatManager {
         ],
       };
 
-      // Always broadcast heartbeat_done (UI uses it to update last-run indicators)
-      this.deps.broadcast?.({
-        type: 'heartbeat_done',
-        agentId: entry.agentId,
-        isOk,
-        text: isOk ? '' : finalText.slice(0, 8000),
-        at: Date.now(),
-        automatedSession: isOk ? null : automatedSession,
-      });
+      // HEARTBEAT_OK is deliberately silent: no chat/session/sidebar message,
+      // no toast, and no delivery. Last-run state remains available via API.
+      if (!isOk) {
+        this.deps.broadcast?.({
+          type: 'heartbeat_done',
+          agentId: entry.agentId,
+          isOk: false,
+          text: finalText.slice(0, 8000),
+          at: Date.now(),
+          automatedSession,
+        });
+      }
 
       // Deliver to channels only if there is real content
       if (!isOk && finalText.trim() && this.deps.deliverChannels) {

@@ -19,7 +19,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { spawn, execSync } from 'child_process';
+import { spawn, execSync, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
 import { flushSession } from './session';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
@@ -74,6 +74,128 @@ function getRestartContextPath(): string {
   const prometheusDir = path.join(getLifecycleStateRoot(), '.prometheus');
   if (!fs.existsSync(prometheusDir)) fs.mkdirSync(prometheusDir, { recursive: true });
   return path.join(prometheusDir, 'restart-context.json');
+}
+
+function getGatewayHealthUrl(): string {
+  const port = Number(process.env.GATEWAY_PORT || 18789) || 18789;
+  return `http://127.0.0.1:${port}/api/health`;
+}
+
+function shouldClosePreviousTerminalAfterRestart(ctx: RestartContext): boolean {
+  if (process.env.PROMETHEUS_CLOSE_OLD_TERMINAL_ON_RESTART === '0') return false;
+  if (process.env.PROMETHEUS_RESTART_CLOSE_OLD_TERMINAL === '0') return false;
+  if (ctx.electronManaged || ctx.restartLauncher === 'electron') return false;
+  return true;
+}
+
+function findWindowsShellLauncherPid(gatewayPid: number, launcherPid: number): number | undefined {
+  if (process.platform !== 'win32') return undefined;
+
+  try {
+    const script = [
+      `$procId = ${Number(gatewayPid)}`,
+      '$items = @()',
+      'while ($procId -gt 0) {',
+      '  $p = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue',
+      '  if (-not $p) { break }',
+      '  $items += [pscustomobject]@{ pid = [int]$p.ProcessId; ppid = [int]$p.ParentProcessId; name = [string]$p.Name }',
+      '  $procId = [int]$p.ParentProcessId',
+      '}',
+      '$items | ConvertTo-Json -Compress',
+    ].join('; ');
+    const raw = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 5_000,
+    }).trim();
+    const parsed = raw ? JSON.parse(raw) : [];
+    const ancestors = Array.isArray(parsed) ? parsed : [parsed];
+    const shell = ancestors.find((item: any) => {
+      const pid = Number(item?.pid || 0);
+      const name = String(item?.name || '').toLowerCase();
+      return pid > 0
+        && pid !== gatewayPid
+        && /^(pwsh|powershell|powershell_ise|cmd)\.exe$/.test(name);
+    });
+    return Number.isFinite(Number(shell?.pid)) ? Number(shell.pid) : undefined;
+  } catch (err: any) {
+    console.warn(`[lifecycle] Could not resolve shell launcher process: ${String(err?.message || err)}`);
+    return Number.isFinite(launcherPid) && launcherPid > 0 ? launcherPid : undefined;
+  }
+}
+
+function startPreviousTerminalCleanupWatcher(ctx: RestartContext): void {
+  if (!shouldClosePreviousTerminalAfterRestart(ctx)) return;
+
+  const oldGatewayPid = process.pid;
+  const launcherPid = process.ppid;
+  const targetPid = process.platform === 'win32'
+    ? (findWindowsShellLauncherPid(oldGatewayPid, launcherPid) || launcherPid)
+    : launcherPid;
+
+  if (!Number.isFinite(targetPid) || targetPid <= 0 || targetPid === oldGatewayPid) return;
+
+  const helper = `
+const cp = require('child_process');
+const http = require('http');
+const opts = JSON.parse(process.argv[1] || '{}');
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function healthOk(url) {
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      res.resume();
+      resolve(res.statusCode >= 200 && res.statusCode < 300);
+    });
+    req.setTimeout(1200, () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+(async () => {
+  const deadline = Date.now() + Number(opts.timeoutMs || 120000);
+  while (Date.now() < deadline && pidAlive(Number(opts.oldGatewayPid))) await sleep(500);
+  while (Date.now() < deadline) {
+    if (await healthOk(String(opts.healthUrl))) break;
+    await sleep(750);
+  }
+  if (Date.now() >= deadline) return;
+  const targetPid = Number(opts.targetPid || 0);
+  if (!targetPid || targetPid === process.pid) return;
+  if (process.platform === 'win32') {
+    cp.spawn('taskkill.exe', ['/PID', String(targetPid), '/T', '/F'], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    }).unref();
+    return;
+  }
+  try { process.kill(targetPid, 'SIGTERM'); } catch {}
+  await sleep(1500);
+  if (pidAlive(targetPid)) {
+    try { process.kill(targetPid, 'SIGKILL'); } catch {}
+  }
+})().catch(() => {});
+`;
+
+  try {
+    const child = spawn(process.execPath, ['-e', helper, JSON.stringify({
+      oldGatewayPid,
+      targetPid,
+      healthUrl: getGatewayHealthUrl(),
+      timeoutMs: 120_000,
+    })], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+    console.log(`[lifecycle] Previous terminal cleanup watcher started (target pid ${targetPid}).`);
+  } catch (err: any) {
+    console.warn(`[lifecycle] Could not start previous terminal cleanup watcher: ${String(err?.message || err)}`);
+  }
 }
 
 // ─── Restart Context Read/Write ───────────────────────────────────────────────
@@ -420,6 +542,7 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     }
   }
   writeRestartContext(restartCtx);
+  startPreviousTerminalCleanupWatcher(restartCtx);
 
   // Step 2: Shut down current gateway
   await shutdownGateway();

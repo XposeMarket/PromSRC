@@ -151,12 +151,13 @@ Operational debugging facts:
 
 ## 12B) Voice Agent, Mobile Dictation Handoff, and Live Worker Steering
 
-2026-05-21 voice refactor principle:
+2026-05-22 voice refactor correction:
 
 - Voice mode now has its own Voice Agent layer in front of the Prometheus worker.
 - This layer is only for Prometheus dictation/voice flows. Normal typed desktop/mobile chat and manual queued steering should keep using the ordinary app paths.
 - The Voice Agent can answer immediate voice questions from a fresh worker context packet, steer an active worker, interrupt an active worker, or acknowledge before handing new work to the worker.
-- The Prometheus worker remains the tool-running brain. The Voice Agent is the speech/router/narrator layer.
+- The Prometheus worker remains the heavy tool-running brain for browser/desktop/files/coding/media/account actions and long reasoning.
+- Correction: the Voice Agent is not tool-less. It may call a small allowlisted `voice_*` tool set directly for fast, low-risk voice support; anything outside that set must be handed to or steered into the normal worker.
 
 Canonical source files for this refactor:
 
@@ -184,11 +185,23 @@ Voice worker context packet:
 
 Voice Agent action contract:
 
-- `answer_now`: speak `voiceReply`; do not call or steer the worker.
+- `answer_now`: speak `voiceReply`; do not call or steer the worker. The reply may come from injected context or a confirmed `voice_*` tool result.
 - `no_reply`: no worker call and no spoken output.
 - `steer_worker`: queue a same-turn steer on the active worker.
 - `interrupt_worker`: abort the active worker if possible.
 - `handoff_new_work`: speak the acknowledgement, then the mobile/desktop voice client may start the normal worker request.
+
+2026-05-27 voice routing / wake gate current state:
+
+- The Voice Agent path is now intentionally layered. Deterministic routing handles exact stop/pause/status commands, obvious wake phrase changes, small-talk/check-in turns, and safety boundaries before using the model router.
+- Simple mobile always-listening turns like "how's it going", "can you hear me", "testing", "thanks", and "everything good" should bypass the model decision pass and log a `deterministic small-talk route` latency entry.
+- For `handoff_new_work`, do not add fake/template acknowledgement text in the client. The Voice Agent model must provide the spoken acknowledgement. If the model chooses `handoff_new_work` but leaves `spokenReply` empty, `/api/voice-agent/input` asks the model for a brief repair acknowledgement rather than inventing a hardcoded one.
+- `voice_set_wake_phrase` is a runtime configuration tool, not memory and not a worker task. It returns a runtime directive and an actual Voice Agent acknowledgement; it must not dispatch normal worker work.
+- Mobile wake phrase setting also applies locally first for reliability, shows the green toast, then allows the utterance to continue to `/api/voice-agent/input` so Prometheus can acknowledge it naturally.
+- Mobile sends `voiceRuntime` context when a wake phrase exists. The backend injects a short runtime note so the Voice Agent knows the current wake phrase and whether quiet mode is active.
+- Normal voice turns are not automatically interruptions. `/api/voice-agent/input` broadcasts `voice_interruption` only when there is an active runtime/stream or the action is `steer_worker`/`interrupt_worker`; otherwise it broadcasts `voice_agent_turn`.
+- Cutting off playback after the worker's final response has already been emitted must only stop the audio and let the next transcript become a normal new voice turn. It should not create `pendingInterruptContext` or the Interruption UI.
+- Speaking while the worker is still streaming/working is the true interruption path. That should route through the Voice Agent to decide `answer_now`, `steer_worker`, or `interrupt_worker`, and this is what should render the Interruption / Interruption Response UI.
 
 2026-05-21 full-context Voice Agent upgrade:
 
@@ -215,15 +228,25 @@ Voice Agent injected identity/context now includes:
 - current worker context packet
 - classifier hint for cancel/pause/question/correction/etc.
 
-Voice Agent role prompt:
+Voice Agent role prompt and direct tool boundary:
 
 - "You are Prometheus speaking through the user's voice interface."
-- It has Prometheus identity, memory, preferences, user knowledge, and current task context.
-- It does not execute tools directly.
-- It answers directly only when context is enough.
-- It dispatches/steers/interrupts the Prometheus worker when work requires tools/files/browser/desktop/coding/scheduling/memory mutation/long reasoning.
+- It has Prometheus identity, memory, preferences, user knowledge, current task context, and current time/date context.
+- It may call only the provided `voice_*` tools from `buildVoiceToolDefinitions()` in `src/gateway/routes/chat.router.ts`.
+- Current direct Voice Agent tools:
+  - `voice_web_search`: fast wrapper around Prometheus web search; use for quick factual/current lookup, with multi mode for latest/current/news/compare/sensitive/current-event questions.
+  - `voice_web_fetch`: fast wrapper around `web_fetch` for one clean text/article/docs URL; social/video/media/auth/browser-heavy URLs must escalate to the worker.
+  - `voice_write_note`: fast wrapper around `write_note`; use only for explicit remember/jot/log/save-note requests.
+  - `voice_set_wake_phrase`: runtime wake phrase setter. Use only for wake phrase/word changes; never save wake phrases as notes or memory.
+  - `voice_skill_lookup`: summarized `skill_list`/skill metadata lookup for available workflows; returns summaries, not full skill instructions.
+  - `voice_memory_search`: read-only memory recall wrapper around memory search and optional record read; do not mutate memory through it.
+  - `voice_timer`: one-shot timer create/list/update/reschedule/cancel wrapper; the future timer execution is handled later by the worker.
+- It can run at most a tiny direct-tool loop: the decision model receives `buildVoiceToolDefinitions()`, may call up to two tool calls per pass for the first two passes, and then must return strict JSON.
+- It answers directly when context or a `voice_*` result is enough.
+- It dispatches/steers/interrupts the Prometheus worker when work requires tools outside `voice_*`, files, browser, desktop, coding, media/account actions, approvals, broad scheduling/automation, long reasoning, or more than the small voice-tool loop should handle.
 - It must return strict JSON: `action`, `spokenReply`, optional `workerInstruction`, optional `needsWorkerResponse`, optional `reason`.
 - It should avoid generic acknowledgements and speak like Prometheus with specific context.
+- Guardrail: do not claim the Voice Agent used full worker tools or changed files/accounts from the voice layer. It may truthfully say it searched, fetched, saved a note, checked memory, looked up skills, or set a timer only when the corresponding `voice_*` result confirms it.
 
 Worker handoff:
 
@@ -231,6 +254,16 @@ Worker handoff:
 - The handoff block includes the spoken acknowledgement, original transcript, worker instruction, and context summary.
 - Mobile passes this backend handoff block as `callerContext` into `/api/chat`.
 - The worker is instructed not to repeat a generic startup acknowledgement because the Voice Agent already spoke to the user.
+- If handoff acknowledgement audio is silent, debug the model decision response first: `voiceReply` must be present for `handoff_new_work`, or the model repair pass should have produced one. Do not fix this by adding generic client-side acknowledgement templates.
+
+Voice Agent tool execution path:
+
+- Tool schemas are defined by `buildVoiceToolDefinitions()` in `src/gateway/routes/chat.router.ts`.
+- Tool calls execute through `executeVoiceAgentToolWithTrace(...)`, which broadcasts `voice_agent_tool_event` websocket events and appends Voice Agent process entries.
+- The concrete executor is `executeVoiceAgentTool(...)`; it calls the existing Prometheus helper functions for search, fetch, notes, skills, memory search/record read, and timers.
+- `maybeApplyVoiceToolFallback(...)` can rescue old-style "I cannot use tools" voice decisions by detecting matching voice requests and running the relevant `voice_*` wrapper.
+- `findVoiceToolFallbackRequest(...)` provides deterministic fallback routing for obvious voice requests: URL fetch/read, search/latest/current/news, note/remember, skill/workflow/playbook, memory/recall, and simple relative timers.
+- `voice_agent_tool_event` is consumed by `web-ui/src/pages/ChatPage.js` and `web-ui/src/mobile/mobile-pages.js` so desktop/mobile chat process logs show Voice Agent tool calls/results.
 
 Important behavior guarantee:
 
@@ -272,6 +305,25 @@ Mobile voice behavior:
   - if action is `handoff_new_work`, it speaks the acknowledgement, then starts the normal worker stream
   - if action is `answer_now`, `no_reply`, `steer_worker`, or `interrupt_worker`, it handles that result and does not start a duplicate worker stream
 - Voice acknowledgements use direct `_ttsSpeak(...)`, not milestone-gated `_speakVoiceMilestone(...)`, so acknowledgements should be audible even before worker streaming begins.
+
+Mobile listen modes, wake phrase, and quiet mode:
+
+- Mobile Listen Mode lives in `web-ui/src/mobile/mobile-pages.js` as `push_to_speak` or `always_listening`; Push to Speak is the default and must remain intact.
+- Switching mobile back to Push to Speak clears `wakePhrase` and `wakeGateActive`, returning Prometheus to normal non-gated behavior.
+- `wakePhrase` and `wakeGateActive` are separate states. A saved phrase is only configuration; it does not filter speech unless `wakeGateActive === true`.
+- Saying "Prometheus quiet", "quiet Prometheus", or similar quiet phrases activates quiet mode only if a wake phrase is set. If no wake phrase exists, Prometheus should tell the user to set one first so they cannot get stuck.
+- Saying the wake phrase while quiet mode is active clears `wakeGateActive` and returns Always Listening to normal. Saying "unlock Prometheus" / "turn off wake phrase" clears both the wake phrase and the quiet gate.
+- While quiet mode is active, the mobile Voice page status should stay visibly on `Quiet mode` rather than being overwritten by generic `Listening` or `Ready`; the hint should continue to show `Say "<phrase>" to wake Prometheus`.
+- Current implementation is still page-owned, not a full app-wide voice service. Leaving the Voice page stops the page-owned listener cleanly but preserves Always Listening settings and the warm mic grant; returning to the Voice page should auto-resume Always Listening without toggling back to Push to Speak.
+- True cross-page always-listening would require moving STT/audio runtime handles out of `renderVoicePage(...)` into a global mobile voice service.
+
+Mobile xAI / Grok STT and TTS facts:
+
+- xAI mobile Push to Speak and Always Listening use the xAI streaming STT path where possible (`/api/voice/xai/stt-stream`), with batch STT fallback only where streaming is unavailable.
+- On xAI Push to Speak release, do not close the websocket after a fixed short delay. Send `audio.done`, wait for `transcript.done`, and submit the final transcript. If final never arrives, submit the latest partial after the longer timeout. Empty text should show "I did not catch any speech" instead of silently returning to Ready.
+- xAI partial transcripts in Always Listening may not always emit final events on phone; mobile schedules an idle submit from partials so recognized text does not sit forever on screen.
+- OpenAI Realtime uses a different WebRTC audio path and can work even when xAI TTS/STT is broken. Do not infer xAI audio health from OpenAI Realtime success.
+- xAI TTS on iOS/Safari should not always force URL delivery. The safer path is the server's base64/WAV fallback; URL delivery is fine off iOS/Safari. The hidden audio element should not treat an early pre-play `pause` as successful playback.
 
 Narration loop:
 

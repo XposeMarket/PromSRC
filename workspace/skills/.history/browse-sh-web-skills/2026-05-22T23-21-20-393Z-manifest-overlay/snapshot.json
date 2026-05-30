@@ -1,0 +1,12 @@
+{
+  "skillId": "browse-sh-web-skills",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-05-22T23:21:20.399Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\browse-sh-web-skills",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "ef0f85c16312f949"
+}

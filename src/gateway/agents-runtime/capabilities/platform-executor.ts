@@ -216,68 +216,9 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
       return { name, args, ...connResult };
     }
 
-    const { loadComposites, saveComposite, deleteComposite, executeComposite } = await import('../../tools/composite-tools');
-
-    if (name === 'create_composite') {
-      const cName = String(args.name || '').trim().replace(/\s+/g, '_');
-      if (!cName) return { name, args, result: 'name is required', error: true };
-      if (!Array.isArray(args.steps) || !args.steps.length) return { name, args, result: 'steps array is required', error: true };
-      saveComposite({
-        name: cName,
-        description: String(args.description || ''),
-        parameters: args.parameters && typeof args.parameters === 'object' ? args.parameters : {},
-        steps: args.steps,
-      });
-      return { name, args, result: `Composite "${cName}" saved with ${args.steps.length} step(s). It will appear as a callable tool next message.`, error: false };
-    }
-
-    if (name === 'get_composite') {
-      const cName = String(args.name || '').trim();
-      if (!cName) return { name, args, result: 'name is required', error: true };
-      const existing = loadComposites().get(cName);
-      if (!existing) return { name, args, result: `Composite "${cName}" not found.`, error: true };
-      return { name, args, result: JSON.stringify(existing, null, 2), error: false };
-    }
-
-    if (name === 'edit_composite') {
-      const cName = String(args.name || '').trim();
-      if (!cName) return { name, args, result: 'name is required', error: true };
-      const composites = loadComposites();
-      const existing = composites.get(cName);
-      if (!existing) return { name, args, result: `Composite "${cName}" not found.`, error: true };
-      const newName = args.new_name ? String(args.new_name).trim() : cName;
-      const updated = {
-        name: newName,
-        description: args.description !== undefined ? String(args.description) : existing.description,
-        parameters: args.parameters !== undefined ? args.parameters : existing.parameters,
-        steps: Array.isArray(args.steps) ? args.steps : existing.steps,
-      };
-      if (newName !== cName) deleteComposite(cName);
-      saveComposite(updated);
-      const renamed = newName !== cName ? ` (renamed from "${cName}")` : '';
-      return { name, args, result: `Composite "${newName}" updated${renamed}.`, error: false };
-    }
-
-    if (name === 'delete_composite') {
-      const cName = String(args.name || '').trim();
-      if (!cName) return { name, args, result: 'name is required', error: true };
-      const removed = deleteComposite(cName);
-      return { name, args, result: removed ? `Composite "${cName}" deleted.` : `Composite "${cName}" not found.`, error: !removed };
-    }
-
-    if (name === 'list_composites') {
-      const composites = loadComposites();
-      if (!composites.size) return { name, args, result: 'No composites defined yet.', error: false };
-      const lines = Array.from(composites.values()).map(
-        (c: any) => `- ${c.name} (${c.steps.length} steps) - ${c.description}`,
-      );
-      return { name, args, result: lines.join('\n'), error: false };
-    }
-
-    if (loadComposites().has(name)) {
-      const result = await executeComposite(name, args, ctxExecuteToolBridge(workspacePath, deps, sessionId), workspacePath, deps, sessionId);
-      return { name, args, result, error: false };
-    }
+    const { handleCompositeTool } = await import('../../tools/composite-tools');
+    const compositeResult = await handleCompositeTool(name, args, ctxExecuteToolBridge(workspacePath, deps, sessionId), workspacePath, deps, sessionId);
+    if (compositeResult) return compositeResult;
 
     return { name, args, result: `Unhandled platform tool: ${name}`, error: true };
   },

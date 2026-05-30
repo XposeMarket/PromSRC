@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "resources": [
+    {
+      "path": "notes/browser-session-recovery-2026-05-22.md",
+      "type": "doc",
+      "description": "Guardrail for recovering browser workflows after no-session, user-Chrome debugger, about:blank, and screenshot-before-open errors."
+    },
+    {
+      "path": "notes/product-carousel-browser-extraction-2026-05-23.md",
+      "type": "doc",
+      "description": "Browser extraction workflow for product carousels and shopping/product result pages.",
+      "triggers": [
+        "product carousel",
+        "shopping carousel",
+        "product extraction",
+        "Amazon products",
+        "show products",
+        "product cards"
+      ],
+      "autoInject": true,
+      "injectMode": "summary_then_content",
+      "maxInjectChars": 2500
+    }
+  ],
+  "id": "browser-automation-playbook"
+}

@@ -13,11 +13,12 @@
  *   during installation so users see progress rather than a blank window.
  */
 
-const { app, BrowserWindow, shell, Menu, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, Menu, dialog, ipcMain, safeStorage } = require('electron');
 const { spawn, execSync }  = require('child_process');
 const path       = require('path');
 const http       = require('http');
 const fs         = require('fs');
+const crypto     = require('crypto');
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const GATEWAY_URL  = 'http://127.0.0.1:18789';
@@ -106,10 +107,11 @@ if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
 }
 
 // ─── State ─────────────────────────────────────────────────────────────────
-let mainWindow     = null;
-let gatewayProcess = null;
-let isQuitting     = false;
-let pendingUpdate  = null;  // holds UpdateInfo once a release is downloaded
+let mainWindow          = null;
+let gatewayProcess      = null;
+let isQuitting          = false;
+let gatewayShuttingDown = false;
+let pendingUpdate       = null;  // holds UpdateInfo once a release is downloaded
 let isGatewayRestarting = false;
 const GATEWAY_RESTART_EXIT_CODE = 42;
 
@@ -315,6 +317,51 @@ function getLastGatewayOutput(maxLines = 30) {
   return gatewayLogLines.slice(-maxLines).join('\n');
 }
 
+// ─── Vault master key ────────────────────────────────────────────────────────
+// The gateway runs as a child process and cannot use safeStorage (main-process
+// only). So we own the master key here: keep it OS-sealed at rest (vault.key.enc)
+// and hand the plaintext key to the child over stdin. Returns a 64-char hex string,
+// or null if protection is unavailable (child then falls back to its key file).
+function resolveVaultMasterKey() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      writeGatewayLog('[main] safeStorage unavailable — vault key will use file fallback\n');
+      return null;
+    }
+    const vaultDir = path.join(USER_DATA_DIR, '.prometheus', 'vault');
+    if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
+    const sealedPath = path.join(vaultDir, 'vault.key.enc');
+    const legacyPath = path.join(vaultDir, 'vault.key');
+
+    // Already sealed → unseal and use.
+    if (fs.existsSync(sealedPath)) {
+      const hex = safeStorage.decryptString(fs.readFileSync(sealedPath)).trim();
+      return /^[0-9a-fA-F]{64}$/.test(hex) ? hex.toLowerCase() : null;
+    }
+
+    // Migration: an existing plaintext key must be preserved (vault.enc was
+    // encrypted with it), so re-seal the SAME bytes, then delete the plaintext.
+    if (fs.existsSync(legacyPath)) {
+      const hex = fs.readFileSync(legacyPath, 'utf-8').trim();
+      if (/^[0-9a-fA-F]{64}$/.test(hex)) {
+        fs.writeFileSync(sealedPath, safeStorage.encryptString(hex.toLowerCase()));
+        try { fs.rmSync(legacyPath); } catch {}
+        writeGatewayLog('[main] Migrated vault.key → OS-sealed vault.key.enc\n');
+        return hex.toLowerCase();
+      }
+    }
+
+    // First run: generate a fresh key and seal it.
+    const hex = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(sealedPath, safeStorage.encryptString(hex));
+    writeGatewayLog('[main] Created OS-sealed vault master key\n');
+    return hex;
+  } catch (err) {
+    writeGatewayLog(`[main] Vault key sealing failed: ${err && err.message ? err.message : err}\n`);
+    return null;
+  }
+}
+
 // ─── Gateway ───────────────────────────────────────────────────────────────
 function startGateway() {
   console.log('[Prometheus] Starting gateway...');
@@ -334,6 +381,11 @@ function startGateway() {
   const bundledSkillsDir = IS_PACKAGED_RUNTIME
     ? path.join(process.resourcesPath, 'bundled-skills')
     : path.join(APP_ROOT, 'workspace', 'skills');
+
+  // Unseal the vault master key (or null if OS protection is unavailable). Handed
+  // to the child over stdin below — the child blocks on that read, so we MUST write
+  // a line in both cases (a hex key, or an empty sentinel for the file-fallback path).
+  const vaultKeyHex = resolveVaultMasterKey();
 
   const gatewayEnv = {
     ...process.env,
@@ -377,6 +429,14 @@ function startGateway() {
   }
 
   writeGatewayLog(`[main] Gateway spawned (pid=${gatewayProcess.pid})\n`);
+
+  // Hand off the master key (or an empty sentinel) as the first stdin line. The
+  // child's vault-key-bootstrap reads exactly one line, then stdin is left open.
+  try {
+    gatewayProcess.stdin?.write((vaultKeyHex || '') + '\n');
+  } catch (err) {
+    writeGatewayLog(`[main] Vault key handoff write failed: ${err && err.message ? err.message : err}\n`);
+  }
 
   gatewayProcess.stdout?.on('data', (d) => writeGatewayLog(d));
   gatewayProcess.stderr?.on('data', (d) => writeGatewayLog(d));
@@ -676,18 +736,49 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   isQuitting = true;
-  if (gatewayProcess && !gatewayProcess.killed) {
+
+  // If gateway is already gone or we already started shutdown, let quit proceed.
+  if (!gatewayProcess || gatewayProcess.killed || gatewayShuttingDown) return;
+
+  gatewayShuttingDown = true;
+  event.preventDefault();
+
+  const forceKillAndQuit = () => {
     try {
-      // On Windows, TerminateProcess immediately — no graceful drain needed.
-      if (process.platform === 'win32' && gatewayProcess.pid) {
+      if (process.platform === 'win32' && gatewayProcess && gatewayProcess.pid) {
         execSync(`taskkill /PID ${gatewayProcess.pid} /F /T`, { stdio: 'pipe' });
-      } else {
+      } else if (gatewayProcess) {
         gatewayProcess.kill('SIGKILL');
       }
-    } catch {
-      gatewayProcess.kill();
-    }
-  }
+    } catch {}
+    app.quit();
+  };
+
+  const onExit = () => {
+    clearTimeout(fallbackTimer);
+    app.quit();
+  };
+  gatewayProcess.once('exit', onExit);
+
+  // Force-kill fallback — gateway's own gracefulShutdown has a 1.2s hard exit,
+  // so 3s is more than enough.
+  const fallbackTimer = setTimeout(() => {
+    if (gatewayProcess) gatewayProcess.removeListener('exit', onExit);
+    forceKillAndQuit();
+  }, 3000);
+
+  // Ask the gateway to shut down gracefully via HTTP.
+  const req = http.request(
+    { hostname: '127.0.0.1', port: 18789, path: '/api/internal/shutdown', method: 'POST', timeout: 1000 },
+    (res) => { res.resume(); } // response received — gateway is draining, wait for 'exit'
+  );
+  req.on('error', () => {
+    // Gateway unreachable — skip straight to force-kill.
+    clearTimeout(fallbackTimer);
+    if (gatewayProcess) gatewayProcess.removeListener('exit', onExit);
+    forceKillAndQuit();
+  });
+  req.end();
 });

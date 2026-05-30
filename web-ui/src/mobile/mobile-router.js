@@ -2,19 +2,19 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell } from './mobile-shell.js';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-voice-live-update-fix';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderCreativePage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=xaitts8';
-import { renderMobileSettingsPage } from './mobile-settings.js';
+} from './mobile-pages.js?v=mobile-voice-live-update-fix';
+import { renderMobileSettingsPage } from './mobile-settings.js?v=mobile-voice-live-update-fix';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   searchMobileChatSessions,
-} from './mobile-api.js';
+} from './mobile-api.js?v=mobile-voice-live-update-fix';
 
 // Once a device has ever entered mobile mode (or completed pairing), this flag
 // is written to localStorage so we stay in mobile mode even when the URL loses
@@ -149,10 +149,30 @@ function render() {
           chat.attachments.mobile_default = [];
           chat.editingMessageIndex = -1;
         }
+        const voice = window.__pmVoice;
+        if (voice && typeof voice === 'object') {
+          voice.targetSessionId = 'mobile_default';
+          voice.targetSessionLabel = 'Mobile - New Chat';
+          voice.targetSessionChannel = 'mobile';
+          voice.targetSessionForced = true;
+          voice.pendingInterruptContext = null;
+          voice.lastInterruptionEvent = null;
+          if (voice.activeVoiceRuntime) voice.activeVoiceRuntime.isStreamActive = false;
+          voice.activeVoiceRuntime = null;
+        }
       } catch {}
+      invalidateMobileDrawerSessions('mobile');
       mobileNavigate('#mobile/chat');
     },
-    onOpenSession: (sessionId) => mobileNavigate(`#mobile/chat/${encodeURIComponent(sessionId)}`),
+    onOpenSession: (sessionId) => {
+      const picker = window.__pmVoiceTargetPicker;
+      if (typeof picker === 'function') {
+        window.__pmVoiceTargetPicker = null;
+        picker(sessionId);
+      } else {
+        mobileNavigate(`#mobile/chat/${encodeURIComponent(sessionId)}`);
+      }
+    },
     loadSessions: loadMobileSessionGroups,
     searchSessions: searchMobileChatSessions,
   });

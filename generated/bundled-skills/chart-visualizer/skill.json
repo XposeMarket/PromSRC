@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "name": "Chart Visualizer",
+  "description": "Render live Chart.js charts directly in chat using fenced chart blocks for bar, line, pie/doughnut, scatter, radar, bubble, comparison, trend, and metrics visualizations.",
+  "version": "1.0.0",
+  "triggers": [
+    "chart",
+    "graph",
+    "plot",
+    "bar chart",
+    "line chart",
+    "pie chart",
+    "doughnut chart",
+    "scatter plot",
+    "radar chart",
+    "bubble chart",
+    "visualize data",
+    "chart this data",
+    "plot this data",
+    "trend over time",
+    "compare metrics",
+    "metrics chart",
+    "data visualization",
+    "show me a graph"
+  ],
+  "categories": [
+    "visualization",
+    "charts",
+    "data-analysis",
+    "interactive-output"
+  ],
+  "requiredTools": [
+    "skill_read"
+  ],
+  "toolBinding": {
+    "requiredTools": [
+      "skill_read"
+    ],
+    "recommendedToolCategories": [],
+    "defaultWorkflow": [
+      "Read chart-visualizer.",
+      "Choose the correct Chart.js chart type.",
+      "Output one fenced chart block containing only the Chart.js config object."
+    ],
+    "canSpawnSubagents": false
+  },
+  "permissions": {
+    "workspaceWrite": false,
+    "externalSideEffects": false
+  },
+  "id": "chart-visualizer"
+}
