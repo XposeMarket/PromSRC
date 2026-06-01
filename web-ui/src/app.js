@@ -22,7 +22,7 @@ export function getInitialTheme() {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved === 'light' || saved === 'dark') return saved;
   } catch {}
-  return 'light';
+  return 'dark';
 }
 
 export function applyTheme(theme) {

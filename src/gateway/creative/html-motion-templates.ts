@@ -993,7 +993,7 @@ const podcastEpisodePromo: HtmlMotionTemplate = {
     { id: 'show', label: 'Show name', example: 'Ship It Weekly' },
     { id: 'episode', label: 'Episode number', example: 'EP. 042' },
     { id: 'title', label: 'Episode title', example: 'Inside the motion template engine' },
-    { id: 'host', label: 'Host(s)', example: 'with Mira Chen & Raul' },
+    { id: 'host', label: 'Host(s)', example: 'with Mira Chen & Alex' },
     { id: 'cta', label: 'CTA', example: 'Listen on Spotify, Apple, YouTube' },
   ],
   optionalInputs: [],
@@ -1001,7 +1001,7 @@ const podcastEpisodePromo: HtmlMotionTemplate = {
     const show = escapeHtml(pick(input, 'show', 'Ship It Weekly'));
     const episode = escapeHtml(pick(input, 'episode', 'EP. 042'));
     const title = escapeHtml(pick(input, 'title', 'Inside the motion template engine'));
-    const host = escapeHtml(pick(input, 'host', 'with Mira Chen & Raul'));
+    const host = escapeHtml(pick(input, 'host', 'with Mira Chen & Alex'));
     const cta = escapeHtml(pick(input, 'cta', 'Listen on Spotify, Apple, YouTube'));
     const bars = Array.from({ length: 32 }, (_, i) => i);
     return `<!doctype html><html><head><meta charset="utf-8"><style>

@@ -1,6 +1,7 @@
 import { browserVisionScreenshot } from './browser-tools.js';
 import {
   desktopScreenshotWithHistory,
+  desktopWindowScreenshot,
   getDesktopAdvisorPacket,
   parseDesktopScreenshotToolArgs,
 } from './desktop-tools.js';
@@ -31,8 +32,20 @@ export async function executeDeliverySendScreenshot(
     mimeType = shot.mimeType || 'image/jpeg';
   } else if (source === 'desktop_new' || source === 'desktop_last') {
     if (source === 'desktop_new') {
-      const options = parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined);
-      const capture = await desktopScreenshotWithHistory(sessionId, options);
+      const hasWindowTarget = !!(
+        String(args?.name || '').trim()
+        || (Number.isFinite(Number(args?.handle)) && Number(args?.handle) > 0)
+        || args?.active === true
+      );
+      const capture = hasWindowTarget
+        ? await desktopWindowScreenshot(sessionId, {
+          name: args?.name == null ? undefined : String(args.name),
+          handle: args?.handle == null ? undefined : Number(args.handle),
+          active: args?.active === true,
+          focus_first: args?.focus_first == null ? undefined : args.focus_first !== false,
+          padding: args?.padding == null ? undefined : Number(args.padding),
+        })
+        : await desktopScreenshotWithHistory(sessionId, parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined));
       if (capture.startsWith('ERROR')) return { result: capture, error: true };
     }
     const packet = getDesktopAdvisorPacket(sessionId);
@@ -40,7 +53,7 @@ export async function executeDeliverySendScreenshot(
       return { result: 'ERROR: No desktop screenshot available. Call desktop_screenshot first or use source="desktop_new".', error: true };
     }
     imageBuffer = Buffer.from(packet.screenshotBase64, 'base64');
-    mimeType = 'image/jpeg';
+    mimeType = packet.screenshotMime || 'image/png';
   } else if (source === 'file') {
     const file = readAttachmentBuffer(String(args?.path || args?.file || args?.attachmentPath || ''), workspacePath);
     imageBuffer = file.buffer;

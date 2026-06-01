@@ -47,7 +47,8 @@ export interface ApprovalRecord {
     devEditId?: string;
     allowedFiles: string[];
     verificationCommand?: string;
-    verificationProfile?: 'backend_build' | 'webui_sync_check' | 'full_build' | 'none';
+    verificationProfile?: 'backend_build' | 'webui_sync_check' | 'full_build' | 'route_smoke' | 'desktop_ui_smoke' | 'mobile_ui_smoke' | 'none';
+    verificationProfiles?: Array<'backend_build' | 'webui_sync_check' | 'full_build' | 'route_smoke' | 'desktop_ui_smoke' | 'mobile_ui_smoke' | 'none'>;
     reason?: string;
     planHash?: string;
     plan?: {

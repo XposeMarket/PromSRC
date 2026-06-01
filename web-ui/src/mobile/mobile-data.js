@@ -6,10 +6,10 @@ export const chatMessages = [
     time: '9:30 AM',
     body: {
       sender: 'Prometheus',
-      text: 'Good morning, Raul.\nHere’s your operator snapshot for today.',
+      text: 'Good morning.\nHere’s your operator snapshot for today.',
       summary: [
         { icon: 'calendar', title: '3 schedules today', subtitle: 'Brain Dream, Weekly Radar, Team Standup' },
-        { icon: 'users',    title: '2 team updates',  subtitle: 'Daily X Bookmark, Xpose Market Group' },
+        { icon: 'users',    title: '2 team updates',  subtitle: 'Daily Signal Radar, Growth Team' },
         { icon: 'clipboard', title: '7 tasks need attention', subtitle: 'Across 3 teams and 2 subagents' },
       ],
     },
@@ -37,7 +37,7 @@ export const chatMessages = [
       text: 'Here’s a quick team update summary:',
       teamRows: [
         { icon: '🏠', name: 'Daily X Bookmark',  detail: 'All runs healthy. 4 subagents active.' },
-        { icon: '🏠', name: 'Xpose Market Group', detail: '2 proposals in review. 1 awaiting approval.' },
+        { icon: '🏠', name: 'Growth Team', detail: '2 proposals in review. 1 awaiting approval.' },
       ],
     },
   },
@@ -105,11 +105,11 @@ export const mobileSchedules = [
   {
     id: 'daily-x-radar',
     emoji: '📡',
-    name: 'Daily X Signal Radar — Collector',
+    name: 'Daily Signal Radar — Collector',
     color: 'green',
     status: 'active',
     enabled: true,
-    description: 'You are running the Daily X Signal Radar collector for Raul.',
+    description: 'You are running the Daily Signal Radar collector for the user.',
     next: '5/14/2026, 9:30:00 PM',
     last: '5/13/2026, 10:16:09 PM',
     assignedTo: 'schedule_daily-x-signal-radar-collector_di871',
@@ -119,7 +119,7 @@ export const mobileSchedules = [
 export const mobileTeams = [
   { id: 'oss-competitive-analysis', name: 'OSS Competitive Analysis', agents: 5, house: 'brown', featured: false },
   { id: 'daily-x-bookmark',          name: 'Daily X Bookmark → Prometheus Feature Pipeline', agents: 4, house: 'blue',  featured: true },
-  { id: 'xpose-market-group',        name: 'Xpose Market Group', agents: 6, house: 'brown', featured: false },
+  { id: 'growth-team',              name: 'Growth Team', agents: 6, house: 'brown', featured: false },
   { id: 'committee',                 name: 'Committee', agents: 3, house: 'brown', featured: false },
 ];
 
@@ -139,7 +139,7 @@ export const mobileTeamDetail = {
       { id: 'analyst_xb',    name: 'analyst_xb…',     color: '#a06bd6', avatar: '✨' },
     ],
     purpose:
-      'Run a daily X Bookmark → Prometheus Feature Pipeline for Raul. Use Raul’s logged-in X browser session to collect up to 50 recent X bookmarks/day, triage up to 15 viable Prometheus-relevant ideas/day, deep research 3–8 of the triaged candidates/day depending on signal quality, map the strongest researched ideas into exact source-grounded Prometheus implementation plans, and prepare/create 3–5 manager-selected proposal candidates/day when quality is high enough.',
+      'Run a daily saved-signal → Prometheus Feature Pipeline for the user. Use user-approved sources to collect up to 50 recent saved items/day, triage up to 15 viable Prometheus-relevant ideas/day, deep research 3–8 of the triaged candidates/day depending on signal quality, map the strongest researched ideas into clear product notes, and prepare 3–5 manager-selected proposal candidates/day when quality is high enough.',
     currentTask:
       'Finalize queued manager inbox outcomes for 2026-05-08 lane; validate corrected Ari artifacts; preserve root-source visibility blocker and pending owner go/no-go on artifact-to-proposal escalation.',
     lastRun: '7d ago',

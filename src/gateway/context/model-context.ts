@@ -116,6 +116,48 @@ export function estimateMessagesTokensForModel(messages: Array<any> | undefined,
   }, 0);
 }
 
+export function estimateMessageTokenBreakdownForModel(
+  messages: Array<any> | undefined,
+  profile: Pick<ModelContextProfile, 'tokenizer'>,
+): {
+  totalTokens: number;
+  messageCount: number;
+  byRole: Record<string, number>;
+  largestMessages: Array<{ index: number; role: string; tokens: number; chars: number; toolName?: string }>;
+} {
+  if (!Array.isArray(messages)) return { totalTokens: 0, messageCount: 0, byRole: {}, largestMessages: [] };
+  const byRole: Record<string, number> = {};
+  const largestMessages: Array<{ index: number; role: string; tokens: number; chars: number; toolName?: string }> = [];
+  let totalTokens = 0;
+  messages.forEach((msg: any, index) => {
+    const roleText = String(msg?.role || 'unknown');
+    const content = Array.isArray(msg?.content)
+      ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n')
+      : String(msg?.content || '');
+    const toolCalls = Array.isArray(msg?.tool_calls) ? JSON.stringify(msg.tool_calls) : '';
+    const tokens = estimateTextTokensForModel(roleText, profile.tokenizer)
+      + estimateTextTokensForModel(content, profile.tokenizer)
+      + estimateTextTokensForModel(toolCalls, profile.tokenizer)
+      + 6;
+    totalTokens += tokens;
+    byRole[roleText] = (byRole[roleText] || 0) + tokens;
+    largestMessages.push({
+      index,
+      role: roleText,
+      tokens,
+      chars: content.length + toolCalls.length,
+      toolName: msg?.tool_name ? String(msg.tool_name).slice(0, 80) : undefined,
+    });
+  });
+  largestMessages.sort((a, b) => b.tokens - a.tokens);
+  return {
+    totalTokens,
+    messageCount: messages.length,
+    byRole,
+    largestMessages: largestMessages.slice(0, 5),
+  };
+}
+
 export function selectModelInfoForContextProfile(models: ModelInfo[] | undefined, model: string): ModelInfo | undefined {
   if (!Array.isArray(models) || !models.length) return undefined;
   const wanted = String(model || '').trim().toLowerCase();

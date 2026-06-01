@@ -6,8 +6,8 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#f7f1e6",
-  "theme_color": "#ea6a1f",
+  "background_color": "#101112",
+  "theme_color": "#1d150e",
   "description": "Prometheus mobile — your remote control, approval center, and field companion.",
   "categories": ["productivity", "utilities"],
   "icons": [

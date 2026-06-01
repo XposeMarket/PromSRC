@@ -78,10 +78,15 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
     : undefined;
   const workspacePath = getWorkspace(runtime.sessionId) || process.cwd();
   const fileChanges = collectTurnFileChangesFromProcessEntries(processEntries, workspacePath);
+  const workStartedAt = Number(runtime.startedAt || 0) || Date.now();
+  const workEndedAt = Number(runtime.interruptedAt || runtime.updatedAt || Date.now()) || Date.now();
   addMessage(runtime.sessionId, {
     role: 'assistant',
     content,
-    timestamp: Date.now(),
+    timestamp: workEndedAt,
+    workStartedAt,
+    workEndedAt,
+    workDurationMs: Math.max(0, workEndedAt - workStartedAt),
     channel: runtime.source as any,
     channelLabel: runtime.source || 'system',
     processEntries: processEntries.length ? processEntries : undefined,

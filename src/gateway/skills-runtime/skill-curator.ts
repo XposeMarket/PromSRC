@@ -68,6 +68,26 @@ export interface SkillCuratorAuditedChange {
   reason?: string;
 }
 
+export interface SkillCuratorActivityItem {
+  id: string;
+  timestamp: string;
+  source: 'ledger' | 'gardener';
+  status: 'applied' | 'observed';
+  skillId?: string;
+  title: string;
+  summary: string;
+  changeType?: string;
+  appliedBy?: string;
+  risk?: 'low' | 'medium' | 'high';
+  changedPaths: string[];
+  evidence: string[];
+  reason?: string;
+  requestExcerpt?: string;
+  finalResponseExcerpt?: string;
+  suggestedAction?: string;
+  toolSequence?: string[];
+}
+
 type CandidateRow = {
   id?: string;
   timestamp?: string;
@@ -219,6 +239,83 @@ function auditSkillChange(row: SkillChangeLedgerEntry): SkillCuratorAuditedChang
     changedPaths,
     evidence,
     reason: row.reason,
+  };
+}
+
+function isBrainAppliedBy(value: string): boolean {
+  return /^(brain_|skill_curator$|curator$|gardener$|thought$|dream$)/i.test(String(value || '').trim());
+}
+
+function activityRisk(value: unknown): 'low' | 'medium' | 'high' | undefined {
+  const risk = String(value || '').toLowerCase();
+  if (risk === 'low' || risk === 'medium' || risk === 'high') return risk;
+  return undefined;
+}
+
+function buildLedgerActivity(row: SkillChangeLedgerEntry): SkillCuratorActivityItem {
+  const changedPaths = Array.isArray(row.changedPaths) ? row.changedPaths.map(String).filter(Boolean) : [];
+  const evidence = Array.isArray(row.evidence) ? row.evidence.map(String).filter(Boolean) : [];
+  const appliedBy = String(row.appliedBy || 'skill_manager');
+  const changeType = String(row.changeType || 'skill_update');
+  const title = `${row.skillId || 'unknown skill'} ${changeType.replace(/[_-]+/g, ' ')}`;
+  const summary = row.reason
+    || (isBrainAppliedBy(appliedBy)
+      ? 'Brain applied a skill update from observed Thought/Dream evidence.'
+      : 'Skill change recorded in the maintenance ledger.');
+  return {
+    id: suggestionId({
+      activity: 'ledger',
+      timestamp: row.timestamp,
+      skillId: row.skillId,
+      changeType: row.changeType,
+      afterHash: row.afterHash,
+      changedPaths,
+    }),
+    timestamp: row.timestamp,
+    source: 'ledger',
+    status: 'applied',
+    skillId: row.skillId,
+    title,
+    summary,
+    changeType,
+    appliedBy,
+    changedPaths,
+    evidence,
+    reason: row.reason,
+  };
+}
+
+function buildGardenerActivity(row: CandidateRow): SkillCuratorActivityItem {
+  const skillId = String(row.skillId || '').trim() || undefined;
+  const type = String(row.type || 'observation');
+  const title = skillId
+    ? `${skillId} ${type.replace(/[_-]+/g, ' ')}`
+    : `Gardener ${type.replace(/[_-]+/g, ' ')}`;
+  const summary = String(row.suggestedAction || row.reason || row.requestExcerpt || 'Thought/Gardener captured a reusable skill signal.').trim();
+  return {
+    id: suggestionId({
+      activity: 'gardener',
+      id: row.id,
+      timestamp: row.timestamp || row.date,
+      skillId,
+      type,
+      suggestedAction: row.suggestedAction,
+    }),
+    timestamp: String(row.timestamp || row.date || ''),
+    source: 'gardener',
+    status: 'observed',
+    skillId,
+    title,
+    summary,
+    changeType: type,
+    risk: activityRisk(row.risk),
+    changedPaths: Array.isArray(row.touchedPaths) ? row.touchedPaths.map(String).filter(Boolean) : [],
+    evidence: Array.isArray(row.evidence) ? row.evidence.map(String).filter(Boolean) : [],
+    reason: row.reason,
+    requestExcerpt: row.requestExcerpt,
+    finalResponseExcerpt: row.finalResponseExcerpt,
+    suggestedAction: row.suggestedAction,
+    toolSequence: Array.isArray(row.toolSequence) ? row.toolSequence.map(String).filter(Boolean) : [],
   };
 }
 
@@ -619,6 +716,30 @@ function dedupeIncomingSuggestions(incoming: SkillCuratorSuggestion[]): SkillCur
 
 export function listSkillCuratorSuggestions(workspacePath: string): SkillCuratorSuggestion[] {
   return readJsonArray<SkillCuratorSuggestion>(suggestionsPath(workspacePath));
+}
+
+export function listSkillCuratorActivity(
+  workspacePath: string,
+  skillsManager: SkillsManager,
+  options?: { days?: number; limit?: number },
+): SkillCuratorActivityItem[] {
+  const days = Math.max(1, Math.floor(Number(options?.days) || 14));
+  const limit = Math.max(1, Math.floor(Number(options?.limit) || 160));
+  const ledgerLimit = Math.max(limit, 250);
+  const ledger = recentSkillChangeRows(skillsManager, days, ledgerLimit)
+    .map(buildLedgerActivity);
+  const observed = recentCandidateRows(workspacePath, days)
+    .filter((row) => row.type !== 'no_action_but_record_episode' || row.confidence !== 'low')
+    .map(buildGardenerActivity);
+
+  const byId = new Map<string, SkillCuratorActivityItem>();
+  for (const item of [...ledger, ...observed]) {
+    if (!item.timestamp) continue;
+    byId.set(item.id, item);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
+    .slice(0, limit);
 }
 
 export function rejectSkillCuratorSuggestion(workspacePath: string, id: string): SkillCuratorSuggestion | null {

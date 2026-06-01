@@ -225,6 +225,38 @@ export function createPendingRequest(input: {
   return req;
 }
 
+export function findRequestForChallengeClaim(input: {
+  challengeId: string;
+  deviceFingerprint: string;
+  userAgent: string;
+  ipHint: string;
+}): PairingPendingRequest | null {
+  _load(); _sweep();
+  const challengeId = String(input.challengeId || '');
+  const deviceFingerprint = String(input.deviceFingerprint || '').slice(0, 120);
+  const userAgent = String(input.userAgent || '').slice(0, 240);
+  const ipHint = String(input.ipHint || '').slice(0, 80);
+
+  for (const req of _requests.values()) {
+    if (req.challengeId !== challengeId || req.status === 'expired') continue;
+
+    // Normal browsers keep a stable localStorage fingerprint, so exact
+    // fingerprint match is enough to make claim retries idempotent. If storage
+    // is unavailable, fall back to the same user-agent + IP hint.
+    if (deviceFingerprint && deviceFingerprint !== 'unknown' && req.deviceFingerprint === deviceFingerprint) {
+      return req;
+    }
+    if ((!deviceFingerprint || deviceFingerprint === 'unknown')
+        && req.deviceFingerprint === deviceFingerprint
+        && req.userAgent === userAgent
+        && req.ipHint === ipHint) {
+      return req;
+    }
+  }
+
+  return null;
+}
+
 export function getPendingRequest(id: string): PairingPendingRequest | null {
   _load(); _sweep();
   return _requests.get(id) || null;

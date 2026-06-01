@@ -445,13 +445,62 @@ export function buildVisualSrcdoc(lang, code, isDark) {
 <\/head><body>${code}<\/body><\/html>`;
 }
 
+function escapeAttr(value) {
+  return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function buildPartialHtmlPreviewCode(partialCode) {
+  let code = String(partialCode || '');
+  const completedStyles = [...code.matchAll(/<style\b[^>]*>[\s\S]*?<\/style\s*>/ig)].map((match) => match[0]).join('');
+
+  const bodyMatch = code.match(/<body\b[^>]*>/i);
+  if (bodyMatch && typeof bodyMatch.index === 'number') {
+    code = completedStyles + code.slice(bodyMatch.index + bodyMatch[0].length);
+  } else {
+    code = code
+      .replace(/^\s*<!doctype[^>]*>\s*/i, '')
+      .replace(/<\/?html\b[^>]*>/gi, '')
+      .replace(/<head\b[\s\S]*?<\/head\s*>/gi, completedStyles);
+  }
+
+  code = code
+    .replace(/<\/body\s*>[\s\S]*$/i, '')
+    .replace(/<\/html\s*>/gi, '');
+
+  for (const tag of ['script', 'style']) {
+    const openRe = new RegExp(`<${tag}\\b[^>]*>`, 'ig');
+    const closeRe = new RegExp(`</${tag}\\s*>`, 'ig');
+    const opens = [...code.matchAll(openRe)];
+    const closes = [...code.matchAll(closeRe)];
+    const lastOpen = opens.length ? opens[opens.length - 1] : null;
+    const lastClose = closes.length ? closes[closes.length - 1] : null;
+    if (lastOpen && (!lastClose || lastClose.index < lastOpen.index)) {
+      code = code.slice(0, lastOpen.index);
+    }
+  }
+
+  code = code.replace(/<!--[\s\S]*$/, '');
+  return code.trim();
+}
+
+function buildPartialHtmlSrcdoc(partialCode, isDark) {
+  const previewCode = buildPartialHtmlPreviewCode(partialCode);
+  const textColor = isDark ? '#cbd5e1' : '#334155';
+  const mutedColor = isDark ? '#94a3b8' : '#64748b';
+  const bg = isDark ? 'rgba(15,23,42,0.16)' : 'rgba(248,250,252,0.62)';
+  const emptyState = `<div style="min-height:280px;display:flex;align-items:center;justify-content:center;color:${mutedColor};font:12px system-ui,sans-serif;background:${bg}">Assembling visual canvas...<\/div>`;
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>*{box-sizing:border-box}html,body{margin:0;min-height:280px;background:transparent!important;color:${textColor};font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}body{min-height:280px}script{display:none!important}<\/style>
+<\/head><body>${previewCode || emptyState}<\/body><\/html>`;
+}
+
 export function buildVisualIframe(lang, code) {
   const id = 'vis_' + Math.random().toString(36).slice(2);
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
   const srcdoc = buildVisualSrcdoc(lang, code, isDark);
-  const encoded = srcdoc.replace(/"/g, '&quot;');
+  const encoded = escapeAttr(srcdoc);
   const escapedLang = lang.replace(/"/g, '');
-  const escapedCode = code.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const escapedCode = escapeAttr(code);
   const minHeight = 280;
   const onloadHandler = "(function(f){try{var h=f.contentDocument.documentElement.scrollHeight;if(h>60)f.style.minHeight=Math.min(h+16,700)+'px'}catch(e){}})(this)";
   return `<div class="visual-block" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" style="margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
@@ -473,13 +522,14 @@ function buildPartialVisual(lang, partialCode) {
 
   // HTML is browser-forgiving — render partial code live for piece-by-piece effect
   if (lang === 'html' && partialCode.trim().length > 10) {
-    const srcdoc = buildVisualSrcdoc(lang, partialCode, isDark);
-    const encoded = srcdoc.replace(/"/g, '&quot;');
+    const srcdoc = buildPartialHtmlSrcdoc(partialCode, isDark);
+    const encoded = escapeAttr(srcdoc);
     const overlayBg = isDark ? 'rgba(18,25,38,0.80)' : 'rgba(248,250,252,0.82)';
     const overlayText = isDark ? '#94a3b8' : '#64748b';
+    const onloadHandler = "(function(f){try{var h=f.contentDocument.documentElement.scrollHeight;if(h>60)f.style.minHeight=Math.min(h+16,700)+'px'}catch(e){}})(this)";
     return `<div class="visual-block" style="margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line);position:relative">
   <style>@keyframes vis-blink{0%,100%{opacity:.25}50%{opacity:1}}</style>
-  <iframe srcdoc="${encoded}" sandbox="allow-scripts allow-same-origin" style="width:100%;min-height:280px;border:none;display:block;background:transparent" loading="eager"></iframe>
+  <iframe srcdoc="${encoded}" sandbox="allow-scripts allow-same-origin" style="width:100%;min-height:280px;border:none;display:block;background:transparent" loading="eager" onload="${onloadHandler}"></iframe>
   <div style="position:absolute;top:8px;right:8px;background:${overlayBg};border:1px solid rgba(99,102,241,.35);border-radius:6px;padding:3px 10px;font-size:10px;color:${overlayText};font-family:sans-serif;display:flex;align-items:center;gap:6px;backdrop-filter:blur(4px);pointer-events:none">
     <span style="width:6px;height:6px;border-radius:50%;background:#6366f1;display:inline-block;animation:vis-blink .75s ease-in-out infinite"></span>Building…
   </div>

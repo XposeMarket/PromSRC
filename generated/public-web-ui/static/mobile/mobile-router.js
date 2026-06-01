@@ -2,13 +2,13 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-voice-live-update-fix';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=liquid-glass-tabbar';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderCreativePage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=mobile-voice-live-update-fix';
+} from './mobile-pages.js?v=mobile-abort-button';
 import { renderMobileSettingsPage } from './mobile-settings.js?v=mobile-voice-live-update-fix';
 import {
   getDeviceToken,
@@ -36,6 +36,10 @@ export function clearForceMobile() {
 function isMobileRoute() {
   const h = (window.location.hash || '').replace(/^#/, '');
   const p = window.location.pathname || '';
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    if (q.get('desktop') === '1' || q.get('mode') === 'desktop') return false;
+  } catch {}
   if (h.startsWith('mobile') || p === '/mobile' || p.startsWith('/mobile/')) return true;
   try {
     const q = new URLSearchParams(window.location.search || '');

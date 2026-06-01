@@ -7,6 +7,7 @@ function normalizeFlag(value: unknown): string {
 
 const PUBLIC_BUILD_DISABLED_TOOL_NAMES = new Set([
   'read_source',
+  'read_dev_sources',
   'list_source',
   'source_stats',
   'src_stats',
@@ -41,6 +42,10 @@ const PUBLIC_BUILD_DISABLED_TOOL_NAMES = new Set([
 	  'gateway_restart',
   'self_update',
   'request_dev_source_edit',
+  'update_dev_source_edit',
+  'await_dev_source_edit_approval',
+  'apply_dev_source_patchset',
+  'prom_apply_dev_changes',
 ]);
 
 const PUBLIC_BUILD_DISABLED_TOOL_CATEGORIES = new Set([

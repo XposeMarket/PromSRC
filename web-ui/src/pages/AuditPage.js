@@ -36,6 +36,51 @@ function inferRunKind(sessionId, agentId) {
   return 'Agent Run';
 }
 
+function getLifecycleId(entry) {
+  const args = entry?.toolArgs && typeof entry.toolArgs === 'object' ? entry.toolArgs : {};
+  return String(args.approvalId || args.approval_id || args.proposalId || args.proposal_id || args.dev_edit_id || args.devEditId || '').trim();
+}
+
+function isLifecycleEntry(entry) {
+  const action = String(entry?.actionType || '').toLowerCase();
+  const tool = String(entry?.toolName || '').toLowerCase();
+  return action === 'approval_requested'
+    || action === 'approval_resolved'
+    || tool.startsWith('proposal_')
+    || tool === 'request_dev_source_edit';
+}
+
+function inferLifecycleKind(entry) {
+  const action = String(entry?.actionType || '').toLowerCase();
+  const tool = String(entry?.toolName || '').toLowerCase();
+  const status = String(entry?.approvalStatus || '').toLowerCase();
+  if (tool === 'request_dev_source_edit') {
+    if (action === 'approval_requested') return 'Prom Dev Edit Plan';
+    if (status === 'approved') return 'Prom Dev Edit Approved';
+    if (status === 'rejected') return 'Prom Dev Edit Rejected';
+    return 'Prom Dev Edit';
+  }
+  if (tool === 'proposal_created') return 'Proposal Created';
+  if (tool === 'proposal_dispatch') return 'Proposal Executor Started';
+  if (tool === 'proposal_status') {
+    const proposalStatus = String(entry?.toolArgs?.status || '').toLowerCase();
+    if (proposalStatus === 'executing') return 'Proposal Executing';
+    if (proposalStatus === 'repairing') return 'Proposal Repairing';
+    if (proposalStatus === 'executed') return 'Proposal Executed';
+    if (proposalStatus === 'failed') return 'Proposal Failed';
+    if (proposalStatus) return `Proposal ${toTitleCase(proposalStatus)}`;
+    return 'Proposal Status';
+  }
+  if (tool === 'proposal_lifecycle' || tool === 'proposal_approved' || tool === 'proposal_denied') {
+    if (status === 'approved') return 'Proposal Approved';
+    if (status === 'rejected') return 'Proposal Rejected';
+    return 'Proposal Decision';
+  }
+  if (action === 'approval_requested') return 'Approval Requested';
+  if (action === 'approval_resolved') return status === 'rejected' ? 'Approval Rejected' : 'Approval Approved';
+  return 'Lifecycle Event';
+}
+
 function deriveAgentName(agentId, sessionId) {
   const aid = String(agentId || '').trim();
   if (aid && aid.toLowerCase() !== 'unknown' && aid.toLowerCase() !== 'main') return aid;
@@ -68,26 +113,59 @@ function classifyToolAction(toolName, actionType) {
   return 'other';
 }
 
-function getRunKey(entry) {
+function getRunKey(entry, segmentId = 'main') {
   const sid = String(entry.sessionId || '').trim();
-  if (sid) return sid;
+  if (sid) return segmentId === 'main' ? sid : `${sid}::${segmentId}`;
   const aid = deriveAgentName(entry.agentId, entry.sessionId);
-  return `${aid}:${String(entry.timestamp || '').slice(0, 13)}`;
+  return `${aid}:${String(entry.timestamp || '').slice(0, 13)}::${segmentId}`;
 }
 
 function buildRunRows(entries) {
   const rows = new Map();
-  for (const e of entries) {
-    const key = getRunKey(e);
+  const sorted = entries.slice().sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+  const sessionSegments = new Map();
+
+  for (const e of sorted) {
+    const sid = String(e.sessionId || '').trim() || 'unknown';
+    if (!sessionSegments.has(sid)) sessionSegments.set(sid, { segment: 'before-approval', label: 'Tool Stream Before Approval', approvals: 0 });
+    const state = sessionSegments.get(sid);
+
+    if (isLifecycleEntry(e)) {
+      const lifecycleId = getLifecycleId(e) || String(e.timestamp || '');
+      const key = `lifecycle::${sid}::${String(e.toolName || e.actionType || 'event')}::${lifecycleId}::${String(e.timestamp || '')}`;
+      rows.set(key, {
+        key,
+        sessionId: sid,
+        agentId: deriveAgentName(e.agentId, e.sessionId),
+        kind: inferLifecycleKind(e),
+        startedAt: e.timestamp,
+        endedAt: e.timestamp,
+        tools: [e],
+        isLifecycle: true,
+      });
+
+      if (String(e.actionType || '').toLowerCase() === 'approval_resolved' && String(e.approvalStatus || '').toLowerCase() === 'approved') {
+        state.approvals += 1;
+        const label = String(e.toolName || '').toLowerCase() === 'request_dev_source_edit'
+          ? 'Tool Stream After Dev Edit Approval'
+          : 'Tool Stream After Approval';
+        state.segment = `after-approval-${state.approvals}`;
+        state.label = label;
+      }
+      continue;
+    }
+
+    const key = getRunKey(e, state.segment);
     if (!rows.has(key)) {
       rows.set(key, {
         key,
         sessionId: String(e.sessionId || ''),
         agentId: deriveAgentName(e.agentId, e.sessionId),
-        kind: inferRunKind(e.sessionId, e.agentId),
+        kind: state.segment === 'before-approval' ? inferRunKind(e.sessionId, e.agentId) : state.label,
         startedAt: e.timestamp,
         endedAt: e.timestamp,
         tools: [],
+        isLifecycle: false,
       });
     }
     const run = rows.get(key);
@@ -117,8 +195,58 @@ function computeRunStatus(tools) {
 function nonMainEntry(e) {
   const aid = String(e.agentId || '').toLowerCase();
   if (aid && aid !== 'main' && aid !== 'unknown') return true;
+  if (isLifecycleEntry(e)) return true;
   const sid = String(e.sessionId || '');
   return sid.startsWith('team_') || sid.startsWith('task_') || sid.startsWith('bg_') || sid.startsWith('proposal_') || sid.startsWith('cron_') || sid.startsWith('schedule_') || sid.startsWith('meta_');
+}
+
+function formatStructuredValue(value, maxLen = 1200) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value.length > maxLen ? `${value.slice(0, maxLen)}...` : value;
+  try {
+    const text = JSON.stringify(value, null, 2);
+    return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
+  } catch {
+    return String(value).slice(0, maxLen);
+  }
+}
+
+function renderAuditEntryDetails(t) {
+  const args = t.toolArgs && typeof t.toolArgs === 'object' ? t.toolArgs : {};
+  const tool = String(t.toolName || '').toLowerCase();
+  const blocks = [];
+
+  if (tool === 'request_dev_source_edit') {
+    if (args.reason) blocks.push(['Reason', args.reason]);
+    if (args.files) blocks.push(['Files', Array.isArray(args.files) ? args.files.join('\n') : args.files]);
+    if (args.plan) blocks.push(['Plan', args.plan]);
+    if (args.verification_command || args.verification_profile) {
+      blocks.push(['Verification', [args.verification_command, args.verification_profile].filter(Boolean).join('\n')]);
+    }
+  } else if (tool.startsWith('proposal_')) {
+    if (args.title) blocks.push(['Title', args.title]);
+    if (args.summary) blocks.push(['Summary', args.summary]);
+    if (args.details) blocks.push(['Plan / Details', args.details]);
+    if (args.executionSteps) blocks.push(['Execution Steps', args.executionSteps]);
+    if (args.affectedFiles) blocks.push(['Affected Files', args.affectedFiles]);
+    if (args.diffPreview) blocks.push(['Diff Preview', args.diffPreview]);
+  }
+
+  if (!blocks.length && Object.keys(args).length > 0) blocks.push(['Arguments', args]);
+  if (t.resultSummary) blocks.push(['Result', t.resultSummary]);
+  if (t.error) blocks.push(['Error', t.error]);
+
+  if (!blocks.length) return '';
+  return `<div style="grid-column:1 / -1;display:flex;flex-direction:column;gap:6px;margin-top:4px">
+    ${blocks.map(([label, value]) => {
+      const text = formatStructuredValue(value);
+      if (!text) return '';
+      return `<div style="border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:7px 8px">
+        <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px">${escHtml(label)}</div>
+        <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.45;color:var(--text)">${escHtml(text)}</pre>
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
 export async function loadAuditLog() {
@@ -214,6 +342,9 @@ function renderAuditTable() {
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map((x) => `${x[0]} (${x[1]})`).join(', ');
+    const rowSummary = run.isLifecycle
+      ? (run.tools[0]?.resultSummary || run.tools[0]?.toolArgs?.title || run.tools[0]?.toolArgs?.reason || topTools || 'Lifecycle event')
+      : (topTools || 'No tool names');
 
     html.push(`<tr style="border-bottom:1px solid var(--line);cursor:pointer" onclick="toggleAuditRow('${rowKey}')" title="Click to expand run tools">
       <td style="padding:7px 12px;white-space:nowrap;color:var(--muted)">
@@ -227,9 +358,9 @@ function renderAuditTable() {
       <td style="padding:7px 12px;white-space:nowrap">
         <span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:999px;text-transform:uppercase;letter-spacing:0.05em;${style}">${escHtml(runStatus)}</span>
       </td>
-      <td style="padding:7px 12px;font-size:11px;color:var(--muted)">${toolsCount} tool${toolsCount === 1 ? '' : 's'}</td>
+      <td style="padding:7px 12px;font-size:11px;color:var(--muted)">${run.isLifecycle ? 'event' : `${toolsCount} tool${toolsCount === 1 ? '' : 's'}`}</td>
       <td style="padding:7px 12px;font-size:11px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(run.kind)}</td>
-      <td style="padding:7px 12px;font-size:11px;color:var(--muted);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(topTools || 'No tool names')}</td>
+      <td style="padding:7px 12px;font-size:11px;color:var(--muted);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(rowSummary)}">${escHtml(rowSummary)}</td>
     </tr>`);
 
     if (isExpanded) {
@@ -237,7 +368,7 @@ function renderAuditTable() {
         const action = classifyToolAction(t.toolName, t.actionType);
         const badgeStyle = actionStyle[action] || actionStyle.other;
         const ts = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const args = t.toolArgs ? escHtml(JSON.stringify(t.toolArgs).slice(0, 140)) : '';
+        const args = t.toolArgs ? escHtml(JSON.stringify(t.toolArgs).slice(0, 180)) : '';
         const result = escHtml(t.error || t.resultSummary || '—');
         return `<div style="display:grid;grid-template-columns:80px 190px 78px 1fr;gap:10px;padding:6px 8px;border-bottom:1px solid var(--line);font-size:11px">
           <div style="color:var(--muted)">${escHtml(ts)}</div>
@@ -247,6 +378,7 @@ function renderAuditTable() {
           </div>
           <div><span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;text-transform:uppercase;letter-spacing:0.05em;${badgeStyle}">${escHtml(action)}</span></div>
           <div style="color:${t.error ? 'var(--err)' : 'var(--muted)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${result}</div>
+          ${renderAuditEntryDetails(t)}
         </div>`;
       }).join('');
       html.push(`<tr><td colspan="6" style="padding:0;background:var(--panel-2)"><div style="padding:6px 0">${details}</div></td></tr>`);

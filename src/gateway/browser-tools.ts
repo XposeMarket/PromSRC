@@ -1821,7 +1821,41 @@ export async function browserDoctor(sessionId: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
   if (!session) {
-    warn('Session', 'no active browser session; call browser_open to create one');
+    warn('Session', 'no active browser session');
+    const metadata = registerBrowserSessionMetadata(resolved);
+    const identity = getStableBrowserIdentity(resolved, metadata);
+    const target = metadata.ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus';
+    const debugPort = metadata.ownerType === 'main'
+      ? (target === 'user' ? getUserChromeDebugPort() : getMainChromeDebugPort())
+      : getPersistentBrowserPort(identity);
+    const profileDir = metadata.ownerType === 'main'
+      ? (target === 'user'
+        ? getRealChromeProfileDir()
+        : (process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')))
+      : resolvePersistentBrowserProfileDir(identity, resolved, metadata);
+    try {
+      const chromePath = await findBrowserExecutableForPlaywright();
+      chromePath ? ok('Chrome executable', chromePath) : fail('Chrome executable', 'not found; configure CHROME_PATH or install Chrome/Chromium');
+      const portOpen = await isPortOpen(debugPort);
+      (portOpen ? ok : warn)('CDP port probe', `${debugPort}${portOpen ? ' responded' : ' is not responding yet; browser_open will launch Chrome'}`);
+      if (portOpen) {
+        try {
+          const pw = await getPW();
+          if (pw) {
+            const browser = await connectOverCDPWithTimeout(pw, debugPort, 3000);
+            await browser.close().catch(() => {});
+            ok('CDP attach', 'Playwright connected successfully');
+          }
+        } catch (err: any) {
+          fail('CDP attach', `${String(err?.message || err).split('\n')[0]} — restart the existing Chrome process for this profile/port`);
+        }
+      }
+      const profileExists = fs.existsSync(profileDir);
+      (profileExists ? ok : warn)('Chrome profile', `${profileDir}${profileExists ? '' : ' (will be created on browser_open)'}`);
+      ok('Next browser_open target', `${getBrowserProfileLabel(target)} on port ${debugPort}`);
+    } catch (err: any) {
+      fail('Launch readiness', err?.message || String(err));
+    }
     return lines.join('\n');
   }
 
@@ -2063,11 +2097,24 @@ async function getPW(): Promise<any | null> {
   }
 }
 
-async function isPortOpen(port: number): Promise<boolean> {
+async function isPortOpen(port: number, timeoutMs: number = 1500): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
   try {
-    const resp = await fetch(`http://localhost:${port}/json/version`);
+    const resp = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: controller.signal,
+      cache: 'no-store',
+    } as any);
     return resp.ok;
-  } catch { return false; }
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function connectOverCDPWithTimeout(pw: any, debugPort: number, timeoutMs: number = 5000): Promise<any> {
+  return await pw.chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, { timeout: timeoutMs });
 }
 
 function getMainChromeDebugPort(): number {
@@ -2216,11 +2263,18 @@ async function connectOrLaunchPersistentChrome(
 
   if (await isPortOpen(debugPort)) {
     try {
-      const browser = await pw.chromium.connectOverCDP(`http://localhost:${debugPort}`);
+      const browser = await connectOverCDPWithTimeout(pw, debugPort);
       console.log(`[Browser] Connected to Chrome on port ${debugPort} (${metadata.ownerType}, ${getBrowserProfileLabel(profileKind)}, profile: ${profileDir})`);
       return { browser, debugPort, profileDir, ownsBrowser: false, profileKind, browserTarget: profileKind };
     } catch (e: any) {
-      console.warn(`[Browser] Port ${debugPort} responded but CDP connect failed: ${e.message}`);
+      const message = String(e?.message || e);
+      console.warn(`[Browser] Port ${debugPort} responded but CDP connect failed: ${message}`);
+      throw new Error(
+        `Chrome debug port ${debugPort} is responding but Playwright could not attach within 5s. ` +
+        `This usually means the existing ${getBrowserProfileLabel(profileKind)} process is wedged. ` +
+        `Close Chrome for profile ${profileDir} or restart the browser target, then try browser_open again. ` +
+        `Details: ${message.split('\n')[0] || message}`
+      );
     }
   }
 
@@ -2246,7 +2300,7 @@ async function connectOrLaunchPersistentChrome(
     await new Promise(r => setTimeout(r, 500));
     if (!await isPortOpen(debugPort)) continue;
     try {
-      const browser = await pw.chromium.connectOverCDP(`http://localhost:${debugPort}`);
+      const browser = await connectOverCDPWithTimeout(pw, debugPort);
       console.log(`[Browser] Launched and connected to Chrome on port ${debugPort} (${metadata.ownerType}, ${getBrowserProfileLabel(profileKind)})`);
       return { browser, debugPort, profileDir, ownsBrowser: true, profileKind, browserTarget: profileKind };
     } catch {
@@ -2369,7 +2423,7 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
   await syncPageMetadata(session).catch(() => {});
   persistBrowserSessionRecord(session);
 
-  // Auto-handle OAuth popups (e.g. "Continue as Raul" Google sign-in dialog).
+  // Auto-handle OAuth popups (e.g. "Continue as <name>" Google sign-in dialog).
   // These appear as new pages in the context and are invisible to the DOM snapshot.
   // We click the primary confirm button automatically so the agent doesn't get stuck.
   context.on('page', async (popup: any) => {

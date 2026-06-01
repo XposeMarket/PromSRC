@@ -2,6 +2,7 @@ import express from 'express';
 import { getConfig } from '../../config/config.js';
 import { getValidToken, loadTokens } from '../../auth/openai-oauth.js';
 import { buildSystemPrompt, loadSkills } from '../../config/soul-loader.js';
+import { loadVoiceAgentMemory } from '../prompt-context.js';
 
 export const router = express.Router();
 
@@ -138,6 +139,7 @@ function buildRealtimeContextPack(): string {
     includeSoul: true,
     includeMemory: true,
   });
+  const voiceAgentMemory = loadVoiceAgentMemory(workspacePath);
 
   const bridgeContract = [
     '## Realtime Authority Boundary',
@@ -155,13 +157,15 @@ function buildRealtimeContextPack(): string {
     '- If the user says "do not respond until I say X", remember X as the wake phrase for this Realtime session.',
     '- If the user asks "what are you doing?" or "status", answer from current worker/process status when available.',
     '- If the user says "stop" or "cancel that", interrupt the active worker only when the intent is cancellation; otherwise stop speaking only.',
-    '- Preserve Prometheus tone: warm, direct, technically sharp, playful when natural, and deeply aligned with Raul.',
+    '- Preserve Prometheus tone: warm, direct, technically sharp, playful when natural, and deeply aligned with the user.',
   ].join('\n');
 
   const instructions = [
     '# Prometheus Realtime Context Pack',
     bridgeContract,
     voicePresenceRules,
+    voiceAgentMemory ? '## Voice Agent Memory' : '',
+    voiceAgentMemory,
     '## Canonical Prometheus Runtime Context',
     clampText(canonicalRuntime, 10000),
     '## Skill Catalog Digest',

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
@@ -37,25 +37,34 @@
   })();
 </script>
 <!-- F2: External CSS (replaces inline <style> block) -->
+<script>
+  (() => {
+    try {
+      const saved = localStorage.getItem('prometheus_theme');
+      document.documentElement.setAttribute('data-theme', saved === 'light' || saved === 'dark' ? saved : 'dark');
+    } catch {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
 <link rel="stylesheet" href="src/styles/fonts.css">
 <link rel="stylesheet" href="src/styles/base.css?v=sidebar-resize-fix">
 <link rel="stylesheet" href="src/styles/components.css">
 <link rel="stylesheet" href="src/styles/pages.css?v=skill-left-panel-cleanup">
 <link rel="stylesheet" href="src/styles/projects.css">
 <link rel="stylesheet" href="src/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="src/styles/mobile.css?v=session-last-message-sort">
+<link rel="stylesheet" href="src/styles/mobile.css?v=voice-glass-bottom-glow">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="theme-color" content="#ea6a1f" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#1d150e" media="(prefers-color-scheme: dark)">
-<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#1d150e">
+<meta name="color-scheme" content="dark light">
 <meta name="application-name" content="Prometheus">
 <meta name="mobile-web-app-capable" content="yes">
 
 <!-- iOS Add to Home Screen support -->
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Prometheus">
 <link rel="apple-touch-icon" href="/assets/Prometheus.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/assets/Prometheus.png">
@@ -106,14 +115,16 @@
       const hash = String(window.location.hash || '').replace(/^#/, '');
       const path = String(window.location.pathname || '');
       const params = new URLSearchParams(window.location.search || '');
-      const shouldBootMobile =
+      const forceDesktop = params.get('desktop') === '1' || params.get('mode') === 'desktop';
+      const shouldBootMobile = !forceDesktop && (
         hash.startsWith('mobile') ||
         path === '/mobile' ||
         path.startsWith('/mobile/') ||
         !!params.get('pair') ||
         params.get('source') === 'pwa' ||
         localStorage.getItem('pm_force_mobile') === '1' ||
-        !!localStorage.getItem('pm_device_token');
+        !!localStorage.getItem('pm_device_token')
+      );
 
       if (shouldBootMobile) {
         document.body.classList.add('pm-mobile-active');
@@ -2071,10 +2082,10 @@
     <button
       id="theme-toggle"
       class="icon-btn"
-      data-theme-state="light"
+      data-theme-state="dark"
       onclick="toggleTheme()"
-      title="Switch to dark mode"
-      aria-label="Toggle dark mode"
+      title="Switch to light mode"
+      aria-label="Switch to light mode"
     >
       <svg class="theme-icon sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <circle cx="12" cy="12" r="4"></circle>
@@ -2190,7 +2201,7 @@
           </button>
           <div id="chat-context-window-popover" class="chat-context-window-popover" hidden>
             <div class="chat-context-window-row chat-context-window-head">
-              <span>Next call estimate</span>
+              <span>Context window</span>
               <span id="chat-context-window-total">Loading...</span>
             </div>
             <div class="chat-context-window-track" aria-hidden="true">
@@ -6659,10 +6670,61 @@ window.saveSkillFromModal = saveSkillFromModal;
 
 // ---- Stop Button ----
 let currentAbortController = null;
+let stopGenerationReconcileTimer = null;
 
 function handleSendStop() {
   if (window._sessionThinking?.[window.activeChatSessionId]) stopGeneration();
   else { (window.sendChat || sendChat)(); }
+}
+
+function finishStoppedGenerationUI(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  delete window._sessionThinking?.[sid];
+  delete window._sessionAbortControllers?.[sid];
+  if (sid === window.activeChatSessionId) {
+    currentAbortController = null;
+    window.isThinking = false;
+    window.streamingSessionId = null;
+    setButtonState(false);
+    if (typeof window.syncActiveSessionRunState === 'function') window.syncActiveSessionRunState();
+    const input = document.getElementById('chat-input');
+    if (input) {
+      input.placeholder = 'Type a message... (Enter to send, Shift+Enter for newline)';
+      input.disabled = false;
+    }
+    if (typeof window.updateQueuedPromptUI === 'function') window.updateQueuedPromptUI();
+    if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
+    if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  }
+}
+
+function scheduleStoppedGenerationReconcile(sessionId, delayMs = 2500) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  if (stopGenerationReconcileTimer) clearTimeout(stopGenerationReconcileTimer);
+  stopGenerationReconcileTimer = setTimeout(async () => {
+    stopGenerationReconcileTimer = null;
+    const stillMarkedThinking = !!window._sessionThinking?.[sid];
+    if (!stillMarkedThinking) {
+      if (sid === window.activeChatSessionId) setButtonState(false);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/mobile/chat/runs/${encodeURIComponent(sid)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const data = res.ok ? await res.json() : null;
+      if (data?.active) {
+        scheduleStoppedGenerationReconcile(sid, 2500);
+        return;
+      }
+    } catch {
+      scheduleStoppedGenerationReconcile(sid, 2500);
+      return;
+    }
+    finishStoppedGenerationUI(sid);
+  }, Math.max(0, Number(delayMs) || 0));
 }
 
 function stopGeneration() {
@@ -6683,7 +6745,11 @@ function stopGeneration() {
           })
         : null);
     if (abortPromise && typeof abortPromise.catch === 'function') {
-      abortPromise.catch((err) => console.warn('[chat] Gateway abort request failed:', err));
+      abortPromise
+        .then((result) => {
+          if (result && result.success === false) scheduleStoppedGenerationReconcile(activeId, 0);
+        })
+        .catch((err) => console.warn('[chat] Gateway abort request failed:', err));
     }
   } catch (err) {
     console.warn('[chat] Gateway abort request failed:', err);
@@ -6702,6 +6768,7 @@ function stopGeneration() {
   }
   const thinkingMsg = document.getElementById('thinking-msg');
   if (thinkingMsg) thinkingMsg.classList.add('stopping');
+  scheduleStoppedGenerationReconcile(activeId);
 }
 
 function setButtonState(thinking) {
@@ -6729,7 +6796,7 @@ function getInitialTheme() {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved === 'light' || saved === 'dark') return saved;
   } catch {}
-  return 'light';
+  return 'dark';
 }
 
 function applyTheme(theme) {
@@ -7158,7 +7225,7 @@ let _errBackdrop = null;
     }
   })();
 </script>
-<script type="module" src="src/mobile/mobile-router.js?v=mobile-voice-live-update-fix"></script>
+<script type="module" src="src/mobile/mobile-router.js?v=floating-header-nobar"></script>
 <script>
   // ── Prometheus Mobile: PWA bootstrap ──
   // 1. Capture beforeinstallprompt early so we can offer "Install" from the drawer.

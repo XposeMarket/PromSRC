@@ -42,6 +42,61 @@ const BANNED_PATTERNS = [
   /(?:^|\/)(?:apply-local-llm-patch|b5-server-v2|write-chat-helpers|patch-server-v2|rebrand-html|rebrand-src|test-ollama|check-build|start-gateway)\.(?:js|mjs|bat)$/i,
 ];
 
+const BANNED_PUBLIC_SKILLS = [
+  'ai-surface-smoke-research',
+  'dev-debugging',
+  'file-surgery',
+  'json-and-config-surgery',
+  'prometheus-team-design',
+  'self-repair-protocol',
+  'src-edit-proposal-rigor',
+  'subagent-system-prompt-design',
+  'voice-browser-desktop-smoke-test',
+  'windows-shell-playbook',
+];
+
+const TEXT_EXTENSIONS = new Set([
+  '.cjs',
+  '.css',
+  '.html',
+  '.js',
+  '.json',
+  '.md',
+  '.mjs',
+  '.ts',
+  '.txt',
+  '.yaml',
+  '.yml',
+]);
+
+const BANNED_PUBLIC_SKILL_CONTENT = [
+  /\bRaul\b/i,
+  /\bXpose Market\b/i,
+  /\bFrederick Roof Repair\b/i,
+  /\bTelegram\b/i,
+  /\bdesktop_send_to_telegram\b/i,
+  /\bbrowser_send_to_telegram\b/i,
+  /D:\\Prometheus/i,
+  /C:\\Users\\rafel/i,
+  /\bPromSRC\b/i,
+  /\bworkspace\/self\b/i,
+  /\bread_dev_sources\b/i,
+  /\bapply_dev_source_patchset\b/i,
+  /\brequest_dev_source_edit\b/i,
+  /\bupdate_dev_source_edit\b/i,
+  /\bawait_dev_source_edit_approval\b/i,
+  /\bprom_apply_dev_changes\b/i,
+  /\bsrc_edit\b/i,
+];
+
+const BANNED_PUBLIC_APP_CONTENT = [
+  /\bRaul\b/i,
+  /\bXpose Market\b/i,
+  /\bFrederick Roof Repair\b/i,
+  /C:\\Users\\rafel/i,
+  /\bPromSRC\b/i,
+];
+
 function normalizeEntry(entry) {
   return String(entry).replace(/\\/g, '/').replace(/^\/+/, '');
 }
@@ -63,12 +118,70 @@ function walk(dir, prefix = '') {
 
 function isBanned(entry) {
   const normalized = normalizeEntry(entry);
-  return BANNED_PATTERNS.some((pattern) => pattern.test(normalized));
+  if (BANNED_PATTERNS.some((pattern) => pattern.test(normalized))) return true;
+  return BANNED_PUBLIC_SKILLS.some((skillId) => (
+    normalized === `bundled-skills/${skillId}` ||
+    normalized.startsWith(`bundled-skills/${skillId}/`)
+  ));
 }
 
 function hasEntry(entries, relPath) {
   const normalized = normalizeEntry(relPath);
   return entries.includes(normalized) || entries.includes(`/${normalized}`);
+}
+
+function readAsarText(entry) {
+  try {
+    return asar.extractFile(ASAR_PATH, entry).toString('utf-8');
+  } catch {
+    return null;
+  }
+}
+
+function readResourceText(entry) {
+  const fullPath = path.join(RESOURCES_DIR, entry);
+  if (!fs.existsSync(fullPath)) return null;
+  return fs.readFileSync(fullPath, 'utf-8');
+}
+
+function findBannedSkillContent(appEntries, resourceEntries) {
+  const hits = [];
+  for (const entry of appEntries) {
+    if (!entry.startsWith('bundled-skills/')) continue;
+    if (!TEXT_EXTENSIONS.has(path.extname(entry).toLowerCase())) continue;
+    const text = readAsarText(entry);
+    if (!text) continue;
+    const pattern = BANNED_PUBLIC_SKILL_CONTENT.find((candidate) => candidate.test(text));
+    if (pattern) hits.push(`app.asar:${entry} (${pattern})`);
+  }
+  for (const entry of resourceEntries) {
+    if (!entry.startsWith('bundled-skills/')) continue;
+    if (!TEXT_EXTENSIONS.has(path.extname(entry).toLowerCase())) continue;
+    const text = readResourceText(entry);
+    if (!text) continue;
+    const pattern = BANNED_PUBLIC_SKILL_CONTENT.find((candidate) => candidate.test(text));
+    if (pattern) hits.push(`resources:${entry} (${pattern})`);
+  }
+  return hits;
+}
+
+function findBannedAppContent(appEntries, resourceEntries) {
+  const hits = [];
+  for (const entry of appEntries) {
+    if (!TEXT_EXTENSIONS.has(path.extname(entry).toLowerCase())) continue;
+    const text = readAsarText(entry);
+    if (!text) continue;
+    const pattern = BANNED_PUBLIC_APP_CONTENT.find((candidate) => candidate.test(text));
+    if (pattern) hits.push(`app.asar:${entry} (${pattern})`);
+  }
+  for (const entry of resourceEntries) {
+    if (!TEXT_EXTENSIONS.has(path.extname(entry).toLowerCase())) continue;
+    const text = readResourceText(entry);
+    if (!text) continue;
+    const pattern = BANNED_PUBLIC_APP_CONTENT.find((candidate) => candidate.test(text));
+    if (pattern) hits.push(`resources:${entry} (${pattern})`);
+  }
+  return hits;
 }
 
 function assertAsarEntry(appEntries, relPath) {
@@ -122,6 +235,8 @@ function readLatestYml() {
   for (const line of fs.readFileSync(latestPath, 'utf-8').split(/\r?\n/)) {
     const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
     if (match) latest[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+    const fileSizeMatch = line.match(/^\s+size:\s*(\d+)\s*$/);
+    if (fileSizeMatch && !latest.fileSize) latest.fileSize = fileSizeMatch[1];
   }
   return latest;
 }
@@ -154,9 +269,9 @@ function verifyUpdaterMetadata() {
   }
 
   const actualSize = fs.statSync(installerPath).size;
-  const metadataSize = Number(latest.size);
+  const metadataSize = Number(latest.size || latest.fileSize);
   if (!Number.isFinite(metadataSize) || metadataSize !== actualSize) {
-    throw new Error(`latest.yml size ${latest.size || '(missing)'} does not match installer size ${actualSize}.`);
+    throw new Error(`latest.yml size ${latest.size || latest.fileSize || '(missing)'} does not match installer size ${actualSize}.`);
   }
 }
 
@@ -222,6 +337,22 @@ function main() {
     console.error('[verify-public-release] Found banned release contents:');
     for (const entry of banned.slice(0, 120)) console.error(`- ${entry}`);
     if (banned.length > 120) console.error(`...and ${banned.length - 120} more`);
+    process.exit(1);
+  }
+
+  const bannedSkillContent = findBannedSkillContent(appEntries, resourceEntries);
+  if (bannedSkillContent.length) {
+    console.error('[verify-public-release] Found private/dev content in public bundled skills:');
+    for (const entry of bannedSkillContent.slice(0, 120)) console.error(`- ${entry}`);
+    if (bannedSkillContent.length > 120) console.error(`...and ${bannedSkillContent.length - 120} more`);
+    process.exit(1);
+  }
+
+  const bannedAppContent = findBannedAppContent(appEntries, resourceEntries);
+  if (bannedAppContent.length) {
+    console.error('[verify-public-release] Found private content in public app bundle:');
+    for (const entry of bannedAppContent.slice(0, 120)) console.error(`- ${entry}`);
+    if (bannedAppContent.length > 120) console.error(`...and ${bannedAppContent.length - 120} more`);
     process.exit(1);
   }
 

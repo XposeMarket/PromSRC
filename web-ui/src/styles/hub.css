@@ -895,7 +895,7 @@
 }
 .hub-curator-summary {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 .hub-curator-list {
@@ -903,7 +903,16 @@
   flex-direction: column;
   gap: 10px;
 }
-.hub-curator-card {
+.hub-curator-group-title {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.hub-curator-card,
+.hub-curator-activity-card {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-2);
@@ -912,8 +921,14 @@
   flex-direction: column;
   gap: 9px;
 }
+.hub-curator-activity-card {
+  background: color-mix(in srgb, var(--panel-2) 82%, var(--panel));
+}
 .hub-curator-card[data-status="pending"] {
   border-color: color-mix(in srgb, var(--brand) 28%, var(--line));
+}
+.hub-curator-activity-card[data-status="applied"] {
+  border-color: color-mix(in srgb, #15803d 34%, var(--line));
 }
 .hub-curator-card[data-status="quarantined"],
 .hub-curator-card[data-risk="high"] {

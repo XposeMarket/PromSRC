@@ -26,6 +26,7 @@ import {
   type ProposalStatus,
 } from '../proposals/proposal-store.js';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
+import { appendAuditEntry } from '../audit-log.js';
 import { loadTask, saveTask, type TaskStatus } from '../tasks/task-store.js';
 import {
   DEV_SRC_SELF_EDIT_MODE,
@@ -127,6 +128,31 @@ export interface ApproveProposalActionResult {
   sessionId?: string;
 }
 
+function proposalLifecycleAuditArgs(proposal: any, extra: Record<string, any> = {}): Record<string, any> {
+  return {
+    proposalId: proposal?.id,
+    type: proposal?.type,
+    executionMode: proposal?.executionMode || proposal?.execution_mode,
+    priority: proposal?.priority,
+    title: proposal?.title,
+    summary: proposal?.summary,
+    details: proposal?.details,
+    affectedFiles: proposal?.affectedFiles,
+    executionSteps: proposal?.executionSteps,
+    diffPreview: proposal?.diffPreview,
+    estimatedImpact: proposal?.estimatedImpact,
+    requiresBuild: proposal?.requiresBuild,
+    requiresSrcEdit: proposal?.requiresSrcEdit,
+    sourceAgentId: proposal?.sourceAgentId,
+    sourceTeamId: proposal?.sourceTeamId,
+    sourcePipeline: proposal?.sourcePipeline,
+    sourceSessionId: proposal?.sourceSessionId,
+    executorAgentId: proposal?.executorAgentId,
+    riskTier: proposal?.riskTier,
+    ...extra,
+  };
+}
+
 export function denyProposalAction(proposalId: string, notes?: string): any {
   const proposal = denyProposal(proposalId, notes);
   if (!proposal) {
@@ -134,6 +160,16 @@ export function denyProposalAction(proposalId: string, notes?: string): any {
     err.statusCode = 404;
     throw err;
   }
+  appendAuditEntry({
+    sessionId: `proposal_${proposal.id}`,
+    agentId: proposal.sourceAgentId || 'proposal_author',
+    actionType: 'approval_resolved',
+    toolName: 'proposal_lifecycle',
+    toolArgs: proposalLifecycleAuditArgs(proposal, { notes }),
+    policyTier: 'propose',
+    approvalStatus: 'rejected',
+    resultSummary: `Rejected proposal "${proposal.title}" (${proposal.id})`,
+  });
   _broadcastFn?.({ type: 'proposal_denied', proposalId: proposal.id, title: proposal.title });
   return proposal;
 }
@@ -492,6 +528,17 @@ export async function approveProposalAction(
     throw err;
   }
 
+  appendAuditEntry({
+    sessionId: `proposal_${proposal.id}`,
+    agentId: proposal.sourceAgentId || 'proposal_author',
+    actionType: 'approval_resolved',
+    toolName: 'proposal_lifecycle',
+    toolArgs: proposalLifecycleAuditArgs(proposal, { notes: opts.notes }),
+    policyTier: 'propose',
+    approvalStatus: 'approved',
+    resultSummary: `Approved proposal "${proposal.title}" (${proposal.id})`,
+  });
+
   _broadcastFn?.({ type: 'proposal_approved', proposalId: proposal.id, title: proposal.title });
   let dispatchResult: { taskId: string; sessionId: string } | null = null;
 
@@ -847,6 +894,24 @@ export async function dispatchApprovedProposal(
 		    });
 	    // Mark proposal as executing with the REAL background task id.
 	    markProposalExecuting(proposalId, task.id);
+      appendAuditEntry({
+        sessionId,
+        agentId: proposal.executorAgentId || proposal.sourceAgentId || 'proposal_executor',
+        actionType: 'approval_resolved',
+        toolName: 'proposal_dispatch',
+        toolArgs: proposalLifecycleAuditArgs(proposal, {
+          taskId: task.id,
+          sessionId,
+          executionLane,
+          usesDevSrcSelfEdit,
+          usesDevSrcSelfEditRepair,
+          planSteps,
+          canonicalBuildCommand,
+        }),
+        policyTier: 'commit',
+        approvalStatus: 'approved',
+        resultSummary: `Started proposal executor task ${task.id}`,
+      });
       if (usesDevSrcSelfEditRepair && repairContext?.resumeOriginalTaskId) {
         const originalTask = loadTask(String(repairContext.resumeOriginalTaskId));
         if (originalTask?.proposalExecution?.buildFailure) {
@@ -879,6 +944,21 @@ export async function dispatchApprovedProposal(
 	  } catch (taskErr: any) {
 	    console.error(`[Proposals] Task launch failed for ${proposalId}:`, taskErr?.message);
 	    markProposalFailed(proposalId, taskErr?.message || 'Task launch failed');
+      appendAuditEntry({
+        sessionId,
+        agentId: proposal.executorAgentId || proposal.sourceAgentId || 'proposal_executor',
+        actionType: 'approval_resolved',
+        toolName: 'proposal_dispatch',
+        toolArgs: proposalLifecycleAuditArgs(proposal, {
+          sessionId,
+          executionLane,
+          canonicalBuildCommand,
+        }),
+        policyTier: 'commit',
+        approvalStatus: 'rejected',
+        resultSummary: `Proposal executor dispatch failed: ${taskErr?.message || 'Unknown error'}`,
+        error: taskErr?.message || 'Task launch failed',
+      });
       if (repairContext?.rootProposalId) {
         markProposalRepairing(
           String(repairContext.rootProposalId),

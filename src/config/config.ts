@@ -258,6 +258,21 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
           'reg',
         ],
         allowed_custom_commands: [],
+        allowed_commands: [
+          'hyperframes*',
+          'npx hyperframes*',
+          'npx --yes hyperframes*',
+          'npx -y hyperframes*',
+          'node scripts/run-hyperframes.js*',
+          'node ../../scripts/run-hyperframes.js*',
+          'npm run dev',
+          'npm run check',
+          'npm run lint',
+          'npm run validate',
+          'npm run inspect',
+          'npm run render',
+          'npm run publish',
+        ],
         approval_mode: 'default'
       },
       files: {

@@ -29,6 +29,7 @@ import crypto from 'crypto';
 import { activateToolCategory, addMessage, clearHistory, clearSessionMutationScope, persistToolLog, setSessionMutationScope } from '../session';
 import { formatToolObservationsForContext, persistToolResultsAsObservations } from '../tool-observations';
 import { isKnownProviderId } from '../../providers/provider-registry.js';
+import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import {
   getBrainDir,
   ensureBrainDirs,
@@ -58,6 +59,208 @@ const DREAM_BUFFER_MIN     = 90;                    // don't start thought if dr
 const DREAM_CLEANUP_DELAY_MS = 30 * 60 * 1000;      // run the memory solidifier 30m after dream success
 const THOUGHT_RETRY_BACKOFF_MS = 30 * 60 * 1000;    // wait 30m after a failed attempt
 const DREAM_RETRY_BACKOFF_MS   = 60 * 60 * 1000;    // wait 60m after a failed attempt
+
+const PRIVATE_BRAIN_SOURCE_TOOL_NAMES = new Set([
+  'list_source',
+  'source_stats',
+  'read_source',
+  'read_dev_sources',
+  'apply_dev_source_patchset',
+  'grep_source',
+  'list_prom',
+  'prom_file_stats',
+  'read_prom_file',
+  'grep_prom',
+  'webui_source_stats',
+  'read_webui_source',
+  'grep_webui_source',
+]);
+
+function isPublicBrainProfile(): boolean {
+  return isPublicDistributionBuild();
+}
+
+function brainDreamToolFilter(toolNames: string[]): string[] {
+  if (!isPublicBrainProfile()) return toolNames;
+  return toolNames.filter((name) => !PRIVATE_BRAIN_SOURCE_TOOL_NAMES.has(name));
+}
+
+function brainThoughtProposalTypes(): string {
+  return isPublicBrainProfile()
+    ? 'prompt_mutation / skill_evolution / config_change / feature_addition / task_trigger / general'
+    : 'prompt_mutation / skill_evolution / src_edit / config_change / feature_addition / task_trigger / general';
+}
+
+function brainThoughtExecutionModes(): string {
+  return isPublicBrainProfile()
+    ? 'action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note. Do not propose internal Prometheus implementation or bundled dev-tool changes in public builds.'
+    : 'code_change for Prometheus src/ or web-ui/ edits only; action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note.';
+}
+
+function brainThoughtProposalTypesExample(): string {
+  return isPublicBrainProfile()
+    ? 'prompt_mutation / skill_evolution / task_trigger / general'
+    : 'prompt_mutation / skill_evolution / src_edit / task_trigger / general';
+}
+
+function brainThoughtExecutionModesExample(): string {
+  return isPublicBrainProfile()
+    ? 'action / review / none'
+    : 'code_change / action / review / none';
+}
+
+function brainOpportunitySurfaceExample(): string {
+  return isPublicBrainProfile()
+    ? 'teams/... or workspace path'
+    : 'src/... or web-ui/... or teams/... or workspace path';
+}
+
+function brainDreamSourceEvidenceTools(): string {
+  if (isPublicBrainProfile()) {
+    return `Use workspace file, entity, and skill tools when the best evidence lives in user workspace surfaces.
+Do not inspect internal Prometheus implementation files, bundled dev tools, or self-reference files in public builds.`;
+  }
+
+  return `You also have prom-root read tools tonight. Use them when the best evidence lives outside plain workspace surfaces:
+- list_prom / read_prom_file / grep_prom for scripts/, electron/, .prometheus/, root docs, and allowlisted project-root files
+- read_source / grep_source for src/
+- read_webui_source / grep_webui_source for web-ui/`;
+}
+
+function brainIncubationFileTargets(): string {
+  return isPublicBrainProfile()
+    ? 'workspace files, configs, pages, agent definitions, or artifacts involved'
+    : 'current files, configs, pages, agent definitions, or code involved';
+}
+
+function brainPartialFeatureHeuristic(): string {
+  return isPublicBrainProfile()
+    ? 'If the user talked about a feature but left it unfinished, inspect the relevant workspace files, project docs, browser-hosted surfaces, or team outputs and determine what already exists, what is missing, and the smallest meaningful proposal that moves it forward tomorrow. Do not inspect or propose internal Prometheus implementation changes in public builds.'
+    : 'If the user talked about a feature but left it unfinished, inspect the relevant src/, web-ui/, or prom-root files and determine what already exists, what is missing, and the smallest meaningful proposal that moves it forward tomorrow.';
+}
+
+function brainDreamProposalGuidance(): string {
+  if (isPublicBrainProfile()) {
+    return `Available proposal types:
+- prompt_mutation
+- skill_evolution
+- config_change
+- feature_addition
+- memory_update
+- task_trigger (bounded one-shot action, team run, verification, or investigation)
+- general
+
+Execution modes (required for executable proposals):
+- action: approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
+- review: read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
+
+Public build proposal routing rule:
+- type describes the proposal category shown to the user.
+- execution_mode controls how the approved executor behaves.
+- Do not create proposals for internal Prometheus implementation or bundled dev tooling in public builds.
+- If a signal appears to require internal product implementation changes, record it as deferred product feedback in the Dream output instead of calling write_proposal.
+- task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
+- task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
+
+Operational proposal rules:
+- Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
+- Use execution_mode=review for "verify/check/audit/review and report back" proposals.
+- For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file implementation edit plan.
+- Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
+- Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
+- Do not include implementation-edit headings, diff previews, build steps, or verification profiles in public proposals.
+
+Skill proposal rules:
+- Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
+- Use type skill_evolution only for creating a new reusable workflow skill, or for a high-risk skill change you intentionally deferred from automatic editing.
+- New skill proposals must include exact target skill id, planned resources, acceptance behavior after approval, a draft skill body or detailed outline, triggers, permissions, categories, and required tools.
+- High-risk existing-skill proposals must explain why automatic editing was unsafe and must cite skill_read/skill_inspect evidence.
+- Prefer automatic existing-skill updates or new-skill proposals over memory when the learning is procedural or workflow-specific.`;
+  }
+
+  return `Available proposal types:
+- prompt_mutation
+- skill_evolution
+- src_edit
+- config_change
+- feature_addition
+- memory_update
+- task_trigger (bounded one-shot action, team run, verification, or investigation)
+- general
+
+Execution modes (required for executable proposals):
+- code_change: Prometheus dev self-edit only; affected_files must be exact src/ and/or web-ui/ files; sandboxed; build/verification required
+- action: approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
+- review: read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
+
+Proposal routing rule:
+- type describes the proposal category shown to the user.
+- execution_mode controls how the approved executor behaves.
+- Do not use src_edit unless execution_mode=code_change and the proposal truly edits Prometheus source code.
+- task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
+- task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
+
+Operational proposal rules:
+  - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
+  - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
+- For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file edit plan.
+- Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
+- Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
+- Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
+
+Skill proposal rules:
+- Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
+- Use type skill_evolution only for creating a new reusable workflow skill, or for a high-risk skill change you intentionally deferred from automatic editing.
+- New skill proposals must include exact target skill id, planned resources, acceptance behavior after approval, a draft skill body or detailed outline, triggers, permissions, categories, and required tools.
+- High-risk existing-skill proposals must explain why automatic editing was unsafe and must cite skill_read/skill_inspect evidence.
+- Prefer automatic existing-skill updates or new-skill proposals over memory when the learning is procedural or workflow-specific.
+
+Source-code proposal rules:
+- If a proposal would edit Prometheus source code, it must set execution_mode=code_change, type src_edit, and affected_files must include the exact src/... or web-ui/... paths
+- Before calling write_proposal for src_edit, inspect current code with the source tools:
+  - Use grep_source or list_source to locate relevant files when the path is uncertain
+  - Use source_stats before reading large or unfamiliar files
+  - Prefer read_dev_sources to inspect every affected src/ or web-ui/ file in one batch; use read_source/read_webui_source only for one-off emergency reads
+  - Cite the functions, classes, handlers, constants, or line ranges you inspected
+- For web-ui code, use webui_source_stats, read_dev_sources, read_webui_source, and grep_webui_source
+- Do not create automatic code_change proposals for scripts/, electron/, .prometheus/, dist/, build/, or other project-root paths. Defer them or use a non-code action/review proposal unless the user explicitly asks for that broader manual work.
+- Do not rely only on thought summaries for source-edit proposals; base them on actual current files
+- Any proposal touching src/ or web-ui/ must include these exact markdown headings in details:
+  ## Why this change
+  ## Exact source edits
+  ## Deterministic behavior after patch
+  ## Acceptance tests
+  ## Risks and compatibility
+- In "Exact source edits", include an ordered implementation plan with the exact files and symbols to edit, the current behavior observed from read_dev_sources/read_source, and the intended replacement behavior.
+- In "Acceptance tests", include the safe verification profile/command that should verify the edit. Prefer verification_profile=backend_build for backend-only quick dev edits, verification_profile=webui_sync_check for web-ui edits, and full_build only when full-app behavior needs it. For proposal code_change execution, the executor verifies inside the isolated sandbox with the canonical build command; quick live dev edits finalize through prom_apply_dev_changes.
+- Set requires_build=true for TypeScript/backend src edits and web-ui source edits unless there is a specific reason no build is needed.
+- Include execution_steps with the exact approved implementation/verification checklist. The executor will use these steps instead of inventing a fresh plan.
+- Set executor_prompt, not executorPrompt. The executor_prompt must restate the ordered plan and instruct the approved executor to prefer read_dev_sources and apply_dev_source_patchset; use tiny source read/write tools only for one-off emergency edits.
+- If the needed src files or exact edit points are not known after inspection, do not create the proposal. Record it as deferred with "needs source scouting" instead.
+
+Risk tier rules:
+- Every src_edit proposal must set risk_tier to low or high
+- Use low only for isolated, easy-to-review changes
+- Use high for core runtime logic, proposal execution, source-write tools, multi-file edits, or anything that could break workflows
+- If unsure, choose high`;
+}
+
+function brainDreamProposalSubmitRules(): string {
+  if (isPublicBrainProfile()) {
+    return `For each proposal passing the gate:
+- For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files as resource refs, execution_steps, executor_prompt, and requires_build=false
+- For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false
+- Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
+- Save the returned proposal ID for the output files`;
+  }
+
+  return `For each proposal passing the gate:
+- For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files as resource refs, execution_steps, executor_prompt, and requires_build=false
+- For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false
+- For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files, execution_steps, executor_prompt, risk_tier, and requires_build=true when build verification is needed
+- Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
+- Save the returned proposal ID for the output files`;
+}
 const DREAM_CLEANUP_RETRY_BACKOFF_MS = 60 * 60 * 1000;
 const DREAM_CATCHUP_LOOKBACK_DAYS = 7;              // max backlog window to auto-catch-up
 
@@ -211,7 +414,7 @@ export class BrainRunner {
         nextRun: dreamTime.toISOString(),
         schedule: `Nightly at ${String(DREAM_HOUR).padStart(2,'0')}:${String(DREAM_MIN).padStart(2,'0')} local, cleanup about 30m later`,
         model: state.dreamModel || '',
-        ranToday: state.lastDreamDate === today || daily.dreamRan,
+        ranToday: this._isDreamCompletedForDate(today),
         pendingDate: pendingDreamDate || undefined,
         lastAttempt: state.lastDreamAttemptAt,
         lastOutcome: state.lastDreamStatus,
@@ -375,6 +578,19 @@ export class BrainRunner {
     }
   }
 
+  private _hasThoughtArtifactForDate(dateStr: string): boolean {
+    return this._countThoughtsForDate(dateStr) > 0;
+  }
+
+  private _isValidTimestamp(value: string | null | undefined): boolean {
+    if (!value) return false;
+    return Number.isFinite(new Date(value).getTime());
+  }
+
+  private _isDreamCompletedForDate(dateStr: string): boolean {
+    return this._hasDreamArtifactForDate(dateStr);
+  }
+
   private _countThoughtsForDate(dateStr: string): number {
     try {
       const thoughtsDir = path.join(getBrainDir(), 'thoughts', dateStr);
@@ -390,19 +606,12 @@ export class BrainRunner {
     const latestDueDay = getDreamTimeForDate(latestDueDate);
     if (latestDueDay.getTime() > now.getTime()) return null;
 
-    let cursor = state.lastDreamDate
-      ? addLocalDays(getDreamTimeForDate(state.lastDreamDate), 1)
-      : getDreamTimeForDate(latestDueDate);
     const oldestAllowed = addLocalDays(getDreamTimeForDate(latestDueDate), -(DREAM_CATCHUP_LOOKBACK_DAYS - 1));
-    if (cursor.getTime() < oldestAllowed.getTime()) cursor = oldestAllowed;
+    let cursor = oldestAllowed;
 
     while (cursor.getTime() <= latestDueDay.getTime()) {
       const candidateDate = getLocalDateStr(cursor);
-      const dailyStatus = loadDailyStatus(candidateDate);
-      const legacyCompleted = !!state.lastDreamDate
-        && candidateDate < state.lastDreamDate
-        && this._hasDreamArtifactForDate(candidateDate);
-      if (!dailyStatus.dreamRan && !legacyCompleted && candidateDate !== state.lastDreamDate) {
+      if (!this._isDreamCompletedForDate(candidateDate)) {
         return candidateDate;
       }
       cursor = addLocalDays(cursor, 1);
@@ -440,19 +649,28 @@ export class BrainRunner {
     // Don't run thoughts if dream is imminent or already ran today
     if (this._isDreamSoon(now) || this._isDreamEligible(now)) return null;
     if (state.lastThoughtStatus === 'failed' && state.lastThoughtAttemptAt) {
-      const elapsedSinceAttempt = now.getTime() - new Date(state.lastThoughtAttemptAt).getTime();
-      if (elapsedSinceAttempt < THOUGHT_RETRY_BACKOFF_MS) return null;
+      const lastAttemptMs = new Date(state.lastThoughtAttemptAt).getTime();
+      if (Number.isFinite(lastAttemptMs)) {
+        const elapsedSinceAttempt = now.getTime() - lastAttemptMs;
+        if (elapsedSinceAttempt < THOUGHT_RETRY_BACKOFF_MS) return null;
+      }
     }
 
     const windowEnd = now;
 
-    if (!state.lastThoughtAt) {
+    const lastThoughtAt = state.lastThoughtAt;
+    if (!lastThoughtAt || !this._isValidTimestamp(lastThoughtAt)) {
       // First thought of the day/session
       const windowStart = new Date(now.getTime() - THOUGHT_INTERVAL_MS);
       return { windowStart, windowEnd };
     }
 
-    const lastThought = new Date(state.lastThoughtAt);
+    const lastThought = new Date(lastThoughtAt);
+    if (!this._hasThoughtArtifactForDate(getLocalDateStr(lastThought))) {
+      const windowStart = new Date(now.getTime() - THOUGHT_INTERVAL_MS);
+      return { windowStart, windowEnd };
+    }
+
     const elapsed     = now.getTime() - lastThought.getTime();
 
     if (elapsed < THOUGHT_INTERVAL_MS) return null;
@@ -473,7 +691,9 @@ export class BrainRunner {
     ) {
       return true;
     }
-    const elapsedSinceAttempt = now.getTime() - new Date(state.lastDreamAttemptAt).getTime();
+    const attemptMs = new Date(state.lastDreamAttemptAt).getTime();
+    if (!Number.isFinite(attemptMs)) return true;
+    const elapsedSinceAttempt = now.getTime() - attemptMs;
     return elapsedSinceAttempt >= DREAM_RETRY_BACKOFF_MS;
   }
 
@@ -485,7 +705,9 @@ export class BrainRunner {
     ) {
       return true;
     }
-    const elapsedSinceAttempt = now.getTime() - new Date(state.lastDreamCleanupAttemptAt).getTime();
+    const attemptMs = new Date(state.lastDreamCleanupAttemptAt).getTime();
+    if (!Number.isFinite(attemptMs)) return true;
+    const elapsedSinceAttempt = now.getTime() - attemptMs;
     return elapsedSinceAttempt >= DREAM_CLEANUP_RETRY_BACKOFF_MS;
   }
 
@@ -577,6 +799,7 @@ export class BrainRunner {
           'list_directory',
           'list_files',
           'read_file',
+          'read_files_batch',
 	          'file_stats',
 	          'grep_file',
 	          'grep_files',
@@ -730,7 +953,9 @@ export class BrainRunner {
 	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
 	    try {
 	      activateToolCategory(sessionId, 'file_ops');
-	      activateToolCategory(sessionId, 'source_read');
+	      if (!isPublicBrainProfile()) {
+	        activateToolCategory(sessionId, 'source_read');
+	      }
 	      setSessionMutationScope(sessionId, {
 	        allowedFiles: [workspaceOutFile, workspaceProposalsFile, 'BUSINESS.md'],
 	        allowedDirs: [path.posix.dirname(workspaceOutFile), 'entities', path.posix.join('Brain', 'business-reconciliation', dateStr)],
@@ -744,7 +969,7 @@ export class BrainRunner {
         `CONTEXT: Automated Brain Dream run for ${dateStr}. Synthesize the thoughts for that date, write durable memory updates, create proposals. This is the nightly execution run.`,
         dreamModelOverride,
         'cron',
-        [
+        brainDreamToolFilter([
           'list_directory',
           'list_files',
           'read_file',
@@ -757,6 +982,7 @@ export class BrainRunner {
           'write_file',
 	          'replace_lines',
 	          'find_replace',
+          'apply_patchset',
           'insert_after',
           'delete_lines',
           'memory_browse',
@@ -768,6 +994,8 @@ export class BrainRunner {
           'list_source',
           'source_stats',
           'read_source',
+          'read_dev_sources',
+          'apply_dev_source_patchset',
           'grep_source',
           'list_prom',
           'prom_file_stats',
@@ -784,7 +1012,7 @@ export class BrainRunner {
           'skill_manifest_write',
           'skill_resource_write',
           'write_proposal',
-        ],
+        ]),
       );
       resultText = abortSignal.aborted
         ? 'ABORTED: Brain dream run aborted by operator.'
@@ -1216,8 +1444,8 @@ C. MEMORY CANDIDATES
 D. IMPROVEMENT CANDIDATES
    Items that might be worthy of proposals — the Dream will evaluate before submitting.
    Format each as: Issue | Proposal type | Suggested execution mode | Confidence | Evidence
-   Proposal types: prompt_mutation / skill_evolution / src_edit / config_change / feature_addition / task_trigger / general
-   Execution modes: code_change for Prometheus src/ or web-ui/ edits only; action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note.
+   Proposal types: ${brainThoughtProposalTypes()}
+   Execution modes: ${brainThoughtExecutionModes()}
 
 E. WINDOW VERDICT
    - Active: yes / no
@@ -1264,7 +1492,7 @@ _(Leave table with a single dash row if nothing found.)_
 ## D. Improvement Candidates
 | Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
 |-------|---------------|--------------------------|------------|---------|
-| ...   | prompt_mutation / skill_evolution / src_edit / task_trigger / general | code_change / action / review / none | high/medium/low | [ref] |
+| ...   | ${brainThoughtProposalTypesExample()} | ${brainThoughtExecutionModesExample()} | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
@@ -1394,71 +1622,9 @@ Proposal quality gate — ALL 4 conditions must be true:
   3. NOT DUPLICATE — no semantically equivalent proposal already in pending/ or proposals.md
   4. EXECUTOR-READY — executor_prompt has enough detail to implement without guesswork
 
-Available proposal types:
-  prompt_mutation    — improve a specific cron job prompt (cite job name)
-  skill_evolution    — add or update a skill file (specify file path + proposed content)
-  src_edit           — source code change (cite specific file + describe change precisely)
-  config_change      — cron schedule, settings.json, or config file change
-  feature_addition   — new capability (include full design in executor_prompt)
-  memory_update      — workspace file change (not USER.md/SOUL.md/MEMORY.md — those are Phase 3)
-  task_trigger       — start or schedule a bounded one-shot action, team run, verification, or investigation
-  general            — anything that doesn't fit above
+${brainDreamProposalGuidance()}
 
-Execution modes (required for executable proposals):
-  code_change        - Prometheus dev self-edit only; affected_files must be exact src/ and/or web-ui/ files; sandboxed; build/verification required
-  action             - approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
-  review             - read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
-
-Proposal routing rule:
-  - type describes the proposal category shown to Raul.
-  - execution_mode controls how the approved executor behaves.
-  - Do not use src_edit unless execution_mode=code_change and the proposal truly edits Prometheus source code.
-  - task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
-  - task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
-
-Operational proposal rules:
-  - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
-  - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
-  - For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file edit plan.
-  - Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
-  - Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
-  - Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
-
-Source-code proposal rules:
-  - If a proposal would edit Prometheus source code, it MUST set execution_mode=code_change, type src_edit, and affected_files MUST include the exact src/... or web-ui/... paths.
-  - Before calling write_proposal for src_edit, inspect current code with the source tools:
-      * Use grep_source or list_source to locate relevant files when the path is uncertain.
-      * Use source_stats before reading large or unfamiliar files.
-      * Use read_source on every affected src/ file and cite the lines or symbols you inspected.
-      * For web-ui code, use webui_source_stats, read_webui_source, and grep_webui_source.
-  - Do not create automatic code_change proposals for scripts/, electron/, .prometheus/, dist/, build/, or other project-root paths. Defer them or use a non-code action/review proposal unless Raul explicitly asks for that broader manual work.
-  - Do NOT rely only on audit notes or thought summaries for src_edit proposals. The proposal must be based on the actual current source.
-  - The details field for any proposal touching src/ or web-ui/ MUST include these exact markdown headings:
-      ## Why this change
-      ## Exact source edits
-      ## Deterministic behavior after patch
-      ## Acceptance tests
-      ## Risks and compatibility
-  - In "Exact source edits", name the files, functions/classes/handlers, and current behavior you verified from read_source.
-  - In "Acceptance tests", include the safe verification profile/command that should verify the edit. Prefer verification_profile=backend_build for backend-only quick dev edits, verification_profile=webui_sync_check for web-ui edits, and full_build only when full-app behavior needs it. For proposal code_change execution, the executor verifies inside the isolated sandbox with the canonical build command; quick live dev edits finalize through prom_apply_dev_changes.
-  - Set requires_build=true for TypeScript/backend src edits and web-ui source edits unless there is a specific reason no build is needed.
-  - Include execution_steps with the exact approved implementation/verification checklist. The executor will use these steps instead of inventing a fresh plan.
-  - Set executor_prompt, not executorPrompt. Make it source-aware: instruct the approved executor to read affected files with read_source/read_webui_source first, then edit with the matching source write tools.
-
-Risk tier rules:
-  - Every src_edit proposal MUST set risk_tier to either low or high.
-  - risk_tier controls which executor default is used after approval:
-      * low  -> Settings > Agent Model Defaults > proposal_executor_low_risk
-      * high -> Settings > Agent Model Defaults > proposal_executor_high_risk
-  - Use low only for isolated, easy-to-review changes such as comments, copy, small config glue, or a one-file bug fix with narrow behavior.
-  - Use high for core runtime logic, auth/security, memory/proposal execution, source-write tools, multi-file edits, data migrations, or anything where a bad patch could break builds or user workflows.
-  - If unsure, choose high. Do not hardcode a model name unless executor_provider_id/executor_model is explicitly justified.
-
-For each proposal passing the gate:
-  - For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files[] as resource refs, execution_steps, executor_prompt, and requires_build=false.
-  - For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files[] as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false.
-  - For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files[], execution_steps, executor_prompt, risk_tier, and requires_build=true when build verification is needed.
-  - Save the returned proposal ID for the output files
+${brainDreamProposalSubmitRules()}
 
 If 0 proposals pass the gate: note this in the dream file. This is normal.
 
@@ -1685,8 +1851,8 @@ F. Opportunity Seeds
 G. Improvement Candidates
 - Items that might be worthy of proposals
 - Format as: Issue | Proposal type | Suggested execution mode | Confidence | Evidence
-- Proposal types: prompt_mutation / skill_evolution / src_edit / config_change / feature_addition / task_trigger / general
-- Execution modes: code_change for Prometheus src/ or web-ui/ edits only; action for approved one-shot work; review for read-mostly audit/report work; none when it is only a note
+- Proposal types: ${brainThoughtProposalTypes()}
+- Execution modes: ${brainThoughtExecutionModes()}
 
 H. Window Verdict
 - Active: yes / no
@@ -1712,8 +1878,8 @@ _Generated: ${nowStr}_
 Write exactly 3 homepage Pulse cards that a user could click on the Prometheus new-chat screen.
 These are proactive "you were circling this, want to dig in?" cards based on the user's chats and momentum.
 They are not questions about the Brain Thought, not report summaries, and not citations of your analysis sections.
-Choose card ideas from actual user-facing threads: things Raul mentioned briefly, unfinished ideas, repeated interests, half-built features, follow-up-worthy creative/product/business/code directions, or practical next steps that naturally continue recent conversations.
-Prefer cards that feel useful, timely, personal to Prometheus/Raul's recent work, and editable, not alarmist or awkward.
+Choose card ideas from actual user-facing threads: things the user mentioned briefly, unfinished ideas, repeated interests, half-built features, follow-up-worthy creative/product/business/code directions, or practical next steps that naturally continue recent conversations.
+Prefer cards that feel useful, timely, personal to the user's recent work with Prometheus, and editable, not alarmist or awkward.
 Each card must:
 - have a short, natural title under 52 characters
 - have a clear body under 130 characters
@@ -1728,7 +1894,7 @@ Good card style examples:
   prompt: "Let's dig into premium UI microfeatures for Prometheus based on the recent chat UI work. Review what changed recently, then suggest 5 small high-impact polish ideas and the best first one to implement."
 - title: "Prompt Cache Next Steps"
   body: "A lightweight way to save winning prompts could turn repeated workflows into reusable tooling."
-  prompt: "Let's explore a Prompt Cache feature for Prometheus. Ground it in recent chats and current source, then sketch the smallest useful version and how it would show up in the UI."
+  prompt: "Let's explore a Prompt Cache feature for Prometheus. Ground it in recent chats and current workspace artifacts, then sketch the smallest useful version and how it would show up in the UI."
 - title: "Opus 4.8 Showcase"
   body: "The model upgrade momentum could become a cleaner demo or launch asset."
   prompt: "Let's revisit the Opus 4.8 showcase idea from the recent Prometheus work. Check what exists now, then propose the cleanest next version or repair path."
@@ -1806,14 +1972,14 @@ _(Leave table with a single dash row if nothing found.)_
 ## F. Opportunity Seeds
 | Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
 |------|----------------|----------------------------|-----------|---------|
-| ...  | [why Dream should care tomorrow] | [src/... or web-ui/... or teams/... or workspace path] | high/medium/low | [ref] |
+| ...  | [why Dream should care tomorrow] | [${brainOpportunitySurfaceExample()}] | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
 ## G. Improvement Candidates
 | Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
 |-------|---------------|--------------------------|------------|---------|
-| ...   | prompt_mutation / skill_evolution / src_edit / task_trigger / general | code_change / action / review / none | high/medium/low | [ref] |
+| ...   | ${brainThoughtProposalTypesExample()} | ${brainThoughtExecutionModesExample()} | high/medium/low | [ref] |
 
 _(Leave table with a single dash row if nothing found.)_
 
@@ -2026,10 +2192,7 @@ List ${skillEpisodesDirRel}. If ${skillEpisodesDirRel}/episodes.jsonl exists, re
 List ${skillGardenerDirRel}. If live-candidates.jsonl or workflow-episodes.jsonl exists, read them. These are always-on skill gardener signals captured during normal chat: reusable workflows, candidate skill updates, candidate resources/templates, missing trigger signals, lifecycle status, confidence, risk, and evidence.
 
 List ${pendingPropsDirRel} to see what formal proposals are currently pending approval.
-You also have prom-root read tools tonight. Use them when the best evidence lives outside plain workspace surfaces:
-- list_prom / read_prom_file / grep_prom for scripts/, electron/, .prometheus/, root docs, and allowlisted project-root files
-- read_source / grep_source for src/
-- read_webui_source / grep_webui_source for web-ui/
+${brainDreamSourceEvidenceTools()}
 
 If no thought files exist in ${thoughtsDirRel}:
 - Note "no thoughts available" in the dream file
@@ -2158,7 +2321,7 @@ PHASE 5 - INCUBATE OPPORTUNITY SEEDS
 
 For each verified high-confidence opportunity seed:
 - Scout the suggested surface directly before deciding what to propose
-- Read the actual current files, configs, pages, agent definitions, or code involved
+- Read the actual ${brainIncubationFileTargets()}
 - Turn vague intent into a concrete morning-ready proposal only if the evidence supports it
 
 Also look for repeated workflows across the thoughts even if no single thought named them as an opportunity. If the user did a similar task multiple times, consider whether Prometheus should propose:
@@ -2171,7 +2334,7 @@ Also look for repeated workflows across the thoughts even if no single thought n
 
 Incubation heuristics:
 1. PARTIAL FEATURE IDEA
-   If the user talked about a feature but left it unfinished, inspect the relevant src/, web-ui/, or prom-root files and determine what already exists, what is missing, and the smallest meaningful proposal that moves it forward tomorrow.
+   ${brainPartialFeatureHeuristic()}
 2. NEW AGENT OR SUBAGENT
    If a new agent, subagent, or team was created or configured, inspect its team files, manager outputs, related workspace surfaces, and nearby code. Look for concrete work it could own next.
 3. PLACEHOLDER OR NEGLECTED SURFACE
@@ -2222,7 +2385,7 @@ PHASE 7 - PROPOSALS
 
 Proposal quality gate - all 4 conditions must be true:
 1. CONCRETE - specific file, job, skill, agent, or behavior to change
-2. EVIDENCED - clear citation from a thought file or verified audit or source reference
+2. EVIDENCED - clear citation from a thought file or verified audit${isPublicBrainProfile() ? '' : ' or source'} reference
 3. NOT DUPLICATE - no semantically equivalent proposal already pending or already in the ledger
 4. EXECUTOR-READY - the executor prompt has enough detail to implement without guesswork
 
@@ -2242,77 +2405,9 @@ Strong proposals can also come from:
 - external events or notifications Prometheus can turn into useful drafts, follow-ups, or automations
 - planned content or workspace work that is clearly blocked only by the user not having time yet
 
-Available proposal types:
-- prompt_mutation
-- skill_evolution
-- src_edit
-- config_change
-- feature_addition
-- memory_update
-- task_trigger (bounded one-shot action, team run, verification, or investigation)
-- general
+${brainDreamProposalGuidance()}
 
-Execution modes (required for executable proposals):
-- code_change: Prometheus dev self-edit only; affected_files must be exact src/ and/or web-ui/ files; sandboxed; build/verification required
-- action: approve and do/trigger/create something exactly once; use for team starts, scheduled runs, artifacts, bounded workspace actions
-- review: read-mostly verification/audit/report; do not mutate unless the proposal explicitly approves the exact mutation
-
-Proposal routing rule:
-- type describes the proposal category shown to Raul.
-- execution_mode controls how the approved executor behaves.
-- Do not use src_edit unless execution_mode=code_change and the proposal truly edits Prometheus source code.
-- task_trigger, feature_addition, config_change, memory_update, and general can be execution_mode=action when approval should make something happen once.
-- task_trigger, general, skill_evolution, and feature_addition can be execution_mode=review when approval should inspect, verify, audit, or report without mutation.
-
-Operational proposal rules:
-  - Use execution_mode=action for approvals like "start this team/run", "perform this bounded non-code action", or "create this approved artifact".
-  - Use execution_mode=review for "verify/check/audit/review and report back" proposals.
-- For action/review proposals, affected_files are resource references, evidence references, or expected artifact locations, not a per-file edit plan.
-- Keep executor_prompt action/review-shaped: inspect necessary state, perform the approved action exactly once or complete the approved review, verify the result, write a note, and complete.
-- Include execution_steps with 3-7 concrete approved steps. These become the executor's task checklist after approval.
-- Do not include src proposal headings, diff previews, or build steps unless the proposal truly edits code.
-
-Skill proposal rules:
-- Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
-- Use type skill_evolution only for creating a new reusable workflow skill, or for a high-risk skill change you intentionally deferred from automatic editing.
-- New skill proposals must include exact target skill id, planned resources, acceptance behavior after approval, a draft skill body or detailed outline, triggers, permissions, categories, and required tools.
-- High-risk existing-skill proposals must explain why automatic editing was unsafe and must cite skill_read/skill_inspect evidence.
-- Prefer automatic existing-skill updates or new-skill proposals over memory when the learning is procedural or workflow-specific.
-
-Source-code proposal rules:
-- If a proposal would edit Prometheus source code, it must set execution_mode=code_change, type src_edit, and affected_files must include the exact src/... or web-ui/... paths
-- Before calling write_proposal for src_edit, inspect current code with the source tools:
-  - Use grep_source or list_source to locate relevant files when the path is uncertain
-  - Use source_stats before reading large or unfamiliar files
-  - Use read_source on every affected src/ file and cite the functions, classes, handlers, constants, or line ranges you inspected
-- For web-ui code, use webui_source_stats, read_webui_source, and grep_webui_source
-- Do not create automatic code_change proposals for scripts/, electron/, .prometheus/, dist/, build/, or other project-root paths. Defer them or use a non-code action/review proposal unless Raul explicitly asks for that broader manual work.
-- Do not rely only on thought summaries for source-edit proposals; base them on actual current files
-- Any proposal touching src/ or web-ui/ must include these exact markdown headings in details:
-  ## Why this change
-  ## Exact source edits
-  ## Deterministic behavior after patch
-  ## Acceptance tests
-  ## Risks and compatibility
-- In "Exact source edits", include an ordered implementation plan with the exact files and symbols to edit, the current behavior observed from read_source, and the intended replacement behavior.
-- In "Acceptance tests", include the safe verification profile/command that should verify the edit. Prefer verification_profile=backend_build for backend-only quick dev edits, verification_profile=webui_sync_check for web-ui edits, and full_build only when full-app behavior needs it. For proposal code_change execution, the executor verifies inside the isolated sandbox with the canonical build command; quick live dev edits finalize through prom_apply_dev_changes.
-- Set requires_build=true for TypeScript/backend src edits and web-ui source edits unless there is a specific reason no build is needed.
-- Include execution_steps with the exact approved implementation/verification checklist. The executor will use these steps instead of inventing a fresh plan.
-- Set executor_prompt, not executorPrompt. The executor_prompt must restate the ordered plan and instruct the approved executor to read the affected files with read_source/read_webui_source first, then apply only the approved edits.
-- If the needed src files or exact edit points are not known after inspection, do not create the proposal. Record it as deferred with "needs source scouting" instead.
-
-Risk tier rules:
-- Every src_edit proposal must set risk_tier to low or high
-- Use low only for isolated, easy-to-review changes
-- Use high for core runtime logic, proposal execution, source-write tools, multi-file edits, or anything that could break workflows
-- If unsure, choose high
-
-For each proposal passing the gate:
-- For action proposals, call write_proposal with: execution_mode="action", type, priority, title, summary, details, affected_files as resource refs, execution_steps, executor_prompt, and requires_build=false
-- For review proposals, call write_proposal with: execution_mode="review", type, priority, title, summary, details, affected_files as evidence/resource refs, execution_steps, executor_prompt, and requires_build=false
-- For code_change proposals, call write_proposal with: execution_mode="code_change", type="src_edit", priority, title, summary, details, affected_files, execution_steps, executor_prompt, risk_tier, and requires_build=true when build verification is needed
-- Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
-- Save the returned proposal ID for the output files
+${brainDreamProposalSubmitRules()}
 
 If zero proposals pass the gate, note that in the dream file.
 

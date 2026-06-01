@@ -91,6 +91,21 @@ function resolveTurnFilePath(rawPath: any, workspacePath: string): string {
   }
 }
 
+function expandRawPathCandidates(rawPath: any, toolName: string, args: any): string[] {
+  const raw = String(rawPath || '').trim().replace(/\\/g, '/');
+  if (!raw) return [];
+  const out = new Set<string>([raw]);
+  const surfaces = Array.isArray(args?.changed_surfaces)
+    ? args.changed_surfaces.map((surface: any) => String(surface || '').trim().toLowerCase())
+    : [];
+  const isDevApply = toolName === 'prom_apply_dev_changes';
+  const isMobileish = surfaces.includes('mobile') || /^src\/mobile\//i.test(raw) || /^mobile\//i.test(raw);
+  if (isMobileish && /^src\/mobile\//i.test(raw)) out.add(`web-ui/${raw}`);
+  if (isMobileish && /^mobile\//i.test(raw)) out.add(`web-ui/src/${raw}`);
+  if (isDevApply && /^src\/(pages|styles|components|mobile|utils|app\.js|ws\.js)/i.test(raw)) out.add(`web-ui/${raw}`);
+  return Array.from(out);
+}
+
 function extractPatchTargetPaths(patchText: string): string[] {
   const paths = new Set<string>();
   for (const rawLine of String(patchText || '').split(/\r?\n/)) {
@@ -141,6 +156,7 @@ function collectCandidatePathsFromArgs(toolName: string, args: any, workspacePat
   return Array.from(new Set(
     candidates
       .flatMap((item) => Array.isArray(item) ? item : [item])
+      .flatMap((item) => expandRawPathCandidates(item, toolName, safeArgs))
       .map((item) => resolveTurnFilePath(item, workspacePath))
       .filter(Boolean),
   ));
@@ -225,9 +241,9 @@ function inferGitStatus(root: string, relPath: string, absPath: string): TurnFil
     const status = runGitText(root, ['status', '--porcelain', '--', relPath]).trim();
     if (/^R/.test(status)) return 'renamed';
     if (/^\?\?/.test(status) || /^A/.test(status)) return 'added';
-    if (/^D|^.D/.test(status) || !fs.existsSync(absPath)) return 'deleted';
+    if (/^D|^.D/.test(status)) return 'deleted';
   } catch {}
-  return fs.existsSync(absPath) ? 'modified' : 'deleted';
+  return 'modified';
 }
 
 export function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): TurnFileChanges | undefined {
@@ -270,6 +286,8 @@ export function collectTurnFileChanges(toolResults: any[] | undefined, workspace
       status = 'added';
     }
 
+    if (!fs.existsSync(absPath) && status !== 'deleted') continue;
+    if (status === 'deleted' && insertions === 0 && deletions === 0 && !binary && !diffPreview) continue;
     if (insertions === 0 && deletions === 0 && !binary && status === 'modified' && !diffPreview) continue;
     changes.push({
       path: absPath,

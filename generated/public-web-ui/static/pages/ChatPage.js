@@ -327,52 +327,60 @@ function setChatContextWindowLoading(label = 'Loading...') {
   if (total) total.textContent = label;
 }
 
+function formatContextPercent(tokens, total) {
+  const n = Number(tokens);
+  const d = Number(total);
+  if (!Number.isFinite(n) || !Number.isFinite(d) || d <= 0) return '0.0%';
+  return `${Math.max(0, (n / d) * 100).toFixed(1)}%`;
+}
+
+function renderChatContextRows(rows, windowTokens) {
+  const metrics = document.querySelector('#chat-context-window-popover .chat-context-window-metrics');
+  if (!metrics) return;
+  const source = Array.isArray(rows) && rows.length ? rows : [];
+  metrics.innerHTML = source.map((row) => {
+    const tokens = Math.max(0, Number(row?.tokens || 0));
+    const active = row?.active !== false && tokens > 0;
+    const muted = row?.outOfBand === true ? ' is-out-of-band' : '';
+    const percentText = row?.percentLabel
+      ? String(row.percentLabel)
+      : (row?.percentBasis === 'window' ? formatContextPercent(tokens, windowTokens) : '');
+    return `
+      <div class="chat-context-window-row${active ? ' is-active' : ''}${muted}">
+        <span class="chat-context-window-label"><span class="chat-context-window-swatch"></span>${escHtml(row?.label || 'Context')}</span>
+        <span class="chat-context-window-value">${formatContextTokenCount(tokens)}</span>
+        <span class="chat-context-window-percent">${escHtml(percentText)}</span>
+      </div>
+    `;
+  }).join('');
+}
+
 function renderChatContextWindow(data = chatContextWindowState.data) {
   const btn = document.getElementById('chat-context-window-btn');
   const fill = document.getElementById('chat-context-window-fill');
   const total = document.getElementById('chat-context-window-total');
-  const messages = document.getElementById('chat-context-window-messages');
-  const tools = document.getElementById('chat-context-window-tools');
-  const trigger = document.getElementById('chat-context-window-trigger');
-  const stored = document.getElementById('chat-context-window-stored');
-  const process = document.getElementById('chat-context-window-process');
-  const rawTools = document.getElementById('chat-context-window-raw-tools');
-  const usage = document.getElementById('chat-context-window-usage');
-  const toolSchema = document.getElementById('chat-context-window-tool-schema');
+  const headLabel = document.querySelector('#chat-context-window-popover .chat-context-window-head span:first-child');
   if (!btn) return;
 
   if (!data || data.success === false) {
     btn.style.setProperty('--chat-context-window-deg', '0deg');
     if (fill) fill.style.width = '0%';
     if (total) total.textContent = 'Unavailable';
-    if (messages) messages.textContent = '-';
-    if (tools) tools.textContent = '-';
-    if (trigger) trigger.textContent = '-';
-    if (stored) stored.textContent = '-';
-    if (process) process.textContent = '-';
-    if (rawTools) rawTools.textContent = '-';
-    if (usage) usage.textContent = '-';
-    if (toolSchema) toolSchema.textContent = '-';
+    if (headLabel) headLabel.textContent = 'Context window';
+    renderChatContextRows([], 0);
     return;
   }
 
-  const current = Math.max(0, Number(data.currentInputTokens || 0));
+  const currentState = data.currentState || {};
+  const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
   const windowTokens = Math.max(0, Number(data.contextWindowTokens || 0));
-  const storedThread = data.storedThread || {};
-  const modelUsage = data.modelUsage || {};
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
-  btn.title = `Next model call estimate: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens`;
+  btn.title = `Context window: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens`;
   if (fill) fill.style.width = `${percent.toFixed(1)}%`;
+  if (headLabel) headLabel.textContent = 'Context window';
   if (total) total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)`;
-  if (messages) messages.textContent = `${formatContextTokenCount(data.messageTokens)} tokens`;
-  if (tools) tools.textContent = `${formatContextTokenCount(data.toolObservationTokens)} tokens`;
-  if (trigger) trigger.textContent = `${formatContextTokenCount(data.compactionTriggerTokens)} tokens`;
-  if (stored) stored.textContent = `${formatContextTokenCount(storedThread.fullStoredThreadTokens)} tokens`;
-  if (process) process.textContent = `${formatContextTokenCount(storedThread.processEntryTokens)} tokens`;
-  if (rawTools) rawTools.textContent = `${formatContextTokenCount(storedThread.rawToolResultTokens)} tokens`;
-  if (usage) usage.textContent = `${formatContextTokenCount(modelUsage.totalTokens)} tokens`;
-  if (toolSchema) toolSchema.textContent = `${formatContextTokenCount(modelUsage.estimatedToolSchemaTokens)} tokens`;
+  renderChatContextRows(currentState.rows, windowTokens);
 }
 
 async function refreshChatContextWindow(options = {}) {
@@ -440,6 +448,9 @@ function toggleVoiceSettingsPopover(event) {
   const nextOpen = !!popover.hidden;
   popover.hidden = !nextOpen;
   btn.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  // Refresh control visibility/state on open so the per-mode toggles (incl. the
+  // xAI realtime checkbox) reflect the current voice mode and saved settings.
+  if (nextOpen) { try { renderVoiceProviderControls(); } catch {} }
 }
 
 function closeVoiceSettingsPopover() {
@@ -483,6 +494,7 @@ function makeEmptyStreamState() {
     lastHeartbeat: { state: 'idle', level: '', current_step: '-', retry_count: 0, format_violation_count: 0, message: '' },
     lastHeartbeatLogSignature: '',
     currentTurnStartIndex: -1,
+    turnStartedAt: 0,
     activeModelBadge: null,
     pendingApprovals: [],
     abortRequested: false,
@@ -2370,7 +2382,7 @@ function updateCreativeModeControls() {
     canvasToggleBtn.title = meta ? `${meta.title} is active` : 'Open Canvas';
   }
   if (backBtn) {
-    backBtn.title = meta ? `Exit ${meta.title} to close the canvas` : 'Back to Context';
+    backBtn.title = canvasOpen ? 'Close Canvas' : 'Back to Context';
   }
   if (resizeHandle) {
     resizeHandle.style.opacity = widthLockMessage ? '0.45' : '';
@@ -3459,6 +3471,17 @@ function getBrowserCanvasRestoreHint(state = getBrowserCanvasState()) {
   return { restoreUrl, restoreTitle };
 }
 
+function isBrowserCanvasClosedStreamStatus(status) {
+  const value = String(status || '').trim().toLowerCase();
+  if (!value) return false;
+  return (
+    value.includes('page closed')
+    || value.includes('chrome session ended')
+    || value.includes('browser tab closed')
+    || value.includes('last browser tab closed')
+  );
+}
+
 function requestBrowserKnowledge(force = false) {
   const state = getBrowserCanvasState();
   const sessionId = getBrowserCanvasVisibleSessionId();
@@ -4018,25 +4041,26 @@ function applyBrowserEventState(msg, options = {}) {
   }
 }
 
-function applyCreativeModeUI() {
+function applyCreativeModeUI(options = {}) {
   const mode = normalizeCreativeMode(window.currentCreativeMode);
   const suppressAutoOpen = window.__pmSuppressCreativeAutoOpen === true;
+  const shouldAutoOpen = options.autoOpen === true && !suppressAutoOpen;
   const rightPanel = document.getElementById('right-panel');
   const panel = document.getElementById('canvas-panel');
   const topbar = document.getElementById('right-panel-topbar');
   const body = document.body;
   if (mode) {
     if (isStructuredCreativeMode(mode)) ensureCreativeSceneForMode(mode);
-    if (!suppressAutoOpen && rightPanel && !rightPanel.classList.contains('open')) {
+    if (shouldAutoOpen && rightPanel && !rightPanel.classList.contains('open')) {
       if (typeof window.toggleRightPanel === 'function') window.toggleRightPanel();
     }
-    if (!suppressAutoOpen && body) body.classList.remove('right-collapsed');
-    if (!suppressAutoOpen && rightPanel && !creativeModeSavedPanelWidth) {
+    if (shouldAutoOpen && body) body.classList.remove('right-collapsed');
+    if ((shouldAutoOpen || canvasOpen) && rightPanel && !creativeModeSavedPanelWidth) {
       creativeModeSavedPanelWidth = rightPanel.style.width || `${rightPanel.offsetWidth || 0}px`;
     }
-    if (!suppressAutoOpen) {
+    if (shouldAutoOpen || canvasOpen) {
       setRightPanelWidth(CREATIVE_MODE_PANEL_WIDTH, { minimumWidth: 960, lockMax: true });
-      if (!canvasOpen) toggleCanvas(true, { force: true });
+      if (shouldAutoOpen && !canvasOpen) toggleCanvas(true, { force: true });
     }
   } else if (rightPanel) {
     if (creativeModeSavedPanelWidth && !/^0px$/i.test(creativeModeSavedPanelWidth)) {
@@ -4061,6 +4085,16 @@ function applyCreativeModeUI() {
   syncCanvasSurfaceWidthLock();
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
   syncCreativeEditor({ mode: normalizeCreativeMode(window.currentCreativeMode), shell: document.getElementById('canvas-creative-shell'), scene: window.prometheusCreativeScene, api: window.prometheusCreativeCore });
+}
+
+function revealCreativeCanvasForWorkspaceOutput(mode = window.currentCreativeMode) {
+  const normalizedMode = normalizeCreativeMode(mode);
+  if (!isStructuredCreativeMode(normalizedMode)) return;
+  if (normalizeCreativeMode(window.currentCreativeMode) !== normalizedMode) {
+    window.currentCreativeMode = normalizedMode;
+  }
+  ensureCreativeSceneForMode(normalizedMode);
+  applyCreativeModeUI({ autoOpen: true });
 }
 
 function createBlankCreativeScene(mode = window.currentCreativeMode) {
@@ -4107,7 +4141,7 @@ function applySessionCreativeMode(sessionId, mode, options = {}) {
         session.creativeHtmlMotionClip = null;
       }
     }
-    applyCreativeModeUI();
+    applyCreativeModeUI({ autoOpen: options.autoOpen === true });
     updateDesignSelectionChip();
     syncHeaderCanvasChrome();
   }
@@ -4134,7 +4168,7 @@ async function setCreativeModeFromUI(mode) {
   if (!sid || !nextMode) return;
   try {
     const savedMode = await persistCreativeMode(sid, nextMode);
-    applySessionCreativeMode(sid, savedMode);
+    applySessionCreativeMode(sid, savedMode, { autoOpen: true });
     const meta = getCreativeModeMeta(savedMode);
     addProcessEntry('info', `${meta?.title || 'Creative workspace'} opened for this chat.`);
     showToast(`${meta?.title || 'Creative workspace'} opened`);
@@ -4174,26 +4208,14 @@ function renderQueuedPromptsPanel() {
   list.innerHTML = queue.map((q, i) => `
     <div class="queued-item">
       <span class="queued-item-index">${i + 1}.</span>
-      <div class="queued-item-text">${escHtml(getQueuedTurnMessage(q))}${getQueuedTurnFiles(q).length ? `<span class="queued-item-attachments">+${getQueuedTurnFiles(q).length}</span>` : ''}</div>
+      <button type="button" class="queued-item-text" onclick="editQueuedPrompt(${i})" title="Edit queued prompt" aria-label="Edit queued prompt">${escHtml(getQueuedTurnMessage(q))}${getQueuedTurnFiles(q).length ? `<span class="queued-item-attachments">+${getQueuedTurnFiles(q).length}</span>` : ''}</button>
       <div class="queued-item-actions">
-        <button class="queued-icon-btn queued-steer-btn" onclick="steerQueuedPrompt(${i})" title="Steer into active run" style="width:auto;padding:0 8px;gap:5px;font-size:11.5px;font-weight:700;font-family:Manrope,sans-serif;">
+        <button class="queued-icon-btn queued-steer-btn" onclick="steerQueuedPrompt(${i})" title="Steer into active run" aria-label="Steer into active run">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-          Steer
         </button>
-        <button class="queued-icon-btn queued-remove-btn" onclick="removeQueuedPrompt(${i})" title="Remove from queue">
+        <button class="queued-icon-btn queued-remove-btn" onclick="removeQueuedPrompt(${i})" title="Remove from queue" aria-label="Remove from queue">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
         </button>
-        <div class="queued-item-menu-wrap">
-          <button class="queued-icon-btn queued-dots-btn" onclick="toggleQueuedPromptMenu(event,${i})" title="More options">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
-          </button>
-          <div class="queued-item-popover" id="queued-popover-${i}">
-            <button class="queued-popover-btn" onclick="editQueuedPrompt(${i})">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              Edit this prompt
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   `).join('');
@@ -4205,15 +4227,6 @@ function removeQueuedPrompt(index) {
   queue.splice(index, 1);
   window.queuedPrompts = queue;
   updateQueuedPromptUI();
-}
-
-function toggleQueuedPromptMenu(event, index) {
-  event.stopPropagation();
-  const popover = document.getElementById(`queued-popover-${index}`);
-  if (!popover) return;
-  const isOpen = popover.classList.contains('open');
-  document.querySelectorAll('.queued-item-popover.open').forEach((p) => p.classList.remove('open'));
-  if (!isOpen) popover.classList.add('open');
 }
 
 function editQueuedPrompt(index) {
@@ -4232,12 +4245,6 @@ function editQueuedPrompt(index) {
     input.setSelectionRange(input.value.length, input.value.length);
   }
 }
-
-document.addEventListener('click', (e) => {
-  if (!e.target.closest('.queued-item-menu-wrap')) {
-    document.querySelectorAll('.queued-item-popover.open').forEach((p) => p.classList.remove('open'));
-  }
-});
 
 function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   const sid = String(sessionId || '').trim();
@@ -4517,11 +4524,24 @@ function sanitizeBrowserCanvasStateForStorage(browserCanvasState) {
 
 function sanitizeChatSessionForStorage(session) {
   if (!session || typeof session !== 'object') return session;
+  const history = Array.isArray(session.history)
+    ? session.history
+      .filter((msg) => !isInternalChatMessage(msg))
+      .slice(-4)
+      .map((msg) => {
+        const next = sanitizeChatMessageForDurableStorage(msg);
+        delete next.toolLog;
+        delete next.processEntries;
+        delete next.thinking;
+        return next;
+      })
+    : [];
   return {
     ...session,
-    history: Array.isArray(session.history)
-      ? session.history.map((msg) => sanitizeChatMessageForDurableStorage(msg))
-      : session.history,
+    history,
+    processLog: [],
+    creativeHistoryPast: [],
+    creativeHistoryFuture: [],
     browserCanvasState: sanitizeBrowserCanvasStateForStorage(session.browserCanvasState),
   };
 }
@@ -4686,18 +4706,26 @@ function shouldAutoRefreshSessionTitle(session, history) {
 
 function applyAutoSessionTitleOnce(session, history) {
   if (!session || !shouldAutoRefreshSessionTitle(session, history)) {
-    if (session && session.autoTitleLocked !== true) {
-      const current = String(session.title || '').trim();
-      if (current && current !== 'New chat' && !isCommandSessionTitle(current) && !isGreetingOnlySessionMessage(current)) {
-        session.autoTitleLocked = true;
-      }
-    }
     return false;
   }
   const nextTitle = makeSessionTitle(history);
   if (!nextTitle || nextTitle === 'New chat') return false;
   session.title = nextTitle;
+  return true;
+}
+
+function applyServerSessionTitle(sessionId, title) {
+  const sid = String(sessionId || '').trim();
+  const nextTitle = String(title || '').replace(/\s+/g, ' ').trim();
+  if (!sid || !nextTitle) return false;
+  const session = getChatSessionById(sid);
+  if (!session) return false;
+  session.title = nextTitle;
   session.autoTitleLocked = true;
+  if (sid === window.activeChatSessionId) window.chatTitle = nextTitle;
+  saveChatSessions();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  if (typeof window.renderChannelSessionsList === 'function') window.renderChannelSessionsList();
   return true;
 }
 
@@ -4777,6 +4805,35 @@ function isAssistantLikeMessage(msg) {
   return msg?.role === 'ai' || msg?.role === 'assistant';
 }
 
+function formatAssistantWorkDuration(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function assistantWorkStartedAt(msg) {
+  const explicit = Number(msg?.workStartedAt || msg?.startedAt || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const ts = Number(msg?.timestamp || 0);
+  return Number.isFinite(ts) && ts > 0 ? ts : 0;
+}
+
+function renderAssistantWorkTimer(msg, { active = false, startedAt = 0 } = {}) {
+  const start = Number(startedAt || assistantWorkStartedAt(msg) || 0);
+  if (!start) return '';
+  const endedAt = Number(msg?.workEndedAt || 0);
+  const duration = active
+    ? Date.now() - start
+    : (Number.isFinite(Number(msg?.workDurationMs)) && Number(msg.workDurationMs) >= 0
+      ? Number(msg.workDurationMs)
+      : ((Number.isFinite(endedAt) && endedAt > 0 ? endedAt : Number(msg?.timestamp || Date.now())) - start));
+  return `<div class="assistant-work-timer">${active ? 'Working for' : 'Worked for'} ${escHtml(formatAssistantWorkDuration(duration))}</div>`;
+}
+
 function cloneChatMessageForBranch(msg) {
   if (!msg || typeof msg !== 'object') return null;
   const clone = JSON.parse(JSON.stringify(msg));
@@ -4788,6 +4845,13 @@ function cloneChatMessageForBranch(msg) {
 
 function getMessageCopyText(msg) {
   return String(msg?.content || '').trim();
+}
+
+function isVoiceAgentWorkerHandoffMessage(msg) {
+  const label = String(msg?.channelLabel || msg?.source || '').toLowerCase();
+  return msg?.voiceAgentWorkerHandoff === true
+    || label.includes('voice agent handoff')
+    || label.includes('realtime agent dispatch');
 }
 
 function findAssistantResponseIndex(history, userIndex) {
@@ -5111,6 +5175,30 @@ function normalizeStoredSession(session) {
   };
 }
 
+function normalizeStoredSessionStub(session) {
+  const normalized = normalizeStoredSession(session);
+  return {
+    ...normalized,
+    history: [],
+    processLog: [],
+    _needsServerLoad: true,
+  };
+}
+
+function loadStoredSessionStubsForStartup() {
+  try {
+    const raw = localStorage.getItem(CHAT_SESSIONS_KEY) || '[]';
+    if (raw.length > 250000) {
+      console.warn('[ChatPage] Skipping large local session cache during startup; using server summaries instead.');
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(normalizeStoredSessionStub) : [];
+  } catch {
+    return [];
+  }
+}
+
 function sessionStubFromServer(s) {
   const channel = String(s.channel || 'web');
   return normalizeStoredSession({
@@ -5186,7 +5274,16 @@ async function _loadSessionFromServer(id, options = {}) {
   const force = options.force === true;
   if (!sess || (!force && !sess._needsServerLoad)) return;
   try {
-    const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}`, 2000);
+    const params = new URLSearchParams();
+    if (options.full === true) {
+      params.set('full', '1');
+    } else {
+      params.set('historyLimit', String(Math.max(20, Math.min(300, Number(options.historyLimit || 160)))));
+      params.set('processLimit', String(Math.max(40, Math.min(500, Number(options.processLimit || 240)))));
+      params.set('includeToolLog', '0');
+    }
+    const query = params.toString();
+    const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, 3000);
     const s = data.session;
     if (!s) return;
     const localHistory = Array.isArray(sess.history) ? sess.history.slice() : [];
@@ -5233,18 +5330,10 @@ async function _loadSessionFromServer(id, options = {}) {
 }
 
 async function loadChatSessions() {
-  let storedSessions = [];
-  const preferredActiveSessionId = recallActiveChatSessionId();
-  try {
-    storedSessions = JSON.parse(localStorage.getItem(CHAT_SESSIONS_KEY) || '[]');
-  } catch {
-    storedSessions = [];
-  }
-  if (!Array.isArray(storedSessions)) storedSessions = [];
-  setChatSessions(storedSessions.map(normalizeStoredSession));
+  setChatSessions(loadStoredSessionStubsForStartup());
   let serverSessions = [];
   try {
-    const data = await fetchJsonWithTimeout('/api/sessions', 2000);
+    const data = await fetchJsonWithTimeout('/api/sessions?limit=160&offset=0', 2500);
     if (data) {
       serverSessions = Array.isArray(data.sessions) ? data.sessions : [];
     }
@@ -5254,65 +5343,14 @@ async function loadChatSessions() {
     mergeServerSessionSummaries(serverSessions);
   }
 
-  if (window.chatSessions.length === 0) {
-    // localStorage is empty — try to recover sessions from disk via server
-    let recovered = false;
-    try {
-      const data = await fetchJsonWithTimeout('/api/sessions', 2000);
-      if (data) {
-        const serverSessions = Array.isArray(data.sessions) ? data.sessions : [];
-        if (serverSessions.length > 0) {
-          setChatSessions(serverSessions.filter((s) => !isInternalChatSession(s)).map(s => ({
-            id: s.id,
-            title: s.title || s.preview || s.id,
-            history: [],
-            processLog: [],
-            creativeMode: normalizeCreativeMode(s.creativeMode),
-            canvasProjectRoot: normalizeCanvasPath(s.canvasProjectRoot) || null,
-            canvasProjectLabel: s.canvasProjectLabel || null,
-            canvasProjectLink: normalizeCanvasProjectLink(s.canvasProjectLink),
-            creativeSceneDoc: s.creativeSceneDoc || null,
-            creativeSelectedId: s.creativeSelectedId || null,
-            creativeTimelineMs: Number.isFinite(Number(s.creativeTimelineMs)) ? Number(s.creativeTimelineMs) : 0,
-            creativeHistoryPast: Array.isArray(s.creativeHistoryPast) ? s.creativeHistoryPast : [],
-            creativeHistoryFuture: Array.isArray(s.creativeHistoryFuture) ? s.creativeHistoryFuture : [],
-            creativeHtmlMotionClip: s.creativeHtmlMotionClip || null,
-            mainChatGoal: s.mainChatGoal || null,
-            createdAt: s.createdAt || Date.now(),
-            updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
-            lastMessageAt: s.lastMessageAt || s.lastActiveAt || s.createdAt || Date.now(),
-            // Preserve channel so _isChannelSession works on stubs
-            source: (s.channel && s.channel !== 'web') ? s.channel : undefined,
-            automated: !!(s.channel && s.channel !== 'web'),
-            _needsServerLoad: true,
-          })));
-          window.activeChatSessionId = window.chatSessions.some((s) => s.id === preferredActiveSessionId)
-            ? preferredActiveSessionId
-            : window.chatSessions[0].id;
-          setAgentSessionId(window.activeChatSessionId);
-          saveChatSessions();
-          // Eagerly load the active session's history so it renders immediately
-          await _loadSessionFromServer(window.activeChatSessionId);
-          recovered = true;
-        }
-      }
-    } catch {}
-
-    if (!recovered) {
-      const id = preferredActiveSessionId || generateSessionId();
-      window.activeChatSessionId = id;
-      setAgentSessionId(id);
-      saveChatSessions();
-    }
-  } else if (!window.activeChatSessionId || !window.chatSessions.some(s => s.id === window.activeChatSessionId)) {
-    window.activeChatSessionId = window.chatSessions.some((s) => s.id === preferredActiveSessionId)
-      ? preferredActiveSessionId
-      : window.chatSessions[0].id;
-    setAgentSessionId(window.activeChatSessionId);
+  const startupSessionId = generateSessionId();
+  window.activeChatSessionId = startupSessionId;
+  setAgentSessionId(startupSessionId);
+  if (!getChatSessionById(startupSessionId)) {
+    window.chatSessions.unshift(createEmptyChatSession(startupSessionId));
   }
   if (!window.agentSessionId || window.agentSessionId !== window.activeChatSessionId) setAgentSessionId(window.activeChatSessionId);
   saveChatSessions();
-  if (window.activeChatSessionId) await _loadSessionFromServer(window.activeChatSessionId);
   syncActiveChat();
   scheduleChatContextWindowRefresh(350);
   if (window.activeChatSessionId) catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
@@ -5330,7 +5368,7 @@ async function loadChatSessions() {
   if (window._sessionListRefreshTimer) clearInterval(window._sessionListRefreshTimer);
   window._sessionListRefreshTimer = setInterval(async () => {
     try {
-      const data = await fetchJsonWithTimeout('/api/sessions', 2500);
+      const data = await fetchJsonWithTimeout('/api/sessions?limit=160&offset=0', 2500);
       if (data) {
         const svr = Array.isArray(data.sessions) ? data.sessions : [];
         if (svr.length > 0) {
@@ -7282,7 +7320,7 @@ async function canvasExtractLayersFromSource(source, promptText = '', overrides 
   try {
     if (normalizeCreativeMode(window.currentCreativeMode) !== 'image') {
       const savedMode = await persistCreativeMode(sid, 'image');
-      applySessionCreativeMode(sid, savedMode);
+      applySessionCreativeMode(sid, savedMode, { autoOpen: true });
     }
     ensureCreativeSceneForMode(window.currentCreativeMode);
     const spriteSheetHandled = await canvasTryExtractSpriteSheetTilesFromSource(targetSource);
@@ -7989,7 +8027,7 @@ async function canvasHandleCreativeUploadInput(input) {
     const sid = getCurrentChatModeSessionId() || window.activeChatSessionId || window.agentSessionId || 'default';
     if (normalizeCreativeMode(window.currentCreativeMode) !== 'image') {
       const savedMode = await persistCreativeMode(sid, 'image');
-      applySessionCreativeMode(sid, savedMode);
+      applySessionCreativeMode(sid, savedMode, { autoOpen: true });
     }
     ensureCreativeSceneForMode(window.currentCreativeMode);
     const base64 = await blobToBase64(file);
@@ -8505,6 +8543,7 @@ function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
+  syncAssistantWorkTimer();
 
   const visibleHistory = collapseDuplicateAssistantMessageEntries((window.chatHistory || [])
     .map((msg, originalIndex) => ({ msg, originalIndex })))
@@ -8540,23 +8579,25 @@ function renderChatMessages() {
       : (isTimerMsg ? '<span class="msg-channel-tag">(timer)</span>' : (isGoalMsg ? '<span class="msg-channel-tag">(goal)</span>' : ''));
     const displayRole = isTimerMsg ? 'assistant' : msg.role;
     const isUser = displayRole === 'user';
+    const isWorkerHandoff = isUser && isVoiceAgentWorkerHandoffMessage(msg);
     const isEditingThisUserMessage = isUser && window.editingUserMessageIndex === originalIndex;
     const userContentHtml = isEditingThisUserMessage
       ? renderUserEditComposer(msg, originalIndex)
       : (isGoalMsg
         ? '<div class="msg-content"><strong>Goal continuation</strong><br><span style="color:var(--muted);font-size:12px">Prometheus is continuing the active main-chat goal.</span></div>'
-        : renderUserMessageContent(msg));
+        : `${isWorkerHandoff ? '<div class="msg-role voice-handoff-role">Voice Agent to Worker</div>' : ''}${renderUserMessageContent(msg)}`);
     const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
     const assistantContentHtml = !isUser
       ? `${assistantApprovalHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
       : userContentHtml;
     return `
-    <div class="msg-shell ${displayRole}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}">
-      <div class="msg ${displayRole}">
+    <div class="msg-shell ${displayRole}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}">
+      <div class="msg ${displayRole}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
         ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
         <div class="msg-bubble-stack">
           ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
           <div class="msg-body${msg.approvalRequest && !msg.content ? ' msg-body-approval-only' : ''}">
+                ${!isUser ? renderAssistantWorkTimer(msg) : ''}
 		            ${!isUser && !(msg.approvalRequest && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
 		            ${assistantContentHtml}
 		            ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
@@ -8586,11 +8627,13 @@ function renderChatMessages() {
     const currentProcessOpen = !!window.currentTurnProcessOpen;
     const currentTurnEntries = window.currentTurnStartIndex >= 0 ? window.processLogEntries.slice(window.currentTurnStartIndex) : [];
     const currentProcessHtml = currentProcessOpen ? formatProcessLines(currentTurnEntries) : '';
+    const activeStreamState = getSessionStreamState(window.activeChatSessionId) || {};
 	    container.innerHTML += `
       <div class="msg-shell ai">
         <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="thinking-msg">
           <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
           <div class="msg-body">
+            ${renderAssistantWorkTimer(null, { active: true, startedAt: Number(activeStreamState.turnStartedAt || 0) })}
             ${!thinkingOnly ? `<div class="msg-role">Prom${window.useAgentMode ? ' (Agent)' : ''}${window.activeModelBadge ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(window.activeModelBadge.label)}</span>` : ''}</div>` : ''}
 	            ${liveTraceHtml || progressHtml}
             ${window.streamingAIText && !liveTraceHtml
@@ -8608,6 +8651,20 @@ function renderChatMessages() {
   }
 
   if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
+}
+
+function syncAssistantWorkTimer() {
+  const active = isSessionThinking(window.activeChatSessionId);
+  if (active) {
+    if (!window._assistantWorkTimer) {
+      window._assistantWorkTimer = setInterval(() => {
+        if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
+      }, 1000);
+    }
+  } else if (window._assistantWorkTimer) {
+    clearInterval(window._assistantWorkTimer);
+    window._assistantWorkTimer = null;
+  }
 }
 
 async function copyChatMessage(originalIndex, ev) {
@@ -8894,6 +8951,11 @@ function formatToolCallForLog(actionRaw, args, streamState) {
     shell: withParens('Running Shell Command', firstToolArg(args, ['command'], 180)),
     skill_list: 'Searching Skills...',
     skill_read: withSubject('Reading Skill', firstToolArg(args, ['id', 'skill_id', 'name'])),
+    skill_resource_list: withSubject('Listing Skill Resources', firstToolArg(args, ['id', 'skill_id', 'name'])),
+    skill_resource_read: withSubject('Reading Skill Resource', firstToolArg(args, ['path', 'resource', 'resource_path'])),
+    voice_skill_lookup: 'Searching Skills...',
+    voice_skill_read: withSubject('Reading Skill', firstToolArg(args, ['id', 'skill_id', 'name'])),
+    voice_skill_resource_read: withSubject('Reading Skill Resource', firstToolArg(args, ['path', 'resource', 'resource_path'])),
     skill_create: withSubject('Creating Skill', firstToolArg(args, ['name', 'id'])),
     grep_file: withSubject('Grep File', [firstToolArg(args, ['path', 'file']), firstToolArg(args, ['pattern', 'query'])].filter(Boolean).join(' | ')),
     grep_files: withSubject('Grep Files', [firstToolArg(args, ['path', 'directory', 'dir']), firstToolArg(args, ['pattern', 'query'])].filter(Boolean).join(' | ')),
@@ -9319,6 +9381,7 @@ function chatMessageRichnessScore(msg) {
     Array.isArray(msg.generatedVideos) ? msg.generatedVideos.length : 0,
     Array.isArray(msg.canvasFiles) ? msg.canvasFiles.length : 0,
     Array.isArray(msg.fileChanges?.files) ? msg.fileChanges.files.length : 0,
+    Array.isArray(msg.productCarousel?.items) ? msg.productCarousel.items.length : 0,
   ].reduce((sum, value) => sum + value, 0);
 }
 
@@ -10238,6 +10301,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     return;
   }
   streamState = resetSessionStreamState(thisSessionId);
+  streamState.turnStartedAt = Date.now();
 
   // Show the user's message immediately, then do attachment work before the API call.
   let fileContextNote = '';
@@ -10257,6 +10321,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   }
   let messageWithFiles = message;
 
+  const realtimeAgentDispatch = String(options.voiceSource || '').includes('realtime_agent_dispatch');
   const reuseExistingUserIndex = Number.isInteger(options.reuseExistingUserIndex)
     ? options.reuseExistingUserIndex
     : (options.voiceAgentHandoff === true ? findRecentVoiceWorkflowUserIndex(sessionHistoryRef, messageWithFiles) : -1);
@@ -10270,6 +10335,12 @@ async function sendChat(queuedMessage = null, options = {}) {
   userTurnMessage.content = messageWithFiles;
   userTurnMessage.attachmentPreviews = uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined;
   userTurnMessage.timestamp = userTurnMessage.timestamp || Date.now();
+  if (realtimeAgentDispatch) {
+    userTurnMessage.voiceAgentWorkerHandoff = true;
+    userTurnMessage.source = 'realtime_agent_dispatch';
+    userTurnMessage.channel = 'voice';
+    userTurnMessage.channelLabel = 'Voice Agent handoff';
+  }
   if (reuseExistingUserIndex < 0) sessionHistoryRef.push(userTurnMessage);
   const userTurnIndex = sessionHistoryRef.indexOf(userTurnMessage);
   const userTurnTimestamp = Number(userTurnMessage.timestamp || 0);
@@ -10278,10 +10349,15 @@ async function sendChat(queuedMessage = null, options = {}) {
     : Date.now();
   const appendAssistantTurnForUser = (message) => {
     const shouldAppendAfterInterruption = streamState.forceAppendAssistantAfterInterruption === true;
+    const workStartedAt = Number(message.workStartedAt || streamState.turnStartedAt || assistantTurnTimestamp || Date.now());
+    const workEndedAt = Number(message.workEndedAt || Date.now());
     const assistantMessage = {
       ...message,
       role: message.role || 'ai',
       timestamp: Number(message.timestamp || (shouldAppendAfterInterruption ? Date.now() : assistantTurnTimestamp)),
+      workStartedAt,
+      workEndedAt,
+      workDurationMs: Math.max(0, Number(message.workDurationMs ?? (workEndedAt - workStartedAt)) || 0),
     };
     const existingIndex = sessionHistoryRef.findIndex((candidate, idx) => (
       idx > userTurnIndex
@@ -10347,7 +10423,11 @@ async function sendChat(queuedMessage = null, options = {}) {
 
   streamState.currentTurnStartIndex = Array.isArray(thisSession?.processLog) ? thisSession.processLog.length : 0;
   if (window.activeChatSessionId === thisSessionId) window.currentTurnStartIndex = streamState.currentTurnStartIndex;
-  addProcessEntry('user', uploadedFileCount > 0 ? `${message} [+${uploadedFileCount} file(s)]` : message);
+  if (realtimeAgentDispatch) {
+    addProcessEntry('info', `Voice Agent handoff to Worker: ${(uploadedFileCount > 0 ? `${message} [+${uploadedFileCount} file(s)]` : message).slice(0, 900)}`);
+  } else {
+    addProcessEntry('user', uploadedFileCount > 0 ? `${message} [+${uploadedFileCount} file(s)]` : message);
+  }
 
   let desktopVoiceAgentHandoffContext = '';
   const voiceLatencyTurnStartedAt = options.voiceAgentHandoff === true ? Date.now() : 0;
@@ -10394,13 +10474,22 @@ async function sendChat(queuedMessage = null, options = {}) {
   }));
   const combinedCallerContext = buildCombinedCallerContext(messageWithFiles);
   const realtimeInterruptCallerContext = await finalizeRealtimeVoicePlaybackInterruptContext(messageWithFiles);
-  const turnCallerContext = [combinedCallerContext, realtimeInterruptCallerContext, desktopVoiceAgentHandoffContext].filter(Boolean).join('\n\n') || undefined;
+  const realtimeAgentDispatchContext = realtimeAgentDispatch
+    ? [
+      '[REALTIME_AGENT_HANDOFF]',
+      'This desktop realtime voice turn was already acknowledged by the live realtime voice agent before the worker started.',
+      'Do not repeat a generic startup acknowledgement. Continue directly into the requested work.',
+      '[/REALTIME_AGENT_HANDOFF]',
+    ].join('\n')
+    : '';
+  const turnCallerContext = [combinedCallerContext, realtimeInterruptCallerContext, desktopVoiceAgentHandoffContext, realtimeAgentDispatchContext].filter(Boolean).join('\n\n') || undefined;
   if (designMultiSelectedElements.length) clearDesignMultiSelection();
 
 		  const allSteps = [];
 		  let finalReply = '';
 		  let finalArtifacts = [];
 		  let finalFileChanges = null;
+		  let finalProductCarousel = null;
 		  const canvasPresentedFiles = []; // file paths presented to canvas this turn
 		  const turnGeneratedImages = [];
 		  const turnGeneratedImageKeys = new Set();
@@ -10755,7 +10844,7 @@ async function sendChat(queuedMessage = null, options = {}) {
               );
               break;
             }
-            const isSkillTool = action === 'skill_list' || action === 'skill_read' || action === 'skill_create';
+            const isSkillTool = action === 'skill_list' || action === 'skill_read' || action === 'skill_resource_list' || action === 'skill_resource_read' || action === 'skill_create';
             const isBackgroundAgentTool = action.startsWith('background_');
             if (isSkillTool) {
               pushProgressLine(`${stepPrefix}${displayAction}`);
@@ -11124,12 +11213,19 @@ async function sendChat(queuedMessage = null, options = {}) {
             break;
           }
 
+          case 'session_title': {
+            applyServerSessionTitle(event.sessionId || thisSessionId, event.title);
+            renderIfViewingThisSession();
+            break;
+          }
+
 	          case 'done':
 	            finalReply = event.reply || '';
 	            if (finalReply) partialContent = finalReply;
 	            if (event.thinking) collectTurnThinking(event.thinking);
 	            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
 	            finalFileChanges = event.fileChanges || null;
+	            finalProductCarousel = event.productCarousel || null;
 	            streamState.activeModelBadge = null; // clear badge when turn completes
 	            break;
 
@@ -11153,6 +11249,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        content: finalReply,
 	        artifacts: finalArtifacts,
 	        fileChanges: finalFileChanges || undefined,
+	        productCarousel: finalProductCarousel || undefined,
 	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
 	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
 	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
@@ -12339,6 +12436,13 @@ function toggleVoiceDictation() {
   // xAI realtime opt-in: speech-to-speech over WebSocket, same agent machinery
   // as OpenAI Realtime. If realtime can't start, fall back to the standard xAI
   // STT/TTS route rather than leaving the user with no working voice.
+  if (mode === 'xai') {
+    // Visible on-screen diagnostic so the chosen route is unambiguous on Safari
+    // (where the console isn't easily inspected).
+    showToast('xAI voice route', wantsXaiRealtimeMode()
+      ? 'Realtime ON → starting Grok speech-to-speech (WebSocket)…'
+      : 'Realtime OFF → standard xAI STT/TTS', 'info', 3500);
+  }
   if (mode === 'xai' && wantsXaiRealtimeMode()) {
     toggleRealtimeVoiceReplies().catch((err) => {
       const reason = String(err?.message || err || 'Unknown error').slice(0, 300);
@@ -14488,6 +14592,10 @@ function speakVoiceMilestone(text, options = {}) {
   const spoken = String(text || '').replace(/\s+/g, ' ').trim();
   if (!spoken) return;
   if (realtimeNarrationMode !== 'milestones') return;
+  if (wantsVoiceAgentRealtimeMode()) {
+    speakVoiceAgentRealtimeMilestone(spoken, options);
+    return;
+  }
   if (realtimeVoiceRepliesEnabled) {
     speakRealtimeNarration(spoken, options);
     return;
@@ -14508,6 +14616,44 @@ function speakVoiceMilestone(text, options = {}) {
 
 function isDesktopVoiceNarrationActive() {
   return realtimeNarrationMode === 'milestones' && !!(realtimeVoiceRepliesEnabled || voiceRepliesEnabled);
+}
+
+function speakVoiceAgentRealtimeMilestone(text, options = {}) {
+  const spoken = cleanVoiceSpeechText(text);
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!spoken || !dc || dc.readyState !== 'open') return;
+  if (voiceAgentRealtimeQuiet?.active) return;
+  if (voiceAgentRealtimeConnection?.activeResponse || realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) return;
+  if (voiceAgentRealtimeTurn?.hadFunctionCall && options.force !== true) return;
+  if (!shouldSpeakRealtimeNarration(spoken, { ...options, minGapMs: Number(options.minGapMs ?? 20000) || 20000 })) return;
+  try {
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: [
+            '[WORKER_MILESTONE]',
+            `Current worker update: ${spoken}`,
+            'Say a short natural progress update only if the user benefits from hearing it.',
+            'Do not start new work. Do not repeat the original acknowledgement.',
+            '[/WORKER_MILESTONE]',
+          ].join('\n'),
+        }],
+      },
+    }));
+    dc.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        output_modalities: ['audio'],
+        instructions: 'You are Prometheus in realtime voice mode. If useful, speak one concise progress update based on the worker milestone. Otherwise say nothing. Speak only normal words and numbers; never vocalize punctuation marks, symbols, emoji, markdown, bullets, or standalone characters.',
+      },
+    }));
+  } catch (err) {
+    try { addProcessEntry?.('warn', `Realtime milestone forward failed: ${String(err?.message || err)}`); } catch {}
+  }
 }
 
 function realtimeNarrationFromToolCall(action, displayAction = '') {
@@ -14632,7 +14778,7 @@ async function speakWithRealtimeVoiceManaged(content) {
 // REALTIME VOICE AGENT — full audio-in / audio-out via OpenAI Realtime API.
 // Replaces the split flow (transcription session + voice-agent decision + TTS
 // session) with a single Realtime session whose model handles small talk,
-// voice_* tool calls, and worker dispatch through function calling. Used when
+// voice_* / skill_* tool calls, and worker dispatch through function calling. Used when
 // the user has voiceMode === 'openai_realtime' end-to-end.
 // ============================================================================
 
@@ -14646,12 +14792,321 @@ const voiceAgentRealtimeFunctionCallBuffers = new Map(); // call_id -> { name, a
 // stops auto-replying. Each completed user transcript is checked for the wake phrase;
 // a match re-opens the agent and replies to that utterance. No second recognizer.
 const voiceAgentRealtimeQuiet = { active: false, wakePhrase: '', wakeNormalized: '', pendingActivate: false };
+let voiceAgentRealtimeContextRefreshTimer = null;
+let voiceAgentRealtimePendingCreateResponse = null;
 
-// Per-response tracking to catch the Realtime failure mode where the model SAYS it
-// handed work to the worker but never emits the dispatch function call. If a response
-// claims a hand-off yet called no function, we auto-dispatch the user's request.
-const voiceAgentRealtimeTurn = { hadFunctionCall: false, lastUserTranscript: '', lastAssistantTranscript: '', nudged: false };
+function isDesktopVoiceStatusQuestion(text) {
+  const value = String(text || '').toLowerCase();
+  return /\b(what are you doing|what're you doing|what is happening|what's happening|status|where are we|where are you|what step|what stage|what did you do|what have you done|what do you see|what are you seeing|what's on screen|what is on screen)\b/.test(value);
+}
+
+// Inject fresh worker context into the live realtime session after read-only status
+// calls so later status/progress questions stay grounded without steering Worker.
+function sendVoiceAgentRealtimeContextUpdate(contextPacket, options = {}) {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!dc || dc.readyState !== 'open') return false;
+  const packet = contextPacket && typeof contextPacket === 'object' ? contextPacket : null;
+  if (!packet) return false;
+  const summary = String(packet.summary || '').trim();
+  const lines = [
+    '## Live Worker context update',
+    `Reason: ${String(options.reason || 'worker context refreshed')}`,
+    `Active Worker: ${packet.active === true ? 'yes' : 'no'}`,
+    summary ? `Summary: ${summary.slice(0, 1600)}` : '',
+    packet.trigger?.detail ? `Triggered by: ${String(packet.trigger.detail).slice(0, 700)}` : '',
+    packet.currentlyDoing ? `Currently doing: ${String(packet.currentlyDoing).slice(0, 300)}` : '',
+    packet.currentGoal ? `Current goal: ${String(packet.currentGoal).slice(0, 600)}` : '',
+    packet.currentPhase ? `Current phase: ${String(packet.currentPhase).slice(0, 200)}` : '',
+    packet.activeToolLabel || packet.activeToolName ? `Active tool: ${String(packet.activeToolLabel || packet.activeToolName).slice(0, 200)}` : '',
+    Array.isArray(packet.processEntries) && packet.processEntries.length
+      ? `Recent process entries: ${packet.processEntries.slice(-5).map(entry => String(entry?.message || entry?.text || entry?.stage || '').trim()).filter(Boolean).join(' | ').slice(0, 1000)}`
+      : '',
+    Array.isArray(packet.doneAlready) && packet.doneAlready.length
+      ? `Done already: ${packet.doneAlready.slice(-6).map(entry => String(entry || '').trim()).filter(Boolean).join(' | ').slice(0, 1000)}`
+      : '',
+    Array.isArray(packet.recentEvents) && packet.recentEvents.length
+      ? `Recent stream events: ${packet.recentEvents.slice(-5).map(entry => String(entry?.message || entry?.text || entry?.stage || '').trim()).filter(Boolean).join(' | ').slice(0, 1000)}`
+      : '',
+    `Packet id: ${packet.id || packet.contextPacketId || ''}`,
+    'Use this update for status/progress questions. Do not steer the Worker unless the user clearly gives a correction, cancellation, or direction change.',
+  ].filter(Boolean).join('\n');
+  try {
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: lines }],
+      },
+    }));
+    return true;
+  } catch (err) {
+    console.warn('[voice-agent-realtime] context update failed', err);
+    return false;
+  }
+}
+
+function clearVoiceAgentRealtimePendingCreateResponse() {
+  if (voiceAgentRealtimePendingCreateResponse?.timer) {
+    clearTimeout(voiceAgentRealtimePendingCreateResponse.timer);
+  }
+  voiceAgentRealtimePendingCreateResponse = null;
+}
+
+function sendVoiceAgentRealtimeResponseCreate(reason = 'manual') {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!dc || dc.readyState !== 'open') return false;
+  try {
+    dc.send(JSON.stringify({ type: 'response.create' }));
+    if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] response.create', reason);
+    return true;
+  } catch (err) {
+    if (window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] response.create failed', err);
+    return false;
+  }
+}
+
+function scheduleVoiceAgentRealtimeResponseAfterSkillContext(reason = 'ptt_release') {
+  clearVoiceAgentRealtimePendingCreateResponse();
+  const createdAt = Date.now();
+  const pending = { createdAt, reason, timer: null };
+  pending.timer = setTimeout(() => {
+    if (voiceAgentRealtimePendingCreateResponse !== pending) return;
+    voiceAgentRealtimePendingCreateResponse = null;
+    sendVoiceAgentRealtimeResponseCreate(`${reason}_skill_context_timeout`);
+  }, 500);
+  voiceAgentRealtimePendingCreateResponse = pending;
+}
+
+function finishVoiceAgentRealtimePendingResponse(reason = 'skill_context_ready') {
+  if (!voiceAgentRealtimePendingCreateResponse) return false;
+  clearVoiceAgentRealtimePendingCreateResponse();
+  return sendVoiceAgentRealtimeResponseCreate(reason);
+}
+
+async function injectVoiceAgentRealtimeSkillContext(sessionId, transcript, options = {}) {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  const text = String(transcript || '').trim();
+  if (!dc || dc.readyState !== 'open' || !text) return false;
+  try {
+    const response = await fetch('/api/voice-agent/realtime-skill-context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId,
+        transcript: text,
+        maxChars: options.maxChars || 4200,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.success || !data?.matched || !data?.context) return false;
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: data.context }],
+      },
+    }));
+    addSessionProcessEntry(sessionId, 'skill', `Realtime skill trigger matched: ${(data.skills || []).map(s => s.id).filter(Boolean).join(', ')}`, {
+      actor: 'Voice Agent (Realtime)',
+      skills: data.skills || [],
+    });
+    return true;
+  } catch (err) {
+    if (window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] skill context injection failed', err);
+    return false;
+  }
+}
+
+function requestVoiceAgentRealtimeWorkerNarration(reason = 'worker_context_tick') {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (!dc || dc.readyState !== 'open') return false;
+  if (voiceAgentRealtimeQuiet?.active) return false;
+  if (realtimeNarrationMode !== 'milestones') return false;
+  if (voiceAgentRealtimeConnection?.activeResponse || realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) return false;
+  const now = Date.now();
+  const minGap = 20000;
+  if (now - Number(voiceAgentRealtimeConnection?.lastNarrationRequestAt || 0) < minGap) return false;
+  if (now - Number(voiceAgentRealtimeConnection?.lastResponseEndedAt || 0) < 8000) return false;
+  voiceAgentRealtimeConnection.lastNarrationRequestAt = now;
+  voiceAgentRealtimeConnection.narrationPending = true;
+  try {
+    dc.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        output_modalities: ['audio'],
+        instructions: [
+          'You are Prometheus in realtime voice mode.',
+          'Review the freshest Live Worker context update already in this conversation.',
+          'If the user benefits from a short progress update, speak one natural sentence grounded in that worker context.',
+          'If the update is minor, duplicate, uncertain, or not useful, produce no spoken update.',
+          'Speak only normal words and numbers. Never vocalize punctuation marks, symbols, emoji, markdown, bullets, dashes, or standalone characters.',
+          'Do not steer, dispatch, or interrupt the Worker from this narration tick.',
+          `Narration tick reason: ${String(reason || 'worker_context_tick')}`,
+        ].join('\n'),
+      },
+    }));
+    return true;
+  } catch (err) {
+    try { addProcessEntry?.('warn', `Realtime narration request failed: ${String(err?.message || err)}`); } catch {}
+    return false;
+  }
+}
+
+async function refreshVoiceAgentRealtimeWorkerContext(reason = 'manual_refresh', options = {}) {
+  const sid = String(voiceAgentRealtimeConnection?.sessionId || window.activeChatSessionId || '').trim();
+  if (!sid || !voiceAgentRealtimeConnection?.dc || voiceAgentRealtimeConnection.dc.readyState !== 'open') return null;
+  try {
+    const response = await fetch('/api/voice-agent/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, source: `desktop_realtime_${reason}` }),
+    });
+    const data = await response.json().catch(() => ({}));
+    const packet = overlayPendingVoiceAgentRealtimeWorkerPacket(data?.contextPacket || null, sid, reason);
+    if (packet) {
+      sendVoiceAgentRealtimeContextUpdate(packet, { reason });
+      if (options.requestNarration === true && packet.active === true) requestVoiceAgentRealtimeWorkerNarration(reason);
+    }
+    return packet;
+  } catch (err) {
+    if (window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] context refresh failed', err);
+    return null;
+  }
+}
+
+function startVoiceAgentRealtimeContextRefreshLoop(conn) {
+  if (voiceAgentRealtimeContextRefreshTimer) clearInterval(voiceAgentRealtimeContextRefreshTimer);
+  const run = () => {
+    if (!voiceAgentRealtimeConnection || voiceAgentRealtimeConnection !== conn) return;
+    refreshVoiceAgentRealtimeWorkerContext('periodic_worker_context', { requestNarration: true }).catch(() => {});
+  };
+  voiceAgentRealtimeContextRefreshTimer = setInterval(run, 5600);
+  setTimeout(run, 1500);
+}
+
+// Per-response tracking for explicit realtime worker handoffs. The old
+// transcript-claim recovery is intentionally disabled: realtime must call
+// dispatch_prometheus_worker explicitly, not auto-start Worker from spoken text.
+const voiceAgentRealtimeTurn = {
+  hadFunctionCall: false,
+  dispatchedWorkerThisResponse: false,
+  lastUserTranscript: '',
+  lastAssistantTranscript: '',
+  nudged: false,
+  pendingWorkerDispatch: null,
+};
+const REALTIME_HANDOFF_RECOVERY_ENABLED = false;
 const REALTIME_HANDOFF_CLAIM_RE = /\b(hand(?:ing|ed)?\s*(?:it|that|this)?\s*off|to the worker|kick(?:ing)?\s*(?:it|that)?\s*off|i('?ve|\s*have)?\s*started|getting started|i'?ll\s*(?:start|get|run|handle|take care)|on it|working on (?:it|that)|in progress|started (?:it|that|the|on)|spun? up|firing up)\b/i;
+
+function normalizeRealtimeAgentMatchText(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function getPendingVoiceAgentRealtimeWorkerDispatch(sessionId) {
+  const pending = voiceAgentRealtimeTurn.pendingWorkerDispatch;
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  if (!pending || pending.sessionId !== sid) return null;
+  if (Date.now() - Number(pending.startedAt || 0) > 30000) {
+    voiceAgentRealtimeTurn.pendingWorkerDispatch = null;
+    return null;
+  }
+  return pending;
+}
+
+function makePendingVoiceAgentRealtimeWorkerPacket(sessionId, reason = 'worker_dispatch_pending') {
+  const pending = getPendingVoiceAgentRealtimeWorkerDispatch(sessionId);
+  if (!pending) return null;
+  const id = pending.contextPacketId || `realtime_pending_worker_${pending.startedAt}`;
+  return {
+    id,
+    contextPacketId: id,
+    active: true,
+    summary: `The Prometheus worker has just been dispatched and is starting up: ${pending.task}`,
+    currentGoal: pending.task,
+    currentPhase: 'starting',
+    activeToolName: 'dispatch_prometheus_worker',
+    activeToolLabel: 'Worker dispatch is starting',
+    pendingSteerCount: 0,
+    activeRun: null,
+    trigger: {
+      source: 'realtime_agent_dispatch',
+      detail: pending.task,
+      startedAt: pending.startedAt,
+    },
+    currentlyDoing: 'Starting the Prometheus worker for the realtime voice handoff.',
+    doneAlready: ['Realtime voice agent sent the task to the Prometheus worker.'],
+    observations: [`Pending worker context synthesized locally because the live worker registry has not caught up yet. Reason: ${reason}.`],
+    processEntries: [],
+    recentEvents: [],
+  };
+}
+
+function overlayPendingVoiceAgentRealtimeWorkerPacket(packet, sessionId, reason = 'worker_context') {
+  if (packet?.active === true) {
+    voiceAgentRealtimeTurn.pendingWorkerDispatch = null;
+    return packet;
+  }
+  return makePendingVoiceAgentRealtimeWorkerPacket(sessionId, reason) || packet;
+}
+
+function markVoiceAgentRealtimeWorkerDispatch(sessionId, task) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  const cleanTask = String(task || '').trim();
+  if (!sid || !cleanTask) return null;
+  voiceAgentRealtimeTurn.pendingWorkerDispatch = {
+    sessionId: sid,
+    task: cleanTask,
+    startedAt: Date.now(),
+    contextPacketId: `realtime_pending_worker_${Date.now()}`,
+  };
+  const packet = makePendingVoiceAgentRealtimeWorkerPacket(sid, 'worker_dispatch');
+  if (packet) sendVoiceAgentRealtimeContextUpdate(packet, { reason: 'worker_dispatch_pending' });
+  return packet;
+}
+
+function removeRecentRealtimeAgentChatMessage(sessionId, role, text) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  const target = normalizeRealtimeAgentMatchText(text);
+  if (!sid || !target) return false;
+  const sess = getChatSessionById(sid);
+  const history = sess?.history;
+  if (!Array.isArray(history)) return false;
+  const wantedRole = role === 'user' ? 'user' : 'ai';
+  const now = Date.now();
+  for (let i = history.length - 1; i >= Math.max(0, history.length - 12); i -= 1) {
+    const msg = history[i];
+    if (!msg || msg.role !== wantedRole || msg.source !== 'voice_agent_realtime') continue;
+    if (now - Number(msg.timestamp || now) > 120000) continue;
+    const candidate = normalizeRealtimeAgentMatchText(msg.content || msg.text || '');
+    if (candidate && (candidate === target || candidate.includes(target) || target.includes(candidate))) {
+      history.splice(i, 1);
+      try { persistSession(sid); } catch {}
+      if (window.activeChatSessionId === sid) {
+        window.chatHistory = history;
+        try { renderChatMessages(); } catch {}
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function cancelVoiceAgentRealtimeResponseForDispatch() {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  if (dc && dc.readyState === 'open') {
+    try { dc.send(JSON.stringify({ type: 'response.cancel' })); } catch {}
+    try { dc.send(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
+  }
+  if (voiceAgentRealtimeConnection) {
+    voiceAgentRealtimeConnection.activeResponse = false;
+    voiceAgentRealtimeConnection.narrationPending = false;
+    voiceAgentRealtimeConnection.lastResponseEndedAt = Date.now();
+  }
+  realtimeVoicePlaybackActive = false;
+  realtimeVoiceActiveResponseId = '';
+}
 
 function sendRealtimeAgentCreateResponseFlag(enabled) {
   const dc = voiceAgentRealtimeConnection?.dc;
@@ -14660,25 +15115,33 @@ function sendRealtimeAgentCreateResponseFlag(enabled) {
   // Quiet mode (create_response gating) only applies to always-listening server VAD.
   // In push-to-talk there is no turn_detection, so don't reinstate server VAD here.
   if (listenMode !== 'always_listening') return;
+  const turnDetection = {
+    type: 'server_vad',
+    threshold: 0.5,
+    prefix_padding_ms: 300,
+    silence_duration_ms: 500,
+    create_response: !!enabled,
+  };
   try {
-    dc.send(JSON.stringify({
-      type: 'session.update',
-      session: {
-        type: 'realtime',
-        audio: {
-          input: {
-            turn_detection: {
-              type: 'server_vad',
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 500,
-              create_response: !!enabled,
+    if (voiceAgentRealtimeConnection?.provider === 'xai') {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: { turn_detection: turnDetection },
+      }));
+    } else {
+      dc.send(JSON.stringify({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          audio: {
+            input: {
+              turn_detection: turnDetection,
+              transcription: { model: 'gpt-realtime-whisper' },
             },
-            transcription: { model: 'gpt-realtime-whisper' },
           },
         },
-      },
-    }));
+      }));
+    }
   } catch {}
 }
 
@@ -14686,31 +15149,44 @@ function setRealtimeAgentWakePhrase(phrase) {
   const clean = String(phrase || '').replace(/\s+/g, ' ').trim();
   voiceAgentRealtimeQuiet.wakePhrase = clean;
   voiceAgentRealtimeQuiet.wakeNormalized = normalizeRealtimeWakePhrase(clean);
+  realtimeSessionWakePhrase = clean;
 }
 
 function activateRealtimeAgentQuietMode() {
   if (!voiceAgentRealtimeConnection) return;
   voiceAgentRealtimeQuiet.active = true;
+  voiceAgentRealtimeQuiet.pendingActivate = false;
+  if (voiceAgentRealtimeQuiet.wakePhrase) {
+    realtimeWakeGate = buildRealtimeWakeGateFromPhrase(voiceAgentRealtimeQuiet.wakePhrase, 'realtime_agent_quiet_mode');
+  }
+  stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'realtime_agent_quiet_mode' });
   sendRealtimeAgentCreateResponseFlag(false);
   const phrase = voiceAgentRealtimeQuiet.wakePhrase;
   showToast('Quiet mode', phrase ? `Silent until you say "${phrase}".` : 'Silent until you wake Prometheus.', 'info', 2600);
   setUnifiedVoiceButtonState();
+  renderRealtimeWakeGateState();
 }
 
 function deactivateRealtimeAgentQuietMode() {
   if (!voiceAgentRealtimeQuiet.active) return;
   voiceAgentRealtimeQuiet.active = false;
   voiceAgentRealtimeQuiet.pendingActivate = false;
+  clearRealtimeWakeGate({ silent: true, clearInput: true });
   sendRealtimeAgentCreateResponseFlag(true);
   setUnifiedVoiceButtonState();
+  renderRealtimeWakeGateState();
 }
 
 function handleRealtimeAgentQuietTranscript(transcript) {
-  if (!voiceAgentRealtimeQuiet.active) return;
+  if (!voiceAgentRealtimeQuiet.active) return false;
   const wake = voiceAgentRealtimeQuiet.wakeNormalized;
-  if (!wake) return;
+  if (!wake) return true;
   const heard = normalizeRealtimeWakePhrase(transcript);
-  if (!heard || !heard.includes(wake)) return; // not woken — stay silent
+  if (!heard || !heard.includes(wake)) {
+    sendRealtimeAgentCreateResponseFlag(false);
+    cancelVoiceAgentRealtimeResponseForDispatch();
+    return true; // not woken — stay silent and suppress transcript display
+  }
   deactivateRealtimeAgentQuietMode();
   showToast('Awake', 'Prometheus is listening again.', 'success', 1800);
   // Reply to the wake utterance now that create_response is back on.
@@ -14718,6 +15194,7 @@ function handleRealtimeAgentQuietTranscript(transcript) {
   if (dc?.readyState === 'open') {
     try { dc.send(JSON.stringify({ type: 'response.create' })); } catch {}
   }
+  return false;
 }
 
 function isVoiceAgentRealtimeMode() {
@@ -14745,7 +15222,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
 
     // 1. Bootstrap — gateway builds instructions, tools, and mints ephemeral token
     const wakeGate = getRealtimeWakeGate?.();
-    voiceAgentRealtimeQuiet.active = false;
+    voiceAgentRealtimeQuiet.active = !!(wakeGate?.active && wakeGate?.suppressVoice === true);
     voiceAgentRealtimeQuiet.pendingActivate = false;
     setRealtimeAgentWakePhrase(wakeGate?.phrase || '');
     const bootstrapResp = await fetch('/api/voice-agent/realtime-bootstrap', {
@@ -14845,7 +15322,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
                     threshold: 0.5,
                     prefix_padding_ms: 300,
                     silence_duration_ms: 500,
-                    create_response: true,
+                    create_response: !voiceAgentRealtimeQuiet.active,
                   }
                 : null,
               transcription: { model: 'gpt-realtime-whisper' },
@@ -14860,6 +15337,8 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
     }
 
     voiceAgentRealtimeConnection = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode };
+    if (voiceAgentRealtimeQuiet.active) sendRealtimeAgentCreateResponseFlag(false);
+    startVoiceAgentRealtimeContextRefreshLoop(voiceAgentRealtimeConnection);
     pc.addEventListener('connectionstatechange', () => {
       if (['closed', 'failed', 'disconnected'].includes(pc.connectionState)) {
         if (voiceAgentRealtimeConnection?.pc === pc) {
@@ -14882,6 +15361,11 @@ function stopVoiceAgentRealtimeSession() {
   voiceAgentRealtimeConnecting = null;
   voiceAgentRealtimeListenMode = 'idle';
   voiceAgentRealtimeFunctionCallBuffers.clear();
+  clearVoiceAgentRealtimePendingCreateResponse();
+  if (voiceAgentRealtimeContextRefreshTimer) {
+    clearInterval(voiceAgentRealtimeContextRefreshTimer);
+    voiceAgentRealtimeContextRefreshTimer = null;
+  }
   try { conn?.cleanup?.(); } catch {}
   try { conn?.dc?.close(); } catch {}
   try { conn?.pc?.close(); } catch {}
@@ -14900,7 +15384,7 @@ function setVoiceAgentRealtimeMicEnabled(enabled) {
 // the process log. Display-only: the realtime session itself owns the audio.
 function appendRealtimeAgentChatMessage(sessionId, role, text) {
   const sid = String(sessionId || window.activeChatSessionId || '').trim();
-  const content = String(text || '').trim();
+  const content = cleanVoiceSpeechText(text);
   if (!sid || !content) return;
   const sess = getChatSessionById(sid);
   if (!sess) return;
@@ -14920,10 +15404,10 @@ function appendRealtimeAgentChatMessage(sessionId, role, text) {
   }
 }
 
-// Safety net: the Realtime model sometimes SAYS it handed work to the worker but
-// never emits dispatch_prometheus_worker. When a response claims a hand-off yet
-// called no function, dispatch the user's request ourselves so the claim is true.
+// Disabled deterministic recovery: realtime must emit dispatch_prometheus_worker.
+// Do not infer a Worker handoff from assistant transcript text.
 function maybeRecoverHallucinatedRealtimeHandoff(sessionId) {
+  if (!REALTIME_HANDOFF_RECOVERY_ENABLED) return;
   if (voiceAgentRealtimeTurn.hadFunctionCall || voiceAgentRealtimeTurn.nudged) return;
   const claim = voiceAgentRealtimeTurn.lastAssistantTranscript || '';
   const task = String(voiceAgentRealtimeTurn.lastUserTranscript || '').trim();
@@ -14931,7 +15415,9 @@ function maybeRecoverHallucinatedRealtimeHandoff(sessionId) {
   voiceAgentRealtimeTurn.nudged = true;
   addSessionProcessEntry(sessionId, 'warn', `Realtime model claimed a hand-off without calling dispatch_prometheus_worker — auto-dispatching: ${task.slice(0, 160)}`, { actor: 'Voice Agent (Realtime)' });
   try {
-    if (typeof window.sendChat === 'function') {
+  if (typeof window.sendChat === 'function') {
+      removeRecentRealtimeAgentChatMessage(sessionId, 'user', task);
+      markVoiceAgentRealtimeWorkerDispatch(sessionId, task);
       window.sendChat(task, { skipVoiceAgent: true, voiceSource: 'realtime_agent_dispatch_recovery' });
     }
   } catch (err) {
@@ -14967,7 +15453,9 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     return;
   }
   if (type === 'response.created') {
+    if (voiceAgentRealtimeConnection) voiceAgentRealtimeConnection.activeResponse = true;
     voiceAgentRealtimeTurn.hadFunctionCall = false;
+    voiceAgentRealtimeTurn.dispatchedWorkerThisResponse = false;
     voiceAgentRealtimeTurn.lastAssistantTranscript = '';
     return;
   }
@@ -14985,21 +15473,36 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
   if (type === 'conversation.item.input_audio_transcription.completed') {
     const transcript = String(event.transcript || '').trim();
     if (transcript) {
+      if (handleRealtimeAgentQuietTranscript(transcript)) return;
       voiceAgentRealtimeTurn.lastUserTranscript = transcript;
       voiceAgentRealtimeTurn.nudged = false;
       addSessionProcessEntry(sessionId, 'user', `User: ${transcript}`, { actor: 'Voice Agent (Realtime)' });
       appendRealtimeAgentChatMessage(sessionId, 'user', transcript);
-      // Quiet mode: only the wake phrase re-opens the agent.
-      handleRealtimeAgentQuietTranscript(transcript);
+      const pendingResponse = voiceAgentRealtimePendingCreateResponse;
+      const shouldGateResponse = !!(
+        pendingResponse
+        && Date.now() - Number(pendingResponse.createdAt || 0) >= 0
+        && Date.now() - Number(pendingResponse.createdAt || 0) < 2500
+      );
+      if (shouldGateResponse) {
+        await injectVoiceAgentRealtimeSkillContext(sessionId, transcript, { reason: 'ptt_transcript' });
+        finishVoiceAgentRealtimePendingResponse('ptt_transcript_ready');
+      } else {
+        injectVoiceAgentRealtimeSkillContext(sessionId, transcript, { reason: 'transcript_observed' }).catch(() => {});
+      }
     }
     return;
   }
 
   // Assistant-side transcript (what Prom said) — for chat history + display
   if (type === 'response.audio_transcript.done' || type === 'response.output_audio_transcript.done') {
-    const transcript = String(event.transcript || '').trim();
+    const transcript = cleanVoiceSpeechText(event.transcript || '');
     if (transcript) {
       voiceAgentRealtimeTurn.lastAssistantTranscript = transcript;
+      if (voiceAgentRealtimeTurn.dispatchedWorkerThisResponse) {
+        removeRecentRealtimeAgentChatMessage(sessionId, 'ai', transcript);
+        return;
+      }
       addSessionProcessEntry(sessionId, 'info', `Prom: ${transcript}`, { actor: 'Voice Agent (Realtime)' });
       appendRealtimeAgentChatMessage(sessionId, 'ai', transcript);
     }
@@ -15007,7 +15510,12 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
   }
 
   // A response finished — quiet-mode activation + hallucinated-handoff safety net.
-  if (type === 'response.done' || type === 'response.audio.done') {
+  if (type === 'response.done' || type === 'response.audio.done' || type === 'response.output_audio.done' || type === 'response.cancelled') {
+    if (voiceAgentRealtimeConnection) {
+      voiceAgentRealtimeConnection.activeResponse = false;
+      voiceAgentRealtimeConnection.narrationPending = false;
+      voiceAgentRealtimeConnection.lastResponseEndedAt = Date.now();
+    }
     if (voiceAgentRealtimeQuiet.pendingActivate) {
       voiceAgentRealtimeQuiet.pendingActivate = false;
       activateRealtimeAgentQuietMode();
@@ -15041,35 +15549,101 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
     const task = String(args.task || '').trim();
     if (task) {
       try {
+        voiceAgentRealtimeTurn.dispatchedWorkerThisResponse = true;
+        cancelVoiceAgentRealtimeResponseForDispatch();
+        removeRecentRealtimeAgentChatMessage(sessionId, 'user', task || voiceAgentRealtimeTurn.lastUserTranscript);
+        markVoiceAgentRealtimeWorkerDispatch(sessionId, task);
         // Reuse the regular chat send path so the worker runs with full context.
         // sendChat(queuedMessage, options) — pass the task as the queued message so
         // it does not depend on composer state, and skip the voice-agent decision
         // (the realtime model already decided to hand off).
         if (typeof window.sendChat === 'function') {
           await window.sendChat(task, { skipVoiceAgent: true, voiceSource: 'realtime_agent_dispatch' });
+          setTimeout(() => refreshVoiceAgentRealtimeWorkerContext('worker_dispatched_fast').catch(() => {}), 300);
+          setTimeout(() => refreshVoiceAgentRealtimeWorkerContext('worker_dispatched').catch(() => {}), 1200);
         }
       } catch (err) {
         console.warn('[voice-agent-realtime] dispatch failed', err);
       }
     }
-    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: true, dispatched: !!task, task }));
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({
+      ok: true,
+      dispatched: !!task,
+      task,
+      spoken_confirmation_not_needed: true,
+      note: 'Worker dispatch has started through the chat worker bridge. Do not speak another handoff acknowledgement.',
+    }), { createResponse: false });
     return;
   }
   if (name === 'steer_active_worker') {
     const message = String(args.message || '').trim();
-    if (message) {
-      try { await submitDesktopVoiceAsLiveSteer(message, { source: 'realtime_agent_steer' }); } catch {}
+    let ok = false;
+    let error = '';
+    if (isDesktopVoiceStatusQuestion(message)) {
+      try {
+        const response = await fetch('/api/voice-agent/realtime-tool', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, toolName: 'voice_worker_status', toolArgs: { include_recent_events: true } }),
+        });
+        const status = await response.json().catch(() => ({}));
+        const result = status?.result && typeof status.result === 'object' ? status.result : null;
+        const packet = overlayPendingVoiceAgentRealtimeWorkerPacket(result ? {
+          id: result.contextPacketId,
+          active: result.active,
+          summary: result.summary,
+          currentGoal: result.currentGoal,
+          currentPhase: result.currentPhase,
+          activeToolName: result.activeToolName,
+          activeToolLabel: result.activeToolLabel,
+          trigger: result.trigger,
+          currentlyDoing: result.currentlyDoing,
+          doneAlready: result.doneAlready,
+          processEntries: result.processEntries,
+          recentEvents: result.recentEvents,
+        } : null, sessionId, 'blocked_status_as_steer');
+        if (packet) sendVoiceAgentRealtimeContextUpdate(packet, { reason: 'blocked_status_as_steer' });
+        sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({
+          ok: true,
+          steered: false,
+          statusQuestion: true,
+          workerStatus: overlayPendingVoiceAgentRealtimeWorkerPacket(result || null, sessionId, 'blocked_status_as_steer_output') || null,
+        }));
+      } catch (err) {
+        sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, steered: false, statusQuestion: true, error: String(err?.message || err) }));
+      }
+      return;
     }
-    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: true, steered: !!message }));
+    if (message) {
+      try {
+        const response = await fetch('/api/chat/steer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, message, source: 'realtime_agent_steer' }),
+        });
+        const data = await response.json().catch(() => ({}));
+        ok = response.ok && (data?.success === true || data?.ok === true);
+        error = data?.error || '';
+      } catch (err) {
+        error = String(err?.message || err);
+      }
+    } else {
+      error = 'message required';
+    }
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok, steered: ok, message, error }));
     return;
   }
   if (name === 'interrupt_active_worker') {
+    try {
+      const ctrl = window._sessionAbortControllers?.[sessionId] || currentAbortController;
+      if (ctrl && !ctrl.signal?.aborted) ctrl.abort();
+    } catch {}
     try { await requestGatewayMainChatAbort?.(sessionId, 'realtime_agent_interrupt'); } catch {}
     sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: true, interrupted: true, reason: String(args.reason || '') }));
     return;
   }
 
-  // All voice_* tools route through the gateway tool endpoint
+  // All voice_* / skill_* tools route through the gateway tool endpoint
   try {
     const response = await fetch('/api/voice-agent/realtime-tool', {
       method: 'POST',
@@ -15081,6 +15655,26 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
       sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, error: data?.error || `Tool failed (${response.status})` }));
       return;
     }
+    if (name === 'voice_worker_status') {
+      const packet = overlayPendingVoiceAgentRealtimeWorkerPacket(data?.result && typeof data.result === 'object'
+        ? {
+          id: data.result.contextPacketId,
+          active: data.result.active,
+          summary: data.result.summary,
+          currentGoal: data.result.currentGoal,
+          currentPhase: data.result.currentPhase,
+          activeToolName: data.result.activeToolName,
+          activeToolLabel: data.result.activeToolLabel,
+          trigger: data.result.trigger,
+          currentlyDoing: data.result.currentlyDoing,
+          doneAlready: data.result.doneAlready,
+          processEntries: data.result.processEntries,
+          recentEvents: data.result.recentEvents,
+        }
+        : null, sessionId, 'voice_worker_status_tool');
+      if (packet) sendVoiceAgentRealtimeContextUpdate(packet, { reason: 'voice_worker_status_tool' });
+    }
+
     // Apply any runtime directive (wake phrase / quiet mode) to the live session.
     const directive = data.runtimeDirective;
     if (directive?.action) {
@@ -15089,23 +15683,34 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
         setRealtimeAgentWakePhrase(phrase);
       } else if (directive.action === 'enter_quiet_mode' || directive.action === 'set_quiet_until') {
         if (phrase) setRealtimeAgentWakePhrase(phrase);
-        // Activate after the spoken acknowledgement finishes so Prom can confirm
-        // before going silent. response.done flips it on.
-        if (voiceAgentRealtimeQuiet.wakeNormalized) {
-          voiceAgentRealtimeQuiet.pendingActivate = true;
-        }
+        activateRealtimeAgentQuietMode();
+        const quietResult = data.result && typeof data.result === 'object'
+          ? data.result
+          : { ok: true, summary: String(data.raw || 'Quiet mode active.') };
+        sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({
+          ...quietResult,
+          realtime_quiet_applied: true,
+          spoken_confirmation_not_needed: true,
+        }), { createResponse: false });
+        return;
       }
     }
-    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify(data.result || data.raw || { ok: true }));
+    const toolOutput = name === 'voice_worker_status'
+      ? (overlayPendingVoiceAgentRealtimeWorkerPacket(data.result || null, sessionId, 'voice_worker_status_output') || data.result || data.raw || { ok: true })
+      : (data.result || data.raw || { ok: true });
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify(toolOutput), { preview: data.preview });
   } catch (err) {
     sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, error: String(err?.message || err) }));
   }
 }
 
-function sendVoiceAgentRealtimeFunctionOutput(callId, output) {
+function sendVoiceAgentRealtimeFunctionOutput(callId, output, options = {}) {
   const dc = voiceAgentRealtimeConnection?.dc;
   if (!dc || dc.readyState !== 'open' || !callId) return;
   try {
+    const preview = options.preview && typeof options.preview === 'object' ? options.preview : null;
+    const previewDataUrl = String(preview?.dataUrl || '').trim();
+    const canSendPreviewImage = !!previewDataUrl && String(voiceAgentRealtimeConnection?.provider || 'openai_realtime') !== 'xai';
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -15114,8 +15719,31 @@ function sendVoiceAgentRealtimeFunctionOutput(callId, output) {
         output: String(output || ''),
       },
     }));
-    // Trigger the model to continue/respond to the tool result
-    dc.send(JSON.stringify({ type: 'response.create' }));
+    if (canSendPreviewImage) {
+      const source = String(preview?.source || '').trim() || 'screen';
+      const dimensions = preview?.width && preview?.height ? ` ${preview.width}x${preview.height}` : '';
+      dc.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: `Fresh ${source} screenshot after the tool call${dimensions}. Use this visual context for the next realtime browser/desktop step.`,
+            },
+            {
+              type: 'input_image',
+              image_url: previewDataUrl,
+            },
+          ],
+        },
+      }));
+    }
+    // Trigger the model to continue/respond to the tool result when the tool
+    // result needs a spoken answer. Worker dispatch already has its own visible
+    // worker turn, so creating another response here causes duplicate acks.
+    if (options.createResponse !== false) dc.send(JSON.stringify({ type: 'response.create' }));
   } catch (err) {
     console.warn('[voice-agent-realtime] sendFunctionCallOutput failed', err);
   }
@@ -15134,16 +15762,38 @@ function pttRealtimeAgentPress() {
 }
 
 function pttRealtimeAgentRelease() {
-  // User released PTT — close mic; server VAD will detect end-of-speech if buffered
-  setVoiceAgentRealtimeMicEnabled(false);
-  // Manually commit + create response so the model replies even without VAD
-  const dc = voiceAgentRealtimeConnection?.dc;
-  if (dc?.readyState === 'open') {
-    try {
-      dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-      dc.send(JSON.stringify({ type: 'response.create' }));
-    } catch {}
+  const conn = voiceAgentRealtimeConnection;
+  const isXai = conn?.provider === 'xai';
+  // Capture-health diagnostic: if appends==0 the mic isn't feeding audio; if
+  // appends>0 but nonSilent==0 the mic is producing silence (Safari rate bug).
+  if (isXai && window.__xaiRealtimeCapture) {
+    const c = window.__xaiRealtimeCapture;
+    showToast('xAI mic capture', `chunks sent: ${c.appends}, with sound: ${c.nonSilent}, rate: ${c.sampleRate}`, c.nonSilent > 0 ? 'info' : 'error', 6000);
   }
+  const commitAndRespond = () => {
+    const dc = voiceAgentRealtimeConnection?.dc;
+    if (dc?.readyState === 'open') {
+      try {
+        dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+        if (isXai) {
+          dc.send(JSON.stringify({ type: 'response.create' }));
+        } else {
+          scheduleVoiceAgentRealtimeResponseAfterSkillContext('ptt_release');
+        }
+      } catch {}
+    }
+  };
+  if (isXai) {
+    // Let the last ~150ms of audio chunks flush over the socket before committing,
+    // then stop the mic. (Stopping first can clip the tail of the utterance.)
+    setTimeout(() => {
+      commitAndRespond();
+      setVoiceAgentRealtimeMicEnabled(false);
+    }, 150);
+    return;
+  }
+  setVoiceAgentRealtimeMicEnabled(false);
+  commitAndRespond();
 }
 
 async function enableRealtimeAgentAlwaysListening() {
@@ -15249,7 +15899,7 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
     //    ephemeral xAI client secret. Unlike OpenAI, the session config is sent
     //    by the client over the socket (session.update) after connect.
     const wakeGate = getRealtimeWakeGate?.();
-    voiceAgentRealtimeQuiet.active = false;
+    voiceAgentRealtimeQuiet.active = !!(wakeGate?.active && wakeGate?.suppressVoice === true);
     voiceAgentRealtimeQuiet.pendingActivate = false;
     setRealtimeAgentWakePhrase(wakeGate?.phrase || '');
     const bootstrapResp = await fetch('/api/voice-agent/xai-realtime-bootstrap', {
@@ -15273,6 +15923,7 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
       wsUrl: bootstrap.wsUrl,
       model: bootstrap.model,
       voice: bootstrap.voice,
+      auth: bootstrap.auth,
       hasClientSecret: !!bootstrap.clientSecret,
       clientSecretPrefix: String(bootstrap.clientSecret || '').slice(0, 6),
       instructionsLength: bootstrap.instructionsLength,
@@ -15289,27 +15940,42 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
     await playback.resume();
 
     // 3. Mic capture → PCM16 → input_audio_buffer.append.
+    //    IMPORTANT: do NOT force the AudioContext sampleRate. On Safari, forcing a
+    //    rate that differs from the mic's native rate makes the MediaStream source
+    //    emit silence. Use the native rate and downsample to 24k in software.
     const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     const micTrack = micStream.getAudioTracks()[0];
     micTrack.enabled = listenMode === 'always_listening';
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    const captureCtx = new AudioCtx({ sampleRate: XAI_REALTIME_INPUT_SAMPLE_RATE });
+    const captureCtx = new AudioCtx();
     const source = captureCtx.createMediaStreamSource(micStream);
     const processor = captureCtx.createScriptProcessor(2048, 1, 1);
     const mutedGain = captureCtx.createGain();
     mutedGain.gain.value = 0;
+    let xaiAppendCount = 0;
+    let xaiNonSilentCount = 0;
     processor.onaudioprocess = (event) => {
       if (ws.readyState !== WebSocket.OPEN || !micTrack.enabled) return;
       const inputData = event.inputBuffer.getChannelData(0);
-      const pcm = downsampleFloat32ToInt16(inputData, captureCtx.sampleRate || XAI_REALTIME_INPUT_SAMPLE_RATE, XAI_REALTIME_INPUT_SAMPLE_RATE);
+      // Track whether the mic is actually producing sound (Safari silence guard).
+      let peak = 0;
+      for (let i = 0; i < inputData.length; i += 64) { const a = Math.abs(inputData[i]); if (a > peak) peak = a; }
+      if (peak > 0.01) xaiNonSilentCount += 1;
+      const pcm = downsampleFloat32ToInt16(inputData, captureCtx.sampleRate || 48000, XAI_REALTIME_INPUT_SAMPLE_RATE);
       if (pcm.byteLength > 0) {
-        try { ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: arrayBufferToBase64(pcm.buffer) })); } catch {}
+        try { ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: arrayBufferToBase64(pcm.buffer) })); xaiAppendCount += 1; } catch {}
       }
     };
     source.connect(processor);
     processor.connect(mutedGain);
     mutedGain.connect(captureCtx.destination);
     await captureCtx.resume?.();
+    // Expose counters so PTT release / diagnostics can report capture health.
+    window.__xaiRealtimeCapture = {
+      get appends() { return xaiAppendCount; },
+      get nonSilent() { return xaiNonSilentCount; },
+      sampleRate: captureCtx.sampleRate,
+    };
 
     // Persistent close/error logging — xAI reports auth/protocol failures as a
     // WebSocket close code+reason rather than an in-band error event.
@@ -15348,20 +16014,22 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
 
     // 4. Configure the session over the socket.
     const turnDetection = listenMode === 'always_listening'
-      ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: true }
+      ? { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500, create_response: !voiceAgentRealtimeQuiet.active }
       : null;
-    // xAI session.update: voice/instructions/turn_detection are flat; audio
-    // formats are nested under session.audio.input/output.format. Send the core
-    // config first (this MUST be accepted for transcription to work), then tools
-    // as a separate update so a tools-schema mismatch can't break audio config.
+    // xAI's realtime API is OpenAI-Realtime-compatible, so use the OpenAI
+    // Realtime WebSocket session format: flat input_audio_format/output_audio_format
+    // = "pcm16" (24kHz mono 16-bit LE — exactly what our capture produces) and
+    // input_audio_transcription to surface user-speech transcripts. Send core
+    // config first (must be accepted), then tools separately so a tools-schema
+    // mismatch can't break the audio/transcription config.
     const coreSession = {
+      modalities: ['audio', 'text'],
       instructions: bootstrap.instructions,
       voice: bootstrap.voice,
+      input_audio_format: 'pcm16',
+      output_audio_format: 'pcm16',
+      input_audio_transcription: { model: 'grok-stt' },
       turn_detection: turnDetection,
-      audio: {
-        input: { format: { type: 'audio/pcm', rate: XAI_REALTIME_INPUT_SAMPLE_RATE } },
-        output: { format: { type: 'audio/pcm', rate: XAI_REALTIME_OUTPUT_SAMPLE_RATE } },
-      },
     };
     try { ws.send(JSON.stringify({ type: 'session.update', session: coreSession })); } catch (err) {
       console.warn('[xai-realtime] core session.update send failed', err);
@@ -15393,6 +16061,8 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
         try { ws.close(); } catch {}
       },
     };
+    startVoiceAgentRealtimeContextRefreshLoop(voiceAgentRealtimeConnection);
+    if (voiceAgentRealtimeQuiet.active) sendRealtimeAgentCreateResponseFlag(false);
     ws.addEventListener('close', () => {
       if (voiceAgentRealtimeConnection?.ws === ws) voiceAgentRealtimeConnection = null;
     });
@@ -15438,6 +16108,11 @@ async function handleXaiRealtimeEvent(event, sessionId, playback) {
   // the debug flag (a rejected session.update is the usual cause of "no transcription").
   if (type === 'session.created' || type === 'session.updated') {
     try { console.info('[xai-realtime]', type, event?.session ? { voice: event.session.voice, turn_detection: event.session.turn_detection, audio: event.session.audio } : event); } catch {}
+    if (type === 'session.updated') {
+      const sess = event?.session || {};
+      const inFmt = sess.input_audio_format || sess?.audio?.input?.format?.type || '?';
+      try { showToast('xAI session configured', `voice=${sess.voice || '?'} in=${typeof inFmt === 'string' ? inFmt : JSON.stringify(inFmt)} vad=${sess?.turn_detection?.type || 'none'}`, 'info', 5000); } catch {}
+    }
   }
   if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
     const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 400);
@@ -15447,6 +16122,8 @@ async function handleXaiRealtimeEvent(event, sessionId, playback) {
   }
   // Streamed assistant audio
   if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
+    if (voiceAgentRealtimeConnection) voiceAgentRealtimeConnection.activeResponse = true;
+    realtimeVoicePlaybackActive = true;
     const b64 = event.delta || event.audio;
     if (b64) {
       try { playback.enqueue(new Int16Array(base64ToArrayBuffer(b64))); } catch {}
@@ -15472,8 +16149,17 @@ window.pttRealtimeAgentRelease = pttRealtimeAgentRelease;
 window.enableRealtimeAgentAlwaysListening = enableRealtimeAgentAlwaysListening;
 window.disableRealtimeAgentAlwaysListening = disableRealtimeAgentAlwaysListening;
 
+function cleanVoiceSpeechText(text) {
+  const value = String(text || '')
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/(^|\s)[!?.,;:()[\]{}"'`~@#$%^&*_+=|\\/<>-]+(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /[A-Za-z0-9]/.test(value) ? value : '';
+}
+
 function splitVoiceText(text, maxLength = 180) {
-  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  const source = cleanVoiceSpeechText(text);
   if (!source) return [];
   const sentences = source.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [source];
   const chunks = [];
@@ -15729,6 +16415,8 @@ async function speakWithServerTts(text, provider) {
 }
 
 async function speakAssistantReply(text) {
+  text = cleanVoiceSpeechText(text);
+  if (!text) return;
   if (getRealtimeWakeGate()?.suppressVoice) return;
   if (realtimeVoiceRepliesEnabled) {
     await speakWithRealtimeVoice(text);
@@ -30595,10 +31283,6 @@ function toggleRightPanel() {
   const toggleBtn = document.getElementById('drawerToggle');
   if (!panel) return;
   const wasOpen = panel.classList.contains('open');
-  if (wasOpen && isCreativeModeLocked()) {
-    showToast('Close the Creative workspace to close the canvas.', 'info');
-    return;
-  }
   const isOpen = panel.classList.toggle('open');
   document.body.classList.toggle('right-collapsed', !isOpen);
   if (toggleBtn) toggleBtn.classList.toggle('active', isOpen);
@@ -30620,11 +31304,6 @@ function toggleRightPanel() {
 
 function toggleCanvas(nextOpen = null, options = {}) {
   const targetOpen = typeof nextOpen === 'boolean' ? nextOpen : !canvasOpen;
-  if (!targetOpen && isCreativeModeLocked() && options.force !== true) {
-    const meta = getCreativeModeMeta(window.currentCreativeMode);
-    showToast(`Close ${meta?.title || 'the Creative workspace'} to close the canvas.`, 'info');
-    return;
-  }
   canvasOpen = targetOpen;
   const panel = document.getElementById('canvas-panel');
   const btn = document.getElementById('canvas-toggle-btn');
@@ -32870,7 +33549,6 @@ window.renderQueuedPromptsPanel = renderQueuedPromptsPanel;
 window.removeQueuedPrompt = removeQueuedPrompt;
 window.steerQueuedPrompt = steerQueuedPrompt;
 window.clearQueuedPrompts = clearQueuedPrompts;
-window.toggleQueuedPromptMenu = toggleQueuedPromptMenu;
 window.editQueuedPrompt = editQueuedPrompt;
 window.updateQueuedPromptUI = updateQueuedPromptUI;
 window.removeVoicePendingTurn = removeVoicePendingTurn;
@@ -33595,10 +34273,21 @@ function _showChannelActivityToast(sid, channelLabel, preview) {
   if (_isMobileShellActive()) return;
   document.querySelector('.__channel-activity-toast')?.remove();
   const toast = document.createElement('div');
+  let autoDismissTimer = null;
+  const dismissToast = () => {
+    if (autoDismissTimer) {
+      clearTimeout(autoDismissTimer);
+      autoDismissTimer = null;
+    }
+    if (!toast.isConnected) return;
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(10px)';
+    setTimeout(() => toast.remove(), 300);
+  };
   toast.className = '__sc-toast __channel-activity-toast';
   const existing = document.querySelectorAll('.__sc-toast');
   const offset = 24 + [...existing].reduce((sum, t) => sum + t.offsetHeight + 8, 0);
-  toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;background:var(--panel);border:1.5px solid var(--brand, #6366f1);border-radius:12px;padding:12px 16px 12px 14px;min-width:240px;max-width:380px;box-shadow:0 4px 24px rgba(0,0,0,0.18);font-family:var(--font);display:flex;gap:10px;align-items:flex-start`;
+  toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;background:var(--panel);border:1.5px solid var(--brand, #6366f1);border-radius:12px;padding:12px 16px 12px 14px;min-width:240px;max-width:380px;box-shadow:0 4px 24px rgba(0,0,0,0.18);font-family:var(--font);display:flex;gap:10px;align-items:flex-start;animation:scToastIn 0.2s ease;transition:opacity 0.3s ease, transform 0.3s ease`;
   toast.setAttribute('data-channel-sid', sid);
   toast.innerHTML = `
     <span style="font-size:16px;flex-shrink:0;line-height:1.4">💬</span>
@@ -33611,10 +34300,11 @@ function _showChannelActivityToast(sid, channelLabel, preview) {
   `;
   toast.querySelector('.__channel-switch-btn').addEventListener('click', () => {
     _switchToChannelSession(sid);
-    toast.remove();
+    dismissToast();
   });
-  toast.querySelector('button:last-child').addEventListener('click', () => toast.remove());
+  toast.querySelector('button:last-child').addEventListener('click', dismissToast);
   document.body.appendChild(toast);
+  autoDismissTimer = setTimeout(dismissToast, 12000);
   if (!document.getElementById('__sc-toast-style')) {
     const s = document.createElement('style');
     s.id = '__sc-toast-style';
@@ -33661,7 +34351,10 @@ function handleMainChatStreamEvent(msg = {}) {
     renderChatMessages();
   };
 
-  if (evt.type === 'user_message') {
+  if (evt.type === 'session_title') {
+    applyServerSessionTitle(sid, evt.title);
+    renderIfViewing();
+  } else if (evt.type === 'user_message') {
     const raw = evt.message && typeof evt.message === 'object' ? evt.message : {};
     const content = String(raw.content || evt.content || '').trim();
     if (content) {
@@ -33686,6 +34379,7 @@ function handleMainChatStreamEvent(msg = {}) {
     }
     window._sessionThinking[sid] = true;
     streamState.currentTurnStartIndex = sess.processLog.length;
+    streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
     // Cross-channel live update: schedule auto-switch or show a toast.
     // The switch is deferred via setTimeout(0) so it runs AFTER
     // restoreActiveSessionIfStreamStoleFocus (which otherwise undoes the switch).
@@ -33708,6 +34402,7 @@ function handleMainChatStreamEvent(msg = {}) {
     const chunk = String(evt.text || '');
     if (chunk) {
       window._sessionThinking[sid] = true;
+      streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
       streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
       appendLiveTraceToStreamState(streamState, 'assistant', chunk, { append: true });
       renderIfViewing();
@@ -33716,6 +34411,7 @@ function handleMainChatStreamEvent(msg = {}) {
     const chunk = String(evt.thinking || evt.text || '');
     if (chunk) {
       window._sessionThinking[sid] = true;
+      streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
       streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
       if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
         appendLiveTraceToStreamState(streamState, 'preamble', chunk, { append: true });
@@ -33783,6 +34479,8 @@ function handleMainChatStreamEvent(msg = {}) {
     const streamed = String(streamState.streamingAIText || '').trim();
     const content = reply || streamed;
     if (content) {
+      const workEndedAt = Date.now();
+      const workStartedAt = Number(streamState.turnStartedAt || 0) || workEndedAt;
       const last = sess.history[sess.history.length - 1];
       if (!last || !isAssistantLikeMessage(last) || String(last.content || '') !== content) {
         let lastUserTimestamp = 0;
@@ -33797,6 +34495,9 @@ function handleMainChatStreamEvent(msg = {}) {
           content,
           thinking: evt.thinking || streamState.streamingThinkingText || undefined,
           timestamp: lastUserTimestamp > 0 ? lastUserTimestamp + 1 : Date.now(),
+          workStartedAt,
+          workEndedAt,
+          workDurationMs: Math.max(0, workEndedAt - workStartedAt),
           channel: inferChannelFromSessionId(sid),
           channelLabel: inferChannelFromSessionId(sid),
           artifacts: Array.isArray(evt.artifacts) && evt.artifacts.length ? evt.artifacts : undefined,
@@ -33804,6 +34505,7 @@ function handleMainChatStreamEvent(msg = {}) {
           generatedVideos: Array.isArray(evt.generatedVideos) && evt.generatedVideos.length ? evt.generatedVideos : undefined,
           canvasFiles: Array.isArray(evt.canvasFiles) && evt.canvasFiles.length ? evt.canvasFiles : undefined,
           fileChanges: evt.fileChanges || undefined,
+          productCarousel: evt.productCarousel || undefined,
           processEntries: sess.processLog.slice(Number(streamState.currentTurnStartIndex || 0)),
         });
       }
@@ -33842,7 +34544,7 @@ function appendVoiceAgentToolProcessEvent(msg = {}) {
   if (!action) return;
   if (evt.type === 'tool_call') {
     const args = evt.args && typeof evt.args === 'object' ? evt.args : {};
-    addSessionProcessEntry(sid, action.startsWith('voice_skill') ? 'skill' : 'tool', formatToolCallForLog(action, args, null), {
+    addSessionProcessEntry(sid, (action.startsWith('skill_') || action.startsWith('voice_skill')) ? 'skill' : 'tool', formatToolCallForLog(action, args, null), {
       actor: 'Voice Agent',
       ...args,
     });
@@ -34212,8 +34914,28 @@ wsEventBus.on('browser:stream_status', (msg) => {
   state.streamStatus = String(msg?.status || '').trim();
   if (!state.streamActive) {
     clearBrowserCanvasStreamHeartbeat();
+    if (isBrowserCanvasClosedStreamStatus(state.streamStatus)) {
+      state.active = false;
+      state.statusLabel = state.streamStatus || 'Browser closed.';
+      state.controlCaptured = false;
+      state.controlOwner = 'agent';
+      clearBrowserTransientHighlight();
+      clearQueuedBrowserControlInputs();
+      const registry = getBrowserSessionRegistry(state);
+      const sid = String(msg?.sessionId || state.sessionId || '').trim();
+      if (sid && registry[sid]) {
+        registry[sid] = {
+          ...registry[sid],
+          active: false,
+          streamActive: false,
+          statusLabel: state.statusLabel,
+          updatedAt: Number(msg?.timestamp || Date.now()) || Date.now(),
+        };
+      }
+    }
   }
   renderBrowserCanvasSurface();
+  persistActiveChat();
 });
 
 wsEventBus.on('browser:control', (msg) => {
@@ -34535,6 +35257,7 @@ wsEventBus.on('canvas_publish_state', (msg) => {
       canvasLoadWorkspaceFiles(storageRoot, { expandBrowser: false }).catch(() => {});
     }
     loadCreativeAssets({ force: true, silent: true, renderStart: false, mode }).catch(() => {});
+    if (eventName === 'creative_export_saved') revealCreativeCanvasForWorkspaceOutput(mode);
   });
 });
 
@@ -34612,6 +35335,7 @@ wsEventBus.on('creative_render_job_updated', (msg) => {
   }
   if (msg?.terminal || msg?.exportSaved) {
     loadCreativeAssets({ force: true, silent: true, renderStart: false, mode }).catch(() => {});
+    if (msg?.exportSaved) revealCreativeCanvasForWorkspaceOutput(mode);
     return;
   }
   renderCreativeWorkspace();

@@ -28,7 +28,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             specialization: {
               type: 'string',
-              description: 'Concrete standalone specialization when using from_role. If the agent is later added to a team, this can become its team role. E.g. "Prospect Researcher: finds local small-business leads for Xpose Market from maps/directories/search."',
+              description: 'Concrete standalone specialization when using from_role. If the agent is later added to a team, this can become its team role. E.g. "Prospect Researcher: finds local small-business leads from maps/directories/search."',
             },
             personality_style: {
               type: 'string',

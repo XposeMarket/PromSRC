@@ -28,6 +28,7 @@ export interface DevSourceEditScope {
   allowedFiles: string[];
   verificationCommand?: string;
   verificationProfile?: DevSourceVerificationProfile;
+  verificationProfiles?: DevSourceVerificationProfile[];
   reason?: string;
   plan?: DevSourceEditPlan;
   planHash?: string;
@@ -48,6 +49,15 @@ export interface DevSourceEditContinuation {
   changedSurfaces?: string[];
   summary?: string;
   verification?: string[];
+  verificationProfile?: DevSourceVerificationProfile;
+  verificationProfiles?: DevSourceVerificationProfile[];
+  lastVerification?: {
+    profileIds: DevSourceVerificationProfile[];
+    changedFiles: string[];
+    success: boolean;
+    summary: string;
+    completedAt: number;
+  };
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -56,7 +66,24 @@ export interface DevSourceEditContinuation {
 
 const grants = new Map<string, DevSourceEditScope>();
 const DEFAULT_TTL_MS = 2 * 60 * 60 * 1000;
-export type DevSourceVerificationProfile = 'backend_build' | 'webui_sync_check' | 'full_build' | 'none';
+export type DevSourceVerificationProfile =
+  | 'backend_build'
+  | 'webui_sync_check'
+  | 'full_build'
+  | 'route_smoke'
+  | 'desktop_ui_smoke'
+  | 'mobile_ui_smoke'
+  | 'none';
+
+const DEV_SOURCE_VERIFICATION_PROFILES: DevSourceVerificationProfile[] = [
+  'backend_build',
+  'webui_sync_check',
+  'full_build',
+  'route_smoke',
+  'desktop_ui_smoke',
+  'mobile_ui_smoke',
+  'none',
+];
 
 function normalizePath(input: unknown): string {
   return String(input || '')
@@ -79,6 +106,14 @@ function normalizeAllowedFiles(files: unknown): string[] {
 function normalizeTextArray(value: unknown, fallback: string[] = []): string[] {
   const raw = Array.isArray(value) ? value : fallback;
   return raw.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 12);
+}
+
+export function normalizeDevSourceVerificationProfiles(value: unknown): DevSourceVerificationProfile[] {
+  const raw = Array.isArray(value) ? value : [value];
+  const profiles = raw
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item): item is DevSourceVerificationProfile => DEV_SOURCE_VERIFICATION_PROFILES.includes(item as DevSourceVerificationProfile));
+  return Array.from(new Set(profiles));
 }
 
 function normalizeEvidence(value: unknown): DevSourceEditEvidence[] {
@@ -109,6 +144,7 @@ export function normalizeDevSourceEditPlan(input: {
   reason?: string;
   verificationCommand?: string;
   verificationProfile?: DevSourceVerificationProfile;
+  verificationProfiles?: DevSourceVerificationProfile[];
 }): DevSourceEditPlan {
   const raw = input.plan && typeof input.plan === 'object' ? input.plan as any : {};
   const userRequest = String(raw.user_request || raw.userRequest || input.userRequest || '').trim();
@@ -118,7 +154,9 @@ export function normalizeDevSourceEditPlan(input: {
   const fix = String(raw.fix || input.fix || '').trim();
   const verificationFallback = [
     input.verificationCommand,
-    input.verificationProfile ? `verification_profile:${input.verificationProfile}` : '',
+    ...(input.verificationProfiles && input.verificationProfiles.length
+      ? input.verificationProfiles.map((profile) => `verification_profile:${profile}`)
+      : [input.verificationProfile ? `verification_profile:${input.verificationProfile}` : '']),
   ].filter(Boolean).map(String);
   const steps = normalizeTextArray(raw.steps || raw.plan_steps || input.steps, [
     'Inspect the approved source files and confirm the existing behavior.',
@@ -232,6 +270,7 @@ export function createDevSourceEditApprovalScope(input: {
   files: unknown;
   verificationCommand?: unknown;
   verificationProfile?: unknown;
+  verificationProfiles?: unknown;
   reason?: unknown;
   plan?: unknown;
   userRequest?: unknown;
@@ -256,10 +295,9 @@ export function createDevSourceEditApprovalScope(input: {
   if (allowedFiles.length === 0) {
     throw new Error('At least one src/ or web-ui/ file is required.');
   }
-  const requestedProfile = String(input.verificationProfile || '').trim().toLowerCase();
-  const verificationProfile = ['backend_build', 'webui_sync_check', 'full_build', 'none'].includes(requestedProfile)
-    ? requestedProfile as DevSourceVerificationProfile
-    : undefined;
+  const requestedProfiles = normalizeDevSourceVerificationProfiles((input as any).verificationProfiles || input.verificationProfile);
+  const verificationProfile = requestedProfiles[0] || undefined;
+  const verificationProfiles = requestedProfiles.length ? requestedProfiles : undefined;
   const verificationCommand = String(input.verificationCommand || '').trim() || undefined;
   const reason = String(input.reason || '').trim() || undefined;
   const plan = normalizeDevSourceEditPlan({
@@ -277,6 +315,7 @@ export function createDevSourceEditApprovalScope(input: {
     reason,
     verificationCommand,
     verificationProfile,
+    verificationProfiles,
   });
   const planHash = stableHash(plan);
   const devEditId = String(input.devEditId || '').trim() || `dev_edit_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
@@ -285,6 +324,7 @@ export function createDevSourceEditApprovalScope(input: {
     allowedFiles,
     verificationCommand,
     verificationProfile,
+    verificationProfiles,
     reason,
     plan,
     planHash,
@@ -319,6 +359,8 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
     plan: grant.plan,
     allowedFiles: grant.allowedFiles,
     verification: grant.plan?.verification,
+    verificationProfile: grant.verificationProfile,
+    verificationProfiles: grant.verificationProfiles,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
@@ -330,6 +372,7 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
       allowedFiles: scope.allowedFiles,
       verificationCommand: scope.verificationCommand,
       verificationProfile: scope.verificationProfile,
+      verificationProfiles: scope.verificationProfiles,
       devEditId: scope.devEditId,
       planHash: scope.planHash,
       approvedBy,

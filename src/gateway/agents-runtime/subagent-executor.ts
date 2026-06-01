@@ -276,6 +276,11 @@ import {
   upsertDevSourceEditContinuation,
 } from '../dev-source-approvals.js';
 import {
+  formatDevVerificationSummary,
+  resolveDevVerificationPlan,
+  runDevVerificationPlan,
+} from '../dev-verification.js';
+import {
   consumeFinalActionApproval,
   createFinalActionApprovalScope,
   grantFinalActionApproval,
@@ -1183,6 +1188,7 @@ const GENERIC_WORKSPACE_MUTATION_TOOLS = new Set([
   'copy_directory',
   'move_directory',
   'apply_patch',
+  'apply_patchset',
   'restore_snapshot',
   'revert_last_tool_change',
   'revert_own_patch',
@@ -1334,18 +1340,23 @@ function formatPromApplyDevChangesInstruction(files: string[], reason: string, m
   const surfaces = getPromApplySurfacesForFiles(files);
   const safeReason = String(reason || 'Approved Prometheus dev source edits').replace(/"/g, '\\"');
   const idPart = devEditId ? `, dev_edit_id:"${String(devEditId).replace(/"/g, '\\"')}"` : '';
-  return `prom_apply_dev_changes({changed_surfaces:${JSON.stringify(surfaces.length ? surfaces : ['backend'])}, mode:"${mode}", reason:"${safeReason}"${idPart}})`;
+  const filesPart = files.length ? `, affected_files:${JSON.stringify(files)}` : '';
+  return `prom_apply_dev_changes({changed_surfaces:${JSON.stringify(surfaces.length ? surfaces : ['backend'])}, mode:"${mode}", reason:"${safeReason}"${idPart}${filesPart}})`;
 }
 
 function getPostSourceEditInstructionForSession(sessionId: string, files: string[]): string {
   const task = resolveTaskForSession(sessionId);
   const mode = task?.proposalExecution?.mode;
   if (mode === DEV_SRC_SELF_EDIT_MODE || mode === DEV_SRC_SELF_EDIT_REPAIR_MODE) {
-    return `Run the canonical sandbox verification command with run_command({command:"${getSourceVerificationCommandForSession(sessionId)}", shell:true}) before completing the proposal task. Do not call prom_apply_dev_changes inside the isolated proposal sandbox.`;
+    return `Pending: run sandbox verification "${getSourceVerificationCommandForSession(sessionId)}" before finalizing.`;
   }
   const grant = getDevSourceEditGrant(sessionId);
   const scopedFiles = files.length ? files : (grant?.allowedFiles || []);
-  return `Dev source write succeeded. Continue the approved dev-edit plan: reread the changed area if needed, run the approved verification checks, and use ${formatPromApplyDevChangesInstruction(scopedFiles, grant?.reason || 'Approved Prometheus dev source edits', 'verify_only', grant?.devEditId)} for a no-restart Prometheus build/sync preflight when the check is a Prometheus build. Do not call apply_live until the patch and approved verification/preflight step are complete. Then finalize with ${formatPromApplyDevChangesInstruction(scopedFiles, grant?.reason || 'Approved Prometheus dev source edits', 'apply_live', grant?.devEditId)}. After apply_live succeeds, call write_note with tag "${grant?.plan?.completionNoteTag || 'dev_edit_complete'}"${grant?.devEditId ? ` and dev_edit_id "${grant.devEditId}"` : ''}.`;
+  const surfaces = getPromApplySurfacesForFiles(scopedFiles);
+  const surfaceText = (surfaces.length ? surfaces : ['backend']).join(',');
+  const idText = grant?.devEditId ? ` dev_edit_id=${grant.devEditId}` : '';
+  const tagText = grant?.plan?.completionNoteTag || 'dev_edit_complete';
+  return `Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=${surfaceText}; write_note tag=${tagText}.${idText}`;
 }
 
 function validateSourceSyntaxBeforeWrite(absPath: string, content: string): string | null {
@@ -1605,6 +1616,193 @@ export async function executeTool(name: string, args: any, workspacePath: string
     }
     const numbered = sliced.map((line, i) => `${firstLineNum + i}: ${line}`).join('\n');
     return `${displayPath} (${allLines.length} lines):\n${numbered}`;
+  }
+  function normalizeFindTextForRecovery(text: string): string {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+  function tokenSetForRecovery(text: string): Set<string> {
+    return new Set(
+      normalizeFindTextForRecovery(text)
+        .toLowerCase()
+        .split(/[^a-z0-9_$]+/i)
+        .filter((token) => token.length >= 2)
+    );
+  }
+  function countCommonTokensForRecovery(left: Set<string>, right: Set<string>): number {
+    let common = 0;
+    for (const token of left) {
+      if (right.has(token)) common += 1;
+    }
+    return common;
+  }
+  function renderCandidateSnippetForRecovery(allLines: string[], startLine: number, endLine: number): string {
+    const clampedStart = Math.max(1, Math.min(startLine, allLines.length || 1));
+    const clampedEnd = Math.max(clampedStart, Math.min(endLine, allLines.length || clampedStart));
+    const snippet = allLines
+      .slice(clampedStart - 1, clampedEnd)
+      .map((line, index) => `${clampedStart + index}: ${line}`)
+      .join('\n');
+    return snippet || `${clampedStart}:`;
+  }
+  function buildTextNotFoundRecovery(displayPath: string, content: string, findText: string, readToolName: string): string {
+    const allLines = content.split('\n');
+    const findLines = String(findText || '').split('\n');
+    const normalizedFind = normalizeFindTextForRecovery(findText);
+    const targetWindow = Math.max(1, Math.min(40, findLines.length || 1));
+    const candidates: Array<{ reason: string; startLine: number; endLine: number; score: number }> = [];
+    const seen = new Set<string>();
+    const addCandidate = (reason: string, startLine: number, endLine: number, score: number) => {
+      if (!Number.isFinite(startLine) || startLine < 1) return;
+      const clampedStart = Math.max(1, Math.min(startLine, allLines.length || 1));
+      const clampedEnd = Math.max(clampedStart, Math.min(endLine, allLines.length || clampedStart));
+      const key = `${clampedStart}:${clampedEnd}:${reason}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push({ reason, startLine: clampedStart, endLine: clampedEnd, score });
+    };
+
+    if (normalizedFind) {
+      const minWindow = Math.max(1, targetWindow - 2);
+      const maxWindow = Math.min(Math.max(targetWindow + 4, minWindow), 48);
+      for (let size = minWindow; size <= maxWindow; size += 1) {
+        for (let index = 0; index <= Math.max(0, allLines.length - size); index += 1) {
+          const block = allLines.slice(index, index + size).join('\n');
+          const normalizedBlock = normalizeFindTextForRecovery(block);
+          if (normalizedBlock && (normalizedBlock === normalizedFind || normalizedBlock.includes(normalizedFind) || normalizedFind.includes(normalizedBlock))) {
+            addCandidate('same text with normalized whitespace', index + 1, index + size, 1000 - Math.abs(size - targetWindow));
+          }
+        }
+      }
+    }
+
+    const trimmedFindLines = findLines.map((line) => line.trim()).filter(Boolean);
+    const prefixAnchor = trimmedFindLines[0] || '';
+    const suffixAnchor = trimmedFindLines[trimmedFindLines.length - 1] || '';
+    if (prefixAnchor.length >= 8) {
+      allLines.forEach((line, index) => {
+        const trimmedLine = line.trim();
+        if (trimmedLine && (trimmedLine.includes(prefixAnchor) || prefixAnchor.includes(trimmedLine))) {
+          addCandidate('matching prefix anchor', index + 1, index + targetWindow, 800);
+        }
+      });
+    }
+    if (suffixAnchor.length >= 8 && suffixAnchor !== prefixAnchor) {
+      allLines.forEach((line, index) => {
+        const trimmedLine = line.trim();
+        if (trimmedLine && (trimmedLine.includes(suffixAnchor) || suffixAnchor.includes(trimmedLine))) {
+          addCandidate('matching suffix anchor', index + 2 - targetWindow, index + 1, 780);
+        }
+      });
+    }
+
+    const findTokens = tokenSetForRecovery(findText);
+    if (findTokens.size > 0) {
+      const closestWindow = Math.min(Math.max(targetWindow, 4), 30);
+      for (let index = 0; index <= Math.max(0, allLines.length - closestWindow); index += 1) {
+        const block = allLines.slice(index, index + closestWindow).join('\n');
+        const blockTokens = tokenSetForRecovery(block);
+        const common = countCommonTokensForRecovery(findTokens, blockTokens);
+        const union = new Set([...findTokens, ...blockTokens]).size || 1;
+        const score = common / union;
+        if (common >= 2 || score >= 0.25) {
+          addCandidate('closest token block', index + 1, index + closestWindow, Math.round(score * 500));
+        }
+      }
+    }
+
+    const top = candidates
+      .sort((a, b) => b.score - a.score || a.startLine - b.startLine)
+      .filter((candidate, index, list) => list.findIndex((other) => Math.abs(other.startLine - candidate.startLine) <= 2) === index)
+      .slice(0, 3);
+    if (!top.length) {
+      return `ERROR: Text not found in ${displayPath}. No close candidate found. Use ${readToolName} to confirm exact text including whitespace.`;
+    }
+    const rendered = top.map((candidate, index) => {
+      const snippetStart = Math.max(1, candidate.startLine - 2);
+      const snippetEnd = Math.min(allLines.length, candidate.endLine + 2);
+      return `${index + 1}) ${candidate.reason}, lines ${candidate.startLine}-${candidate.endLine}:\n${renderCandidateSnippetForRecovery(allLines, snippetStart, snippetEnd)}`;
+    }).join('\n\n');
+    return `ERROR: Text not found in ${displayPath}. Likely intended locations:\n${rendered}\n\nNext: retry with an exact snippet from one candidate, or call ${readToolName} around the candidate lines.`;
+  }
+  function scorePathSuggestion(requestedRel: string, candidateRel: string): number {
+    const requested = String(requestedRel || '').toLowerCase().replace(/\\/g, '/');
+    const candidate = String(candidateRel || '').toLowerCase().replace(/\\/g, '/');
+    const requestedBase = path.basename(requested);
+    const candidateBase = path.basename(candidate);
+    let score = 0;
+    if (candidate === requested) score += 1000;
+    if (candidate.endsWith(requested)) score += 600;
+    if (candidateBase === requestedBase) score += 500;
+    if (candidate.includes(requestedBase) && requestedBase) score += 220;
+    if (requested.includes(candidateBase) && candidateBase) score += 120;
+    const requestedParts = requested.split(/[\/._-]+/).filter(Boolean);
+    const candidateParts = new Set(candidate.split(/[\/._-]+/).filter(Boolean));
+    for (const part of requestedParts) {
+      if (candidateParts.has(part)) score += 40;
+      else if (part.length >= 3 && candidate.includes(part)) score += 15;
+    }
+    score -= Math.abs(candidate.length - requested.length) / 8;
+    return score;
+  }
+  function buildPathNotFoundRecovery(
+    displayPath: string,
+    rootDir: string,
+    requestedRel: string,
+    browseToolName: string,
+    options: { displayPrefix?: string; directoriesOnly?: boolean; include?: (rel: string, isDirectory: boolean) => boolean } = {}
+  ): string {
+    const suggestions: Array<{ rel: string; isDirectory: boolean; score: number }> = [];
+    const skipDirs = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.next', '.vite', '.turbo', '.pnpm-store']);
+    const maxVisited = 4000;
+    let visited = 0;
+    const walk = (dir: string) => {
+      if (visited >= maxVisited) return;
+      let dirents: fs.Dirent[];
+      try {
+        dirents = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of dirents) {
+        if (visited >= maxVisited) return;
+        if (entry.isDirectory() && skipDirs.has(entry.name)) continue;
+        const abs = path.join(dir, entry.name);
+        const rel = path.relative(rootDir, abs).replace(/\\/g, '/');
+        const isDirectory = entry.isDirectory();
+        if ((isDirectory || entry.isFile()) && (!options.directoriesOnly || isDirectory) && (!options.include || options.include(rel, isDirectory))) {
+          visited += 1;
+          const score = scorePathSuggestion(requestedRel, rel);
+          if (score > 0) suggestions.push({ rel, isDirectory, score });
+        }
+        if (isDirectory) walk(abs);
+      }
+    };
+    walk(rootDir);
+    const top = suggestions
+      .sort((a, b) => b.score - a.score || a.rel.length - b.rel.length)
+      .slice(0, 3);
+    if (!top.length) {
+      return `ERROR: ${displayPath} not found. No close path candidate found. Use ${browseToolName} to browse nearby files.`;
+    }
+    const prefix = options.displayPrefix || '';
+    const rendered = top
+      .map((item, index) => `${index + 1}) ${prefix}${item.rel}${item.isDirectory ? '/' : ''}`)
+      .join('\n');
+    return `ERROR: ${displayPath} not found. Likely intended paths:\n${rendered}\n\nNext: retry with one candidate, or use ${browseToolName} to browse nearby files.`;
+  }
+  function buildLineOutOfRangeRecovery(displayPath: string, allLines: string[], requestedLine: number, readToolName: string, lineLabel = 'line'): string {
+    const lineCount = allLines.length;
+    const tailStart = Math.max(1, lineCount - 7);
+    const tail = renderCandidateSnippetForRecovery(allLines, tailStart, lineCount);
+    return `ERROR: ${lineLabel} ${requestedLine} past end of ${displayPath} (${lineCount} lines).\nLast lines:\n${tail}\n\nNext: use ${readToolName} with start_line near ${tailStart}, or retry with a line <= ${lineCount}.`;
+  }
+  function recoverWorkspacePathError(err: any, requested: unknown, browseToolName = 'list_dir'): string {
+    const message = String(err?.message || err);
+    if (/not found/i.test(message)) {
+      const requestedRel = String(requested || '').replace(/\\/g, '/');
+      return buildPathNotFoundRecovery(requestedRel, workspacePath, requestedRel, browseToolName);
+    }
+    return `ERROR: ${message}`;
   }
 	  function renderDirectoryEntries(absPath: string): string[] {
     return fs.readdirSync(absPath).map((entry) => {
@@ -3795,7 +3993,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true });
         } catch (err: any) {
-          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+          const requested = String(filename || '').replace(/\\/g, '/');
+          return { name, args, result: recoverWorkspacePathError(err, requested, 'list_dir'), error: true };
         }
         const filePath = resolvedFile.absPath;
         const content = fs.readFileSync(filePath, 'utf-8');
@@ -3806,7 +4005,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const numLines = Math.max(1, Math.floor(Number(args.num_lines) || 240));
           const startIdx = startLine - 1;
           if (startIdx >= allLines.length) {
-            return { name, args, result: `Line ${startLine} past end (${allLines.length} lines)`, error: true };
+            return { name, args, result: buildLineOutOfRangeRecovery(resolvedFile.displayPath, allLines, startLine, 'read_file', 'start_line'), error: true };
           }
           const windowLines = allLines.slice(startIdx, startIdx + numLines);
           const numberedWindow = windowLines.map((line, i) => `${startLine + i}: ${line}`).join('\n');
@@ -3827,7 +4026,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          fs.mkdirSync(resolved.absPath, { recursive: true });
 	          return { name, args, result: `OK directory created: ${resolved.normalizedRel}`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, requestedPath, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3846,7 +4045,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          fs.writeFileSync(resolved.absPath, content, 'utf-8');
 	          return { name, args, result: `OK created ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3862,7 +4061,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          fs.writeFileSync(resolved.absPath, content, 'utf-8');
 	          return { name, args, result: `OK wrote ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3877,14 +4076,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'replace_lines');
 	          if (blocked) return blocked;
 	          const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
-	          if (start > lines.length) return { name, args, result: `ERROR: start_line ${start} past end (${lines.length} lines)`, error: true };
+	          if (start > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_file', 'start_line'), error: true };
 	          const endClamped = Math.min(end, lines.length);
 	          const newLines = String(args.new_content ?? '').split('\n');
 	          lines.splice(start - 1, endClamped - start + 1, ...newLines);
 	          fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
 	          return { name, args, result: `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped}.`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3897,13 +4096,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'insert_after');
 	          if (blocked) return blocked;
 	          const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
-	          if (afterLine > lines.length) return { name, args, result: `ERROR: after_line ${afterLine} past end (${lines.length} lines)`, error: true };
+	          if (afterLine > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, afterLine, 'read_file', 'after_line'), error: true };
 	          const newLines = String(args.content ?? '').split('\n');
 	          lines.splice(afterLine, 0, ...newLines);
 	          fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
 	          return { name, args, result: `OK ${resolved.normalizedRel}: inserted after line ${afterLine}.`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3918,13 +4117,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'delete_lines');
 	          if (blocked) return blocked;
 	          const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
-	          if (start > lines.length) return { name, args, result: `ERROR: start_line ${start} past end (${lines.length} lines)`, error: true };
+	          if (start > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_file', 'start_line'), error: true };
 	          const endClamped = Math.min(end, lines.length);
 	          lines.splice(start - 1, endClamped - start + 1);
 	          fs.writeFileSync(resolved.absPath, lines.join('\n'), 'utf-8');
 	          return { name, args, result: `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped}.`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3939,12 +4138,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'find_replace');
 	          if (blocked) return blocked;
 	          const content = fs.readFileSync(resolved.absPath, 'utf-8');
-	          if (!content.includes(find)) return { name, args, result: `ERROR: Text not found in ${resolved.normalizedRel}`, error: true };
+	          if (!content.includes(find)) return { name, args, result: buildTextNotFoundRecovery(resolved.normalizedRel, content, find, 'read_file'), error: true };
 	          const updated = args.replace_all === true ? content.split(find).join(replace) : content.replace(find, replace);
 	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
 	          return { name, args, result: `OK ${resolved.normalizedRel}: replaced ${args.replace_all === true ? 'all occurrences' : 'first occurrence'}.`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3963,7 +4162,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          fs.renameSync(oldResolved.absPath, newResolved.absPath);
 	          return { name, args, result: `OK renamed ${oldResolved.normalizedRel} to ${newResolved.normalizedRel}.`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, oldPath, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -3977,7 +4176,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          fs.unlinkSync(resolved.absPath);
 	          return { name, args, result: `OK deleted ${resolved.normalizedRel}.`, error: false };
 	        } catch (err: any) {
-	          return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
 	      }
 
@@ -4158,7 +4357,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: source_stats only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: `File not found: src/${normalizedRel}. Use list_source to browse available files.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return { name, args, result: `"src/${normalizedRel}" is not a file`, error: true };
@@ -4189,7 +4388,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const promDisplay = resolved.normalizedRel || '.';
         if (!fs.existsSync(resolved.absPath)) {
-          return { name, args, result: `Path not found: ${promDisplay}. Use list_prom to browse allowed prom-root surfaces.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(promDisplay, projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         const stat = fs.statSync(resolved.absPath);
         if (!stat.isFile()) return { name, args, result: `"${promDisplay}" is not a file`, error: true };
@@ -4221,7 +4420,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: webui_source_stats only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: `File not found: web-ui/${normalizedRel}. Use list_webui_source to browse available files.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${normalizedRel}`, webUiRoot, normalizedRel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return { name, args, result: `"web-ui/${normalizedRel}" is not a file`, error: true };
@@ -4435,13 +4634,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (gs_useSrc) {
           const gs_srcSubdir = gs_rawPath ? path.resolve(gs_srcRoot, gs_rawPath) : gs_srcRoot;
           if (!gs_srcSubdir.startsWith(gs_srcRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside src/`, error: true };
-          if (!fs.existsSync(gs_srcSubdir)) return { name, args, result: `Directory not found: src/${gs_rawPath}`, error: true };
+          if (!fs.existsSync(gs_srcSubdir)) return { name, args, result: buildPathNotFoundRecovery(`src/${gs_rawPath}`, gs_srcRoot, gs_rawPath, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
           gs_walkDir(gs_srcSubdir, gs_srcRoot, 'src');
         }
         if (gs_useWebUi) {
           const gs_webUiSubdir = gs_rawPath ? path.resolve(gs_webUiRoot, gs_rawPath) : gs_webUiRoot;
           if (!gs_webUiSubdir.startsWith(gs_webUiRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside web-ui/`, error: true };
-          if (!fs.existsSync(gs_webUiSubdir)) return { name, args, result: `Directory not found: web-ui/${gs_rawPath}`, error: true };
+          if (!fs.existsSync(gs_webUiSubdir)) return { name, args, result: buildPathNotFoundRecovery(`web-ui/${gs_rawPath}`, gs_webUiRoot, gs_rawPath, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
           gs_walkDir(gs_webUiSubdir, gs_webUiRoot, 'web-ui');
         }
         const gs_searchedLabel = gs_searchBoth ? 'src/ + web-ui/' : (gs_useSrc ? 'src/' + (gs_rawPath ? gs_rawPath : '') : 'web-ui/' + (gs_rawPath ? gs_rawPath : ''));
@@ -4467,7 +4666,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         if (!fs.existsSync(gp_resolved.absPath)) {
-          return { name, args, result: `Path not found: ${gp_resolved.normalizedRel || '.'}. Use list_prom to browse allowed prom-root surfaces.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(gp_resolved.normalizedRel || '.', gp_projectRoot, gp_resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         const gp_rootStat = fs.statSync(gp_resolved.absPath);
         if (!gp_rootStat.isDirectory()) {
@@ -4534,7 +4733,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: read_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: `File not found: src/${normalizedRel}. Use list_source to browse available files.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`src/${normalizedRel}`, srcRoot, normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const stat = fs.statSync(absPath);
         if (stat.isDirectory()) {
@@ -4564,7 +4763,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          return { name, args, result: 'ERROR: delete_source only allows access to src/ directory.', error: true };
 	        }
 	        if (!fs.existsSync(ds_absPath)) {
-	          return { name, args, result: `File not found: src/${ds_rel.replace(/^\.?\/?src\//, '')}. Use list_source to verify path.`, error: true };
+	          const ds_normalizedRel = ds_rel.replace(/^\.?\/?src\//, '');
+	          return { name, args, result: buildPathNotFoundRecovery(`src/${ds_normalizedRel}`, ds_srcRoot, ds_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
 	        }
 	        const ds_stat = fs.statSync(ds_absPath);
 	        if (!ds_stat.isFile()) return { name, args, result: `"src/${ds_rel.replace(/^\.?\/?src\//, '')}" is not a file`, error: true };
@@ -4583,7 +4783,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: list_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: `Directory not found: src/${rel}`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`src/${rel}`, srcRoot, rel, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
         }
         const entries = renderDirectoryEntries(absPath);
         const displayPath = rel ? `src/${rel}` : 'src';
@@ -4600,7 +4800,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         if (!fs.existsSync(resolved.absPath)) {
-          return { name, args, result: `Path not found: ${resolved.normalizedRel || '.'}. Use list_prom with another allowlisted path.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel || '.', projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (rel) => isPromAllowedPath(rel) }), error: true };
         }
         const stat = fs.statSync(resolved.absPath);
         if (!stat.isDirectory()) {
@@ -4626,7 +4826,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
         if (!fs.existsSync(resolved.absPath)) {
-          return { name, args, result: `Path not found: ${resolved.normalizedRel || '.'}. Use list_prom to browse allowed prom-root surfaces.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel || '.', projectRoot, resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         const stat = fs.statSync(resolved.absPath);
         if (stat.isDirectory()) {
@@ -4661,13 +4861,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: `File not found: ${resolved.normalizedRel}. Use list_prom to verify path.`, error: true };
+	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
 	        const content = fs.readFileSync(resolved.absPath, 'utf-8');
 	        if (!content.includes(findText)) {
-	          return { name, args, result: `Text not found in ${resolved.normalizedRel}. Use read_prom_file to confirm exact text including whitespace.`, error: true };
+	          return { name, args, result: buildTextNotFoundRecovery(resolved.normalizedRel, content, findText, 'read_prom_file'), error: true };
 	        }
 	        const replaceAll = args.replace_all === true;
 	        const occurrences = replaceAll ? (content.split(findText).length - 1) : 1;
@@ -4695,13 +4895,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: `File not found: ${resolved.normalizedRel}. Use list_prom to verify path.`, error: true };
+	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
 	        const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
 	        if (start > lines.length) {
-	          return { name, args, result: `Line ${start} past end of file (${lines.length} lines). Use read_prom_file to check line numbers.`, error: true };
+	          return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_prom_file', 'start_line'), error: true };
 	        }
 	        const endClamped = Math.min(end, lines.length);
 	        lines.splice(start - 1, endClamped - start + 1, ...newContent.split('\n'));
@@ -4727,7 +4927,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: `File not found: ${resolved.normalizedRel}. Use list_prom to verify path.`, error: true };
+	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
@@ -4756,13 +4956,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: `File not found: ${resolved.normalizedRel}. Use list_prom to verify path.`, error: true };
+	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
 	        const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
 	        if (start > lines.length) {
-	          return { name, args, result: `Line ${start} past end of file (${lines.length} lines). Use read_prom_file to check line numbers.`, error: true };
+	          return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_prom_file', 'start_line'), error: true };
 	        }
 	        const endClamped = Math.min(end, lines.length);
 	        lines.splice(start - 1, endClamped - start + 1);
@@ -4815,7 +5015,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	        const scopeBlocked = enforceProposalWriteAccess(resolved.normalizedRel, 'file', name);
 	        if (scopeBlocked) return scopeBlocked;
 	        if (!fs.existsSync(resolved.absPath)) {
-	          return { name, args, result: `File not found: ${resolved.normalizedRel}. Use list_prom to verify path.`, error: true };
+	          return { name, args, result: buildPathNotFoundRecovery(resolved.normalizedRel, projectRoot, resolved.normalizedRel, 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
 	        }
 	        const stat = fs.statSync(resolved.absPath);
 	        if (!stat.isFile()) return { name, args, result: `"${resolved.normalizedRel}" is not a file`, error: true };
@@ -4834,7 +5034,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: list_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(lwu_absPath)) {
-          return { name, args, result: `Directory not found: web-ui/${lwu_rel}`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${lwu_rel}`, lwu_webUiRoot, lwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
         }
         const lwu_entries = renderDirectoryEntries(lwu_absPath);
         const lwu_displayPath = lwu_rel ? `web-ui/${lwu_rel}` : 'web-ui';
@@ -4852,7 +5052,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: read_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(rwu_absPath)) {
-          return { name, args, result: `File not found: web-ui/${rwu_rel}. Use list_webui_source to browse available files.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${rwu_rel}`, rwu_webUiRoot, rwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const rwu_stat = fs.statSync(rwu_absPath);
         if (rwu_stat.isDirectory()) {
@@ -4886,11 +5086,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: find_replace_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(frs_absPath)) {
-          return { name, args, result: `File not found: src/${frs_rel}. Use list_source to verify path.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`src/${frs_rel}`, frs_srcRoot, frs_rel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const frs_content = fs.readFileSync(frs_absPath, 'utf-8');
         if (!frs_content.includes(frs_find)) {
-          return { name, args, result: `Text not found in src/${frs_rel}. Use read_source to confirm exact text including whitespace.`, error: true };
+          return { name, args, result: buildTextNotFoundRecovery(`src/${frs_rel}`, frs_content, frs_find, 'read_source'), error: true };
         }
         const frs_replaceAll = args.replace_all === true;
         const frs_occurrences = frs_replaceAll ? (frs_content.split(frs_find).length - 1) : 1;
@@ -4924,11 +5124,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: replace_lines_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(rls_absPath)) {
-          return { name, args, result: `File not found: src/${rls_rel.replace(/^\.?\/?src\//, '')}. Use list_source to verify path.`, error: true };
+          const rls_normalizedRel = rls_rel.replace(/^\.?\/?src\//, '');
+          return { name, args, result: buildPathNotFoundRecovery(`src/${rls_normalizedRel}`, rls_srcRoot, rls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const rls_lines = fs.readFileSync(rls_absPath, 'utf-8').split('\n');
         if (rls_start > rls_lines.length) {
-          return { name, args, result: `Line ${rls_start} past end of file (${rls_lines.length} lines). Use read_source to check line numbers.`, error: true };
+          return { name, args, result: buildLineOutOfRangeRecovery(`src/${rls_rel.replace(/^\.?\/?src\//, '')}`, rls_lines, rls_start, 'read_source', 'start_line'), error: true };
         }
         const rls_endClamped = Math.min(rls_end, rls_lines.length);
         rls_lines.splice(rls_start - 1, rls_endClamped - rls_start + 1, ...rls_newContent.split('\n'));
@@ -4960,7 +5161,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: insert_after_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(ias_absPath)) {
-          return { name, args, result: `File not found: src/${ias_rel.replace(/^\.?\/?src\//, '')}. Use list_source to verify path.`, error: true };
+          const ias_normalizedRel = ias_rel.replace(/^\.?\/?src\//, '');
+          return { name, args, result: buildPathNotFoundRecovery(`src/${ias_normalizedRel}`, ias_srcRoot, ias_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const ias_lines = fs.readFileSync(ias_absPath, 'utf-8').split('\n');
         const ias_insertAt = Math.min(ias_afterLine, ias_lines.length);
@@ -4993,11 +5195,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: delete_lines_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(dls_absPath)) {
-          return { name, args, result: `File not found: src/${dls_rel.replace(/^\.?\/?src\//, '')}. Use list_source to verify path.`, error: true };
+          const dls_normalizedRel = dls_rel.replace(/^\.?\/?src\//, '');
+          return { name, args, result: buildPathNotFoundRecovery(`src/${dls_normalizedRel}`, dls_srcRoot, dls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const dls_lines = fs.readFileSync(dls_absPath, 'utf-8').split('\n');
         if (dls_start > dls_lines.length) {
-          return { name, args, result: `Line ${dls_start} past end of file (${dls_lines.length} lines). Use read_source to check line numbers.`, error: true };
+          return { name, args, result: buildLineOutOfRangeRecovery(`src/${dls_rel.replace(/^\.?\/?src\//, '')}`, dls_lines, dls_start, 'read_source', 'start_line'), error: true };
         }
         const dls_endClamped = Math.min(dls_end, dls_lines.length);
         dls_lines.splice(dls_start - 1, dls_endClamped - dls_start + 1);
@@ -5051,7 +5254,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: list_source only allows access to src/ directory.', error: true };
         }
         if (!fs.existsSync(absPath)) {
-          return { name, args, result: `Directory not found: src/${rel}`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`src/${rel}`, srcRoot, rel, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
         }
         const entries = fs.readdirSync(absPath).map(e => {
           try {
@@ -5073,7 +5276,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: list_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(lwu_absPath)) {
-          return { name, args, result: `Directory not found: web-ui/${lwu_rel}`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${lwu_rel}`, lwu_webUiRoot, lwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
         }
         const lwu_entries = fs.readdirSync(lwu_absPath).map(e => {
           try {
@@ -5096,7 +5299,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: read_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(rwu_absPath)) {
-          return { name, args, result: `File not found: web-ui/${rwu_rel}. Use list_webui_source to browse available files.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${rwu_rel}`, rwu_webUiRoot, rwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const rwu_stat = fs.statSync(rwu_absPath);
         if (rwu_stat.isDirectory()) {
@@ -5156,11 +5359,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: find_replace_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(frwu_absPath)) {
-          return { name, args, result: `File not found: web-ui/${frwu_rel}. Use list_webui_source to verify path.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_webUiRoot, frwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const frwu_content = fs.readFileSync(frwu_absPath, 'utf-8');
         if (!frwu_content.includes(frwu_find)) {
-          return { name, args, result: `Text not found in web-ui/${frwu_rel}. Use read_webui_source to confirm exact text including whitespace.`, error: true };
+          return { name, args, result: buildTextNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_content, frwu_find, 'read_webui_source'), error: true };
         }
         const frwu_replaceAll = args.replace_all === true;
         const frwu_occurrences = frwu_replaceAll ? (frwu_content.split(frwu_find).length - 1) : 1;
@@ -5195,11 +5398,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: replace_lines_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(rlwu_absPath)) {
-          return { name, args, result: `File not found: web-ui/${rlwu_rel}. Use list_webui_source to verify path.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${rlwu_rel}`, rlwu_webUiRoot, rlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const rlwu_lines = fs.readFileSync(rlwu_absPath, 'utf-8').split('\n');
         if (rlwu_start > rlwu_lines.length) {
-          return { name, args, result: `Line ${rlwu_start} past end of file (${rlwu_lines.length} lines). Use read_webui_source to check line numbers.`, error: true };
+          return { name, args, result: buildLineOutOfRangeRecovery(`web-ui/${rlwu_rel}`, rlwu_lines, rlwu_start, 'read_webui_source', 'start_line'), error: true };
         }
         const rlwu_endClamped = Math.min(rlwu_end, rlwu_lines.length);
         rlwu_lines.splice(rlwu_start - 1, rlwu_endClamped - rlwu_start + 1, ...rlwu_newContent.split('\n'));
@@ -5231,7 +5434,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: insert_after_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(iawu_absPath)) {
-          return { name, args, result: `File not found: web-ui/${iawu_rel}. Use list_webui_source to verify path.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${iawu_rel}`, iawu_webUiRoot, iawu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const iawu_lines = fs.readFileSync(iawu_absPath, 'utf-8').split('\n');
         const iawu_insertAt = Math.min(iawu_afterLine, iawu_lines.length);
@@ -5264,11 +5467,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           return { name, args, result: 'ERROR: delete_lines_webui_source only allows access to web-ui/ directory.', error: true };
         }
         if (!fs.existsSync(dlwu_absPath)) {
-          return { name, args, result: `File not found: web-ui/${dlwu_rel}. Use list_webui_source to verify path.`, error: true };
+          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${dlwu_rel}`, dlwu_webUiRoot, dlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const dlwu_lines = fs.readFileSync(dlwu_absPath, 'utf-8').split('\n');
         if (dlwu_start > dlwu_lines.length) {
-          return { name, args, result: `Line ${dlwu_start} past end of file (${dlwu_lines.length} lines). Use read_webui_source to check line numbers.`, error: true };
+          return { name, args, result: buildLineOutOfRangeRecovery(`web-ui/${dlwu_rel}`, dlwu_lines, dlwu_start, 'read_webui_source', 'start_line'), error: true };
         }
         const dlwu_endClamped = Math.min(dlwu_end, dlwu_lines.length);
         dlwu_lines.splice(dlwu_start - 1, dlwu_endClamped - dlwu_start + 1);
@@ -5330,7 +5533,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          return { name, args, result: 'ERROR: delete_webui_source only allows access to web-ui/ directory.', error: true };
 	        }
 	        if (!fs.existsSync(dwu_absPath)) {
-	          return { name, args, result: `File not found: web-ui/${dwu_rel}. Use list_webui_source to verify path.`, error: true };
+	          return { name, args, result: buildPathNotFoundRecovery(`web-ui/${dwu_rel}`, dwu_webUiRoot, dwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
 	        }
 	        const dwu_stat = fs.statSync(dwu_absPath);
 	        if (!dwu_stat.isFile()) return { name, args, result: `"web-ui/${dwu_rel}" is not a file`, error: true };
@@ -11098,7 +11301,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             `2. For each role, call spawn_subagent with:`,
             `   - subagent_id: "<role>_<shortname>_v1" (e.g. "researcher_growth_v1")`,
             `   - from_role: "<role>" (e.g. "researcher")`,
-            `   - specialization: a concrete team-specific assignment, not a generic role. Examples: "Prospect Researcher: finds local small-business leads for Xpose Market from maps/directories/search"; "Website/SEO Qualifier: reviews each lead's site quality, trust signals, UX, and basic SEO gaps"; "Lead Enricher: gathers contact info, socials, owner names, and outreach angle when available".`,
+            `   - specialization: a concrete team-specific assignment, not a generic role. Examples: "Prospect Researcher: finds local small-business leads from maps/directories/search"; "Website/SEO Qualifier: reviews each lead's site quality, trust signals, UX, and basic SEO gaps"; "Lead Enricher: gathers contact info, socials, owner names, and outreach angle when available".`,
             `   - optional create_if_missing.teamRole: a short title like "Website/SEO Qualifier"`,
             `   - optional create_if_missing.teamAssignment: the full concrete assignment if it needs more detail than specialization`,
             `   - run_now: false`,
@@ -13889,10 +14092,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
 
         if (name === 'prom_apply_dev_changes') {
+          const requestedDevEditId = String(args.dev_edit_id || args.devEditId || '').trim();
+          const activeDevEdit = requestedDevEditId
+            ? getDevSourceEditContinuation(requestedDevEditId)
+            : getLatestPendingDevSourceEditContinuation(sessionId);
+          const explicitAffectedFiles = Array.isArray(args.affected_files)
+            ? args.affected_files.map((f: any) => String(f || '').trim()).filter(Boolean)
+            : [];
+          const affectedFiles = explicitAffectedFiles.length
+            ? explicitAffectedFiles
+            : Array.isArray(activeDevEdit?.affectedFiles) && activeDevEdit.affectedFiles.length
+              ? activeDevEdit.affectedFiles
+              : activeDevEdit?.allowedFiles || [];
           const surfaces = Array.isArray(args.changed_surfaces)
             ? args.changed_surfaces.map((s: any) => String(s || '').trim().toLowerCase()).filter(Boolean)
             : [];
-          const normalizedSurfaces: string[] = Array.from(new Set<string>(surfaces.map((surface: string) => {
+          const inferredSurfaces = getPromApplySurfacesForFiles(affectedFiles);
+          const normalizedSurfaces: string[] = Array.from(new Set<string>([...surfaces, ...inferredSurfaces].map((surface: string) => {
             if (surface === 'src' || surface === 'gateway') return 'backend';
             return surface;
           })));
@@ -13903,15 +14119,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const verifyOnly = mode === 'verify_only';
           const reason = String(args.reason || 'Prometheus dev changes applied').trim();
           if (!normalizedSurfaces.length) {
-            return { name, args, result: 'prom_apply_dev_changes requires at least one changed surface.', error: true };
+            return { name, args, result: 'prom_apply_dev_changes requires changed_surfaces or affected_files that map to src/ or web-ui/.', error: true };
           }
           if (!['apply_live', 'verify_only'].includes(mode)) {
             return { name, args, result: 'prom_apply_dev_changes mode must be apply_live or verify_only.', error: true };
           }
-          const requestedDevEditId = String(args.dev_edit_id || args.devEditId || '').trim();
-          const activeDevEdit = requestedDevEditId
-            ? getDevSourceEditContinuation(requestedDevEditId)
-            : getLatestPendingDevSourceEditContinuation(sessionId);
           const completionNoteTag = String(
             args.completion_note_tag
             || args.completionNoteTag
@@ -13940,6 +14152,58 @@ export async function executeTool(name: string, args: any, workspacePath: string
           };
 
           const steps: any[] = [];
+          if (verifyOnly) {
+            const plan = resolveDevVerificationPlan({
+              mode: 'verify_only',
+              changedFiles: affectedFiles,
+              changedSurfaces: normalizedSurfaces,
+              approvedProfiles: activeDevEdit?.verificationProfiles || activeDevEdit?.verificationProfile,
+              requestedProfiles: args.verification_profiles || args.verificationProfiles || args.verification_profile || args.verificationProfile,
+              rootDir: path.resolve(__dirname, '..', '..', '..'),
+            });
+            const results = await runDevVerificationPlan(plan, path.resolve(__dirname, '..', '..', '..'));
+            const failed = results.find((result) => !result.success);
+            if (activeDevEdit) {
+              upsertDevSourceEditContinuation({
+                ...activeDevEdit,
+                affectedFiles,
+                changedSurfaces: normalizedSurfaces,
+                verificationProfiles: plan.profileIds,
+                verificationProfile: plan.profileIds[0],
+                lastVerification: {
+                  profileIds: plan.profileIds,
+                  changedFiles: plan.changedFiles,
+                  success: !failed,
+                  summary: formatDevVerificationSummary(plan, results),
+                  completedAt: Date.now(),
+                },
+                updatedAt: Date.now(),
+              });
+            }
+            if (failed) {
+              const completed = results.filter((result) => result.success);
+              return {
+                name,
+                args,
+                result:
+                  `prom_apply_dev_changes verify_only failed during ${failed.label} (${failed.durationMs}ms).\n\n` +
+                  `${formatDevVerificationSummary(plan, results)}` +
+                  (completed.length ? `\n\nCompleted first:\n${completed.map((s) => `- ${s.label}: ok (${s.durationMs}ms)`).join('\n')}` : '') +
+                  `\n\n${failed.output || ''}`,
+                error: true,
+              };
+            }
+            return {
+              name,
+              args,
+              result:
+                `prom_apply_dev_changes verify_only succeeded.\n` +
+                `${formatDevVerificationSummary(plan, results)}\n` +
+                `Gateway was not restarted${hasWeb && refreshDesktop ? ', and no desktop reload was requested' : ''}.`,
+              error: false,
+            };
+          }
+
           if (hasWeb) {
             const sync = runCommand('npm run sync:web-ui', 120_000);
             steps.push(sync);
@@ -13953,41 +14217,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }
           }
 
-          if (verifyOnly) {
-            if (hasBackend) {
-              const build = runCommand('npm run build:backend', 180_000);
-              steps.push(build);
-              if (!build.success) {
-                return {
-                  name,
-                  args,
-                  result:
-                    `prom_apply_dev_changes verify_only failed during ${build.command} (${build.durationMs}ms).` +
-                    (steps.length > 1 ? `\n\nCompleted first:\n${steps.slice(0, -1).map((s) => `- ${s.command}: ok (${s.durationMs}ms)`).join('\n')}` : '') +
-                    `\n\n${build.output}`,
-                  error: true,
-                };
-              }
-            }
-            return {
-              name,
-              args,
-              result:
-                `prom_apply_dev_changes verify_only succeeded. ` +
-                `${steps.map((s) => `${s.command} ok (${s.durationMs}ms)`).join('; ') || 'No verification command was needed'}. ` +
-                `Gateway was not restarted${hasWeb && refreshDesktop ? ', and no desktop reload was requested' : ''}.`,
-              error: false,
-            };
-          }
-
           const buildDevEditContinuation = (status: 'applying_live') => activeDevEdit ? {
             ...activeDevEdit,
             status,
             completionNoteTag,
-            affectedFiles: Array.isArray(args.affected_files) ? args.affected_files.map((f: any) => String(f || '').trim()).filter(Boolean) : activeDevEdit.affectedFiles,
+            affectedFiles,
             changedSurfaces: normalizedSurfaces,
             summary: String(args.summary || reason || activeDevEdit.summary || '').trim() || undefined,
             verification: Array.isArray(activeDevEdit.verification) ? activeDevEdit.verification : activeDevEdit.plan?.verification,
+            verificationProfile: activeDevEdit.verificationProfile,
+            verificationProfiles: activeDevEdit.verificationProfiles,
             updatedAt: Date.now(),
           } : undefined;
 
@@ -14007,7 +14246,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 proposalId: args.proposal_id || undefined,
                 title: args.title || reason,
                 summary: args.summary || reason,
-                affectedFiles: Array.isArray(args.affected_files) ? args.affected_files : undefined,
+                affectedFiles: affectedFiles.length ? affectedFiles : undefined,
                 testInstructions: args.test_instructions || undefined,
                 previousSessionId: sessionId,
                 originChannel: isTelegramSession ? 'telegram' : undefined,
@@ -14286,6 +14525,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               files: args?.files || args?.allowed_files || args?.affected_files,
               verificationCommand: args?.verification_command || args?.verificationCommand,
               verificationProfile: args?.verification_profile || args?.verificationProfile,
+              verificationProfiles: args?.verification_profiles || args?.verificationProfiles,
               reason: args?.reason || args?.summary,
               plan: args?.plan || args?.dev_plan || args?.devPlan,
               userRequest: args?.user_request || args?.userRequest,
@@ -14332,6 +14572,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               reason: scope.reason,
               verification_command: scope.verificationCommand,
               verification_profile: scope.verificationProfile,
+              verification_profiles: scope.verificationProfiles,
               plan: scope.plan,
               plan_hash: scope.planHash,
             },
@@ -14346,6 +14587,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               allowedFiles: scope.allowedFiles,
               verificationCommand: scope.verificationCommand,
               verificationProfile: scope.verificationProfile,
+              verificationProfiles: scope.verificationProfiles,
               reason: scope.reason,
               plan: scope.plan,
               planHash: scope.planHash,
@@ -14476,6 +14718,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 allowedFiles: scope.allowedFiles,
                 plan: scope.plan,
                 planHash: scope.planHash,
+                verificationProfiles: scope.verificationProfiles,
                 completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
               },
             },
@@ -14485,6 +14728,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 allowedFiles: scope.allowedFiles,
                 plan: scope.plan,
                 planHash: scope.planHash,
+                verificationProfiles: scope.verificationProfiles,
                 completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
               },
             },
@@ -14587,6 +14831,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
                     ? createDevSourceEditApprovalScope({
                         sessionId,
                         files: existing.devSourceEdit.allowedFiles,
+                        verificationProfile: existing.devSourceEdit.verificationProfile,
+                        verificationProfiles: (existing.devSourceEdit as any).verificationProfiles,
                         reason: existing.devSourceEdit.reason,
                         plan: existing.devSourceEdit.plan,
                       })
@@ -14620,6 +14866,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
                     ? createDevSourceEditApprovalScope({
                         sessionId,
                         files: existing.devSourceEdit.allowedFiles,
+                        verificationProfile: existing.devSourceEdit.verificationProfile,
+                        verificationProfiles: (existing.devSourceEdit as any).verificationProfiles,
                         reason: existing.devSourceEdit.reason,
                         plan: existing.devSourceEdit.plan,
                       })

@@ -122,6 +122,7 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
         files: dev.allowedFiles || approval.toolArgs?.files || [],
         verificationCommand: dev.verificationCommand || approval.toolArgs?.verification_command,
         verificationProfile: dev.verificationProfile || approval.toolArgs?.verification_profile,
+        verificationProfiles: dev.verificationProfiles || approval.toolArgs?.verification_profiles,
         reason: dev.reason || approval.reason,
         plan: dev.plan || approval.toolArgs?.plan,
         approvalId: approval.id,

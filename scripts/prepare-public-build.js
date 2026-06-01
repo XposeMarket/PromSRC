@@ -112,12 +112,55 @@ function copyPublicWebVendorAssets() {
 
 // Skills that are internal/dev-only and should NOT be shipped to public users
 const SKILLS_EXCLUDE = new Set([
+  'ai-surface-smoke-research',
+  'dev-debugging',
+  'file-surgery',
   'json-and-config-surgery',
   'prometheus-team-design',
   'self-repair-protocol',
   'src-edit-proposal-rigor',
   'subagent-system-prompt-design',
+  'voice-browser-desktop-smoke-test',
+  'windows-shell-playbook',
 ]);
+
+const PRIVATE_SKILL_CONTENT_PATTERNS = [
+  /\bRaul\b/i,
+  /\bXpose Market\b/i,
+  /\bFrederick Roof Repair\b/i,
+  /\bTelegram\b/i,
+  /\bdesktop_send_to_telegram\b/i,
+  /\bbrowser_send_to_telegram\b/i,
+  /D:\\Prometheus/i,
+  /C:\\Users\\rafel/i,
+  /\bPromSRC\b/i,
+  /\bworkspace\/self\b/i,
+  /\bread_dev_sources\b/i,
+  /\bapply_dev_source_patchset\b/i,
+  /\brequest_dev_source_edit\b/i,
+  /\bupdate_dev_source_edit\b/i,
+  /\bawait_dev_source_edit_approval\b/i,
+  /\bprom_apply_dev_changes\b/i,
+  /\bsrc_edit\b/i,
+];
+
+function skillContainsPrivateContent(skillDir) {
+  const stack = [skillDir];
+  while (stack.length) {
+    const current = stack.pop();
+    const stat = fs.statSync(current);
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(current)) {
+        stack.push(path.join(current, entry));
+      }
+      continue;
+    }
+    if (!TEXT_EXTENSIONS.has(path.extname(current).toLowerCase())) continue;
+    const text = fs.readFileSync(current, 'utf-8');
+    if (PRIVATE_SKILL_CONTENT_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  }
+  return false;
+}
 
 function bundleSkills() {
   const srcSkills = path.join(ROOT, 'workspace', 'skills');
@@ -144,6 +187,10 @@ function bundleSkills() {
     const srcMdLower = path.join(srcSkillDir, 'skill.md');
     const srcManifest = path.join(srcSkillDir, 'skill.json');
     if (!fs.existsSync(srcMd) && !fs.existsSync(srcMdLower) && !fs.existsSync(srcManifest)) continue;
+    if (skillContainsPrivateContent(srcSkillDir)) {
+      console.log(`[prepare-public-build] Skipping private/local skill: ${entry.name}`);
+      continue;
+    }
 
     const destSkillDir = path.join(destSkills, entry.name);
     copyRecursive(srcSkillDir, destSkillDir, { normalizeText: true });

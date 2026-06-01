@@ -18,6 +18,7 @@ import { getAllMainChatGoalRecords } from '../main-chat-goals';
 import { listSessionSummaries, type SessionSummary } from '../session';
 import {
   applySkillCuratorSuggestion,
+  listSkillCuratorActivity,
   listSkillCuratorSuggestions,
   rejectSkillCuratorSuggestion,
   runSkillCurator,
@@ -300,11 +301,15 @@ router.get('/api/hub/skills/review', (_req: Request, res: Response) => {
   try {
     const workspacePath = getConfig().getWorkspacePath();
     const suggestions = listSkillCuratorSuggestions(workspacePath);
+    const activity = _sm ? listSkillCuratorActivity(workspacePath, _sm, { days: 14, limit: 180 }) : [];
     res.json({
       success: true,
       suggestions,
+      activity,
       pending: suggestions.filter((s) => s.status === 'pending').length,
       quarantined: suggestions.filter((s) => s.status === 'quarantined').length,
+      appliedActivity: activity.filter((item) => item.status === 'applied').length,
+      observedActivity: activity.filter((item) => item.status === 'observed').length,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || String(err) });

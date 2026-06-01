@@ -1,0 +1,3 @@
+[submodule "workspace/PromSite"]
+	path = workspace/PromSite
+	url = https://github.com/XposeMarket/promsite.git

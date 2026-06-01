@@ -125,15 +125,19 @@ const TEAM_OPS_TOOL_NAMES = new Set([
 // background_spawn/status/progress/join are also CORE — always injected.
 
 const SOURCE_WRITE_TOOL_NAMES = new Set([
+	  'apply_dev_source_patchset',
 	  'find_replace_source', 'replace_lines_source', 'insert_after_source',
 	  'delete_lines_source', 'write_source', 'delete_source',
 	  'find_replace_webui_source', 'replace_lines_webui_source', 'insert_after_webui_source',
 	  'delete_lines_webui_source', 'write_webui_source', 'delete_webui_source',
 	  'find_replace_prom', 'replace_lines_prom', 'insert_after_prom',
 	  'delete_lines_prom', 'write_prom_file', 'delete_prom_file',
+	  'request_dev_source_edit', 'update_dev_source_edit', 'await_dev_source_edit_approval',
+	  'prom_apply_dev_changes',
 	]);
 
 const DEV_ONLY_SOURCE_READ_TOOL_NAMES = new Set([
+  'read_dev_sources',
   'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
   'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
   'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',

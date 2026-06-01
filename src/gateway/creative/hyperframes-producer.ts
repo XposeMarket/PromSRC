@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { normalizeForHyperframes, wrapForIframePreview } from './hyperframes-bridge';
+import { resolveRuntimeBinary } from '../../runtime/dependencies';
 
 export type HyperframesProducerFormat = 'mp4' | 'webm' | 'mov' | 'png-sequence';
 export type HyperframesProducerQuality = 'draft' | 'standard' | 'high';
@@ -59,10 +60,44 @@ function readCompositionId(html: string, fallback?: string): string {
   return htmlId || stageId || fallback || 'prometheus-hyperframes';
 }
 
+function prependPathDir(dir: string): void {
+  const resolved = path.resolve(dir);
+  const pathKey = process.platform === 'win32'
+    ? (Object.keys(process.env).find((key) => key.toLowerCase() === 'path') || 'Path')
+    : 'PATH';
+  const current = String(process.env[pathKey] || '');
+  const parts = current.split(path.delimiter).filter(Boolean);
+  const normalized = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  const alreadyPresent = parts.some((part) => {
+    const candidate = path.resolve(part);
+    return (process.platform === 'win32' ? candidate.toLowerCase() : candidate) === normalized;
+  });
+  if (!alreadyPresent) {
+    process.env[pathKey] = [resolved, ...parts].join(path.delimiter);
+  }
+}
+
+function exposePrometheusFfmpegToHyperframes(): void {
+  for (const binary of ['ffmpeg', 'ffprobe'] as const) {
+    try {
+      const resolved = resolveRuntimeBinary(binary, { allowPathFallback: true });
+      if (!path.isAbsolute(resolved) || !fs.existsSync(resolved)) continue;
+      prependPathDir(path.dirname(resolved));
+      const envName = binary === 'ffmpeg' ? 'FFMPEG_PATH' : 'FFPROBE_PATH';
+      if (!String(process.env[envName] || '').trim()) {
+        process.env[envName] = resolved;
+      }
+    } catch {
+      // HyperFrames will report its own dependency error if neither bundled nor PATH binaries work.
+    }
+  }
+}
+
 export async function renderHyperframesWithProducer(input: HyperframesProducerRenderInput): Promise<HyperframesProducerRenderResult> {
   const workspacePath = path.resolve(input.workspacePath || process.cwd());
   const outputPath = path.resolve(input.outputPath);
   ensureInside(workspacePath, outputPath);
+  exposePrometheusFfmpegToHyperframes();
 
   const normalized = normalizeForHyperframes(input.html);
   const compositionId = safeSegment(input.compositionId || readCompositionId(normalized));

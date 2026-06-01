@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
+import { appendAuditEntry } from '../audit-log.js';
 import {
   type ProposalRepairContext,
   normalizeProposalRepairContext,
@@ -457,6 +458,56 @@ function normalizeProposal(raw: Proposal): Proposal {
   return normalized;
 }
 
+function proposalAuditArgs(proposal: Proposal): Record<string, any> {
+  return {
+    proposalId: proposal.id,
+    type: proposal.type,
+    executionMode: proposal.executionMode,
+    priority: proposal.priority,
+    title: proposal.title,
+    summary: proposal.summary,
+    details: proposal.details,
+    affectedFiles: proposal.affectedFiles,
+    executionSteps: proposal.executionSteps,
+    diffPreview: proposal.diffPreview,
+    estimatedImpact: proposal.estimatedImpact,
+    requiresBuild: proposal.requiresBuild,
+    requiresSrcEdit: proposal.requiresSrcEdit,
+    sourceAgentId: proposal.sourceAgentId,
+    sourceTeamId: proposal.sourceTeamId,
+    sourcePipeline: proposal.sourcePipeline,
+    sourceSessionId: proposal.sourceSessionId,
+    executorAgentId: proposal.executorAgentId,
+    riskTier: proposal.riskTier,
+  };
+}
+
+function appendProposalStatusAudit(
+  proposal: Proposal,
+  summary: string,
+  extra: Record<string, any> = {},
+): void {
+  const status = String(proposal.status || '').toLowerCase();
+  appendAuditEntry({
+    sessionId: `proposal_${proposal.id}`,
+    agentId: proposal.executorAgentId || proposal.sourceAgentId || 'proposal_executor',
+    actionType: 'approval_resolved',
+    toolName: 'proposal_status',
+    toolArgs: {
+      ...proposalAuditArgs(proposal),
+      status: proposal.status,
+      executorTaskId: proposal.executorTaskId,
+      executedAt: proposal.executedAt,
+      executionResult: proposal.executionResult,
+      ...extra,
+    },
+    policyTier: status === 'executed' || status === 'failed' || status === 'expired' ? 'commit' : 'propose',
+    approvalStatus: status === 'failed' || status === 'expired' ? 'rejected' : 'approved',
+    resultSummary: summary,
+    error: status === 'failed' ? proposal.executionResult : undefined,
+  });
+}
+
 // ─── CRUD ──────────────────────────────────────────────────────────────────────
 
 export function createProposal(
@@ -488,6 +539,17 @@ export function createProposal(
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(proposal, null, 2), 'utf-8');
   console.log(`[ProposalStore] Created "${proposal.title}" (${id})`);
+
+  appendAuditEntry({
+    sessionId: `proposal_${proposal.id}`,
+    agentId: proposal.sourceAgentId || 'proposal_author',
+    actionType: 'approval_requested',
+    toolName: 'proposal_created',
+    toolArgs: proposalAuditArgs(proposal),
+    policyTier: 'propose',
+    approvalStatus: 'pending',
+    resultSummary: `Created proposal "${proposal.title}" (${proposal.id})`,
+  });
 
   // Broadcast live event so UI right-column + Proposals page update instantly
   try {
@@ -641,6 +703,7 @@ export function markProposalExecuting(id: string, taskId: string): Proposal | nu
   p.status = 'executing';
   p.executorTaskId = taskId;
   saveProposal(p);
+  appendProposalStatusAudit(p, `Proposal executor started task ${taskId}`, { taskId });
   return p;
 }
 
@@ -651,6 +714,7 @@ export function markProposalRepairing(id: string, reason: string, taskId?: strin
   if (taskId) p.executorTaskId = taskId;
   p.executionResult = reason.slice(0, 1000);
   saveProposal(p);
+  appendProposalStatusAudit(p, `Proposal moved to repair: ${p.executionResult}`, { taskId, reason: p.executionResult });
   return p;
 }
 
@@ -661,6 +725,7 @@ export function markProposalExecuted(id: string, result: string): Proposal | nul
   p.executedAt = Date.now();
   p.executionResult = result.slice(0, 1000);
   saveProposal(p);
+  appendProposalStatusAudit(p, `Proposal executed: ${p.executionResult}`, { result: p.executionResult });
   return p;
 }
 
@@ -670,6 +735,7 @@ export function markProposalFailed(id: string, reason: string): Proposal | null 
   p.status = 'failed';
   p.executionResult = reason.slice(0, 500);
   saveProposal(p);
+  appendProposalStatusAudit(p, `Proposal failed: ${p.executionResult}`, { reason: p.executionResult });
   return p;
 }
 

@@ -110,6 +110,7 @@ win:
         - x64
   icon: assets/Prometheus.ico
   verifyUpdateCodeSignature: false
+  signAndEditExecutable: false
 
 nsis:
   oneClick: false

@@ -17,6 +17,7 @@ export const ICONS = {
   doc:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 13 12 16 17 11"/></svg>',
   dots:      '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
   chev:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
+  fork:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v2a4 4 0 0 0 4 4h2"/><path d="M18 8v2a4 4 0 0 1-4 4h-2"/><path d="M12 14v2"/></svg>',
   refresh:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg>',
   plus:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
   play:      '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
@@ -66,8 +67,10 @@ let _scrimEl = null;
 let _drawerSearch = '';
 let _drawerSearchTimer = null;
 let _drawerSearchSeq = 0;
+let _tabResizeHandlerBound = false;
 const PM_DRAWER_STATE_KEY = 'pm_mobile_drawer_sessions_view';
 const PM_THEME_KEY = 'prometheus_theme';
+const PM_ACTIVE_TAB_KEY = 'pm_mobile_active_tab';
 const PM_DRAWER_SESSION_PAGE_SIZE = 20;
 const _drawerSessionPaging = {
   mobile: { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false },
@@ -168,7 +171,7 @@ function _getTheme() {
     const saved = localStorage.getItem(PM_THEME_KEY);
     if (saved === 'dark' || saved === 'light') return saved;
   } catch {}
-  return 'light';
+  return 'dark';
 }
 
 function _applyMobileTheme(theme) {
@@ -196,6 +199,47 @@ function _applyMobileTheme(theme) {
 
 function _toggleMobileTheme() {
   _applyMobileTheme(_getTheme() === 'dark' ? 'light' : 'dark');
+}
+
+function _tabIndex(tabId) {
+  return Math.max(0, mobileNavTabs.findIndex((tab) => tab.id === tabId));
+}
+
+function _rememberActiveTab(activeTab) {
+  if (!activeTab) return;
+  try { sessionStorage.setItem(PM_ACTIVE_TAB_KEY, activeTab); } catch {}
+}
+
+function _lastActiveTab() {
+  try { return sessionStorage.getItem(PM_ACTIVE_TAB_KEY) || ''; } catch { return ''; }
+}
+
+// Position the sliding glass pill exactly over a tab button by measuring its
+// real layout box. Percentages on `transform: translateX` are relative to the
+// element's own width, so we drive `left`/`width` in pixels instead.
+function _positionTabIndicator(tabbar, tabId, { animate = true } = {}) {
+  if (!tabbar) return;
+  const target = tabbar.querySelector(`.pm-tab[data-tab="${tabId}"]`);
+  const indicator = tabbar.querySelector('.pm-tab-indicator');
+  if (!target || !indicator) return;
+  const place = () => {
+    const left = target.offsetLeft;
+    const width = target.offsetWidth;
+    if (!width) { window.requestAnimationFrame(place); return; }
+    indicator.style.setProperty('--pm-ind-x', `${left}px`);
+    indicator.style.setProperty('--pm-ind-w', `${width}px`);
+  };
+  if (animate) {
+    indicator.classList.add('is-moving');
+    window.setTimeout(() => indicator.classList.remove('is-moving'), 520);
+    window.requestAnimationFrame(place);
+  } else {
+    // Skip the transition on first paint / resize so it just snaps into place.
+    const prev = indicator.style.transition;
+    indicator.style.transition = 'none';
+    place();
+    window.requestAnimationFrame(() => { indicator.style.transition = prev; });
+  }
 }
 
 function _loadDrawerState() {
@@ -260,6 +304,15 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   app.appendChild(_scrimEl);
   app.appendChild(_drawerEl);
 
+  // Shell-level delegated fallback for the hamburger. Per-page code also wires
+  // this via wireHeaderActions(), but if a page's render throws before that
+  // call, the menu would otherwise stop opening — this guarantees it always
+  // works. openDrawer() is idempotent, so the double-wiring is harmless.
+  app.addEventListener('click', (ev) => {
+    const menuBtn = ev.target?.closest?.('[data-action="menu"]');
+    if (menuBtn && app.contains(menuBtn)) openDrawer();
+  });
+
   _scrimEl.addEventListener('click', closeDrawer);
   _drawerEl.querySelectorAll('.pm-drawer-item').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -293,18 +346,59 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   app.appendChild(page);
 
   // Tabbar
-  const tabbar = el(`<nav class="pm-tabbar" role="tablist" aria-label="Primary"></nav>`);
+  const previousTab = _lastActiveTab();
+  const shouldAnimateTab = !!activeTab && !!previousTab && previousTab !== activeTab;
+  const tabbar = el(`
+    <nav
+      class="pm-tabbar"
+      role="tablist"
+      aria-label="Primary"
+    >
+      <span class="pm-tabbar-sheen" aria-hidden="true"></span>
+      <span class="pm-tab-indicator" aria-hidden="true"></span>
+    </nav>
+  `);
   mobileNavTabs.forEach(tab => {
     const b = el(`
-      <button class="pm-tab ${tab.id === activeTab ? 'active' : ''}" data-tab="${tab.id}" role="tab" aria-label="${escapeHtml(tab.label)}">
+      <button class="pm-tab ${tab.id === activeTab ? 'active' : ''}" data-tab="${tab.id}" role="tab" aria-label="${escapeHtml(tab.label)}" aria-selected="${tab.id === activeTab ? 'true' : 'false'}">
         ${ICONS[tab.icon] || ''}
         <span>${escapeHtml(tab.label)}</span>
       </button>
     `);
-    b.addEventListener('click', () => { if (typeof onNavigate === 'function') onNavigate(tab.route); });
+    b.addEventListener('click', () => {
+      const currentTab = tabbar.querySelector('.pm-tab.active')?.getAttribute('data-tab') || activeTab || '';
+      try { if (currentTab) sessionStorage.setItem(PM_ACTIVE_TAB_KEY, currentTab); } catch {}
+      tabbar.querySelectorAll('.pm-tab').forEach((item) => {
+        const isActive = item.getAttribute('data-tab') === tab.id;
+        item.classList.toggle('active', isActive);
+        item.setAttribute('aria-selected', String(isActive));
+      });
+      _positionTabIndicator(tabbar, tab.id, { animate: true });
+      if (typeof onNavigate === 'function') window.setTimeout(() => onNavigate(tab.route), 90);
+    });
     tabbar.appendChild(b);
   });
   app.appendChild(tabbar);
+  _rememberActiveTab(activeTab);
+  // Snap the pill onto the active tab once laid out; animate from the previous
+  // tab if we just navigated here from another tab.
+  window.requestAnimationFrame(() => {
+    if (shouldAnimateTab) {
+      // Park the pill on the previous tab, then glide to the active one.
+      _positionTabIndicator(tabbar, previousTab, { animate: false });
+      window.requestAnimationFrame(() => _positionTabIndicator(tabbar, activeTab, { animate: true }));
+    } else {
+      _positionTabIndicator(tabbar, activeTab, { animate: false });
+    }
+  });
+  if (!_tabResizeHandlerBound) {
+    _tabResizeHandlerBound = true;
+    window.addEventListener('resize', () => {
+      const bar = document.querySelector('.pm-tabbar');
+      const active = bar?.querySelector('.pm-tab.active')?.getAttribute('data-tab');
+      if (bar && active) _positionTabIndicator(bar, active, { animate: false });
+    }, { passive: true });
+  }
 
   initMobileCanvasSheet();
 
@@ -657,15 +751,14 @@ export function renderMobileHeader({ title, online = true, leftIcon = 'menu', on
       <button class="pm-icon-btn" data-action="${leftIcon === 'back' ? 'back' : 'menu'}" aria-label="${leftIcon === 'back' ? 'Back' : 'Menu'}">${ICONS[leftIcon]}</button>
       <div class="pm-brand"><span class="pm-brand-flame">🔥</span><span>Prometheus</span></div>
       <div class="pm-header-actions">
+        ${online ? '<span class="pm-online" aria-live="polite">Online</span>' : ''}
         ${rightActions}
         <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
       </div>
     </header>
-    <div class="pm-title-row${hideTitle ? ' pm-title-row-compact' : ''}">
-      ${hideTitle ? '' : `<h1 class="pm-title">${escapeHtml(title)}</h1>`}
-      ${online ? '<span class="pm-online">Online</span>' : ''}
-      ${extras}
-    </div>
+    ${(!hideTitle || (extras && String(extras).trim()))
+      ? `<div class="pm-title-row${hideTitle ? ' pm-title-row-compact' : ''}">${hideTitle ? '' : `<h1 class="pm-title">${escapeHtml(title)}</h1>`}${extras}</div>`
+      : ''}
   `;
 }
 
@@ -749,6 +842,10 @@ export function initMobileCanvasSheet() {
       </div>
       <div class="pm-canvas-sheet-toolbar">
         <span class="pm-canvas-sheet-file-name" id="pm-canvas-file-name"></span>
+        <span class="pm-canvas-interaction-toggle" id="pm-canvas-interaction-toggle" style="display:none;" role="group" aria-label="Canvas interaction mode">
+          <button type="button" class="pm-canvas-interaction-btn" data-canvas-interaction-mode="interact" aria-pressed="false">Interact</button>
+          <button type="button" class="pm-canvas-interaction-btn" data-canvas-interaction-mode="inspect" aria-pressed="false">Inspect</button>
+        </span>
         <button type="button" class="pm-canvas-sheet-save-btn" id="pm-canvas-preview" style="display:none;" aria-label="Render preview">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12s1.5-3 4-3 4 3 4 3-1.5 3-4 3-4-3-4-3z"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
           Preview
@@ -782,6 +879,7 @@ export function initMobileCanvasSheet() {
           path: String(file.path || ''),
           src,
           download: String(file.download || src),
+          interactionMode: normalizeCanvasInteractionMode(file.interactionMode) || defaultCanvasInteractionMode(file),
         });
         api.activeIdx = api.tabs.length - 1;
       }
@@ -812,9 +910,13 @@ export function initMobileCanvasSheet() {
       const fileNameEl = document.getElementById('pm-canvas-file-name');
       const saveEl = document.getElementById('pm-canvas-save');
       const previewBtn = document.getElementById('pm-canvas-preview');
+      const interactionToggle = document.getElementById('pm-canvas-interaction-toggle');
       if (!tabsEl || !bodyEl) return;
 
       const tab = api.tabs[api.activeIdx] || null;
+      if (tab && !normalizeCanvasInteractionMode(tab.interactionMode)) {
+        tab.interactionMode = defaultCanvasInteractionMode(tab);
+      }
 
       tabsEl.innerHTML = api.tabs.map((t, i) => `
         <button type="button" class="pm-canvas-sheet-tab${i === api.activeIdx ? ' active' : ''}" data-cs-tab="${i}" title="${escapeHtml(t.name)}">
@@ -832,9 +934,20 @@ export function initMobileCanvasSheet() {
       // Show Preview button for file types that benefit from screenshot rendering
       const previewable = tab && tab.path && !['image', 'video', 'audio'].includes(tab.kind);
       if (previewBtn) previewBtn.style.display = previewable ? '' : 'none';
+      const iframeBacked = !!(tab && !['image', 'video', 'audio'].includes(tab.kind));
+      if (interactionToggle) {
+        interactionToggle.style.display = iframeBacked ? 'inline-flex' : 'none';
+        interactionToggle.querySelectorAll('[data-canvas-interaction-mode]').forEach((button) => {
+          const mode = button.getAttribute('data-canvas-interaction-mode');
+          const active = mode === (tab?.interactionMode || 'inspect');
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+      }
 
       if (!tab) {
         bodyEl.innerHTML = '<div class="pm-canvas-sheet-empty">No file open</div>';
+        sheetEl.classList.remove('is-interacting', 'is-inspecting');
         resetCanvasZoom(bodyEl);
         return;
       }
@@ -845,11 +958,26 @@ export function initMobileCanvasSheet() {
         bodyEl.innerHTML = canvasZoomHtml(`<video src="${escapeHtml(tab.src)}" controls playsinline></video>`);
       } else if (tab.kind === 'audio') {
         bodyEl.innerHTML = `<audio src="${escapeHtml(tab.src)}" controls></audio>`;
+        sheetEl.classList.remove('is-interacting', 'is-inspecting');
         resetCanvasZoom(bodyEl);
       } else {
         bodyEl.innerHTML = canvasZoomHtml(`<iframe src="${escapeHtml(tab.src)}" title="${escapeHtml(tab.name)}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`);
       }
-      initCanvasZoom(bodyEl);
+      applyCanvasInteractionMode(sheetEl, bodyEl, tab);
+    },
+
+    setInteractionMode(mode) {
+      const tab = api.tabs[api.activeIdx];
+      const nextMode = normalizeCanvasInteractionMode(mode);
+      if (!tab || !nextMode || ['image', 'video', 'audio'].includes(tab.kind)) return;
+      tab.interactionMode = nextMode;
+      applyCanvasInteractionMode(sheetEl, document.getElementById('pm-canvas-body'), tab);
+      const toggle = document.getElementById('pm-canvas-interaction-toggle');
+      toggle?.querySelectorAll?.('[data-canvas-interaction-mode]')?.forEach((button) => {
+        const active = button.getAttribute('data-canvas-interaction-mode') === nextMode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
     },
   };
 
@@ -861,6 +989,11 @@ export function initMobileCanvasSheet() {
   });
   document.getElementById('pm-canvas-close').addEventListener('click', () => api.close());
   document.getElementById('pm-canvas-scrim').addEventListener('click', () => api.close());
+  document.getElementById('pm-canvas-interaction-toggle')?.addEventListener('click', (ev) => {
+    const btn = ev.target?.closest?.('[data-canvas-interaction-mode]');
+    if (!btn) return;
+    api.setInteractionMode(btn.getAttribute('data-canvas-interaction-mode'));
+  });
 
   // Preview button — render a screenshot of the current file via /api/preview/screenshot
   document.getElementById('pm-canvas-preview').addEventListener('click', async () => {
@@ -880,9 +1013,11 @@ export function initMobileCanvasSheet() {
       bodyEl.innerHTML = canvasZoomHtml(`<div class="pm-canvas-preview-stack">${
         chunks.map(c => `<img src="data:image/png;base64,${c.base64}" style="width:100%;display:block;" alt="Preview">`).join('')
       }</div>`);
-      initCanvasZoom(bodyEl);
+      const previewTab = { ...tab, kind: 'image', interactionMode: 'inspect' };
+      applyCanvasInteractionMode(sheetEl, bodyEl, previewTab);
     } catch (err) {
       bodyEl.innerHTML = `<div class="pm-canvas-sheet-empty">Preview failed: ${escapeHtml(String(err?.message || err))}</div>`;
+      sheetEl.classList.remove('is-interacting', 'is-inspecting');
       resetCanvasZoom(bodyEl);
     } finally {
       btn.disabled = false;
@@ -917,12 +1052,43 @@ export function initMobileCanvasSheet() {
     api.open({
       name: btn.getAttribute('data-name') || 'File',
       kind: btn.getAttribute('data-kind') || 'file',
+      path: btn.getAttribute('data-path') || '',
       src:  btn.getAttribute('data-src')  || '',
       download: btn.getAttribute('data-download') || '',
     });
   });
 
   window.__pmCanvasSheet = api;
+}
+
+function normalizeCanvasInteractionMode(mode) {
+  const value = String(mode || '').trim().toLowerCase();
+  return value === 'interact' || value === 'inspect' ? value : '';
+}
+
+function getCanvasFileExt(file = {}) {
+  const source = String(file.name || file.path || file.src || '').split(/[?#]/)[0];
+  const name = source.split(/[\\/]/).pop() || '';
+  const idx = name.lastIndexOf('.');
+  return idx >= 0 ? name.slice(idx + 1).toLowerCase() : '';
+}
+
+function defaultCanvasInteractionMode(file = {}) {
+  const kind = String(file.kind || '').trim().toLowerCase();
+  if (kind === 'image' || kind === 'video' || kind === 'audio') return 'inspect';
+  const ext = getCanvasFileExt(file);
+  return ['html', 'htm', 'js', 'mjs', 'cjs', 'css', 'jsx', 'tsx', 'ts', 'vue', 'svelte'].includes(ext)
+    ? 'interact'
+    : 'inspect';
+}
+
+function applyCanvasInteractionMode(sheetEl, bodyEl, tab = {}) {
+  if (!bodyEl) return;
+  const mode = normalizeCanvasInteractionMode(tab.interactionMode) || defaultCanvasInteractionMode(tab);
+  const iframeBacked = !!bodyEl.querySelector?.('iframe');
+  sheetEl?.classList?.toggle('is-interacting', iframeBacked && mode === 'interact');
+  sheetEl?.classList?.toggle('is-inspecting', !iframeBacked || mode !== 'interact');
+  initCanvasZoom(bodyEl, { enabled: !iframeBacked || mode !== 'interact' });
 }
 
 function canvasZoomHtml(innerHtml) {
@@ -939,11 +1105,16 @@ function resetCanvasZoom(root) {
   root.__pmCanvasZoomCleanup = null;
 }
 
-function initCanvasZoom(root) {
+function initCanvasZoom(root, options = {}) {
   resetCanvasZoom(root);
   const viewport = root?.querySelector?.('[data-canvas-zoom-viewport]');
   const content = root?.querySelector?.('[data-canvas-zoom-content]');
   if (!viewport || !content) return;
+  if (options.enabled === false) {
+    content.style.transform = 'translate3d(0px, 0px, 0px) scale(1)';
+    viewport.classList.remove('is-zoomed');
+    return;
+  }
 
   const state = {
     pointers: new Map(),

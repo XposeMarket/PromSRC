@@ -41,10 +41,10 @@ import { getVault } from '../../security/vault';
 import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/meet-prompt';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
-import { readModelUsageEvents } from '../../providers/model-usage';
+import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, replaceHistory, touchSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getSessionDisplayTitle, type TurnOrigin } from '../session';
-import { buildContextBudget, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, type TurnOrigin } from '../session';
+import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
 import { createToolObservationsFromResults, formatToolObservationsForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
@@ -71,6 +71,7 @@ import {
   browserClick,
   browserFill,
   browserPressKey,
+  browserType,
   browserWait,
   browserScroll,
   browserClose,
@@ -100,6 +101,7 @@ import {
 import {
   desktopFindWindow,
   desktopFocusWindow,
+  desktopWindowControl,
   desktopClick,
   desktopDrag,
   desktopWait,
@@ -115,10 +117,20 @@ import {
   desktopWaitForChange,
   desktopDiffScreenshot,
   desktopScreenshotWithHistory,
+  desktopWindowScreenshot,
   parseDesktopScreenshotToolArgs,
+  parseDesktopPointerMonitorArgs,
+  resolveDesktopActionPoint,
+  getDesktopAdvisorPacketById,
   desktopGetActiveMonitorIndex,
   desktopGetMonitors,
   desktopGetMonitorsSummary,
+  desktopFindInstalledApp,
+  desktopListWindowsCanonical,
+  desktopWindowClick,
+  desktopWindowType,
+  desktopWindowPressKey,
+  desktopWindowScroll,
   getDesktopToolDefinitions,
   getDesktopAdvisorPacket,
 } from '../desktop-tools';
@@ -362,6 +374,7 @@ const FILE_MUTATION_TOOL_NAMES = new Set([
   'insert_after',
   'delete_lines',
   'find_replace',
+  'apply_patchset',
   'rename_file',
   'delete_file',
   'copy_file',
@@ -369,6 +382,7 @@ const FILE_MUTATION_TOOL_NAMES = new Set([
   'apply_patch',
   'write_source',
   'find_replace_source',
+  'apply_dev_source_patchset',
   'replace_lines_source',
   'insert_after_source',
   'delete_lines_source',
@@ -415,10 +429,40 @@ function resolveTurnFilePath(rawPath: any, workspacePath: string): string {
   const value = String(rawPath || '').trim();
   if (!value || value === '.' || value === '/dev/null') return '';
   try {
-    return path.resolve(path.isAbsolute(value) ? value : path.join(workspacePath, value));
+    if (path.isAbsolute(value)) return path.resolve(value);
+    const normalized = value.replace(/\\/g, '/').replace(/^\.?\//, '');
+    const workspaceAbs = path.resolve(path.join(workspacePath, normalized));
+    if (fs.existsSync(workspaceAbs)) return workspaceAbs;
+    if (/^(src|web-ui)\//i.test(normalized)) {
+      const projectRoot = path.resolve(workspacePath, '..');
+      const projectAbs = path.resolve(path.join(projectRoot, normalized));
+      if (
+        fs.existsSync(path.join(projectRoot, 'package.json'))
+        && fs.existsSync(path.join(projectRoot, 'src'))
+        && fs.existsSync(path.join(projectRoot, 'web-ui'))
+      ) {
+        return projectAbs;
+      }
+    }
+    return workspaceAbs;
   } catch {
     return '';
   }
+}
+
+function expandRawPathCandidates(rawPath: any, toolName: string, args: any): string[] {
+  const raw = String(rawPath || '').trim().replace(/\\/g, '/');
+  if (!raw) return [];
+  const out = new Set<string>([raw]);
+  const surfaces = Array.isArray(args?.changed_surfaces)
+    ? args.changed_surfaces.map((surface: any) => String(surface || '').trim().toLowerCase())
+    : [];
+  const isDevApply = toolName === 'prom_apply_dev_changes';
+  const isMobileish = surfaces.includes('mobile') || /^src\/mobile\//i.test(raw) || /^mobile\//i.test(raw);
+  if (isMobileish && /^src\/mobile\//i.test(raw)) out.add(`web-ui/${raw}`);
+  if (isMobileish && /^mobile\//i.test(raw)) out.add(`web-ui/src/${raw}`);
+  if (isDevApply && /^src\/(pages|styles|components|mobile|utils|app\.js|ws\.js)/i.test(raw)) out.add(`web-ui/${raw}`);
+  return Array.from(out);
 }
 
 function extractPatchTargetPaths(patchText: string): string[] {
@@ -450,6 +494,15 @@ function extractTouchedFilesFromToolResult(result: any, workspacePath: string): 
   if (result?.error === true) return [];
   const args = result?.args && typeof result.args === 'object' ? result.args : {};
   const candidates: any[] = [];
+  for (const source of [result?.extra, result?.data, result]) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of [
+      'touchedFiles', 'changedFiles', 'affectedFiles', 'files',
+      'touched_files', 'changed_files', 'affected_files',
+    ]) {
+      if (source[key] != null) candidates.push(source[key]);
+    }
+  }
   for (const key of [
     'path', 'file', 'filename', 'name', 'target', 'target_path', 'targetPath',
     'old_path', 'oldPath', 'new_path', 'newPath', 'source', 'destination',
@@ -474,6 +527,7 @@ function extractTouchedFilesFromToolResult(result: any, workspacePath: string): 
   return Array.from(new Set(
     candidates
       .flatMap((item) => Array.isArray(item) ? item : [item])
+      .flatMap((item) => expandRawPathCandidates(item, toolName, args))
       .map((item) => resolveTurnFilePath(item, workspacePath))
       .filter(Boolean),
   ));
@@ -521,9 +575,9 @@ function inferGitStatus(root: string, relPath: string, absPath: string): TurnFil
     const status = runGitText(root, ['status', '--porcelain', '--', relPath]).trim();
     if (/^R/.test(status)) return 'renamed';
     if (/^\?\?/.test(status) || /^A/.test(status)) return 'added';
-    if (/^D|^.D/.test(status) || !fs.existsSync(absPath)) return 'deleted';
+    if (/^D|^.D/.test(status)) return 'deleted';
   } catch {}
-  return fs.existsSync(absPath) ? 'modified' : 'deleted';
+  return 'modified';
 }
 
 function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): TurnFileChanges | undefined {
@@ -566,6 +620,8 @@ function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: s
       status = 'added';
     }
 
+    if (!fs.existsSync(absPath) && status !== 'deleted') continue;
+    if (status === 'deleted' && insertions === 0 && deletions === 0 && !binary && !diffPreview) continue;
     if (insertions === 0 && deletions === 0 && !binary && status === 'modified' && !diffPreview) continue;
     changes.push({
       path: absPath,
@@ -1051,6 +1107,7 @@ import { isProviderStatusChecking, markProviderStatus, readProviderStatusCache }
 import {
   buildBootStartupSnapshot as _buildBootStartupSnapshot,
   loadWorkspaceFile,
+  loadVoiceAgentMemory,
   readDailyMemoryContext,
   detectToolCategories,
   readMemoryCategories,
@@ -1260,6 +1317,37 @@ function formatCompactionToolResults(sessionId: string, toolResults: ToolResult[
     includeHeader: false,
     maxChars: 14000,
     maxObservations: maxResults,
+  });
+}
+
+const MODEL_TOOL_RESULT_MAX_CHARS = 24000;
+const MODEL_TOOL_RESULT_HEAD_CHARS = 17000;
+const MODEL_TOOL_RESULT_TAIL_CHARS = 5000;
+
+function boundToolTextForModelContext(text: string, toolName: string, maxChars = MODEL_TOOL_RESULT_MAX_CHARS): string {
+  const value = String(text || '');
+  if (!value || value.length <= maxChars) return value;
+  const headChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_HEAD_CHARS, Math.floor(maxChars * 0.75)));
+  const tailChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_TAIL_CHARS, maxChars - headChars));
+  const omitted = value.length - headChars - tailChars;
+  return [
+    value.slice(0, headChars).trimEnd(),
+    '',
+    `[...${omitted.toLocaleString('en-US')} chars omitted from ${toolName || 'tool'} result before reinjecting into model context; full output remains in tool logs/raw storage...]`,
+    '',
+    value.slice(-tailChars).trimStart(),
+  ].join('\n');
+}
+
+function boundToolMessageContentForModelContext(content: any, toolName: string): any {
+  if (typeof content === 'string') return boundToolTextForModelContext(content, toolName);
+  if (!Array.isArray(content)) return content;
+  return content.map((part: any) => {
+    if (!part || typeof part !== 'object' || part.type !== 'text') return part;
+    return {
+      ...part,
+      text: boundToolTextForModelContext(String(part.text || ''), toolName),
+    };
   });
 }
 
@@ -1513,9 +1601,14 @@ async function maybeRunMidWorkflowCompaction(input: {
   if (cfg?.rollingCompactionEnabled === false) return { compacted: false, projectedTokens: 0, triggerTokens: 0 };
   const profile = resolveActiveModelContextProfile();
   const budget = buildContextBudget(profile);
-  const projectedTokens = estimateMessagesTokensForModel(input.messages, profile);
+  // Correct the raw model-tokenizer estimate toward real provider input-token
+  // counts so the mid-workflow trigger fires at the same effective fullness the
+  // provider actually sees. Clamped + default-1.0 until enough samples exist.
+  const calibrationFactor = getUsageCalibration(profile.providerId, profile.model).factor || 1;
+  const projectedBreakdown = estimateMessageTokenBreakdownForModel(input.messages, profile);
+  const projectedTokens = Math.round(projectedBreakdown.totalTokens * calibrationFactor);
   const recentToolText = formatCompactionToolResults(input.sessionId, input.toolResults, 8);
-  const recentToolTokens = estimateTextTokensForModel(recentToolText, profile.tokenizer);
+  const recentToolTokens = Math.round(estimateTextTokensForModel(recentToolText, profile.tokenizer) * calibrationFactor);
   const shouldCompact = projectedTokens >= budget.compactionTriggerTokens
     || recentToolTokens >= budget.toolContextBudgetTokens;
   if (!shouldCompact) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
@@ -1535,6 +1628,11 @@ async function maybeRunMidWorkflowCompaction(input: {
       context_window_tokens: profile.contextWindowTokens,
       provider: profile.providerId,
       model: profile.model,
+      message_count: projectedBreakdown.messageCount,
+      token_breakdown: projectedBreakdown.byRole,
+      largest_messages: projectedBreakdown.largestMessages,
+      recent_tool_observation_tokens: recentToolTokens,
+      tool_context_budget_tokens: budget.toolContextBudgetTokens,
     },
     synthetic: true,
     actor: 'system',
@@ -1592,7 +1690,8 @@ async function maybeRunMidWorkflowCompaction(input: {
       content: 'Context was compacted mid-workflow. Continue the active task directly from the summary above; do not recap the compaction to the user.',
     });
 
-    const newProjectedTokens = estimateMessagesTokensForModel(input.messages, profile);
+    const newProjectedBreakdown = estimateMessageTokenBreakdownForModel(input.messages, profile);
+    const newProjectedTokens = newProjectedBreakdown.totalTokens;
     input.sendSSE('tool_result', {
       action: CONTEXT_COMPACTION_TOOL_NAME,
       result: `Thread compacted mid-workflow. Continuing with ${newProjectedTokens}/${budget.inputBudgetTokens} estimated input tokens.`,
@@ -1612,6 +1711,8 @@ async function maybeRunMidWorkflowCompaction(input: {
         context_window_tokens: profile.contextWindowTokens,
         provider: profile.providerId,
         model: profile.model,
+        token_breakdown_after: newProjectedBreakdown.byRole,
+        largest_messages_after: newProjectedBreakdown.largestMessages,
       },
     });
     return { compacted: true, summaryText: boundedSummary, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
@@ -1895,7 +1996,7 @@ async function handleChat(
   };
   const PROPOSAL_CORE_MIN = new Set([
     'run_command',
-    'read_file', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace',
+    'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
     'list_files', 'list_directory', 'mkdir', 'file_stats', 'grep_file', 'grep_files', 'search_files',
     'write_note',
     'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
@@ -1907,7 +2008,7 @@ async function handleChat(
     'switch_model',
     'set_current_model',
     ...(!isPublicDistributionBuild() ? [
-      'read_source', 'list_source', 'grep_source', 'source_stats', 'src_stats',
+      'read_source', 'read_dev_sources', 'apply_dev_source_patchset', 'list_source', 'grep_source', 'source_stats', 'src_stats',
       'read_webui_source', 'list_webui_source', 'grep_webui_source', 'webui_source_stats', 'webui_stats',
       'list_prom', 'prom_file_stats', 'read_prom_file', 'grep_prom',
     ] : []),
@@ -2349,7 +2450,7 @@ async function handleChat(
 
   // Tools that gather information — do NOT advance the step cursor.
   const READ_ONLY_PROGRESS_TOOLS = new Set([
-    'list_files', 'list_directory', 'read_file', 'web_search', 'web_fetch',
+    'list_files', 'list_directory', 'read_file', 'read_files_batch', 'read_dev_sources', 'web_search', 'web_fetch',
     'browser_snapshot', 'browser_get_page_text', 'browser_get_focused_item',
     'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
     'skill_list',
@@ -2664,7 +2765,7 @@ async function handleChat(
   // Write tools that should invalidate any cached read_file results for the same file
   const WRITE_TOOL_NAMES = new Set([
     'replace_lines', 'edit', 'find_replace', 'write_file', 'create_file',
-    'apply_patch', 'append_file', 'delete_file', 'move_file',
+    'apply_patch', 'apply_patchset', 'apply_dev_source_patchset', 'append_file', 'delete_file', 'move_file',
   ]);
 
   const invalidateReadCacheForFile = (filename: string): void => {
@@ -2676,7 +2777,9 @@ async function handleChat(
     }
     // Also remove from seenToolCalls so a re-read executes fresh rather than being skipped
     for (const key of seenToolCalls.keys()) {
-      if (key.startsWith('read_file:') && key.includes(base)) seenToolCalls.delete(key);
+      if ((key.startsWith('read_file:') || key.startsWith('read_files_batch:') || key.startsWith('read_dev_sources:')) && key.includes(base)) {
+        seenToolCalls.delete(key);
+      }
     }
   };
   const loopDetectionEnabled = orchRuntimeCfg?.triggers?.loop_detection !== false;
@@ -2861,6 +2964,7 @@ async function handleChat(
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
+      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
       messages.push({ role: 'tool', tool_name: toolName, content: toolMessageContent });
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       orchestrationLog.push(
@@ -3439,7 +3543,10 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
           result: autoShot,
           error: String(autoShot).startsWith('ERROR'),
         };
-        const autoShotContent = buildDesktopScreenshotContent(syntheticResult, sessionId, '');
+        const autoShotContent = boundToolMessageContentForModelContext(
+          buildDesktopScreenshotContent(syntheticResult, sessionId, ''),
+          autoToolName,
+        );
         messages.push({
           role: 'tool',
           tool_name: autoToolName,
@@ -4642,6 +4749,7 @@ RULES:
               ? buildDesktopAck(toolName, toolResult) + goalReminder
               : toolResult.result + goalReminder;
         if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
+        toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
         messages.push({
           role: 'tool',
           tool_name: toolName,
@@ -5271,7 +5379,7 @@ RULES:
             '',
             'Your previous reply did not call any tools. Do not describe what you will do.',
             'Your next assistant message must contain tool calls only.',
-            'Use the available workspace file tools directly: list_directory, read_file, mkdir, create_file, replace_lines, find_replace, file_stats.',
+            'Use the available workspace file tools directly: list_directory, read_files_batch, read_file, apply_patchset, mkdir, create_file, replace_lines, find_replace, file_stats.',
             '',
             nextStep
               ? `Execute the next required action for: ${nextStep.text}.`
@@ -5577,7 +5685,7 @@ RULES:
             '',
             'Your previous reply attempted to finalize or narrated intent without tool calls.',
             'Do not answer in prose. Your next assistant message must contain tool calls only.',
-            'Use the workspace file tools directly: list_directory, read_file, mkdir, create_file, replace_lines, find_replace, file_stats.',
+            'Use the workspace file tools directly: list_directory, read_files_batch, read_file, apply_patchset, mkdir, create_file, replace_lines, find_replace, file_stats.',
             'After the step is actually complete, call complete_plan_step with concrete evidence.',
           ].join('\n'),
         });
@@ -6638,6 +6746,15 @@ RULES:
       if (WRITE_TOOL_NAMES.has(toolName) && !toolResult.error) {
         const writtenFile = String(toolArgs.filename || toolArgs.name || toolArgs.path || '');
         invalidateReadCacheForFile(writtenFile);
+        const touchedFiles = [
+          ...((Array.isArray((toolResult as any).data?.touchedFiles) ? (toolResult as any).data.touchedFiles : []) as any[]),
+          ...((Array.isArray((toolResult as any).extra?.touchedFiles) ? (toolResult as any).extra.touchedFiles : []) as any[]),
+        ]
+          .map((item: any) => String(item || '').trim())
+          .filter(Boolean);
+        for (const touchedFile of Array.from(new Set(touchedFiles))) {
+          invalidateReadCacheForFile(touchedFile);
+        }
       }
       allToolResults.push(toolResult);
       logToolCall(workspacePath, toolName, toolArgs, toolResult.result, toolResult.error);
@@ -6757,6 +6874,7 @@ RULES:
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
+      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
 	      messages.push({
 	        role: 'tool',
 	        tool_name: toolName,
@@ -7158,6 +7276,88 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
   })();
 }
 
+function cleanGeneratedSessionTitle(raw: unknown): string {
+  let title = String(raw || '').trim();
+  const match = title.match(/\[\s*Title\s*:\s*([^\]]+)\]/i) || title.match(/^Title\s*:\s*(.+)$/i);
+  if (match) title = match[1] || '';
+  title = title
+    .split(/\r?\n/)[0]
+    .replace(/^["'`*_ \t]+|["'`*_ \t]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[.!?;:,\-]+$/g, '')
+    .trim();
+  if (!title) return '';
+  if (/^(?:new chat|untitled|greeting|hello|hey|hi)$/i.test(title)) return '';
+  if (/^(?:name this|chat thread|conversation|short helpful title)$/i.test(title)) return '';
+  const words = title.split(/\s+/).filter(Boolean);
+  if (words.length > 8) title = words.slice(0, 8).join(' ');
+  return title.slice(0, 60).trim();
+}
+
+function sessionTitleTranscript(session: ReturnType<typeof getSession>): { transcript: string; userCount: number; hasSubstantiveUserText: boolean } {
+  const messages = Array.isArray(session?.history) ? session.history : [];
+  const visible = messages
+    .filter((msg: any) => {
+      const role = String(msg?.role || '').toLowerCase();
+      if (role !== 'user' && role !== 'assistant' && role !== 'ai') return false;
+      const content = String(msg?.content || '').trim();
+      if (!content) return false;
+      if (/^\s*(?:\[Title:|Title:)/i.test(content)) return false;
+      return true;
+    })
+    .slice(0, 6);
+  const userMessages = visible.filter((msg: any) => String(msg?.role || '').toLowerCase() === 'user');
+  const hasSubstantiveUserText = userMessages.some((msg: any) => {
+    const text = String(msg?.content || '').trim();
+    return text.length >= 8 && !/^(?:hi|hey|hello|yo|good morning|good afternoon|good evening|what'?s up|sup)[.!?\s]*$/i.test(text);
+  });
+  const transcript = visible
+    .map((msg: any) => {
+      const role = String(msg?.role || '').toLowerCase() === 'user' ? 'User' : 'Prometheus';
+      const content = String(msg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+      return `${role}: ${content}`;
+    })
+    .join('\n')
+    .slice(0, 2200);
+  return { transcript, userCount: userMessages.length, hasSubstantiveUserText };
+}
+
+async function maybeAutoNameChatSession(sessionId: string): Promise<string | null> {
+  const session = getSession(sessionId);
+  if (!session || session.autoTitleLocked === true) return null;
+  const { transcript, userCount, hasSubstantiveUserText } = sessionTitleTranscript(session);
+  if (!transcript || !hasSubstantiveUserText || userCount < 1 || userCount > 3) return null;
+
+  const prompt = [
+    'Name this Prometheus chat thread based on the context so far.',
+    'Return ONLY this exact shape: [Title:Short Helpful Title]',
+    'Rules: 3-7 words, specific to the task, no quotes, no markdown, no trailing punctuation, never use "New chat".',
+    '',
+    'Transcript:',
+    transcript,
+  ].join('\n');
+
+  let title = '';
+  try {
+    const generated = await Promise.race([
+      getOllamaClient().generate(prompt, 'executor', {
+        temperature: 0,
+        num_predict: 32,
+        think: 'none',
+        usageContext: { sessionId },
+      } as any),
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 3000)),
+    ]);
+    title = cleanGeneratedSessionTitle(generated);
+  } catch (err: any) {
+    console.warn('[chat-title] failed to generate session title:', err?.message || err);
+  }
+
+  if (!title) return null;
+  const summary = autoNameSession(sessionId, title);
+  return summary?.title || null;
+}
+
 async function runInteractiveTurn(
   message: string,
   sessionId: string,
@@ -7197,6 +7397,7 @@ async function runInteractiveTurn(
       generatedVideos: result?.generatedVideos,
       canvasFiles: result?.canvasFiles,
       fileChanges: result?.fileChanges,
+      productCarousel: result?.productCarousel,
     });
   };
   const upstreamSendSSE = sendSSE;
@@ -7435,6 +7636,16 @@ async function runInteractiveTurn(
       persistToolLog(sessionId, toolLogText);
     }
     if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId);
+    if (!isSubagentChatSession) {
+      const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
+      if (generatedSessionTitle && !abortSignal?.aborted) {
+        sendSSE('session_title', {
+          sessionId,
+          title: generatedSessionTitle,
+          autoTitleLocked: true,
+        });
+      }
+    }
   }
 
     completeLocalMainChatStream(result);
@@ -8252,6 +8463,15 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     sessionId: sid,
     active: !!activeRuntime,
     activeRun: activeRuntime ? summarizeMobileRuntime(activeRuntime) : null,
+    trigger: activeRuntime ? {
+      source: compactVoiceText(activeRuntime.source || '', 120),
+      detail: compactVoiceText(activeRuntime.detail || activeRuntime.recoveryData?.message || '', 900),
+      taskId: activeRuntime.taskId ? String(activeRuntime.taskId) : '',
+      teamId: activeRuntime.teamId ? String(activeRuntime.teamId) : '',
+      agentId: activeRuntime.agentId ? String(activeRuntime.agentId) : '',
+      scheduleId: activeRuntime.scheduleId ? String(activeRuntime.scheduleId) : '',
+      startedAt: Number(activeRuntime.startedAt || 0) || null,
+    } : null,
     currentGoal,
     currentPhase: displayPhase,
     activeToolName: displayTool,
@@ -8265,6 +8485,8 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     processEntries,
     recentEvents,
     observations: summarizeVoiceObservation(sid),
+    doneAlready: completed,
+    currentlyDoing: activeToolLabel || displayTool || displayPhase || '',
     summary: recentSummaryLines.join('\n'),
   };
 }
@@ -8309,6 +8531,15 @@ const voiceAgentContextBlockPending = new Map<string, Promise<VoiceAgentContextB
 
 function getVoiceAgentContextBlockCacheKey(sessionId: string): string {
   return String(sessionId || 'default').trim() || 'default';
+}
+
+function invalidateVoiceAgentContextBlockCache(sessionId?: string): void {
+  const sid = String(sessionId || '').trim();
+  if (sid) {
+    voiceAgentContextBlockCache.delete(getVoiceAgentContextBlockCacheKey(sid));
+    return;
+  }
+  voiceAgentContextBlockCache.clear();
 }
 
 async function getVoiceAgentContextBlock(sessionId: string, transcript: string, options: Record<string, any> = {}): Promise<{ contextBlock: string; elapsedMs: number; cacheHit: boolean }> {
@@ -8582,7 +8813,7 @@ async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, a
   const action = String(name || '').trim();
   const cleanArgs = args && typeof args === 'object' ? args : {};
   broadcastVoiceAgentToolEvent(sessionId, 'tool_call', { action, args: cleanArgs });
-  pushVoiceAgentProcessEntry(trace, action === 'voice_skill_lookup' ? 'skill' : 'tool', `Using ${friendlyVoiceToolName(action)}...`, { action, args: cleanArgs });
+  pushVoiceAgentProcessEntry(trace, action.startsWith('voice_skill_') || action.startsWith('skill_') ? 'skill' : 'tool', `Using ${friendlyVoiceToolName(action)}...`, { action, args: cleanArgs });
   const raw = await executeVoiceAgentTool(sessionId, action, cleanArgs);
   const summary = voiceAgentToolResultSummary(raw);
   broadcastVoiceAgentToolEvent(sessionId, 'tool_result', {
@@ -8613,6 +8844,239 @@ function voiceToolResult(ok: boolean, summary: string, data: Record<string, any>
     summary: compactVoiceText(summary, 1200),
     ...data,
   }, null, 2);
+}
+
+const VOICE_SKILL_INSTRUCTIONS_MAX_CHARS = 7000;
+const VOICE_SKILL_RESOURCE_MAX_CHARS = 5000;
+
+const VOICE_TOOL_EQUIVALENTS: Record<string, string> = {
+  web_search: 'voice_web_search',
+  web_fetch: 'voice_web_fetch',
+  browser_open: 'voice_browser_open',
+  browser_snapshot: 'voice_browser_snapshot',
+  browser_screenshot: 'voice_browser_screenshot',
+  browser_click: 'voice_browser_click',
+  browser_vision_click: 'voice_browser_vision_click',
+  browser_fill: 'voice_browser_fill',
+  browser_type: 'voice_browser_type',
+  browser_vision_type: 'voice_browser_vision_type',
+  browser_press_key: 'voice_browser_press_key',
+  browser_scroll: 'voice_browser_scroll',
+  browser_wait: 'voice_browser_wait',
+  desktop_screenshot: 'voice_desktop_screenshot',
+  desktop_click: 'voice_desktop_click',
+  desktop_window_control: 'voice_desktop_window_control',
+  desktop_list_windows: 'voice_desktop_list_windows',
+  desktop_focus_window: 'voice_desktop_focus_window',
+  desktop_find_app: 'voice_desktop_find_app',
+  desktop_launch_app: 'voice_desktop_launch_app',
+  desktop_window_click: 'voice_desktop_window_click',
+  desktop_window_type: 'voice_desktop_window_type',
+  desktop_window_press_key: 'voice_desktop_window_press_key',
+  desktop_window_scroll: 'voice_desktop_window_scroll',
+  memory_search: 'voice_memory_search',
+  write_note: 'voice_write_note',
+};
+
+function voiceToolEquivalentForSkillTool(toolName: unknown): string {
+  const tool = String(toolName || '').trim();
+  if (!tool) return '';
+  if (VOICE_TOOL_EQUIVALENTS[tool]) return VOICE_TOOL_EQUIVALENTS[tool];
+  if (tool.startsWith('voice_')) return tool;
+  if (tool.startsWith('browser_')) return 'voice browser tool where available';
+  if (tool.startsWith('desktop_')) return 'voice desktop tool where available';
+  return '';
+}
+
+function buildVoiceSkillRuntimeGuidance(skill: any): string {
+  const requiredTools = Array.isArray(skill?.requiredTools) ? skill.requiredTools : [];
+  const equivalents = requiredTools
+    .map((tool: unknown) => {
+      const voiceTool = voiceToolEquivalentForSkillTool(tool);
+      return voiceTool ? `${tool} -> ${voiceTool}` : '';
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+  return [
+    'Use this skill as workflow guidance inside Realtime voice.',
+    'Call only provided voice_* tools and canonical read-only skill_* tools from this layer. Explicit user-authorized social posts/messages are allowed through voice browser/desktop UI tools when the content and destination are clear. If the skill needs files, shell commands, downloads/uploads, credentials, source edits, purchases/payments, account settings/security changes, destructive submits, or durable system changes, dispatch_prometheus_worker instead.',
+    equivalents.length ? `Voice-safe tool equivalents: ${equivalents.join('; ')}.` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function summarizeVoiceSkill(skill: any): Record<string, any> {
+  return {
+    id: skill?.id || '',
+    name: skill?.name || skill?.id || '',
+    description: compactVoiceText(skill?.description || skill?.instructions || '', 260),
+    triggers: Array.isArray(skill?.triggers) ? skill.triggers.slice(0, 8) : [],
+    requiredTools: Array.isArray(skill?.requiredTools) ? skill.requiredTools.slice(0, 10) : [],
+    status: skill?.status || '',
+    eligibility: skill?.eligibility?.status || '',
+    riskLevel: skill?.riskLevel || '',
+  };
+}
+
+function buildRealtimeSkillContextForTranscript(transcript: string, maxChars = 4200): { context: string; skills: Record<string, any>[] } {
+  const text = String(transcript || '').trim();
+  if (!text || !_skillsManager) return { context: '', skills: [] };
+  _skillsManager.scanSkillsIfStale?.();
+  const matched = _skillsManager.findMatchingSkillsForMessage(text)
+    .map((id: string) => _skillsManager.get(id))
+    .filter(Boolean)
+    .slice(0, 5);
+  if (!matched.length) return { context: '', skills: [] };
+  const skillLines = matched.map((skill: any) => {
+    const triggers = Array.isArray(skill.triggers) && skill.triggers.length
+      ? ` Triggers: ${skill.triggers.slice(0, 6).join(', ')}.`
+      : '';
+    const required = Array.isArray(skill.requiredTools) && skill.requiredTools.length
+      ? ` Required tools: ${skill.requiredTools.slice(0, 8).join(', ')}.`
+      : '';
+    const status = skill?.eligibility?.status && skill.eligibility.status !== 'ready'
+      ? ` Eligibility: ${skill.eligibility.status}.`
+      : '';
+    return `- ${skill.id} (${skill.name || skill.id}): ${compactVoiceText(skill.description || '', 180)}.${triggers}${required}${status}`;
+  });
+  const context = [
+    '## Realtime Skill Trigger Update',
+    `Latest spoken request: ${compactVoiceText(text, 500)}`,
+    'The request matches installed skill trigger metadata. These are not active instructions yet. If a skill is relevant, call skill_read with its id before acting.',
+    ...skillLines,
+    'Use skill guidance only through voice_* tools and canonical read-only skill_* tools. Explicit user-authorized social posts/messages are allowed through voice browser/desktop UI tools when the content and destination are clear. Dispatch to the Prometheus worker for non-voice tools, files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
+  ].join('\n');
+  return {
+    context: compactVoiceText(context, maxChars),
+    skills: matched.map(summarizeVoiceSkill),
+  };
+}
+
+async function captureVoiceBrowserObservation(
+  sessionId: string,
+  tool: string,
+  includeScreenshot: boolean = true,
+): Promise<Record<string, any>> {
+  if (includeScreenshot === false) {
+    await broadcastVoiceBrowserStatus(sessionId, tool, null).catch(() => {});
+    return {};
+  }
+  const shot = await browserVisionScreenshot(sessionId).catch(() => null);
+  await broadcastVoiceBrowserStatus(sessionId, tool, shot).catch(() => {});
+  if (!shot?.base64) return {};
+  broadcastVoiceScreenshotPreview(sessionId, 'browser', tool, shot);
+  return { width: shot.width, height: shot.height, mimeType: shot.mimeType || 'image/png' };
+}
+
+async function broadcastVoiceBrowserStatus(sessionId: string, tool: string, shot?: any): Promise<void> {
+  const info = getBrowserSessionInfo(sessionId);
+  if (!info?.active) return;
+  const payload = {
+    type: 'browser:status',
+    sessionId,
+    tool,
+    active: true,
+    url: info.url || '',
+    title: info.title || '',
+    statusLabel: tool === 'voice_browser_open' ? 'Browser opened.' : 'Voice browser action complete.',
+    mode: info.mode || 'agent',
+    captured: info.captured === true,
+    controlOwner: info.controlOwner || 'agent',
+    streamActive: info.streamActive === true,
+    streamTransport: info.streamTransport || '',
+    streamFocus: info.streamFocus || 'passive',
+    browserTarget: info.browserTarget || '',
+    profileKind: info.profileKind || '',
+    profileLabel: info.profileLabel || '',
+    profileDir: info.profileDir || '',
+    debugPort: info.debugPort || 0,
+    frameBase64: shot?.base64 || '',
+    frameWidth: Number(shot?.width || 0),
+    frameHeight: Number(shot?.height || 0),
+    frameFormat: shot?.base64 ? 'png' : '',
+    browserOwnerType: 'main',
+    browserOwnerId: '',
+    browserLabel: 'Voice Agent browser',
+    browserTaskPrompt: '',
+    browserSpawnerSessionId: '',
+    timestamp: Date.now(),
+  };
+  broadcastWS(payload);
+  if (tool === 'voice_browser_open' || tool === 'voice_browser_snapshot') {
+    broadcastWS({ ...payload, type: 'browser:open' });
+  }
+}
+
+function voiceDesktopWindowSelector(args: Record<string, any>): { window_id?: string; window_handle?: number; app_id?: string; title?: string } {
+  return {
+    window_id: args?.window_id == null ? undefined : String(args.window_id),
+    window_handle: args?.window_handle == null && args?.handle == null ? undefined : Number(args.window_handle ?? args.handle),
+    app_id: args?.app_id == null && args?.appId == null ? undefined : String(args.app_id ?? args.appId),
+    title: args?.title == null && args?.name == null ? undefined : String(args.title ?? args.name),
+  };
+}
+
+async function captureVoiceDesktopWindowObservation(
+  sessionId: string,
+  tool: string,
+  args: Record<string, any>,
+  includeScreenshot: boolean = true,
+): Promise<Record<string, any>> {
+  if (includeScreenshot === false) return {};
+  const selector = voiceDesktopWindowSelector(args);
+  const handle = Number(selector.window_handle || 0);
+  const title = String(selector.title || '').trim();
+  const appId = String(selector.app_id || '').trim();
+  await desktopWindowScreenshot(sessionId, {
+    ...(Number.isFinite(handle) && handle > 0 ? { handle } : {}),
+    ...(title ? { name: title } : {}),
+    ...(!title && !(Number.isFinite(handle) && handle > 0) && appId ? { name: appId } : {}),
+    active: !title && !(Number.isFinite(handle) && handle > 0) && !appId,
+    focus_first: false,
+  }).catch(() => '');
+  const packet = getDesktopAdvisorPacket(sessionId);
+  if (packet?.screenshotBase64) {
+    broadcastVoiceScreenshotPreview(sessionId, 'desktop', tool, {
+      base64: packet.screenshotBase64,
+      mimeType: packet.screenshotMime || 'image/png',
+      width: packet.width,
+      height: packet.height,
+    });
+  }
+  const target = packet?.targetWindow;
+  return packet ? {
+    screenshotId: packet.screenshotId,
+    width: packet.width,
+    height: packet.height,
+    targetWindow: target ? {
+      title: target.title,
+      processName: target.processName,
+      handle: target.handle,
+    } : undefined,
+  } : {};
+}
+
+async function captureVoiceDesktopObservation(
+  sessionId: string,
+  tool: string,
+  includeScreenshot: boolean = true,
+): Promise<Record<string, any>> {
+  if (includeScreenshot === false) return {};
+  const result = await desktopScreenshotWithHistory(sessionId, { capture: 'all' }).catch(() => '');
+  const packet = getDesktopAdvisorPacket(sessionId);
+  if (packet?.screenshotBase64) {
+    broadcastVoiceScreenshotPreview(sessionId, 'desktop', tool, {
+      base64: packet.screenshotBase64,
+      mimeType: packet.screenshotMime || 'image/png',
+      width: packet.width,
+      height: packet.height,
+    });
+  }
+  return packet ? {
+    screenshotId: packet.screenshotId,
+    width: packet.width,
+    height: packet.height,
+    observation: compactVoiceText(result, 5000),
+  } : {};
 }
 
 function voiceRuntimeDirectiveFromToolResult(result: any): Record<string, any> | null {
@@ -8679,6 +9143,28 @@ function summarizeVoiceMemorySearch(raw: any): Record<string, any> {
   };
 }
 
+function resolveVoiceAgentMemoryFilePath(workspacePath: string): string {
+  const canonical = path.join(workspacePath, 'VOICEAGENT.md');
+  if (fs.existsSync(canonical)) return canonical;
+  const lower = path.join(workspacePath, 'voiceagent.md');
+  if (fs.existsSync(lower)) return lower;
+  return canonical;
+}
+
+function readVoiceAgentMemoryFile(workspacePath: string): { filePath: string; content: string } {
+  const filePath = resolveVoiceAgentMemoryFilePath(workspacePath);
+  if (!fs.existsSync(filePath)) return { filePath, content: '' };
+  return { filePath, content: fs.readFileSync(filePath, 'utf-8') };
+}
+
+function formatVoiceAgentMemoryAppend(content: string, category = ''): string {
+  const text = String(content || '').trim();
+  if (!text) return '';
+  const date = new Date().toISOString().slice(0, 10);
+  const tag = compactVoiceText(category || 'voice', 60).toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'voice';
+  return `- ${text} [${date}; ${tag}]`;
+}
+
 function cleanVoiceWakePhrase(value: unknown): string {
   return String(value || '')
     .replace(/\s+/g, ' ')
@@ -8741,8 +9227,26 @@ function buildVoiceToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'voice_agent_memory',
+        description: 'Read or update workspace/VOICEAGENT.md, the live voice-agent-only memory file. Use when the user explicitly asks to view, add, change, or remove live voice agent routing/spoken-behavior notes. This is not general user/soul/memory storage and must not be used for wake phrase runtime settings.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['read', 'append', 'replace'], description: 'read returns the current file, append adds one dated bullet, replace overwrites the file with supplied full content.' },
+            content: { type: 'string', description: 'Required for append and replace. For append, this should be one concise voice-agent routing or behavior note. For replace, this must be the complete new VOICEAGENT.md content.' },
+            category: { type: 'string', description: 'Optional short tag for appended notes, such as browser, routing, spoken_style, or handoff.' },
+            max_chars: { type: 'number', description: 'Read cap. Default 5000, max 12000.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'voice_set_wake_phrase',
-        description: 'Set the mobile voice runtime wake phrase for always-listening mode. Use when Raul asks to set/change/make his wake phrase or wake word. This is runtime voice configuration, not memory or notes.',
+        description: 'Set the mobile voice runtime wake phrase for always-listening mode. Use when the user asks to set/change/make their wake phrase or wake word. This is runtime voice configuration, not memory or notes.',
         parameters: {
           type: 'object',
           required: ['phrase'],
@@ -8786,13 +9290,61 @@ function buildVoiceToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
-        name: 'voice_skill_lookup',
-        description: 'Fast voice wrapper around skill_list/skill_read summaries. Use to find relevant skills or answer questions about available workflows. Returns summaries only, not full skill instructions.',
+        name: 'skill_list',
+        description: 'Canonical Prometheus skill_list tool. List installed reusable skills with triggers, categories, required tools, and counts. Use this before skill_read when the user asks about skills or before browser/desktop/tool-heavy workflows that may have a playbook.',
         parameters: {
           type: 'object',
           properties: {
-            query: { type: 'string' },
-            id: { type: 'string', description: 'Specific skill id to summarize.' },
+            query: { type: 'string', description: 'Optional filter across id/name/description/triggers/categories/requiredTools.' },
+            limit: { type: 'number', description: 'Maximum skills to return. Default 40, capped at 80.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_read',
+        description: 'Canonical Prometheus skill_read tool. Read full SKILL.md instructions for one relevant skill before acting. Follow skill instructions only through voice_* tools from Realtime; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker for files, shell, uploads/downloads, credentials, source edits, purchases/payments, account settings/security changes, destructive, or durable actions.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', description: 'Skill id from skill_list or trigger context.' },
+            max_chars: { type: 'number', description: 'Optional cap for instructions, default 7000.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_resource_list',
+        description: 'Canonical Prometheus skill_resource_list tool. List static resources declared or discovered for a bundled skill.',
+        parameters: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string', description: 'Skill id.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_resource_read',
+        description: 'Canonical Prometheus skill_resource_read tool. Read one text resource from a bundled skill, such as an example/template/reference. Keep use narrow and hand off to Worker for non-text or execution-heavy resources.',
+        parameters: {
+          type: 'object',
+          required: ['id', 'path'],
+          properties: {
+            id: { type: 'string', description: 'Skill id.' },
+            path: { type: 'string', description: 'Resource path from skill_read or skill_resource_list.' },
+            max_chars: { type: 'number', description: 'Optional cap for content, default 5000.' },
           },
           additionalProperties: false,
         },
@@ -8849,11 +9401,170 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_browser_screenshot',
-        description: 'Capture the current Prometheus-controlled browser viewport from the voice layer. Use when Raul asks for a browser screenshot or quick visual browser check. Observation only: do not click, type, navigate, or control the browser.',
+        description: 'Capture the current Prometheus-controlled browser viewport from the voice layer. Use for quick visual browser context before or after realtime browser control.',
         parameters: {
           type: 'object',
           properties: {
             include_summary: { type: 'boolean', description: 'Whether to include brief screenshot metadata in the spoken reply.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_open',
+        description: 'Open the Prometheus-controlled browser, a URL/domain, or a browser search query and return DOM plus screenshot observation context. Use this for "open browser", Chrome/Edge/browser/web/page/tab/site/URL/search requests. If the user says just "open the browser", open https://www.google.com. Hand off to Worker for uploads/downloads, files, purchases/payments, account settings/security changes, or durable work.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'URL/domain to open. Include protocol when known. Domains like example.com are accepted.' },
+            query: { type: 'string', description: 'Browser search query when the user asks to open/search something without giving a URL.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after opening. Default true.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_scroll',
+        description: 'Scroll the current Prometheus-controlled browser viewport up or down and observe the result. If the user asks to scroll the browser/page/site, call this tool immediately instead of saying you will. Do not use for file downloads/uploads or durable external actions; hand those to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            direction: { type: 'string', enum: ['up', 'down'], description: 'Scroll direction. Default down.' },
+            amount: { type: 'number', description: 'Scroll amount multiplier from 0.5 to 4. Default 1.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after scrolling. Default true.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_snapshot',
+        description: 'Return the current Prometheus browser DOM/accessibility snapshot with @ref targets. Use before browser_click/browser_fill when you need reliable element refs.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_click',
+        description: 'Click a browser element by @ref, saved element name, or CSS selector, then observe with fresh DOM and screenshot context. If the user asks to click/tap/select something in the browser, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when the target and content are clear. For uploads/downloads, purchases/payments, destructive submits, or account settings/security changes, hand off to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            ref: { type: 'number', description: 'Preferred @ref from voice_browser_snapshot or a prior browser observation.' },
+            element: { type: 'string', description: 'Optional saved/named browser element.' },
+            selector: { type: 'string', description: 'Optional CSS selector when no @ref is available.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after clicking. Default true.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_vision_click',
+        description: 'Click browser viewport coordinates from the latest screenshot, then observe with fresh DOM and screenshot context. Use when DOM refs are unavailable, such as canvas/SVG/WebGL UIs. Explicit user-authorized social posts/messages are allowed when the target and content are clear. For uploads/downloads, purchases/payments, destructive submits, or account settings/security changes, hand off to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            x: { type: 'number', description: 'Viewport x coordinate in pixels from the browser screenshot.' },
+            y: { type: 'number', description: 'Viewport y coordinate in pixels from the browser screenshot.' },
+            button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button. Default left.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after clicking. Default true.' },
+          },
+          required: ['x', 'y'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_fill',
+        description: 'Fill a browser field by @ref, saved element name, or CSS selector, then observe with fresh DOM and screenshot context. Use for live browser UI drafting/input, including explicitly requested social posts/messages. Do not use for passwords, payment data, uploads/downloads, or destructive/account-settings submits; hand those to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            ref: { type: 'number', description: 'Preferred @ref from voice_browser_snapshot or a prior browser observation.' },
+            element: { type: 'string', description: 'Optional saved/named browser element.' },
+            selector: { type: 'string', description: 'Optional CSS selector when no @ref is available.' },
+            text: { type: 'string', description: 'Text to fill into the target field.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after filling. Default true.' },
+          },
+          required: ['text'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_type',
+        description: 'Type text into the browser element that currently has focus, then observe with fresh DOM and screenshot context. Use after click/focus on fields, editors, or canvas input UIs, including explicitly requested social posts/messages. Do not use for passwords/payment data or destructive/account-settings submits; hand those to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Text to type into the currently focused browser element.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after typing. Default true.' },
+          },
+          required: ['text'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_vision_type',
+        description: 'Click browser viewport coordinates from the latest screenshot and type text, then observe with fresh DOM and screenshot context. Use when DOM refs are unavailable, including explicitly requested social posts/messages. Do not use for passwords/payment data or destructive/account-settings submits; hand those to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            x: { type: 'number', description: 'Viewport x coordinate in pixels from the browser screenshot.' },
+            y: { type: 'number', description: 'Viewport y coordinate in pixels from the browser screenshot.' },
+            text: { type: 'string', description: 'Text to type after clicking the coordinate.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after typing. Default true.' },
+          },
+          required: ['x', 'y', 'text'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_press_key',
+        description: 'Press a browser key such as Enter, Escape, Tab, ArrowDown, PageDown, or Backspace, then observe with fresh DOM and screenshot context. If the user asks to press a browser key, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when pressing the key is the requested submit/send action. For purchases/payments, destructive submits, or account settings/security changes, hand off to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string', description: 'Key to press, e.g. Enter, Escape, Tab, ArrowDown, PageDown, Backspace.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after pressing the key. Default true.' },
+          },
+          required: ['key'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_browser_wait',
+        description: 'Wait briefly for the current browser page/UI to settle, then observe with fresh DOM and screenshot context.',
+        parameters: {
+          type: 'object',
+          properties: {
+            ms: { type: 'number', description: 'Milliseconds to wait. Clamped to a short realtime-friendly delay.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a browser screenshot preview after waiting. Default true.' },
           },
           additionalProperties: false,
         },
@@ -8863,12 +9574,19 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_desktop_screenshot',
-        description: 'Capture a desktop screenshot from the voice layer. Use when Raul asks for a desktop screenshot or asks to visually check the computer. Observation only: do not click, type, scroll, or control the desktop.',
+        description: 'Capture a desktop screenshot from the voice layer. Use when the user asks for a desktop screenshot, app/window screenshot, or when realtime desktop control needs fresh visual context.',
         parameters: {
           type: 'object',
           properties: {
-            capture: { type: 'string', enum: ['all', 'primary'], description: 'Default all. Use primary if Raul asks for the main screen.' },
+            capture: { type: 'string', enum: ['all', 'primary'], description: 'Default all. Use primary if the user asks for the main screen.' },
             monitor_index: { type: 'number', description: 'Optional monitor index; overrides capture when provided.' },
+            name: { type: 'string', description: 'Optional app/window title or process name to capture as a single-window screenshot.' },
+            handle: { type: 'number', description: 'Optional exact window handle to capture.' },
+            active: { type: 'boolean', description: 'Capture the current active window.' },
+            focus_first: { type: 'boolean', description: 'Focus the target window before capture. Default true for window screenshots.' },
+            padding: { type: 'number', description: 'Extra pixels around a window screenshot. Default 8.' },
+            mode: { type: 'string', enum: ['normal', 'som'], description: 'Use som to overlay numbered clickable UI elements when preparing to click.' },
+            som: { type: 'boolean', description: 'Shortcut for mode="som".' },
             include_summary: { type: 'boolean', description: 'Whether to include brief screenshot metadata in the spoken reply.' },
           },
           additionalProperties: false,
@@ -8878,8 +9596,224 @@ function buildVoiceToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'voice_desktop_click',
+        description: 'Click desktop coordinates using the same Prometheus desktop_click targeting model as the Worker. If the user asks to click the desktop/current screen and a screenshot coordinate or SOM element is available, call this tool immediately. Prefer voice_desktop_window_click when you already have a specific window_id/window_handle.',
+        parameters: {
+          type: 'object',
+          properties: {
+            x: { type: 'number', description: 'X coordinate from the screenshot/capture/monitor/virtual coordinate space.' },
+            y: { type: 'number', description: 'Y coordinate from the screenshot/capture/monitor/virtual coordinate space.' },
+            element: { type: 'number', description: 'Numbered SOM element from a screenshot taken with mode="som".' },
+            coordinate_space: { type: 'string', enum: ['capture', 'monitor', 'virtual', 'window'], description: 'Coordinate space. Use capture with screenshot_id when clicking from screenshot pixels.' },
+            screenshot_id: { type: 'string', description: 'Screenshot ID from voice_desktop_screenshot. Strongly recommended for capture/SOM clicks.' },
+            monitor_index: { type: 'number', description: 'Monitor index for monitor coordinate space.' },
+            window_name: { type: 'string', description: 'Optional target window name for window-relative coordinates.' },
+            window_handle: { type: 'number', description: 'Optional target window handle for window-relative coordinates.' },
+            button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button. Default left.' },
+            double_click: { type: 'boolean', description: 'Double click instead of single click. Default false.' },
+            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Optional modifier key.' },
+            verify: { type: 'string', description: 'Optional desktop verification mode supported by the underlying tool.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a fresh desktop screenshot preview after clicking. Default true.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_window_control',
+        description: 'Minimize, maximize, restore, or close a desktop window using the same Prometheus desktop_window_control path as the Worker. Prefer this over clicking window chrome.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'], description: 'Window action to perform.' },
+            name: { type: 'string', description: 'Optional app/window title or process name. If omitted, active window is used.' },
+            handle: { type: 'number', description: 'Optional exact window handle.' },
+            active: { type: 'boolean', description: 'Use the current active window. Default true when name/handle are omitted.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a fresh window screenshot preview after maximize/restore. Default true. Minimize/close do not capture by default.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_focus_window',
+        description: 'Focus one desktop app/window by partial title or process name. Use for live desktop UI control setup. Do not use for files, shell commands, installs, or durable system changes; hand those to Worker.',
+        parameters: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', description: 'Partial window title or process name to focus.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_launch_app',
+        description: 'Launch a native desktop app by app_id or app name and wait for its window. Use only for non-browser desktop apps. NEVER use this for browser, Chrome, Edge, websites, URLs, pages, tabs, Google/search, installers, shell commands, files, or durable system changes; use voice_browser_open or Worker instead.',
+        parameters: {
+          type: 'object',
+          properties: {
+            app_id: { type: 'string', description: 'Stable installed app id when known.' },
+            app: { type: 'string', description: 'Native app name or executable name, e.g. notepad, calculator, vscode. Do not pass browser/chrome/edge/web/url/search requests here.' },
+            wait_ms: { type: 'number', description: 'Max milliseconds to wait for the window. Default 6000.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_find_app',
+        description: 'Look up installed desktop apps by name and return ranked app_id candidates. Use before voice_desktop_launch_app when the app name is ambiguous.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'App name or fuzzy query.' },
+            limit: { type: 'number', description: 'Maximum candidates. Default 8.' },
+            refresh: { type: 'boolean', description: 'Refresh the installed app inventory before searching. Default false.' },
+          },
+          required: ['query'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_list_windows',
+        description: 'List open desktop windows in the canonical Prometheus window model. Use to find window_id/window_handle/app_id before window-scoped desktop control.',
+        parameters: {
+          type: 'object',
+          properties: {
+            app_id: { type: 'string', description: 'Optional app_id filter.' },
+            process_name: { type: 'string', description: 'Optional process name filter.' },
+            title: { type: 'string', description: 'Optional window title filter.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_window_click',
+        description: 'Click inside a specific desktop window using window/screenshot coordinates, then capture a fresh window screenshot. If the user asks to click inside an identified app/window, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when the target and content are clear. For file operations, installs, destructive confirmations, purchases/payments, or account settings/security changes, hand off to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            window_id: { type: 'string', description: 'Preferred canonical window_id from voice_desktop_list_windows.' },
+            window_handle: { type: 'number', description: 'Optional exact window handle from a window screenshot/list.' },
+            app_id: { type: 'string', description: 'Optional app_id selector.' },
+            title: { type: 'string', description: 'Optional window title selector.' },
+            x: { type: 'number', description: 'X coordinate from the relevant screenshot/window.' },
+            y: { type: 'number', description: 'Y coordinate from the relevant screenshot/window.' },
+            coordinate_space: { type: 'string', enum: ['window', 'capture', 'monitor', 'virtual'], description: 'Coordinate space. Default window.' },
+            screenshot_id: { type: 'string', description: 'Optional screenshot_id anchoring the coordinate.' },
+            button: { type: 'string', enum: ['left', 'right'], description: 'Mouse button. Default left.' },
+            double_click: { type: 'boolean', description: 'Double click instead of single click. Default false.' },
+            modifier: { type: 'string', enum: ['shift', 'ctrl', 'alt'], description: 'Optional modifier key.' },
+            verify: { type: 'string', description: 'Optional desktop verification mode supported by the underlying tool.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after clicking. Default true.' },
+          },
+          required: ['x', 'y'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_window_type',
+        description: 'Type text into a specific focused desktop window, then capture a fresh window screenshot. Use for live app UI input only, including explicitly requested social posts/messages. Do not use for passwords/payment data, file editing, shell commands, destructive submits, or account settings/security changes; hand those to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            text: { type: 'string', description: 'Text to type into the target window.' },
+            raw: { type: 'boolean', description: 'Use raw typing instead of clipboard paste. Default false.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after typing. Default true.' },
+          },
+          required: ['text'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_window_press_key',
+        description: 'Press a key in a specific focused desktop window, then capture a fresh window screenshot. If the user asks to press a key in an app/window, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when pressing the key is the requested submit/send action. For destructive confirmations, installs, file operations, purchases/payments, or account settings/security changes, hand off to Worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            key: { type: 'string', description: 'Key to press, e.g. Enter, Escape, Tab, ArrowDown, PageDown, Backspace.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after pressing the key. Default true.' },
+          },
+          required: ['key'],
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_desktop_window_scroll',
+        description: 'Scroll inside a specific desktop window, then capture a fresh window screenshot. If the user asks to scroll an app/window, call this tool immediately instead of saying you will.',
+        parameters: {
+          type: 'object',
+          properties: {
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction. Default down.' },
+            amount: { type: 'number', description: 'Scroll amount multiplier. Default 1.' },
+            x: { type: 'number', description: 'Optional x coordinate to move over before scrolling.' },
+            y: { type: 'number', description: 'Optional y coordinate to move over before scrolling.' },
+            coordinate_space: { type: 'string', enum: ['window', 'capture', 'monitor', 'virtual'], description: 'Coordinate space for x/y. Default window.' },
+            screenshot_id: { type: 'string', description: 'Optional screenshot_id anchoring x/y.' },
+            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after scrolling. Default true.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'voice_worker_status',
+        description: 'Read the freshest Prometheus worker/run status and current context packet. Use for status/update/progress questions like "what are you doing", "where are we", "what happened", or "how is the worker going". This is read-only and must NOT steer or interrupt the worker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            include_recent_events: { type: 'boolean', description: 'Include recent stream/process events. Default true.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+
+    {
+      type: 'function',
+      function: {
         name: 'voice_send_screenshot',
-        description: 'Capture or reuse a browser/desktop screenshot and deliver it through the origin-aware delivery router. Use only when Raul asks to send, share, or show him a screenshot.',
+        description: 'Capture or reuse a browser/desktop screenshot and deliver it through the origin-aware delivery router. Use only when the user asks to send, share, or show them a screenshot.',
         parameters: {
           type: 'object',
           required: ['source'],
@@ -8889,6 +9823,11 @@ function buildVoiceToolDefinitions(): any[] {
             caption: { type: 'string' },
             capture: { type: 'string', enum: ['all', 'primary'], description: 'Optional desktop capture mode when source is desktop_new.' },
             monitor_index: { type: 'number', description: 'Optional desktop monitor index when source is desktop_new.' },
+            name: { type: 'string', description: 'Optional app/window title or process name to capture when source is desktop_new.' },
+            handle: { type: 'number', description: 'Optional exact window handle to capture when source is desktop_new.' },
+            active: { type: 'boolean', description: 'Capture the current active window when source is desktop_new.' },
+            focus_first: { type: 'boolean', description: 'Focus the target window before capture. Default true for window screenshots.' },
+            padding: { type: 'number', description: 'Extra pixels around a window screenshot. Default 8.' },
           },
           additionalProperties: false,
         },
@@ -8931,6 +9870,54 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       const result = await executeWriteNote({ content, tag: String(args.tag || 'voice').trim() || 'voice' });
       return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Note failed.') : 'Note saved.', { file: result.data?.file, tag: result.data?.tag });
     }
+    if (name === 'voice_agent_memory') {
+      const action = String(args.action || 'read').trim().toLowerCase();
+      const maxChars = Math.min(12000, Math.max(800, Number(args.max_chars || args.maxChars || 5000) || 5000));
+      const { filePath, content: currentContent } = readVoiceAgentMemoryFile(workspacePath);
+      if (action === 'read') {
+        const content = currentContent.length > maxChars ? `${currentContent.slice(0, Math.max(0, maxChars - 18)).trimEnd()}\n...[truncated]` : currentContent;
+        return voiceToolResult(true, currentContent ? 'Voice agent memory loaded.' : 'Voice agent memory is empty.', {
+          file: filePath,
+          content,
+          length: currentContent.length,
+          truncated: currentContent.length > maxChars,
+        });
+      }
+      if (action === 'append') {
+        const entry = formatVoiceAgentMemoryAppend(args.content, args.category);
+        if (!entry) return voiceToolResult(false, 'Content is required to append to voice agent memory.');
+        const initial = currentContent.trim()
+          ? currentContent.trimEnd()
+          : '# Voice Agent Memory\n\nThese notes apply only to Prometheus in live voice and Realtime mode.\n';
+        const nextContent = `${initial}\n${initial.endsWith('\n') ? '' : '\n'}${entry}\n`;
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, nextContent, 'utf-8');
+        invalidateVoiceAgentContextBlockCache(sessionId);
+        return voiceToolResult(true, 'Voice agent memory updated live.', {
+          file: filePath,
+          action: 'append',
+          appended: entry,
+          content: nextContent.length > maxChars ? `${nextContent.slice(0, Math.max(0, maxChars - 18)).trimEnd()}\n...[truncated]` : nextContent,
+          length: nextContent.length,
+          truncated: nextContent.length > maxChars,
+        });
+      }
+      if (action === 'replace') {
+        const nextContent = String(args.content || '').trim();
+        if (!nextContent) return voiceToolResult(false, 'Full replacement content is required.');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, `${nextContent}\n`, 'utf-8');
+        invalidateVoiceAgentContextBlockCache(sessionId);
+        return voiceToolResult(true, 'Voice agent memory replaced live.', {
+          file: filePath,
+          action: 'replace',
+          content: nextContent.length > maxChars ? `${nextContent.slice(0, Math.max(0, maxChars - 18)).trimEnd()}\n...[truncated]` : nextContent,
+          length: nextContent.length,
+          truncated: nextContent.length > maxChars,
+        });
+      }
+      return voiceToolResult(false, 'voice_agent_memory action must be read, append, or replace.');
+    }
     if (name === 'voice_set_wake_phrase') {
       const phrase = cleanVoiceWakePhrase(args.phrase);
       if (!phrase) return voiceToolResult(false, 'Wake phrase is required.');
@@ -8955,32 +9942,116 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         activateAfterReply: true,
       });
     }
-    if (name === 'voice_skill_lookup') {
+    if (name === 'skill_list' || name === 'voice_skill_lookup') {
       _skillsManager.scanSkills();
       const all = _skillsManager.getAll();
       const id = String(args.id || '').trim();
       const query = String(args.query || '').trim().toLowerCase();
+      const explicitAll = !query || /\b(all|everything|every|list|show|available|installed|current(?:ly)?)\b/i.test(query);
+      const limit = Math.min(80, Math.max(1, Number(args.limit || (explicitAll ? 40 : 20)) || (explicitAll ? 40 : 20)));
+      const queryTerms = query
+        .split(/\s+/)
+        .map((part) => part.replace(/[^\p{L}\p{N}_-]+/gu, '').trim())
+        .filter((part) => part.length >= 3 && !['all', 'the', 'and', 'are', 'you', 'can', 'have', 'with', 'for', 'skill', 'skills', 'list', 'show', 'available', 'current', 'currently'].includes(part));
       const candidates = id
         ? all.filter((skill: any) => String(skill.id || '') === id)
+        : explicitAll && queryTerms.length === 0
+          ? all
         : all.filter((skill: any) => {
-            if (!query) return true;
+            if (!queryTerms.length) return true;
             const haystack = [
               skill.id,
               skill.name,
               skill.description,
               ...(Array.isArray(skill.triggers) ? skill.triggers : []),
               ...(Array.isArray(skill.requiredTools) ? skill.requiredTools : []),
+              ...(Array.isArray(skill.categories) ? skill.categories : []),
             ].join(' ').toLowerCase();
-            return query.split(/\s+/).filter(Boolean).some((part) => haystack.includes(part));
+            return queryTerms.some((part) => haystack.includes(part));
           });
-      const skills = candidates.slice(0, 8).map((skill: any) => ({
-        id: skill.id,
-        name: skill.name,
-        description: compactVoiceText(skill.description || skill.instructions || '', 260),
-        triggers: Array.isArray(skill.triggers) ? skill.triggers.slice(0, 8) : [],
-        requiredTools: Array.isArray(skill.requiredTools) ? skill.requiredTools.slice(0, 8) : [],
+      const skills = candidates.slice(0, limit).map((skill: any) => ({
+        ...summarizeVoiceSkill(skill),
       }));
-      return voiceToolResult(true, skills.length ? `Found ${skills.length} relevant skill${skills.length === 1 ? '' : 's'}.` : 'No matching skills found.', { skills });
+      const truncated = candidates.length > skills.length;
+      const summary = id
+        ? (skills.length ? `Found skill "${skills[0].id}".` : `Skill "${id}" was not found.`)
+        : candidates.length
+          ? `Showing ${skills.length} of ${candidates.length} matching skill${candidates.length === 1 ? '' : 's'}; ${all.length} installed total.`
+          : `No matching skills found; ${all.length} installed total.`;
+      return voiceToolResult(true, summary, {
+        skills,
+        totalInstalled: all.length,
+        matchedCount: candidates.length,
+        returnedCount: skills.length,
+        truncated,
+        limit,
+        note: truncated
+          ? `This is a truncated result, not the complete skill list. Call skill_list again with limit up to 80 or a narrower query to see more.`
+          : `This result is complete for the current query.`,
+      });
+    }
+    if (name === 'skill_read' || name === 'voice_skill_read') {
+      _skillsManager.scanSkillsIfStale?.();
+      const skillId = String(args.id || args.skill_id || '').trim();
+      if (!skillId) return voiceToolResult(false, 'Skill id is required.');
+      const skill = _skillsManager.get(skillId);
+      if (!skill) return voiceToolResult(false, `Skill "${skillId}" not found.`, { missing: true });
+      const eligibility = String(skill?.eligibility?.status || skill.status || '').toLowerCase();
+      const verdict = String(skill?.safety?.verdict || '').toLowerCase();
+      if (eligibility === 'blocked' || skill.status === 'blocked' || verdict === 'critical') {
+        return voiceToolResult(false, `Skill "${skill.id}" is blocked and cannot be loaded in Realtime voice.`, {
+          skill: summarizeVoiceSkill(skill),
+          safety: skill.safety,
+          eligibility: skill.eligibility,
+        });
+      }
+      activateSkillForSession(sessionId, skill.id);
+      const maxChars = Math.min(12000, Math.max(1200, Number(args.max_chars || args.maxChars || VOICE_SKILL_INSTRUCTIONS_MAX_CHARS) || VOICE_SKILL_INSTRUCTIONS_MAX_CHARS));
+      const resources = Array.isArray(skill.resources) ? skill.resources.slice(0, 16).map((resource: any) => ({
+        path: resource.path,
+        type: resource.type,
+        description: compactVoiceText(resource.description || '', 180),
+      })) : [];
+      return voiceToolResult(true, `Loaded skill "${skill.name || skill.id}".`, {
+        skill: summarizeVoiceSkill(skill),
+        instructions: compactVoiceText(skill.instructions || '', maxChars),
+        runtimeGuidance: buildVoiceSkillRuntimeGuidance(skill),
+        resources,
+        truncated: String(skill.instructions || '').length > maxChars,
+      });
+    }
+    if (name === 'skill_resource_list') {
+      _skillsManager.scanSkillsIfStale?.();
+      const skillId = String(args.id || args.skill_id || '').trim();
+      if (!skillId) return voiceToolResult(false, 'Skill id is required.');
+      const skill = _skillsManager.get(skillId);
+      if (!skill) return voiceToolResult(false, `Skill "${skillId}" not found.`);
+      const resources = _skillsManager.listResources(skillId).slice(0, 40).map((resource: any) => ({
+        path: resource.path,
+        type: resource.type,
+        description: compactVoiceText(resource.description || '', 180),
+      }));
+      return voiceToolResult(true, resources.length ? `Found ${resources.length} resource${resources.length === 1 ? '' : 's'} for "${skill.id}".` : `Skill "${skill.id}" has no resources.`, {
+        id: skill.id,
+        resources,
+      });
+    }
+    if (name === 'skill_resource_read' || name === 'voice_skill_resource_read') {
+      _skillsManager.scanSkillsIfStale?.();
+      const skillId = String(args.id || args.skill_id || '').trim();
+      const resourcePath = String(args.path || args.resource_path || '').trim();
+      if (!skillId || !resourcePath) return voiceToolResult(false, 'Skill id and resource path are required.');
+      const maxChars = Math.min(10000, Math.max(800, Number(args.max_chars || args.maxChars || VOICE_SKILL_RESOURCE_MAX_CHARS) || VOICE_SKILL_RESOURCE_MAX_CHARS));
+      const result = _skillsManager.readResource(skillId, resourcePath, maxChars);
+      if (!result.ok) return voiceToolResult(false, result.error || `Could not read ${skillId}/${resourcePath}.`);
+      activateSkillForSession(sessionId, skillId);
+      activateSkillResourceForSession(sessionId, skillId, result.path);
+      return voiceToolResult(true, `Loaded skill resource ${skillId}/${result.path}.`, {
+        id: skillId,
+        path: result.path,
+        content: result.content,
+        truncated: result.truncated,
+      });
     }
     if (name === 'voice_memory_search') {
       const readRecordId = String(args.read_record_id || args.record_id || '').trim();
@@ -9068,9 +10139,161 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         mimeType: shot.mimeType,
       });
     }
+    if (name === 'voice_browser_open') {
+      const rawUrl = String(args.url || '').trim();
+      const query = String(args.query || '').trim();
+      let url = rawUrl;
+      if (!url && query) {
+        url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+      } else if (url && /\s/.test(url) && !/^[a-z][a-z0-9+.-]*:/i.test(url) && !/\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b/i.test(url)) {
+        url = `https://www.google.com/search?q=${encodeURIComponent(url)}`;
+      }
+      if (!url) return voiceToolResult(false, 'URL or query is required.');
+      const result = await browserOpen(sessionId, url, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      const openedUrl = (() => {
+        try { return new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`); } catch { return null; }
+      })();
+      return voiceToolResult(ok, ok ? `Opened ${query || rawUrl || openedUrl?.hostname || url}.` : result, {
+        url,
+        host: openedUrl?.hostname || '',
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_scroll') {
+      const direction = String(args.direction || 'down').toLowerCase() === 'up' ? 'up' : 'down';
+      const amount = Math.min(4, Math.max(0.5, Number(args.amount || args.multiplier || 1) || 1));
+      const result = await browserScroll(sessionId, direction, amount, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? `Scrolled ${direction}.` : result, {
+        direction,
+        amount,
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_snapshot') {
+      const result = await browserSnapshot(sessionId);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      if (ok) await broadcastVoiceBrowserStatus(sessionId, name, null).catch(() => {});
+      return voiceToolResult(ok, ok ? 'Browser snapshot captured.' : result, {
+        observation: compactVoiceText(result, 8000),
+      });
+    }
+    if (name === 'voice_browser_click') {
+      const target = {
+        ref: args.ref == null ? undefined : Number(args.ref),
+        element: args.element == null && args.element_name == null ? undefined : String(args.element ?? args.element_name),
+        selector: args.selector == null ? undefined : String(args.selector),
+      };
+      const result = await browserClick(sessionId, target, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Browser click complete.' : result, {
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_vision_click') {
+      const x = Number(args.x);
+      const y = Number(args.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return voiceToolResult(false, 'x and y are required.');
+      const button = String(args.button || 'left').toLowerCase() === 'right' ? 'right' : 'left';
+      const result = await browserVisionClick(sessionId, x, y, button, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Browser vision click complete.' : result, {
+        x,
+        y,
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_fill') {
+      const text = String(args.text || '');
+      if (!text) return voiceToolResult(false, 'Text is required.');
+      const target = {
+        ref: args.ref == null ? undefined : Number(args.ref),
+        element: args.element == null && args.element_name == null ? undefined : String(args.element ?? args.element_name),
+        selector: args.selector == null ? undefined : String(args.selector),
+      };
+      const result = await browserFill(sessionId, target, text, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Browser field filled.' : result, {
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_type') {
+      const text = String(args.text || '');
+      if (!text) return voiceToolResult(false, 'Text is required.');
+      const result = await browserType(sessionId, text, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Browser typing complete.' : result, {
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_vision_type') {
+      const x = Number(args.x);
+      const y = Number(args.y);
+      const text = String(args.text || '');
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !text) return voiceToolResult(false, 'x, y, and text are required.');
+      const result = await browserVisionType(sessionId, x, y, text, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Browser vision typing complete.' : result, {
+        x,
+        y,
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_press_key') {
+      const key = String(args.key || '').trim();
+      if (!key) return voiceToolResult(false, 'Key is required.');
+      const result = await browserPressKey(sessionId, key, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? `Pressed ${key}.` : result, {
+        key,
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_wait') {
+      const ms = Math.min(5000, Math.max(100, Number(args.ms || args.wait_ms || 750) || 750));
+      const result = await browserWait(sessionId, ms, { observe: 'snapshot' });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? `Waited ${ms}ms.` : result, {
+        ms,
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
     if (name === 'voice_desktop_screenshot') {
-      const options = parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined);
-      const result = await desktopScreenshotWithHistory(sessionId, options);
+      const hasWindowTarget = !!(
+        String(args?.name || '').trim()
+        || (Number.isFinite(Number(args?.handle)) && Number(args?.handle) > 0)
+        || args?.active === true
+      );
+      const result = hasWindowTarget
+        ? await desktopWindowScreenshot(sessionId, {
+          name: args?.name == null ? undefined : String(args.name),
+          handle: args?.handle == null ? undefined : Number(args.handle),
+          active: args?.active === true,
+          focus_first: args?.focus_first == null ? undefined : args.focus_first !== false,
+          padding: args?.padding == null ? undefined : Number(args.padding),
+          mode: String(args?.mode || '').toLowerCase() === 'som' || args?.som === true ? 'som' : 'normal',
+          som: args?.som === true || String(args?.mode || '').toLowerCase() === 'som',
+        })
+        : await desktopScreenshotWithHistory(sessionId, parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined));
       const ok = !String(result || '').startsWith('ERROR');
       const packet = getDesktopAdvisorPacket(sessionId);
       if (ok && packet?.screenshotBase64) {
@@ -9080,12 +10303,236 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
           width: packet.width,
           height: packet.height,
         });
+
       }
-      return voiceToolResult(ok, ok ? 'Captured desktop screenshot.' : result, ok && packet ? {
+      const target = packet?.targetWindow;
+      return voiceToolResult(ok, ok
+        ? (target ? `Captured ${target.processName || 'window'} screenshot: ${target.title || 'untitled window'}.` : 'Captured desktop screenshot.')
+        : result, ok && packet ? {
         screenshotId: packet.screenshotId,
         width: packet.width,
         height: packet.height,
+        observation: compactVoiceText(result, 5000),
+        targetWindow: target ? {
+          title: target.title,
+          processName: target.processName,
+          handle: target.handle,
+        } : undefined,
       } : {});
+    }
+    if (name === 'voice_desktop_click') {
+      const clickTarget = {
+        x: Number(args.x),
+        y: Number(args.y),
+        element: args.element == null ? undefined : Number(args.element),
+        coordinate_space: args.coordinate_space as any,
+        screenshot_id: args.screenshot_id == null && args.screenshotId == null ? undefined : String(args.screenshot_id ?? args.screenshotId),
+        window_name: args.window_name == null && args.windowName == null ? undefined : String(args.window_name ?? args.windowName),
+        window_handle: args.window_handle == null && args.windowHandle == null ? undefined : Number(args.window_handle ?? args.windowHandle),
+        ...parseDesktopPointerMonitorArgs(args),
+      };
+      let resolved = await resolveDesktopActionPoint(sessionId, clickTarget, 'desktop_click');
+      if (!resolved.ok && clickTarget.screenshot_id) {
+        const msg = resolved.message;
+        const isStale = msg.includes('is stale')
+          || msg.includes('predates desktop action tracking')
+          || /is \d+s old/.test(msg);
+        if (isStale) {
+          const oldPacket = getDesktopAdvisorPacketById(sessionId, clickTarget.screenshot_id);
+          const freshCapture = oldPacket?.targetWindow
+            ? await desktopWindowScreenshot(sessionId, {
+              handle: oldPacket.targetWindow.handle,
+              name: oldPacket.targetWindow.title,
+              focus_first: true,
+            }).catch(() => null)
+            : await desktopScreenshotWithHistory(sessionId).catch(() => null);
+          const freshIdMatch = String(freshCapture || '').match(/Screenshot ID:\s*(ds_[^\s.]+)/);
+          const freshId = freshIdMatch ? freshIdMatch[1] : null;
+          if (freshId) {
+            const retryResolved = await resolveDesktopActionPoint(
+              sessionId,
+              { ...clickTarget, screenshot_id: freshId },
+              'desktop_click',
+            );
+            if (retryResolved.ok) resolved = retryResolved;
+          }
+        }
+      }
+      let result = !resolved.ok
+        ? `ERROR: ${resolved.message}`
+        : await desktopClick(
+          resolved.point.x,
+          resolved.point.y,
+          String(args.button || 'left').toLowerCase() === 'right' ? 'right' : 'left',
+          args.double_click === true || args.doubleClick === true,
+          undefined,
+          args.modifier === 'shift' || args.modifier === 'ctrl' || args.modifier === 'alt'
+            ? args.modifier
+            : undefined,
+          resolved.point.sourceNote,
+          {
+            mode: args.verify,
+            coordinateSpace: resolved.point.coordinateSpace,
+            allowRetryOnLikelyNoop: args.verify === 'strict',
+          },
+        );
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Desktop click complete.' : result, {
+        observation: compactVoiceText(result, 3000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_desktop_window_control') {
+      const actionRaw = String(args.action || '').toLowerCase();
+      const action = actionRaw === 'minimize' || actionRaw === 'maximize' || actionRaw === 'restore' || actionRaw === 'close'
+        ? actionRaw
+        : 'restore';
+      const result = await desktopWindowControl(action, {
+        name: args.name == null && args.title == null ? undefined : String(args.name ?? args.title),
+        handle: args.handle == null && args.window_handle == null && args.windowHandle == null ? undefined : Number(args.handle ?? args.window_handle ?? args.windowHandle),
+        active: args.active === true,
+      });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shouldCapture = ok
+        && args.include_screenshot !== false
+        && (action === 'maximize' || action === 'restore');
+      const shotMeta = shouldCapture
+        ? await captureVoiceDesktopWindowObservation(sessionId, name, {
+          ...args,
+          active: !args.name && !args.title && !args.handle && !args.window_handle && !args.windowHandle,
+        }, true)
+        : {};
+      return voiceToolResult(ok, ok ? `Window ${action} complete.` : result, {
+        action,
+        observation: compactVoiceText(result, 3000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_desktop_focus_window') {
+      const windowName = String(args.name || '').trim();
+      if (!windowName) return voiceToolResult(false, 'Window name is required.');
+      const result = await desktopFocusWindow(windowName);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      return voiceToolResult(ok, ok ? result : result, {
+        name: windowName,
+      });
+    }
+    if (name === 'voice_desktop_launch_app') {
+      const app = String(args.app || '').trim();
+      const appId = String(args.app_id || args.appId || '').trim();
+      if (!app && !appId) return voiceToolResult(false, 'App name or app_id is required.');
+      const launchText = `${app} ${appId}`.trim();
+      if (isVoiceBrowserLaunchText(launchText)) {
+        return voiceToolResult(false, 'That is a browser/web request, not a desktop app launch. Use voice_browser_open for browser, Chrome, Edge, URLs, domains, pages, tabs, or search.', {
+          useTool: 'voice_browser_open',
+          suggestedArgs: /\b(?:browser|chrome|chromium|edge)\b/i.test(launchText) && !/\b(?:https?:\/\/|www\.|\.[a-z]{2,}\b|search|google|bing|duckduckgo)\b/i.test(launchText)
+            ? { url: 'https://www.google.com', include_screenshot: true }
+            : { query: launchText, include_screenshot: true },
+        });
+      }
+      if (isDangerousVoiceLaunchText(launchText)) {
+        return voiceToolResult(false, 'Refusing to launch installer/build-tool shortcuts from the voice desktop app launcher. Use Worker if an install or tooling setup is actually required.', {
+          useTool: 'dispatch_prometheus_worker',
+        });
+      }
+      const result = await desktopLaunchApp(app, '', Math.min(20000, Math.max(1000, Number(args.wait_ms || args.waitMs || 6000) || 6000)), appId);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      return voiceToolResult(ok, ok ? result : result, {
+        app,
+        appId,
+      });
+    }
+    if (name === 'voice_desktop_find_app') {
+      const query = String(args.query || args.app || '').trim();
+      if (!query) return voiceToolResult(false, 'App query is required.');
+      const result = await desktopFindInstalledApp(query, Math.min(20, Math.max(1, Number(args.limit || 8) || 8)), args.refresh === true);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      return voiceToolResult(ok, ok ? 'Desktop app lookup complete.' : result, {
+        query,
+        candidates: compactVoiceText(result, 5000),
+      });
+    }
+    if (name === 'voice_desktop_list_windows') {
+      const result = await desktopListWindowsCanonical({
+        app_id: args.app_id == null && args.appId == null ? undefined : String(args.app_id ?? args.appId),
+        process_name: args.process_name == null && args.processName == null ? undefined : String(args.process_name ?? args.processName),
+        title: args.title == null ? undefined : String(args.title),
+      });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      return voiceToolResult(ok, ok ? 'Desktop windows listed.' : result, {
+        windows: compactVoiceText(result, 7000),
+      });
+    }
+    if (name === 'voice_desktop_window_click') {
+      const x = Number(args.x);
+      const y = Number(args.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return voiceToolResult(false, 'x and y are required.');
+      const selector = voiceDesktopWindowSelector(args);
+      const result = await desktopWindowClick(
+        selector,
+        {
+          x,
+          y,
+          coordinate_space: args.coordinate_space || args.coordinateSpace || 'window',
+          screenshot_id: args.screenshot_id == null && args.screenshotId == null ? undefined : String(args.screenshot_id ?? args.screenshotId),
+        } as any,
+        {
+          button: String(args.button || 'left').toLowerCase() === 'right' ? 'right' : 'left',
+          double_click: args.double_click === true || args.doubleClick === true,
+          modifier: args.modifier,
+          verify: args.verify,
+        } as any,
+        sessionId,
+      );
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Desktop window click complete.' : result, {
+        observation: compactVoiceText(result, 3000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_desktop_window_type') {
+      const text = String(args.text || '');
+      if (!text) return voiceToolResult(false, 'Text is required.');
+      const result = await desktopWindowType(voiceDesktopWindowSelector(args), text, args.raw === true);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Desktop window typing complete.' : result, {
+        observation: compactVoiceText(result, 3000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_desktop_window_press_key') {
+      const key = String(args.key || '').trim();
+      if (!key) return voiceToolResult(false, 'Key is required.');
+      const result = await desktopWindowPressKey(voiceDesktopWindowSelector(args), key);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? `Pressed ${key} in desktop window.` : result, {
+        key,
+        observation: compactVoiceText(result, 3000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_desktop_window_scroll') {
+      const directionRaw = String(args.direction || 'down').toLowerCase();
+      const direction = (directionRaw === 'up' || directionRaw === 'left' || directionRaw === 'right') ? directionRaw : 'down';
+      const result = await desktopWindowScroll(voiceDesktopWindowSelector(args), {
+        direction,
+        amount: Math.min(8, Math.max(0.25, Number(args.amount || 1) || 1)),
+        x: args.x == null ? undefined : Number(args.x),
+        y: args.y == null ? undefined : Number(args.y),
+        coordinate_space: args.coordinate_space || args.coordinateSpace || 'window',
+        screenshot_id: args.screenshot_id == null && args.screenshotId == null ? undefined : String(args.screenshot_id ?? args.screenshotId),
+      } as any, sessionId);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? `Scrolled ${direction} in desktop window.` : result, {
+        direction,
+        observation: compactVoiceText(result, 3000),
+        ...shotMeta,
+      });
     }
     if (name === 'voice_send_screenshot') {
       const delivered = await executeDeliverySendScreenshot({
@@ -9094,6 +10541,48 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       }, workspacePath, { telegramChannel: _telegramChannel, broadcastWS }, sessionId);
       return voiceToolResult(!delivered.error, delivered.result);
     }
+    if (name === 'voice_worker_status') {
+      const providedPacket = args?.contextPacket && typeof args.contextPacket === 'object' ? args.contextPacket : null;
+      const providedSessionId = String(providedPacket?.sessionId || '').trim();
+      const providedAgeMs = Date.now() - Number(providedPacket?.createdAt || 0);
+      const providedIsFreshActive = !!(
+        providedPacket?.active === true
+        && providedSessionId === sessionId
+        && Number.isFinite(providedAgeMs)
+        && providedAgeMs >= 0
+        && providedAgeMs <= 45_000
+      );
+      const contextPacket = providedIsFreshActive
+        ? providedPacket
+        : buildVoiceWorkerContextPacket(sessionId, { source: 'voice_worker_status_tool' });
+      const recentEvents = args?.include_recent_events === false ? [] : contextPacket.recentEvents;
+      const processEntries = args?.include_recent_events === false ? [] : contextPacket.processEntries;
+      const active = contextPacket.active === true;
+      const summary = contextPacket.summary
+        ? String(contextPacket.summary)
+        : active
+          ? 'A Prometheus worker is active, but it has not published a detailed status yet.'
+          : 'No Prometheus worker is currently active for this chat.';
+      return voiceToolResult(true, active ? 'Worker status loaded.' : 'No active worker.', {
+        active,
+        summary: compactVoiceText(summary, 1600),
+        currentGoal: contextPacket.currentGoal || '',
+        currentPhase: contextPacket.currentPhase || '',
+        activeToolName: contextPacket.activeToolName || '',
+        activeToolLabel: contextPacket.activeToolLabel || '',
+        pendingSteerCount: contextPacket.pendingSteerCount || 0,
+        activeRun: contextPacket.activeRun || null,
+        trigger: contextPacket.trigger || null,
+        doneAlready: contextPacket.doneAlready || [],
+        currentlyDoing: contextPacket.currentlyDoing || '',
+        observations: contextPacket.observations || null,
+        recentEvents,
+        processEntries,
+        contextPacketId: contextPacket.id,
+        createdAt: contextPacket.createdAt,
+      });
+    }
+
 
   } catch (err: any) {
     return voiceToolResult(false, `${friendlyVoiceToolName(name)} failed: ${String(err?.message || err)}`);
@@ -9110,8 +10599,106 @@ function parseVoiceToolResult(raw: string): any {
   }
 }
 
+const voiceAutomationSkillScoutCache = new Map<string, { query: string; ts: number }>();
+const VOICE_AUTOMATION_SKILL_SCOUT_CACHE_MS = 120000;
+
+function isVoiceBrowserDesktopAutomationTool(toolName: string): boolean {
+  const name = String(toolName || '').trim();
+  return /^voice_(?:browser|desktop)_/.test(name);
+}
+
+function isDirectVoiceUiControlTool(toolName: string): boolean {
+  return [
+    'voice_browser_open',
+    'voice_browser_snapshot',
+    'voice_browser_screenshot',
+    'voice_browser_click',
+    'voice_browser_vision_click',
+    'voice_browser_fill',
+    'voice_browser_type',
+    'voice_browser_vision_type',
+    'voice_browser_press_key',
+    'voice_browser_scroll',
+    'voice_browser_wait',
+    'voice_desktop_screenshot',
+    'voice_desktop_click',
+    'voice_desktop_window_control',
+    'voice_desktop_list_windows',
+    'voice_desktop_focus_window',
+    'voice_desktop_find_app',
+    'voice_desktop_launch_app',
+    'voice_desktop_window_click',
+    'voice_desktop_window_type',
+    'voice_desktop_window_press_key',
+    'voice_desktop_window_scroll',
+  ].includes(String(toolName || '').trim());
+}
+
+function isVoiceRuntimeControlTool(toolName: string): boolean {
+  return [
+    'voice_set_wake_phrase',
+    'voice_enter_quiet_mode',
+    'voice_set_quiet_until',
+  ].includes(String(toolName || '').trim());
+}
+
+async function runVoiceAutomationSkillScout(
+  sessionId: string,
+  transcript: string,
+  toolName: string,
+  trace?: VoiceAgentProcessEntry[],
+  seen?: Set<string>,
+): Promise<void> {
+  if (!isVoiceBrowserDesktopAutomationTool(toolName)) return;
+  if (isDirectVoiceUiControlTool(toolName)) return;
+  const request = compactVoiceText(String(transcript || '').trim(), 500);
+  if (!request) return;
+  const key = `${sessionId || 'voice'}:${toolName}:${request.toLowerCase()}`;
+  if (seen?.has(key)) return;
+  seen?.add(key);
+  const cacheKey = String(sessionId || 'voice').trim() || 'voice';
+  const cached = voiceAutomationSkillScoutCache.get(cacheKey);
+  if (cached && cached.query === request && Date.now() - cached.ts < VOICE_AUTOMATION_SKILL_SCOUT_CACHE_MS) return;
+  voiceAutomationSkillScoutCache.set(cacheKey, { query: request, ts: Date.now() });
+  pushVoiceAgentProcessEntry(trace, 'skill', 'Skill scout before voice browser/desktop automation...', {
+    actor: 'Voice Agent',
+    tool: toolName,
+    query: request,
+  });
+  const listRaw = await executeVoiceAgentToolWithTrace(sessionId, 'skill_list', { query: request, limit: 12 }, trace);
+  const listResult = parseVoiceToolResult(listRaw);
+  if (listResult?.ok === false) return;
+  const skills = Array.isArray(listResult?.skills) ? listResult.skills : [];
+  const first = skills.find((skill: any) => String(skill?.id || '').trim());
+  if (!first?.id || Number(listResult?.matchedCount || skills.length || 0) <= 0) return;
+  await executeVoiceAgentToolWithTrace(sessionId, 'skill_read', { id: String(first.id), max_chars: VOICE_SKILL_INSTRUCTIONS_MAX_CHARS }, trace);
+}
+
 function extractFirstVoiceUrl(text: string): string {
   return String(text || '').match(/https?:\/\/[^\s"'<>]+/i)?.[0]?.replace(/[),.;]+$/g, '') || '';
+
+}
+
+function isVoiceBrowserLaunchText(value: unknown): boolean {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  return /\b(?:https?:\/\/|www\.|\.com\b|\.org\b|\.net\b|\.io\b|\.dev\b|website|web\s*site|browser|chrome|chromium|edge|url|page|tab|search\s+(?:for|web)|google|bing|duckduckgo)\b/i.test(text);
+}
+
+function isDangerousVoiceLaunchText(value: unknown): boolean {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  return /\b(?:install\s+additional\s+tools|native\s+modules?|node-gyp|visual\s+studio\s+build\s+tools|windows\s+build\s+tools|chocolatey)\b/i.test(text);
+}
+
+function extractVoiceLaunchAppName(text: string): string {
+  const quoted = String(text || '').match(/["'“”‘’]([^"'“”‘’]{2,80})["'“”‘’]/);
+  if (quoted?.[1]) return compactVoiceText(quoted[1].trim(), 80);
+  const match = String(text || '').match(/\b(?:open|launch|start)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application))?(?:\s+(?:right now|now|please))?$/i);
+  let candidate = String(match?.[1] || '').trim();
+  candidate = candidate.replace(/\b(?:right now|now|please|app|application)\b/ig, ' ');
+  candidate = candidate.replace(/[^\w\s.-]/g, ' ').replace(/\s+/g, ' ').trim();
+  return compactVoiceText(candidate, 80);
 }
 
 function cleanVoiceSearchFallbackQuery(text: string): string {
@@ -9125,6 +10712,29 @@ function cleanVoiceSearchFallbackQuery(text: string): string {
   value = value.replace(/[^\w\s'"-]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!value || /^(?:test|smoke test|quick test|it|that|this)$/i.test(value)) return 'OpenAI Realtime API voice tools';
   return compactVoiceText(value, 180);
+}
+
+function extractVoiceScreenshotWindowName(transcript: string): string {
+  const text = String(transcript || '').trim();
+  if (!text || /\b(browser|chrome|tab|page|website|site)\b/i.test(text)) return '';
+  const quoted = text.match(/["'“”‘’]([^"'“”‘’]{2,80})["'“”‘’]/);
+  if (quoted?.[1]) return compactVoiceText(quoted[1].trim(), 80);
+  const patterns = [
+    /\b(?:send|share|show|deliver)\s+(?:me\s+)?(?:a\s+)?(?:screenshot|screen\s*shot|screen grab|screengrab|capture)\s+(?:of|from)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application|window))?(?:\s+(?:right now|now|please))?$/i,
+    /\b(?:screenshot|screen\s*shot|screen grab|screengrab|capture)\s+(?:of|from)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application|window))?(?:\s+(?:right now|now|please))?$/i,
+    /\b(?:of|from)\s+(?:the\s+)?(.+?)\s+(?:app|application|window)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    let candidate = String(match?.[1] || '').trim();
+    candidate = candidate.replace(/\b(?:right now|now|please|app|application|window|desktop|screen|monitor|computer|pc)\b/ig, ' ');
+    candidate = candidate.replace(/[^\w\s.-]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (candidate && !/^(?:the|my|a|an|entire|whole|full|current|active)$/i.test(candidate)) {
+      return compactVoiceText(candidate, 80);
+    }
+  }
+  if (/\bactive\s+(?:app|application|window)\b|\bcurrent\s+(?:app|application|window)\b/i.test(text)) return '__active__';
+  return '';
 }
 
 function findVoiceToolFallbackRequest(transcript: string): { name: string; args: Record<string, any> } | null {
@@ -9149,11 +10759,38 @@ function findVoiceToolFallbackRequest(transcript: string): { name: string; args:
   if (endsWithQuietRequest && !mentionsQuietAsExample) {
     return { name: 'voice_enter_quiet_mode', args: { reason: 'User asked Prometheus to go quiet at the end of a voice turn.' } };
   }
+  if (/\b(?:scroll|move)\s+(?:the\s+)?(?:browser|page|website|site|tab)?\s*(up|down)\b/i.test(text)) {
+    const dir = (text.match(/\b(up|down)\b/i)?.[1] || 'down').toLowerCase();
+    return { name: 'voice_browser_scroll', args: { direction: dir === 'up' ? 'up' : 'down', include_screenshot: true } };
+  }
+  if (/\b(?:focus|bring up|switch to)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application|window))?(?:\s+(?:right now|now|please))?$/i.test(text)) {
+    const quoted = text.match(/["'“”‘’]([^"'“”‘’]{2,80})["'“”‘’]/);
+    const focusMatch = text.match(/\b(?:focus|bring up|switch to)\s+(?:the\s+)?(.+?)(?:\s+(?:app|application|window))?(?:\s+(?:right now|now|please))?$/i);
+    const target = compactVoiceText(String(quoted?.[1] || focusMatch?.[1] || '').replace(/\b(?:app|application|window|right now|now|please)\b/ig, ' ').replace(/\s+/g, ' ').trim(), 80);
+    if (target && target !== '__active__') return { name: 'voice_desktop_focus_window', args: { name: target } };
+  }
+  const browserOpenUrl = /\b(?:open|launch|start|pull up|go to)\b/i.test(text)
+    ? extractFirstVoiceUrl(text)
+    : '';
+  if (browserOpenUrl) {
+    return { name: 'voice_browser_open', args: { url: browserOpenUrl, include_screenshot: true } };
+  }
+  if (/\b(?:open|launch|start|pull up|bring up)\s+(?:the\s+)?(?:browser|chrome|chromium|edge)(?:\s+(?:right now|now|please))?$/i.test(text)) {
+    return { name: 'voice_browser_open', args: { url: 'https://www.google.com', include_screenshot: true } };
+  }
+  if (/\b(?:open|launch|start)\b/i.test(text) && /\b(?:app|application)\b/i.test(text) && !/\b(?:browser|chrome|website|site|url|page|tab)\b/i.test(text)) {
+    const app = extractVoiceLaunchAppName(text);
+    if (app) return { name: 'voice_desktop_launch_app', args: { app } };
+  }
   const wantsSendScreenshot = /\b(send|share|show|deliver)\b/i.test(text) && /\b(screenshot|screen\s*shot|screen grab|screengrab|capture)\b/i.test(text);
   const wantsScreenshot = /\b(screenshot|screen\s*shot|screen grab|screengrab|capture)\b/i.test(text);
   if (wantsSendScreenshot || wantsScreenshot) {
     const browser = /\b(browser|chrome|tab|page|website|site)\b/i.test(text);
     const desktop = /\b(desktop|screen|monitor|computer|pc)\b/i.test(text) || !browser;
+    const windowName = extractVoiceScreenshotWindowName(text);
+    const windowArgs = windowName
+      ? (windowName === '__active__' ? { active: true } : { name: windowName })
+      : {};
     const source = browser ? (wantsSendScreenshot ? 'browser_new' : '') : (wantsSendScreenshot ? 'desktop_new' : '');
     if (wantsSendScreenshot) {
       return {
@@ -9161,13 +10798,14 @@ function findVoiceToolFallbackRequest(transcript: string): { name: string; args:
         args: {
           source: source || (desktop ? 'desktop_new' : 'browser_new'),
           target: /\btelegram\b/i.test(text) ? 'telegram' : /\bmobile|phone\b/i.test(text) ? 'mobile' : 'origin',
-          caption: browser ? 'Browser screenshot' : 'Desktop screenshot',
+          caption: browser ? 'Browser screenshot' : (windowName && windowName !== '__active__' ? `${windowName} screenshot` : 'Desktop screenshot'),
+          ...windowArgs,
         },
       };
     }
     return browser
       ? { name: 'voice_browser_screenshot', args: { include_summary: true } }
-      : { name: 'voice_desktop_screenshot', args: { capture: /\bprimary|main screen\b/i.test(text) ? 'primary' : 'all', include_summary: true } };
+      : { name: 'voice_desktop_screenshot', args: { capture: /\bprimary|main screen\b/i.test(text) ? 'primary' : 'all', include_summary: true, ...windowArgs } };
   }
 
   const url = extractFirstVoiceUrl(text);
@@ -9194,13 +10832,20 @@ function findVoiceToolFallbackRequest(transcript: string): { name: string; args:
       },
     };
   }
+  if (/\b(?:voice\s+agent|voiceagent|realtime\s+voice|live\s+voice)\b/i.test(text) && /\b(?:memory|remember|note|rule|routing|behavior|behaviour|always|prefer|use|update|add|change|view|show|read)\b/i.test(text)) {
+    if (/\b(?:view|show|read|what(?:'s| is)?\s+in)\b/i.test(text) && !/\b(?:add|append|remember|note|write|change|update|replace)\b/i.test(text)) {
+      return { name: 'voice_agent_memory', args: { action: 'read' } };
+    }
+    const content = text.replace(/^(?:prometheus[, ]*)?(?:please\s*)?(?:remember|jot down|make a note(?: that)?|write down|log that|save a note(?: that)?|add|update)\s*/i, '').trim();
+    return { name: 'voice_agent_memory', args: { action: 'append', content: content || text, category: 'voice' } };
+  }
   if (/\b(remember|jot|note|write down|log that|save a note|make a note)\b/i.test(text)) {
     if (/\bwake\s+(?:phrase|word)\b/i.test(text)) return null;
     const content = text.replace(/^(?:prometheus[, ]*)?(?:please\s*)?(?:remember|jot down|make a note(?: that)?|write down|log that|save a note(?: that)?)\s*/i, '').trim();
     return { name: 'voice_write_note', args: { content: content || text, tag: 'voice' } };
   }
   if (/\b(skill|workflow|playbook|guidance)\b/i.test(text)) {
-    return { name: 'voice_skill_lookup', args: { query: text } };
+    return { name: 'skill_list', args: { query: text, limit: 40 } };
   }
   if (/\b(what did we decide|what did i say|last time|previously|do you remember|memory|recall)\b/i.test(text)) {
     return { name: 'voice_memory_search', args: { query: text, mode: 'quick', limit: 5 } };
@@ -9263,47 +10908,57 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     'You are Prometheus speaking through the user\'s voice interface.',
     '',
     'You have Prometheus\'s identity, memory, preferences, user knowledge, and current task context.',
-    'You are the live voice layer and you MAY call the provided voice_* tools directly.',
-    'The voice_* tools are safe wrappers around existing Prometheus tools. They are the only tools you may use from this layer.',
-    'Do not say web search, fetch, notes, memory search, skill lookup, timers, or screenshot capture/delivery are only available to the Worker when a matching voice_* tool is provided.',
-    'Use voice tools for fast, low-risk, conversational support. Screenshot voice tools are observation/delivery only: they may capture or send screenshots, but must not click, type, scroll, navigate, or control browser/desktop UI. If the request needs deeper research, browser/desktop control, files, coding, media analysis, account actions, approvals, or more than two tool calls, choose handoff_new_work or steer_worker instead.',
+    'You are the live voice layer and you MAY call the provided voice_* tools plus canonical read-only skill_* tools directly.',
+    'The voice_* tools are safe wrappers around existing Prometheus tools, and skill_* tools are the normal Prometheus skill list/read/resource tools. Those provided tools are the only tools you may use from this layer.',
+    'Do not say web search, fetch, notes, memory search, skill list/read, timers, or screenshot capture/delivery are only available to the Worker when a matching voice_* or skill_* tool is provided.',
+    'Use voice tools for fast conversational support and live browser/desktop UI control. Realtime voice may open, observe, click, type, fill, press keys, focus windows, launch apps, scroll, and complete explicit user-authorized social posts/messages through the curated voice_browser_* / voice_desktop_* tools when the content and destination are clear. If the request needs files, shell/run commands, source editing, MCP/connectors, downloads/uploads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, deletes, installs, destructive actions, or durable system changes, choose handoff_new_work or steer_worker instead.',
     '',
     'When the user asks something answerable from your context, answer directly.',
-    'When the user requests work that can be handled by a voice_* tool, call that tool and answer_now from the result.',
-    'When the user requests work requiring tools outside the voice_* set, files, browser, desktop control, coding, scheduling beyond voice_timer, memory mutation beyond voice_write_note, or long reasoning, acknowledge naturally first, then dispatch to the Prometheus worker.',
-    'When the user interrupts an active worker, decide whether to answer, steer, interrupt, hand off new work, or stay quiet.',
+    'When the user asks for current Worker status/progress/context, call voice_worker_status and answer from the returned live packet; never steer the Worker just to ask it for status.',
+    'When the user requests work that can be handled by a voice_* or skill_* tool, call that tool and answer_now from the result.',
+    'Skill scout rule for voice: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call the matching voice_browser_* or voice_desktop_* tool immediately.',
+    'When the user requests work requiring tools outside the voice_* and skill_* set, files, non-voice browser/desktop capabilities, coding, scheduling beyond voice_timer, memory mutation beyond voice_write_note, or long reasoning, acknowledge naturally first, then dispatch to the Prometheus worker.',
+    'When the user interrupts an active worker, decide whether to answer, steer, interrupt, hand off new work, or stay quiet. A normal status question or casual comment is not a steer.',
     '',
-    'Hard boundary: never claim you used full Worker tools or changed files/accounts from the voice layer. You may truthfully say you searched, fetched, saved a note, checked memory, looked up skills, or set a timer when a voice_* tool result confirms it.',
+    'Hard boundary: never claim you used full Worker tools or changed files/accounts from the voice layer. You may truthfully say you searched, fetched, saved a note, checked memory, listed/read skills, or set a timer when a matching voice_* or skill_* tool result confirms it.',
     'Speak like Prometheus: warm, specific, alive, and context-aware. Avoid generic acknowledgements like "I\'ll get started on that" unless no better context exists.',
     'For voice tests, first messages, and no-context check-ins, do not answer with generic "I am here" or "I\'m here" phrasing. Acknowledge what the user is testing or saying.',
     '',
     'Return ONLY strict JSON. CRITICAL: The "spokenReply" field MUST be the FIRST field in your JSON output so audio playback can begin as you write. Do NOT output any other field before spokenReply. Use this exact field order:',
     '{"spokenReply":"string","action":"answer_now|steer_worker|interrupt_worker|handoff_new_work|no_reply","workerInstruction":"string optional","needsWorkerResponse":false,"reason":"string optional"}',
     '',
-    'Action rules:',
-    '- answer_now: use when the user asks a status/context/question answerable from the injected context or from voice_* tool results. Do not dispatch the worker.',
-    '- steer_worker: use when there is an active worker and the user changes direction, adds a constraint, corrects the task, or asks the worker to do something within the active run.',
+    '- answer_now: use when the user asks a status/context/question answerable from the injected context or from voice_* or skill_* tool results. Do not dispatch or steer the worker.',
+    '- steer_worker: use only when there is an active worker and the user changes direction, adds a constraint, corrects the task, or explicitly asks the worker to do something within the active run. Do not use for status/update questions.',
     '- interrupt_worker: use only for explicit cancel/stop/abort intent.',
-    '- handoff_new_work: use when the user asks for new work that requires tools outside voice_*, files, browser, desktop, coding, media/account actions, or long reasoning and there is no active worker to steer.',
+    '- handoff_new_work: use when the user asks for new work that requires tools outside voice_* and skill_*, files, non-voice browser/desktop capabilities, coding, media/account actions, or long reasoning and there is no active worker to steer.',
     '- no_reply: use only when the transcript is empty, duplicate, or just says continue/resume without needing speech.',
     '',
     'Voice tool rules:',
     '- voice_web_search: quick factual/current lookup. Use multi mode for latest/current/news/compare/sensitive/current events.',
     '- voice_web_fetch: one clean text URL only. Social/video/media/auth pages must be handed to Worker.',
     '- voice_write_note: only for explicit remember/jot/log/save-note requests.',
+    '- voice_agent_memory: read or update workspace/VOICEAGENT.md only when the user explicitly asks to view or change live voice-agent memory/routing/spoken behavior notes.',
     '- voice_set_wake_phrase: set/change the mobile voice runtime wake phrase. Never substitute voice_write_note or memory for wake phrase changes.',
     '- voice_enter_quiet_mode: activate quiet mode with the current wake phrase when the user clearly asks Prometheus to be quiet, sleep, stop listening, or stop responding. If no wake phrase is set in [VOICE_RUNTIME], do not call it; tell the user to set a wake phrase first.',
     '- voice_set_quiet_until: set the wake phrase and enter quiet mode when the user says not to speak/respond/listen until or unless they say a specific phrase.',
     '- Quiet-mode intent must be a real instruction. Do not call quiet tools for mentions, examples, debugging, or questions about the words "quiet" or "Prometheus".',
     '- When a quiet tool succeeds, give one natural acknowledgement in spokenReply. The runtime will activate quiet mode after the acknowledgement finishes.',
-    '- voice_skill_lookup: use to orient yourself with available workflows; mention only a concise summary.',
+    '- skill_list: canonical skill discovery. Use it to orient yourself with available workflows and triggers for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use the matching voice_browser_* or voice_desktop_* tool. Use totalInstalled/matchedCount/returnedCount/truncated from the result; never say the returned list length is the total number of skills unless truncated is false and matchedCount equals totalInstalled.',
+    '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. When a relevant skill is found or injected by trigger context, load it before acting; follow it only through voice_* tools and hand off to Worker for non-voice capabilities.',
     '- voice_memory_search: read-only recall for previous decisions, project history, preferences, and "what did we decide" questions.',
     '- voice_timer: create/list/cancel/reschedule one-shot timers. Timer execution itself happens later through the Worker.',
-    '- voice_browser_screenshot: capture the current browser viewport only. If no browser session exists or the user wants analysis/control, hand off to Worker.',
-    '- voice_desktop_screenshot: capture the desktop only. It is observation-only and must not be followed by direct desktop control from Voice.',
+    '- voice_browser_open / voice_browser_snapshot / voice_browser_screenshot: open and observe the Prometheus browser. Open accepts explicit URLs/domains or browser search queries and returns DOM refs plus a screenshot preview; snapshot returns @ref targets; screenshot gives visual context.',
+    '- voice_browser_click / voice_browser_vision_click: click browser UI by @ref/selector/saved element or screenshot coordinate, then observe. Explicit user-authorized social posts/messages are allowed when the content and destination are clear. Use Worker for uploads/downloads, purchases/payments, destructive actions, or account settings/security changes.',
+    '- voice_browser_fill / voice_browser_type / voice_browser_vision_type / voice_browser_press_key / voice_browser_scroll / voice_browser_wait: live browser input/navigation, then observe. Use these to draft and submit explicit user-authorized social posts/messages when content and destination are clear. Use Worker for passwords, payment info, files, durable account settings/security changes, destructive actions, or purchases.',
+    '- voice_desktop_screenshot / voice_desktop_list_windows / voice_desktop_focus_window / voice_desktop_window_control / voice_desktop_find_app / voice_desktop_launch_app: observe/find/focus/minimize/maximize/restore/close/launch desktop apps and windows.',
+    '- voice_desktop_click: click full-desktop/monitor/SOM coordinates from voice_desktop_screenshot using screenshot_id, same as Prometheus desktop_click.',
+    '- voice_desktop_window_click / voice_desktop_window_type / voice_desktop_window_press_key / voice_desktop_window_scroll: live desktop window control. Prefer window-scoped selectors (window_id/window_handle/app_id/title) and fresh screenshot coordinates. Explicit user-authorized social posts/messages are allowed when the content and destination are clear. Use Worker for file edits, shell, installs, destructive confirmations, purchases/payments, account settings/security changes, or durable system changes.',
+    '- voice_worker_status: read fresh Worker status/context. Use it for status/progress/update questions before answering; it is read-only and must not alter the Worker.',
+
     '- voice_send_screenshot: send a browser/desktop screenshot through the delivery router. Default target is origin; use Telegram/mobile only when the user names them or context clearly requires it.',
+    '- Screenshot ownership: when screenshot voice tools are available, screenshot capture and screenshot sending stay in the voice layer. Do not dispatch/steer Worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser_screenshot, voice_desktop_screenshot, or voice_send_screenshot.',
     '- Current time is injected. Do not call a tool just to know the time/date.',
-    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/skill/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer the matching voice_* tool.',
+    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer the matching voice_* tool. If the user asks to update live voice-agent behavior memory, use voice_agent_memory. For skills, prefer skill_list, skill_read, skill_resource_list, or skill_resource_read.',
     '- For a "test web search" request without a concrete query, run a tiny harmless search for "OpenAI Realtime API voice tools" and report that the smoke test worked.',
     '',
     '[CURRENT_TIME]',
@@ -9324,6 +10979,7 @@ function buildVoiceAgentLightSystemPrompt(contextBlock: string, contextPacket: R
     'You are Prometheus speaking through the user\'s voice interface.',
     'Answer naturally and specifically in one or two short spoken sentences.',
     'Do not use canned fallback phrases. Do not answer with generic "I am here" or "I\'m here" phrasing; respond to what the user actually said.',
+    'If the user asks for current Worker status/progress/context, answer from the injected worker packet; do not steer the Worker just to ask it for status.',
     'If the user asks for heavier work outside conversation, choose handoff_new_work and write a natural, specific acknowledgement in spokenReply.',
     '',
     'Return ONLY strict JSON. CRITICAL: The "spokenReply" field MUST be the FIRST field in your JSON output so audio playback can begin as you write. Do NOT output any other field before spokenReply. Use this exact field order:',
@@ -9434,6 +11090,29 @@ function sessionProcessLogFromHistory(session: any): any[] {
   return out.slice(-500);
 }
 
+function boundedPositiveInt(input: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(input);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function sanitizeHistoryForUiResponse(
+  history: any[],
+  options: { historyLimit: number; includeToolLog: boolean; perMessageProcessLimit: number },
+): any[] {
+  const source = Array.isArray(history) ? history : [];
+  const limited = options.historyLimit > 0 ? source.slice(-options.historyLimit) : source;
+  return limited.map((raw) => {
+    if (!raw || typeof raw !== 'object') return raw;
+    const msg: any = { ...raw };
+    if (!options.includeToolLog) delete msg.toolLog;
+    if (Array.isArray(msg.processEntries) && msg.processEntries.length > options.perMessageProcessLimit) {
+      msg.processEntries = msg.processEntries.slice(-options.perMessageProcessLimit);
+    }
+    return msg;
+  });
+}
+
 function estimateJsonTokensForModel(value: unknown, profile: { tokenizer: any }): number {
   try {
     return estimateTextTokensForModel(JSON.stringify(value || null), profile.tokenizer);
@@ -9525,6 +11204,7 @@ function aggregateSessionModelUsage(sessionId: string) {
     estimatedToolSchemaTokens: 0,
     estimatedProviderInputTokens: 0,
     lastCall: null as any,
+    lastContextCall: null as any,
   };
   for (const event of events) {
     if (event.source === 'provider') totals.providerReportedCalls += 1;
@@ -9539,8 +11219,89 @@ function aggregateSessionModelUsage(sessionId: string) {
     totals.estimatedToolSchemaTokens += Number((event as any).estimatedToolSchemaTokens || 0);
     totals.estimatedProviderInputTokens += Number((event as any).estimatedProviderInputTokens || 0);
     totals.lastCall = event;
+    const eventProviderInput = Number((event as any).estimatedProviderInputTokens || 0);
+    const isMainChatContext = event.callType === 'chat' && String(event.agentId || '') === 'main' && eventProviderInput > 0;
+    const isFallbackChatContext = !totals.lastContextCall && event.callType === 'chat' && eventProviderInput > 0;
+    if (isMainChatContext || isFallbackChatContext) totals.lastContextCall = event;
   }
   return totals;
+}
+
+function estimateActiveSkillsContextTokens(sessionId: string, profile: { tokenizer: any }): number {
+  let text = '';
+  try {
+    const skillIds = Array.from(getActivatedSkillIds(sessionId));
+    const lines: string[] = [];
+    for (const skillId of skillIds) {
+      const skill = _skillsManager?.get?.(skillId);
+      lines.push(`Recently used: ${skillId}.`);
+      if (skill?.description) lines.push(`Skill Description: ${skill.description}`);
+      const resources = getActivatedSkillResources(sessionId, skillId);
+      if (resources.length) lines.push(`Resources read: ${resources.join(', ')}.`);
+      lines.push(`Re-read with skill_read("${skillId}") if needed.`);
+    }
+    text = lines.join('\n');
+  } catch {
+    text = '';
+  }
+  return estimateTextTokensForModel(text, profile.tokenizer);
+}
+
+function buildContextWindowCurrentState(input: {
+  sessionId: string;
+  profile: { contextWindowTokens: number; tokenizer: any };
+  currentInputTokens: number;
+  messageTokens: number;
+  recentToolTokens: number;
+  compactionTriggerTokens: number;
+  storedThread: any;
+  modelUsage: any;
+}) {
+  const lastCall = input.modelUsage?.lastContextCall || input.modelUsage?.lastCall || {};
+  const latestMessageInputTokens = Math.max(0, Number(lastCall.estimatedMessageInputTokens || 0));
+  const latestToolSchemaTokens = Math.max(0, Number(lastCall.estimatedToolSchemaTokens || 0));
+  const latestProviderInputTokens = Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0));
+  const activeSkillTokens = estimateActiveSkillsContextTokens(input.sessionId, input.profile);
+  const promptAndSkillTokens = Math.max(0, latestMessageInputTokens - input.currentInputTokens);
+  const systemPromptTokens = Math.max(0, promptAndSkillTokens - activeSkillTokens);
+  const storedMessageTokens = Math.max(0, Number(input.storedThread?.visibleChatTokens || 0) + Number(input.storedThread?.attachmentMetadataTokens || 0));
+  const processTokens = Math.max(0, Number(input.storedThread?.processEntryTokens || 0) + Number(input.storedThread?.legacyToolLogTokens || 0));
+  const storedObservationTokens = Math.max(0, Number(input.storedThread?.toolObservationStoredTokens || 0));
+  const rawToolStorageTokens = Math.max(0, Number(input.storedThread?.rawToolResultTokens || 0));
+  const inContextRows = [
+    { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
+    { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0 },
+    { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0 },
+    { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0 },
+    { id: 'tool_observations', label: 'Tool observations', tokens: Math.max(0, input.recentToolTokens), active: input.recentToolTokens > 0 },
+    { id: 'mcp_tools', label: 'MCP tools', tokens: 0, active: false },
+    { id: 'mcp_tools_deferred', label: 'MCP tools (deferred)', tokens: 0, active: false },
+  ].map((row) => ({ ...row, includedInContext: true, percentBasis: 'window' }));
+  const inContextRowTotal = inContextRows.reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
+  const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - inContextRowTotal);
+  const runtimeOverheadRow = runtimeOverheadTokens > 0
+    ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
+    : [];
+  const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
+  const freeSpaceTokens = Math.max(0, Number(input.profile.contextWindowTokens || 0) - currentStateTokens);
+  return {
+    currentStateTokens,
+    latestProviderInputTokens,
+    nextCallEstimateTokens: input.currentInputTokens,
+    freeSpaceTokens,
+    rows: [
+      ...inContextRows,
+      ...runtimeOverheadRow,
+      { id: 'free_space', label: 'Free space', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
+      { id: 'next_call_estimate', label: 'Next call estimate', tokens: input.currentInputTokens, active: input.currentInputTokens > 0, includedInContext: false, percentLabel: 'next' },
+      { id: 'compaction_trigger', label: 'Compaction trigger', tokens: Math.max(0, Number(input.compactionTriggerTokens || 0)), active: false, includedInContext: false, percentBasis: 'window', percentLabel: 'limit' },
+      { id: 'full_stored_thread', label: 'Full stored thread', tokens: Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0)), active: false, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+      { id: 'stored_process_logs', label: 'Stored process logs', tokens: processTokens, active: processTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+      { id: 'stored_tool_observations', label: 'Stored tool observations', tokens: storedObservationTokens, active: storedObservationTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+      { id: 'raw_tool_storage', label: 'Raw tool storage', tokens: rawToolStorageTokens, active: rawToolStorageTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
+      { id: 'logged_provider_usage', label: 'Logged provider usage', tokens: Math.max(0, Number(input.modelUsage?.totalTokens || 0)), active: Number(input.modelUsage?.totalTokens || 0) > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },
+    ],
+  };
 }
 
 function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voiceReply: string, action: string, eventId: string, processEntries: any[]): void {
@@ -9610,14 +11371,25 @@ function buildFastRouteSpokenReply(toolName: string, toolResult: any): string {
     case 'voice_web_search': return summary ? `Here's what I found: ${summary}` : 'Search complete.';
     case 'voice_web_fetch': return summary ? `Here's the content: ${summary}` : 'Fetched.';
     case 'voice_memory_search': return summary ? `From memory: ${summary}` : 'Nothing found in memory.';
+    case 'voice_agent_memory': return summary || 'Voice agent memory updated.';
+    case 'skill_list':
     case 'voice_skill_lookup': return summary ? `Available workflows: ${summary}` : 'No matching skills found.';
+    case 'skill_read':
+    case 'voice_skill_read': return summary || 'Skill loaded.';
+    case 'skill_resource_list': return summary || 'Skill resources listed.';
+    case 'skill_resource_read':
+    case 'voice_skill_resource_read': return summary || 'Skill resource loaded.';
     case 'voice_write_note': return summary || 'Note saved.';
     case 'voice_set_wake_phrase': return summary || 'Wake phrase updated.';
     case 'voice_enter_quiet_mode': return summary || 'Quiet mode is ready.';
     case 'voice_set_quiet_until': return summary || 'Quiet mode is ready.';
     case 'voice_timer': return summary || 'Timer set.';
+    case 'voice_browser_open': return summary || 'Browser opened.';
+    case 'voice_browser_scroll': return summary || 'Browser scrolled.';
     case 'voice_browser_screenshot': return summary || 'Browser screenshot captured.';
     case 'voice_desktop_screenshot': return summary || 'Desktop captured.';
+    case 'voice_desktop_focus_window': return summary || 'Window focused.';
+    case 'voice_desktop_launch_app': return summary || 'App launched.';
     case 'voice_send_screenshot': return summary || 'Screenshot sent.';
     default: return summary || `${friendlyVoiceToolName(toolName)} complete.`;
   }
@@ -9886,6 +11658,7 @@ async function callVoiceAgentDecisionModel(
   fallback: VoiceAgentDecision,
   trace?: VoiceAgentProcessEntry[],
   onSpeechChunk?: (text: string) => void,
+  options?: { disableDeterministicFastRoutes?: boolean },
 ): Promise<VoiceAgentDecision> {
   try {
     const startedAt = Date.now();
@@ -9899,8 +11672,12 @@ async function callVoiceAgentDecisionModel(
       cacheHit: contextBlockResult.cacheHit,
       totalMs: Date.now() - startedAt,
     });
-    const fallbackToolRequest = findVoiceToolFallbackRequest(transcript);
-    if (fallbackToolRequest?.name === 'voice_set_wake_phrase') {
+    const voiceAutomationSkillScoutSeen = new Set<string>();
+    const deterministicFastRoutesDisabled = options?.disableDeterministicFastRoutes === true;
+    const detectedFallbackToolRequest = findVoiceToolFallbackRequest(transcript);
+    const runtimeControlFastRouteAllowed = deterministicFastRoutesDisabled && isVoiceRuntimeControlTool(detectedFallbackToolRequest?.name || '');
+    const fallbackToolRequest = deterministicFastRoutesDisabled && !runtimeControlFastRouteAllowed ? null : detectedFallbackToolRequest;
+    if ((runtimeControlFastRouteAllowed || !deterministicFastRoutesDisabled) && fallbackToolRequest?.name === 'voice_set_wake_phrase') {
       const content = await executeVoiceAgentToolWithTrace(sessionId, fallbackToolRequest.name, fallbackToolRequest.args, trace);
       const parsedTool = parseVoiceToolResult(content);
       const phrase = cleanVoiceWakePhrase(parsedTool?.wakePhrase || fallbackToolRequest.args?.phrase || '');
@@ -9966,10 +11743,12 @@ async function callVoiceAgentDecisionModel(
     // When a worker IS active we keep the full model path so it can decide whether
     // to answer, steer, or interrupt.
     if (
+      (!deterministicFastRoutesDisabled || runtimeControlFastRouteAllowed)
+      &&
       fallbackToolRequest
       && !classification.shouldAbortOriginalRun
       && !classification.shouldPauseOriginalRun
-      && contextPacket.active !== true
+      && (contextPacket.active !== true || isVoiceRuntimeControlTool(fallbackToolRequest.name))
     ) {
       const toolStartedAt = Date.now();
       pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: deterministic tool fast-route ${fallbackToolRequest.name} — routing model skipped.`, {
@@ -9977,6 +11756,7 @@ async function callVoiceAgentDecisionModel(
         route: `tool:${fallbackToolRequest.name}`,
         totalMs: Date.now() - startedAt,
       });
+      await runVoiceAutomationSkillScout(sessionId, transcript, fallbackToolRequest.name, trace, voiceAutomationSkillScoutSeen);
       const raw = await executeVoiceAgentToolWithTrace(sessionId, fallbackToolRequest.name, fallbackToolRequest.args, trace);
       const toolResult = parseVoiceToolResult(raw);
       const runtimeDirective = voiceRuntimeDirectiveFromToolResult(toolResult);
@@ -10069,7 +11849,7 @@ async function callVoiceAgentDecisionModel(
         runtimeDirectives,
       } as VoiceAgentDecision;
     }
-    const smallTalkReply = deterministicVoiceSmallTalkReply(transcript, contextPacket);
+    const smallTalkReply = deterministicFastRoutesDisabled ? '' : deterministicVoiceSmallTalkReply(transcript, contextPacket);
     if (smallTalkReply && fallback.action === 'answer_now' && !classification.shouldAbortOriginalRun && !classification.shouldPauseOriginalRun) {
       pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: deterministic small-talk route ${Date.now() - startedAt}ms.`, {
         stage: 'voice_fast_router',
@@ -10159,6 +11939,7 @@ async function callVoiceAgentDecisionModel(
       for (const call of toolCalls.slice(0, 2)) {
         const name = String(call?.function?.name || '').trim();
         const args = parseVoiceToolArgs(call?.function?.arguments);
+        await runVoiceAutomationSkillScout(sessionId, transcript, name, trace, voiceAutomationSkillScoutSeen);
         const content = await executeVoiceAgentToolWithTrace(sessionId, name, args, trace);
         messages.push({
           role: 'tool',
@@ -10601,10 +12382,31 @@ router.post('/api/voice-agent/narrate', (req, res) => {
   }
 });
 
+function isRealtimeVoiceAgentInputRequest(body: any): boolean {
+  const voiceMode = String(body?.voiceMode || body?.voice_mode || '').trim().toLowerCase();
+  const source = String(body?.source || body?.origin || '').trim().toLowerCase();
+  const runtime = body?.voiceRuntime || body?.voice_runtime || {};
+  const runtimeMode = String(runtime?.voiceMode || runtime?.voice_mode || runtime?.mode || '').trim().toLowerCase();
+  return (
+    voiceMode.includes('realtime')
+    || source.includes('realtime')
+    || runtimeMode.includes('realtime')
+    || body?.realtimeAgent === true
+    || body?.realtime_agent === true
+    || body?.voiceAgentRealtimeAgent === true
+    || body?.voiceAgentXaiRealtime === true
+    || runtime?.realtimeAgent === true
+    || runtime?.realtime_agent === true
+    || runtime?.voiceAgentRealtimeAgent === true
+    || runtime?.voiceAgentXaiRealtime === true
+  );
+}
+
 router.post('/api/voice-agent/input', async (req, res) => {
   try {
     const requestStartedAt = Date.now();
     const body = req.body || {};
+    const realtimeAgentInput = isRealtimeVoiceAgentInputRequest(body);
     // Streaming mode: client sends { stream: true } and consumes SSE.
     // Server emits one `chunk` event per sentence as the model generates the
     // spokenReply, then a `done` event with the full result payload.
@@ -10670,7 +12472,15 @@ router.post('/api/voice-agent/input', async (req, res) => {
       elapsedMs: contextPacketMs,
       totalMs: Date.now() - requestStartedAt,
     });
-    const exactCommand = contextPacket.active ? exactActiveWorkerVoiceCommand(transcript) : '';
+    if (realtimeAgentInput) {
+      pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', 'Realtime Voice Agent caller detected; deterministic voice fast-routes disabled except quiet/wake runtime controls.', {
+        stage: 'voice_realtime_fast_routes_disabled',
+        voiceMode: String(body.voiceMode || '').trim(),
+        source: String(body.source || '').trim(),
+        totalMs: Date.now() - requestStartedAt,
+      });
+    }
+    const exactCommand = !realtimeAgentInput && contextPacket.active ? exactActiveWorkerVoiceCommand(transcript) : '';
     let decision: VoiceAgentDecision;
     let fastRouteReason = '';
     if (exactCommand) {
@@ -10698,6 +12508,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
         fallbackDecision,
         voiceProcessEntries,
         streamMode ? emitSpeechChunk : undefined,
+        { disableDeterministicFastRoutes: realtimeAgentInput },
       );
     }
     if (decision.action === 'answer_now' && !String(decision.spokenReply || '').trim() && transcript) {
@@ -10923,7 +12734,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
 // When voice mode is "openai_realtime" end-to-end, the browser opens a single
 // Realtime session whose system instructions and function tools come from
 // this bootstrap. The reasoning model is gpt-realtime (not the primary). All
-// voice_* tools route through /api/voice-agent/realtime-tool, and worker
+// voice_* and skill_* tools route through /api/voice-agent/realtime-tool, and worker
 // handoff/steer/interrupt are signalled as function calls back to the browser.
 // ============================================================================
 
@@ -11008,7 +12819,7 @@ function buildRealtimeVoiceAgentTools(): any[] {
   realtimeTools.push({
     type: 'function',
     name: 'dispatch_prometheus_worker',
-    description: 'Hand off heavy work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, browser/desktop control, coding, multi-step research, account actions, or anything outside the voice_* tool set. CRITICAL: call this function IMMEDIATELY — do NOT speak an acknowledgement before calling it. Speaking "on it" / "I started that" WITHOUT emitting this function call does nothing and the work never runs. Emit the function call first; a short spoken confirmation is generated automatically once the tool result returns. Never claim the worker is running unless you actually called this function.',
+    description: 'Hand off heavy or durable work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that the curated voice_browser_* and voice_desktop_* tools can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Speaking "on it" or "I started that" WITHOUT emitting this function call does nothing and the work never runs. Never claim the worker is running unless you actually called this function or voice_worker_status reports it active.',
     parameters: {
       type: 'object',
       required: ['task'],
@@ -11022,7 +12833,7 @@ function buildRealtimeVoiceAgentTools(): any[] {
   realtimeTools.push({
     type: 'function',
     name: 'steer_active_worker',
-    description: 'Steer an active Prometheus worker run mid-execution. Use ONLY when the worker context shows a worker is currently active and the user is correcting/adjusting it. For abort intent, use interrupt_active_worker instead.',
+    description: 'Steer an active Prometheus worker run mid-execution. Use ONLY when the worker context shows a worker is currently active and the user is clearly correcting, adjusting, pausing, or changing the active work. Do NOT use for normal conversation, status/progress/update questions, or "what are you doing"; use voice_worker_status for those. For abort intent, use interrupt_active_worker instead.',
     parameters: {
       type: 'object',
       required: ['message'],
@@ -11035,7 +12846,7 @@ function buildRealtimeVoiceAgentTools(): any[] {
   realtimeTools.push({
     type: 'function',
     name: 'interrupt_active_worker',
-    description: 'Abort the currently active Prometheus worker run. Use ONLY for explicit cancel/stop/abort intent from the user. Speak a short ack like "Stopping" first.',
+    description: 'Abort the currently active Prometheus worker run. Use ONLY for explicit cancel/stop/abort intent from the user. Call this function immediately; do not wait for a separate acknowledgement path. After the function output returns, speak one very short confirmation.',
     parameters: {
       type: 'object',
       properties: {
@@ -11050,47 +12861,68 @@ function buildRealtimeVoiceAgentTools(): any[] {
 function buildRealtimeVoiceAgentInstructions(args: {
   contextBlock: string;
   contextPacket: Record<string, any>;
+  voiceAgentMemory?: string;
   voiceRuntime?: string;
   wakePhrase?: string;
 }): string {
   const lines = [
     'You are Prometheus speaking through the user\'s voice interface in OpenAI Realtime mode.',
-    'You are the live conversational voice agent: small talk, status answers, fast voice_* tools, and worker hand-offs all flow through you. You ARE Prometheus on voice — speak with that identity.',
+    'You are the live conversational voice agent: small talk, status answers, fast voice_* tools, canonical read-only skill_* tools, and worker hand-offs all flow through you. You ARE Prometheus on voice — speak with that identity.',
     '',
-    'Personality: warm, direct, technically sharp, playful when natural, deeply aligned with Raul. Use his name when it fits. Avoid generic acknowledgements like "I am here" or "How can I help" — answer what he actually said.',
+    'Personality: warm, direct, technically sharp, playful when natural, deeply aligned with the user. Use the user name only when it is known and natural. Avoid generic acknowledgements like "I am here" or "How can I help" — answer what they actually said.',
     '',
     'Response style: speak naturally and conversationally, as if on a phone call. Keep replies tight unless he wants depth. No bullet points or markdown — this is audio.',
+    'Speak only normal words and numbers. Never vocalize punctuation marks, symbols, emoji, markdown, bullets, dashes, or standalone characters; if a candidate reply has no word, stay silent.',
     '',
+    args.voiceAgentMemory ? '## Voice agent memory' : '',
+    args.voiceAgentMemory ? args.voiceAgentMemory : '',
+    args.voiceAgentMemory ? '' : '',
     '## When to call which tool',
     '- voice_web_search: quick factual/current lookup. Multi mode for latest/current/news/compare.',
     '- voice_web_fetch: one clean text URL only. Social/video/auth pages must be dispatched to Worker.',
-    '- voice_write_note: only when Raul explicitly asks to remember/jot/note something.',
+    '- voice_write_note: only when the user explicitly asks to remember/jot/note something.',
+    '- voice_agent_memory: read or update workspace/VOICEAGENT.md only when the user explicitly asks to inspect or change live voice-agent routing/spoken-behavior memory. Use append for small additions; use replace only when the user asks to rewrite the file.',
     '- voice_set_wake_phrase: set/change the always-listening wake phrase.',
     '- voice_enter_quiet_mode / voice_set_quiet_until: silence Prometheus when he asks for quiet.',
-    '- voice_skill_lookup: orient yourself with available workflows; mention only a concise summary.',
+    '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use the matching voice_browser_* or voice_desktop_* tool. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
+    '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
     '- voice_memory_search: read-only recall for prior decisions, project history, preferences.',
     '- voice_timer: create/list/cancel one-shot timers.',
-    '- voice_browser_screenshot / voice_desktop_screenshot / voice_send_screenshot: observation-only screenshots.',
-    '- dispatch_prometheus_worker: HAND OFF heavy work — code, file ops, browser/desktop control, multi-step, deep research, anything outside voice_*. Call this function IMMEDIATELY without speaking first; the confirmation is spoken after the tool result. Do NOT speak an ack before the call.',
-    '- steer_active_worker / interrupt_active_worker: ONLY when a worker run is currently active (check the worker context below).',
+    '- voice_browser_open / voice_browser_snapshot / voice_browser_screenshot: open and observe the Prometheus browser. Open accepts explicit URLs/domains or browser search queries and returns DOM refs and a screenshot preview; snapshot gives @ref targets; screenshot gives visual context.',
+    '- voice_browser_click / voice_browser_vision_click / voice_browser_fill / voice_browser_type / voice_browser_vision_type / voice_browser_press_key / voice_browser_scroll / voice_browser_wait: live browser UI control. Use these for fast Jarvis-style navigation, input, drafting, and explicit user-authorized social posts/messages when content and destination are clear. Hand off to Worker for uploads, downloads, password/payment entry, purchases/payments, destructive actions, account settings/security changes, or anything involving files.',
+    '- voice_desktop_screenshot / voice_desktop_list_windows / voice_desktop_focus_window / voice_desktop_window_control / voice_desktop_find_app / voice_desktop_launch_app: observe, find, focus, minimize, maximize, restore, close, and launch desktop apps/windows.',
+    '- voice_desktop_click: click full-desktop/monitor/SOM coordinates from voice_desktop_screenshot using screenshot_id, same as Prometheus desktop_click.',
+    '- voice_desktop_window_click / voice_desktop_window_type / voice_desktop_window_press_key / voice_desktop_window_scroll: live desktop window control. Use window_id/window_handle/app_id/title and fresh screenshot coordinates. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker for file edits, shell commands, installs, destructive confirmations, purchases/payments, account settings/security changes, durable system changes, or anything requiring approvals.',
+    '- voice_send_screenshot: send a browser/desktop screenshot through the delivery router. Use this in Realtime voice when the user asks to send, share, show, or deliver a screenshot.',
+    '- Screenshot ownership: when screenshot voice tools are available, screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser_screenshot, voice_desktop_screenshot, or voice_send_screenshot.',
+    '- voice_worker_status: read fresh Worker status/context for status/progress/update questions. This is read-only; use it instead of steer_active_worker for questions like “what are you doing?”, “where are we?”, or “how’s it going?”.',
+    '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
+    '- steer_active_worker / interrupt_active_worker: ONLY when a worker run is currently active (check the worker context below) AND the user is correcting, changing, pausing, or cancelling the active work. Normal conversation and status questions are not steers.',
     '',
     '## Routing decisions you make implicitly',
-    '- If Raul asks something answerable from your context (status, memory, identity, recall) — answer directly, no tool.',
-    '- If Raul wants quick voice-scope work — call the matching voice_* tool, then narrate the result.',
-    '- If Raul wants real work — call dispatch_prometheus_worker FIRST (no spoken ack before it); the spoken confirmation comes after the tool result.',
-    '- If Raul interrupts an active worker with a correction — call steer_active_worker.',
-    '- If Raul explicitly cancels — call interrupt_active_worker.',
+    '- If the user asks something answerable from your context (memory, identity, recall, small talk) — answer directly, no tool.',
+    '- If the user asks for status/progress/context about the active Worker — call voice_worker_status, then answer from that result. Do not send the status question to the Worker as a steer.',
+    '- Skill scout rule: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call the matching voice_browser_* or voice_desktop_* tool immediately.',
+    '- If the user wants quick voice-scope work — call the matching voice_* or skill_* tool, then narrate the result.',
+    '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_agent_memory instead of voice_write_note.',
+    '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app shows the handoff and the worker will report progress.',
+    '- If the user interrupts an active worker with an actual correction, new constraint, pause, or direction change — call steer_active_worker.',
+    '- If the user explicitly cancels/stops/aborts — call interrupt_active_worker.',
     '',
     '## Tool calls are REAL actions — never fake them',
     '- A tool only runs if you actually emit the function call. Saying "on it", "handing that off", "I started the worker", or "let me search" does NOT run anything by itself.',
-    '- CRITICAL for hand-offs: when Raul wants real work, emit the dispatch_prometheus_worker function call in the SAME turn as your spoken ack. Speaking an acknowledgement WITHOUT emitting the function call is a failure — the work never starts. Prefer to call the tool first, then speak; never end your turn on just an ack when work is required.',
-    '- Likewise, never claim a search/note/screenshot/timer happened unless you actually called the matching voice_* tool and received its result.',
+    '- CRITICAL for hand-offs: when the user wants real work, emit the dispatch_prometheus_worker function call in the same turn and stay quiet around it. Speaking an acknowledgement WITHOUT emitting the function call is a failure because the work never starts.',
+    '- CRITICAL for live UI control: when the user asks you to click, scroll, press a key, type, fill, focus, maximize, minimize, restore, close, open, or screenshot the current browser/desktop, your next action must be the matching voice_browser_* or voice_desktop_* function call. Do not say you will do it without the function call.',
+    '- CRITICAL for screenshot delivery: when the user asks to send/share/show/deliver a screenshot, call voice_send_screenshot. Do not dispatch Worker for ordinary screenshot delivery while this tool exists.',
+    '- If a browser/desktop target is ambiguous, first call voice_browser_snapshot or voice_desktop_screenshot({mode:"som"}), then call the action tool from the returned refs/coordinates.',
+    '- CRITICAL for status: never say you messaged, asked, notified, or sent something to the Worker when the user only asked a status/update question. Call voice_worker_status and answer from the returned context instead.',
+    '- Likewise, never claim a search/note/screenshot/timer happened unless you actually called the matching voice_* tool and received its result; never claim skill counts or skill instructions unless skill_list, skill_read, skill_resource_list, or skill_resource_read returned them.',
     '- After you say you are doing something, the corresponding function call MUST be in your output.',
     '',
     '## Hard boundaries',
-    '- Never claim you used full Worker tools or changed files/accounts from the voice layer unless a voice_* tool result confirms it.',
+    '- Never claim you used full Worker tools or changed files/accounts from the voice layer unless a voice_* tool result confirms it. Skill_* results only confirm skill discovery or skill instruction reads.',
     '- Never narrate that you are calling a tool ("let me search for that" → just call voice_web_search and report the result).',
-    '- For screenshot tools: capture only. No clicks, typing, navigation, or UI control from voice.',
+    '- Screenshot tools provide fresh visual context. Browser/desktop UI control is allowed through the curated voice_browser_* and voice_desktop_window_* tools, including explicit user-authorized social posts/messages when content and destination are clear. Durable/file/account settings/security/destructive work must go to Worker.',
     '',
     '## Worker context (current state — read-only orientation)',
     args.contextBlock || '(no extended context available)',
@@ -11122,11 +12954,17 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
     const originalPrompt = String(body.originalUserPrompt || '').trim();
     const contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
-    const wakePhrase = cleanVoiceWakePhrase(body?.voiceRuntime?.wakePhrase || body?.voice_runtime?.wakePhrase || '');
+    const voiceAgentMemory = loadVoiceAgentMemory(getConfig().getWorkspacePath());
+    const runtimeBody = body?.voiceRuntime && typeof body.voiceRuntime === 'object'
+      ? body.voiceRuntime
+      : (body?.voice_runtime && typeof body.voice_runtime === 'object' ? body.voice_runtime : {});
+    const wakePhrase = cleanVoiceWakePhrase(runtimeBody?.wakePhrase || runtimeBody?.wake_phrase || '');
+    const wakeGateActive = runtimeBody?.wakeGateActive === true || runtimeBody?.wake_gate_active === true;
 
     const instructions = buildRealtimeVoiceAgentInstructions({
       contextBlock: contextBlockResult.contextBlock,
       contextPacket,
+      voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
     });
@@ -11152,7 +12990,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
               threshold: 0.5,
               prefix_padding_ms: 300,
               silence_duration_ms: 600,
-              create_response: true,
+              create_response: !(wakeGateActive && !!wakePhrase),
             },
           },
           output: { voice, speed },
@@ -11242,6 +13080,8 @@ const DEFAULT_XAI_REALTIME_VOICE = process.env.XAI_REALTIME_VOICE || 'eve';
 const XAI_REALTIME_USER_AGENT = process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0';
 const XAI_REALTIME_VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'];
 
+type XaiRealtimeAuthCandidate = { token: string; auth: 'xai_oauth' | 'api_key' };
+
 function getXaiRealtimeApiKey(): string {
   const cfg = getConfig().getConfig() as any;
   const providers = cfg?.llm?.providers && typeof cfg.llm.providers === 'object' ? cfg.llm.providers : {};
@@ -11256,17 +13096,29 @@ function hasXaiRealtimeOAuth(): boolean {
   return isXAIConnected(getConfig().getConfigDir());
 }
 
-// Resolve the usable xAI credential for the realtime client_secret mint: a raw
-// xAI API key OR the connected xAI OAuth account (mirrors voice.router's xaiAuthToken).
-async function getXaiRealtimeToken(): Promise<string> {
-  const apiKey = getXaiRealtimeApiKey();
-  if (apiKey) return apiKey;
-  if (!hasXaiRealtimeOAuth()) return '';
-  try {
-    return await getValidXAIToken(getConfig().getConfigDir());
-  } catch {
-    return '';
+// Resolve every usable xAI credential for the realtime client_secret mint. For
+// voice mode, prefer the user's connected OAuth account so a stale env/config
+// API key cannot silently override it; keep API key as a fallback candidate.
+async function getXaiRealtimeAuthCandidates(): Promise<XaiRealtimeAuthCandidate[]> {
+  const candidates: XaiRealtimeAuthCandidate[] = [];
+  const seen = new Set<string>();
+  const push = (token: string, auth: XaiRealtimeAuthCandidate['auth']) => {
+    const value = String(token || '').trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    candidates.push({ token: value, auth });
+  };
+
+  if (hasXaiRealtimeOAuth()) {
+    try {
+      push(await getValidXAIToken(getConfig().getConfigDir()), 'xai_oauth');
+    } catch {
+      // Fall through — API key fallback below may still be usable.
+    }
   }
+
+  push(getXaiRealtimeApiKey(), 'api_key');
+  return candidates;
 }
 
 function sanitizeXaiRealtimeModel(value: unknown): string {
@@ -11289,7 +13141,7 @@ router.get('/api/realtime/xai/status', (_req, res) => {
     model: DEFAULT_XAI_REALTIME_MODEL,
     voice: DEFAULT_XAI_REALTIME_VOICE,
     voices: XAI_REALTIME_VOICE_IDS,
-    auth: hasApiKey ? 'api_key' : (hasOAuth ? 'xai_oauth' : 'none'),
+    auth: hasOAuth ? 'xai_oauth' : (hasApiKey ? 'api_key' : 'none'),
     oauthConfigured: hasOAuth,
     apiKeyConfigured: hasApiKey,
   });
@@ -11299,8 +13151,8 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
-    const token = await getXaiRealtimeToken();
-    if (!token) {
+    const authCandidates = await getXaiRealtimeAuthCandidates();
+    if (!authCandidates.length) {
       res.status(400).json({ ok: false, success: false, error: 'xAI Realtime requires an xAI API key (XAI_API_KEY) or a connected xAI OAuth account. Add one in Settings -> Models.' });
       return;
     }
@@ -11311,11 +13163,13 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
     const originalPrompt = String(body.originalUserPrompt || '').trim();
     const contextBlockResult = await getVoiceAgentContextBlock(sessionId, originalPrompt);
+    const voiceAgentMemory = loadVoiceAgentMemory(getConfig().getWorkspacePath());
     const wakePhrase = cleanVoiceWakePhrase(body?.voiceRuntime?.wakePhrase || body?.voice_runtime?.wakePhrase || '');
 
     const instructions = buildRealtimeVoiceAgentInstructions({
       contextBlock: contextBlockResult.contextBlock,
       contextPacket,
+      voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
       wakePhrase,
     });
@@ -11328,31 +13182,45 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
     // Mint a short-lived ephemeral token. The browser cannot set WS headers, so it
     // connects with the token as a subprotocol (xai-client-secret.<token>) and sends
     // the session config (instructions/tools/voice) itself via session.update.
-    const upstream = await fetch(XAI_REALTIME_CLIENT_SECRETS_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': XAI_REALTIME_USER_AGENT,
-      },
-      body: JSON.stringify({ expires_after: { seconds: 300 } }),
-    });
-    const text = await upstream.text();
     let data: any = null;
-    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-    console.log('[xai-realtime] client_secret mint', {
-      endpoint: XAI_REALTIME_CLIENT_SECRETS_ENDPOINT,
-      status: upstream.status,
-      ok: upstream.ok,
-      responseKeys: data && typeof data === 'object' ? Object.keys(data) : typeof data,
-      body: upstream.ok ? undefined : String(text || '').slice(0, 500),
-    });
-    if (!upstream.ok) {
-      res.status(upstream.status || 502).json({
+    let usedAuth: XaiRealtimeAuthCandidate['auth'] | null = null;
+    let lastFailure: { status: number; data: any; auth: XaiRealtimeAuthCandidate['auth'] } | null = null;
+    const bodyJson = JSON.stringify({ expires_after: { seconds: 300 } });
+    for (const candidate of authCandidates) {
+      const upstream = await fetch(XAI_REALTIME_CLIENT_SECRETS_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${candidate.token}`,
+          'Content-Type': 'application/json',
+          'User-Agent': XAI_REALTIME_USER_AGENT,
+        },
+        body: bodyJson,
+      });
+      const text = await upstream.text();
+      let parsed: any = null;
+      try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+      console.log('[xai-realtime] client_secret mint', {
+        endpoint: XAI_REALTIME_CLIENT_SECRETS_ENDPOINT,
+        auth: candidate.auth,
+        status: upstream.status,
+        ok: upstream.ok,
+        responseKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed) : typeof parsed,
+        body: upstream.ok ? undefined : String(text || '').slice(0, 500),
+      });
+      if (upstream.ok) {
+        data = parsed;
+        usedAuth = candidate.auth;
+        break;
+      }
+      lastFailure = { status: upstream.status, data: parsed, auth: candidate.auth };
+    }
+    if (!data) {
+      res.status(lastFailure?.status || 502).json({
         ok: false,
         success: false,
-        error: data?.error?.message || data?.error || `xAI Realtime client_secret mint failed (${upstream.status})`,
-        details: data,
+        error: lastFailure?.data?.error?.message || lastFailure?.data?.error || `xAI Realtime client_secret mint failed (${lastFailure?.status || 502})`,
+        details: lastFailure?.data,
+        auth: lastFailure?.auth || null,
       });
       return;
     }
@@ -11367,6 +13235,7 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       success: true,
       provider: 'xai',
       clientSecret,
+      auth: usedAuth,
       wsUrl: `${XAI_REALTIME_WS_BASE}?model=${encodeURIComponent(model)}`,
       model,
       voice,
@@ -11384,14 +13253,38 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
   }
 });
 
+router.post('/api/voice-agent/realtime-skill-context', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const transcript = String(body.transcript || body.text || body.message || '').trim();
+    const maxChars = Math.min(8000, Math.max(1000, Number(body.maxChars || body.max_chars || 4200) || 4200));
+    const result = buildRealtimeSkillContextForTranscript(transcript, maxChars);
+    res.json({
+      ok: true,
+      success: true,
+      matched: result.skills.length > 0,
+      context: result.context,
+      skills: result.skills,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
 router.post('/api/voice-agent/realtime-tool', async (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = String(body.sessionId || 'default').trim() || 'default';
     const toolName = String(body.toolName || body.name || '').trim();
-    const toolArgs = body.toolArgs && typeof body.toolArgs === 'object'
+    const parsedToolArgs = body.toolArgs && typeof body.toolArgs === 'object'
       ? body.toolArgs
       : parseVoiceToolArgs(body.arguments || body.args);
+    const toolArgs = {
+      ...parsedToolArgs,
+      ...(toolName === 'voice_worker_status' && body.contextPacket && typeof body.contextPacket === 'object'
+        ? { contextPacket: body.contextPacket }
+        : {}),
+    };
     if (!toolName) {
       res.status(400).json({ ok: false, success: false, error: 'toolName is required' });
       return;
@@ -11776,6 +13669,7 @@ router.post('/api/chat', async (req, res) => {
         generatedVideos: result.generatedVideos,
         canvasFiles: result.canvasFiles,
         fileChanges: result.fileChanges,
+        productCarousel: result.productCarousel,
       });
 	      sendSSE('done', {
         reply: result.text, mode: result.type,
@@ -11787,6 +13681,7 @@ router.post('/api/chat', async (req, res) => {
         generatedVideos: result.generatedVideos,
         canvasFiles: result.canvasFiles,
         fileChanges: result.fileChanges,
+        productCarousel: result.productCarousel,
       });
     }
 		  } catch (err: any) {
@@ -11974,13 +13869,30 @@ router.get('/api/sessions/:id', (req, res) => {
       res.status(404).json({ error: 'Not found' });
       return;
     }
+
+    const full = req.query.full === '1' || req.query.full === 'true';
+    const historyLimit = full
+      ? 0
+      : boundedPositiveInt(req.query.historyLimit, 200, 20, 500);
+    const processLimit = full
+      ? 500
+      : boundedPositiveInt(req.query.processLimit, 250, 40, 500);
+    const includeToolLog = full || req.query.includeToolLog === '1' || req.query.includeToolLog === 'true';
+    const responseHistory = sanitizeHistoryForUiResponse(session.history, {
+      historyLimit,
+      includeToolLog,
+      perMessageProcessLimit: full ? 500 : 50,
+    });
+    const responseProcessLog = sessionProcessLogFromHistory({ history: responseHistory }).slice(-processLimit);
     
     res.json({
       session: {
         id: session.id,
         channel: session.channel,
-        history: session.history,
-        processLog: sessionProcessLogFromHistory(session),
+        history: responseHistory,
+        processLog: responseProcessLog,
+        historyTruncated: !full && Array.isArray(session.history) && responseHistory.length < session.history.length,
+        totalHistoryCount: Array.isArray(session.history) ? session.history.length : 0,
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
         lastAssistantAt: session.lastAssistantAt || null,
@@ -12018,27 +13930,43 @@ router.get('/api/sessions/:id/context-window', (req, res) => {
       5,
       Math.max(2500, Math.min(16000, budget.toolContextBudgetTokens * 3)),
     );
-    const messageTokens = estimateMessagesTokensForModel(history as any, profile);
-    const toolTokens = estimateTextTokensForModel(recentToolContext, profile.tokenizer);
+    const calibration = getUsageCalibration(profile.providerId, profile.model);
+    const calibrationFactor = calibration.factor || 1;
+    const messageTokens = Math.round(estimateMessagesTokensForModel(history as any, profile) * calibrationFactor);
+    const toolTokens = Math.round(estimateTextTokensForModel(recentToolContext, profile.tokenizer) * calibrationFactor);
     const currentInputTokens = messageTokens + toolTokens;
     const session = getSession(id);
     const storedThread = estimateStoredThreadFootprint(id, session, profile);
     const modelUsage = aggregateSessionModelUsage(id);
+    const currentState = buildContextWindowCurrentState({
+      sessionId: id,
+      profile,
+      currentInputTokens,
+      messageTokens,
+      recentToolTokens: toolTokens,
+      compactionTriggerTokens: budget.compactionTriggerTokens,
+      storedThread,
+      modelUsage,
+    });
     res.json({
       success: true,
       sessionId: id,
       profile,
       budget,
-      metricKind: 'next_model_call_estimate',
+      metricKind: 'current_context_state',
+      currentState,
+      currentStateTokens: currentState.currentStateTokens,
+      nextCallEstimateTokens: currentInputTokens,
       currentInputTokens,
       messageTokens,
       toolObservationTokens: toolTokens,
       storedThread,
       modelUsage,
+      calibration,
       contextWindowTokens: profile.contextWindowTokens,
       inputBudgetTokens: budget.inputBudgetTokens,
       compactionTriggerTokens: budget.compactionTriggerTokens,
-      percentOfWindow: profile.contextWindowTokens > 0 ? currentInputTokens / profile.contextWindowTokens : 0,
+      percentOfWindow: profile.contextWindowTokens > 0 ? currentState.currentStateTokens / profile.contextWindowTokens : 0,
       percentOfInputBudget: budget.inputBudgetTokens > 0 ? currentInputTokens / budget.inputBudgetTokens : 0,
       historyMessages: history.length,
       hasToolObservations: !!recentToolContext,

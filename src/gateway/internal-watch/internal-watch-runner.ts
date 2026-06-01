@@ -304,7 +304,7 @@ export class InternalWatchRunner {
     });
     const obs = watch.lastObservation || { status: 'timeout' };
     this.broadcast({ type: 'internal_watch_timeout', watchId: watch.id, watch, observation: obs, sessionId: watch.origin.sessionId });
-    const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell Raul/Prom what was being watched and the latest observation.`;
+    const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
     await this.deliver(watch, obs, 'timeout', timeoutInstruction);
     setModelBusy(false);
     this.runningWatchIds.delete(watch.id);

@@ -20,7 +20,7 @@ export function getFileWebMemoryTools(): any[] {
         },
 	      },
 	    },
-	    {
+    {
       type: 'function',
       function: {
         name: 'read_file',
@@ -245,6 +245,38 @@ export function getFileWebMemoryTools(): any[] {
             num_lines: { type: 'number', description: 'Number of lines to return from start_line. Omit to read to end of file (up to cap).' },
             head: { type: 'number', description: 'Return only first N lines (shorthand for start_line:1, num_lines:N)' },
             tail: { type: 'number', description: 'Return only last N lines' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_dev_sources',
+        description:
+          'Read multiple Prometheus dev source files in one compact call. Prefer this over repeated source_stats/read_source/read_webui_source calls. ' +
+          'Accepts src/..., web-ui/..., or src-relative paths, and supports line windows plus around/anchor matching.',
+        parameters: {
+          type: 'object', required: ['files'],
+          properties: {
+            files: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  file: { type: 'string', description: 'src/..., web-ui/..., or path relative to src/.' },
+                  path: { type: 'string' },
+                  start_line: { type: 'number' },
+                  num_lines: { type: 'number' },
+                  head: { type: 'number' },
+                  tail: { type: 'number' },
+                  around: { type: 'string' },
+                  anchor: { type: 'string' },
+                  regex: { type: 'boolean' },
+                  context: { type: 'number' },
+                },
+              },
+            },
           },
         },
       },
@@ -620,6 +652,45 @@ export function getFileWebMemoryTools(): any[] {
             find: { type: 'string', description: 'Exact text to find (must match the file exactly, including whitespace and newlines)' },
             replace: { type: 'string', description: 'Replacement text' },
             replace_all: { type: 'boolean', description: 'If true, replace all occurrences. Default: false (first occurrence only).' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_dev_source_patchset',
+        description:
+          'Apply multiple approved Prometheus dev-source edits in one guarded patchset. Prefer this after request_dev_source_edit approval. ' +
+          'It validates every edit before writing, syntax-parses changed JS/TS, returns slim telemetry and touched files, and does not repeat the full post-edit workflow after each tiny edit.',
+        parameters: {
+          type: 'object', required: ['edits'],
+          properties: {
+            edits: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['file', 'op'],
+                properties: {
+                  file: { type: 'string', description: 'src/..., web-ui/..., or path relative to src/.' },
+                  path: { type: 'string' },
+                  op: { type: 'string', enum: ['exact_replace', 'find_replace', 'delete_exact', 'line_replace', 'replace_lines', 'insert_after_line', 'insert_after', 'insert_after_anchor', 'delete_lines', 'write_file', 'full_file_write', 'create_file'] },
+                  find: { type: 'string' },
+                  replace: { type: 'string' },
+                  replace_all: { type: 'boolean' },
+                  start_line: { type: 'number' },
+                  end_line: { type: 'number' },
+                  after_line: { type: 'number' },
+                  anchor: { type: 'string' },
+                  regex: { type: 'boolean' },
+                  occurrence: { type: 'number' },
+                  content: { type: 'string' },
+                  new_content: { type: 'string' },
+                  expected_hash: { type: 'string', description: 'Optional sha256 prefix guard for the pre-edit file content.' },
+                  expected_before: { type: 'string', description: 'Optional text guard that must be present before editing.' },
+                },
+              },
+            },
           },
         },
       },

@@ -9,12 +9,17 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
+import { resolveActiveModelContextProfile } from './context/model-context';
+import { getUsageCalibration } from '../providers/model-usage';
 import { getRecentToolObservationsForContext as readRecentToolObservationsForContext } from './tool-observations';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  workStartedAt?: number;
+  workEndedAt?: number;
+  workDurationMs?: number;
   channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
   channelLabel?: string;
   origin?: TurnOrigin;
@@ -592,14 +597,10 @@ function shouldLockExistingSessionTitle(title: any): boolean {
 
 function applyAutoSessionTitleOnce(session: Session): void {
   if (!session || session.autoTitleLocked === true) return;
-  if (shouldLockExistingSessionTitle(session.title)) {
-    session.autoTitleLocked = true;
-    return;
-  }
+  if (shouldLockExistingSessionTitle(session.title)) return;
   const nextTitle = getSessionTitleFromHistory(session.history);
   if (!nextTitle || nextTitle === 'New chat') return;
   session.title = nextTitle;
-  session.autoTitleLocked = true;
 }
 
 export function getSessionDisplayTitle(session: Pick<Session, 'title' | 'history'>): string {
@@ -944,6 +945,7 @@ function inferChannelFromSessionId(sessionId: string): NonNullable<Session['chan
 }
 
 function resolveNumCtx(): number {
+  // Explicit overrides win (used to pin a local Ollama num_ctx regardless of model).
   const envCandidates = [
     process.env.LOCALCLAW_SESSION_NUM_CTX,
     process.env.LOCALCLAW_CHAT_NUM_CTX,
@@ -956,6 +958,15 @@ function resolveNumCtx(): number {
     const cfg: any = getConfig().getConfig();
     const candidate = Number(cfg?.llm?.num_ctx);
     if (Number.isFinite(candidate) && candidate > 512) return Math.floor(candidate);
+  } catch {
+    // fall through to provider-aware detection
+  }
+  // No explicit override: use the real context window for the active provider+model
+  // instead of a provider-blind 8192 default (which compacted huge-window models
+  // ~70x too early).
+  try {
+    const win = Number(resolveActiveModelContextProfile().contextWindowTokens);
+    if (Number.isFinite(win) && win > 512) return Math.floor(win);
   } catch {
     // fall through
   }
@@ -994,6 +1005,19 @@ function getCompactedContextHistoryForTokenEstimate(session: Session): ChatMessa
 
 function estimateActiveContextTokens(session: Session): number {
   return estimateHistoryTokens(getCompactedContextHistoryForTokenEstimate(session));
+}
+
+function activeUsageCalibrationFactor(): number {
+  // Scale raw char-based estimates toward what the active provider+model actually
+  // counts as input tokens, using recent provider-reported usage. Falls back to
+  // 1.0 (no correction) until enough provider samples exist. Clamped inside
+  // getUsageCalibration so a noisy ratio can never wildly distort the budget.
+  try {
+    const profile = resolveActiveModelContextProfile();
+    return getUsageCalibration(profile.providerId, profile.model).factor || 1;
+  } catch {
+    return 1;
+  }
 }
 
 function resolveSessionPolicy(): {
@@ -1467,7 +1491,10 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
   const contextLimitTokens = resolveNumCtx();
   const thresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.memoryFlushThreshold);
   const compactionThresholdTokens = Math.floor(contextLimitTokens * sessionPolicy.compactionThreshold);
-  const beforeTokens = estimateActiveContextTokens(session);
+  // Correct raw estimates toward real provider input-token counts before
+  // comparing against the (now provider-aware) window thresholds.
+  const usageCalibrationFactor = activeUsageCalibrationFactor();
+  const beforeTokens = Math.round(estimateActiveContextTokens(session) * usageCalibrationFactor);
   let compactionInjected = false;
   let deferredForCompaction = false;
   let compactionApplied = false;
@@ -1479,7 +1506,7 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     && !options.disableCompactionCheck
     && !session.pendingCompaction
   ) {
-    const projectedTokens = beforeTokens + estimateMessageTokens(msg);
+    const projectedTokens = beforeTokens + Math.round(estimateMessageTokens(msg) * usageCalibrationFactor);
     const realMessageCount = session.history.filter(isRealContextMessage).length + 1;
     const recentlyCompacted = session.history
       .slice(-8)
@@ -1507,7 +1534,7 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     && !options.disableMemoryFlushCheck
     && !session.pendingMemoryFlush
   ) {
-    const projectedTokens = beforeTokens + estimateMessageTokens(msg);
+    const projectedTokens = beforeTokens + Math.round(estimateMessageTokens(msg) * usageCalibrationFactor);
     const realMessageCount = session.history.filter(isRealContextMessage).length + 1;
     const recentlyPrompted = session.history
       .slice(-6)
@@ -1946,6 +1973,19 @@ export function renameSession(id: string, title: string): SessionSummary | null 
   const nextTitle = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (!sessionId || !nextTitle) return null;
   const session = getSession(sessionId);
+  session.title = nextTitle;
+  session.autoTitleLocked = true;
+  session.lastActiveAt = Date.now();
+  flushSession(sessionId);
+  return buildSessionSummary(session);
+}
+
+export function autoNameSession(id: string, title: string): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  const nextTitle = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!sessionId || !nextTitle) return null;
+  const session = getSession(sessionId);
+  if (session.autoTitleLocked === true) return null;
   session.title = nextTitle;
   session.autoTitleLocked = true;
   session.lastActiveAt = Date.now();

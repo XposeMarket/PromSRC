@@ -33,7 +33,7 @@ const _expanded = new Set();
 let _skills = [];
 let _hubSkillSearch = '';
 let _goals = [];
-let _curator = { suggestions: [], pending: 0, quarantined: 0, loading: false, actingId: '' };
+let _curator = { suggestions: [], activity: [], pending: 0, quarantined: 0, appliedActivity: 0, observedActivity: 0, loading: false, actingId: '' };
 const _heatmap = { year: 0, month: 0, counts: {} };
 const _stats = { mode: 'overview', range: 'all', tools: null, models: null, loading: false };
 try {
@@ -723,6 +723,49 @@ function renderCuratorSuggestion(s) {
   `;
 }
 
+function renderCuratorActivityItem(item) {
+  const status = String(item?.status || 'observed').toLowerCase() === 'applied' ? 'applied' : 'observed';
+  const source = String(item?.appliedBy || item?.source || 'brain').trim();
+  const risk = String(item?.risk || '').trim();
+  const paths = Array.isArray(item?.changedPaths) ? item.changedPaths.filter(Boolean) : [];
+  const evidence = Array.isArray(item?.evidence) ? item.evidence.filter(Boolean) : [];
+  const tools = Array.isArray(item?.toolSequence) ? item.toolSequence.filter(Boolean) : [];
+  const summary = String(item?.summary || item?.reason || item?.suggestedAction || '').trim();
+  return `
+    <article class="hub-curator-activity-card" data-status="${escHtml(status)}">
+      <div class="hub-curator-card-head">
+        <div class="hub-curator-title-wrap">
+          <div class="hub-curator-title">${escHtml(item?.title || 'Skill activity')}</div>
+          <div class="hub-curator-meta">
+            <span>${escHtml(item?.skillId || 'unassigned signal')}</span>
+            <span>${escHtml(item?.changeType || item?.source || 'activity')}</span>
+            <span title="${escHtml(fmtDate(item?.timestamp))}">${escHtml(relTime(item?.timestamp))}</span>
+          </div>
+        </div>
+        <div class="hub-curator-badges">
+          <span class="hub-curator-badge status">${escHtml(status === 'applied' ? 'applied' : 'observed')}</span>
+          ${source ? `<span class="hub-curator-badge scan">${escHtml(source)}</span>` : ''}
+          ${risk ? `<span class="hub-curator-badge risk">${escHtml(risk)} risk</span>` : ''}
+        </div>
+      </div>
+      ${summary ? `<div class="hub-curator-lesson">${escHtml(summary)}</div>` : ''}
+      ${item?.requestExcerpt ? `<div class="hub-curator-why"><strong>Observed</strong> ${escHtml(item.requestExcerpt)}</div>` : ''}
+      ${item?.finalResponseExcerpt ? `<div class="hub-curator-why"><strong>Outcome</strong> ${escHtml(item.finalResponseExcerpt)}</div>` : ''}
+      ${paths.length ? `<div class="hub-curator-path" title="${escHtml(paths.join(', '))}"><span>Changed</span>${paths.slice(0, 4).map(escHtml).join(', ')}${paths.length > 4 ? `, +${paths.length - 4} more` : ''}</div>` : ''}
+      ${tools.length ? `<div class="hub-curator-evidence">${tools.slice(0, 6).map((tool) => `<span title="${escHtml(tool)}">${escHtml(tool)}</span>`).join('')}${tools.length > 6 ? `<span>+${tools.length - 6} tools</span>` : ''}</div>` : ''}
+      ${evidence.length ? `
+        <details class="hub-curator-details">
+          <summary>Evidence</summary>
+          <div class="hub-curator-evidence">
+            ${evidence.slice(0, 10).map((ev) => `<span title="${escHtml(ev)}">${escHtml(ev)}</span>`).join('')}
+            ${evidence.length > 10 ? `<span>+${evidence.length - 10} more</span>` : ''}
+          </div>
+        </details>
+      ` : ''}
+    </article>
+  `;
+}
+
 function renderCuratorPanel() {
   const list = document.getElementById('hub-curator-list');
   const summary = document.getElementById('hub-curator-summary');
@@ -730,12 +773,17 @@ function renderCuratorPanel() {
   if (!list) return;
 
   const suggestions = Array.isArray(_curator.suggestions) ? _curator.suggestions : [];
+  const activity = Array.isArray(_curator.activity) ? _curator.activity : [];
   const counts = suggestions.reduce((acc, item) => {
     const s = curatorStatusClass(item.status);
     acc[s] = (acc[s] || 0) + 1;
     return acc;
   }, {});
-  if (subtitle) subtitle.textContent = _curator.loading ? 'Loading Brain skill suggestions...' : `${counts.pending || 0} pending, ${counts.quarantined || 0} quarantined, ${counts.applied || 0} applied, ${counts.rejected || 0} denied`;
+  const appliedActivity = activity.filter((item) => String(item?.status || '').toLowerCase() === 'applied').length;
+  const observedActivity = activity.length - appliedActivity;
+  if (subtitle) subtitle.textContent = _curator.loading
+    ? 'Loading Brain skill suggestions and Thought/Dream activity...'
+    : `${counts.pending || 0} pending, ${counts.quarantined || 0} quarantined, ${appliedActivity} applied updates, ${observedActivity} observed signals`;
   if (summary) {
     const low = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'low').length;
     const medium = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'medium').length;
@@ -743,19 +791,21 @@ function renderCuratorPanel() {
     summary.innerHTML = [
       renderStatTile('Pending', compactNumber(counts.pending || 0)),
       renderStatTile('Quarantined', compactNumber(counts.quarantined || 0)),
+      renderStatTile('Applied Updates', compactNumber(appliedActivity)),
+      renderStatTile('Observed Signals', compactNumber(observedActivity)),
       renderStatTile('Low risk', compactNumber(low)),
       renderStatTile('Medium risk', compactNumber(medium)),
       renderStatTile('High risk', compactNumber(high)),
-      renderStatTile('Total', compactNumber(suggestions.length)),
+      renderStatTile('Total', compactNumber(suggestions.length + activity.length)),
     ].join('');
   }
 
-  if (_curator.loading && !suggestions.length) {
-    list.innerHTML = `<div class="hub-empty">Loading curator suggestions...</div>`;
+  if (_curator.loading && !suggestions.length && !activity.length) {
+    list.innerHTML = `<div class="hub-empty">Loading curator suggestions and activity...</div>`;
     return;
   }
-  if (!suggestions.length) {
-    list.innerHTML = `<div class="hub-empty">No skill curator suggestions yet.</div>`;
+  if (!suggestions.length && !activity.length) {
+    list.innerHTML = `<div class="hub-empty">No skill curator suggestions or Thought/Dream activity yet.</div>`;
     return;
   }
   const sorted = suggestions.slice().sort((a, b) => {
@@ -763,7 +813,11 @@ function renderCuratorPanel() {
     const bp = curatorStatusClass(b.status) === 'pending' ? 0 : 1;
     return (ap - bp) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
   });
-  list.innerHTML = sorted.map(renderCuratorSuggestion).join('');
+  const sortedActivity = activity.slice().sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+  list.innerHTML = [
+    sorted.length ? `<div class="hub-curator-group-title">Review Queue</div>${sorted.map(renderCuratorSuggestion).join('')}` : '',
+    sortedActivity.length ? `<div class="hub-curator-group-title">Thought and Dream Activity</div>${sortedActivity.map(renderCuratorActivityItem).join('')}` : '',
+  ].filter(Boolean).join('');
   list.querySelectorAll('[data-curator-action]').forEach((btn) => {
     btn.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -778,10 +832,14 @@ async function loadCuratorSuggestions() {
   try {
     const r = await api('/api/hub/skills/review', { timeoutMs: 30000 });
     _curator.suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
+    _curator.activity = Array.isArray(r?.activity) ? r.activity : [];
     _curator.pending = Number(r?.pending || 0);
     _curator.quarantined = Number(r?.quarantined || 0);
+    _curator.appliedActivity = Number(r?.appliedActivity || 0);
+    _curator.observedActivity = Number(r?.observedActivity || 0);
   } catch {
     _curator.suggestions = [];
+    _curator.activity = [];
   } finally {
     _curator.loading = false;
     _curator.actingId = '';

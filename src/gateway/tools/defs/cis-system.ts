@@ -735,10 +735,18 @@ export function getCisSystemTools(): any[] {
             },
             verification_profile: {
               type: 'string',
-              enum: ['backend_build', 'webui_sync_check', 'full_build', 'none'],
-              description: 'Optional safe verification profile. Prefer this over verification_command: backend_build for backend/src, webui_sync_check for web-ui/mobile/static, full_build for mixed/runtime-wide changes, none when no build is needed.',
+              enum: ['backend_build', 'webui_sync_check', 'full_build', 'route_smoke', 'desktop_ui_smoke', 'mobile_ui_smoke', 'none'],
+              description: 'Optional safe verification profile. Prefer verification_profiles for composite checks. backend_build for backend/src, webui_sync_check for web-ui/mobile/static, full_build for runtime-wide changes, route_smoke/desktop_ui_smoke/mobile_ui_smoke for smoke checks, none when no build is needed.',
             },
-            verification_command: { type: 'string', description: 'Legacy optional exact verification command. Prefer verification_profile for Prometheus dev source edits.' },
+            verification_profiles: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: ['backend_build', 'webui_sync_check', 'full_build', 'route_smoke', 'desktop_ui_smoke', 'mobile_ui_smoke', 'none'],
+              },
+              description: 'Optional composite safe verification profiles. Prometheus also auto-narrows from affected_files when omitted.',
+            },
+            verification_command: { type: 'string', description: 'Legacy optional exact verification command. Prefer verification_profiles for Prometheus dev source edits.' },
           },
         },
       },
@@ -883,7 +891,7 @@ export function getCisSystemTools(): any[] {
           'Use this instead of manually remembering sync/build/restart/reload steps during local dev/proposal execution.',
         parameters: {
           type: 'object',
-          required: ['changed_surfaces', 'reason'],
+          required: ['reason'],
           properties: {
             changed_surfaces: {
               type: 'array',
@@ -892,6 +900,19 @@ export function getCisSystemTools(): any[] {
                 enum: ['backend', 'src', 'gateway', 'web-ui', 'mobile', 'config', 'static'],
               },
               description: 'Changed areas. backend/src/gateway/config trigger build+restart; web-ui/mobile/static trigger sync:web-ui and connected web/mobile reload.',
+            },
+            verification_profile: {
+              type: 'string',
+              enum: ['backend_build', 'webui_sync_check', 'full_build', 'route_smoke', 'desktop_ui_smoke', 'mobile_ui_smoke', 'none'],
+              description: 'Optional manual verification profile override for verify_only. Usually omit this and provide affected_files so Prometheus can auto-narrow.',
+            },
+            verification_profiles: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: ['backend_build', 'webui_sync_check', 'full_build', 'route_smoke', 'desktop_ui_smoke', 'mobile_ui_smoke', 'none'],
+              },
+              description: 'Optional manual composite verification profile override for verify_only. Usually omit this and provide affected_files so Prometheus can auto-narrow.',
             },
             mode: {
               type: 'string',

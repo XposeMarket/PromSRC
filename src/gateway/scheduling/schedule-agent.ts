@@ -57,7 +57,7 @@ function ensureSubagentRuntimeFiles(agent: any, prompt: string): void {
       `You own the scheduled job "${agent.scheduleName || agent.name}".`,
       'Keep durable context about prior runs, failures, fixes, source files, and user preferences.',
       'When scheduled, execute the job prompt carefully and write useful outputs to the workspace.',
-      'When Raul chats with you from the Subagents page, explain past runs and help repair or improve the schedule.',
+      'When the user chats with you from the Subagents page, explain past runs and help repair or improve the schedule.',
     ].join('\n'),
     constraints: [
       'Do not invent results for missing source files or failed tools.',

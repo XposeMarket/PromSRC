@@ -14,7 +14,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { wrapForIframePreview, extractHyperframesLayers, lintHyperframes } from './hyperframes-bridge';
+import { wrapForIframePreview, extractHyperframesLayers, lintHyperframes, getBrowserEvalCompatScript } from './hyperframes-bridge';
 import { launchCreativeChromium } from './playwright-runtime';
 
 export type HyperframesQaSamplePoint = {
@@ -86,6 +86,8 @@ export async function runHyperframesQa(
   try {
     const context = await browser.newContext({ viewport: { width, height } });
     const page = await context.newPage();
+    const browserEvalCompat = getBrowserEvalCompatScript();
+    await page.addInitScript(browserEvalCompat).catch(() => undefined);
     page.on('requestfailed', (req: any) => {
       networkErrors.push({ url: req.url(), status: null, failure: req.failure()?.errorText || null });
     });
@@ -97,6 +99,7 @@ export async function runHyperframesQa(
     page.on('console', (msg: any) => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
     await page.goto(`file://${tmpHtmlPath.replace(/\\/g, '/')}`, { timeout: options.timeoutMs || 15000 });
+    await page.evaluate(browserEvalCompat).catch(() => undefined);
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
 
     let previousBytes: Buffer | null = null;

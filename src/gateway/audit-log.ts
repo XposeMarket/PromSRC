@@ -131,6 +131,16 @@ function isNonMainEntry(e: AuditLogEntry): boolean {
   const aid = String(e.agentId || '').toLowerCase();
   if (aid && aid !== 'main' && aid !== 'unknown') return true;
   const sid = String(e.sessionId || '');
+  const tool = String(e.toolName || '').toLowerCase();
+  const action = String(e.actionType || '').toLowerCase();
+  if (
+    tool === 'request_dev_source_edit'
+    || tool.startsWith('proposal_')
+    || action === 'approval_requested'
+    || action === 'approval_resolved'
+  ) {
+    return true;
+  }
   return (
     sid.startsWith('team_')
     || sid.startsWith('task_')

@@ -69,6 +69,84 @@ export function estimateToolSchemaTokens(tools: Array<any> | undefined): number 
   return estimateTextTokens(JSON.stringify(tools));
 }
 
+export interface UsageCalibration {
+  /** Multiplier to apply to a raw estimate to approximate real provider input tokens. */
+  factor: number;
+  /** Number of provider-reported samples the factor was derived from. */
+  samples: number;
+  source: 'calibrated' | 'default';
+}
+
+const CALIBRATION_MIN = 0.6;
+const CALIBRATION_MAX = 2.5;
+const CALIBRATION_WINDOW = 12;
+const CALIBRATION_MIN_SAMPLES = 2;
+
+/**
+ * Derive a clamped correction factor by comparing what the provider actually
+ * counted as input (input + cache read/write) against what we estimated for the
+ * same call. Self-corrects per provider+model so a fixed char/token divisor
+ * never silently drifts the context budget. Falls back to 1.0 (no correction)
+ * until enough provider-reported calls exist.
+ *
+ * NOTE: the denominator (estimatedProviderInputTokens) is produced by
+ * estimateMessagesTokens + estimateToolSchemaTokens, so the factor is only
+ * dimensionally correct when applied to estimates built the same way.
+ */
+export function getUsageCalibration(provider: string, model: string): UsageCalibration {
+  try {
+    const prov = String(provider || '').trim();
+    const mdl = String(model || '').trim();
+    const events = readModelUsageEvents().filter((e) =>
+      e.source === 'provider'
+      && String(e.provider) === prov
+      && String(e.model) === mdl
+      && Number(e.estimatedProviderInputTokens || 0) > 0,
+    );
+    const recent = events.slice(-CALIBRATION_WINDOW);
+    const ratios = recent
+      .map((e) => {
+        const realInput = Number(e.inputTokens || 0)
+          + Number(e.cacheReadTokens || 0)
+          + Number(e.cacheWriteTokens || 0);
+        const estimate = Number(e.estimatedProviderInputTokens || 0);
+        return estimate > 0 ? realInput / estimate : NaN;
+      })
+      .filter((r) => Number.isFinite(r) && r > 0)
+      .sort((a, b) => a - b);
+    if (ratios.length < CALIBRATION_MIN_SAMPLES) {
+      return { factor: 1, samples: ratios.length, source: 'default' };
+    }
+    const median = ratios[Math.floor(ratios.length / 2)];
+    const factor = Math.min(CALIBRATION_MAX, Math.max(CALIBRATION_MIN, median));
+    return { factor, samples: ratios.length, source: 'calibrated' };
+  } catch {
+    return { factor: 1, samples: 0, source: 'default' };
+  }
+}
+
+/**
+ * Canonical input-token estimate for context-budget decisions: the raw
+ * message+tool estimate, corrected by real provider usage. Returns both the raw
+ * and calibrated figures plus the factor used, so callers can surface either.
+ */
+export function estimateCalibratedInputTokens(
+  messages: ChatMessage[] | Array<any> | undefined,
+  tools: Array<any> | undefined,
+  provider: string,
+  model: string,
+): { raw: number; calibrated: number; factor: number; samples: number; source: 'calibrated' | 'default' } {
+  const raw = estimateMessagesTokens(messages) + estimateToolSchemaTokens(tools);
+  const calibration = getUsageCalibration(provider, model);
+  return {
+    raw,
+    calibrated: Math.round(raw * calibration.factor),
+    factor: calibration.factor,
+    samples: calibration.samples,
+    source: calibration.source,
+  };
+}
+
 export function normalizeUsage(usage: ModelUsage | undefined, fallback: {
   inputTokens?: number;
   outputTokens?: number;

@@ -46,28 +46,33 @@ function installServerDomParser(): void {
   }
 }
 
-installServerDomParser();
+let hyperframesCore: any = null;
 
-const hyperframesCore = require(path.resolve(__dirname, '../../../node_modules/@hyperframes/core/dist/index.js'));
+function loadHyperframesCore(): any {
+  if (hyperframesCore) return hyperframesCore;
+  installServerDomParser();
+  try {
+    hyperframesCore = require(path.resolve(__dirname, '../../../node_modules/@hyperframes/core/dist/index.js'));
+    return hyperframesCore;
+  } catch (err: any) {
+    throw new Error(`HyperFrames core could not be loaded in this runtime: ${err?.message || err}`);
+  }
+}
 
-const {
-  parseHtml,
-  updateElementInHtml,
-  addElementToHtml,
-  removeElementFromHtml,
-  validateCompositionHtml,
-  extractCompositionMetadata,
-  generateHyperframesHtml,
-  lintHyperframeHtml,
-  getHyperframeRuntimeScript,
-  HYPERFRAME_BRIDGE_SOURCES,
-  HYPERFRAME_CONTROL_ACTIONS,
-  parseGsapScript,
-  addAnimationToScript,
-  updateAnimationInScript,
-  removeAnimationFromScript,
-  validateCompositionGsap,
-} = hyperframesCore;
+const parseHtml = (...args: any[]) => loadHyperframesCore().parseHtml(...args);
+const updateElementInHtml = (...args: any[]) => loadHyperframesCore().updateElementInHtml(...args);
+const addElementToHtml = (...args: any[]) => loadHyperframesCore().addElementToHtml(...args);
+const removeElementFromHtml = (...args: any[]) => loadHyperframesCore().removeElementFromHtml(...args);
+const validateCompositionHtml = (...args: any[]) => loadHyperframesCore().validateCompositionHtml(...args);
+const extractCompositionMetadata = (...args: any[]) => loadHyperframesCore().extractCompositionMetadata(...args);
+const generateHyperframesHtml = (...args: any[]) => loadHyperframesCore().generateHyperframesHtml(...args);
+const lintHyperframeHtml = (...args: any[]) => loadHyperframesCore().lintHyperframeHtml(...args);
+const getHyperframeRuntimeScript = (...args: any[]) => loadHyperframesCore().getHyperframeRuntimeScript(...args);
+const parseGsapScript = (...args: any[]) => loadHyperframesCore().parseGsapScript(...args);
+const addAnimationToScript = (...args: any[]) => loadHyperframesCore().addAnimationToScript(...args);
+const updateAnimationInScript = (...args: any[]) => loadHyperframesCore().updateAnimationInScript(...args);
+const removeAnimationFromScript = (...args: any[]) => loadHyperframesCore().removeAnimationFromScript(...args);
+const validateCompositionGsap = (...args: any[]) => loadHyperframesCore().validateCompositionGsap(...args);
 
 /**
  * Patch op taxonomy:
@@ -118,8 +123,8 @@ export type HyperframesParseResult = {
   metadata: CompositionMetadata;
 };
 
-export const BRIDGE_SOURCES = HYPERFRAME_BRIDGE_SOURCES;
-export const BRIDGE_ACTIONS = HYPERFRAME_CONTROL_ACTIONS;
+export const BRIDGE_SOURCES: any[] = [];
+export const BRIDGE_ACTIONS: any[] = [];
 
 export function parseHyperframesHtml(html: string): HyperframesParseResult {
   const normalized = normalizeForHyperframes(String(html || ''));
@@ -399,12 +404,25 @@ function readExistingVariableValues(html: string): Record<string, any> {
  * and listens to postMessage with source: 'hf-parent' for control actions.
  */
 export function getHyperframesRuntimeScript(): string {
-  return getHyperframeRuntimeScript();
+  return `${getBrowserEvalCompatScript()}\n${getHyperframeRuntimeScript()}`;
 }
 
 export function escapeInlineScriptText(script: string): string {
   return String(script || '')
     .replace(/<\/script/gi, '<\\/script');
+}
+
+export function getBrowserEvalCompatScript(): string {
+  return `(function(){
+    if (typeof globalThis.__name !== 'function') {
+      globalThis.__name = function(fn, name){
+        try {
+          if (fn && name) Object.defineProperty(fn, 'name', { value: String(name), configurable: true });
+        } catch (_) {}
+        return fn;
+      };
+    }
+  })();`;
 }
 
 export function getHyperframesTimelineCompatScript(): string {

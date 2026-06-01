@@ -31,7 +31,7 @@ import { getConfig } from '../../config/config';
 import { getSessionStatus } from './account.router';
 import {
   createPairingChallenge, getChallengeByCode,
-  createPendingRequest, getPendingRequest, listPendingRequests,
+  createPendingRequest, findRequestForChallengeClaim, getPendingRequest, listPendingRequests,
   approvePendingRequest, denyPendingRequest, consumePendingRequestToken,
   listPairedDevices, setDeviceEnabled, removeDevice, renameDevice,
   verifyDeviceToken,
@@ -234,16 +234,31 @@ router.post('/api/pairing/claim', (req, res) => {
     if (!code) return res.status(400).json({ success: false, error: 'code required' });
     const ch = getChallengeByCode(code);
     if (!ch)               return res.status(404).json({ success: false, error: 'Challenge not found or expired.' });
-    if (ch.claimed)        return res.status(409).json({ success: false, error: 'This QR code has already been used.' });
     if (ch.expiresAt < Date.now()) return res.status(410).json({ success: false, error: 'QR code expired. Generate a new one.' });
 
-    const r = createPendingRequest({
+    const claim = {
       challengeId: ch.id,
       deviceName: String(req.body?.deviceName || 'Mobile device'),
       deviceFingerprint: String(req.body?.deviceFingerprint || ''),
       userAgent: String(req.headers['user-agent'] || ''),
       ipHint: _ipHintFromReq(req),
-    });
+    };
+
+    if (ch.claimed) {
+      const existing = findRequestForChallengeClaim(claim);
+      if (existing) {
+        return res.json({
+          success: true,
+          requestId: existing.id,
+          expiresAt: existing.expiresAt,
+          status: existing.status,
+          resumed: true,
+        });
+      }
+      return res.status(409).json({ success: false, error: 'This QR code has already been used.' });
+    }
+
+    const r = createPendingRequest(claim);
 
     broadcastWS({ type: 'pairing_pending', requestId: r.id, deviceName: r.deviceName, createdAt: r.createdAt });
 

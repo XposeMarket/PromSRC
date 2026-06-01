@@ -869,6 +869,7 @@ server.listen(PORT, HOST, () => {
     }
   } catch {}
   setTimeout(() => {
+    warmChatRouter('pre-startup');
     runStartup({
       HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
       handleChat, buildTools, runTeamAgentViaChat,
