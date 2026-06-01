@@ -503,7 +503,7 @@ export function buildVisualIframe(lang, code) {
   const escapedCode = escapeAttr(code);
   const minHeight = 280;
   const onloadHandler = "(function(f){try{var h=f.contentDocument.documentElement.scrollHeight;if(h>60)f.style.minHeight=Math.min(h+16,700)+'px'}catch(e){}})(this)";
-  return `<div class="visual-block" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" style="margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
+  return `<div class="visual-block" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
   <iframe
     id="${id}"
     srcdoc="${encoded}"
@@ -527,7 +527,7 @@ function buildPartialVisual(lang, partialCode) {
     const overlayBg = isDark ? 'rgba(18,25,38,0.80)' : 'rgba(248,250,252,0.82)';
     const overlayText = isDark ? '#94a3b8' : '#64748b';
     const onloadHandler = "(function(f){try{var h=f.contentDocument.documentElement.scrollHeight;if(h>60)f.style.minHeight=Math.min(h+16,700)+'px'}catch(e){}})(this)";
-    return `<div class="visual-block" style="margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line);position:relative">
+    return `<div class="visual-block" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line);position:relative">
   <style>@keyframes vis-blink{0%,100%{opacity:.25}50%{opacity:1}}</style>
   <iframe srcdoc="${encoded}" sandbox="allow-scripts allow-same-origin" style="width:100%;min-height:280px;border:none;display:block;background:transparent" loading="eager" onload="${onloadHandler}"></iframe>
   <div style="position:absolute;top:8px;right:8px;background:${overlayBg};border:1px solid rgba(99,102,241,.35);border-radius:6px;padding:3px 10px;font-size:10px;color:${overlayText};font-family:sans-serif;display:flex;align-items:center;gap:6px;backdrop-filter:blur(4px);pointer-events:none">
@@ -542,7 +542,7 @@ function buildPartialVisual(lang, partialCode) {
   const textColor = isDark ? '#94a3b8' : '#64748b';
   const labels = { mermaid: 'diagram', chart: 'chart', svg: 'graphic', html: 'visual' };
   const label = labels[lang] || 'visual';
-  return `<div class="visual-block" style="margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid ${border};background:${bg};min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">
+  return `<div class="visual-block" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid ${border};background:${bg};min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">
   <style>@keyframes vis-spin{to{transform:rotate(360deg)}}@keyframes vis-bar{0%,100%{transform:scaleX(.3)}50%{transform:scaleX(1)}}</style>
   <div style="width:32px;height:32px;border-radius:50%;border:2px solid rgba(99,102,241,.2);border-top-color:#6366f1;animation:vis-spin .8s linear infinite"></div>
   <div style="color:${textColor};font-size:12px;font-family:sans-serif">Building ${label}…</div>

@@ -668,7 +668,8 @@ export function getCisSystemTools(): any[] {
         name: 'request_final_action_approval',
         description:
           'Ask the user for one-shot approval before triggering a high-impact final UI action such as Post, Send, Publish, Submit, Purchase, Transfer, Delete, or Checkout. ' +
-          'Use after preparing the UI with browser/desktop tools and before the final click or Enter key. If approved, pass the returned final_action_approval_id to the exact next browser_click/browser_press_key/desktop_click/desktop_press_key call.',
+          'Use after preparing the UI with browser/desktop tools and before the final click or Enter key. If approved, pass the returned final_action_approval_id to the exact next browser_click/browser_press_key/desktop_click/desktop_press_key call. ' +
+          'That approved final action automatically returns post-action visual evidence; inspect it and confirm the approved action succeeded before reporting completion.',
         parameters: {
           type: 'object',
           required: ['action_kind', 'target_label', 'summary'],

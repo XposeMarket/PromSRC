@@ -13,7 +13,17 @@
  *   during installation so users see progress rather than a blank window.
  */
 
-const { app, BrowserWindow, shell, Menu, dialog, ipcMain, safeStorage } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  BrowserView,
+  WebContentsView,
+  shell,
+  Menu,
+  dialog,
+  ipcMain,
+  safeStorage,
+} = require('electron');
 const { spawn, execSync }  = require('child_process');
 const path       = require('path');
 const http       = require('http');
@@ -109,11 +119,42 @@ if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
 // ─── State ─────────────────────────────────────────────────────────────────
 let mainWindow          = null;
 let gatewayProcess      = null;
+let nativeBrowserRpcServer = null;
+let nativeBrowserRpcPort = 0;
 let isQuitting          = false;
 let gatewayShuttingDown = false;
 let pendingUpdate       = null;  // holds UpdateInfo once a release is downloaded
 let isGatewayRestarting = false;
 const GATEWAY_RESTART_EXIT_CODE = 42;
+const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
+const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
+
+// ─── Native in-house browser: profile-keyed multi-view registry ──────────────
+// Each "profile" is an isolated, on-disk Electron session partition (its own
+// cookies/logins), analogous to Prometheus' per-agent Chrome debug profiles.
+//   - The main chat uses the "main" profile by default.
+//   - Subagents/other owners can either share the main profile or get their own,
+//     so two agents driving two accounts never clash over one logged-in session.
+// Only ONE view is "presented" (positioned + visible) in the canvas at a time —
+// the main chat's. Other profiles' views stay parked at zero size but remain
+// alive for background automation (DOM snapshot / run-js).
+const NATIVE_BROWSER_DEFAULT_PROFILE = 'main';
+const nativeBrowserViews = new Map();      // partition -> WebContentsView/BrowserView
+const nativeBrowserSessionPartitions = new Map(); // sessionId -> partition
+let presentedNativePartition = '';         // partition currently shown in the canvas
+const nativeBrowserState = {
+  available: !!(WebContentsView || BrowserView),
+  attached: false,
+  visible: false,
+  sessionId: '',
+  profile: '',
+  partition: '',
+  url: 'about:blank',
+  title: '',
+  loading: false,
+  bounds: { ...NATIVE_BROWSER_EMPTY_BOUNDS },
+  lastError: '',
+};
 
 // ─── Setup Splash Screen ───────────────────────────────────────────────────
 // Shown during first-run dependency installation.
@@ -395,6 +436,8 @@ function startGateway() {
     PROMETHEUS_WORKSPACE_DIR:     path.join(USER_DATA_DIR, 'workspace'),
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
+    PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
+    PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
     ...(IS_PUBLIC_BUILD ? { PROMETHEUS_PUBLIC_BUILD: '1' } : {}),
   };
 
@@ -542,6 +585,566 @@ function waitForGateway(retries = MAX_RETRIES) {
   });
 }
 
+// ─── Native In-App Browser Surface (profile-keyed multi-view) ────────────────
+// Build a clean Chrome user-agent so the embedded browser is indistinguishable
+// from regular Chrome. The default Electron UA leaks "Electron/x.y" and the app
+// name ("prometheus/1.0.5"), which sites like X use to flag/limit automation.
+// We reuse the real bundled Chromium version so the UA stays internally consistent.
+function buildNativeBrowserUserAgent() {
+  const chrome = String(process.versions.chrome || '').trim() || '130.0.0.0';
+  const platform = process.platform === 'darwin'
+    ? 'Macintosh; Intel Mac OS X 10_15_7'
+    : (process.platform === 'linux' ? 'X11; Linux x86_64' : 'Windows NT 10.0; Win64; x64');
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+}
+
+function applyNativeBrowserUserAgent(view) {
+  try {
+    const ua = buildNativeBrowserUserAgent();
+    view.webContents.setUserAgent(ua);
+    // Cover sub-resource / fetch requests in this partition too.
+    if (view.webContents.session && typeof view.webContents.session.setUserAgent === 'function') {
+      view.webContents.session.setUserAgent(ua);
+    }
+  } catch {}
+}
+
+function slugifyNativeProfile(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  const slug = raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+  return slug || NATIVE_BROWSER_DEFAULT_PROFILE;
+}
+
+function partitionForNativeProfile(profileId) {
+  return `persist:prometheus-inhouse-${slugifyNativeProfile(profileId)}`;
+}
+
+function nativeProfileFromPartition(partition) {
+  return String(partition || '').replace(/^persist:prometheus-inhouse-/, '') || NATIVE_BROWSER_DEFAULT_PROFILE;
+}
+
+function resolveNativePartition(sessionId, profileId) {
+  if (profileId) return partitionForNativeProfile(profileId);
+  const sid = String(sessionId || '').trim();
+  if (sid && nativeBrowserSessionPartitions.has(sid)) return nativeBrowserSessionPartitions.get(sid);
+  return partitionForNativeProfile(NATIVE_BROWSER_DEFAULT_PROFILE);
+}
+
+function nativeViewMeta(view) {
+  if (!view.__promMeta) view.__promMeta = { url: 'about:blank', title: '', loading: false, lastError: '' };
+  return view.__promMeta;
+}
+
+function getNativeViewByPartition(partition) {
+  const view = nativeBrowserViews.get(partition);
+  if (view && !view.webContents?.isDestroyed()) return view;
+  if (view) nativeBrowserViews.delete(partition);
+  return null;
+}
+
+function normalizeNativeBrowserBounds(bounds = {}) {
+  return {
+    x: Math.max(0, Math.round(Number(bounds.x || 0))),
+    y: Math.max(0, Math.round(Number(bounds.y || 0))),
+    width: Math.max(0, Math.round(Number(bounds.width || 0))),
+    height: Math.max(0, Math.round(Number(bounds.height || 0))),
+  };
+}
+
+function normalizeBrowserUrlForLoad(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return 'about:blank';
+  if (/^(about|data|file|https?):/i.test(raw)) return raw;
+  return `https://${raw}`;
+}
+
+// Broadcasts the PRESENTED (canvas-visible) view's state to the renderer.
+function broadcastNativeBrowserState(extra = {}) {
+  const partition = presentedNativePartition;
+  const view = partition ? getNativeViewByPartition(partition) : null;
+  const wc = view?.webContents;
+  if (wc && !wc.isDestroyed()) {
+    const meta = nativeViewMeta(view);
+    meta.url = wc.getURL() || meta.url || 'about:blank';
+    meta.title = wc.getTitle() || meta.title || '';
+    meta.loading = wc.isLoading();
+    nativeBrowserState.url = meta.url;
+    nativeBrowserState.title = meta.title;
+    nativeBrowserState.loading = meta.loading;
+    nativeBrowserState.profile = nativeProfileFromPartition(partition);
+    nativeBrowserState.partition = partition;
+  }
+  const payload = { ...nativeBrowserState, ...extra, timestamp: Date.now() };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('native-browser-state', payload); } catch {}
+  }
+  return payload;
+}
+
+// Per-session state payload (used by RPC results so each owner/profile gets its
+// OWN url/title/loading rather than whatever happens to be presented).
+function nativeSessionStatePayload(sessionId, view, partition, extra = {}) {
+  const meta = nativeViewMeta(view);
+  const wc = view.webContents;
+  if (wc && !wc.isDestroyed()) {
+    meta.url = wc.getURL() || meta.url || 'about:blank';
+    meta.title = wc.getTitle() || meta.title || '';
+    meta.loading = wc.isLoading();
+  }
+  return {
+    sessionId: String(sessionId || ''),
+    profile: nativeProfileFromPartition(partition),
+    partition,
+    attached: true,
+    url: meta.url,
+    title: meta.title,
+    loading: meta.loading,
+    lastError: meta.lastError || '',
+    presented: partition === presentedNativePartition,
+    timestamp: Date.now(),
+    ...extra,
+  };
+}
+
+// Emits a session state payload and, when that session's view is the presented
+// one, refreshes the canvas-facing broadcast too.
+function emitNativeSessionState(sessionId, view, partition, extra = {}) {
+  const payload = nativeSessionStatePayload(sessionId, view, partition, extra);
+  if (partition === presentedNativePartition) broadcastNativeBrowserState();
+  return payload;
+}
+
+function wireNativeViewEvents(view, partition) {
+  const wc = view.webContents;
+  const meta = nativeViewMeta(view);
+  const onUpdate = () => { if (partition === presentedNativePartition) broadcastNativeBrowserState(); };
+  wc.setWindowOpenHandler(({ url }) => {
+    if (url) wc.loadURL(url).catch((err) => { meta.lastError = err?.message || String(err); onUpdate(); });
+    return { action: 'deny' };
+  });
+  wc.on('did-start-loading', () => { meta.loading = true; onUpdate(); });
+  wc.on('did-stop-loading', () => { meta.loading = false; onUpdate(); });
+  wc.on('did-navigate', (_event, url) => { meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
+  wc.on('did-navigate-in-page', (_event, url) => { meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
+  wc.on('page-title-updated', (_event, title) => { meta.title = title || wc.getTitle() || ''; onUpdate(); });
+  wc.on('did-fail-load', (_event, _code, description, validatedURL) => { meta.lastError = description || 'Native browser load failed.'; meta.url = validatedURL || wc.getURL() || meta.url; onUpdate(); });
+}
+
+// Ensures a view exists for the resolved profile partition and maps the session
+// to it. Returns { view, partition }.
+function ensureNativeBrowserView(sessionId = '', profileId = '') {
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Prometheus window is not ready.');
+  if (!nativeBrowserState.available) throw new Error('Electron native browser surface is unavailable in this runtime.');
+  const partition = resolveNativePartition(sessionId, profileId);
+  const sid = String(sessionId || '').trim();
+  if (sid) nativeBrowserSessionPartitions.set(sid, partition);
+
+  let view = getNativeViewByPartition(partition);
+  if (view) return { view, partition };
+
+  const webPreferences = {
+    partition,
+    nodeIntegration: false,
+    contextIsolation: true,
+    sandbox: true,
+    webSecurity: true,
+  };
+  view = WebContentsView
+    ? new WebContentsView({ webPreferences })
+    : new BrowserView({ webPreferences });
+
+  if (WebContentsView && mainWindow.contentView?.addChildView) {
+    mainWindow.contentView.addChildView(view);
+  } else if (typeof mainWindow.addBrowserView === 'function') {
+    mainWindow.addBrowserView(view);
+  } else if (typeof mainWindow.setBrowserView === 'function') {
+    mainWindow.setBrowserView(view);
+  }
+  view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS });
+  applyNativeBrowserUserAgent(view);
+  wireNativeViewEvents(view, partition);
+  nativeBrowserViews.set(partition, view);
+  return { view, partition };
+}
+
+function requireNativeViewForSession(sessionId, profileId = '') {
+  const { view, partition } = ensureNativeBrowserView(sessionId, profileId);
+  const wc = view.webContents;
+  if (!wc || wc.isDestroyed()) throw new Error('Native browser view is not available.');
+  return { view, wc, partition };
+}
+
+// Makes one profile's view the canvas-visible one and parks all others at zero
+// size, so only a single in-house browser is ever painted in the panel.
+function presentNativeView(partition) {
+  presentedNativePartition = partition;
+  nativeBrowserState.partition = partition;
+  nativeBrowserState.profile = nativeProfileFromPartition(partition);
+  for (const [p, v] of nativeBrowserViews) {
+    if (p !== partition) { try { v.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {} }
+  }
+}
+
+function setNativeBrowserBounds(bounds = {}, sessionId = '') {
+  const sid = String(sessionId || nativeBrowserState.sessionId || '').trim();
+  const partition = resolveNativePartition(sid, '');
+  presentNativeView(partition);
+  const next = normalizeNativeBrowserBounds(bounds);
+  nativeBrowserState.bounds = next;
+  nativeBrowserState.visible = nativeBrowserState.attached && next.width > 8 && next.height > 8;
+  const view = getNativeViewByPartition(partition);
+  if (view) {
+    try {
+      view.setBounds(nativeBrowserState.visible ? next : { ...NATIVE_BROWSER_EMPTY_BOUNDS });
+    } catch (err) {
+      nativeViewMeta(view).lastError = err?.message || String(err);
+    }
+  }
+  return broadcastNativeBrowserState();
+}
+
+function hideNativeBrowserSurface(reason = '') {
+  nativeBrowserState.visible = false;
+  nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
+  const view = presentedNativePartition ? getNativeViewByPartition(presentedNativePartition) : null;
+  if (view) { try { view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {} }
+  return broadcastNativeBrowserState({ reason });
+}
+
+async function openNativeBrowserSurface({ sessionId = '', url = '', profile = '' } = {}) {
+  const { view, wc, partition } = requireNativeViewForSession(sessionId, profile);
+  nativeBrowserState.attached = true;
+  if (sessionId) nativeBrowserState.sessionId = String(sessionId);
+  const meta = nativeViewMeta(view);
+  meta.lastError = '';
+  const targetUrl = normalizeBrowserUrlForLoad(url || meta.url || 'about:blank');
+  if (targetUrl && targetUrl !== 'about:blank') await wc.loadURL(targetUrl);
+  meta.url = wc.getURL() || targetUrl;
+  meta.title = wc.getTitle() || '';
+  return emitNativeSessionState(sessionId, view, partition);
+}
+
+// Idempotent attach used by the renderer to (re)mount + present the view without
+// forcing a navigation. It only loads the requested URL when the view has no real
+// page yet, which prevents the render → attach → reload → broadcast → render echo
+// loop. Explicit navigation goes through openNativeBrowserSurface / navigate.
+async function attachNativeBrowserSurface({ sessionId = '', url = '', profile = '' } = {}) {
+  const { view, wc, partition } = requireNativeViewForSession(sessionId, profile);
+  presentNativeView(partition);
+  nativeBrowserState.attached = true;
+  if (sessionId) nativeBrowserState.sessionId = String(sessionId);
+  const meta = nativeViewMeta(view);
+  meta.lastError = '';
+  const currentUrl = String(wc.getURL() || '').trim();
+  const hasRealPage = currentUrl && currentUrl !== 'about:blank';
+  if (!hasRealPage) {
+    const targetUrl = normalizeBrowserUrlForLoad(url || meta.url || 'about:blank');
+    if (targetUrl && targetUrl !== 'about:blank') await wc.loadURL(targetUrl);
+  }
+  meta.url = wc.getURL() || meta.url || 'about:blank';
+  meta.title = wc.getTitle() || meta.title || '';
+  return broadcastNativeBrowserState();
+}
+
+async function navigateNativeBrowserSurface({ action = '', url = '', sessionId = '' } = {}) {
+  const { view, wc, partition } = requireNativeViewForSession(sessionId);
+  const normalized = String(action || '').trim().toLowerCase();
+  if (normalized === 'back') {
+    if (wc.canGoBack()) wc.goBack();
+  } else if (normalized === 'forward') {
+    if (wc.canGoForward()) wc.goForward();
+  } else if (normalized === 'reload') {
+    wc.reload();
+  } else if (normalized === 'open') {
+    await wc.loadURL(normalizeBrowserUrlForLoad(url));
+  } else {
+    throw new Error(`Unsupported native browser navigation action "${normalized || 'unknown'}".`);
+  }
+  return emitNativeSessionState(sessionId, view, partition);
+}
+
+function stateNativeBrowserSurface({ sessionId = '' } = {}) {
+  const sid = String(sessionId || '').trim();
+  if (sid && nativeBrowserSessionPartitions.has(sid)) {
+    const partition = nativeBrowserSessionPartitions.get(sid);
+    const view = getNativeViewByPartition(partition);
+    if (view) return nativeSessionStatePayload(sid, view, partition);
+  }
+  return broadcastNativeBrowserState();
+}
+
+function buildNativeSnapshotScript() {
+  return `(() => {
+    const selector = 'a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"],summary';
+    const visible = (el) => {
+      const rect = el.getBoundingClientRect && el.getBoundingClientRect();
+      if (!rect || (rect.width <= 0 && rect.height <= 0)) return false;
+      const style = getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) !== 0;
+    };
+    const textOf = (el) => String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.innerText || el.value || el.href || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 140);
+    const roleOf = (el) => String(el.getAttribute('role') || el.tagName || '').toLowerCase();
+    const inputish = (el) => {
+      const tag = String(el.tagName || '').toLowerCase();
+      const role = roleOf(el);
+      return ['input','textarea','select'].includes(tag) || el.isContentEditable || ['textbox','searchbox','combobox'].includes(role);
+    };
+    const elements = Array.from(document.querySelectorAll(selector)).filter(visible).slice(0, 240).map((el, index) => {
+      const ref = index + 1;
+      try { el.setAttribute('data-prometheus-native-ref', String(ref)); } catch {}
+      const rect = el.getBoundingClientRect();
+      return {
+        ref,
+        role: roleOf(el),
+        tag: String(el.tagName || '').toLowerCase(),
+        name: textOf(el),
+        isInput: inputish(el),
+        selector: el.id ? '#' + CSS.escape(el.id) : '',
+        bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) }
+      };
+    });
+    const lines = [
+      'Page: ' + (document.title || location.href),
+      'URL: ' + location.href,
+      'Elements (' + elements.length + '):',
+      ...elements.map((el) => '@' + el.ref + ' [' + (el.isInput ? 'INPUT ' : '') + (el.role || el.tag || 'element') + '] ' + (el.name || el.selector || el.tag))
+    ];
+    return { url: location.href, title: document.title || '', viewportWidth: innerWidth, viewportHeight: innerHeight, elements, snapshot: lines.join('\\n') };
+  })()`;
+}
+
+async function executeNativeBrowserJavaScript(code, sessionId = '') {
+  const { wc } = requireNativeViewForSession(sessionId);
+  return wc.executeJavaScript(code, true);
+}
+
+async function snapshotNativeBrowserSurface(sessionId = '') {
+  const { view, wc, partition } = requireNativeViewForSession(sessionId);
+  const result = await wc.executeJavaScript(buildNativeSnapshotScript(), true);
+  const meta = nativeViewMeta(view);
+  meta.url = String(result?.url || meta.url || '');
+  meta.title = String(result?.title || meta.title || '');
+  if (partition === presentedNativePartition) broadcastNativeBrowserState();
+  return result;
+}
+
+function nativeTargetSelector(payload = {}) {
+  return payload.selector
+    ? `document.querySelector(${JSON.stringify(String(payload.selector))})`
+    : `document.querySelector('[data-prometheus-native-ref="${Number(payload.ref || 0)}"]')`;
+}
+
+// Locate an element, scroll it into view, and return its viewport-center click
+// point plus metadata. Used so clicks/fills dispatch REAL OS input events at the
+// correct pixel (trusted, isTrusted=true) instead of synthetic el.click().
+async function locateNativeElement(payload = {}, sessionId = '') {
+  return executeNativeBrowserJavaScript(`(() => {
+    const el = ${nativeTargetSelector(payload)};
+    if (!el) return { ok: false, error: 'Target element not found.' };
+    el.scrollIntoView?.({ block: 'center', inline: 'center' });
+    const rect = el.getBoundingClientRect();
+    const cx = Math.round(Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2)));
+    const cy = Math.round(Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2)));
+    const tag = String(el.tagName || '').toLowerCase();
+    const name = String(el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || el.value || el.tagName || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+    const role = String(el.getAttribute('role') || el.tagName || '').toLowerCase();
+    const editable = tag === 'input' || tag === 'textarea' || el.isContentEditable === true;
+    return { ok: true, x: cx, y: cy, tag, role, name, editable,
+      bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) } };
+  })()`, sessionId);
+}
+
+function sendNativeMouseClick(wc, x, y, button = 'left') {
+  wc.focus();
+  wc.sendInputEvent({ type: 'mouseMove', x, y });
+  wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: 1 });
+  wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: 1 });
+}
+
+async function clickNativeBrowserSurface(payload = {}) {
+  const sessionId = payload.sessionId || '';
+  await snapshotNativeBrowserSurface(sessionId).catch(() => null);
+  const { wc } = requireNativeViewForSession(sessionId);
+  const located = await locateNativeElement(payload, sessionId);
+  if (!located?.ok) throw new Error(located?.error || 'Target element not found.');
+  // Real trusted click at the element's center — matches how Playwright clicks
+  // Chrome (coordinate-based, isTrusted=true) so sites like X accept it.
+  sendNativeMouseClick(wc, located.x, located.y, payload.button === 'right' ? 'right' : 'left');
+  return located;
+}
+
+async function fillNativeBrowserSurface(payload = {}) {
+  const sessionId = payload.sessionId || '';
+  await snapshotNativeBrowserSurface(sessionId).catch(() => null);
+  const text = String(payload.text || '');
+  const { wc } = requireNativeViewForSession(sessionId);
+  const located = await locateNativeElement(payload, sessionId);
+  if (!located?.ok) throw new Error(located?.error || 'Target element not found.');
+  // Focus the field with a real click, select any existing content, then type
+  // the value as TRUSTED input. This is required for rich editors like X's
+  // Draft.js composer (a contenteditable) that ignore programmatic textContent,
+  // and it keeps isTrusted=true so anti-bot checks accept it.
+  sendNativeMouseClick(wc, located.x, located.y, 'left');
+  await executeNativeBrowserJavaScript(`(() => {
+    const el = ${nativeTargetSelector(payload)};
+    if (!el) return false;
+    el.focus?.();
+    try {
+      if (typeof el.select === 'function') el.select();
+      else if (typeof el.setSelectionRange === 'function') el.setSelectionRange(0, String(el.value || '').length);
+      else { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    } catch {}
+    return true;
+  })()`, sessionId);
+  // Replace the selection with the new text via the real input pipeline.
+  if (text) {
+    wc.insertText(text);
+  } else {
+    // Empty value = clear the field.
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Delete' });
+    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Delete' });
+  }
+  // For plain input/textarea, also fire change so frameworks that only listen on
+  // blur/change settle their state.
+  await executeNativeBrowserJavaScript(`(() => {
+    const el = ${nativeTargetSelector(payload)};
+    if (!el) return false;
+    const tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') el.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`, sessionId).catch(() => null);
+  return { ok: true, role: located.role, name: located.name, bounds: located.bounds };
+}
+
+async function inputNativeBrowserSurface(payload = {}) {
+  const { wc } = requireNativeViewForSession(payload.sessionId || '');
+  const action = String(payload.action || '').trim().toLowerCase();
+  if (action === 'text') {
+    wc.insertText(String(payload.text || ''));
+  } else if (action === 'key') {
+    const keyCode = String(payload.key || 'Enter');
+    wc.sendInputEvent({ type: 'keyDown', keyCode });
+    wc.sendInputEvent({ type: 'keyUp', keyCode });
+  } else if (action === 'wheel') {
+    wc.sendInputEvent({
+      type: 'mouseWheel',
+      x: Math.max(0, Math.round(Number(payload.x || 0))),
+      y: Math.max(0, Math.round(Number(payload.y || 0))),
+      deltaX: Number(payload.deltaX || 0),
+      deltaY: Number(payload.deltaY || 0),
+      canScroll: true,
+    });
+  } else if (action === 'click') {
+    const x = Math.max(0, Math.round(Number(payload.x || 0)));
+    const y = Math.max(0, Math.round(Number(payload.y || 0)));
+    const button = payload.button === 'right' ? 'right' : 'left';
+    wc.sendInputEvent({ type: 'mouseMove', x, y });
+    wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: 1 });
+    wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: 1 });
+  } else {
+    throw new Error(`Unsupported native browser input action "${action || 'unknown'}".`);
+  }
+  return { ok: true };
+}
+
+async function screenshotNativeBrowserSurface(sessionId = '') {
+  const { view, wc, partition } = requireNativeViewForSession(sessionId);
+  const image = await wc.capturePage();
+  const size = image.getSize();
+  const meta = nativeViewMeta(view);
+  // capturePage returns PHYSICAL pixels (size scaled by devicePixelRatio), but
+  // native input events use CSS pixels. Report the CSS viewport so the gateway can
+  // scale vision-click coordinates back from image space to CSS space.
+  let viewport = { width: size.width, height: size.height };
+  try {
+    viewport = await wc.executeJavaScript('({ width: window.innerWidth, height: window.innerHeight })', true);
+  } catch {}
+  return {
+    base64: image.toPNG().toString('base64'),
+    width: size.width,
+    height: size.height,
+    viewportWidth: Number(viewport?.width || size.width) || size.width,
+    viewportHeight: Number(viewport?.height || size.height) || size.height,
+    mimeType: 'image/png',
+    url: meta.url,
+    title: meta.title,
+    profile: nativeProfileFromPartition(partition),
+  };
+}
+
+async function inspectNativeBrowserPoint(payload = {}) {
+  const sessionId = payload.sessionId || '';
+  const point = { x: Math.max(0, Math.round(Number(payload.x || 0))), y: Math.max(0, Math.round(Number(payload.y || 0))) };
+  return executeNativeBrowserJavaScript(`((point) => {
+    const el = document.elementFromPoint(point.x, point.y);
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const selector = el.id ? '#' + CSS.escape(el.id) : (el.getAttribute('data-prometheus-native-ref') ? '[data-prometheus-native-ref="' + el.getAttribute('data-prometheus-native-ref') + '"]' : el.tagName.toLowerCase());
+    return {
+      selector,
+      tagName: String(el.tagName || '').toLowerCase(),
+      role: String(el.getAttribute('role') || '').toLowerCase(),
+      id: String(el.id || ''),
+      text: String(el.getAttribute('aria-label') || el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 180),
+      bounds: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+      viewport: { width: innerWidth, height: innerHeight }
+    };
+  })(${JSON.stringify(point)})`, sessionId);
+}
+
+async function startNativeBrowserRpcServer() {
+  if (nativeBrowserRpcServer) return nativeBrowserRpcPort;
+  nativeBrowserRpcServer = http.createServer((req, res) => {
+    const respond = (status, body) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body || {}));
+    };
+    if (req.method !== 'POST') return respond(405, { error: 'Method not allowed.' });
+    if (req.headers.authorization !== `Bearer ${NATIVE_BROWSER_RPC_TOKEN}`) {
+      return respond(401, { error: 'Unauthorized.' });
+    }
+    let raw = '';
+    req.on('data', (chunk) => { raw += chunk; if (raw.length > 2_000_000) req.destroy(); });
+    req.on('end', async () => {
+      let payload = {};
+      try { payload = raw ? JSON.parse(raw) : {}; } catch { return respond(400, { error: 'Invalid JSON.' }); }
+      try {
+        const pathName = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+        let result;
+        if (pathName === '/state') result = stateNativeBrowserSurface(payload);
+        else if (pathName === '/attach') result = await attachNativeBrowserSurface(payload);
+        else if (pathName === '/bounds') result = setNativeBrowserBounds(payload.bounds || payload, payload.sessionId);
+        else if (pathName === '/hide') result = hideNativeBrowserSurface('rpc hide');
+        else if (pathName === '/open') result = await openNativeBrowserSurface(payload);
+        else if (pathName === '/navigate') result = await navigateNativeBrowserSurface(payload);
+        else if (pathName === '/snapshot') result = await snapshotNativeBrowserSurface(payload.sessionId);
+        else if (pathName === '/click') result = await clickNativeBrowserSurface(payload);
+        else if (pathName === '/fill') result = await fillNativeBrowserSurface(payload);
+        else if (pathName === '/input') result = await inputNativeBrowserSurface(payload);
+        else if (pathName === '/screenshot') result = await screenshotNativeBrowserSurface(payload.sessionId);
+        else if (pathName === '/inspect') result = await inspectNativeBrowserPoint(payload);
+        else if (pathName === '/run-js') result = await executeNativeBrowserJavaScript(String(payload.code || ''), payload.sessionId);
+        else return respond(404, { error: 'Unknown native browser RPC route.' });
+        return respond(200, { ok: true, result });
+      } catch (err) {
+        nativeBrowserState.lastError = err?.message || String(err);
+        broadcastNativeBrowserState();
+        return respond(500, { error: nativeBrowserState.lastError });
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    nativeBrowserRpcServer.once('error', reject);
+    nativeBrowserRpcServer.listen(0, '127.0.0.1', () => {
+      nativeBrowserRpcServer.off('error', reject);
+      nativeBrowserRpcPort = nativeBrowserRpcServer.address().port;
+      resolve();
+    });
+  });
+  writeGatewayLog(`[main] Native browser RPC listening on 127.0.0.1:${nativeBrowserRpcPort}\n`);
+  return nativeBrowserRpcPort;
+}
+
 // ─── Loading Screen ────────────────────────────────────────────────────────
 function createLoadingWindow() {
   const loader = new BrowserWindow({
@@ -607,6 +1210,18 @@ ipcMain.handle('select-canvas-paths', async (_event, options = {}) => {
   if (result.canceled) return [];
   return Array.isArray(result.filePaths) ? result.filePaths : [];
 });
+
+ipcMain.handle('native-browser:available', () => nativeBrowserState.available === true);
+ipcMain.handle('native-browser:attach', async (_event, options = {}) => attachNativeBrowserSurface(options));
+ipcMain.handle('native-browser:detach', async () => hideNativeBrowserSurface('detached'));
+ipcMain.handle('native-browser:set-bounds', async (_event, bounds = {}) => setNativeBrowserBounds(bounds, bounds && bounds.sessionId));
+ipcMain.handle('native-browser:navigate', async (_event, payload = {}) => navigateNativeBrowserSurface(payload));
+ipcMain.handle('native-browser:focus', async () => {
+  const sid = String(nativeBrowserState.sessionId || '').trim();
+  try { requireNativeViewForSession(sid).wc.focus(); } catch {}
+  return broadcastNativeBrowserState();
+});
+ipcMain.handle('native-browser:state', async () => broadcastNativeBrowserState());
 
 ipcMain.on('install-update', () => {
   if (autoUpdater && pendingUpdate) {
@@ -713,6 +1328,11 @@ app.whenReady().then(async () => {
 
   // ── Step 2: Show loading splash + start gateway ────────────────────────
   const loader = createLoadingWindow();
+  try {
+    await startNativeBrowserRpcServer();
+  } catch (err) {
+    writeGatewayLog(`[main] Native browser RPC unavailable: ${err && err.message ? err.message : err}\n`);
+  }
   startGateway();
 
   try {

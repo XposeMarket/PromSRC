@@ -794,6 +794,95 @@ function createSSESender(res: any): (event: string, data: any) => void {
   };
 }
 
+type SubagentChatStreamFrame = {
+  seq: number;
+  type: string;
+  at: number;
+  data: Record<string, any>;
+};
+
+type SubagentChatStreamState = {
+  agentId: string;
+  streamId: string;
+  startedAt: number;
+  updatedAt: number;
+  active: boolean;
+  nextSeq: number;
+  events: SubagentChatStreamFrame[];
+  completedAt?: number;
+};
+
+const subagentChatStreams = new Map<string, SubagentChatStreamState>();
+const SUBAGENT_CHAT_STREAM_MAX_EVENTS = 800;
+const SUBAGENT_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
+
+function getSubagentChatStream(agentId: string): SubagentChatStreamState | null {
+  const id = _sanitizeAgentId(agentId);
+  if (!id) return null;
+  return subagentChatStreams.get(id) || null;
+}
+
+function pruneSubagentChatStreams(): void {
+  const cutoff = Date.now() - SUBAGENT_CHAT_STREAM_TTL_MS;
+  for (const [agentId, stream] of subagentChatStreams.entries()) {
+    if (!stream.active && Number(stream.completedAt || stream.updatedAt || 0) < cutoff) {
+      subagentChatStreams.delete(agentId);
+    }
+  }
+}
+
+function beginSubagentChatStream(agentId: string): SubagentChatStreamState {
+  pruneSubagentChatStreams();
+  const id = _sanitizeAgentId(agentId);
+  const stream: SubagentChatStreamState = {
+    agentId: id,
+    streamId: crypto.randomUUID(),
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    active: true,
+    nextSeq: 1,
+    events: [],
+  };
+  subagentChatStreams.set(id, stream);
+  return stream;
+}
+
+function finishSubagentChatStream(agentId: string, streamId: string): void {
+  const stream = getSubagentChatStream(agentId);
+  if (!stream || stream.streamId !== streamId) return;
+  stream.active = false;
+  stream.completedAt = Date.now();
+  stream.updatedAt = stream.completedAt;
+}
+
+function appendSubagentChatStreamEvent(agentId: string, streamId: string, type: string, data: any): SubagentChatStreamFrame | null {
+  const stream = getSubagentChatStream(agentId);
+  if (!stream || stream.streamId !== streamId) return null;
+  const frame: SubagentChatStreamFrame = {
+    seq: stream.nextSeq++,
+    type: String(type || 'event'),
+    at: Date.now(),
+    data: data && typeof data === 'object' ? { ...data } : {},
+  };
+  stream.events.push(frame);
+  if (stream.events.length > SUBAGENT_CHAT_STREAM_MAX_EVENTS) {
+    stream.events.splice(0, stream.events.length - SUBAGENT_CHAT_STREAM_MAX_EVENTS);
+  }
+  stream.updatedAt = frame.at;
+  try {
+    broadcastWS({
+      type: 'subagent_chat_stream_event',
+      agentId: stream.agentId,
+      streamId: stream.streamId,
+      seq: frame.seq,
+      event: frame.type,
+      at: frame.at,
+      data: frame.data,
+    });
+  } catch {}
+  return frame;
+}
+
 async function runSubagentChatTurn(
   agentId: string,
   agent: any,
@@ -1059,6 +1148,46 @@ router.get('/api/agents/:id/chat', (req, res) => {
   res.json({ success: true, messages: getSubagentChatHistory(agentId, limit) });
 });
 
+router.get('/api/agents/:id/chat/stream', (req, res) => {
+  const agentId = _sanitizeAgentId(req.params.id);
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+  try {
+    pruneSubagentChatStreams();
+    const after = Math.max(0, Math.floor(Number(req.query.after || 0)) || 0);
+    const stream = getSubagentChatStream(agentId);
+    const events = stream
+      ? stream.events
+        .filter((frame) => Number(frame.seq || 0) > after)
+        .map((frame) => ({
+          seq: frame.seq,
+          type: frame.type,
+          at: frame.at,
+          streamId: stream.streamId,
+          data: frame.data || {},
+        }))
+      : [];
+    res.json({
+      success: true,
+      agentId,
+      active: !!stream?.active,
+      stream: stream ? {
+        streamId: stream.streamId,
+        active: stream.active,
+        startedAt: stream.startedAt,
+        updatedAt: stream.updatedAt,
+        completedAt: stream.completedAt || null,
+        nextSeq: stream.nextSeq,
+        firstSeq: stream.events[0]?.seq || 0,
+        lastSeq: stream.events[stream.events.length - 1]?.seq || 0,
+      } : null,
+      events,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
 router.post('/api/agents/:id/chat', async (req, res) => {
   const agentId = _sanitizeAgentId(req.params.id);
   const agent = getAgentById(agentId);
@@ -1118,7 +1247,12 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  const sendSSE = createSSESender(res);
+  const retainedStream = beginSubagentChatStream(agentId);
+  const baseSendSSE = createSSESender(res);
+  const sendSSE = (event: string, data: any) => {
+    baseSendSSE(event, data);
+    appendSubagentChatStreamEvent(agentId, retainedStream.streamId, event, data);
+  };
   sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
   const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
   const abortSignal = { aborted: false };
@@ -1170,6 +1304,7 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
     }
   } finally {
     requestCompleted = true;
+    finishSubagentChatStream(agentId, retainedStream.streamId);
     clearInterval(heartbeat);
     res.end();
   }

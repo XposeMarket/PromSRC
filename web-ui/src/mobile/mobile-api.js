@@ -461,6 +461,104 @@ export async function postTeamChat(teamId, text) {
   });
 }
 
+export async function loadTeamChatStreamReplay(teamId, after = 0) {
+  const qs = Number(after || 0) > 0 ? `?after=${encodeURIComponent(Math.floor(Number(after)))}` : '';
+  const r = await api(`/api/teams/${encodeURIComponent(teamId)}/chat/stream${qs}`).catch(() => null);
+  if (!r?.success) return { active: false, stream: null, events: [] };
+  return {
+    active: r.active === true,
+    stream: r.stream || null,
+    events: Array.isArray(r.events) ? r.events : [],
+  };
+}
+
+export function streamTeamChat(teamId, { message, signal }, handlers = {}) {
+  const ctrl = new AbortController();
+  if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  const url = (API || '') + `/api/teams/${encodeURIComponent(teamId)}/chat/stream`;
+  const cb = (name, ...args) => { try { handlers[name]?.(...args); } catch (e) { console.error('[team stream]', name, e); } };
+  const toChatStreamError = (err) => {
+    if (err?.name === 'AbortError') return err;
+    const raw = String(err?.message || err || '').trim();
+    const normalized = new Error(/terminated|load failed|failed to fetch|networkerror/i.test(raw)
+      ? 'Connection dropped. The team may still be working; reopening this chat will recover the latest state.'
+      : (raw || 'Team chat stream failed.'));
+    normalized.cause = err;
+    normalized.mobileStreamDisconnected = /terminated|load failed|failed to fetch|networkerror/i.test(raw);
+    return normalized;
+  };
+
+  (async () => {
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          ...(getDeviceToken() ? { 'X-Pairing-Token': getDeviceToken() } : {}),
+        },
+        body: JSON.stringify({ message }),
+        signal: ctrl.signal,
+      });
+    } catch (err) {
+      cb('onError', toChatStreamError(err));
+      cb('onDone');
+      return;
+    }
+    if (!res.ok || !res.body) {
+      cb('onError', new Error(`Team chat HTTP ${res.status}`));
+      cb('onDone');
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+    let gotFinal = false;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const dataLines = block.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart());
+          if (!dataLines.length) continue;
+          let evt; try { evt = JSON.parse(dataLines.join('\n')); } catch { continue; }
+          cb('onEvent', evt);
+          switch (evt.type) {
+            case 'token':          if (evt.text) cb('onToken', String(evt.text)); break;
+            case 'thinking_delta': if (evt.thinking || evt.text) cb('onThinking', String(evt.thinking || evt.text)); break;
+            case 'info':
+            case 'heartbeat':      if (evt.message || evt.state) cb('onInfo', String(evt.message || evt.state)); break;
+            case 'progress_state': cb('onProgressState', evt); break;
+            case 'tool_call':      cb('onToolCall', evt); break;
+            case 'tool_result':    cb('onToolResult', evt); break;
+            case 'tool_progress':  cb('onToolProgress', evt); break;
+            case 'final':          gotFinal = true; cb('onFinal', String(evt.text || evt.reply || ''), evt); break;
+            case 'done':
+              if (!gotFinal && evt.reply) cb('onFinal', String(evt.reply), evt);
+              cb('onDone');
+              return;
+            case 'error':
+              cb('onError', new Error(String(evt.message || 'Team chat error')));
+              cb('onDone');
+              return;
+          }
+        }
+      }
+    } catch (err) {
+      if (err?.name !== 'AbortError') cb('onError', toChatStreamError(err));
+    } finally {
+      cb('onDone');
+    }
+  })();
+
+  return { abort: () => ctrl.abort() };
+}
+
 /* ---------------- workspace / memory / tasks / voice ---------------- */
 
 export async function loadTeamWorkspace(teamId) {
@@ -558,6 +656,17 @@ export async function loadSubagentRuns(agentId, limit = 30) {
 export async function loadSubagentChat(agentId, limit = 100) {
   const r = await api(`/api/agents/${encodeURIComponent(agentId)}/chat?limit=${limit}`).catch(() => null);
   return Array.isArray(r?.messages) ? r.messages : [];
+}
+
+export async function loadSubagentChatStreamReplay(agentId, after = 0) {
+  const qs = Number(after || 0) > 0 ? `?after=${encodeURIComponent(Math.floor(Number(after)))}` : '';
+  const r = await api(`/api/agents/${encodeURIComponent(agentId)}/chat/stream${qs}`).catch(() => null);
+  if (!r?.success) return { active: false, stream: null, events: [] };
+  return {
+    active: r.active === true,
+    stream: r.stream || null,
+    events: Array.isArray(r.events) ? r.events : [],
+  };
 }
 
 export async function loadSubagentContextRefs(agentId) {

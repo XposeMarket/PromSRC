@@ -660,9 +660,10 @@ function formatSubagentProcessLines(entries) {
 function renderSubagentProcessPill(entries, prefix = 'sa_proc') {
   if (!entries || entries.length === 0) return '';
   const id = `${prefix}_${Math.random().toString(36).slice(2)}`;
+  const count = Array.isArray(entries) ? entries.length : 0;
   return `
     <div style="margin-top:8px">
-      <button class="process-pill-btn" onclick="toggleSubagentProcess('${id}')">Process</button>
+      <button class="process-pill-btn" onclick="toggleSubagentProcess('${id}')">Process${count ? ` (${count})` : ''}</button>
       <div id="${id}" style="display:none;margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">
         ${formatSubagentProcessLines(entries)}
       </div>
@@ -1312,6 +1313,7 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
     completed: false,
     finalReply: '',
     fallbackTimer: null,
+    source: 'localSse',
   };
   setSubagentStreamingState(agentId, streamState);
   renderSubagentBoard(agentId);
@@ -2034,6 +2036,36 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
   }
 }
 
+async function replaySubagentChatStream(agentId, afterSeq = 0) {
+  if (!agentId) return;
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/chat/stream?after=${Math.max(0, Number(afterSeq) || 0)}`);
+    const frames = Array.isArray(data?.events) ? data.events : [];
+    for (const frame of frames) {
+      applySubagentExternalStreamEvent(agentId, {
+        type: frame.type || frame.event,
+        ...(frame.data || {}),
+      }, {
+        event: frame.type || frame.event,
+        streamId: frame.streamId,
+        seq: frame.seq,
+        retainedReplay: true,
+      });
+    }
+    const streamState = getSubagentStreamingState(agentId);
+    if (!data?.active && streamState?.completed === true) {
+      setTimeout(async () => {
+        if (getSubagentStreamingState(agentId) !== streamState || streamState.completed !== true) return;
+        const reconciled = await reconcileSubagentChatFromServer(agentId, streamState, 0);
+        if (!reconciled && getSubagentStreamingState(agentId) === streamState) {
+          setSubagentStreamingState(agentId, null);
+          if (activeSubagentId === agentId && subagentDetailTab === 'chat') renderSubagentBoard(agentId);
+        }
+      }, 900);
+    }
+  } catch {}
+}
+
 // ── Module init ───────────────────────────────────────────────────────────────
 console.log('[SubagentsPage] module loaded');
 
@@ -2041,6 +2073,12 @@ console.log('[SubagentsPage] module loaded');
 wsEventBus.on('agent_run_complete', (data) => {
   if (!activeSubagentId || data.agentId !== activeSubagentId) return;
   refreshSubagentDetail(activeSubagentId);
+});
+
+wsEventBus.on('ws:open', () => {
+  if (activeSubagentId && subagentDetailTab === 'chat') {
+    replaySubagentChatStream(activeSubagentId).catch(() => {});
+  }
 });
 
 wsEventBus.on('subagent_chat_message', (data) => {
@@ -2076,6 +2114,8 @@ wsEventBus.on('subagent_chat_message', (data) => {
 wsEventBus.on('subagent_chat_stream_event', (data) => {
   const agentId = String(data.agentId || '').trim();
   if (!agentId) return;
+  const streamState = getSubagentStreamingState(agentId);
+  if (streamState?.source === 'localSse' && streamState.completed !== true) return;
   applySubagentExternalStreamEvent(agentId, {
     type: data.event,
     ...(data.data || {}),

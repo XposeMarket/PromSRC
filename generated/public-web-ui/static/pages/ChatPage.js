@@ -126,6 +126,9 @@ if (window.browserCanvasState === undefined) {
     streamLastFrameAt: 0,
     frameFormat: 'png',
     active: false,
+    profileKind: '',
+    browserTarget: '',
+    profileLabel: '',
     browserSessions: {},
     sessionId: '',
     followSessionId: '',
@@ -173,6 +176,11 @@ let browserQueuedWheelFlushTimer = 0;
 let browserQueuedTextInput = '';
 let browserQueuedWheelInput = null;
 let browserStreamHeartbeatTimer = 0;
+let nativeBrowserBoundsObserver = null;
+let nativeBrowserStateUnsubscribe = null;
+let nativeBrowserLastBoundsKey = '';
+let nativeBrowserSyncQueued = false;
+let nativeBrowserAttachedSessionId = '';
 
 // Per-session streaming state — allows concurrent independent sessions
 if (window._sessionThinking === undefined) window._sessionThinking = {};
@@ -677,10 +685,15 @@ const CREATIVE_MODE_META = {
 
 const CANVAS_PANEL_MIN_WIDTH = 980;
 const IMMERSIVE_CANVAS_PANEL_WIDTH = 1180;
+const BROWSER_MODE_PANEL_WIDTH = 1040;
+const BROWSER_MODE_TEACH_PANEL_WIDTH = 1260;
+const BROWSER_MODE_MIN_PANEL_WIDTH = 820;
+const BROWSER_MODE_TEACH_MIN_PANEL_WIDTH = 940;
 const IMMERSIVE_CENTER_COL_MIN_WIDTH = 480;
 const CREATIVE_MODE_PANEL_WIDTH = IMMERSIVE_CANVAS_PANEL_WIDTH;
 let creativeModeSavedPanelWidth = null;
 let canvasPreviewSavedPanelWidth = null;
+let browserCanvasPanelWidthMode = '';
 let rightPanelCanvasSavedScrollTop = 0;
 
 const CANVAS_PREVIEW_DEVICES = {
@@ -864,17 +877,22 @@ function syncBrowserTeachSessionToBackend() {
   });
 }
 
-function getViewportBoundPanelWidth(desiredWidth, minimumWidth = 760) {
+function getViewportBoundPanelWidth(desiredWidth, minimumWidth = 760, options = {}) {
   if (typeof window === 'undefined') return Math.max(minimumWidth, desiredWidth);
   const viewportWidth = Math.max(0, Number(window.innerWidth) || 0);
-  const maxWidth = viewportWidth > 0 ? Math.max(minimumWidth, viewportWidth - 40) : desiredWidth;
+  const reservedWidth = Math.max(0, Number(options.reservedWidth || 0) || 0);
+  const maxViewportRatio = Math.max(0.1, Math.min(1, Number(options.maxViewportRatio || 1) || 1));
+  const viewportReserveCap = viewportWidth > 0 ? viewportWidth - reservedWidth : desiredWidth;
+  const ratioCap = viewportWidth > 0 ? viewportWidth * maxViewportRatio : desiredWidth;
+  const rawMaxWidth = Math.min(viewportReserveCap, ratioCap, viewportWidth > 0 ? viewportWidth - 40 : desiredWidth);
+  const maxWidth = viewportWidth > 0 ? Math.max(minimumWidth, rawMaxWidth) : desiredWidth;
   return Math.max(minimumWidth, Math.min(desiredWidth, maxWidth));
 }
 
 function setRightPanelWidth(width, options = {}) {
   const rightPanel = document.getElementById('right-panel');
   if (!rightPanel) return;
-  const boundedWidth = getViewportBoundPanelWidth(width, options.minimumWidth || 760);
+  const boundedWidth = getViewportBoundPanelWidth(width, options.minimumWidth || 760, options);
   rightPanel.style.width = `${boundedWidth}px`;
   rightPanel.style.minWidth = `${boundedWidth}px`;
   if (options.lockMax) rightPanel.style.maxWidth = `${boundedWidth}px`;
@@ -887,6 +905,48 @@ function resetRightPanelWidth() {
   rightPanel.style.removeProperty('width');
   rightPanel.style.removeProperty('min-width');
   rightPanel.style.removeProperty('max-width');
+}
+
+function getBrowserCanvasPanelWidthTarget(mode = getBrowserCanvasState().interactionMode) {
+  const normalizedMode = normalizeBrowserInteractionMode(mode);
+  const isTeachMode = normalizedMode === 'teach';
+  const viewportWidth = typeof window === 'undefined'
+    ? 0
+    : Math.max(0, Number(window.innerWidth) || 0);
+  const minimumWidth = isTeachMode ? BROWSER_MODE_TEACH_MIN_PANEL_WIDTH : BROWSER_MODE_MIN_PANEL_WIDTH;
+  const maximumWidth = isTeachMode ? BROWSER_MODE_TEACH_PANEL_WIDTH : Number.POSITIVE_INFINITY;
+  if (!viewportWidth) return isTeachMode ? maximumWidth : BROWSER_MODE_PANEL_WIDTH;
+  const midpointWidth = Math.floor(viewportWidth * (isTeachMode ? 0.58 : 0.50));
+  return Math.max(minimumWidth, Math.min(maximumWidth, midpointWidth));
+}
+
+function applyBrowserCanvasPanelDefault(options = {}) {
+  const rightPanel = document.getElementById('right-panel');
+  if (!rightPanel || !canvasOpen || !isBrowserCanvasSurfaceActive() || isCreativeModeLocked()) return false;
+  const mode = normalizeBrowserInteractionMode(getBrowserCanvasState().interactionMode);
+  if (options.force !== true && browserCanvasPanelWidthMode === mode) return false;
+  browserCanvasPanelWidthMode = mode;
+  const isTeachMode = mode === 'teach';
+  setRightPanelWidth(getBrowserCanvasPanelWidthTarget(mode), {
+    minimumWidth: isTeachMode ? BROWSER_MODE_TEACH_MIN_PANEL_WIDTH : BROWSER_MODE_MIN_PANEL_WIDTH,
+    reservedWidth: isTeachMode ? 420 : 0,
+    maxViewportRatio: isTeachMode ? 0.62 : 0.5,
+  });
+  return true;
+}
+
+function restoreCanvasPreviewSavedPanelWidth(rightPanel = document.getElementById('right-panel')) {
+  if (!rightPanel || canvasPreviewSavedPanelWidth === null) return false;
+  if (canvasPreviewSavedPanelWidth && !/^0px$/i.test(canvasPreviewSavedPanelWidth)) {
+    rightPanel.style.width = canvasPreviewSavedPanelWidth;
+    rightPanel.style.minWidth = canvasPreviewSavedPanelWidth;
+  } else {
+    rightPanel.style.removeProperty('width');
+    rightPanel.style.removeProperty('min-width');
+  }
+  rightPanel.style.removeProperty('max-width');
+  canvasPreviewSavedPanelWidth = null;
+  return true;
 }
 
 function normalizeCreativeMode(mode) {
@@ -924,6 +984,9 @@ function getBrowserCanvasState() {
       streamLastFrameAt: 0,
       frameFormat: 'png',
       active: false,
+      profileKind: '',
+      browserTarget: '',
+      profileLabel: '',
       browserSessions: {},
       sessionId: '',
       followSessionId: '',
@@ -979,6 +1042,9 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
     surface: String(state.surface || 'files') === 'browser' ? 'browser' : 'files',
     interactionMode: normalizeBrowserInteractionMode(state.interactionMode),
     active: state.active === true,
+    profileKind: String(state.profileKind || '').trim(),
+    browserTarget: String(state.browserTarget || '').trim(),
+    profileLabel: String(state.profileLabel || '').trim(),
     browserSessions,
     sessionId: String(state.sessionId || '').trim(),
     followSessionId: String(state.followSessionId || '').trim(),
@@ -1510,6 +1576,9 @@ function upsertBrowserSessionRecord(msg, options = {}) {
     browserLabel: String(msg?.browserLabel || previous.browserLabel || (ownerType === 'background' ? 'Subagent' : 'Main Agent')).trim(),
     browserTaskPrompt: String(msg?.browserTaskPrompt || previous.browserTaskPrompt || '').trim(),
     browserSpawnerSessionId: String(msg?.browserSpawnerSessionId || previous.browserSpawnerSessionId || '').trim(),
+    profileKind: String(msg?.profileKind || previous.profileKind || '').trim(),
+    browserTarget: String(msg?.browserTarget || previous.browserTarget || msg?.profileKind || previous.profileKind || '').trim(),
+    profileLabel: String(msg?.profileLabel || previous.profileLabel || '').trim(),
     active: typeof msg?.active === 'boolean' ? msg.active === true : previous.active === true,
     url: String(msg?.url || previous.url || '').trim(),
     title: String(msg?.title || previous.title || '').trim(),
@@ -1532,6 +1601,9 @@ function upsertBrowserSessionRecord(msg, options = {}) {
     state.lastTool = next.tool || state.lastTool;
     state.statusLabel = next.statusLabel || state.statusLabel;
     state.streamActive = next.streamActive;
+    state.profileKind = next.profileKind || state.profileKind || '';
+    state.browserTarget = next.browserTarget || state.browserTarget || '';
+    state.profileLabel = next.profileLabel || state.profileLabel || '';
     if (next.frameBase64) {
       state.frameBase64 = next.frameBase64;
       state.frameWidth = next.frameWidth;
@@ -1560,6 +1632,9 @@ function getBrowserCanvasSessionTabs(state = getBrowserCanvasState()) {
       frameWidth: state.frameWidth,
       frameHeight: state.frameHeight,
       frameFormat: state.frameFormat,
+      profileKind: state.profileKind,
+      browserTarget: state.browserTarget,
+      profileLabel: state.profileLabel,
       timestamp: state.updatedAt || Date.now(),
     });
   }
@@ -1579,6 +1654,23 @@ function getBrowserCanvasVisibleSessionId() {
   if (followSessionId) return followSessionId;
   const visibleSessionId = String(state.sessionId || '').trim();
   return visibleSessionId || getBrowserCanvasPrimarySessionId();
+}
+
+function normalizeBrowserProviderKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+}
+
+function isInHouseBrowserProviderValue(value) {
+  const key = normalizeBrowserProviderKey(value);
+  return key === 'inhouse' || key === 'in_house' || key === 'in_app' || key === 'electron' || key === 'prometheus_inhouse' || key === 'prometheus_in_house';
+}
+
+function isBrowserCanvasInHouseProvider(state = getBrowserCanvasState()) {
+  const visibleRecord = getBrowserSessionRecord(getBrowserCanvasVisibleSessionId(), state);
+  return isInHouseBrowserProviderValue(visibleRecord?.browserTarget)
+    || isInHouseBrowserProviderValue(visibleRecord?.profileKind)
+    || isInHouseBrowserProviderValue(state.browserTarget)
+    || isInHouseBrowserProviderValue(state.profileKind);
 }
 
 function isFollowingDetachedBrowserCanvasSession(state = getBrowserCanvasState()) {
@@ -1605,6 +1697,9 @@ function followBrowserCanvasSession(sessionId, options = {}) {
     state.lastTool = record.tool || '';
     state.statusLabel = record.statusLabel || state.statusLabel;
     state.streamActive = record.streamActive === true;
+    state.profileKind = record.profileKind || '';
+    state.browserTarget = record.browserTarget || record.profileKind || '';
+    state.profileLabel = record.profileLabel || '';
     if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
     state.frameBlobUrl = '';
     state.frameBase64 = record.frameBase64 || '';
@@ -1648,6 +1743,9 @@ function returnBrowserCanvasToPrimarySession(options = {}) {
     state.lastTool = record.tool || '';
     state.statusLabel = record.statusLabel || state.statusLabel;
     state.streamActive = record.streamActive === true;
+    state.profileKind = record.profileKind || '';
+    state.browserTarget = record.browserTarget || record.profileKind || '';
+    state.profileLabel = record.profileLabel || '';
     if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
     state.frameBlobUrl = '';
     state.frameBase64 = record.frameBase64 || '';
@@ -1745,10 +1843,12 @@ function focusBrowserCanvasFrameWrap() {
 function resolveBrowserCanvasViewportPointFromClient(clientX, clientY) {
   const state = getBrowserCanvasState();
   const frame = document.getElementById('browser-canvas-frame');
-  if (!frame || (!String(state.frameBase64 || '').trim() && !state.frameBlobUrl)) return null;
-  const rect = frame.getBoundingClientRect();
+  const nativeProvider = isBrowserCanvasInHouseProvider(state);
+  const targetEl = nativeProvider ? document.getElementById('browser-canvas-frame-stage') : frame;
+  if (!targetEl || (!nativeProvider && !String(state.frameBase64 || '').trim() && !state.frameBlobUrl)) return null;
+  const rect = targetEl.getBoundingClientRect();
   if (!rect.width || !rect.height) return null;
-  const computed = window.getComputedStyle(frame);
+  const computed = window.getComputedStyle(targetEl);
   const borderLeft = parseFloat(computed.borderLeftWidth) || 0;
   const borderTop = parseFloat(computed.borderTopWidth) || 0;
   const borderRight = parseFloat(computed.borderRightWidth) || 0;
@@ -2064,9 +2164,10 @@ function syncBrowserCanvasStream(options = {}) {
   const state = getBrowserCanvasState();
   const currentMode = normalizeBrowserInteractionMode(state.interactionMode);
   const sessionId = getBrowserCanvasVisibleSessionId();
+  const nativeProvider = isBrowserCanvasInHouseProvider(state);
   const desired = {
     sessionId: String(sessionId || '').trim(),
-    active: !!(canvasOpen && isBrowserCanvasSurfaceActive() && state.active && sessionId),
+    active: !!(canvasOpen && isBrowserCanvasSurfaceActive() && state.active && sessionId && !nativeProvider),
     focus: isBrowserCanvasSurfaceActive() ? 'interactive' : ((currentMode === 'copilot' || currentMode === 'teach') ? 'interactive' : 'passive'),
   };
   const previous = window.__promBrowserCanvasStreamDesired || { sessionId: '', active: false, focus: 'passive' };
@@ -2109,6 +2210,143 @@ function syncBrowserCanvasStream(options = {}) {
   } else {
     startBrowserCanvasStreamHeartbeat();
   }
+}
+
+function getNativeBrowserSurfaceApi() {
+  return window.prometheusBrowserSurface && typeof window.prometheusBrowserSurface === 'object'
+    ? window.prometheusBrowserSurface
+    : null;
+}
+
+function getNativeBrowserBoundsElement() {
+  return document.getElementById('browser-canvas-frame-stage') || document.getElementById('browser-canvas-frame-wrap');
+}
+
+function queueNativeBrowserSurfaceSync(options = {}) {
+  if (nativeBrowserSyncQueued && options.force !== true) return;
+  nativeBrowserSyncQueued = true;
+  requestAnimationFrame(() => {
+    nativeBrowserSyncQueued = false;
+    syncNativeBrowserSurface(options);
+  });
+}
+
+async function syncNativeBrowserSurface(options = {}) {
+  const api = getNativeBrowserSurfaceApi();
+  if (!api) return false;
+  ensureNativeBrowserSurfaceStateListener();
+  ensureNativeBrowserBoundsObserver();
+  const state = getBrowserCanvasState();
+  const sessionId = getBrowserCanvasVisibleSessionId();
+  const shouldShow = !!(
+    canvasOpen
+    && isBrowserCanvasSurfaceActive()
+    && state.active
+    && sessionId
+    && isBrowserCanvasInHouseProvider(state)
+  );
+  if (!shouldShow) {
+    nativeBrowserLastBoundsKey = '';
+    if (nativeBrowserAttachedSessionId) {
+      nativeBrowserAttachedSessionId = '';
+      try { await api.detach?.(); } catch {}
+    } else {
+      try { await api.setBounds?.({ x: 0, y: 0, width: 0, height: 0 }); } catch {}
+    }
+    return false;
+  }
+  const targetEl = getNativeBrowserBoundsElement();
+  const rect = targetEl?.getBoundingClientRect?.();
+  if (!rect || rect.width < 8 || rect.height < 8) {
+    queueNativeBrowserSurfaceSync({ force: true });
+    return false;
+  }
+  const bounds = {
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+  const key = `${sessionId}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
+  try {
+    // Attach only when the session actually changes. Re-attaching on every render
+    // or resize would re-trigger a native state broadcast and create an
+    // attach → state → render → attach echo loop. Bounds updates are cheap and
+    // idempotent, so those run whenever the rect changes.
+    if (nativeBrowserAttachedSessionId !== sessionId) {
+      nativeBrowserAttachedSessionId = sessionId;
+      await api.attach?.({
+        sessionId,
+        url: state.url || getBrowserCanvasRestoreHint(state).restoreUrl || 'about:blank',
+      });
+    }
+    if (key !== nativeBrowserLastBoundsKey || options.force === true) {
+      nativeBrowserLastBoundsKey = key;
+      await api.setBounds?.(bounds);
+    }
+    return true;
+  } catch (err) {
+    console.warn('[Prometheus] Native browser surface sync failed:', err);
+    return false;
+  }
+}
+
+function ensureNativeBrowserBoundsObserver() {
+  if (nativeBrowserBoundsObserver || typeof ResizeObserver === 'undefined') return;
+  const targetEl = getNativeBrowserBoundsElement();
+  if (!targetEl) return;
+  nativeBrowserBoundsObserver = new ResizeObserver(() => queueNativeBrowserSurfaceSync());
+  try { nativeBrowserBoundsObserver.observe(targetEl); } catch {}
+  window.addEventListener('resize', () => queueNativeBrowserSurfaceSync({ force: true }), { passive: true });
+  window.addEventListener('scroll', () => queueNativeBrowserSurfaceSync({ force: true }), { passive: true, capture: true });
+}
+
+function ensureNativeBrowserSurfaceStateListener() {
+  const api = getNativeBrowserSurfaceApi();
+  if (!api || nativeBrowserStateUnsubscribe || typeof api.onState !== 'function') return;
+  nativeBrowserStateUnsubscribe = api.onState((nativeState) => {
+    if (!nativeState || typeof nativeState !== 'object') return;
+    const sid = String(nativeState.sessionId || '').trim();
+    if (!sid || sid !== getBrowserCanvasVisibleSessionId()) return;
+    const state = getBrowserCanvasState();
+    const nextActive = nativeState.attached !== false;
+    const nextUrl = String(nativeState.url || state.url || '').trim();
+    const nextTitle = String(nativeState.title || state.title || '').trim();
+    const nextStatus = nativeState.loading ? 'In-house browser loading.' : 'In-house browser active.';
+    // Skip churn when nothing meaningful changed — native state broadcasts fire on
+    // every loading toggle, so avoid redundant render + persist cycles.
+    const unchanged = state.active === nextActive
+      && state.url === nextUrl
+      && state.title === nextTitle
+      && state.statusLabel === nextStatus
+      && state.profileKind === 'inhouse';
+    if (unchanged) return;
+    state.active = nextActive;
+    state.profileKind = 'inhouse';
+    state.browserTarget = 'inhouse';
+    state.profileLabel = 'Prometheus in-house browser';
+    state.url = nextUrl;
+    state.title = nextTitle;
+    state.statusLabel = nextStatus;
+    state.streamActive = false;
+    state.streamTransport = 'native';
+    state.updatedAt = Date.now();
+    rememberBrowserCanvasRestorablePage(state.url, state.title, state);
+    upsertBrowserSessionRecord({
+      sessionId: sid,
+      active: true,
+      url: state.url,
+      title: state.title,
+      statusLabel: state.statusLabel,
+      profileKind: 'inhouse',
+      browserTarget: 'inhouse',
+      profileLabel: state.profileLabel,
+      streamActive: false,
+      timestamp: state.updatedAt,
+    });
+    renderBrowserCanvasSurface();
+    persistActiveChat();
+  });
 }
 
 function truncateBrowserPreview(value, max = 80) {
@@ -2155,9 +2393,6 @@ function getSelectedBrowserElementKey(element = getBrowserCanvasState().selected
 function getCanvasWidthLockMessage(tab = getActiveCanvasTab()) {
   const creativeMeta = getCreativeModeMeta(window.currentCreativeMode);
   if (creativeMeta) return `Exit ${creativeMeta.title} to resize the canvas.`;
-  if (canvasOpen && isBrowserCanvasSurfaceActive()) {
-    return 'Switch the browser surface back to files to resize the panel.';
-  }
   if (canvasOpen && isPreviewLikeCanvasTab(tab)) {
     return 'Switch the canvas back to code to resize the panel.';
   }
@@ -2176,7 +2411,14 @@ function syncCanvasSurfaceWidthLock(tab = getActiveCanvasTab()) {
     if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
     return;
   }
-  const shouldLock = !!(canvasOpen && (isBrowserCanvasSurfaceActive() || isPreviewLikeCanvasTab(tab)));
+  if (canvasOpen && isBrowserCanvasSurfaceActive()) {
+    restoreCanvasPreviewSavedPanelWidth(rightPanel);
+    applyBrowserCanvasPanelDefault();
+    updateCreativeModeControls();
+    if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
+    return;
+  }
+  const shouldLock = !!(canvasOpen && isPreviewLikeCanvasTab(tab));
   if (shouldLock) {
     if (canvasPreviewSavedPanelWidth === null) {
       const measuredWidth = rightPanel.offsetWidth || 0;
@@ -2187,15 +2429,7 @@ function syncCanvasSurfaceWidthLock(tab = getActiveCanvasTab()) {
     }
     setRightPanelWidth(IMMERSIVE_CANVAS_PANEL_WIDTH, { minimumWidth: 960, lockMax: true });
   } else if (canvasPreviewSavedPanelWidth !== null) {
-    if (canvasPreviewSavedPanelWidth && !/^0px$/i.test(canvasPreviewSavedPanelWidth)) {
-      rightPanel.style.width = canvasPreviewSavedPanelWidth;
-      rightPanel.style.minWidth = canvasPreviewSavedPanelWidth;
-    } else {
-      rightPanel.style.removeProperty('width');
-      rightPanel.style.removeProperty('min-width');
-    }
-    rightPanel.style.removeProperty('max-width');
-    canvasPreviewSavedPanelWidth = null;
+    restoreCanvasPreviewSavedPanelWidth(rightPanel);
   }
   updateCreativeModeControls();
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
@@ -2485,7 +2719,9 @@ function renderBrowserCanvasSurface() {
     teachPendingCard.style.marginTop = '0';
     teachPendingCard.style.marginBottom = '12px';
   }
+  const nativeProvider = isBrowserCanvasInHouseProvider(state);
   const hasFrame = !!String(state.frameBase64 || '').trim();
+  const hasVisualSurface = hasFrame || (nativeProvider && state.active);
   const controlCaptured = state.controlCaptured === true && state.controlOwner === 'user';
   const followingDetachedSession = isFollowingDetachedBrowserCanvasSession(state);
   const restoreHint = getBrowserCanvasRestoreHint(state);
@@ -2500,7 +2736,7 @@ function renderBrowserCanvasSurface() {
   const teachVerification = teachVerified && teach.verification && typeof teach.verification === 'object' ? teach.verification : null;
   const streamDescriptor = state.streamActive
     ? `${String(state.streamTransport || 'stream').toUpperCase()} live`
-    : '';
+    : (nativeProvider && state.active ? 'NATIVE live' : '');
   const browserTabs = getBrowserCanvasSessionTabs(state);
 
   ensureBrowserCanvasControlBindings();
@@ -2527,9 +2763,11 @@ function renderBrowserCanvasSurface() {
     subtitle.textContent = state.active
       ? (followingDetachedSession
         ? `Watching Teach verifier tab${state.streamActive ? ` · ${streamDescriptor}` : ''}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`
-        : (state.streamActive
+        : (nativeProvider
+          ? `Prometheus in-house browser${state.statusLabel ? ` · ${state.statusLabel}` : ''}`
+          : (state.streamActive
           ? `${streamDescriptor}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`
-          : (state.statusLabel || `Watching ${state.title || state.url || 'the active page'}`)))
+          : (state.statusLabel || `Watching ${state.title || state.url || 'the active page'}`))))
       : 'Waiting for browser activity in this chat';
   }
   if (urlEl) urlEl.textContent = state.url || restoreHint.restoreUrl || 'No active browser session';
@@ -2546,12 +2784,14 @@ function renderBrowserCanvasSurface() {
   if (chromeSessionChip) {
     chromeSessionChip.textContent = followingDetachedSession
       ? 'Verifier tab'
-      : (state.active ? (visibleSessionId ? `Session ${String(visibleSessionId).slice(0, 8)}` : 'Session ready') : 'No session');
+      : (state.active ? (nativeProvider ? 'In-house browser' : (visibleSessionId ? `Session ${String(visibleSessionId).slice(0, 8)}` : 'Session ready')) : 'No session');
   }
   if (chromeStreamChip) {
-    chromeStreamChip.textContent = state.streamActive
+    chromeStreamChip.textContent = nativeProvider && state.active
+      ? 'Native surface'
+      : (state.streamActive
       ? `${String(state.streamTransport || 'stream').toUpperCase()} ${String(state.streamFocus || 'passive')}`
-      : 'Stream idle';
+      : 'Stream idle');
   }
   if (stageTitle) {
     stageTitle.textContent = state.active
@@ -2639,6 +2879,33 @@ function renderBrowserCanvasSurface() {
   if (reopenBtn) {
     reopenBtn.style.display = canReopenLastPage && !controlCaptured ? 'inline-flex' : 'none';
     reopenBtn.title = canReopenLastPage ? `Reopen ${restoreHint.restoreTitle || restoreHint.restoreUrl}` : 'No saved browser page for this chat yet';
+  }
+  // Browser-mode layout: Agent & Co-pilot get the full-width browser with no side
+  // panels; only Teach keeps the Last Tool Call / Mode Notes / Teach sidebar. The
+  // take-control/release/reopen affordance is relocated to a slim full-width slot
+  // under the toolbar when the side panel is hidden so Co-pilot stays usable.
+  const sideCol = document.getElementById('browser-canvas-side-col');
+  const layoutGrid = document.getElementById('browser-canvas-layout');
+  const controlSlot = document.getElementById('browser-canvas-control-slot');
+  const showSidePanels = mode === 'teach';
+  if (sideCol) sideCol.style.display = showSidePanels ? 'flex' : 'none';
+  // The grid columns are governed by a CSS rule keyed on this attribute because
+  // #browser-canvas-layout sets grid-template-columns with !important, which an
+  // inline style cannot override. data-side-panels="0" collapses to one column.
+  if (layoutGrid) layoutGrid.dataset.sidePanels = showSidePanels ? '1' : '0';
+  if (controlRow && controlSlot) {
+    const modeCard = modeTitleEl ? modeTitleEl.parentElement : null;
+    if (showSidePanels) {
+      if (modeCard && controlRow.parentElement !== modeCard) {
+        const anchor = modeCopyEl && modeCopyEl.parentElement === modeCard ? modeCopyEl.nextElementSibling : null;
+        if (anchor) modeCard.insertBefore(controlRow, anchor);
+        else modeCard.appendChild(controlRow);
+      }
+      controlSlot.style.display = 'none';
+    } else {
+      if (controlRow.parentElement !== controlSlot) controlSlot.appendChild(controlRow);
+      controlSlot.style.display = controlRow.style.display !== 'none' ? 'block' : 'none';
+    }
   }
   if (namePanel) namePanel.style.display = showTeachNaming ? 'block' : 'none';
   if (nameInput && nameInput.value !== state.elementNameDraft) nameInput.value = state.elementNameDraft || '';
@@ -2782,9 +3049,10 @@ function renderBrowserCanvasSurface() {
       savedWrap.innerHTML = '';
     }
   }
-  if (frameWrap) frameWrap.style.display = hasFrame ? 'flex' : 'none';
-  if (emptyState) emptyState.style.display = hasFrame ? 'none' : 'block';
+  if (frameWrap) frameWrap.style.display = hasVisualSurface ? 'flex' : 'none';
+  if (emptyState) emptyState.style.display = hasVisualSurface ? 'none' : 'block';
   if (frameEl) {
+    frameEl.style.display = nativeProvider ? 'none' : 'block';
     frameEl.style.cursor = mode === 'teach'
       ? (followingDetachedSession ? 'default' : 'crosshair')
       : (mode === 'copilot' ? ((controlCaptured && !followingDetachedSession) ? 'text' : 'pointer') : 'default');
@@ -2804,16 +3072,22 @@ function renderBrowserCanvasSurface() {
       frameEl.dataset.frameBlobUrl = '';
     }
   }
-  if (frameMeta) frameMeta.style.display = hasFrame ? 'flex' : 'none';
+  const nativePlaceholder = document.getElementById('browser-canvas-native-placeholder');
+  if (nativePlaceholder) nativePlaceholder.style.display = nativeProvider && state.active ? 'flex' : 'none';
+  if (frameMeta) frameMeta.style.display = hasVisualSurface ? 'flex' : 'none';
   if (frameCaption) {
-    frameCaption.textContent = state.streamActive
+    frameCaption.textContent = nativeProvider && state.active
+      ? 'Prometheus in-house browser'
+      : (state.streamActive
       ? `${streamDescriptor} browser feed`
-      : (state.title || state.url || 'Latest browser frame');
+      : (state.title || state.url || 'Latest browser frame'));
   }
   if (frameSize) {
     const width = Number(state.frameWidth || 0);
     const height = Number(state.frameHeight || 0);
-    frameSize.textContent = width > 0 && height > 0 ? `${width} × ${height}` : 'Viewport frame';
+    frameSize.textContent = nativeProvider && state.active
+      ? 'Native Electron surface'
+      : (width > 0 && height > 0 ? `${width} × ${height}` : 'Viewport frame');
   }
   if (selectionCard) selectionCard.style.display = mode === 'teach' && state.selectedElement && !followingDetachedSession ? 'block' : 'none';
   if (frameSize && state.streamActive) {
@@ -2836,12 +3110,15 @@ function renderBrowserCanvasSurface() {
     selectionText.title = fullSelectorText;
   }
   syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl);
+  const stageEl = frameEl?.parentElement || document.getElementById('browser-canvas-frame-stage');
+  if (stageEl) stageEl.dataset.nativeBrowserSurface = nativeProvider && state.active ? '1' : '0';
   ensureBrowserCanvasHoverBindings();
   ensureBrowserCanvasFrameMetaResizeObserver(frameWrap, frameMeta, frameEl);
   updateBrowserSelectionOverlay(selectionBox, frameEl, state);
   updateBrowserTransientHighlight(clickHighlight, frameEl, state);
   updateBrowserHoverOverlay();
   syncBrowserCanvasStream();
+  queueNativeBrowserSurfaceSync();
   updateDesignSelectionChip();
   updateCreativeModeControls();
 }
@@ -2851,6 +3128,7 @@ function setBrowserCanvasSurface(surface, options = {}) {
   const state = getBrowserCanvasState();
   const changed = state.surface !== nextSurface;
   state.surface = nextSurface;
+  if (changed && nextSurface !== 'browser') browserCanvasPanelWidthMode = '';
   if (nextSurface === 'browser' && options.autoOpen !== false && !canvasOpen) {
     toggleCanvas(true, { force: true });
   }
@@ -2915,6 +3193,7 @@ async function setBrowserInteractionMode(mode) {
   }
   renderBrowserCanvasSurface();
   if (!isBrowserCanvasSurfaceActive()) setBrowserCanvasSurface('browser');
+  else syncCanvasSurfaceWidthLock(getActiveCanvasTab());
   const sessionId = getBrowserCanvasPrimarySessionId();
   if (sessionId) {
     wsSend({ type: 'browser:mode:set', sessionId, mode: nextMode });
@@ -2924,11 +3203,38 @@ async function setBrowserInteractionMode(mode) {
 function syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl) {
   if (frameWrap) {
     frameWrap.style.flexDirection = 'column';
-    frameWrap.style.alignItems = 'center';
+    frameWrap.style.alignItems = 'stretch';
     frameWrap.style.justifyContent = 'flex-start';
   }
   if (!frameMeta || !frameEl) return;
-  const frameWidth = frameEl.getBoundingClientRect().width || frameEl.clientWidth || 0;
+  const state = getBrowserCanvasState();
+  const nativeProvider = isBrowserCanvasInHouseProvider(state);
+  const stageEl = frameEl.parentElement;
+  const viewportWidth = Math.max(1, Number(state.frameViewportWidth || state.frameWidth || frameEl.naturalWidth || 1280) || 1280);
+  const viewportHeight = Math.max(1, Number(state.frameViewportHeight || state.frameHeight || frameEl.naturalHeight || 720) || 720);
+  const wrapRectWidth = Number(frameWrap?.clientWidth || frameWrap?.getBoundingClientRect?.().width || 0);
+  const availableWidth = Math.max(220, Math.floor(wrapRectWidth) - 24);
+  const metaHeight = frameMeta.style.display === 'none' ? 0 : (Number(frameMeta.offsetHeight || 0) + 12);
+  const availableHeight = Math.max(160, Number(frameWrap?.clientHeight || 0) - metaHeight - 24);
+  const widthFirstHeight = Math.floor(availableWidth * (viewportHeight / viewportWidth));
+  const renderWidth = Math.max(220, Math.floor(availableWidth));
+  const renderHeight = Math.max(124, Math.min(availableHeight, widthFirstHeight));
+  if (stageEl) {
+    if (nativeProvider) {
+      // The native WebContentsView can render at any size, so let it fill the
+      // whole card instead of locking to a screenshot's fixed aspect ratio.
+      stageEl.style.width = `${Math.floor(availableWidth)}px`;
+      stageEl.style.height = `${Math.floor(availableHeight)}px`;
+      stageEl.style.maxWidth = '100%';
+    } else {
+      stageEl.style.width = `${renderWidth}px`;
+      stageEl.style.height = `${renderHeight}px`;
+      stageEl.style.maxWidth = '100%';
+    }
+  }
+  const frameWidth = nativeProvider
+    ? (stageEl?.getBoundingClientRect?.().width || stageEl?.clientWidth || 0)
+    : (frameEl.getBoundingClientRect().width || frameEl.clientWidth || 0);
   if (frameWidth > 0) {
     frameMeta.style.width = `${frameWidth}px`;
     frameMeta.style.maxWidth = '100%';
@@ -2951,6 +3257,7 @@ function ensureBrowserCanvasFrameMetaResizeObserver(frameWrap, frameMeta, frameE
     const img = document.getElementById('browser-canvas-frame');
     if (!wrap || !meta || !img) return;
     syncBrowserCanvasFrameLayout(wrap, meta, img);
+    syncNativeBrowserSurface();
     const state = getBrowserCanvasState();
     updateBrowserSelectionOverlay(document.getElementById('browser-canvas-selection-box'), img, state);
     updateBrowserTransientHighlight(document.getElementById('browser-canvas-click-highlight'), img, state);
@@ -3548,8 +3855,15 @@ function sendBrowserCanvasNavigation(action, url = '') {
     showToast('Enter a URL to open.', 'info');
     return false;
   }
+  const wasActive = state.active === true;
   returnBrowserCanvasToPrimarySession({ render: false, requestData: false });
-  state.active = true;
+  const hasActiveSession = state.active === true;
+  if (normalizedAction !== 'open' || wasActive || hasActiveSession) {
+    state.active = true;
+  }
+  if (normalizedAction === 'open' && state.active) {
+    state.url = address;
+  }
   state.statusLabel = normalizedAction === 'open'
     ? `Opening ${address}`
     : `${normalizedAction.charAt(0).toUpperCase()}${normalizedAction.slice(1)} requested.`;
@@ -3969,6 +4283,9 @@ function applyBrowserEventState(msg, options = {}) {
   state.active = msg.active !== false;
   state.url = String(msg.url || state.url || '').trim();
   state.title = String(msg.title || state.title || '').trim();
+  if (msg.profileKind) state.profileKind = String(msg.profileKind || '').trim();
+  if (msg.browserTarget) state.browserTarget = String(msg.browserTarget || '').trim();
+  if (msg.profileLabel) state.profileLabel = String(msg.profileLabel || '').trim();
   rememberBrowserCanvasRestorablePage(state.url, state.title, state);
   state.lastTool = String(msg.tool || msg.lastTool || state.lastTool || '').trim();
   state.statusLabel = String(msg.statusLabel || state.statusLabel || '').trim() || (state.active ? 'Browser active' : 'Browser idle');
@@ -4004,6 +4321,9 @@ function applyBrowserEventState(msg, options = {}) {
     state.streamTransport = '';
     state.streamFocus = 'passive';
     state.streamStatus = '';
+    state.profileKind = '';
+    state.browserTarget = '';
+    state.profileLabel = '';
     state.streamLastFrameAt = 0;
     state.elementNameDraft = '';
     state.elementNameDraftKey = '';
@@ -5217,6 +5537,7 @@ function sessionStubFromServer(s) {
     creativeHistoryFuture: Array.isArray(s.creativeHistoryFuture) ? s.creativeHistoryFuture : [],
     creativeHtmlMotionClip: s.creativeHtmlMotionClip || null,
     mainChatGoal: s.mainChatGoal || null,
+    activeRun: s.activeRun === true,
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
     lastMessageAt: s.lastMessageAt || s.lastActiveAt || s.createdAt || Date.now(),
@@ -5253,6 +5574,7 @@ function mergeServerSessionSummaries(summaries) {
         canvasProjectLabel: existing.canvasProjectLabel || serverStub.canvasProjectLabel,
         canvasProjectLink: existing.canvasProjectLink || serverStub.canvasProjectLink,
         mainChatGoal: serverStub.mainChatGoal || existing.mainChatGoal || null,
+        activeRun: serverStub.activeRun === true,
       });
       const hasHistoryButNoProcessLog = Array.isArray(existing.history) && existing.history.length > 0
         && (!Array.isArray(existing.processLog) || existing.processLog.length === 0);
@@ -8590,13 +8912,14 @@ function renderChatMessages() {
     const assistantContentHtml = !isUser
       ? `${assistantApprovalHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
       : userContentHtml;
+    const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
     return `
-    <div class="msg-shell ${displayRole}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}">
-      <div class="msg ${displayRole}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
+    <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}">
+      <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
         ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
         <div class="msg-bubble-stack">
           ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
-          <div class="msg-body${msg.approvalRequest && !msg.content ? ' msg-body-approval-only' : ''}">
+          <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${msg.approvalRequest && !msg.content ? ' msg-body-approval-only' : ''}">
                 ${!isUser ? renderAssistantWorkTimer(msg) : ''}
 		            ${!isUser && !(msg.approvalRequest && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
 		            ${assistantContentHtml}
@@ -31368,6 +31691,7 @@ function toggleCanvas(nextOpen = null, options = {}) {
       rightPanel.scrollTop = rightPanelCanvasSavedScrollTop || 0;
       resetRightPanelWidth();
     }
+    browserCanvasPanelWidthMode = '';
 	    // Reset fullscreen if active
 	    if (canvasFullscreenMode) {
 	      canvasFullscreenMode = false;
@@ -33689,6 +34013,7 @@ window.reopenBrowserCanvasLastPage = reopenBrowserCanvasLastPage;
 window.sendBrowserCanvasNavigation = sendBrowserCanvasNavigation;
 window.openBrowserCanvasAddress = openBrowserCanvasAddress;
 window.handleBrowserCanvasAddressKeydown = handleBrowserCanvasAddressKeydown;
+window.queueNativeBrowserSurfaceSync = queueNativeBrowserSurfaceSync;
 window.handleBrowserCanvasFrameLoad = handleBrowserCanvasFrameLoad;
 window.inspectBrowserCanvasPoint = inspectBrowserCanvasPoint;
 window.updateBrowserElementNameDraft = updateBrowserElementNameDraft;

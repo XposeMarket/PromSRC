@@ -1021,6 +1021,67 @@
   background: rgba(56, 189, 248, 0.14) !important;
   color: #e0f2fe !important;
 }
+#canvas-browser-shell {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(56,189,248,0.12), transparent 34%),
+    linear-gradient(180deg, rgba(15,23,42,0.94), rgba(15,23,42,0.88)) !important;
+}
+#browser-canvas-layout {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 27%, 390px) !important;
+  gap: 12px !important;
+  padding: 12px !important;
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
+}
+/* Agent & Co-pilot modes hide the side panel — collapse to a single full-width
+   column so the browser fills the canvas. Only Teach keeps the two-column grid.
+   Higher specificity (#id[attr]) beats the base !important rule above. */
+#browser-canvas-layout[data-side-panels="0"] {
+  grid-template-columns: 1fr !important;
+}
+#browser-canvas-live-card {
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+  align-self: stretch;
+  justify-self: stretch;
+}
+#browser-canvas-frame-wrap {
+  padding: 12px !important;
+  overflow: hidden !important;
+  align-items: stretch !important;
+}
+#browser-canvas-frame-stage {
+  max-width: 100% !important;
+  max-height: 100%;
+  margin: 0 auto !important;
+}
+#browser-canvas-frame-stage[data-native-browser-surface="1"] {
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(8,47,73,0.18);
+}
+#browser-canvas-frame {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  object-fit: cover;
+  object-position: top center;
+}
+#browser-canvas-frame-meta {
+  width: 100% !important;
+}
+@media (max-width: 1180px) {
+  #browser-canvas-layout {
+    grid-template-columns: 1fr !important;
+    overflow: auto;
+  }
+  #browser-canvas-layout > div:last-child {
+    min-height: auto;
+    overflow: visible !important;
+  }
+}
 .canvas-tab {
   display: flex; align-items: center; gap: 5px;
   padding: 6px 10px 6px 12px;

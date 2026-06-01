@@ -41,3 +41,20 @@ contextBridge.exposeInMainWorld('prometheusFiles', {
   selectCanvasFiles: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'files' }),
   selectCanvasFolder: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'folder' }),
 });
+
+// ─── Native In-App Browser Bridge ───────────────────────────────────────────
+contextBridge.exposeInMainWorld('prometheusBrowserSurface', {
+  available: () => ipcRenderer.invoke('native-browser:available'),
+  attach: (options = {}) => ipcRenderer.invoke('native-browser:attach', options),
+  detach: () => ipcRenderer.invoke('native-browser:detach'),
+  setBounds: (bounds = {}) => ipcRenderer.invoke('native-browser:set-bounds', bounds),
+  navigate: (payload = {}) => ipcRenderer.invoke('native-browser:navigate', payload),
+  focus: () => ipcRenderer.invoke('native-browser:focus'),
+  state: () => ipcRenderer.invoke('native-browser:state'),
+  onState: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const handler = (_event, state) => cb(state);
+    ipcRenderer.on('native-browser-state', handler);
+    return () => ipcRenderer.removeListener('native-browser-state', handler);
+  },
+});

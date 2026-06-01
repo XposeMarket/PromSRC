@@ -1,6 +1,6 @@
 # SELF — Prometheus Self-Reference (Split Index)
 
-Last verified against `src/`, `web-ui/`, route/tool definitions, config defaults, command policy/approval surfaces, current package metadata, provider-aware context budgeting, rolling/mid-workflow compaction, tool observation injection, Brain runner skill-curator behavior, Hub/chat context UI, voice-agent/mobile dictation routing/direct voice tool wrappers, the desktop web UI source/generated route/component surface, and the Prometheus Mobile PWA/gateway route surface on: 2026-05-29
+Last verified against `src/`, `web-ui/`, route/tool definitions, batch read/patchset file tools, dev-source verification profiles/auto-narrow `prom_apply_dev_changes verify_only`, config defaults, command policy/approval surfaces, current package metadata, provider-aware context budgeting, rolling/mid-workflow compaction, tool observation injection, Brain runner skill-curator behavior, Hub/chat context UI, voice-agent/mobile dictation routing/direct voice tool wrappers, OpenAI/xAI realtime voice integration, the desktop web UI source/generated route/component surface, and the Prometheus Mobile PWA/gateway route surface on: 2026-05-30
 Workspace: `D:\Prometheus\workspace`
 Project root: `D:\Prometheus`
 
@@ -44,10 +44,14 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 29, 30, 31 | Data Paths, Sharp Edges, Maintenance Rule | [15-paths-and-sharp-edges.md](15-paths-and-sharp-edges.md) |
 | 32 | Prometheus Mobile App Maintenance Reference | [16-mobile-app.md](16-mobile-app.md) |
 | 33 | Desktop Web UI Maintenance Reference | [17-desktop-web-ui.md](17-desktop-web-ui.md) |
+| 34 | Public Release and Self-Update Operations | [18-public-release.md](18-public-release.md) |
+
+Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.
 
 ## Operational Runbooks
 
 - Public runtime and installer dependency hardening: [public-runtime-release/README.md](public-runtime-release/README.md)
+- Owner-approved public release and self-update flow: [18-public-release.md](18-public-release.md)
 
 ## Maintenance
 

@@ -75,6 +75,96 @@ function createSSESender(res: any): (event: string, data: any) => void {
   };
 }
 
+type TeamChatStreamFrame = {
+  seq: number;
+  type: string;
+  at: number;
+  data: Record<string, any>;
+};
+
+type TeamChatStreamState = {
+  teamId: string;
+  streamId: string;
+  startedAt: number;
+  updatedAt: number;
+  active: boolean;
+  nextSeq: number;
+  events: TeamChatStreamFrame[];
+  completedAt?: number;
+};
+
+const teamChatStreams = new Map<string, TeamChatStreamState>();
+const TEAM_CHAT_STREAM_MAX_EVENTS = 800;
+const TEAM_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
+
+function getTeamChatStream(teamId: string): TeamChatStreamState | null {
+  const id = String(teamId || '').trim();
+  if (!id) return null;
+  return teamChatStreams.get(id) || null;
+}
+
+function pruneTeamChatStreams(): void {
+  const cutoff = Date.now() - TEAM_CHAT_STREAM_TTL_MS;
+  for (const [teamId, stream] of teamChatStreams.entries()) {
+    if (!stream.active && Number(stream.completedAt || stream.updatedAt || 0) < cutoff) {
+      teamChatStreams.delete(teamId);
+    }
+  }
+}
+
+function beginTeamChatStream(teamId: string): TeamChatStreamState {
+  pruneTeamChatStreams();
+  const id = String(teamId || '').trim();
+  const stream: TeamChatStreamState = {
+    teamId: id,
+    streamId: crypto.randomUUID(),
+    startedAt: Date.now(),
+    updatedAt: Date.now(),
+    active: true,
+    nextSeq: 1,
+    events: [],
+  };
+  teamChatStreams.set(id, stream);
+  return stream;
+}
+
+function finishTeamChatStream(teamId: string, streamId: string): void {
+  const stream = getTeamChatStream(teamId);
+  if (!stream || stream.streamId !== streamId) return;
+  stream.active = false;
+  stream.completedAt = Date.now();
+  stream.updatedAt = stream.completedAt;
+}
+
+function appendTeamChatStreamEvent(teamId: string, teamName: string, streamId: string, type: string, data: any): TeamChatStreamFrame | null {
+  const stream = getTeamChatStream(teamId);
+  if (!stream || stream.streamId !== streamId) return null;
+  const frame: TeamChatStreamFrame = {
+    seq: stream.nextSeq++,
+    type: String(type || 'event'),
+    at: Date.now(),
+    data: data && typeof data === 'object' ? { ...data } : {},
+  };
+  stream.events.push(frame);
+  if (stream.events.length > TEAM_CHAT_STREAM_MAX_EVENTS) {
+    stream.events.splice(0, stream.events.length - TEAM_CHAT_STREAM_MAX_EVENTS);
+  }
+  stream.updatedAt = frame.at;
+  try {
+    broadcastTeamEvent({
+      type: 'team_chat_stream_event',
+      teamId: stream.teamId,
+      teamName,
+      streamId: stream.streamId,
+      seq: frame.seq,
+      event: frame.type,
+      at: frame.at,
+      data: frame.data,
+    });
+  } catch {}
+  return frame;
+}
+
 type TeamChatRouteTarget = {
   type: 'room' | 'team' | 'manager' | 'member';
   targetId?: string;
@@ -2061,6 +2151,45 @@ router.patch('/api/brain/config', (req: any, res: any) => {
   }
 });
 
+router.get('/api/teams/:id/chat/stream', (req, res) => {
+  const team = getManagedTeam(req.params.id);
+  if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
+  try {
+    pruneTeamChatStreams();
+    const after = Math.max(0, Math.floor(Number(req.query.after || 0)) || 0);
+    const stream = getTeamChatStream(req.params.id);
+    const events = stream
+      ? stream.events
+        .filter((frame) => Number(frame.seq || 0) > after)
+        .map((frame) => ({
+          seq: frame.seq,
+          type: frame.type,
+          at: frame.at,
+          streamId: stream.streamId,
+          data: frame.data || {},
+        }))
+      : [];
+    res.json({
+      success: true,
+      teamId: req.params.id,
+      active: !!stream?.active,
+      stream: stream ? {
+        streamId: stream.streamId,
+        active: stream.active,
+        startedAt: stream.startedAt,
+        updatedAt: stream.updatedAt,
+        completedAt: stream.completedAt || null,
+        nextSeq: stream.nextSeq,
+        firstSeq: stream.events[0]?.seq || 0,
+        lastSeq: stream.events[stream.events.length - 1]?.seq || 0,
+      } : null,
+      events,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
 router.post('/api/teams/:id/chat/stream', async (req, res) => {
   const team = getManagedTeam(req.params.id);
   if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
@@ -2089,7 +2218,12 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-  const sendSSE = createSSESender(res);
+  const retainedStream = beginTeamChatStream(req.params.id);
+  const baseSendSSE = createSSESender(res);
+  const sendSSE = (event: string, data: any) => {
+    baseSendSSE(event, data);
+    appendTeamChatStreamEvent(req.params.id, team.name, retainedStream.streamId, event, data);
+  };
   sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
   const heartbeat = setInterval(() => sendSSE('heartbeat', { state: 'processing' }), 5000);
   const abortSignal = { aborted: false };
@@ -2212,6 +2346,7 @@ router.post('/api/teams/:id/chat/stream', async (req, res) => {
       sendSSE('error', { message: err.message || 'Unknown error' });
     }
   } finally {
+    finishTeamChatStream(req.params.id, retainedStream.streamId);
     closeStream();
   }
 });

@@ -11459,7 +11459,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           result = await withBoundedToolTimeout(browserOpen(sessionId, args.url || '', {
             observe: resolveBrowserObserveMode('browser_open', args.observe),
-            target: args.target != null ? String(args.target) : undefined,
+            target: args.target != null ? String(args.target) : (args.profile != null ? String(args.profile) : undefined),
+            inhouseProfile: args.inhouse_profile ?? args.inhouseProfile,
             profileDirectory: args.profile_directory ?? args.profileDirectory,
           }), timeoutMs, 'browser_open');
         } catch (err: any) {
@@ -11495,6 +11496,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
       case 'browser_click': {
         const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        const hasFinalActionApproval = !!finalActionApprovalId;
         if (finalActionApprovalId) {
           const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
           if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
@@ -11504,7 +11506,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           element: args.element != null ? String(args.element) : (args.element_name != null ? String(args.element_name) : undefined),
           selector: args.selector != null ? String(args.selector) : undefined,
         }, {
-          observe: resolveBrowserObserveMode('browser_click', args.capture_after === true ? 'snapshot' : args.observe),
+          observe: resolveBrowserObserveMode('browser_click', hasFinalActionApproval ? 'snapshot' : (args.capture_after === true ? 'snapshot' : args.observe)),
         });
         await broadcastBrowserStatus('browser_click');
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -11535,12 +11537,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'browser_key': {
         const keyToolName = name === 'browser_key' ? 'browser_key' : 'browser_press_key';
         const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        const hasFinalActionApproval = !!finalActionApprovalId;
         if (finalActionApprovalId) {
           const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: keyToolName, toolArgs: args });
           if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
         }
         const result = await browserPressKey(sessionId, String(args.key || 'Enter'), {
-          observe: resolveBrowserObserveMode(keyToolName, args.observe),
+          observe: resolveBrowserObserveMode(keyToolName, hasFinalActionApproval ? 'snapshot' : args.observe),
         });
         await broadcastBrowserStatus('browser_press_key');
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -11936,6 +11939,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
           if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
         }
+        const hasFinalActionApproval = !!finalActionApprovalId;
         let result = !resolved.ok
           ? `ERROR: ${resolved.message}`
           : await desktopClick(
@@ -11954,7 +11958,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 allowRetryOnLikelyNoop: args.verify === 'strict',
               },
             );
-        if (!result.startsWith('ERROR') && args.capture_after === true) {
+        if (!result.startsWith('ERROR') && (args.capture_after === true || hasFinalActionApproval)) {
           const after = await desktopScreenshotWithHistory(sessionId, { capture: 'all' });
           result += `\n\nCapture after action:\n${after}`;
         }
@@ -12017,11 +12021,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
       case 'desktop_press_key': {
         const finalActionApprovalId = String(args.final_action_approval_id || args.finalActionApprovalId || '').trim();
+        const hasFinalActionApproval = !!finalActionApprovalId;
         if (finalActionApprovalId) {
           const gate = consumeFinalActionApproval({ sessionId, approvalId: finalActionApprovalId, toolName: name, toolArgs: args });
           if (!gate.ok) return { name, args, result: `ERROR: ${gate.message}`, error: true };
         }
-        const result = await desktopPressKey(String(args.key || 'Enter'));
+        let result = await desktopPressKey(String(args.key || 'Enter'));
+        if (!result.startsWith('ERROR') && hasFinalActionApproval) {
+          const after = await desktopScreenshotWithHistory(sessionId, { capture: 'all' });
+          result += `\n\nCapture after action:\n${after}`;
+        }
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_get_clipboard': {

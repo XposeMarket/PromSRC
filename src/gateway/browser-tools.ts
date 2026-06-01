@@ -1,9 +1,11 @@
 /**
  * browser-tools.ts - Browser Automation for Prometheus
  * 
- * Strategy: Connect to user's Chrome via CDP (--remote-debugging-port=9222).
- * If Chrome isn't running with the debug port, launch it ourselves with a
- * dedicated Prometheus profile so it doesn't conflict with the user's Chrome.
+ * Strategy: connect to a Prometheus-owned Chrome profile by default.
+ * Main chat uses CHROME_DEBUG_PORT and a dedicated Prometheus profile; user
+ * Chrome is opt-in only through browser_set_profile_target/browser_open target.
+ * Background agents, tasks, and team agents get isolated persistent profiles
+ * and CDP ports derived from their stable owner identity.
  * 
  * Snapshot: DOM-based element scraping (reliable across all Playwright versions).
  * No dependency on deprecated page.accessibility or page.ariaSnapshot APIs.
@@ -38,7 +40,7 @@ import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
 type PwBrowser = any;
 type PwContext = any;
 type PwPage = any;
-export type BrowserProfileKind = 'prometheus' | 'user';
+export type BrowserProfileKind = 'prometheus' | 'user' | 'inhouse';
 
 interface BrowserSession {
   sessionId: string;
@@ -61,6 +63,16 @@ interface BrowserSession {
     shownAt: number;
   }>>;
   createdAt: number;
+}
+
+interface InHouseBrowserSession {
+  sessionId: string;
+  url: string;
+  title: string;
+  lastSnapshot: string;
+  lastSnapshotAt: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface BrowserSessionMetadata {
@@ -307,6 +319,16 @@ export function resolveBrowserObserveMode(toolName: string, observe?: unknown): 
   return normalizeBrowserObserveMode(observe)
     || BROWSER_TOOL_DEFAULT_OBSERVE_MODE[String(toolName || '').trim()]
     || 'none';
+}
+
+function browserKnowledgeHostFromUrl(url: string): string {
+  try {
+    return String(new URL(String(url || '').startsWith('http') ? String(url || '') : `https://${String(url || '')}`).hostname || '')
+      .replace(/^www\./i, '')
+      .toLowerCase();
+  } catch {
+    return String(url || '').trim().toLowerCase();
+  }
 }
 
 function attachShortcutsContext(
@@ -617,6 +639,7 @@ function shouldUseCompactObservation(mode: BrowserObserveMode): boolean {
 // ─── Session Management ────────────────────────────────────────────────────────
 
 const sessions: Map<string, BrowserSession> = new Map();
+const inHouseSessions: Map<string, InHouseBrowserSession> = new Map();
 const mainBrowserTargetPreferences: Map<string, BrowserProfileKind> = new Map();
 const mainBrowserProfileDirectoryPreferences: Map<string, string> = new Map();
 const browserSessionMetadata: Map<string, BrowserSessionMetadata> = new Map();
@@ -628,6 +651,7 @@ let browserSessionRegistryCache: Map<string, PersistedBrowserSessionRecord> | nu
 function inferBrowserOwnerType(sessionId: string): BrowserSessionMetadata['ownerType'] {
   const sid = String(sessionId || '').trim();
   if (sid.startsWith('background_')) return 'background';
+  if (/^(subagent_|subagent_chat_|subagent-chat_)/i.test(sid)) return 'background';
   if (sid.startsWith('task_')) return 'task';
   if (sid.includes('::')) return 'detached';
   if (sid.startsWith('team_') || sid.startsWith('team_dispatch_')) return 'team-agent';
@@ -637,6 +661,9 @@ function inferBrowserOwnerType(sessionId: string): BrowserSessionMetadata['owner
 function inferBrowserOwnerId(sessionId: string): string {
   const sid = String(sessionId || '').trim();
   if (sid.startsWith('background_')) return sid.slice('background_'.length);
+  if (sid.startsWith('subagent_chat_')) return sid.slice('subagent_chat_'.length);
+  if (sid.startsWith('subagent-chat_')) return sid.slice('subagent-chat_'.length);
+  if (sid.startsWith('subagent_')) return sid.slice('subagent_'.length);
   if (sid.startsWith('task_')) return sid.slice('task_'.length);
   return sid;
 }
@@ -677,6 +704,14 @@ export function getBrowserSessionMetadata(sessionId: string): BrowserSessionMeta
 function buildBrowserSessionMetadataPayload(sessionId: string): Record<string, any> {
   const metadata = getBrowserSessionMetadata(sessionId);
   const originLabel = formatBrowserSessionOriginLabel(sessionId, metadata);
+  // Always emit the active lane so the renderer can flip its native in-house
+  // surface on/off. The in-house lane sets these to 'inhouse' explicitly; the
+  // Playwright/CDP lanes report the live session's profile (or the main target).
+  const resolved = resolveSessionId(sessionId);
+  const session = sessions.get(resolved);
+  const profileKind: BrowserProfileKind = session?.profileKind
+    || (metadata.ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus');
+  const browserTarget: BrowserProfileKind = session?.browserTarget || profileKind;
   return {
     browserOwnerType: metadata.ownerType,
     browserOwnerId: metadata.ownerId || '',
@@ -684,6 +719,9 @@ function buildBrowserSessionMetadataPayload(sessionId: string): Record<string, a
     browserOriginLabel: originLabel,
     browserTaskPrompt: metadata.taskPrompt || '',
     browserSpawnerSessionId: metadata.spawnerSessionId || '',
+    profileKind,
+    browserTarget,
+    profileLabel: getBrowserProfileLabel(profileKind),
   };
 }
 
@@ -788,6 +826,14 @@ interface BrowserLiveStreamState {
 const browserLiveStreams: Map<string, BrowserLiveStreamState> = new Map();
 const BROWSER_LIVE_STREAM_LEASE_MS = 20_000;
 const BROWSER_STREAM_HEARTBEAT_STATUS = 'Live browser stream ready.';
+function readBrowserLiveStreamNumberEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = Number(process.env[name]);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.min(max, Math.max(min, raw));
+}
+const BROWSER_LIVE_STREAM_JPEG_QUALITY_INTERACTIVE = readBrowserLiveStreamNumberEnv('PROMETHEUS_BROWSER_LIVE_STREAM_JPEG_QUALITY_INTERACTIVE', 88, 1, 100);
+const BROWSER_LIVE_STREAM_JPEG_QUALITY_PASSIVE = readBrowserLiveStreamNumberEnv('PROMETHEUS_BROWSER_LIVE_STREAM_JPEG_QUALITY_PASSIVE', 92, 1, 100);
+const BROWSER_LIVE_STREAM_CDP_SCALE = readBrowserLiveStreamNumberEnv('PROMETHEUS_BROWSER_LIVE_STREAM_CDP_SCALE', 1.35, 1, 2);
 
 function normalizeBrowserInteractionMode(mode: unknown): BrowserInteractionMode {
   const value = String(mode || '').trim().toLowerCase();
@@ -1556,7 +1602,9 @@ async function startBrowserSnapshotStreamLoop(
       try {
         const buf: Buffer = await session.page.screenshot({
           type: 'jpeg',
-          quality: current.focus === 'interactive' ? 54 : 66,
+          quality: current.focus === 'interactive'
+            ? BROWSER_LIVE_STREAM_JPEG_QUALITY_INTERACTIVE
+            : BROWSER_LIVE_STREAM_JPEG_QUALITY_PASSIVE,
           fullPage: false,
         });
         const geom = await readBrowserPageGeometry(resolved, { maxAgeMs: 400 }).catch(() => null);
@@ -1636,11 +1684,15 @@ async function tryStartBrowserCDPStream(
     browserLiveStreams.set(resolved, stream);
     cdp.on?.('Page.screencastFrame', onFrame);
     await cdp.send('Page.enable');
+    const cdpMaxWidth = Math.max(viewport.width, Math.round(viewport.width * BROWSER_LIVE_STREAM_CDP_SCALE));
+    const cdpMaxHeight = Math.max(viewport.height, Math.round(viewport.height * BROWSER_LIVE_STREAM_CDP_SCALE));
     await cdp.send('Page.startScreencast', {
       format: 'jpeg',
-      quality: stream.focus === 'interactive' ? 56 : 68,
-      maxWidth: viewport.width,
-      maxHeight: viewport.height,
+      quality: stream.focus === 'interactive'
+        ? BROWSER_LIVE_STREAM_JPEG_QUALITY_INTERACTIVE
+        : BROWSER_LIVE_STREAM_JPEG_QUALITY_PASSIVE,
+      maxWidth: cdpMaxWidth,
+      maxHeight: cdpMaxHeight,
       everyNthFrame: stream.focus === 'interactive' ? 1 : 2,
     });
     await broadcastBrowserLiveStreamStatus(resolved, stream, { active: true });
@@ -1708,12 +1760,30 @@ export async function startBrowserLiveStream(
   status: string;
 }> {
   const resolved = resolveSessionId(sessionId);
+  const focus = normalizeBrowserLiveStreamFocus(options?.focus);
+  if (getInHouseSession(resolved)) {
+    broadcastWS({
+      type: 'browser:stream_status',
+      sessionId: resolved,
+      active: false,
+      transport: 'snapshot',
+      focus,
+      status: 'Prometheus in-house browser is rendered natively; screenshot stream is idle.',
+      timestamp: Date.now(),
+    });
+    return {
+      sessionId: resolved,
+      active: false,
+      transport: 'snapshot',
+      focus,
+      status: 'Native Electron browser surface active.',
+    };
+  }
   const session = await getOrCreateSession(resolved, {
     url: String(options?.restoreUrl || '').trim(),
     title: String(options?.restoreTitle || '').trim(),
   });
   await syncPageMetadata(session).catch(() => {});
-  const focus = normalizeBrowserLiveStreamFocus(options?.focus);
   const existing = browserLiveStreams.get(resolved);
   if (existing?.active && existing.focus === focus && existing.transport) {
     refreshBrowserLiveStreamLease(resolved);
@@ -1786,6 +1856,35 @@ export async function browserReopenSession(
   extractionSchemas: BrowserKnowledgeExtractionSchema[];
 }> {
   const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved) || shouldUseInHouseBrowser(resolved)) {
+    const hintedUrl = String(restoreHint?.url || '').trim();
+    const persisted = buildBrowserSessionRestoreRecord(resolved, restoreHint);
+    const targetUrl = isRestorableBrowserUrl(hintedUrl) ? hintedUrl : String(persisted?.url || '').trim();
+    if (!isRestorableBrowserUrl(targetUrl)) return null;
+    await browserOpenInHouse(resolved, targetUrl, { observe: 'none' });
+    const inHouse = getInHouseSession(resolved);
+    const url = String(inHouse?.url || targetUrl);
+    const interactionState = getOrCreateBrowserInteractionState(resolveBrowserInteractionStateId(resolved));
+    return {
+      sessionId: resolved,
+      url,
+      site: browserKnowledgeHostFromUrl(url),
+      title: String(inHouse?.title || restoreHint?.title || ''),
+      active: true,
+      mode: interactionState.mode,
+      captured: interactionState.captured,
+      controlOwner: interactionState.controlOwner,
+      streamActive: false,
+      streamTransport: '',
+      streamFocus: 'interactive',
+      frameBase64: '',
+      frameWidth: 0,
+      frameHeight: 0,
+      elements: listNamedBrowserElementsForUrl(url),
+      itemRoots: listNamedBrowserItemRootsForUrl(url),
+      extractionSchemas: listNamedBrowserExtractionSchemasForUrl(url),
+    };
+  }
   const session = await getOrCreateSession(resolved, restoreHint).catch(() => null);
   if (!session) return null;
   const hintedUrl = String(restoreHint?.url || '').trim();
@@ -2127,18 +2226,157 @@ function getUserChromeDebugPort(): number {
 
 function normalizeBrowserProfileKind(value: unknown): BrowserProfileKind {
   const raw = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (['inhouse', 'in_house', 'in_app', 'electron', 'electron_browser', 'prometheus_inhouse', 'prometheus_in_house'].includes(raw)) return 'inhouse';
   if (['user', 'user_chrome', 'current', 'current_chrome', 'real', 'real_profile'].includes(raw)) return 'user';
   return 'prometheus';
 }
 
 function getBrowserProfileLabel(kind: BrowserProfileKind): string {
+  if (kind === 'inhouse') return 'Prometheus in-house browser';
   return kind === 'user' ? 'user Chrome profile' : 'Prometheus browser profile';
 }
 
 function getMainBrowserTarget(sessionId: string): BrowserProfileKind {
   const resolved = resolveSessionId(sessionId);
-  return mainBrowserTargetPreferences.get(resolved)
-    || normalizeBrowserProfileKind(process.env.PROMETHEUS_MAIN_BROWSER_TARGET || 'prometheus');
+  return mainBrowserTargetPreferences.get(resolved) || 'prometheus';
+}
+
+function getInHouseBrowserRpcConfig(): { url: string; token: string } | null {
+  const url = String(process.env.PROMETHEUS_ELECTRON_BROWSER_RPC_URL || '').trim();
+  const token = String(process.env.PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN || '').trim();
+  if (!url || !token) return null;
+  return { url: url.replace(/\/+$/, ''), token };
+}
+
+function isInHouseBrowserAvailable(): boolean {
+  return !!getInHouseBrowserRpcConfig();
+}
+
+async function callInHouseBrowser<T = any>(route: string, payload: Record<string, any> = {}): Promise<T> {
+  const cfg = getInHouseBrowserRpcConfig();
+  if (!cfg) {
+    throw new Error('Prometheus in-house browser is only available in the Electron desktop app.');
+  }
+  const resp = await fetch(`${cfg.url}/${String(route || '').replace(/^\/+/, '')}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${cfg.token}`,
+    },
+    body: JSON.stringify(payload || {}),
+  } as any);
+  const data: any = await resp.json().catch(() => ({}));
+  if (!resp.ok || data?.ok === false || data?.error) {
+    throw new Error(String(data?.error || `In-house browser RPC failed (${resp.status}).`));
+  }
+  return data?.result as T;
+}
+
+function getInHouseSession(sessionId: string): InHouseBrowserSession | undefined {
+  return inHouseSessions.get(resolveSessionId(sessionId));
+}
+
+function upsertInHouseSession(sessionId: string, state: any = {}): InHouseBrowserSession {
+  const resolved = resolveSessionId(sessionId);
+  const existing = inHouseSessions.get(resolved);
+  const now = Date.now();
+  const next: InHouseBrowserSession = {
+    sessionId: resolved,
+    url: String(state?.url || existing?.url || ''),
+    title: String(state?.title || existing?.title || ''),
+    lastSnapshot: String(existing?.lastSnapshot || ''),
+    lastSnapshotAt: Number(existing?.lastSnapshotAt || 0),
+    createdAt: Number(existing?.createdAt || now),
+    updatedAt: now,
+  };
+  inHouseSessions.set(resolved, next);
+  persistBrowserSessionRecord({
+    sessionId: resolved,
+    lastPageUrl: next.url,
+    lastPageTitle: next.title,
+  } as BrowserSession);
+  return next;
+}
+
+function clearInHouseSession(sessionId: string): void {
+  inHouseSessions.delete(resolveSessionId(sessionId));
+}
+
+// Per-session in-house browser profile selection. Each profile id maps to an
+// isolated, persistent Electron partition (its own cookies/logins) on the main
+// process. Main chat defaults to the shared "main" profile; subagents/tasks get
+// an isolated profile derived from their stable owner identity so two agents
+// driving two accounts never collide. Either side can override via inhouse_profile.
+const inHouseProfilePreferences: Map<string, string> = new Map();
+const inHouseTargetSessions: Set<string> = new Set();
+
+function normalizeInHouseProfileId(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+function resolveInHouseProfileId(sessionId: string): string {
+  const resolved = resolveSessionId(sessionId);
+  const explicit = inHouseProfilePreferences.get(resolved);
+  if (explicit) return explicit;
+  const metadata = getBrowserSessionMetadata(resolved);
+  if (metadata.ownerType === 'main') return 'main';
+  const ownerId = normalizeInHouseProfileId(metadata.ownerId || resolved) || normalizeInHouseProfileId(resolved) || 'agent';
+  return `${metadata.ownerType}-${ownerId}`;
+}
+
+function shouldUseInHouseBrowser(sessionId: string): boolean {
+  const resolved = resolveSessionId(sessionId);
+  const metadata = getBrowserSessionMetadata(resolved);
+  if (metadata.ownerType === 'main') return getMainBrowserTarget(resolved) === 'inhouse';
+  return inHouseTargetSessions.has(resolved);
+}
+
+// Clear, actionable message for tools not yet ported to the in-house browser, so
+// the agent gets guidance instead of a misleading "No browser session" error.
+function inHouseUnsupportedToolMessage(tool: string, alternative: string): string {
+  return `NOTE: ${tool} is not yet available in the Prometheus in-house browser. ${alternative} (Or switch this session to the regular Chrome lane with browser_open target="prometheus".)`;
+}
+
+function buildInHouseStatusPayload(sessionId: string, statusLabel: string, extra: Record<string, any> = {}): BrowserSessionInfo & Record<string, any> {
+  const resolved = resolveSessionId(sessionId);
+  const inHouse = getInHouseSession(resolved);
+  const interactionState = getOrCreateBrowserInteractionState(resolveBrowserInteractionStateId(resolved));
+  return {
+    sessionId: resolved,
+    active: !!inHouse,
+    url: String(extra.url || inHouse?.url || ''),
+    title: String(extra.title || inHouse?.title || ''),
+    profileKind: 'inhouse',
+    browserTarget: 'inhouse',
+    profileLabel: getBrowserProfileLabel('inhouse'),
+    profileDir: 'Electron persistent partition: persist:prometheus-inhouse-browser',
+    debugPort: 0,
+    mode: interactionState.mode,
+    captured: interactionState.captured,
+    controlOwner: interactionState.controlOwner,
+    streamActive: false,
+    streamTransport: '',
+    streamFocus: 'interactive',
+    source: extra.source || 'system',
+    statusLabel,
+    timestamp: Date.now(),
+    ...extra,
+  };
+}
+
+function broadcastInHouseBrowserStatus(sessionId: string, tool: string, statusLabel: string, extra: Record<string, any> = {}): void {
+  broadcastWS({
+    type: 'browser:status',
+    ...buildInHouseStatusPayload(sessionId, statusLabel, {
+      tool,
+      ...extra,
+    }),
+  });
 }
 
 function normalizeChromeProfileDirectory(value: unknown): string {
@@ -2332,8 +2570,7 @@ async function isSessionAlive(session: BrowserSession): Promise<boolean> {
 
 /**
  * Returns the path to the user's real Chrome profile directory.
- * Used when CHROME_USE_REAL_PROFILE=true — allows Prometheus to reuse
- * existing login sessions instead of starting fresh with an isolated profile.
+ * Used only when main chat explicitly selects target="user_chrome".
  * WARNING: Chrome must be fully closed before connecting, or CDP will reject it.
  */
 function getRealChromeProfileDir(): string {
@@ -2362,10 +2599,14 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     try { await existing.browser.close(); } catch {}
   }
 
+  const metadata = registerBrowserSessionMetadata(sessionId);
+  if (metadata.ownerType === 'main' && getMainBrowserTarget(sessionId) === 'inhouse') {
+    throw new Error('The current browser target is Prometheus in-house browser. Use browser_open with target="prometheus" to switch back to regular Chrome/CDP.');
+  }
+
   const pw = await getPW();
   if (!pw) throw new Error('Playwright not installed. Run: npm install playwright && npx playwright install chromium');
 
-  const metadata = registerBrowserSessionMetadata(sessionId);
   const browserConnection = await connectOrLaunchPersistentChrome(pw, sessionId, metadata);
   const browser = browserConnection.browser;
 
@@ -3586,32 +3827,11 @@ async function buildAdvisorPacketForSession(
 // ─── Exported Tool Handlers ────────────────────────────────────────────────────
 
 // ─── Shared browser session alias ────────────────────────────────────────────
-// Task sessions (task_<id>) share the browser connection of the parent user
-// session that spawned them.  Without this, each task would try to open a
-// fresh CDP connection from a cold start — which always fails mid-task because
-// the debug port is already bound to the live user Chrome instance.
-//
-// Resolution order:
-//   1. Exact session match (cache hit)
-//   2. If sessionId starts with "task_" and the parent session exists, clone it
-//   3. Otherwise create a brand-new session (normal CHAT path)
+// Browser sessions are keyed directly by runtime session ID. Main chat may use
+// the selected main target, while task/background/team sessions intentionally
+// stay isolated so each worker gets its own profile and CDP port.
 export function resolveSessionId(sessionId: string): string {
   const sid = String(sessionId || 'default');
-  if (sessions.has(sid)) return sid;                       // fast path — already exists
-  if (sid.startsWith('task_')) {
-    // Walk back to find a live parent: task_<taskId> was spawned from a user
-    // session stored in the task record.  Try common parent IDs in order.
-    const taskId = sid.slice('task_'.length);
-    const { loadTask } = require('./tasks/task-store') as typeof import('./tasks/task-store');
-    const task = loadTask(taskId);
-    const parentId = task?.sessionId || 'default';
-    if (sessions.has(parentId)) {
-      console.log(`[Browser] Task session "${sid}" aliased to parent session "${parentId}"`);
-      sessions.set(sid, sessions.get(parentId)!);
-      return sid;
-    }
-    // Parent not yet open — fall through so getOrCreateSession makes a fresh one
-  }
   return sid;
 }
 
@@ -4027,6 +4247,9 @@ export async function browserSetProfileTarget(
     return 'ERROR: browser profile target selection is only available in main chat sessions. Subagents keep isolated Prometheus browser profiles.';
   }
   const nextTarget = normalizeBrowserProfileKind(target);
+  if (nextTarget === 'inhouse' && !isInHouseBrowserAvailable()) {
+    return 'ERROR: Prometheus in-house browser is only available in the Electron desktop app. Use target="prometheus" for the regular Chrome/CDP browser.';
+  }
   const profileDirectory = normalizeChromeProfileDirectory(options?.profileDirectory);
   const currentTarget = getMainBrowserTarget(resolved);
   mainBrowserTargetPreferences.set(resolved, nextTarget);
@@ -4038,15 +4261,24 @@ export async function browserSetProfileTarget(
     try { await existing.page.close(); } catch {}
     try { await existing.browser.close(); } catch {}
   }
+  if (nextTarget !== 'inhouse' && getInHouseSession(resolved) && options?.closeExisting !== false) {
+    clearInHouseSession(resolved);
+    await callInHouseBrowser('hide', { sessionId: resolved }).catch(() => {});
+  }
   const active = sessions.get(resolved);
+  const activeInHouse = getInHouseSession(resolved);
   return [
     `Browser target set to ${getBrowserProfileLabel(nextTarget)}.`,
     nextTarget === 'user'
       ? `User Chrome target uses CDP port ${getUserChromeDebugPort()} and user data dir ${getRealChromeProfileDir()}${getUserChromeProfileDirectory(resolved) ? `, Chrome profile "${getUserChromeProfileDirectory(resolved)}"` : ''}. If Chrome is already running normally with that profile, close it first so Prometheus can launch a fresh debugger-enabled Chrome.`
-      : `Prometheus target uses CDP port ${getMainChromeDebugPort()} and profile ${process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')}.`,
+      : (nextTarget === 'inhouse'
+        ? 'Prometheus in-house browser uses the embedded Electron browser surface. The current screenshot stream remains available only as fallback.'
+        : `Prometheus target uses CDP port ${getMainChromeDebugPort()} and profile ${process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')}.`),
     active
       ? `Current active session already uses ${getBrowserProfileLabel(active.profileKind)}.`
-      : (currentTarget !== nextTarget ? 'The next browser_open will create a fresh browser session for this target.' : 'No active browser session is open yet.'),
+      : (activeInHouse
+        ? 'Current active session already uses the Prometheus in-house browser.'
+        : (currentTarget !== nextTarget ? 'The next browser_open will create a fresh browser session for this target.' : 'No active browser session is open yet.')),
   ].join('\n');
 }
 
@@ -4196,10 +4428,199 @@ function toUploadPaths(filePath?: string, filePaths?: string[]): string[] {
   );
 }
 
+async function browserOpenInHouse(
+  sessionId: string,
+  rawUrl: string,
+  options?: { observe?: BrowserObserveMode },
+): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  let targetUrl = String(rawUrl || '').trim();
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(targetUrl)) targetUrl = `https://${targetUrl}`;
+  try {
+    const state: any = await callInHouseBrowser('open', { sessionId: resolved, url: targetUrl, profile: resolveInHouseProfileId(resolved) });
+    const inHouse = upsertInHouseSession(resolved, state);
+    broadcastInHouseBrowserStatus(resolved, 'browser_open', 'Opened in Prometheus in-house browser.', {
+      active: true,
+      url: inHouse.url,
+      title: inHouse.title,
+    });
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_open');
+    if (shouldReturnSnapshot(observeMode)) {
+      return await browserSnapshotInHouse(resolved);
+    }
+    return `Browser opened in Prometheus in-house browser.\nPage: ${inHouse.title || inHouse.url}\nURL: ${inHouse.url}`;
+  } catch (err: any) {
+    return `ERROR: In-house browser open failed: ${err.message}`;
+  }
+}
+
+async function browserSnapshotInHouse(sessionId: string): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  try {
+    const result: any = await callInHouseBrowser('snapshot', { sessionId: resolved });
+    const inHouse = upsertInHouseSession(resolved, result);
+    inHouse.lastSnapshot = String(result?.snapshot || '');
+    inHouse.lastSnapshotAt = Date.now();
+    const snapshot = String(result?.snapshot || `Page: ${inHouse.title || inHouse.url}\nURL: ${inHouse.url}`);
+    broadcastInHouseBrowserStatus(resolved, 'browser_snapshot', 'Snapshot captured from Prometheus in-house browser.', {
+      active: true,
+      url: inHouse.url,
+      title: inHouse.title,
+    });
+    return attachShortcutsContext(snapshot, inHouse.url, resolved);
+  } catch (err: any) {
+    return `ERROR: In-house browser snapshot failed: ${err.message}`;
+  }
+}
+
+async function browserClickInHouse(
+  sessionId: string,
+  target: number | { ref?: number; element?: string; selector?: string },
+  options?: { observe?: BrowserObserveMode },
+): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const inHouse = getInHouseSession(resolved);
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  const requestedSelector = typeof target === 'object' && target !== null ? String(target.selector || '').trim() : '';
+  const requestedRef = typeof target === 'number'
+    ? Number(target)
+    : Number((target && typeof target === 'object' ? target.ref : 0) || 0);
+  if (!requestedSelector && (!Number.isFinite(requestedRef) || requestedRef <= 0)) {
+    return 'ERROR: In-house browser click currently requires ref or selector.';
+  }
+  try {
+    const clicked: any = await callInHouseBrowser('click', { sessionId: resolved, ref: requestedRef, selector: requestedSelector });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_click');
+    if (shouldReturnSnapshot(observeMode)) {
+      const snapshot = await browserSnapshotInHouse(resolved);
+      return `Clicked ${requestedSelector || `@${requestedRef}`} (${clicked?.role || 'element'}: "${clicked?.name || ''}")\n\n${snapshot}`;
+    }
+    broadcastInHouseBrowserStatus(resolved, 'browser_click', `Clicked ${requestedSelector || `@${requestedRef}`} in Prometheus in-house browser.`, {
+      active: true,
+    });
+    return `Clicked ${requestedSelector || `@${requestedRef}`} (${clicked?.role || 'element'}: "${clicked?.name || ''}").`;
+  } catch (err: any) {
+    return `ERROR: In-house browser click failed: ${err.message}`;
+  }
+}
+
+async function browserFillInHouse(
+  sessionId: string,
+  target: number | { ref?: number; element?: string; selector?: string },
+  text: string,
+  options?: { observe?: BrowserObserveMode },
+): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const inHouse = getInHouseSession(resolved);
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  const requestedSelector = typeof target === 'object' && target !== null ? String(target.selector || '').trim() : '';
+  const requestedRef = typeof target === 'number'
+    ? Number(target)
+    : Number((target && typeof target === 'object' ? target.ref : 0) || 0);
+  if (!requestedSelector && (!Number.isFinite(requestedRef) || requestedRef <= 0)) {
+    return 'ERROR: In-house browser fill currently requires ref or selector.';
+  }
+  try {
+    const filled: any = await callInHouseBrowser('fill', { sessionId: resolved, ref: requestedRef, selector: requestedSelector, text: String(text || '') });
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_fill');
+    if (shouldReturnSnapshot(observeMode)) {
+      const snapshot = await browserSnapshotInHouse(resolved);
+      return `Filled ${requestedSelector || `@${requestedRef}`} (${filled?.role || 'element'}: "${filled?.name || ''}") with "${String(text || '').slice(0, 50)}".\n\n${snapshot}`;
+    }
+    broadcastInHouseBrowserStatus(resolved, 'browser_fill', `Filled ${requestedSelector || `@${requestedRef}`} in Prometheus in-house browser.`, {
+      active: true,
+    });
+    return `Filled ${requestedSelector || `@${requestedRef}`} (${filled?.role || 'element'}: "${filled?.name || ''}") with "${String(text || '').slice(0, 50)}".`;
+  } catch (err: any) {
+    return `ERROR: In-house browser fill failed: ${err.message}`;
+  }
+}
+
+async function browserPressKeyInHouse(sessionId: string, key: string, options?: { observe?: BrowserObserveMode }): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  try {
+    await callInHouseBrowser('input', { sessionId: resolved, action: 'key', key });
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_press_key');
+    if (shouldReturnSnapshot(observeMode)) return await browserSnapshotInHouse(resolved);
+    broadcastInHouseBrowserStatus(resolved, 'browser_press_key', `Pressed "${key}" in Prometheus in-house browser.`, { active: true });
+    return `Pressed "${key}" in Prometheus in-house browser.`;
+  } catch (err: any) {
+    return `ERROR: In-house browser key press failed: ${err.message}`;
+  }
+}
+
+async function browserTypeInHouse(sessionId: string, text: string, options?: { observe?: BrowserObserveMode }): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  try {
+    await callInHouseBrowser('input', { sessionId: resolved, action: 'text', text: String(text || '') });
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_type');
+    if (shouldReturnSnapshot(observeMode)) return await browserSnapshotInHouse(resolved);
+    broadcastInHouseBrowserStatus(resolved, 'browser_type', `Typed ${String(text || '').length} chars in Prometheus in-house browser.`, { active: true });
+    return `Typed ${String(text || '').length} chars in Prometheus in-house browser.`;
+  } catch (err: any) {
+    return `ERROR: In-house browser type failed: ${err.message}`;
+  }
+}
+
+async function browserRunJsInHouse(sessionId: string, code: string): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const inHouse = getInHouseSession(resolved);
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  if (!String(code || '').trim()) return 'ERROR: code parameter is required.';
+  try {
+    const result = await callInHouseBrowser('run-js', { sessionId: resolved, code: `(async () => { ${code} })()` });
+    broadcastInHouseBrowserStatus(resolved, 'browser_run_js', 'Ran JavaScript in Prometheus in-house browser.', { active: true });
+    return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+  } catch (err: any) {
+    return `ERROR: In-house browser run-js failed: ${err.message}`;
+  }
+}
+
+async function browserVisionScreenshotInHouse(sessionId: string): Promise<{
+  base64: string;
+  width: number;
+  height: number;
+  mimeType?: 'image/png' | 'image/jpeg';
+  viewportWidth?: number;
+  viewportHeight?: number;
+  coordinateScale?: { x: number; y: number };
+  normalized?: boolean;
+} | null> {
+  const resolved = resolveSessionId(sessionId);
+  if (!getInHouseSession(resolved)) return null;
+  const shot: any = await callInHouseBrowser('screenshot', { sessionId: resolved });
+  const imgW = Number(shot?.width || 0);
+  const imgH = Number(shot?.height || 0);
+  const cssW = Number(shot?.viewportWidth || imgW) || imgW;
+  const cssH = Number(shot?.viewportHeight || imgH) || imgH;
+  // The captured PNG is in physical pixels (devicePixelRatio applied). Map model
+  // image coordinates back to CSS pixels for native input via coordinateScale.
+  const scaleX = imgW > 0 ? cssW / imgW : 1;
+  const scaleY = imgH > 0 ? cssH / imgH : 1;
+  const normalized = Math.abs(scaleX - 1) > 0.001 || Math.abs(scaleY - 1) > 0.001;
+  const out = {
+    base64: String(shot?.base64 || ''),
+    width: imgW,
+    height: imgH,
+    mimeType: 'image/png' as const,
+    viewportWidth: cssW,
+    viewportHeight: cssH,
+    coordinateScale: { x: scaleX, y: scaleY },
+    normalized,
+  };
+  if (!out.base64) return null;
+  setLastBrowserScreenshot(resolved, out);
+  return out;
+}
+
 export async function browserOpen(
   sessionId: string,
   url: string,
-  options?: { observe?: BrowserObserveMode; target?: BrowserProfileKind | string; profileDirectory?: unknown },
+  options?: { observe?: BrowserObserveMode; target?: BrowserProfileKind | string; profile?: BrowserProfileKind | string; inhouseProfile?: unknown; profileDirectory?: unknown },
 ): Promise<string> {
   // ── URL sanity guard ──────────────────────────────────────────────────────
   // When called from inside the node_call<> VM sandbox the URL may arrive as
@@ -4212,12 +4633,41 @@ export async function browserOpen(
   }
 
   const resolvedSessionId = resolveSessionId(sessionId);
-  if (options?.target != null || options?.profileDirectory != null) {
-    const targetResult = await browserSetProfileTarget(resolvedSessionId, options.target || getMainBrowserTarget(resolvedSessionId), {
-      closeExisting: true,
-      profileDirectory: options.profileDirectory,
-    });
-    if (targetResult.startsWith('ERROR')) return targetResult;
+  const requestedTarget = options?.target ?? options?.profile;
+  const requestedInHouseProfile = normalizeInHouseProfileId(options?.inhouseProfile);
+  const requestedTargetKind = requestedTarget != null ? normalizeBrowserProfileKind(requestedTarget) : null;
+  if (requestedTarget != null || options?.profileDirectory != null) {
+    const metadata = getBrowserSessionMetadata(resolvedSessionId);
+    if (metadata.ownerType === 'main') {
+      // Record the chosen in-house profile before flipping the target so the
+      // first open lands on the right partition.
+      if (requestedTargetKind === 'inhouse' && requestedInHouseProfile) {
+        inHouseProfilePreferences.set(resolvedSessionId, requestedInHouseProfile);
+      }
+      const targetResult = await browserSetProfileTarget(resolvedSessionId, requestedTarget || getMainBrowserTarget(resolvedSessionId), {
+        closeExisting: true,
+        profileDirectory: options?.profileDirectory,
+      });
+      if (targetResult.startsWith('ERROR')) return targetResult;
+    } else if (requestedTargetKind === 'inhouse') {
+      // Subagents/tasks may opt into the in-house browser with their own isolated
+      // profile (default) or an explicit shared one via inhouse_profile.
+      if (!isInHouseBrowserAvailable()) {
+        return 'ERROR: Prometheus in-house browser is only available in the Electron desktop app. Use the regular Prometheus Chrome profile instead.';
+      }
+      if (requestedInHouseProfile) inHouseProfilePreferences.set(resolvedSessionId, requestedInHouseProfile);
+      inHouseTargetSessions.add(resolvedSessionId);
+    } else if (requestedTargetKind) {
+      // Switching a subagent back off the in-house lane (prometheus / user_chrome).
+      inHouseTargetSessions.delete(resolvedSessionId);
+      if (getInHouseSession(resolvedSessionId)) {
+        clearInHouseSession(resolvedSessionId);
+        await callInHouseBrowser('hide', { sessionId: resolvedSessionId }).catch(() => {});
+      }
+    }
+  }
+  if (shouldUseInHouseBrowser(resolvedSessionId)) {
+    return browserOpenInHouse(resolvedSessionId, rawUrl, options);
   }
   let session: BrowserSession;
   try {
@@ -4261,6 +4711,7 @@ export async function browserOpen(
 
 export async function browserSnapshot(sessionId: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) return browserSnapshotInHouse(resolved);
   let session = sessions.get(resolved);
   if (session && !(await isSessionAlive(session))) {
     console.log(`[Browser] browserSnapshot: session dead, evicting.`);
@@ -4313,6 +4764,39 @@ export async function browserNavigateControl(
   timestamp: number;
 }> {
   const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    const nav: any = await callInHouseBrowser('navigate', {
+      sessionId: resolved,
+      action: payload?.action,
+      url: String(payload?.url || '').trim(),
+    });
+    const inHouse = upsertInHouseSession(resolved, nav);
+    const interactionState = getOrCreateBrowserInteractionState(resolveBrowserInteractionStateId(resolved));
+    return {
+      sessionId: resolved,
+      active: true,
+      url: inHouse.url,
+      title: inHouse.title,
+      browserTarget: 'inhouse',
+      profileKind: 'inhouse',
+      profileLabel: getBrowserProfileLabel('inhouse'),
+      profileDir: 'Electron persistent partition: persist:prometheus-inhouse-browser',
+      debugPort: 0,
+      mode: interactionState.mode,
+      captured: interactionState.captured,
+      controlOwner: interactionState.controlOwner,
+      streamActive: false,
+      streamTransport: '',
+      streamFocus: 'interactive',
+      source: 'user',
+      statusLabel: 'Navigated in Prometheus in-house browser.',
+      frameBase64: '',
+      frameWidth: 0,
+      frameHeight: 0,
+      frameFormat: 'png',
+      timestamp: Date.now(),
+    };
+  }
   const session = await getOrCreateSession(resolved, {
     url: String(payload?.url || '').trim(),
   });
@@ -4378,6 +4862,7 @@ export async function browserClick(
   target: number | { ref?: number; element?: string; selector?: string },
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) return browserClickInHouse(sessionId, target, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   const requestedElement = typeof target === 'object' && target !== null ? String(target.element || '').trim() : '';
@@ -4484,6 +4969,7 @@ export async function browserFill(
   text: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) return browserFillInHouse(sessionId, target, text, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   const requestedElement = typeof target === 'object' && target !== null ? String(target.element || '').trim() : '';
@@ -4835,6 +5321,7 @@ export async function browserPressKey(
   key: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) return browserPressKeyInHouse(sessionId, key, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
@@ -4873,6 +5360,7 @@ export async function browserType(
   text: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) return browserTypeInHouse(sessionId, text, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
@@ -4905,6 +5393,14 @@ export async function browserWait(
   ms: number,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) {
+    const clampedNative = Math.min(Math.max(ms || 1000, 500), 8000);
+    await new Promise((resolve) => setTimeout(resolve, clampedNative));
+    if (shouldReturnSnapshot(options?.observe || resolveBrowserObserveMode('browser_wait'))) {
+      return browserSnapshotInHouse(sessionId);
+    }
+    return `Waited ${clampedNative}ms in Prometheus in-house browser.`;
+  }
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   const clamped = Math.min(Math.max(ms || 1000, 500), 8000);
@@ -4935,7 +5431,20 @@ export async function browserWait(
  * is currently selected so it knows how many more presses are needed.
  */
 export async function browserGetFocusedItem(sessionId: string): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolvedFocus = resolveSessionId(sessionId);
+  if (getInHouseSession(resolvedFocus)) {
+    try {
+      const info = await callInHouseBrowser<any>('run-js', {
+        sessionId: resolvedFocus,
+        code: `(() => { const el = document.activeElement; if (!el || el === document.body) return null; return { tag: (el.tagName||'').toLowerCase(), role: el.getAttribute('role')||'', label: el.getAttribute('aria-label')||'', text: String(el.innerText||el.value||'').replace(/\\s+/g,' ').trim().slice(0,300) }; })()`,
+      });
+      if (!info) return 'No element is currently focused in the in-house browser.';
+      return `Focused element: [${info.role || info.tag}] ${info.label || info.text || ''}`.trim();
+    } catch (err: any) {
+      return `ERROR: In-house get-focused-item failed: ${err.message}`;
+    }
+  }
+  const session = sessions.get(resolvedFocus);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
     const info = await session.page.evaluate(() => {
@@ -5067,6 +5576,16 @@ export async function browserScroll(
   multiplier?: number,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) {
+    const resolved = resolveSessionId(sessionId);
+    const amount = Math.min(Math.max(Number(multiplier || 1) || 1, 0.25), 5);
+    const deltaY = (direction === 'up' ? -1 : 1) * Math.round(640 * amount);
+    await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+    const observeMode = options?.observe || resolveBrowserObserveMode('browser_scroll');
+    if (shouldReturnSnapshot(observeMode)) return browserSnapshotInHouse(resolved);
+    broadcastInHouseBrowserStatus(resolved, 'browser_scroll', `Scrolled ${direction} in Prometheus in-house browser.`, { active: true });
+    return `Scrolled ${direction} in Prometheus in-house browser.`;
+  }
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -5203,6 +5722,9 @@ export async function browserDrag(
     observe?: BrowserObserveMode;
   } = {},
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) {
+    return inHouseUnsupportedToolMessage('browser_drag', 'Use browser_click / browser_fill / browser_scroll for in-house browser interactions.');
+  }
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -5265,6 +5787,9 @@ export async function browserScrollCollect(
   } = {}
 ): Promise<string> {
   const resolvedSessionId = resolveSessionId(sessionId);
+  if (getInHouseSession(resolvedSessionId)) {
+    return inHouseUnsupportedToolMessage('browser_scroll_collect', 'Use browser_snapshot, then browser_scroll direction="down", and snapshot again to read more of the feed.');
+  }
   const session = sessions.get(resolvedSessionId);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -5512,6 +6037,9 @@ export async function browserScrollCollectV2(
   options: Record<string, any> = {},
 ): Promise<string> {
   const resolvedSessionId = resolveSessionId(sessionId);
+  if (getInHouseSession(resolvedSessionId)) {
+    return inHouseUnsupportedToolMessage('browser_scroll_collect', 'Use browser_snapshot, then browser_scroll direction="down", and snapshot again to read more of the feed.');
+  }
   const session = sessions.get(resolvedSessionId);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -5730,12 +6258,12 @@ export function getBrowserToolDefinitions(): any[] {
       function: {
         name: 'browser_set_profile_target',
         description:
-          'Main chat only: choose which Chrome profile future browser tools use. Default is target="prometheus" (Prometheus-owned debug profile on CHROME_DEBUG_PORT, normally 9222). target="user_chrome" attaches to Chrome on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT (default 9223) when present, or launches a fresh debugger-enabled Chrome using the user Chrome data dir. If normal Chrome is already open with that profile, the fresh launch may fail until Chrome is closed. Subagents cannot use this and remain isolated.',
+          'Main chat only: choose which browser lane future browser tools use. target="prometheus" is the regular Prometheus-owned Chrome/CDP flow. target="inhouse" uses the embedded Electron in-app browser surface. target="user_chrome" attaches to Chrome on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT (default 9223) when present, or launches a fresh debugger-enabled Chrome using the user Chrome data dir. If normal Chrome is already open with that profile, the fresh launch may fail until Chrome is closed. Subagents cannot use this and remain isolated.',
         parameters: {
           type: 'object',
           required: ['target'],
           properties: {
-            target: { type: 'string', enum: ['prometheus', 'user_chrome'], description: 'prometheus = isolated Prometheus profile; user_chrome = user Chrome profile on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT, default 9223.' },
+            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'prometheus = regular Chrome/CDP profile; inhouse = embedded Electron in-app browser; user_chrome = user Chrome profile on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT, default 9223.' },
             profile_directory: { type: 'string', description: 'Optional Chrome profile directory inside User Data, such as "Default" or "Profile 1", used when launching user_chrome fresh.' },
             close_existing: { type: 'boolean', description: 'Close/recreate the current main browser session if it is using a different target. Default true.' },
           },
@@ -5746,12 +6274,14 @@ export function getBrowserToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'browser_open',
-        description: 'Open a URL in a Playwright-controlled Chrome browser. Defaults to the Prometheus-owned debug profile. Use target="user_chrome" when the user wants their Chrome profile: Prometheus will attach to a CDP-enabled user Chrome if available, or launch a fresh debugger-enabled Chrome using the user Chrome data dir. If normal Chrome is already open with that profile, ask the user to close it or use desktop tools for the visible window. This is the ONLY correct way to open URLs for browser automation — NEVER use run_command to open chrome/edge, as those windows are invisible to all other browser tools. Always use browser_open first to establish a session before using browser_snapshot, browser_click, etc. Default observe="screenshot" so navigation gives visual context; request observe="snapshot" when you need DOM refs in the tool result, or observe="compact"/"none" when speed matters. Do NOT call browser_open again for a different URL within the same site — use browser_click on the link @ref instead. For searches, build a direct search URL (e.g. github.com/search?q=query). Elements marked [INPUT] can be filled. If element count looks low, call browser_wait with observe="snapshot" to let JS finish loading and expose refs.',
+        description: 'Open a URL in a Prometheus browser lane. Defaults to target="prometheus", the regular Playwright-controlled Chrome/CDP profile. Use target="inhouse" for the embedded Electron in-app browser. Use target="user_chrome" when the user wants their Chrome profile: Prometheus will attach to a CDP-enabled user Chrome if available, or launch a fresh debugger-enabled Chrome using the user Chrome data dir. Browser tools automatically operate on whichever lane was last opened. The in-house browser keeps PERSISTENT, isolated logins per profile: main chat uses the shared "main" profile, and a subagent that opens target="inhouse" gets its own isolated profile by default (so two agents on two accounts never clash) — pass inhouse_profile to share or pick a specific one (e.g. inhouse_profile="main" to reuse the main chat\'s logins, or inhouse_profile="account-b" for a dedicated account). Always use browser_open first to establish a session. Default observe="screenshot"; request observe="snapshot" for DOM refs, or observe="compact"/"none" when speed matters.',
         parameters: {
           type: 'object', required: ['url'],
           properties: {
             url: { type: 'string', description: 'Full URL to navigate to. For searches, build the search URL directly.' },
-            target: { type: 'string', enum: ['prometheus', 'user_chrome'], description: 'Optional main-chat-only browser profile target. Defaults to prometheus. Subagents ignore this and stay isolated.' },
+            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Browser target. prometheus = regular Chrome/CDP; inhouse = embedded Electron in-app browser (persistent per-profile logins); user_chrome = user Chrome. Main chat may use any; subagents may use prometheus (default isolated) or inhouse.' },
+            profile: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Alias for target while the two-lane browser rollout is in progress.' },
+            inhouse_profile: { type: 'string', description: 'Optional in-house browser profile id (an isolated, persistent login partition). Defaults to "main" for main chat and an isolated per-agent profile for subagents. Use "main" to share the main chat logins, or a distinct id like "account-b" to run a separate account without clashing.' },
             profile_directory: { type: 'string', description: 'Optional Chrome profile directory inside User Data, such as "Default" or "Profile 1", used with target="user_chrome".' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: screenshot for navigation.' },
           },
@@ -5824,7 +6354,7 @@ export function getBrowserToolDefinitions(): any[] {
             ref: { type: 'number', description: '@ref number from the most recent snapshot' },
             element: { type: 'string', description: 'Saved named element for the current site, such as "tweet composer" or "post button".' },
             selector: { type: 'string', description: 'CSS selector for a taught target when you have not promoted it to a saved named element yet.' },
-            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this click triggers a final post/send/publish/purchase/delete/submit action.' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this click triggers a final post/send/publish/purchase/delete/submit action. Forces a post-action observation that must be inspected before reporting completion.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: delta for medium-risk clicks.' },
             capture_after: { type: 'boolean', description: 'Shortcut for observe="snapshot" after the click when you need fresh refs immediately.' },
           },
@@ -5883,7 +6413,7 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object', required: ['key'],
           properties: {
             key: { type: 'string', description: 'Key name: Enter, Tab, Escape, ArrowDown, ArrowUp, Space' },
-            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action.' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action. Forces a post-action observation that must be inspected before reporting completion.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for deterministic keypresses.' },
           },
         },
@@ -5898,7 +6428,7 @@ export function getBrowserToolDefinitions(): any[] {
           type: 'object', required: ['key'],
           properties: {
             key: { type: 'string', description: 'Key name: Enter, Tab, Escape, ArrowDown, ArrowUp, Space, etc.' },
-            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action.' },
+            final_action_approval_id: { type: 'string', description: 'One-shot approval id from request_final_action_approval when this keypress triggers a final post/send/publish/purchase/delete/submit action. Forces a post-action observation that must be inspected before reporting completion.' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: none for deterministic keypresses.' },
           },
         },
@@ -6389,6 +6919,19 @@ export async function browserGetPageText(
   options?: { element?: string },
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    try {
+      const sel = String(options?.element || '').trim();
+      const code = sel
+        ? `(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el ? (el.innerText || el.textContent || '') : ''; })()`
+        : `(() => (document.body && (document.body.innerText || document.body.textContent)) || '')()`;
+      const text = await callInHouseBrowser<string>('run-js', { sessionId: resolved, code });
+      const inHouse = getInHouseSession(resolved);
+      return `Page: ${inHouse?.title || inHouse?.url || ''}\nURL: ${inHouse?.url || ''}\n\n${String(text || '').slice(0, 12000)}`;
+    } catch (err: any) {
+      return `ERROR: In-house browser get-page-text failed: ${err.message}`;
+    }
+  }
   const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -6546,6 +7089,7 @@ export async function browserRunJs(
   code: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) return browserRunJsInHouse(sessionId, code);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (!code || !code.trim()) return 'ERROR: code parameter is required.';
@@ -6724,6 +7268,7 @@ export async function browserElementWatch(
  * Falls back to full snapshot if no previous snapshot exists.
  */
 export async function browserSnapshotDelta(sessionId: string): Promise<string> {
+  if (getInHouseSession(sessionId)) return browserSnapshotInHouse(sessionId);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -6792,6 +7337,9 @@ export async function browserExtractStructured(
   sessionId: string,
   schema: Record<string, any>,
 ): Promise<string> {
+  if (getInHouseSession(sessionId)) {
+    return inHouseUnsupportedToolMessage('browser_extract_structured', 'Use browser_get_page_text or browser_run_js to read structured data from the in-house browser page.');
+  }
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (!schema || typeof schema !== 'object') return 'ERROR: schema must be an object with container_selector, item_root, or schema_name plus fields.';
@@ -6869,6 +7417,7 @@ export async function browserVisionScreenshot(sessionId: string): Promise<{
   coordinateScale?: { x: number; y: number };
   normalized?: boolean;
 } | null> {
+  if (getInHouseSession(sessionId)) return browserVisionScreenshotInHouse(sessionId);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return null;
   try {
@@ -6970,7 +7519,30 @@ export async function browserVisionClick(
   button: 'left' | 'right' = 'left',
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolvedVision = resolveSessionId(sessionId);
+  if (getInHouseSession(resolvedVision)) {
+    let px = Math.round(Number(x) || 0);
+    let py = Math.round(Number(y) || 0);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return 'ERROR: x and y must be valid numbers.';
+    const lastShot = getLastBrowserScreenshot(resolvedVision);
+    if (lastShot?.normalized === true && lastShot.coordinateScale) {
+      px = Math.round(px * lastShot.coordinateScale.x);
+      py = Math.round(py * lastShot.coordinateScale.y);
+    }
+    try {
+      await callInHouseBrowser('input', { sessionId: resolvedVision, action: 'click', x: px, y: py, button });
+      await new Promise((r) => setTimeout(r, 500));
+      const observeMode = options?.observe || resolveBrowserObserveMode('browser_vision_click');
+      if (shouldReturnSnapshot(observeMode)) {
+        return `Vision-clicked (${px}, ${py}) in Prometheus in-house browser.\n\n${await browserSnapshotInHouse(resolvedVision)}`;
+      }
+      broadcastInHouseBrowserStatus(resolvedVision, 'browser_vision_click', `Vision-clicked (${px}, ${py}) in Prometheus in-house browser.`, { active: true });
+      return `Vision-clicked (${px}, ${py}) in Prometheus in-house browser.`;
+    } catch (err: any) {
+      return `ERROR: In-house vision click failed: ${err.message}`;
+    }
+  }
+  const session = sessions.get(resolvedVision);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   let px = Math.round(Number(x) || 0);
   let py = Math.round(Number(y) || 0);
@@ -7019,7 +7591,31 @@ export async function browserVisionType(
   text: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolvedVType = resolveSessionId(sessionId);
+  if (getInHouseSession(resolvedVType)) {
+    let px = Math.round(Number(x) || 0);
+    let py = Math.round(Number(y) || 0);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return 'ERROR: x and y must be valid numbers.';
+    const lastShot = getLastBrowserScreenshot(resolvedVType);
+    if (lastShot?.normalized === true && lastShot.coordinateScale) {
+      px = Math.round(px * lastShot.coordinateScale.x);
+      py = Math.round(py * lastShot.coordinateScale.y);
+    }
+    try {
+      await callInHouseBrowser('input', { sessionId: resolvedVType, action: 'click', x: px, y: py });
+      await new Promise((r) => setTimeout(r, 200));
+      await callInHouseBrowser('input', { sessionId: resolvedVType, action: 'text', text: String(text || '') });
+      const observeMode = options?.observe || resolveBrowserObserveMode('browser_vision_type');
+      if (shouldReturnSnapshot(observeMode)) {
+        return `Typed at (${px}, ${py}) in Prometheus in-house browser.\n\n${await browserSnapshotInHouse(resolvedVType)}`;
+      }
+      broadcastInHouseBrowserStatus(resolvedVType, 'browser_vision_type', `Typed at (${px}, ${py}) in Prometheus in-house browser.`, { active: true });
+      return `Typed at (${px}, ${py}) in Prometheus in-house browser.`;
+    } catch (err: any) {
+      return `ERROR: In-house vision type failed: ${err.message}`;
+    }
+  }
+  const session = sessions.get(resolvedVType);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   let px = Math.round(Number(x) || 0);
   let py = Math.round(Number(y) || 0);
@@ -7062,7 +7658,8 @@ export async function browserVisionType(
 // ─── Session State Helpers (for system prompt injection) ───────────────────────
 
 export function hasBrowserSession(sessionId: string): boolean {
-  return sessions.has(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  return sessions.has(resolved) || inHouseSessions.has(resolved);
 }
 
 export async function browserHandleUserInput(
@@ -7109,6 +7706,44 @@ export async function browserHandleUserInput(
   };
 }> {
   const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    await callInHouseBrowser('input', { sessionId: resolved, ...payload });
+    const state: any = await callInHouseBrowser('state', { sessionId: resolved }).catch(() => ({}));
+    const inHouse = upsertInHouseSession(resolved, state);
+    const interactionState = getOrCreateBrowserInteractionState(resolveBrowserInteractionStateId(resolved));
+    const action = String(payload?.action || 'key').trim().toLowerCase();
+    const userActionKind = (['click', 'wheel', 'key', 'text'].includes(action) ? action : 'key') as BrowserUserAction['kind'];
+    return {
+      sessionId: resolved,
+      active: true,
+      url: inHouse.url,
+      title: inHouse.title,
+      source: 'user',
+      mode: interactionState.mode,
+      captured: interactionState.captured,
+      controlOwner: interactionState.controlOwner,
+      statusLabel: `User ${String(payload?.action || 'input')} sent to Prometheus in-house browser.`,
+      streamActive: false,
+      streamTransport: '',
+      streamFocus: 'interactive',
+      frameBase64: '',
+      frameWidth: 0,
+      frameHeight: 0,
+      frameFormat: 'png',
+      timestamp: Date.now(),
+      userAction: {
+        kind: userActionKind,
+        x: Number(payload?.x || 0),
+        y: Number(payload?.y || 0),
+        mode: interactionState.mode,
+        url: inHouse.url,
+        title: inHouse.title,
+        summary: `User ${String(payload?.action || 'input')} in in-house browser`,
+        timestamp: Date.now(),
+      },
+      clickHighlight: null,
+    };
+  }
   const session = sessions.get(resolved);
   if (!session) throw new Error('No browser session. Use browser_open first.');
   const action = String(payload?.action || '').trim().toLowerCase();
@@ -7451,10 +8086,34 @@ export async function browserTeachVerify(
 export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
+  const inHouse = inHouseSessions.get(resolved);
   const metadata = getBrowserSessionMetadata(resolved);
   const originLabel = formatBrowserSessionOriginLabel(resolved, metadata);
   const interactionState = browserInteractionStates.get(resolveBrowserInteractionStateId(sessionId));
   const liveStream = browserLiveStreams.get(resolved);
+  if (inHouse) {
+    return {
+      active: true,
+      sessionId: resolved,
+      originLabel,
+      url: inHouse.url,
+      title: inHouse.title,
+      debugPort: 0,
+      profileDir: 'Electron persistent partition: persist:prometheus-inhouse-browser',
+      profileKind: 'inhouse',
+      browserTarget: 'inhouse',
+      profileLabel: getBrowserProfileLabel('inhouse'),
+      mode: interactionState?.mode,
+      captured: interactionState?.captured,
+      controlOwner: interactionState?.controlOwner,
+      streamActive: false,
+      streamTransport: '',
+      streamFocus: 'interactive',
+      lastActor: interactionState?.lastActor,
+      lastActorSummary: interactionState?.lastActorSummary,
+      recentUserActions: interactionState?.recentUserActions ? [...interactionState.recentUserActions] : [],
+    };
+  }
   if (!session) {
     return {
       active: false,
@@ -7549,6 +8208,30 @@ export function listBrowserSessions(): BrowserSessionListEntry[] {
       profileKind: session.profileKind,
       browserTarget: session.browserTarget,
       profileLabel: getBrowserProfileLabel(session.profileKind),
+    });
+  }
+  for (const [sessionId, session] of inHouseSessions.entries()) {
+    if (seen.has(sessionId)) continue;
+    seen.add(sessionId);
+    const metadata = getBrowserSessionMetadata(sessionId);
+    const info = getBrowserSessionInfo(sessionId);
+    entries.push({
+      ...info,
+      active: true,
+      sessionId,
+      ownerType: metadata.ownerType,
+      ownerId: metadata.ownerId || '',
+      label: metadata.label || '',
+      originLabel: info.originLabel || formatBrowserSessionOriginLabel(sessionId, metadata),
+      taskPrompt: metadata.taskPrompt || '',
+      spawnerSessionId: metadata.spawnerSessionId || '',
+      createdAt: session.createdAt || metadata.createdAt || 0,
+      updatedAt: session.updatedAt || metadata.updatedAt || 0,
+      debugPort: 0,
+      profileDir: 'Electron persistent partition: persist:prometheus-inhouse-browser',
+      profileKind: 'inhouse',
+      browserTarget: 'inhouse',
+      profileLabel: getBrowserProfileLabel('inhouse'),
     });
   }
   return entries.sort((a, b) => {
@@ -7949,6 +8632,50 @@ export async function browserInspectPoint(
   viewport: { width: number; height: number };
 }> {
   const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    const inHouse = getInHouseSession(resolved)!;
+    const inspected: any = await callInHouseBrowser('inspect', { sessionId: resolved, x, y });
+    if (!inspected || !inspected.tagName) return null;
+    const pack = buildBrowserSelectorPack({
+      tagName: inspected.tagName,
+      id: inspected.id,
+      role: inspected.role,
+      text: inspected.text,
+      name: inspected.text,
+      xpath: '',
+      testid: '',
+      ariaLabel: '',
+      placeholder: '',
+      title: '',
+      classList: [],
+      siblingIndex: 0,
+      parentChain: [],
+    } as any);
+    const selection = {
+      sessionId: resolved,
+      url: inHouse.url,
+      title: inHouse.title,
+      selector: String(inspected.selector || pack.css || ''),
+      pack,
+      tagName: String(inspected.tagName || ''),
+      id: String(inspected.id || ''),
+      classList: [],
+      role: String(inspected.role || ''),
+      text: String(inspected.text || ''),
+      htmlSnippet: '',
+      bounds: inspected.bounds,
+      viewport: inspected.viewport,
+    };
+    if (options.trackSelection) {
+      broadcastWS({
+        type: 'browser:selection',
+        sessionId: resolved,
+        selection,
+        timestamp: Date.now(),
+      });
+    }
+    return selection;
+  }
   const session = sessions.get(resolved);
   if (!session) return null;
   const px = Math.round(Number(x) || 0);

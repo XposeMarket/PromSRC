@@ -2160,6 +2160,8 @@ async function handleChat(
   let preflightReasonForTurn = '';
   let continuationNudges = 0;
   const MAX_CONTINUATION_NUDGES = 4;
+  let setupFinalizationGuard = 0;
+  const MAX_SETUP_FINALIZATION_GUARD = 3;
   let planFinalizationGuard = 0;
   const MAX_PLAN_FINALIZATION_GUARD = 4;
   let writeNoteFinalizationGuard = 0;
@@ -2453,8 +2455,26 @@ async function handleChat(
     'list_files', 'list_directory', 'read_file', 'read_files_batch', 'read_dev_sources', 'web_search', 'web_fetch',
     'browser_snapshot', 'browser_get_page_text', 'browser_get_focused_item',
     'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
-    'skill_list',
+    'skill_list', 'skill_read',
   ]);
+
+  const SETUP_OR_SCOUT_TOOLS = new Set([
+    'skill_list', 'skill_read', 'request_tool_category', 'business_context_mode',
+    'list_files', 'list_directory', 'read_file', 'read_files_batch', 'read_dev_sources',
+    'path_exists', 'mkdir', 'copy_file', 'file_stats',
+  ]);
+
+  const SUBSTANTIVE_FILE_MUTATION_TOOLS = new Set([
+    'create_file', 'write', 'write_file', 'replace_lines', 'find_replace', 'insert_after',
+    'delete_lines', 'delete_file', 'apply_patchset', 'request_dev_source_edit',
+  ]);
+
+  const isSetupOrScoutTool = (name: unknown): boolean => SETUP_OR_SCOUT_TOOLS.has(String(name || '').trim());
+  const isSubstantiveFileMutationToolName = (name: unknown): boolean => SUBSTANTIVE_FILE_MUTATION_TOOLS.has(String(name || '').trim());
+  const userRequestedDurableBuildWork = (): boolean => {
+    const text = String(message || '').toLowerCase();
+    return /\b(build|create|make|implement|generate|design|code|site|website|page|app|tool|component|fix|edit|update|clone|from screenshot|screenshot|continue|resume|proceed|keep going)\b/i.test(text);
+  };
 
   // Keep legacy round-stats for the checklist-guard and continuation-nudge logic
   let progressRoundToolCalls = 0;
@@ -5311,6 +5331,53 @@ RULES:
         manualPlanHasOpenSteps
         && continuationNudges < MAX_CONTINUATION_NUDGES
         && !isHardBlockerReply(candidateText);
+      const successfulToolResults = allToolResults.filter((r) => r && !r.error);
+      const lastSuccessfulTool = successfulToolResults[successfulToolResults.length - 1];
+      const setupOnlyToolResults =
+        successfulToolResults.length > 0
+        && successfulToolResults.every((r) => isSetupOrScoutTool(r.name))
+        && !successfulToolResults.some((r) => isSubstantiveFileMutationToolName(r.name));
+      const shouldForceSetupContinuation =
+        userRequestedDurableBuildWork()
+        && setupOnlyToolResults
+        && isSetupOrScoutTool(lastSuccessfulTool?.name)
+        && setupFinalizationGuard < MAX_SETUP_FINALIZATION_GUARD
+        && !hasConcreteCompletion(candidateText)
+        && !isHardBlockerReply(candidateText);
+
+      if (shouldForceSetupContinuation) {
+        setupFinalizationGuard++;
+        const recentSetup = successfulToolResults
+          .slice(-6)
+          .map((r) => {
+            const name = String(r.name || 'tool');
+            const preview = String(r.result || '').replace(/\s+/g, ' ').slice(0, 120);
+            return `- ${name}${preview ? `: ${preview}` : ''}`;
+          })
+          .join('\n');
+        console.log(
+          `[v2] SETUP FINALIZATION BLOCKED: only setup/scout tools completed for durable build request (guard ${setupFinalizationGuard}/${MAX_SETUP_FINALIZATION_GUARD})`,
+        );
+        sendSSE('info', {
+          message: 'Post-check: continuing because only setup/skill-scout work has completed so far.',
+        });
+        if (candidateText) {
+          messages.push({ role: 'assistant', content: candidateText });
+        }
+        messages.push({
+          role: 'user',
+          content: [
+            'Do not finalize yet. The user asked for durable build/edit work, but the last successful actions were only setup, file staging, skill scouting, or tool-category activation.',
+            '',
+            recentSetup ? `Recent setup results:\n${recentSetup}` : 'Recent setup results: none',
+            '',
+            'Continue the actual implementation now. Do not call skill_list again unless a new, specific skill is required.',
+            'Use concrete workspace tools such as create_file, write_file, replace_lines, find_replace, apply_patchset, or browser/dev-server verification as appropriate.',
+            'Only provide the final answer after you have actually created or updated the requested deliverable, or after you hit a real blocker.',
+          ].join('\n'),
+        });
+        continue;
+      }
 
       if (shouldForceManualPlanRetry) {
         continuationNudges++;
@@ -5715,6 +5782,9 @@ RULES:
               .map(r => {
                 const name = String(r.name || 'tool');
                 const args = r.args || {};
+                if (isSetupOrScoutTool(name)) {
+                  return '';
+                }
                 // Extract the most meaningful arg per tool type
                 if (name === 'create_file' || name === 'write') {
                   return args.filename || args.name || args.path || name;
@@ -13706,6 +13776,25 @@ router.post('/api/chat', async (req, res) => {
   }
 });
 
+function markActiveRunsOnSessionList<T extends any>(input: T): T {
+  const activeSessionIds = new Set(
+    listLiveRuntimes()
+      .filter((runtime: any) => runtime?.kind === 'main_chat' && runtime?.sessionId)
+      .map((runtime: any) => String(runtime.sessionId)),
+  );
+  if (!activeSessionIds.size) return input;
+
+  const mark = (session: any) => session && typeof session === 'object'
+    ? { ...session, activeRun: activeSessionIds.has(String(session.id || '')) || session.activeRun === true }
+    : session;
+
+  if (Array.isArray(input)) return input.map(mark) as T;
+  if (input && typeof input === 'object' && Array.isArray((input as any).sessions)) {
+    return { ...(input as any), sessions: (input as any).sessions.map(mark) } as T;
+  }
+  return input;
+}
+
 // ── List sessions endpoint ────────────────────────────────────────────────────
 router.get('/api/sessions', async (req, res) => {
   try {
@@ -13725,11 +13814,11 @@ router.get('/api/sessions', async (req, res) => {
         limit: Number(req.query.limit),
         offset: Number(req.query.offset),
       });
-      res.json(page);
+      res.json(markActiveRunsOnSessionList(page));
       return;
     }
 
-    res.json({ sessions: listSessionSummaries(channel as any) });
+    res.json({ sessions: markActiveRunsOnSessionList(listSessionSummaries(channel as any)) });
   } catch (err: any) {
     console.error('[/api/sessions] Error:', err);
     res.status(500).json({ error: err.message || 'Failed to list sessions' });
@@ -13791,7 +13880,7 @@ router.get('/api/sessions/search', (req, res) => {
     });
     res.json({
       query: q,
-      sessions,
+      sessions: markActiveRunsOnSessionList(sessions),
     });
   } catch (err: any) {
     console.error('[/api/sessions/search] Error:', err);

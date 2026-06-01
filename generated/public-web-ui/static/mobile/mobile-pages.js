@@ -14,7 +14,7 @@ import {
   streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession,
   loadGatewayStatus, loadLatestUsableSession, loadMobileChatSession, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay,
   updateMobileChatSessionHistory, markMobileEditRerunReset, markMobileChatSessionRead,
-  loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState,
+  loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState, streamTeamChat, loadTeamChatStreamReplay,
   claimPairing, pollPairing, verifyPairingMe,
   createVoiceInterruptionEvent, streamVoiceAgentInputMobile,
   getDeviceToken, setDeviceToken, clearDeviceToken,
@@ -34,7 +34,7 @@ import {
   loadCanvasImageDataUrl, creativeExtractLayers, loadCreativeGallery, buildInlineMediaUrl,
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentHeartbeat,
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentChat, loadSubagentContextRefs,
-  spawnSubagentTask, streamSubagentChat,
+  spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
 } from './mobile-api.js';
 import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/account.js';
 import { renderMd } from '../utils.js';
@@ -11190,6 +11190,8 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   const tabSlot     = body.querySelector('#pm-tab-slot');
 
   async function selectTab(tabName) {
+    try { tabSlot?._pmCleanup?.(); } catch {}
+    if (tabSlot) tabSlot._pmCleanup = null;
     body.querySelectorAll('.pm-tabs button').forEach(x => x.classList.toggle('active', x.getAttribute('data-tab') === tabName));
     if (tabName === 'Context') {
       contextSlot.style.display = '';
@@ -11296,6 +11298,10 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
       } catch {}
     });
   }
+
+  page._pmCleanup = () => {
+    try { tabSlot?._pmCleanup?.(); } catch {}
+  };
 }
 
 /* ---------------- PLACEHOLDER ---------------- */
@@ -11403,6 +11409,236 @@ async function _renderRunsTab(slot, teamId) {
   `).join('');
 }
 
+function _mobileReplayFrameToEvent(frame) {
+  if (!frame) return null;
+  return { type: String(frame.type || frame.event || ''), ...(frame.data || {}) };
+}
+
+function _pushMobileStreamProcessEntry(message, type, text, extra = null) {
+  const clean = String(text || '').trim();
+  if (!message || !clean) return;
+  if (!Array.isArray(message.processEntries)) message.processEntries = [];
+  const key = `${type}:${clean}`.slice(0, 260);
+  if (message.processEntries.some((entry) => String(entry?._key || '') === key)) return;
+  message.processEntries.push({
+    _key: key,
+    type,
+    text: clean.length > 420 ? `${clean.slice(0, 420)}...` : clean,
+    extra,
+    time: _nowTime(),
+  });
+  if (message.processEntries.length > 80) {
+    message.processEntries.splice(0, message.processEntries.length - 80);
+  }
+}
+
+function _renderMobileStreamProcess(message) {
+  const sourceEntries = [
+    ...(Array.isArray(message?.processEntries) ? message.processEntries : []),
+    ...(Array.isArray(message?.metadata?.processEntries) ? message.metadata.processEntries : []),
+  ];
+  const entries = sourceEntries.length
+    ? sourceEntries.map((entry) => ({
+        ...entry,
+        type: String(entry?.type || 'info'),
+        text: String(entry?.text || entry?.content || '').trim(),
+      })).filter((entry) => entry.text)
+    : [];
+  return _renderMobileProcess(entries);
+}
+
+function _mobileAgentMessageAttachments(message) {
+  return [
+    ...(Array.isArray(message?.body?.attachments) ? message.body.attachments : []),
+    ...(Array.isArray(message?.attachmentPreviews) ? message.attachmentPreviews : []),
+    ...(Array.isArray(message?.metadata?.attachmentPreviews) ? message.metadata.attachmentPreviews : []),
+  ].filter(Boolean);
+}
+
+function _mobileAgentMessageFiles(message) {
+  return [
+    ...(Array.isArray(message?.files) ? message.files : []),
+    ...(Array.isArray(message?.canvasFiles) ? message.canvasFiles : []),
+    ...(Array.isArray(message?.metadata?.canvasFiles) ? message.metadata.canvasFiles : []),
+    ...(Array.isArray(message?.metadata?.files) ? message.metadata.files : []),
+  ].filter(Boolean);
+}
+
+function _mobileAgentMessageFileChanges(message) {
+  return message?.fileChanges || message?.metadata?.fileChanges || message?.body?.fileChanges || null;
+}
+
+function _renderMobileAgentChatBubble(message, options = {}) {
+  const role = String(message?.role || message?.from || options.role || 'agent').toLowerCase();
+  const fromUser = role === 'user' || role === 'you' || role === 'human';
+  const timeValue = message?.createdAt || message?.timestamp || message?.ts;
+  const time = timeValue ? _formatTimeAgo(timeValue) : '';
+  const text = String(message?.content || message?.message || message?.text || message?.body?.text || '').replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
+  const attachments = _mobileAgentMessageAttachments(message);
+  const attachmentHtml = attachments.length ? _renderChatAttachmentPreviews(attachments, false) : '';
+  const progress = message?._progress ? `<div class="pm-sa-progress">${escapeHtml(message._progress)}</div>` : '';
+  const streaming = message?.streaming === true || !!message?._progress || (message && message._done !== true && options.live === true);
+  const explicitStartedAt = Number(message?.workStartedAt || message?.startedAt || 0);
+  const assistantLike = {
+    ...message,
+    role: 'ai',
+    timestamp: Number(timeValue || Date.now()),
+    streaming,
+    workStartedAt: (Number.isFinite(explicitStartedAt) && explicitStartedAt > 0)
+      ? explicitStartedAt
+      : (streaming ? Number(timeValue || Date.now()) : 0),
+  };
+  let inner = '';
+  if (fromUser) {
+    inner = `<div class="markdown-body">${_renderMobileMarkdown(text)}</div>${attachmentHtml}`;
+  } else {
+    const sender = String(options.sender || message?.fromLabel || message?.body?.sender || message?.fromName || 'Agent');
+    inner += _renderMobileWorkTimer(assistantLike);
+    inner += `<span class="pm-sender">${escapeHtml(sender)}</span>`;
+    inner += progress;
+    inner += text
+      ? `<div class="markdown-body">${_renderMobileMarkdown(text)}</div>`
+      : (streaming ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');
+    inner += attachmentHtml;
+    inner += _renderMobileMediaGallery(_collectMessageMedia({
+      ...message,
+      files: _mobileAgentMessageFiles(message),
+      artifacts: Array.isArray(message?.artifacts) ? message.artifacts : (Array.isArray(message?.metadata?.artifacts) ? message.metadata.artifacts : []),
+    }));
+    inner += _renderMobileFileChanges(_mobileAgentMessageFileChanges(message));
+    inner += _renderMobileStreamProcess(message);
+  }
+  return `
+    <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'}" style="max-width:92%;margin-bottom:10px;"${streaming && !fromUser ? ' data-streaming="1"' : ''}>
+      <div class="pm-bubble">
+        ${inner}
+        ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
+      </div>
+    </div>`;
+}
+
+function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
+  if (!message || !evt) return false;
+  const type = String(evt.type || '').trim();
+  switch (type) {
+    case 'token': {
+      const chunk = String(evt.text || '');
+      if (!chunk) return false;
+      message.content = `${message.content || ''}${chunk}`;
+      message.text = message.content;
+      message.body = { ...(message.body || {}), text: message.content };
+      message._progress = '';
+      return true;
+    }
+    case 'thinking_delta': {
+      const chunk = String(evt.thinking || evt.text || '');
+      if (!chunk) return false;
+      message._thinking = `${message._thinking || ''}${chunk}`;
+      message._progress = `${fallbackName} is thinking...`;
+      return true;
+    }
+    case 'thinking':
+    case 'agent_thought': {
+      const thought = String(evt.thinking || evt.text || '').trim();
+      if (!thought) return false;
+      message._thinking = message._thinking ? `${message._thinking}\n\n${thought}` : thought;
+      _pushMobileStreamProcessEntry(message, 'think', thought, evt.actor ? { actor: evt.actor } : null);
+      message._progress = `${fallbackName} is thinking...`;
+      return true;
+    }
+    case 'info':
+    case 'heartbeat': {
+      const info = String(evt.message || evt.current_step || evt.state || '').trim();
+      if (!info || /^processing$/i.test(info)) return false;
+      message._progress = info.slice(0, 140);
+      _pushMobileStreamProcessEntry(message, 'info', info, evt.actor ? { actor: evt.actor } : null);
+      return true;
+    }
+    case 'progress_state': {
+      const items = Array.isArray(evt.items) ? evt.items : [];
+      const activeIndex = Number(evt.activeIndex || -1);
+      const activeText = String(activeIndex >= 0 ? items[activeIndex]?.text || '' : '').trim();
+      if (!activeText) return false;
+      message._progress = activeText.slice(0, 140);
+      return true;
+    }
+    case 'tool_call': {
+      const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
+      const stepNum = Number(evt.stepNum || 0);
+      const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
+      const args = evt.args && typeof evt.args === 'object' ? JSON.stringify(evt.args).slice(0, 180) : '';
+      message._progress = `Running ${action}...`;
+      _pushMobileStreamProcessEntry(message, 'tool', `${stepPrefix}${action}${args ? ` ${args}` : ''}`, evt.actor ? { actor: evt.actor } : null);
+      return true;
+    }
+    case 'tool_result': {
+      const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
+      const text = String(evt.result || evt.output || '').trim();
+      const ok = evt.error === true ? false : !/^ERROR:/i.test(text);
+      try { _collectMediaFromToolEvent(message, evt); } catch {}
+      if (evt.fileChanges) message.fileChanges = evt.fileChanges;
+      if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
+      message._progress = ok ? '' : `${action} failed`;
+      _pushMobileStreamProcessEntry(message, ok ? 'result' : 'error', `${action}${text ? ` -> ${text}` : ' complete'}`, evt.actor ? { actor: evt.actor } : null);
+      return true;
+    }
+    case 'tool_progress': {
+      const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
+      const text = String(evt.message || '').trim();
+      if (!text) return false;
+      message._progress = `${action}: ${text}`.slice(0, 140);
+      _pushMobileStreamProcessEntry(message, 'info', `${action}: ${text}`, evt.actor ? { actor: evt.actor } : null);
+      return true;
+    }
+    case 'final': {
+      const text = String(evt.text || evt.reply || '').trim();
+      try { _collectMediaFromToolEvent(message, evt); } catch {}
+      if (evt.fileChanges) message.fileChanges = evt.fileChanges;
+      if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
+      if (text && !String(message.content || '').trim()) {
+        message.content = text;
+        message.text = text;
+        message.body = { ...(message.body || {}), text };
+      }
+      message._progress = '';
+      return true;
+    }
+    case 'done': {
+      const text = String(evt.reply || evt.text || '').trim();
+      try { _collectMediaFromToolEvent(message, evt); } catch {}
+      if (evt.fileChanges) message.fileChanges = evt.fileChanges;
+      if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
+      if (text && !String(message.content || '').trim()) {
+        message.content = text;
+        message.text = text;
+        message.body = { ...(message.body || {}), text };
+      }
+      if (String(evt.thinking || '').trim()) {
+        message._thinking = message._thinking ? `${message._thinking}\n\n${String(evt.thinking).trim()}` : String(evt.thinking).trim();
+      }
+      message._progress = '';
+      message._done = true;
+      message.streaming = false;
+      message.workEndedAt = Number(message.workEndedAt || Date.now()) || Date.now();
+      message.workDurationMs = Math.max(0, message.workEndedAt - Number(message.workStartedAt || message.createdAt || message.timestamp || message.workEndedAt));
+      return true;
+    }
+    case 'error': {
+      const err = String(evt.message || 'Stream error').trim();
+      message.content = message.content || `Error: ${err}`;
+      message.text = message.content;
+      message.body = { ...(message.body || {}), text: message.content };
+      message._progress = '';
+      message.streaming = false;
+      message.workEndedAt = Number(message.workEndedAt || Date.now()) || Date.now();
+      _pushMobileStreamProcessEntry(message, 'error', err);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 async function _renderTeamChatTab(slot, teamId) {
   slot.innerHTML = `
     <div class="pm-card" id="pm-team-chat-card" style="padding:0;overflow:hidden;">
@@ -11417,34 +11653,112 @@ async function _renderTeamChatTab(slot, teamId) {
   const listEl = slot.querySelector('#pm-team-chat-list');
   const form   = slot.querySelector('#pm-team-chat-form');
   const input  = slot.querySelector('#pm-team-chat-input');
+  let messages = [];
+  let liveMsg = null;
+  let currentStream = null;
+  let lastSeq = 0;
+  let lastStreamId = '';
+  let localSseActive = false;
+  let cleanupDone = false;
 
-  function renderList(messages) {
+  function upsertServerMessages(fresh) {
+    const localLive = liveMsg && !liveMsg._done ? liveMsg : null;
+    messages = Array.isArray(fresh) ? fresh.slice() : [];
+    if (localLive) {
+      const duplicate = messages.some((m) =>
+        String(m.content || m.message || m.text || '').trim()
+        && String(m.content || m.message || m.text || '').trim() === String(localLive.content || '').trim()
+      );
+      if (!duplicate) messages.push(localLive);
+    }
+  }
+
+  function renderList() {
     if (!messages.length) {
       listEl.innerHTML = `<div style="text-align:center;color:var(--pm-muted);padding:24px 8px;font-size:13px;">No messages yet. Send the first one.</div>`;
       return;
     }
-    listEl.innerHTML = messages.map(m => {
-      const role = String(m.role || m.from || 'manager').toLowerCase();
-      const fromUser = role === 'user' || role === 'you' || role === 'human';
-      const time = m.createdAt ? _formatTimeAgo(m.createdAt) : '';
-      const text = String(m.content || m.message || m.text || '');
-      return `
-        <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'}" style="max-width:92%;margin-bottom:10px;">
-          <div class="pm-bubble">
-            ${fromUser ? '' : `<span class="pm-sender">${escapeHtml(m.fromLabel || (role === 'manager' ? 'Manager' : role))}</span>`}
-            ${escapeHtml(text).replace(/\n/g, '<br>')}
-            ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
-          </div>
-        </div>`;
-    }).join('');
+    listEl.innerHTML = messages.map((m) => _renderMobileAgentChatBubble(m, {
+      sender: m.fromLabel || m.fromName || 'Manager',
+      live: m === liveMsg,
+    })).join('');
     listEl.scrollTop = listEl.scrollHeight;
   }
 
   try {
-    renderList(await loadTeamChat(teamId, 80));
+    upsertServerMessages(await loadTeamChat(teamId, 80));
+    renderList();
   } catch (err) {
     listEl.innerHTML = `<div style="color:var(--pm-red);padding:16px;">${escapeHtml(err.message || 'Failed to load chat')}</div>`;
   }
+
+  async function reconcile({ forceHistory = false } = {}) {
+    try {
+      const replay = await loadTeamChatStreamReplay(teamId, lastStreamId ? lastSeq : 0);
+      if (replay.stream?.streamId && replay.stream.streamId !== lastStreamId) {
+        lastStreamId = replay.stream.streamId;
+        lastSeq = 0;
+      }
+      if (replay.stream?.streamId && !liveMsg && replay.active) {
+        liveMsg = { role: 'manager', from: 'manager', fromLabel: 'Manager', content: '', _progress: 'Reconnecting...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+        messages.push(liveMsg);
+      }
+      for (const frame of replay.events || []) {
+        if (frame.streamId) lastStreamId = frame.streamId;
+        lastSeq = Math.max(lastSeq, Number(frame.seq || 0));
+        if (!liveMsg) {
+          liveMsg = { role: 'manager', from: 'manager', fromLabel: 'Manager', content: '', _progress: 'Reconnecting...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+          messages.push(liveMsg);
+        }
+        _applyMobileAgentStreamEvent(liveMsg, _mobileReplayFrameToEvent(frame), 'Manager');
+      }
+      if (forceHistory || !replay.active || liveMsg?._done) {
+        upsertServerMessages(await loadTeamChat(teamId, 80));
+        if (!replay.active) liveMsg = null;
+      }
+      renderList();
+    } catch {}
+  }
+
+  const onWsOpen = () => reconcile({ forceHistory: true });
+  const onVisibility = () => { if (!document.hidden) reconcile({ forceHistory: true }); };
+  const onTeamChatMessage = async (msg = {}) => {
+    if (String(msg.teamId || '') !== String(teamId)) return;
+    try {
+      upsertServerMessages(await loadTeamChat(teamId, 80));
+      liveMsg = null;
+      renderList();
+    } catch {}
+  };
+  const onTeamChatStreamEvent = (msg = {}) => {
+    if (String(msg.teamId || '') !== String(teamId)) return;
+    if (localSseActive) return;
+    if (msg.streamId && msg.streamId !== lastStreamId) {
+      lastStreamId = msg.streamId;
+      lastSeq = 0;
+    }
+    lastSeq = Math.max(lastSeq, Number(msg.seq || 0));
+    if (!liveMsg) {
+      liveMsg = { role: 'manager', from: 'manager', fromLabel: 'Manager', content: '', _progress: 'Thinking...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+      messages.push(liveMsg);
+    }
+    _applyMobileAgentStreamEvent(liveMsg, { type: String(msg.event || ''), ...(msg.data || {}) }, 'Manager');
+    renderList();
+  };
+  wsEventBus?.on?.('ws:open', onWsOpen);
+  wsEventBus?.on?.('team_chat_message', onTeamChatMessage);
+  wsEventBus?.on?.('team_chat_stream_event', onTeamChatStreamEvent);
+  document.addEventListener('visibilitychange', onVisibility);
+  slot._pmCleanup = () => {
+    if (cleanupDone) return;
+    cleanupDone = true;
+    try { currentStream?.abort?.(); } catch {}
+    wsEventBus?.off?.('ws:open', onWsOpen);
+    wsEventBus?.off?.('team_chat_message', onTeamChatMessage);
+    wsEventBus?.off?.('team_chat_stream_event', onTeamChatStreamEvent);
+    document.removeEventListener('visibilitychange', onVisibility);
+  };
+  reconcile();
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -11452,15 +11766,39 @@ async function _renderTeamChatTab(slot, teamId) {
     if (!text) return;
     input.value = '';
     input.disabled = true;
-    try {
-      await postTeamChat(teamId, text);
-      renderList(await loadTeamChat(teamId, 80));
-    } catch (err) {
-      pmToast(err.message || 'Send failed', 'error');
-    } finally {
-      input.disabled = false;
-      input.focus();
-    }
+    const userMsg = { role: 'user', from: 'user', content: text, createdAt: Date.now() };
+    liveMsg = { role: 'manager', from: 'manager', fromLabel: 'Manager', content: '', _progress: 'Manager is thinking...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+    messages.push(userMsg, liveMsg);
+    renderList();
+    localSseActive = true;
+    currentStream = streamTeamChat(teamId, { message: text }, {
+      onEvent: (evt) => {
+        _applyMobileAgentStreamEvent(liveMsg, evt, 'Manager');
+        renderList();
+      },
+      onError: (err) => {
+        if (err?.name === 'AbortError') return;
+        liveMsg.content = liveMsg.content || `Error: ${err?.message || 'stream failed'}`;
+        liveMsg._progress = '';
+        liveMsg.streaming = false;
+        liveMsg.workEndedAt = Date.now();
+        localSseActive = false;
+        renderList();
+        pmToast(err?.message || 'Send failed', 'error');
+      },
+      onDone: async () => {
+        if (liveMsg) {
+          liveMsg._progress = '';
+          liveMsg.streaming = false;
+          liveMsg.workEndedAt = liveMsg.workEndedAt || Date.now();
+          liveMsg.workDurationMs = Math.max(0, liveMsg.workEndedAt - Number(liveMsg.workStartedAt || liveMsg.createdAt || liveMsg.workEndedAt));
+        }
+        localSseActive = false;
+        input.disabled = false;
+        input.focus();
+        await reconcile({ forceHistory: true });
+      },
+    });
   });
 }
 
@@ -14484,6 +14822,8 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   let currentStream = null;
 
   async function selectTab(tabName) {
+    try { tabSlot?._pmCleanup?.(); } catch {}
+    if (tabSlot) tabSlot._pmCleanup = null;
     body.querySelectorAll('.pm-tabs button').forEach(x => x.classList.toggle('active', x.getAttribute('data-tab') === tabName));
     if (tabName === 'Overview') {
       overviewSlot.style.display = '';
@@ -14540,6 +14880,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   });
 
   page._pmCleanup = () => {
+    try { tabSlot?._pmCleanup?.(); } catch {}
     try { currentStream?.abort?.(); } catch {}
   };
 }
@@ -14698,38 +15039,111 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
   const input  = slot.querySelector('#pm-sa-chat-input');
 
   let messages = [];
+  let liveMsg = null;
+  let currentStream = null;
+  let lastSeq = 0;
+  let lastStreamId = '';
+  let localSseActive = false;
+  let cleanupDone = false;
+
+  function upsertServerMessages(fresh) {
+    const localLive = liveMsg && !liveMsg._done ? liveMsg : null;
+    messages = Array.isArray(fresh) ? fresh.slice() : [];
+    if (localLive) {
+      const duplicate = messages.some((m) =>
+        String(m.content || m.text || '').trim()
+        && String(m.content || m.text || '').trim() === String(localLive.content || '').trim()
+      );
+      if (!duplicate) messages.push(localLive);
+    }
+  }
 
   function renderList() {
     if (!messages.length) {
       listEl.innerHTML = `<div style="text-align:center;color:var(--pm-muted);padding:24px 8px;font-size:13px;">No messages yet. Send the first one to ${escapeHtml(agent.name)}.</div>`;
       return;
     }
-    listEl.innerHTML = messages.map(m => {
-      const role = String(m.role || 'agent').toLowerCase();
-      const fromUser = role === 'user' || role === 'you' || role === 'human';
-      const time = m.createdAt ? _formatTimeAgo(m.createdAt) : '';
-      const text = String(m.content || m.text || '');
-      const sender = fromUser ? '' : `<span class="pm-sender">${escapeHtml(agent.name)}</span>`;
-      const progress = m._progress ? `<div class="pm-sa-progress">${escapeHtml(m._progress)}</div>` : '';
-      return `
-        <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'}" style="max-width:92%;margin-bottom:10px;">
-          <div class="pm-bubble">
-            ${sender}
-            ${escapeHtml(text).replace(/\n/g, '<br>')}
-            ${progress}
-            ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
-          </div>
-        </div>`;
-    }).join('');
+    listEl.innerHTML = messages.map((m) => _renderMobileAgentChatBubble(m, {
+      sender: agent.name || agent.id || 'Subagent',
+      live: m === liveMsg,
+    })).join('');
     listEl.scrollTop = listEl.scrollHeight;
   }
 
   try {
-    messages = await loadSubagentChat(agent.id, 80);
+    upsertServerMessages(await loadSubagentChat(agent.id, 80));
     renderList();
   } catch (err) {
     listEl.innerHTML = `<div style="color:var(--pm-red);padding:16px;">${escapeHtml(err.message || 'Failed to load chat')}</div>`;
   }
+
+  async function reconcile({ forceHistory = false } = {}) {
+    try {
+      const replay = await loadSubagentChatStreamReplay(agent.id, lastStreamId ? lastSeq : 0);
+      if (replay.stream?.streamId && replay.stream.streamId !== lastStreamId) {
+        lastStreamId = replay.stream.streamId;
+        lastSeq = 0;
+      }
+      if (replay.stream?.streamId && !liveMsg && replay.active) {
+        liveMsg = { role: 'agent', content: '', _progress: 'Reconnecting...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+        messages.push(liveMsg);
+      }
+      for (const frame of replay.events || []) {
+        if (frame.streamId) lastStreamId = frame.streamId;
+        lastSeq = Math.max(lastSeq, Number(frame.seq || 0));
+        if (!liveMsg) {
+          liveMsg = { role: 'agent', content: '', _progress: 'Reconnecting...', createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+          messages.push(liveMsg);
+        }
+        _applyMobileAgentStreamEvent(liveMsg, _mobileReplayFrameToEvent(frame), agent.name || agent.id || 'Subagent');
+      }
+      if (forceHistory || !replay.active || liveMsg?._done) {
+        upsertServerMessages(await loadSubagentChat(agent.id, 80));
+        if (!replay.active) liveMsg = null;
+      }
+      renderList();
+    } catch {}
+  }
+
+  const onWsOpen = () => reconcile({ forceHistory: true });
+  const onVisibility = () => { if (!document.hidden) reconcile({ forceHistory: true }); };
+  const onSubagentChatMessage = async (msg = {}) => {
+    if (String(msg.agentId || '') !== String(agent.id)) return;
+    try {
+      upsertServerMessages(await loadSubagentChat(agent.id, 80));
+      liveMsg = null;
+      renderList();
+    } catch {}
+  };
+  const onSubagentStreamEvent = (msg = {}) => {
+    if (String(msg.agentId || '') !== String(agent.id)) return;
+    if (localSseActive) return;
+    if (msg.streamId && msg.streamId !== lastStreamId) {
+      lastStreamId = msg.streamId;
+      lastSeq = 0;
+    }
+    lastSeq = Math.max(lastSeq, Number(msg.seq || 0));
+    if (!liveMsg) {
+      liveMsg = { role: 'agent', content: '', _progress: `${agent.name} is thinking...`, createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+      messages.push(liveMsg);
+    }
+    _applyMobileAgentStreamEvent(liveMsg, { type: String(msg.event || ''), ...(msg.data || {}) }, agent.name || agent.id || 'Subagent');
+    renderList();
+  };
+  wsEventBus?.on?.('ws:open', onWsOpen);
+  wsEventBus?.on?.('subagent_chat_message', onSubagentChatMessage);
+  wsEventBus?.on?.('subagent_chat_stream_event', onSubagentStreamEvent);
+  document.addEventListener('visibilitychange', onVisibility);
+  slot._pmCleanup = () => {
+    if (cleanupDone) return;
+    cleanupDone = true;
+    try { currentStream?.abort?.(); } catch {}
+    wsEventBus?.off?.('ws:open', onWsOpen);
+    wsEventBus?.off?.('subagent_chat_message', onSubagentChatMessage);
+    wsEventBus?.off?.('subagent_chat_stream_event', onSubagentStreamEvent);
+    document.removeEventListener('visibilitychange', onVisibility);
+  };
+  reconcile();
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -14740,57 +15154,38 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
 
     const userMsg = { role: 'user', content: text, createdAt: Date.now() };
     messages.push(userMsg);
-    const agentMsg = { role: 'agent', content: '', _progress: `${agent.name} is thinking…`, createdAt: Date.now() };
-    messages.push(agentMsg);
+    liveMsg = { role: 'agent', content: '', _progress: `${agent.name} is thinking...`, createdAt: Date.now(), workStartedAt: Date.now(), streaming: true, processEntries: [] };
+    messages.push(liveMsg);
     renderList();
 
-    const stream = streamSubagentChat(agent.id, { message: text }, {
-      onToken: (chunk) => {
-        agentMsg.content = (agentMsg.content || '') + chunk;
-        agentMsg._progress = '';
-        renderList();
-      },
-      onThinking: () => {
-        agentMsg._progress = `${agent.name} is thinking…`;
-        renderList();
-      },
-      onInfo: (msg) => {
-        agentMsg._progress = String(msg).slice(0, 120);
-        renderList();
-      },
-      onToolCall: (evt) => {
-        const action = String(evt?.action || 'tool');
-        agentMsg._progress = `Running ${action}…`;
-        renderList();
-      },
-      onToolResult: () => {
-        agentMsg._progress = '';
-        renderList();
-      },
-      onFinal: (text) => {
-        if (text && !agentMsg.content) agentMsg.content = text;
-        agentMsg._progress = '';
+    localSseActive = true;
+    currentStream = streamSubagentChat(agent.id, { message: text }, {
+      onEvent: (evt) => {
+        _applyMobileAgentStreamEvent(liveMsg, evt, agent.name || agent.id || 'Subagent');
         renderList();
       },
       onError: (err) => {
-        agentMsg.content = agentMsg.content || `Error: ${err?.message || 'stream failed'}`;
-        agentMsg._progress = '';
+        if (err?.name === 'AbortError') return;
+        liveMsg.content = liveMsg.content || `Error: ${err?.message || 'stream failed'}`;
+        liveMsg._progress = '';
+        liveMsg.streaming = false;
+        liveMsg.workEndedAt = Date.now();
+        localSseActive = false;
         renderList();
       },
       onDone: async () => {
-        agentMsg._progress = '';
+        if (liveMsg) {
+          liveMsg._progress = '';
+          liveMsg.streaming = false;
+          liveMsg.workEndedAt = liveMsg.workEndedAt || Date.now();
+          liveMsg.workDurationMs = Math.max(0, liveMsg.workEndedAt - Number(liveMsg.workStartedAt || liveMsg.createdAt || liveMsg.workEndedAt));
+        }
+        localSseActive = false;
         input.disabled = false;
         input.focus();
-        // Reconcile with server (in case our local append diverged).
-        try {
-          const fresh = await loadSubagentChat(agent.id, 80);
-          if (Array.isArray(fresh) && fresh.length) {
-            messages = fresh;
-            renderList();
-          }
-        } catch {}
+        await reconcile({ forceHistory: true });
       },
     });
-    attachStream?.(stream);
+    attachStream?.(currentStream);
   });
 }

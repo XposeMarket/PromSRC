@@ -109,6 +109,7 @@
 </script>
 </head>
 <body class="auth-pending">
+<canvas id="ember-canvas" aria-hidden="true"></canvas>
 <script>
   (() => {
     try {
@@ -138,6 +139,15 @@
 </script>
 
 <style>
+  #ember-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 900;
+    pointer-events: none;
+    display: block;
+  }
   body.creative-render-worker {
     background: #050506;
   }
@@ -2916,19 +2926,17 @@
                 <div id="browser-canvas-agent-tabs" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,0.95fr);gap:14px;padding:16px;flex:1;min-height:0">
-              <div style="min-height:0;border:1px solid rgba(148,163,184,0.24);border-radius:8px;overflow:hidden;background:rgba(2,6,23,0.5);display:flex;flex-direction:column">
+            <div id="browser-canvas-control-slot" style="display:none;padding:10px 16px 0"></div>
+            <div id="browser-canvas-layout" style="display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,0.95fr);gap:14px;padding:16px;flex:1;min-height:0">
+              <div id="browser-canvas-live-card" style="min-height:0;border:1px solid rgba(148,163,184,0.24);border-radius:8px;overflow:hidden;background:rgba(2,6,23,0.5);display:flex;flex-direction:column">
                 <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.72)">
-                  <span style="width:9px;height:9px;border-radius:999px;background:#f87171"></span>
-                  <span style="width:9px;height:9px;border-radius:999px;background:#fbbf24"></span>
-                  <span style="width:9px;height:9px;border-radius:999px;background:#34d399"></span>
-                  <button id="browser-canvas-back-btn" type="button" onclick="sendBrowserCanvasNavigation('back')" title="Back" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><iconify-icon icon="solar:arrow-left-linear" width="15" height="15"></iconify-icon></button>
-                  <button id="browser-canvas-forward-btn" type="button" onclick="sendBrowserCanvasNavigation('forward')" title="Forward" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><iconify-icon icon="solar:arrow-right-linear" width="15" height="15"></iconify-icon></button>
-                  <button id="browser-canvas-reload-btn" type="button" onclick="sendBrowserCanvasNavigation('reload')" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><iconify-icon icon="solar:refresh-linear" width="15" height="15"></iconify-icon></button>
+                  <button id="browser-canvas-back-btn" type="button" onclick="sendBrowserCanvasNavigation('back')" title="Back" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></button>
+                  <button id="browser-canvas-forward-btn" type="button" onclick="sendBrowserCanvasNavigation('forward')" title="Forward" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></button>
+                  <button id="browser-canvas-reload-btn" type="button" onclick="sendBrowserCanvasNavigation('reload')" title="Reload" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></button>
                   <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;margin-left:2px;border:1px solid rgba(148,163,184,0.16);background:rgba(2,6,23,0.42);border-radius:8px;padding:0 8px">
-                    <iconify-icon icon="solar:global-linear" width="14" height="14" style="color:#7dd3fc;flex-shrink:0"></iconify-icon>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#7dd3fc;flex-shrink:0"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                     <input id="browser-canvas-address-input" type="text" spellcheck="false" onkeydown="handleBrowserCanvasAddressKeydown(event)" placeholder="Open a URL..." style="min-width:0;flex:1;height:28px;border:0;background:transparent;color:#e0f2fe;font-size:11px;font-family:'Manrope',sans-serif;outline:none" />
-                    <button id="browser-canvas-open-btn" type="button" onclick="openBrowserCanvasAddress()" title="Open URL" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid rgba(56,189,248,0.22);background:rgba(56,189,248,0.12);color:#bae6fd;border-radius:8px;cursor:pointer;flex-shrink:0"><iconify-icon icon="solar:arrow-right-up-linear" width="13" height="13"></iconify-icon></button>
+                    <button id="browser-canvas-open-btn" type="button" onclick="openBrowserCanvasAddress()" title="Open URL" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid rgba(56,189,248,0.22);background:rgba(56,189,248,0.12);color:#bae6fd;border-radius:8px;cursor:pointer;flex-shrink:0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></button>
                   </div>
                   <div id="browser-canvas-session-chip" style="font-size:10px;font-weight:800;color:#bbf7d0;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.18);border-radius:8px;padding:5px 8px;white-space:nowrap">No session</div>
                   <div id="browser-canvas-stream-chip" style="font-size:10px;font-weight:800;color:#bae6fd;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.18);border-radius:8px;padding:5px 8px;white-space:nowrap">Stream idle</div>
@@ -2943,7 +2951,8 @@
                     <div id="browser-canvas-frame-caption" style="font-size:12px;font-weight:700;color:#f8fafc">Latest browser frame</div>
                     <div id="browser-canvas-frame-size" style="font-size:11px;color:#94a3b8">Viewport frame</div>
                   </div>
-                  <div style="position:relative;width:fit-content;max-width:100%;margin:0 auto">
+                  <div id="browser-canvas-frame-stage" style="position:relative;width:fit-content;max-width:100%;margin:0 auto">
+                    <div id="browser-canvas-native-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;border-radius:12px;border:1px solid rgba(56,189,248,0.22);background:rgba(8,47,73,0.18);color:#bae6fd;font-size:12px;font-weight:800;z-index:1;pointer-events:none">Prometheus in-house browser</div>
                     <img id="browser-canvas-frame" alt="Browser frame" style="display:block;max-width:100%;height:auto;border-radius:12px;border:1px solid rgba(148,163,184,0.18);box-shadow:0 18px 40px rgba(2,6,23,0.38);cursor:crosshair" onclick="inspectBrowserCanvasPoint(event)" onload="handleBrowserCanvasFrameLoad()">
                     <div id="browser-canvas-selection-box" style="display:none;position:absolute;border:2px solid #38bdf8;border-radius:10px;box-shadow:0 0 0 9999px rgba(15,23,42,0.15);pointer-events:none;z-index:6"></div>
                     <div id="browser-canvas-hover-box" style="display:none;position:absolute;border:1.5px dashed rgba(56,189,248,0.85);border-radius:8px;background:rgba(56,189,248,0.08);pointer-events:none;z-index:5;transition:left 90ms ease,top 90ms ease,width 90ms ease,height 90ms ease"></div>
@@ -2958,7 +2967,7 @@
                   </div>
                 </div>
               </div>
-              <div style="display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto">
+              <div id="browser-canvas-side-col" style="display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto">
                 <div style="border:1px solid rgba(148,163,184,0.22);border-radius:10px;padding:14px;background:rgba(15,23,42,0.42)">
                   <div style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#94a3b8">Last Tool Call</div>
                   <div id="browser-canvas-session" style="font-size:12px;color:#f8fafc;margin-top:8px;font-weight:800">No browser tools used yet</div>
@@ -5082,16 +5091,21 @@ function _renderChannelDrill(channelKey) {
   const sessionCards = sessions.map(s => {
     const isActive = s.id === window.activeChatSessionId;
     const isPinned = _pinnedChats.includes(s.id);
+    const isWorking = !!(
+      (window._sessionThinking && window._sessionThinking[s.id])
+      || s.activeRun === true
+    );
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${s.unread ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}" onclick="openSession('${s.id}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}" onclick="openSession('${s.id}')">
   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
-      <div class="job-item-title">${s.unread ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'Untitled')}</div>
+      <div class="job-item-title">${s.unread && !isWorking ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'Untitled')}</div>
     </div>
   </div>
   <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
+    ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
     <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
   </div>
 </div>`;
@@ -5100,9 +5114,13 @@ function _renderChannelDrill(channelKey) {
   const serverCards = serverOnly.map(s => {
     const isActive = s.id === window.activeChatSessionId;
     const isPinned = _pinnedChats.includes(s.id);
+    const isWorking = !!(
+      (window._sessionThinking && window._sessionThinking[s.id])
+      || s.activeRun === true
+    );
     const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''} session-terminal" onclick="openTerminalSession('${s.id}', '${channelKey}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''} session-terminal" onclick="openTerminalSession('${s.id}', '${channelKey}')">
   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
@@ -5111,6 +5129,7 @@ function _renderChannelDrill(channelKey) {
   </div>
   <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
+    ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
     <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt)}</span>
   </div>
 </div>`;
@@ -5236,6 +5255,7 @@ function sessionFromSearchResult(result) {
     channel: existing?.channel || result.channel || '',
     projectId: result.projectId || existing?.projectId || '',
     projectName: result.projectName || existing?.projectName || '',
+    activeRun: result.activeRun === true || existing?.activeRun === true,
     _searchOnly: !existing,
     _needsServerLoad: !existing,
   };
@@ -5330,18 +5350,22 @@ function renderChatSessionCard(s) {
       ? `openTerminalSession('${s.id}')`
       : `openSession('${s.id}')`;
   const searchPreview = renderSessionSearchPreview(s);
-  const isWorking = !!(window._sessionThinking && window._sessionThinking[s.id]);
+  const isWorking = !!(
+    (window._sessionThinking && window._sessionThinking[s.id])
+    || s.activeRun === true
+  );
   return `
     <div class="job-item chat-session-item ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${window.sessionsEditMode ? ' is-editing' : ''}" onclick="${openHandler}">
       ${window.sessionsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
-          <div class="job-item-title">${s.unread ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'New chat')}</div>
+          <div class="job-item-title">${s.unread && !isWorking ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'New chat')}</div>
         </div>
       </div>
       <div class="job-item-meta">
         ${s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : ''}
         ${sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : ''}
+        ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
         <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
       </div>
       ${searchPreview}
@@ -5366,6 +5390,7 @@ function renderSessionsList() {
       updatedAt: ts.lastActiveAt || ts.createdAt || Date.now(),
       lastMessageAt: ts.lastMessageAt || 0,
       source: ts.source || ts.channel || 'terminal',
+      activeRun: ts.activeRun === true,
       _serverOnlyTerminal: true,
     }));
   const webSessions = allSessions.filter(s => !_isChannelSession(s));
@@ -7182,10 +7207,20 @@ let _errBackdrop = null;
     const rightPanel = document.getElementById('right-panel');
     if (!handle || !rightPanel) return;
 
-    let startX, startW;
+    let startX, startW, previousTransition;
     handle.addEventListener('mousedown', e => {
+      const widthLockMessage = typeof window.getCanvasWidthLockMessage === 'function'
+        ? window.getCanvasWidthLockMessage()
+        : '';
+      if (widthLockMessage) {
+        if (typeof window.showToast === 'function') window.showToast(widthLockMessage, 'info');
+        e.preventDefault();
+        return;
+      }
       startX = e.clientX;
       startW = rightPanel.offsetWidth;
+      previousTransition = rightPanel.style.transition;
+      rightPanel.style.transition = 'none';
       handle.classList.add('dragging');
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
@@ -7194,16 +7229,28 @@ let _errBackdrop = null;
 
     function onMove(e) {
       const delta = startX - e.clientX; // drag left = wider panel
-      const newW = Math.max(280, Math.min(900, startW + delta));
+      const viewportWidth = Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0);
+      const canvasActive = rightPanel.classList.contains('canvas-open');
+      const browserActive = document.body?.classList.contains('browser-surface-active');
+      const minW = browserActive ? 620 : 280;
+      const maxRatio = browserActive ? 0.5 : (canvasActive ? 0.68 : 0.52);
+      const maxW = viewportWidth ? Math.max(minW, Math.floor(viewportWidth * maxRatio)) : 900;
+      const newW = Math.max(minW, Math.min(maxW, startW + delta));
       rightPanel.style.width = newW + 'px';
       rightPanel.style.minWidth = newW + 'px';
+      rightPanel.style.removeProperty('max-width');
       if (typeof window._syncPageViewPositions === 'function') {
         window._syncPageViewPositions();
+      }
+      if (typeof window.queueNativeBrowserSurfaceSync === 'function') {
+        window.queueNativeBrowserSurfaceSync({ force: true });
       }
     }
 
     function onUp() {
       handle.classList.remove('dragging');
+      if (previousTransition) rightPanel.style.transition = previousTransition;
+      else rightPanel.style.removeProperty('transition');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
     }
@@ -7289,5 +7336,165 @@ let _errBackdrop = null;
     };
   })();
 </script>
+
+<script>
+/* ── Ember particle effect (dark mode, chat page, center column only) ───── */
+(() => {
+  const canvas = document.getElementById('ember-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  let W, H, embers = [], raf;
+
+  const PALETTE = [
+    [200, 100,  18],
+    [170,  72,  10],
+    [210,  88,  20],
+    [155,  60,   8],
+    [225, 110,  30],
+  ];
+
+  function isDark() {
+    return document.documentElement.getAttribute('data-theme') === 'dark';
+  }
+
+  function isOnChatPage() {
+    return (window.currentMode || 'chat') === 'chat';
+  }
+
+  function getColRect() {
+    const col = document.getElementById('centerCol');
+    return col ? col.getBoundingClientRect() : null;
+  }
+
+  function resize() {
+    W = canvas.width  = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+
+  function mkEmber(colRect) {
+    const [r, g, b] = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+    const maxAlpha  = 0.12 + Math.random() * 0.42;
+    const rect = colRect || getColRect() || { left: 0, top: 0, width: W, height: H, bottom: H };
+    return {
+      x:       rect.left + Math.random() * rect.width,
+      y:       rect.bottom + 10 + Math.random() * 50,
+      vx:      (Math.random() - 0.5) * 0.3,
+      vy:      -(0.35 + Math.random() * 1.1),
+      size:    1.0 + Math.random() * 3.0,
+      maxAlpha,
+      alpha:   0,
+      drift:   (Math.random() - 0.5) * 0.015,
+      phase:   Math.random() * Math.PI * 2,
+      r, g, b,
+      life:    0,
+      maxLife: 220 + Math.random() * 380,
+    };
+  }
+
+  function initEmbers(colRect) {
+    embers = [];
+    const rect = colRect || { width: W, height: H };
+    const count = Math.round(Math.max(30, Math.min(65, (rect.width * rect.height) / 14000)));
+    for (let i = 0; i < count; i++) {
+      const e = mkEmber(colRect);
+      // Scatter vertically across the full column height on first load
+      e.y = (colRect ? colRect.top : 0) + Math.random() * (rect.height * 1.1);
+      e.life = Math.random() * e.maxLife;
+      embers.push(e);
+    }
+  }
+
+  function draw(ts) {
+    ctx.clearRect(0, 0, W, H);
+
+    if (!isDark() || !isOnChatPage()) {
+      raf = requestAnimationFrame(draw);
+      return;
+    }
+
+    const colRect = getColRect();
+    if (!colRect || colRect.width < 10) {
+      raf = requestAnimationFrame(draw);
+      return;
+    }
+
+    const t = ts * 0.001;
+
+    // Clip all drawing to the center column bounds
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(colRect.left, colRect.top, colRect.width, colRect.height);
+    ctx.clip();
+
+    for (let i = 0; i < embers.length; i++) {
+      const e = embers[i];
+      e.life++;
+
+      if (e.life >= e.maxLife || e.y < colRect.top - 20) {
+        embers[i] = mkEmber(colRect);
+        continue;
+      }
+
+      const frac = e.life / e.maxLife;
+      let alpha;
+      if      (frac < 0.08) alpha = e.maxAlpha * (frac / 0.08);
+      else if (frac > 0.72) alpha = e.maxAlpha * (1 - (frac - 0.72) / 0.28);
+      else                  alpha = e.maxAlpha;
+
+      e.x += e.vx + Math.sin(t * 1.1 + e.phase) * e.drift * 60;
+      e.y += e.vy;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      const r2 = e.size * 3.5;
+      const grd = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, r2);
+      grd.addColorStop(0,    `rgba(${e.r},${e.g},${e.b},0.85)`);
+      grd.addColorStop(0.35, `rgba(${e.r},${e.g},${e.b},0.28)`);
+      grd.addColorStop(1,    `rgba(${e.r},${e.g},${e.b},0)`);
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, r2, 0, Math.PI * 2);
+      ctx.fillStyle = grd;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.size * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,210,130,0.92)`;
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    ctx.restore(); // end clip
+
+    raf = requestAnimationFrame(draw);
+  }
+
+  function start() {
+    resize();
+    const colRect = getColRect();
+    initEmbers(colRect);
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(draw);
+  }
+
+  window.addEventListener('resize', () => {
+    resize();
+    const colRect = getColRect();
+    if (!colRect) return;
+    const target = Math.round(Math.max(30, Math.min(65, (colRect.width * colRect.height) / 14000)));
+    while (embers.length < target) { const e = mkEmber(colRect); e.life = Math.random() * e.maxLife; embers.push(e); }
+    while (embers.length > target + 10) embers.pop();
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+})();
+</script>
+
 </body>
 </html>
